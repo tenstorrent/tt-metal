@@ -74,8 +74,8 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     uint32_t arg_idx = 0;
-    address_t intermediate_address = get_arg_val<address_t>(arg_idx++);
-    address_t output_address = get_arg_val<address_t>(arg_idx++);
+    address_t interm_tensor_address = get_arg_val<address_t>(arg_idx++);
+    address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
@@ -114,12 +114,13 @@ void kernel_main() {
     constexpr uint32_t ct_idx =
         num_ct_args + 2 * (ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args);
 
-    constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
-    constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
-    auto intermediate_tensor_accessor = TensorAccessor(intermediate_tensor_args, intermediate_address);
+    constexpr auto interm_tensor_args = TensorAccessorArgs<ct_idx>();
+    auto interm_tensor_accessor = TensorAccessor(interm_tensor_args, interm_tensor_address);
+    constexpr uint32_t ct_idx2 = ct_idx + interm_tensor_args.num_compile_time_args();
 
-    constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_address);
+    constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx2>();
+    auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
+    constexpr uint32_t ct_idx3 = ct_idx2 + output_tensor_args.num_compile_time_args();
 
 #ifdef USE_WORKER_MUX
     auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
@@ -225,25 +226,24 @@ void kernel_main() {
             }
 
             // address incrementer for interm_tensor
-            uint32_t intermediate_tile_id_start;
+            uint32_t interm_tile_id_start;
             if constexpr (dim == 3) {
-                intermediate_tile_id_start = slice_idx * slice_Wt;
+                interm_tile_id_start = slice_idx * slice_Wt;
             } else if constexpr (dim == 2) {
-                intermediate_tile_id_start = slice_idx * slice_Ht * slice_Wt;
+                interm_tile_id_start = slice_idx * slice_Ht * slice_Wt;
             } else if constexpr (dim == 1) {
-                intermediate_tile_id_start = slice_idx * slice_C * slice_Ht * slice_Wt;
+                interm_tile_id_start = slice_idx * slice_C * slice_Ht * slice_Wt;
             } else {
                 ASSERT(false);
             }
-            uint32_t intermediate_pages_read_in_row = start_pages_read_in_row;
-            uint32_t intermediate_row_offset = start_row_offset;
+            uint32_t interm_pages_read_in_row = start_pages_read_in_row;
+            uint32_t interm_row_offset = start_row_offset;
             auto get_next_interm_tile_id = [&]() -> uint32_t {
-                uint32_t tile_id =
-                    intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
-                intermediate_pages_read_in_row++;
-                if (intermediate_pages_read_in_row == slice_Wt) {
-                    intermediate_row_offset += input_tensor_Wt;
-                    intermediate_pages_read_in_row -= slice_Wt;
+                uint32_t tile_id = interm_tile_id_start + interm_row_offset + interm_pages_read_in_row;
+                interm_pages_read_in_row++;
+                if (interm_pages_read_in_row == slice_Wt) {
+                    interm_row_offset += input_tensor_Wt;
+                    interm_pages_read_in_row -= slice_Wt;
                 }
                 return tile_id;
             };
@@ -263,15 +263,14 @@ void kernel_main() {
             };
             auto get_remote_tile_addr = [&](uint32_t tile_id) -> uint64_t {
                 if (write_to_interm) {
-                    return tt::tt_fabric::linear::addrgen_detail::get_noc_address(
-                        intermediate_tensor_accessor, tile_id, 0);
+                    return tt::tt_fabric::linear::addrgen_detail::get_noc_address(interm_tensor_accessor, tile_id, 0);
                 } else {
                     return tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_tensor_accessor, tile_id, 0);
                 }
             };
             auto get_local_tile_addr = [&](uint32_t tile_id) -> uint64_t {
                 if (write_to_interm) {
-                    return intermediate_tensor_accessor.get_noc_addr(tile_id);
+                    return interm_tensor_accessor.get_noc_addr(tile_id);
                 } else {
                     return output_tensor_accessor.get_noc_addr(tile_id);
                 }
@@ -281,8 +280,8 @@ void kernel_main() {
             for (uint32_t c = 0; c < slice_C; ++c) {
                 // reset addr counters
                 output_tiles_read = start_tiles_read;
-                intermediate_pages_read_in_row = start_pages_read_in_row;
-                intermediate_row_offset = start_row_offset;
+                interm_pages_read_in_row = start_pages_read_in_row;
+                interm_row_offset = start_row_offset;
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t tiles_to_read = start_tiles_to_read;
 
@@ -384,7 +383,7 @@ void kernel_main() {
                     }
                 }
 
-                intermediate_tile_id_start += input_channel_num_pages;
+                interm_tile_id_start += input_channel_num_pages;
                 output_tile_id_start += output_channel_num_pages;
             }
 

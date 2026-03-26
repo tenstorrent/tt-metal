@@ -227,6 +227,7 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t page_size,
     const uint32_t output_tensor_num_pages,
     const uint32_t input_batch_num_pages,
+    const uint32_t output_batch_num_pages,
     const uint32_t input_channel_num_pages,
     const uint32_t input_tensor_B,
     const uint32_t input_tensor_Wt,
@@ -259,6 +260,7 @@ std::vector<uint32_t> get_ring_reader_compile_args(
         tile_granularity,         // tile_granularity
         page_size,                // page_size
         input_batch_num_pages,    // input_batch_num_pages
+        output_batch_num_pages,   // output_batch_num_pages
         input_channel_num_pages,  // input_channel_num_pages
         input_tensor_B,           // input_tensor_B
         input_tensor_Wt,          // input_tensor_Wt
@@ -738,27 +740,42 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
+    // input_tensor from reader -> compute
     uint32_t input_cb_index = tt::CB::c_in0;
-    tt::tt_metal::CircularBufferConfig cb_input_config =
+    CreateCircularBuffer(
+        program,
+        sender_worker_core_range_set,
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{input_cb_index, df}})
-            .set_page_size(input_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_input_config);
+            .set_page_size(input_cb_index, l1_scratch_cb_page_size_bytes));
+    // interm_tensor from reader -> compute
     uint32_t intermediate_cb_index = tt::CB::c_in1;
-    tt::tt_metal::CircularBufferConfig cb_intermediate_config =
+    CreateCircularBuffer(
+        program,
+        sender_worker_core_range_set,
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{intermediate_cb_index, df}})
-            .set_page_size(intermediate_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_intermediate_config);
-    uint32_t reader_output_cb_index = tt::CB::c_in2;
-    tt::tt_metal::CircularBufferConfig cb_reader_output_config =
+            .set_page_size(intermediate_cb_index, l1_scratch_cb_page_size_bytes));
+    // output_tensor from reader -> compute
+    uint32_t interm2_cb_index = tt::CB::c_in2;
+    CreateCircularBuffer(
+        program,
+        sender_worker_core_range_set,
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{interm2_cb_index, df}})
+            .set_page_size(interm2_cb_index, l1_scratch_cb_page_size_bytes));
+    // input_tensor from reader -> writer
+    uint32_t reader_output_cb_index = tt::CB::c_in3;
+    CreateCircularBuffer(
+        program,
+        sender_worker_core_range_set,
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{reader_output_cb_index, df}})
-            .set_page_size(reader_output_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_reader_output_config);
-    uint32_t compute_output_cb_index = tt::CB::c_in3;
-    tt::tt_metal::CircularBufferConfig cb_compute_output_config =
+            .set_page_size(reader_output_cb_index, l1_scratch_cb_page_size_bytes));
+    // reduced tensor from compute -> writer
+    uint32_t compute_output_cb_index = tt::CB::c_in4;
+    CreateCircularBuffer(
+        program,
+        sender_worker_core_range_set,
         tt::tt_metal::CircularBufferConfig(
             cb_num_pages * l1_scratch_cb_page_size_bytes, {{compute_output_cb_index, df}})
-            .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
+            .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes));
 
     std::map<std::string, std::string> writer_defines;
     if (num_mux_cores_per_direction_per_link) {
@@ -809,6 +826,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         page_size,
         output_tensor_num_pages,
         input_batch_num_pages,
+        output_batch_num_pages,
         input_channel_num_pages,
         input_tensor_B,
         input_tensor_Wt,
@@ -820,6 +838,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         normalized_dim);
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediate_tensor.buffer()).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
 
     std::string reader_kernel_path = normalized_dim == 0
                                          ? "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/"
@@ -962,7 +981,9 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 std::vector<uint32_t> reader_rt_args = {
                     input_tensor.buffer()->address(),         // input_tensor_address
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
-                    semaphore.at(dir).address(),              // out_ready_semaphore
+                    output_tensor.buffer()->address(),        // output_tensor address
+                    semaphore.at(dir).address(),              // out_ready_semaphore for this dir
+                    semaphore.at(!dir).address(),             // out_ready_semaphore for other dir
                     dir,                                      // direction
                     chunks_per_sync_val,                      // chunks_per_sync
                     start_tiles_read,                         // start_tiles_read
@@ -985,7 +1006,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     output_tensor.buffer()->address(),                           // output_tensor_address
                     virtual_core.x,                                              // out_ready_sem_noc0_x
                     virtual_core.y,                                              // out_ready_sem_noc0_y
-                    semaphore.at(dir).address(),                                 // out_ready_fwd_semaphore
+                    semaphore.at(dir).address(),                                 // out_ready_semaphore for this dir
                     semaphore.at(num_directions_per_link).address(),             // batch_ready_semaphore
                     barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
                     barrier_semaphore.has_value()                                // barrier_sem
@@ -1085,7 +1106,9 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
                 worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
-                worker_reader_sender_runtime_args[2] = semaphore.at(dir).address();
+                worker_reader_sender_runtime_args[2] = output.buffer()->address();
+                worker_reader_sender_runtime_args[3] = semaphore.at(dir).address();
+                worker_reader_sender_runtime_args[4] = semaphore.at(!dir).address();
                 // sender writer
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = intermed.buffer()->address();

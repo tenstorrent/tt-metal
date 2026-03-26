@@ -9,6 +9,7 @@ void kernel_main() {
     // Define all compile-time arguments at the beginning
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t intermediate_cb = get_compile_time_arg_val(1);
+    constexpr uint32_t interm2_cb = 2;  // TODO hardcoded
     constexpr uint32_t output_cb = get_compile_time_arg_val(2);
     constexpr uint32_t tile_granularity = get_compile_time_arg_val(3);
     constexpr uint32_t ring_size = get_compile_time_arg_val(4);
