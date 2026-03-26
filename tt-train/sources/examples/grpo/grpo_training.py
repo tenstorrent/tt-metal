@@ -12,9 +12,9 @@ import argparse
 from ttml.common.utils import no_grad
 
 from utils.setup import InferenceCtx, setup_inference, setup_grpo_config, setup_training_optimizer
-from utils.gsm8k import get_gsm8k
+from utils.boolq import get_boolq, compute_rewards_advantages
 from utils.inference import completion_batched_multiple_prompts, deallocate_tensors
-from utils.loss import compute_nlog_probs, compute_grpo_loss, compute_rewards_advantages
+from utils.loss import compute_nlog_probs, compute_grpo_loss
 from utils.bookkeeping import RunContext, TrainingMetricsTracker, setup_training_run
 
 
@@ -60,7 +60,7 @@ def train_grpo(yaml_config_path, checkpoint_interval):
     grpo_cfg = setup_grpo_config(yaml_config_path)
     optimizer = setup_training_optimizer(yaml_config_path, ctx.tt_model)
 
-    prompts, answers = get_gsm8k(ctx, split="train", shuffle_seed=42)
+    prompts, answers = get_boolq(ctx, split="train", shuffle_seed=42)
     prompts = [ctx.tokenizer.encode(s) for s in prompts]
     prompts, answers = prompts[: grpo_cfg.prompts_to_train], answers[: grpo_cfg.prompts_to_train]
 
@@ -147,9 +147,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--yaml-path",
         type=str,
-        default="tt-train/configs/training_configs/training_grpo_gsm8k_unsloth_llama_3_2_1b_instruct.yaml",
+        default="tt-train/configs/training_configs/training_grpo_boolq_unsloth_llama_3_2_1b_instruct.yaml",
     )
     parser.add_argument("--checkpoint-interval", type=int, default=50)
     args, _ = parser.parse_known_args()
 
-    train_grpo(args.yaml_path, args.checkpoint_interval)
+    train_grpo(args.yaml_path, args.checkpoint_interval, args.dataset)
