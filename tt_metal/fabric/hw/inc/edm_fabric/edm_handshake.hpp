@@ -41,7 +41,6 @@ namespace handshake {
  */
 
 static constexpr uint32_t A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH = 1000000000;
-static constexpr uint32_t CONTEXT_SWITCH_TIMEOUT_SHORT = 100000;
 static constexpr uint32_t MAGIC_HANDSHAKE_VALUE = 0xAA;
 
 // Data-Structure used for EDM to EDM Handshaking.

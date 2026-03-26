@@ -2666,6 +2666,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     }
 }
 
+static constexpr uint32_t CONTEXT_SWITCH_TIMEOUT_SHORT = 100000;
 template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>
 void
 #ifdef FABRIC_2D
