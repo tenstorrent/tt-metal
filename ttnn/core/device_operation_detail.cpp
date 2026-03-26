@@ -8,15 +8,11 @@
 
 #include <algorithm>
 #include <functional>
-#include <string_view>
 #include <unordered_map>
 #include <variant>
 #include <vector>
 
-#include <fmt/format.h>
-
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 
@@ -145,33 +141,6 @@ compute_output_placements_and_shape(
             "have the max distribution rank");
     }
     return {result_placements, tt::tt_metal::distributed::MeshShape(result_strides)};
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// emit_mesh_workload_annotation_impl
-// ─────────────────────────────────────────────────────────────────────
-
-void emit_mesh_workload_annotation_impl(
-    tt::tt_metal::distributed::MeshWorkload& workload,
-    std::string_view operation_name,
-    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors) {
-    if (tt::tt_metal::experimental::inspector::IsEnabled()) {
-        constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
-        fmt::memory_buffer tensor_args_buffer;
-        tensor_args_buffer.reserve(TENSOR_ARGS_BUFFER_SIZE);
-
-        int index = 0;
-        for (const auto& tensor_ref : tensors) {
-            if (index > 0) {
-                fmt::format_to(std::back_inserter(tensor_args_buffer), ", ");
-            }
-            fmt::format_to(std::back_inserter(tensor_args_buffer), "[{}]: {}", index, tensor_ref.get());
-            index++;
-        }
-
-        tt::tt_metal::experimental::inspector::EmitMeshWorkloadAnnotation(
-            workload, operation_name, std::string_view(tensor_args_buffer.data(), tensor_args_buffer.size()));
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────
