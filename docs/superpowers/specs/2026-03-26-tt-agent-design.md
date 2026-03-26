@@ -129,7 +129,7 @@ Concrete, single-purpose skills. Each does one thing well. Invoked by workflow s
 
 ### Meta layer
 
-- **`tt-skill-creator`** — helps TT developers write new skills for tt-agent. Knows the skill format, the knowledge directory structure, the "point to code not inline APIs" principle, and how to structure progressive load tables.
+- **`tt-skill-creator`** — helps TT developers write new skills for tt-agent. Builds on top of the `/skill-creator` superpowers skill (which handles generic skill mechanics: format, frontmatter, progressive load tables, evals) and adds TT-specific guidance on top: what makes a good TT skill, how to decide what belongs in a skill vs `knowledge/` vs left to `tt-learn`, the "point to code not inline APIs" principle, how to structure references, TT coding standards and hardware abstraction levels to respect, and team conventions for the tt-agent system.
 
 ---
 
