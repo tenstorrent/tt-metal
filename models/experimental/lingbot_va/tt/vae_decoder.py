@@ -268,7 +268,7 @@ class WanVAEDecoder(Module):
         self._feat_cache = [None] * self.cached_conv_count
 
     def forward(self, z_BTHWC: ttnn.Tensor, logical_h: int) -> tuple[ttnn.Tensor, int]:
-        B, T, H, W, C = z_BTHWC.shape
+        _, T, _, _, _ = z_BTHWC.shape
 
         self.clear_cache()
         z_tile = ttnn.to_layout(z_BTHWC, ttnn.TILE_LAYOUT)
@@ -286,7 +286,6 @@ class WanVAEDecoder(Module):
                 feat_idx=self._conv_idx,
                 first_chunk=first_chunk,
             )
-            # Channels-first for concatenation
             out_BCTHW = ttnn.permute(out_BTHWC, (0, 4, 1, 2, 3))
             out_BCTHW = out_BCTHW[:, : self.out_channels, :, :, :]
             if output_BCTHW is None:
@@ -294,7 +293,6 @@ class WanVAEDecoder(Module):
             else:
                 output_BCTHW = ttnn.concat([output_BCTHW, out_BCTHW], dim=2)
 
-        # Clamp to [-1, 1]
         output_tile = ttnn.to_layout(output_BCTHW, ttnn.TILE_LAYOUT)
         output_BCTHW = ttnn.clamp(output_tile, min=-1.0, max=1.0)
         output_BCTHW = ttnn.to_layout(output_BCTHW, ttnn.ROW_MAJOR_LAYOUT)

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.models.vae.vae_wan2_1 import WanResample
@@ -22,6 +25,7 @@ class WanResidualDownBlock(Module):
     ) -> None:
         super().__init__()
 
+        # The residual shortcut mirrors the same downsampling factors as the main branch.
         self.avg_shortcut = TtAvgDown3D(
             in_dim,
             out_dim,
@@ -42,8 +46,8 @@ class WanResidualDownBlock(Module):
             )
             in_dim = out_dim
         self.resnets = ModuleList(resnets)
-        if down_flag:
-            self.downsampler = WanResample(
+        self.downsampler = (
+            WanResample(
                 dim=out_dim,
                 mode="downsample3d" if temperal_downsample else "downsample2d",
                 mesh_device=mesh_device,
@@ -51,11 +55,11 @@ class WanResidualDownBlock(Module):
                 ccl_manager=ccl_manager,
                 dtype=dtype,
             )
-        else:
-            self.downsampler = None
+            if down_flag
+            else None
+        )
 
     def forward(self, x, logical_h: int, feat_cache=None, feat_idx=None):
-        # x is (B, T, H, W, C) TILE; logical_h is the valid spatial height for masking (must match WanEncoder3d / WanResample).
         if feat_idx is None:
             feat_idx = [0]
         x_copy = ttnn.clone(x)
@@ -63,7 +67,7 @@ class WanResidualDownBlock(Module):
         for resnet in self.resnets:
             x = resnet(x, logical_h=logical_h, feat_cache=feat_cache, feat_idx=feat_idx)
         if self.downsampler is not None:
-            # WanResample expects ROW_MAJOR; resnets output TILE. WanResample returns updated logical_h after H/2.
+            # WanResample kernels consume row-major, while residual blocks emit tile layout.
             x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             x, logical_h = self.downsampler(x, logical_h, feat_cache=feat_cache, feat_idx=feat_idx)
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)

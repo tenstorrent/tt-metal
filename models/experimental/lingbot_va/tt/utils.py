@@ -145,8 +145,6 @@ def load_transformer_from_state_dict(
     Returns:
         WanTransformer3DModel (TT) with weights loaded.
     """
-    import ttnn  # avoid top-level ttnn for environments that only need torch
-
     n_layers = num_layers if num_layers is not None else NUM_LAYERS
     # Copy so we can mutate for _prepare_torch_state
     state = dict(state_dict)
@@ -202,8 +200,6 @@ def load_text_encoder(
     Returns:
         TT UMT5Encoder with weights loaded.
     """
-    import ttnn
-
     from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder as TTUMT5Encoder
     from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
     from models.tt_dit.parallel.manager import CCLManager
@@ -214,7 +210,7 @@ def load_text_encoder(
         _local_path(text_encoder_path),
         torch_dtype=torch_dtype,
         local_files_only=True,
-    ).to(device="cpu")
+    ).cpu()
     hf_encoder.eval()
     text_weights = {k: v.cpu() for k, v in hf_encoder.state_dict().items()}
     cfg = hf_encoder.config
@@ -262,6 +258,7 @@ def load_vae_encoder(
     ccl_manager: "CCLManager | None" = None,
     parallel_config: "VaeHWParallelConfig | None" = None,
 ):
+    _ = torch_dtype
     encoder_weights = {k: v.cpu() for k, v in van_encoder.state_dict().items()}
     cfg = config
     del van_encoder
@@ -399,8 +396,7 @@ class WanVAEStreamingWrapper:
         self.cleanup_all()
 
     def encode_chunk(self, x_chunk):
-        # Full chunk is self-contained; reset causal feat_cache each call. (If you ever split one
-        # sequence across multiple encode_chunk calls and need T continuity, add an opt-out flag.)
+        # Full chunk is self-contained; reset causal feat_cache each call.
         self.clear_cache()
         if hasattr(self.vae.config, "patch_size") and self.vae.config.patch_size is not None:
             x_chunk = patchify(x_chunk, self.vae.config.patch_size)

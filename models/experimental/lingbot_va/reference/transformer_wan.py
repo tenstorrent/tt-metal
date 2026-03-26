@@ -2,10 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Copyright 2024-2025 The Robbyant Team Authors. All rights reserved.
-"""WanTransformer3DModel and its components (attention, blocks, embeddings, RoPE)."""
+"""Reference WanTransformer3DModel and building blocks."""
 
 import math
-import os
 from copy import deepcopy
 
 import torch
@@ -53,7 +52,6 @@ class WanTimeTextImageEmbedding(nn.Module):
         B, L = timestep.shape
         timestep = timestep.reshape(-1)
         timestep = self.timesteps_proj(timestep)
-        # time_embedder_dtype = next(iter(self.time_embedder.parameters())).dtype
         time_embedder_dtype = self.time_embedder.linear_1.weight.dtype
         if timestep.dtype != time_embedder_dtype and time_embedder_dtype != torch.int8:
             timestep = timestep.to(time_embedder_dtype)
@@ -360,9 +358,8 @@ class WanTransformerBlock(nn.Module):
 
 
 class WanTransformer3DModel(ModelMixin, ConfigMixin):
-    r"""
-    TODO
-    """
+    """Reference transformer used by Lingbot-VA demos."""
+
     _supports_gradient_checkpointing = True
     _skip_layerwise_casting_patterns = [
         # "patch_embedding",
@@ -408,9 +405,6 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
         pos_embed_seq_len=None,
         attn_mode="torch",
     ):
-        r"""
-        TODO
-        """
         super().__init__()
         self.patch_size = patch_size
         self.num_attention_heads = num_attention_heads
@@ -493,75 +487,24 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
         train_mode=False,
         dump_iter=None,
     ):
-        r"""
-        Forward pass through the diffusion model
-
-        Args:
-            x (List[Tensor]):
-                List of input video tensors, each with shape [C_in, F, H, W]
-            t (Tensor):
-                Diffusion timesteps tensor of shape [B]
-            context (List[Tensor]):
-                List of text embeddings each with shape [L, C]
-            seq_len (`int`):
-                Maximum sequence length for positional encoding
-            y (List[Tensor], *optional*):
-                Conditional video inputs for image-to-video mode, same shape as x
-
-        Returns:
-            List[Tensor]:
-                List of denoised video tensors with original input shapes [C_out, F, H / 8, W / 8]
-        """
-        for key, val in input_dict.items():
-            print(f"{key}: {val.shape}")
+        _ = dump_iter
         if train_mode:
             return self.forward_train(input_dict)
-        if action_mode:  # action input emb
-            latent_hidden_states = rearrange(input_dict["noisy_latents"], "b c f h w -> b (f h w) c")
-            latent_hidden_states = self.action_embedder(latent_hidden_states)  # B L1 C
-        else:  # latent input emb
-            latent_hidden_states = rearrange(
-                input_dict["noisy_latents"],
-                "b c (f p1) (h p2) (w p3) -> b (f h w) (c p1 p2 p3)",
-                p1=self.patch_size[0],
-                p2=self.patch_size[1],
-                p3=self.patch_size[2],
-            )
-            latent_hidden_states = self.patch_embedding_mlp(latent_hidden_states)
-        text_hidden_states = self.condition_embedder.text_embedder(input_dict["text_emb"])  # B L2 C
+        input_type = "action" if action_mode else "latent"
+        latent_hidden_states = self._input_embed(input_dict["noisy_latents"], input_type=input_type)
+        text_hidden_states = self._input_embed(input_dict["text_emb"], input_type="text")
 
         latent_grid_id = input_dict["grid_id"]
-        rotary_emb = self.rope(latent_grid_id)[:, :, None]  # 1 L 1 C
-        pach_scale_h, pach_scale_w = (1, 1) if action_mode else (self.patch_size[1], self.patch_size[2])
-
-        latent_time_steps = torch.repeat_interleave(
+        rotary_emb = self.rope(latent_grid_id)[:, :, None]
+        temb, timestep_proj = self._time_embed(
             input_dict["timesteps"],
-            (input_dict["noisy_latents"].shape[-2] // pach_scale_h)
-            * (input_dict["noisy_latents"].shape[-1] // pach_scale_w),
-            dim=1,
-        )  # L
-        current_condition_embedder = self.condition_embedder_action if action_mode else self.condition_embedder
-        temb, timestep_proj = current_condition_embedder(latent_time_steps, dtype=latent_hidden_states.dtype)
-        timestep_proj = timestep_proj.unflatten(2, (6, -1))  # B L 6 C
+            input_dict["noisy_latents"].shape[-2],
+            input_dict["noisy_latents"].shape[-1],
+            latent_hidden_states.dtype,
+            action_mode=action_mode,
+        )
 
-        dump_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "tests", "demo", "out_inference"))
-        dump_path = "action" if action_mode else "video"
-        suffix = f"_iter{dump_iter}_{dump_path}" if dump_iter is not None else ""
-
-        os.makedirs(dump_dir, exist_ok=True)
-        if dump_iter is not None:
-            torch.save(
-                latent_hidden_states.detach().cpu(),
-                os.path.join(dump_dir, f"input_torch{suffix}.pt"),
-            )
-            torch.save(
-                text_hidden_states.detach().cpu(),
-                os.path.join(dump_dir, f"text_hidden_states_torch{suffix}.pt"),
-            )
-            torch.save(temb.detach().cpu(), os.path.join(dump_dir, f"temb_torch{suffix}.pt"))
-            torch.save(timestep_proj.detach().cpu(), os.path.join(dump_dir, f"timestep_proj_torch{suffix}.pt"))
-
-        for block_idx, block in enumerate(self.blocks):
+        for block in self.blocks:
             latent_hidden_states = block(
                 latent_hidden_states,
                 text_hidden_states,
@@ -570,11 +513,7 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
                 update_cache=update_cache,
                 cache_name=cache_name,
             )
-            if dump_iter is not None:
-                torch.save(
-                    latent_hidden_states.detach().cpu(),
-                    os.path.join(dump_dir, f"transformer_torch_{block_idx}{suffix}.pt"),
-                )
+        # Final modulation and output projection.
         temb_scale_shift_table = self.scale_shift_table[None] + temb[:, :, None, ...]
         shift, scale = rearrange(temb_scale_shift_table, "b l n c -> b n l c").chunk(2, dim=1)
         shift = shift.to(latent_hidden_states.device).squeeze(1)
@@ -582,54 +521,9 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
         latent_hidden_states = (self.norm_out(latent_hidden_states.float()) * (1.0 + scale) + shift).type_as(
             latent_hidden_states
         )
-        if dump_iter is not None:
-            torch.save(
-                latent_hidden_states.detach().cpu(),
-                os.path.join(dump_dir, f"norm_out_torch{suffix}.pt"),
-            )
 
         if action_mode:
             latent_hidden_states = self.action_proj_out(latent_hidden_states)
-            if dump_iter is not None:
-                torch.save(
-                    latent_hidden_states.detach().cpu(),
-                    os.path.join(dump_dir, f"final_out_action_torch{suffix}.pt"),
-                )
             return latent_hidden_states
-        else:
-            latent_hidden_states = self.proj_out(latent_hidden_states)
-            if dump_iter is not None:
-                torch.save(
-                    latent_hidden_states.detach().cpu(),
-                    os.path.join(dump_dir, f"final_pre_rearrange_torch{suffix}.pt"),
-                )
-            latent_hidden_states = rearrange(
-                latent_hidden_states, "b l (n c) -> b (l n) c", n=math.prod(self.patch_size)
-            )
-            if dump_iter is not None:
-                torch.save(
-                    latent_hidden_states.detach().cpu(),
-                    os.path.join(dump_dir, f"final_out_video_torch{suffix}.pt"),
-                )
-            return latent_hidden_states
-
-
-if __name__ == "__main__":
-    model = WanTransformer3DModel(
-        patch_size=[1, 2, 2],
-        num_attention_heads=24,
-        attention_head_dim=128,
-        in_channels=48,
-        out_channels=48,
-        action_dim=30,
-        text_dim=4096,
-        freq_dim=256,
-        ffn_dim=14336,
-        num_layers=30,
-        cross_attn_norm=True,
-        eps=1e-6,
-        rope_max_seq_len=1024,
-        pos_embed_seq_len=None,
-        attn_mode="torch",
-    )
-    print(model)
+        latent_hidden_states = self.proj_out(latent_hidden_states)
+        return rearrange(latent_hidden_states, "b l (n c) -> b (l n) c", n=math.prod(self.patch_size))
