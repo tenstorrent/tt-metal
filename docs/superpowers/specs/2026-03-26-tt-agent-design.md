@@ -65,10 +65,11 @@ tt-metal/
         tt-profiler/                 # profile, expose bottlenecks
         tt-tester/                   # test quality, expose weaknesses
         tt-debugger/                 # debug kernels, hangs
+        tt-designer/                 # design phase: TT brainstorm + perf estimation + data-movement planning
         tt-code-review/              # review with TT standards
-        tt-learn/                    # research codebase via deepwiki-mcp, write findings to notes/
       meta/
         tt-skill-creator/            # help write new TT skills
+        tt-learn/                    # research codebase via deepwiki-mcp, write findings to notes/
     knowledge/
       hardware/                      # stable hardware invariants (silicon facts)
         tensix-architecture.md       # cores, FPU, SFPU, L1, NOC topology
@@ -124,12 +125,13 @@ Concrete, single-purpose skills. Each does one thing well. Invoked by workflow s
 - **`tt-profiler`** — invoke Tracy or device profiler, interpret output, identify bottlenecks
 - **`tt-tester`** — write and run tests, evaluate coverage, expose quality issues
 - **`tt-debugger`** — debug device kernels, trace hangs, interpret RISC-V core state
+- **`tt-designer`** — the design phase in one skill. Wraps `/superpowers:brainstorm` with TT-specific grilling (tile alignment, L1 budget, arithmetic intensity, PCC targets), performance estimation (roofline analysis, bandwidth math, CCL latency), and data-movement planning (sharding across cores/chips, CCL strategy selection, compute-communication overlap). Pairs with `tt-code-review` as bookends around implementation — designer before writing code, code-review after. Sub-files: `brainstorm.md`, `estimator.md`, `data-movement.md`.
 - **`tt-code-review`** — review code with TT-specific standards and good practices: CB sizing vs L1, tile alignment, NOC conventions, program cache hash, sharding validity, PCC test coverage
-- **`tt-learn`** — research a topic in the live codebase, write a dated context brief to `notes/` (wraps deepwiki-mcp)
 
 ### Meta layer
 
 - **`tt-skill-creator`** — helps TT developers write new skills for tt-agent. Builds on top of the `/skill-creator` superpowers skill (which handles generic skill mechanics: format, frontmatter, progressive load tables, evals) and adds TT-specific guidance on top: what makes a good TT skill, how to decide what belongs in a skill vs `knowledge/` vs left to `tt-learn`, the "point to code not inline APIs" principle, how to structure references, TT coding standards and hardware abstraction levels to respect, and team conventions for the tt-agent system.
+- **`tt-learn`** — research a topic in the live codebase via deepwiki-mcp, write a dated context brief to `notes/`. Cross-cutting utility invoked by any skill at any time. Consults `knowledge/references/` as starting points before doing a broader search.
 
 ---
 
@@ -212,7 +214,7 @@ Three documents at the tt-agent root serve distinct audiences:
 
 **`README.md`** — for someone who just discovered the repo. What it is, prerequisites, install instructions per platform, two quick-start examples. Links to DESIGN.md and CONTRIBUTING.md.
 
-**`DESIGN.md`** — for someone who wants to understand the decisions. Every non-obvious architectural choice is recorded here with rationale and date. This document preserves the intent behind the system so future agents and developers can continue in the same direction without re-litigating settled questions. Key decisions documented: co-location in tt-metal, own-the-stack vs superpowers, skills/knowledge/notes split, volatile knowledge via tt-learn + deepwiki-mcp, notes/ as shared blackboard, workflow layer as thin base loop, two MCP dependencies (tt-device-mcp + deepwiki-mcp), extraction path.
+**`DESIGN.md`** — for someone who wants to understand the decisions. Every non-obvious architectural choice is recorded here with rationale and date. This document preserves the intent behind the system so future agents and developers can continue in the same direction without re-litigating settled questions. Key decisions documented: co-location in tt-metal, own-the-stack vs superpowers, skills/knowledge/notes split, volatile knowledge via tt-learn + deepwiki-mcp, notes/ as shared blackboard, workflow layer as thin base loop, two MCP dependencies (tt-device-mcp + deepwiki-mcp), tt-designer as unified design-phase skill, tt-learn in meta/ as cross-cutting utility, extraction path.
 
 **`CONTRIBUTING.md`** — for someone who wants to extend the system. How to write a new skill (SKILL.md format, progressive load table), what belongs in knowledge/ vs learned via tt-learn, how to add a platform adapter, the "point to code not inline APIs" rule and why, PR conventions.
 
