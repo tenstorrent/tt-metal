@@ -43,6 +43,7 @@ if(TARGET TT::Metalium)
         STATIC
         pipeline_manager.cpp
         socket_connector.cpp
+        socket_pipeline.cpp
     )
     target_link_libraries(deepseek_v3_b1_pipeline_manager PUBLIC TT::Metalium)
     target_include_directories(
@@ -60,6 +61,18 @@ if(TARGET TT::Metalium)
 
     add_executable(deepseek_pipeline_loopback_harness tests/deepseek_pipeline_loopback_harness.cpp)
     target_link_libraries(deepseek_pipeline_loopback_harness PRIVATE deepseek_v3_b1_pipeline_manager)
+
+    add_executable(pipeline_launcher pipeline_launcher.cpp)
+    target_link_libraries(pipeline_launcher PRIVATE deepseek_v3_b1_pipeline_manager)
+
+    add_executable(test_device_pipeline tests/test_device_pipeline.cpp)
+    target_link_libraries(
+        test_device_pipeline
+        PRIVATE
+            deepseek_v3_b1_pipeline_manager
+            gtest
+            gtest_main
+    )
 endif()
 
 # ===========================================================================
@@ -86,3 +99,9 @@ target_link_libraries(
         gtest
         gtest_main
 )
+
+# Single build target: host mock tests + device integration test (if TT::Metalium was found).
+add_custom_target(pipeline_manager_tests DEPENDS test_pipeline_manager)
+if(TARGET test_device_pipeline)
+    add_dependencies(pipeline_manager_tests test_device_pipeline)
+endif()

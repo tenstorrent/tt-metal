@@ -34,6 +34,14 @@ public:
     // Query the current state of a user slot. Safe to call from any thread.
     UserState get_user_state(int user_id) const;
 
+    // Debug diagnostics for a user slot.
+    int32_t get_in_flight_count(int user_id) const;
+    int32_t get_tokens_generated(int user_id) const;
+    int32_t get_max_new_tokens(int user_id) const;
+    int32_t get_current_position(int user_id) const;
+    bool get_cancel_pending(int user_id) const;
+    int get_decode_staging_size() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

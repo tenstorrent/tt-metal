@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <thread>
+#include <iostream>
 
 #include "models/demos/deepseek_v3_b1/pipeline_manager/bounded_queue.hpp"
 #include "models/demos/deepseek_v3_b1/pipeline_manager/decode_staging.hpp"
@@ -53,14 +54,24 @@ struct PipelineManager::Impl {
         if (!running.load(std::memory_order_acquire)) {
             return;
         }
+
+        // Phase 1: Signal threads to exit their loops.
         running.store(false, std::memory_order_release);
-        pipeline.shutdown();
+        pipeline.request_stop();
+
+        // Phase 2: Wait for threads to drain and exit.
+        std::cout << "Start joining writer thread" << std::endl;
         if (writer_thread.joinable()) {
             writer_thread.join();
         }
         if (reader_thread.joinable()) {
             reader_thread.join();
         }
+
+        std::cout << "Start shutting down pipeline" << std::endl;
+        // Phase 3: Exclusive socket access — send sentinel to kill the device kernel.
+        pipeline.shutdown();
+        std::cout << "Finished shutting down pipeline" << std::endl;
     }
 
     // ========================================================================
@@ -80,6 +91,7 @@ struct PipelineManager::Impl {
                     continue;
                 }
 
+                user_table.in_flight_count[uid].fetch_add(1, std::memory_order_release);
                 pipeline.inject(InjectDescriptor{
                     .user_id = static_cast<int32_t>(uid),
                     .token_id = tok,
@@ -90,7 +102,6 @@ struct PipelineManager::Impl {
                     .top_p = user_table.top_p[uid],
                     .top_k = user_table.top_k[uid],
                 });
-                user_table.in_flight_count[uid].fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
 
@@ -115,7 +126,6 @@ struct PipelineManager::Impl {
 
                 if (cur_pos >= prompt_len) {
                     prefill_queue.pop_front();
-                    user_table.state[pfuid].store(UserState::DECODE, std::memory_order_release);
                     prompt_table.clear(pfuid);
                     continue;
                 }
@@ -126,6 +136,7 @@ struct PipelineManager::Impl {
                 user_table.current_position[pfuid].store(cur_pos + 1, std::memory_order_release);
                 user_table.prefill_chunk_remaining[pfuid] = chunk_rem - 1;
 
+                user_table.in_flight_count[pfuid].fetch_add(1, std::memory_order_release);
                 pipeline.inject(InjectDescriptor{
                     .user_id = static_cast<int32_t>(pfuid),
                     .token_id = prompt_table.get_token(pfuid, cur_pos),
@@ -136,7 +147,12 @@ struct PipelineManager::Impl {
                     .top_p = user_table.top_p[pfuid],
                     .top_k = user_table.top_k[pfuid],
                 });
-                user_table.in_flight_count[pfuid].fetch_add(1, std::memory_order_relaxed);
+
+                if (is_last) {
+                    prefill_queue.pop_front();
+                    user_table.state[pfuid].store(UserState::DECODE, std::memory_order_release);
+                    prompt_table.clear(pfuid);
+                }
                 continue;
             }
 
@@ -311,5 +327,21 @@ void PipelineManager::tick() { impl_->handle_api_requests(); }
 UserState PipelineManager::get_user_state(int user_id) const {
     return impl_->user_table.state[user_id].load(std::memory_order_acquire);
 }
+
+int32_t PipelineManager::get_in_flight_count(int user_id) const {
+    return impl_->user_table.in_flight_count[user_id].load(std::memory_order_acquire);
+}
+
+int32_t PipelineManager::get_tokens_generated(int user_id) const { return impl_->user_table.tokens_generated[user_id]; }
+
+int32_t PipelineManager::get_max_new_tokens(int user_id) const { return impl_->user_table.max_new_tokens[user_id]; }
+
+int32_t PipelineManager::get_current_position(int user_id) const {
+    return impl_->user_table.current_position[user_id].load(std::memory_order_acquire);
+}
+
+bool PipelineManager::get_cancel_pending(int user_id) const { return impl_->cancel_pending.is_set(user_id); }
+
+int PipelineManager::get_decode_staging_size() const { return impl_->decode_staging.fifo.size(); }
 
 }  // namespace models::demos::deepseek_v3_b1::pipeline_manager

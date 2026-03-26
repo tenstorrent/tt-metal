@@ -9,12 +9,21 @@ TT_METALIUM_PREFIX="${TT_METALIUM_PREFIX:-${TT_METALIUM_PREFIX_DEFAULT}}"
 JOBS="${JOBS:-4}"
 
 cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" -DTT_METALIUM_PREFIX="${TT_METALIUM_PREFIX}" -DCMAKE_PREFIX_PATH="${REPO_ROOT}/build;${TT_METALIUM_PREFIX}"
-cmake --build "${BUILD_DIR}" --target deepseek_v3_b1_pipeline_manager_core test_pipeline_manager -j "${JOBS}"
+cmake --build "${BUILD_DIR}" --target pipeline_manager_tests -j "${JOBS}"
 
 echo ""
 echo "Built:"
 echo "  ${BUILD_DIR}/libdeepseek_v3_b1_pipeline_manager_core.a"
 echo "  ${BUILD_DIR}/test_pipeline_manager"
+if [[ -f "${BUILD_DIR}/test_device_pipeline" ]]; then
+    echo "  ${BUILD_DIR}/test_device_pipeline (device + sockets; requires hardware / Metal runtime)"
+fi
+if [[ -f "${BUILD_DIR}/libdeepseek_v3_b1_pipeline_manager.a" ]]; then
+    echo "  ${BUILD_DIR}/libdeepseek_v3_b1_pipeline_manager.a"
+fi
 echo ""
 echo "Run tests:"
 echo "  ${BUILD_DIR}/test_pipeline_manager"
+if [[ -f "${BUILD_DIR}/test_device_pipeline" ]]; then
+    echo "  ${BUILD_DIR}/test_device_pipeline"
+fi

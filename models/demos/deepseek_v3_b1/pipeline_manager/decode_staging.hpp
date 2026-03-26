@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <iostream>
 
 #include "models/demos/deepseek_v3_b1/pipeline_manager/bounded_queue.hpp"
 #include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_manager_types.hpp"
@@ -25,7 +26,8 @@ struct DecodeStagingEntry {
 // whose generation doesn't match the current user generation, handling
 // stale entries from cancelled sessions without timing dependencies.
 struct DecodeStaging {
-    BoundedQueue<DecodeStagingEntry, MAX_USERS> fifo;
+    static constexpr int FIFO_CAPACITY = MAX_USERS * 4;
+    BoundedQueue<DecodeStagingEntry, FIFO_CAPACITY> fifo;
     std::array<std::atomic<uint32_t>, MAX_USERS> generation;
 
     DecodeStaging() {
@@ -38,7 +40,10 @@ struct DecodeStaging {
 
     void stage(int uid, int32_t tok, int32_t pos) {
         uint32_t gen = generation[uid].load(std::memory_order_relaxed);
-        fifo.try_push({.user_id = uid, .token_id = tok, .position = pos, .generation = gen});
+        DecodeStagingEntry entry{.user_id = uid, .token_id = tok, .position = pos, .generation = gen};
+        if (!fifo.try_push(entry)) {
+            std::cerr << "FATAL: decode_staging FIFO full — loopback token dropped for uid " << uid << std::endl;
+        }
     }
 
     // Pops the next entry, silently skipping stale entries from old generations.

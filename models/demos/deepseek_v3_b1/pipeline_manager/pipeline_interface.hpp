@@ -31,7 +31,15 @@ public:
     // Free KV cache for a user slot.
     virtual void reset_kv(int user_id) = 0;
 
-    // Unblock any threads blocked in read_result() during shutdown.
+    // Signal that threads should stop. read_result() must return a sentinel
+    // ResultDescriptor{.user_id = -1} promptly after this is called.
+    // Must NOT use the sockets to communicate with the device — threads may
+    // still hold references. Only sets internal flags.
+    virtual void request_stop() = 0;
+
+    // Called AFTER all threads using inject()/read_result() have been joined.
+    // Performs any final device-side cleanup (e.g. sending sentinel to kernel).
+    // Safe to use sockets here — exclusive ownership is guaranteed.
     virtual void shutdown() = 0;
 };
 
@@ -101,11 +109,13 @@ public:
 
     void reset_kv(int /*user_id*/) override {}
 
-    void shutdown() override {
+    void request_stop() override {
         std::lock_guard<std::mutex> lock(mtx_);
         shutdown_ = true;
         cv_.notify_all();
     }
+
+    void shutdown() override {}
 
 private:
     int latency_min_us_;

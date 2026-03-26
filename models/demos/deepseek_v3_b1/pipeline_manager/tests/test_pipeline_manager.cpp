@@ -81,6 +81,9 @@ bool poll_until(pm::PipelineManager& mgr, Pred pred, std::vector<OutputMessage>&
             outputs.push_back(out);
         }
         if (pred()) {
+            while (mgr.try_pop_output(out)) {
+                outputs.push_back(out);
+            }
             return true;
         }
         std::this_thread::yield();
