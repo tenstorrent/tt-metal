@@ -1,29 +1,34 @@
-name: "(triage) Cursor CLI smoke test"
+name: "(triage) Export Evan Slack threads"
 
 on:
   workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of days of Slack history to export"
+        required: false
+        default: "30"
 
 permissions:
   contents: read
 
 jobs:
-  cursor-cli-smoke-test:
+  export-slack-author-threads:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Ensure CURSOR_API_KEY is configured
+      - name: Ensure SLACK_BOT_TOKEN is configured
         env:
-          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
-          if [ -z "$CURSOR_API_KEY" ]; then
-            echo "Missing secret CURSOR_API_KEY"
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "Missing secret SLACK_BOT_TOKEN"
             exit 1
           fi
 
-      - name: Install Cursor CLI
+      - name: Install Cursor CLI (kept for upcoming analysis steps)
         run: |
           set -euo pipefail
           install_script="$(mktemp)"
@@ -35,14 +40,20 @@ jobs:
           rm -f "$install_script"
           echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
 
-      - name: Run simple Cursor prompt
+      - name: Export Evan top-level Slack messages and thread replies
         env:
-          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
           set -euo pipefail
-          output="$(agent --trust -p "Reply with exactly: CURSOR_CI_OK")"
-          echo "Agent output: $output"
-          if [[ "$output" != *"CURSOR_CI_OK"* ]]; then
-            echo "Unexpected agent output; expected CURSOR_CI_OK"
-            exit 1
-          fi
+          python tools/ci/export_slack_author_threads.py \
+            --channel-id C05GRJC4J4A \
+            --author-user-id U08GTDV8MDH \
+            --days "${{ github.event.inputs.days || 30 }}" \
+            --output build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json
+
+      - name: Upload Slack export artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: slack-C05GRJC4J4A-U08GTDV8MDH-threads
+          path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json
+          retention-days: 7
