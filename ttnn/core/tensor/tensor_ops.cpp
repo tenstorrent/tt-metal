@@ -218,7 +218,6 @@ Tensor unpad_from_tile(const Tensor& input_tensor, const tt::tt_metal::Shape& ou
 //                                  .tensor_view()
 // ======================================================================================
 
-// TODO(river): This will be moved to runtime after MeshTensor is in.
 Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, const Shape& new_padded_shape) {
     // Just edit shape if shape has a 0 dimension
     if (input_tensor.logical_volume() == 0) {
