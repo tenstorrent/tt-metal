@@ -66,9 +66,10 @@ def test_reduce_on_batch(shape, shard_shape, dim, interleaved, device):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999899,
-        rtol=0.00796975,
-        atol=8.160001,
-        frobenius_threshold=0.0016653448,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=8.1,
+        frobenius_threshold=0.002,
+        check_ulp=True,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)

@@ -518,6 +518,25 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     )
 
 
+def comp_allclose_custom(golden, calculated, rtol=1e-05, atol=1e-08):
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
+    atol_delta = torch.max(torch.abs(golden - calculated)).item()
+
+    abs_diff = torch.abs(golden - calculated)
+    max_abs_idx = torch.argmax(abs_diff).item()
+
+    atol_delta_mean = torch.mean(torch.abs(golden - calculated).float()).item()
+    rtol_delta = torch.max(torch.abs(golden - calculated) / torch.abs(golden)).item()
+    rtol_delta_mean = torch.mean((torch.abs(golden - calculated) / torch.abs(golden)).float()).item()
+    return (
+        torch.allclose(golden, calculated, rtol, atol, True),
+        f"Max ATOL Delta: {atol_delta}, Mean ATOL Delta: {atol_delta_mean}, Max RTOL Delta: {rtol_delta}, Mean RTOL Delta: {rtol_delta_mean}, Max Absolute Difference Index: {max_abs_idx}",
+        # f"Max ATOL Delta: {atol_delta}, Mean ATOL Delta: {atol_delta_mean}, Max RTOL Delta: {rtol_delta}, Mean RTOL Delta: {rtol_delta_mean}",
+    )
+
+
 def comp_pcc(golden, calculated, pcc=0.99):
     golden = torch.Tensor(golden)
     calculated = torch.Tensor(calculated)

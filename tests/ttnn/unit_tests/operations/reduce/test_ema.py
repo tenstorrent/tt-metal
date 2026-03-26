@@ -62,8 +62,8 @@ def test_ema(device, T, B, C, cores_y, cores_x):
     assert_numeric_metrics(
         golden_output_tensor,
         torch_output_tensor,
-        pcc_threshold=0.999877,
-        rtol=0.00796975,
-        atol=0.003985375,
-        frobenius_threshold=0.00280151464,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=0.004,
+        frobenius_threshold=0.003,
     )

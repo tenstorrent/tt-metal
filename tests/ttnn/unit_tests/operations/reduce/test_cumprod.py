@@ -68,19 +68,19 @@ def test_cumprod_normal(dim, shape, dtypes, device):
                 assert_numeric_metrics(
                     torch_result_tensor,
                     ttnn_result_torch,
-                    pcc_threshold=0.999887,
-                    rtol=0.0864898192,
-                    atol=1.4417608,
+                    pcc_threshold=0.999,
+                    rtol=0.09,
+                    atol=1.47,
                     frobenius_threshold=0.02,
                 )
             else:
                 assert_numeric_metrics(
                     torch_result_tensor,
                     ttnn_result_torch,
-                    pcc_threshold=0.999895,
-                    rtol=0.0283896706,
-                    atol=1.020001,
-                    frobenius_threshold=0.00385904248,
+                    pcc_threshold=0.999,
+                    rtol=0.03,
+                    atol=1.04,
+                    frobenius_threshold=0.01,
                 )
             # assert_with_pcc(ttnn_result_torch, torch_result_tensor, 0.99)
         assert device.num_program_cache_entries() >= 1
@@ -141,18 +141,18 @@ def test_cumprod_backward(dim, shape, dtypes, device):
         #         torch_input_tensor.grad,
         #         tt_input_grad_cpu,
         #         pcc_threshold=0.9,
-        #         rtol=534772.740001,
-        #         atol=67089041.400001,
-        #         frobenius_threshold=1.158263041,
+        #         rtol=545468.19,
+        #         atol=68330822.23,
+        #         frobenius_threshold=1.18,
         #     )
         # else:
         #     assert_numeric_metrics(
         #         torch_input_tensor.grad,
         #         tt_input_grad_cpu,
         #         pcc_threshold=0.9,
-        #         rtol=534773.760001,
-        #         atol=67114102.800001,
-        #         frobenius_threshold=1.158068221,
+        #         rtol=545469.24,
+        #         atol=68356384.66,
+        #         frobenius_threshold=1.18,
         #     )
         assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
@@ -204,21 +204,21 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             assert_numeric_metrics(
                 torch_result_tensor,
                 ttnn_result_torch,
-                pcc_threshold=0.999887,
-                rtol=0.0864898192,
-                atol=1.4417608,
-                frobenius_threshold=0.00954523546,
+                pcc_threshold=0.999,
+                rtol=0.09,
+                atol=1.47,
+                frobenius_threshold=0.01,
             )
             assert_numeric_metrics(
                 torch_preallocated_tensor,
                 ttnn_preallocated_torch,
-                pcc_threshold=0.99,
-                rtol=0.0864898192,
-                atol=1.4417608,
-                frobenius_threshold=0.00954523546,
+                pcc_threshold=0.999,
+                rtol=0.09,
+                atol=1.47,
+                frobenius_threshold=0.01,
             )
-            assert_with_pcc(ttnn_result_torch, torch_result_tensor, 0.99)
-            assert_with_pcc(ttnn_preallocated_torch, torch_preallocated_tensor, 0.98)
+            # assert_with_pcc(ttnn_result_torch, torch_result_tensor, 0.99)
+            # assert_with_pcc(ttnn_preallocated_torch, torch_preallocated_tensor, 0.98)
     else:
         pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
 

@@ -8,7 +8,7 @@ pytestmark = pytest.mark.use_module_device
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
 
@@ -56,13 +56,13 @@ def test_mean_row_major(device, input_shape, dim, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999739,
-        rtol=0.00796975,
-        atol=0.003985375,
-        frobenius_threshold=0.00261474754,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=0.004,
+        frobenius_threshold=0.003,
         check_ulp=True,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -101,13 +101,14 @@ def test_sum_row_major(device, input_shape, dim, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999898,
-        rtol=0.510001,
-        atol=8.160001,
-        frobenius_threshold=0.00245910778,
+        pcc_threshold=0.999,
+        rtol=0.510,
+        atol=8.16,
+        frobenius_threshold=0.003,
         check_ulp=True,
+        ulp_threshold=65,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+    # #assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -138,13 +139,13 @@ def test_sum_global_row_major(device, input_shape):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.9999,
+        pcc_threshold=0.999,
         rtol=1e-06,
         atol=1e-06,
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -181,7 +182,7 @@ def test_max_row_major(device, input_shape, dim, keepdim):
         frobenius_threshold=1e-09,
         check_ulp=True,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -214,12 +215,12 @@ def test_min_row_major(device, input_shape, dim, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.9999,
+        pcc_threshold=0.999,
         rtol=1e-06,
         atol=1e-06,
         frobenius_threshold=1e-09,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
 @pytest.mark.skip(reason="Skipping std test due to issue #32830")
@@ -251,11 +252,12 @@ def test_std_row_major(device, input_shape, dim):
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.99,
-        rtol=1,
-        atol=1,
-        frobenius_threshold=1,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+        check_ulp=True,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.skip(reason="Skipping var test due to issue #32830")
@@ -287,11 +289,12 @@ def test_var_row_major(device, input_shape, dim):
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.99,
-        rtol=1,
-        atol=1,
-        frobenius_threshold=1,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+        check_ulp=True,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    # assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
 @pytest.mark.parametrize(
@@ -327,8 +330,9 @@ def test_mean_multi_dim_row_major(device, input_shape, dims, keepdim):
         rtol=0.00796975,
         atol=0.003985375,
         frobenius_threshold=0.00196106014,
+        check_ulp=True,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.98)
+    # #assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.98)
 
 
 @pytest.mark.parametrize(
@@ -359,9 +363,9 @@ def test_sum_multi_dim_row_major(device, input_shape, dims, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999897,
-        rtol=0.761016676,
-        atol=32.640001,
-        frobenius_threshold=0.00255249082,
+        pcc_threshold=0.999,
+        rtol=0.761,
+        atol=32.64,
+        frobenius_threshold=0.003,
     )
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+    # #assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)

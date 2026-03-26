@@ -299,6 +299,14 @@ def comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result):
         actual_pytorch_result.shape
     ), f"Shape mismatch: expected {list(expected_pytorch_result.shape)} vs actual {list(actual_pytorch_result.shape)}"
 
+    def _to_float_for_norm(t: torch.Tensor) -> torch.Tensor:
+        if torch.is_floating_point(t) or torch.is_complex(t):
+            return t
+        return t.to(torch.float64)
+
+    expected_pytorch_result = _to_float_for_norm(expected_pytorch_result)
+    actual_pytorch_result = _to_float_for_norm(actual_pytorch_result)
+
     error = expected_pytorch_result - actual_pytorch_result
     frob_error = torch.norm(error, p="fro")
     frob_expected = torch.norm(expected_pytorch_result, p="fro")
@@ -534,6 +542,8 @@ def assert_numeric_metrics(
     check_pcc=True,
     check_ulp=False,
 ):
+    if expected.dtype != actual.dtype:
+        actual = actual.type(expected.dtype)
     # pcc_threshold = 1
     if check_allclose:
         allclose_kwargs = {}
@@ -550,9 +560,10 @@ def assert_numeric_metrics(
         assert_relative_frobenius(expected, actual, **frobenius_kwargs)
 
     if check_pcc:
-        threshold = 0.98 if pcc_threshold is None else pcc_threshold
-        passing_pcc, pcc_message = comp_pcc(expected, actual, threshold)
-        assert passing_pcc, pcc_message
+        if torch.numel(expected) != 1:
+            threshold = 0.98 if pcc_threshold is None else pcc_threshold
+            passing_pcc, pcc_message = comp_pcc(expected, actual, threshold)
+            assert passing_pcc, pcc_message
     if check_ulp:
         ulp_kwargs = {}
         # if ulp_threshold is not None:

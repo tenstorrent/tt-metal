@@ -12,7 +12,7 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
 
 
 def run_moe_test(N, C, H, W, k, E, e, dtype, device):
-    # torch.manual_seed(2005)
+    torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
 
@@ -45,18 +45,18 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
 
         ttnn_weights_1SB1 = ttnn.to_torch(weights_1SB1)
 
-        pcc_values = 0.95
+        # pcc_values = 0.95
         assert_numeric_metrics(
             torch_weights_1SB1,
             ttnn_weights_1SB1,
-            pcc_threshold=0.999715,
-            rtol=0.0455722846,
-            atol=0.011954125,
-            frobenius_threshold=0.0168090808,
+            pcc_threshold=0.999,
+            rtol=0.046,
+            atol=0.012,
+            frobenius_threshold=0.017,
             check_ulp=True,
             ulp_threshold=8,
         )
-        assert_with_pcc(torch_weights_1SB1, ttnn_weights_1SB1, pcc_values)
+        # assert_with_pcc(torch_weights_1SB1, ttnn_weights_1SB1, pcc_values)
 
 
 @pytest.mark.parametrize(

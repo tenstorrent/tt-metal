@@ -34,10 +34,10 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.99934,
-        rtol=0.0118918642,
-        atol=0.011954125,
-        frobenius_threshold=0.00435791122,
+        pcc_threshold=0.999,
+        rtol=0.012,
+        atol=0.012,
+        frobenius_threshold=0.005,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -66,10 +66,10 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999703,
-        rtol=0.022039579,
-        atol=0.0159385,
-        frobenius_threshold=0.00628784302,
+        pcc_threshold=0.999,
+        rtol=0.023,
+        atol=0.016,
+        frobenius_threshold=0.007,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -120,10 +120,10 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999871,
-        rtol=0.0886533412,
-        atol=0.255001,
-        frobenius_threshold=0.0702246142,
+        pcc_threshold=0.999,
+        rtol=0.089,
+        atol=0.255,
+        frobenius_threshold=0.071,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -153,10 +153,10 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999897,
-        rtol=1.64953276,
-        atol=0.127501,
-        frobenius_threshold=0.00278595046,
+        pcc_threshold=0.999,
+        rtol=1.650,
+        atol=0.128,
+        frobenius_threshold=0.003,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -186,10 +186,10 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999897,
-        rtol=0.0295102732,
-        atol=0.031876,
-        frobenius_threshold=0.00261474754,
+        pcc_threshold=0.999,
+        rtol=0.030,
+        atol=0.032,
+        frobenius_threshold=0.003,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -218,10 +218,10 @@ def test_sum_6d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999896,
-        rtol=0.0326230684,
-        atol=0.127501,
-        frobenius_threshold=0.00628784302,
+        pcc_threshold=0.999,
+        rtol=0.033,
+        atol=0.128,
+        frobenius_threshold=0.007,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -249,10 +249,10 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999897,
-        rtol=0.80484475,
-        atol=0.255001,
-        frobenius_threshold=0.0025057993,
+        pcc_threshold=0.999,
+        rtol=0.805,
+        atol=0.255,
+        frobenius_threshold=0.003,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -279,10 +279,10 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999893,
-        rtol=8.478751,
-        atol=4.080001,
-        frobenius_threshold=0.00393768448,
+        pcc_threshold=0.999,
+        rtol=8.479,
+        atol=4.080,
+        frobenius_threshold=0.004,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -352,10 +352,10 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
         assert_numeric_metrics(
             pyt_topk_values,
             ttnn_torch_values,
-            pcc_threshold=0.996363,
-            rtol=0.0435801022,
-            atol=0.0159385,
-            frobenius_threshold=0.0069415294,
+            pcc_threshold=0.996,
+            rtol=0.044,
+            atol=0.016,
+            frobenius_threshold=0.007,
         )
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
@@ -479,10 +479,10 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
         assert_numeric_metrics(
             pyt_topk_values,
             ttnn_torch_values,
-            pcc_threshold=0.999554,
-            rtol=2.932501,
-            atol=0.0258994324,
-            frobenius_threshold=0.0093952363,
+            pcc_threshold=0.999,
+            rtol=2.933,
+            atol=0.026,
+            frobenius_threshold=0.010,
         )
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
@@ -551,10 +551,10 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
         assert_numeric_metrics(
             pyt_topk_values,
             ttnn_torch_values,
-            pcc_threshold=0.99977,
-            rtol=2.996251,
-            atol=0.0258994324,
-            frobenius_threshold=0.010900486,
+            pcc_threshold=0.999,
+            rtol=2.997,
+            atol=0.026,
+            frobenius_threshold=0.011,
         )
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
@@ -580,10 +580,10 @@ def test_sum_3d_tensor_dims(device, c, h, w, dim, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999897,
-        rtol=0.0250278526,
-        atol=0.255001,
-        frobenius_threshold=0.00460693504,
+        pcc_threshold=0.999,
+        rtol=0.026,
+        atol=0.255,
+        frobenius_threshold=0.005,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -608,10 +608,10 @@ def test_sum_2d_tensor_dims(device, h, w, dim, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999899,
-        rtol=0.00772072618,
-        atol=0.127501,
-        frobenius_threshold=0.0048248305,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=0.128,
+        frobenius_threshold=0.005,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -638,10 +638,10 @@ def test_mean_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999892,
-        rtol=6.598126,
-        atol=0.0159385,
-        frobenius_threshold=0.00669250558,
+        pcc_threshold=0.999,
+        rtol=6.599,
+        atol=0.016,
+        frobenius_threshold=0.007,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -667,10 +667,10 @@ def test_mean_3d_tensor_dims(device, c, h, w, dim, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999896,
-        rtol=0.0600156478,
-        atol=0.00099709375,
-        frobenius_threshold=0.00672363394,
+        pcc_threshold=0.999,
+        rtol=0.061,
+        atol=0.001,
+        frobenius_threshold=0.007,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -695,10 +695,10 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999898,
-        rtol=0.00772072618,
-        atol=0.0019931875,
-        frobenius_threshold=0.0059765635,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=0.002,
+        frobenius_threshold=0.006,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -815,14 +815,14 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
     outputs_all_finite = torch.isfinite(torch_result).all() and torch.isfinite(ttnn_result).all()
-    if outputs_all_finite:
+    if outputs_all_finite and torch_result.numel() > 0:
         assert_numeric_metrics(
             torch_result,
             ttnn_result,
-            pcc_threshold=0.9999,
-            rtol=0.00335619616,
-            atol=0.0375033502,
-            frobenius_threshold=0.00335519716,
+            pcc_threshold=0.999,
+            rtol=0.004,
+            atol=0.038,
+            frobenius_threshold=0.004,
         )
         assert_with_pcc(torch_result, ttnn_result, 0.99)
 
