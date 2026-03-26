@@ -910,6 +910,18 @@ def pytest_addoption(parser):
         default=False,
         help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). By default, only tensor metadata is saved. To include tensor values, call ttnn.operation_tracer.enable_tensor_value_serialization(True). See tech_reports/ttnn/operation-tracing.md for details.",
     )
+    parser.addoption(
+        "--wan-bh-linear",
+        action="store_true",
+        default=False,
+        help="Use Blackhole 4x8 Wan performance test with linear topology instead of the default ring topology.",
+    )
+    parser.addoption(
+        "--wan-skip-asserts",
+        action="store_true",
+        default=False,
+        help="Skip Wan performance assertion checks.",
+    )
 
 
 def pytest_configure(config):

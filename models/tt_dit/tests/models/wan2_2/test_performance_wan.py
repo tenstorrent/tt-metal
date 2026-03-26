@@ -92,28 +92,6 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
-    [
-        # FSDP is needed for 2x2 with encoder now on device
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
-        # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
-        # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
-        # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-    ],
-    ids=[
-        "2x2sp0tp1",
-        "2x4sp0tp1",
-        "bh_2x4sp1tp0",
-        "wh_4x8sp1tp0",
-        "bh_4x8sp1tp0",
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize(
     "width, height",
     [
         (832, 480),
@@ -134,6 +112,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
 )
 def test_pipeline_performance(
     *,
+    request: pytest.FixtureRequest,
     mesh_device: ttnn.MeshDevice,
     mesh_shape: tuple,
     model_type: str,
@@ -354,6 +333,57 @@ def test_pipeline_performance(
             )
             pass_perf_check = False
 
-    assert pass_perf_check, "\n".join(assert_msgs)
+    if request.config.getoption("--wan-skip-asserts"):
+        logger.warning("Skipping Wan performance assertions because --wan-skip-asserts is set")
+    else:
+        assert pass_perf_check, "\n".join(assert_msgs)
 
     logger.info("Performance test completed successfully!")
+
+
+def pytest_generate_tests(metafunc):
+    mesh_param_names = (
+        "mesh_device",
+        "mesh_shape",
+        "sp_axis",
+        "tp_axis",
+        "num_links",
+        "dynamic_load",
+        "device_params",
+        "topology",
+        "is_fsdp",
+    )
+    if not all(name in metafunc.fixturenames for name in mesh_param_names):
+        return
+
+    use_bh_linear = metafunc.config.getoption("--wan-bh-linear")
+    bh_4x8_case = (
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False]
+        if use_bh_linear
+        else [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False]
+    )
+
+    cases = [
+        # FSDP is needed for 2x2 with encoder now on device
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        # WH (ring) on 4x8
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        # BH on 4x8 (selectable via --wan-bh-linear)
+        bh_4x8_case,
+    ]
+
+    metafunc.parametrize(
+        mesh_param_names,
+        cases,
+        ids=[
+            "2x2sp0tp1",
+            "2x4sp0tp1",
+            "bh_2x4sp1tp0",
+            "wh_4x8sp1tp0",
+            "bh_4x8sp1tp0",
+        ],
+        indirect=["mesh_device", "device_params"],
+    )
