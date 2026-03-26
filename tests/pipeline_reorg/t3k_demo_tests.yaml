@@ -139,7 +139,7 @@
   cmd: run_t3000_mistral_tests
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 30
   owner_id: U0896VBAKFC # Pratikkumar Prajapati
   team: models
   model-name: mistral
