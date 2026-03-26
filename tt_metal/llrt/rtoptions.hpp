@@ -315,6 +315,9 @@ class RunTimeOptions {
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
 
+    // Store command queues in device DRAM
+    bool dram_backed_cq = false;
+
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
 
@@ -733,6 +736,8 @@ public:
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
+
+    bool get_dram_backed_cq() const { return dram_backed_cq; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

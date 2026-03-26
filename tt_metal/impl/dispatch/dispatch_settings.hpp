@@ -25,7 +25,11 @@ class Hal;
 class DispatchSettings {
 public:
     explicit DispatchSettings(
-        uint32_t num_hw_cqs, const CoreType& core_type, bool is_galaxy_cluster, uint32_t l1_alignment);
+        uint32_t num_hw_cqs,
+        const CoreType& core_type,
+        bool is_galaxy_cluster,
+        bool are_cqs_dram_backed,
+        uint32_t l1_alignment);
 
     bool operator==(const DispatchSettings& other) const;
 
@@ -157,7 +161,8 @@ public:
     CoreType core_type_{0};  // Which core this settings is for
 
 private:
-    void init_worker_defaults(uint32_t num_hw_cqs, bool is_galaxy_cluster, uint32_t l1_alignment);
+    void init_worker_defaults(
+        uint32_t num_hw_cqs, bool is_galaxy_cluster, bool are_cqs_dram_backed, uint32_t l1_alignment);
     void init_eth_defaults(uint32_t num_hw_cqs, uint32_t l1_alignment);
 };
 
