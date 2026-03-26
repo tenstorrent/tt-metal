@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
 
 void kernel_main() {
     // ===== Compile-time args =====
@@ -41,30 +42,10 @@ void kernel_main() {
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
 
-    // DMA-fill the zero buffer CB from the hardware MEM_ZEROS region
-    cb_reserve_back(cb_zero_buffer_id, 1);
+    fill_zero_buffer(cb_zero_buffer_id);
     uint32_t zero_buffer_addr = get_write_ptr(cb_zero_buffer_id);
-    uint64_t zeros_noc_addr = get_noc_addr(NOC_X(my_x[0]), NOC_Y(my_y[0]), MEM_ZEROS_BASE);
-    for (uint32_t offset = 0; offset < NOC_MAX_BURST_SIZE; offset += MEM_ZEROS_SIZE) {
-        uint32_t chunk = ((uint32_t)MEM_ZEROS_SIZE < (NOC_MAX_BURST_SIZE - offset)) ? (uint32_t)MEM_ZEROS_SIZE
-                                                                                    : (NOC_MAX_BURST_SIZE - offset);
-        noc_async_write(zero_buffer_addr + offset, zeros_noc_addr, chunk);
-    }
-    noc_async_write_barrier();
 
-    // Write zeros to each assigned page using NOC_MAX_BURST_SIZE chunks
-    for (uint32_t page = page_start; page < page_end; page++) {
-        uint64_t page_noc_addr = get_noc_addr(page, output_addr_gen);
-        uint32_t remaining = aligned_output_page_size;
-        while (remaining > 0) {
-            uint32_t chunk = (remaining > NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : remaining;
-            noc_async_write(zero_buffer_addr, page_noc_addr, chunk);
-            page_noc_addr += chunk;
-            remaining -= chunk;
-        }
-    }
-
-    noc_async_write_barrier();
+    zero_pages(zero_buffer_addr, page_start, page_end, aligned_output_page_size, output_addr_gen);
 
     // Signal all sender/reader cores that zero-init is complete
     for (uint32_t c = 0; c < num_sender_cores; c++) {

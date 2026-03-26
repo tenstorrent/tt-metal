@@ -7,6 +7,7 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
@@ -114,28 +115,10 @@ void kernel_main() {
         uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
         uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
 
-        cb_reserve_back(zi_cb_id, 1);
+        fill_zero_buffer(zi_cb_id);
         uint32_t zero_buf = get_write_ptr(zi_cb_id);
-        uint64_t zeros_noc = get_noc_addr(NOC_X(my_x[0]), NOC_Y(my_y[0]), MEM_ZEROS_BASE);
-        for (uint32_t off = 0; off < NOC_MAX_BURST_SIZE; off += MEM_ZEROS_SIZE) {
-            uint32_t chunk = ((uint32_t)MEM_ZEROS_SIZE < (NOC_MAX_BURST_SIZE - off)) ? (uint32_t)MEM_ZEROS_SIZE
-                                                                                     : (NOC_MAX_BURST_SIZE - off);
-            noc_async_read(zeros_noc, zero_buf + off, chunk);
-        }
-        noc_async_read_barrier();
 
-        for (uint32_t page = page_start; page < page_end; page++) {
-            uint64_t page_noc_addr = get_noc_addr(page, output_addr_gen);
-            uint32_t remaining = aligned_output_page_size;
-            while (remaining > 0) {
-                uint32_t curr = (remaining > (uint32_t)NOC_MAX_BURST_SIZE) ? (uint32_t)NOC_MAX_BURST_SIZE : remaining;
-                noc_async_write(zero_buf, page_noc_addr, curr);
-                page_noc_addr += curr;
-                remaining -= curr;
-            }
-        }
-
-        noc_async_write_barrier();
+        zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
 
         volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
