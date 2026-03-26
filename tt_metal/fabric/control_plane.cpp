@@ -495,7 +495,7 @@ void ControlPlane::init_control_plane(
                 const size_t mesh_chip_count = mesh_shape.mesh_size();
 
                 // Only apply galaxy pinnings if mesh has 32 chips and is not 1D
-                if (!is_1d && mesh_chip_count == 32) {
+                if (!is_1d && mesh_chip_count % 32 == 0) {
                     auto mesh_pinnings =
                         get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
                     fixed_asic_position_pinnings.insert(
@@ -605,7 +605,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
             const size_t mesh_chip_count = mesh_shape.mesh_size();
 
             // Only apply galaxy pinnings if mesh has 32 chips and is not 1D
-            if (!is_1d && mesh_chip_count == 32) {
+            if (!is_1d && mesh_chip_count % 32 == 0) {
                 auto mesh_pinnings =
                     get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
                 fixed_asic_position_pinnings.insert(
