@@ -135,6 +135,11 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
 
     if (is_dram_backed()) {
+        log_warning(
+            tt::LogMetal,
+            "DRAM-backed CQs are enabled; this feature is intended for niche use-cases such as simulator "
+            "environments, may not work in all configurations, and will result in significantly slower fast dispatch "
+            "performance due to DRAM read/write latency replacing direct host memory access.");
         const uint32_t dram_backed_command_queues_size =
             ctx.hal().get_dev_size(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES);
         TT_ASSERT(dram_backed_command_queues_size > 0);
