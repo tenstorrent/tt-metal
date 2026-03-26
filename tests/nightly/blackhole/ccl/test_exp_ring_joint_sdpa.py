@@ -328,15 +328,15 @@ def run_exp_ring_joint_sdpa_nightly(
         main_row_dim = sdpa_input_shard_dims[0] if sdpa_input_shard_dims[0] is not None else -1
         main_col_dim = sdpa_input_shard_dims[1] if sdpa_input_shard_dims[1] is not None else -1
 
-        reference_output = None
-        last_tt_out_torch = None
+        # Pre-create all semaphore sets before the loop to avoid device writes between iterations
+        ccl_semaphores_list = [
+            [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_links)]
+            for _ in range(num_iterations)
+        ]
+
+        tt_out_list = []
 
         for i in range(num_iterations):
-            # Fresh semaphores per iteration (one per link)
-            ccl_semaphores = [
-                ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_links)
-            ]
-
             ttnn.synchronize_device(mesh_device)
 
             tt_out, _tt_joint_out, _tt_lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
@@ -353,7 +353,7 @@ def run_exp_ring_joint_sdpa_nightly(
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
                 dim=2,
-                multi_device_global_semaphore=ccl_semaphores,
+                multi_device_global_semaphore=ccl_semaphores_list[i],
                 num_links=num_links,
                 cluster_axis=sp_axis,
                 mesh_device=mesh_device,
@@ -363,20 +363,23 @@ def run_exp_ring_joint_sdpa_nightly(
                 num_buffers_per_channel=num_buffers_per_channel,
             )
 
-            tt_out_torch = ttnn.to_torch(
-                tt_out,
+            tt_out_list.append(tt_out)
+
+        # to_torch only after all iterations (avoids PCIe readback between launches)
+        def to_torch_out(tt_tensor):
+            out = ttnn.to_torch(
+                tt_tensor,
                 mesh_composer=ttnn.create_mesh_composer(
                     mesh_device, ttnn.MeshComposerConfig(main_row_dim, main_col_dim)
                 ),
             )
-            # total_seq is already aligned so no padding to strip, but slice for safety
-            tt_out_torch = tt_out_torch[:, :, :total_seq, :]
-            last_tt_out_torch = tt_out_torch
+            return out[:, :, :total_seq, :]
 
-            if num_iterations > 1:
-                if reference_output is None:
-                    reference_output = tt_out_torch
-                elif not torch.equal(reference_output, tt_out_torch):
+        if num_iterations > 1:
+            reference_output = to_torch_out(tt_out_list[0])
+            for i in range(1, num_iterations):
+                tt_out_torch = to_torch_out(tt_out_list[i])
+                if not torch.equal(reference_output, tt_out_torch):
                     diff_mask = reference_output != tt_out_torch
                     num_diffs = diff_mask.sum().item()
                     max_diff = (reference_output - tt_out_torch).abs().max().item()
@@ -384,8 +387,6 @@ def run_exp_ring_joint_sdpa_nightly(
                         f"Exp ring joint SDPA output at iteration {i} differs from iteration 0: "
                         f"{num_diffs} differing elements, max_diff={max_diff}"
                     )
-
-        if num_iterations > 1:
             logger.info(f"Exp ring joint SDPA determinism verified: all {num_iterations} outputs are exactly equal")
             return
 
@@ -397,8 +398,9 @@ def run_exp_ring_joint_sdpa_nightly(
         gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False)
         gt_out = gt[:, :, :total_seq, :]
 
-        out_pass, out_pcc = comp_pcc(gt_out, last_tt_out_torch, pcc_threshold)
-        mse = ((gt_out - last_tt_out_torch) ** 2).mean().item()
+        tt_out_torch = to_torch_out(tt_out_list[-1])
+        out_pass, out_pcc = comp_pcc(gt_out, tt_out_torch, pcc_threshold)
+        mse = ((gt_out - tt_out_torch) ** 2).mean().item()
         logger.info(f"PCC: {out_pcc}, MSE: {mse:.2e}")
 
         assert out_pass, f"PCC {out_pcc} below threshold {pcc_threshold}"
