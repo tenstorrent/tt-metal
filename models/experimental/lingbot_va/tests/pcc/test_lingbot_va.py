@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+"""Smoke test: demo `run_inference` with checkpoint from env or TT_METAL_HOME."""
+
 from __future__ import annotations
 
 import os
