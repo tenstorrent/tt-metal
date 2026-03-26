@@ -19,12 +19,7 @@ import ttnn
 from models.demos.deepseek_v3_b1.demo.weight_provider import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.prepare_weights import (
-    DeepSeekV3DenseLayerWeights,
-    DeepSeekV3EmbeddingLayerWeights,
-    DeepSeekV3LMHeadWeights,
-    DeepSeekV3MoELayerWeights,
-)
+from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3EmbeddingLayerWeights, DeepSeekV3LMHeadWeights
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_broadcast_test_inputs
 
 # Global constants used by multiple stage kinds (and exported to pipeline/cli)
@@ -53,10 +48,14 @@ class StageKind(ABC):
         """Create and return the PipelineBlock for this stage."""
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        """Post-creation setup (tensor allocation, etc). Default: no-op."""
+        """Post-creation setup (tensor allocation, etc).
+
+        Decoder stages may also compile/build device programs here so ``launch_compute`` only
+        enqueues execution. Default: no-op.
+        """
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        """Launch compute kernels after pipeline_block.run(). Default: no-op."""
+        """Run stage compute after ``pipeline_block.run()`` (execute pre-built programs where applicable). Default: no-op."""
 
 
 class EmbeddingStage(StageKind):

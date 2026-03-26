@@ -244,7 +244,11 @@ class Pipeline:
         self._pipeline_block = self._stage_kind.create_pipeline_block(self._ctx)
 
     def setup(self) -> None:
-        """Phase 2: Allocate tensors, weights, semaphores on device."""
+        """Phase 2: Allocate tensors, weights, semaphores on device.
+
+        Decoder/dense stages also build :meth:`DecoderBlock.get_program_context` here so
+        program construction finishes before :meth:`start_pipeline`.
+        """
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before setup()")
         self._stage_kind.setup(self._ctx, self._pipeline_block)
@@ -256,7 +260,7 @@ class Pipeline:
         self._pipeline_block.run()
 
     def start_compute(self) -> None:
-        """Phase 4: Launch stage compute (e.g. LMHeadSampling.op)."""
+        """Phase 4: Launch stage compute (e.g. ``LMHeadSampling.op``, ``DecoderBlock.execute``)."""
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before start_compute()")
         self._stage_kind.launch_compute(self._ctx, self._pipeline_block)
