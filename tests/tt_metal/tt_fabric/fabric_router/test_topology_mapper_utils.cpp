@@ -3855,7 +3855,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_ThreeP
     // Verify the expected number of individual meshes
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 12u);
 
-    // Each oft he mesh level graphs should have connections to other nodes
+    // Each of the mesh level graphs should have connections to other nodes
     for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
         EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
     }
@@ -3920,7 +3920,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_ThreeP
     // Verify the expected number of individual meshes
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 3u);
 
-    // Each oft he mesh level graphs should have connections to other nodes
+    // Each of the mesh level graphs should have connections to other nodes
     for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
         EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
     }
@@ -3982,7 +3982,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_ThreeP
     // Verify the expected number of individual meshes
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 48u);
 
-    // Each oft he mesh level graphs should have connections to other nodes
+    // Each of the mesh level graphs should have connections to other nodes
     for (const auto& node : physical_multi_mesh_graph.mesh_level_graph_.get_nodes()) {
         EXPECT_GT(physical_multi_mesh_graph.mesh_level_graph_.get_neighbors(node).size(), 0);
     }
@@ -4042,7 +4042,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_ThreeP
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // Should have 2 meshes
+    // MGD has 2 logical meshes; this PGD+PSD yields 24 physical mesh graphs (one adjacency graph per physical mesh).
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 24u);
 
     // Each of the mesh level graphs should have connections to other nodes
@@ -4105,7 +4105,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_ThreeP
     // Build physical multi-mesh graph using PGD and PSD
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
-    // Should have 2 meshes
+    // MGD has 2 logical meshes; this PGD+PSD yields 24 physical mesh graphs (one adjacency graph per physical mesh).
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 24u);
 
     // Each of the mesh level graphs should have connections to other nodes
@@ -4227,6 +4227,8 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
 
     // Single BH galaxy: 1 mesh (full 32-ASIC 8x4 torus)
+    // The MGD describes a single logical 1x16 mesh (one BH galaxy), but on this BH system it
+    // is realized as 2 physical meshes (each 1x16, totaling 32 ASICs), so we expect 2 graphs.
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 2u);
 
     // Check that the graph has exit nodes (single-host may have 0 exit nodes)

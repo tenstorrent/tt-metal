@@ -265,19 +265,16 @@ get_requested_intermesh_from_mgd(const ::tt::tt_fabric::MeshGraphDescriptor& mgd
         bool is_device_level = (src_instance.kind == ::tt::tt_fabric::NodeKind::Device) &&
                                (dst_instance.kind == ::tt::tt_fabric::NodeKind::Device);
 
-        uint32_t src_mesh_id_val;
-        uint32_t dst_mesh_id_val;
-
         if (is_device_level) {
             const auto& src_mesh_instance = mgd.get_instance(src_instance.hierarchy.back());
             const auto& dst_mesh_instance = mgd.get_instance(dst_instance.hierarchy.back());
-            src_mesh_id_val = src_mesh_instance.local_id;
-            dst_mesh_id_val = dst_mesh_instance.local_id;
+            const uint32_t src_mesh_id_val = src_mesh_instance.local_id;
+            const uint32_t dst_mesh_id_val = dst_mesh_instance.local_id;
             requested_intermesh_ports[src_mesh_id_val][dst_mesh_id_val].push_back(
                 {src_instance.local_id, dst_instance.local_id, connection_data.count});
         } else {
-            src_mesh_id_val = src_instance.local_id;
-            dst_mesh_id_val = dst_instance.local_id;
+            const uint32_t src_mesh_id_val = src_instance.local_id;
+            const uint32_t dst_mesh_id_val = dst_instance.local_id;
             requested_intermesh_connections[src_mesh_id_val][dst_mesh_id_val] = connection_data.count;
         }
     }
@@ -442,7 +439,7 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const ::tt::tt_fa
  * @brief Build a flat PhysicalAdjacencyMap from PhysicalSystemDescriptor
  *
  * Builds a complete flat adjacency map including all connections (both intra-mesh and intermesh),
- * with multiple entries per channel. If asic_id_to_mesh_rank is empty, includes all ASICs from PSD.
+ * with multiple entries per channel (one edge per Ethernet link).
  */
 PhysicalAdjacencyMap build_flat_adjacency_map_from_psd(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) {
@@ -479,8 +476,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
     log_info(tt::LogFabric, "Building flat adjacency map from PSD");
 
-    // Build flat adjacency map from PhysicalSystemDescriptor
-    PhysicalAdjacencyMap flat_adj = build_flat_adjacency_map_from_psd(physical_system_descriptor);
+    // Build flat adjacency once; reused for find_all_in_psd and build_hierarchical_from_flat_graph (avoids a second
+    // O(|PSD|) pass inside find_all_in_psd).
+    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(build_flat_adjacency_map_from_psd(physical_system_descriptor));
 
     log_info(tt::LogFabric, "Getting valid groupings map from MGD and PGD");
 
@@ -507,8 +505,8 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
     // Find all possible mappings of mesh groupings to the PSD
     std::vector<std::string> errors;
-    auto all_mesh_groupings =
-        physical_grouping_descriptor.find_all_in_psd(all_mesh_grouping_infos, physical_system_descriptor, errors);
+    auto all_mesh_groupings = physical_grouping_descriptor.find_all_in_psd(
+        all_mesh_grouping_infos, physical_system_descriptor, flat_graph, errors);
 
     log_info(
         tt::LogFabric, "Found {} mesh grouping mappings in PSD (errors: {})", all_mesh_groupings.size(), errors.size());
@@ -519,9 +517,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         return result;
     }
 
-    // Convert flat adjacency map to graph and build hierarchical structure
-    // Pass mesh groupings directly - function will build asic_id_to_mesh_rank internally
-    AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
+    // Build hierarchical structure from the same flat graph; mesh groupings drive mesh partitioning
     result = build_hierarchical_from_flat_graph(flat_graph, all_mesh_groupings);
 
     return result;
@@ -687,7 +683,18 @@ namespace {
         for (const auto& asic_id : asic_nodes) {
             for (const auto& [real_mesh_id, asic_ranks] : asic_id_to_mesh_rank) {
                 if (asic_ranks.contains(asic_id)) {
-                    real_mesh_to_physical_mesh_id[real_mesh_id] = physical_mesh_id;
+                    auto [it, inserted] = real_mesh_to_physical_mesh_id.try_emplace(real_mesh_id, physical_mesh_id);
+                    if (!inserted && it->second != physical_mesh_id) {
+                        TT_THROW(
+                            "Internal Error: Inter-mesh rank binding conflict: logical mesh {} is associated with "
+                            "physical mesh {}, "
+                            "but ASIC {} in physical mesh {} is also listed under that logical mesh in "
+                            "asic_id_to_mesh_rank. Each logical mesh must map to a single physical mesh.",
+                            real_mesh_id.get(),
+                            it->second.get(),
+                            asic_id.get(),
+                            physical_mesh_id.get());
+                    }
                     break;
                 }
             }
