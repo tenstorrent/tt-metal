@@ -100,6 +100,7 @@ efficientnet-pytorch==0.7.1
 mmcv==2.2.0 # Required for UniAD model
 casadi==3.7.1 # Required for UniAD model
 mmcv-full==1.7.2 #Required for UniAD model
+molmo-utils
 
 # CPU-only torch for x86_64 to avoid installing CUDA dependencies on dev machines
 --extra-index-url https://download.pytorch.org/whl/cpu
