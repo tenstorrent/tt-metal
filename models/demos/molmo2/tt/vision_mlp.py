@@ -9,12 +9,25 @@ The Molmo2 ViT uses a standard 2-layer MLP with GELU activation:
     output = fc2(gelu(fc1(x)))
 
 Both fc1 and fc2 have bias terms.
+
+Matmuls use the device storage grid via ``core_grid`` so work spreads across available
+Tensix cores (DRAM tensors; intermediate activations are too large for L1 at ViT scales).
 """
 
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+
+
+def _matmul_core_grid(device) -> ttnn.CoreGrid:
+    """Use the full storage/compute grid of the first worker device for matmul fan-out."""
+    try:
+        worker = device.get_device(0) if device.__class__.__name__ == "MeshDevice" else device
+        g = worker.compute_with_storage_grid_size()
+        return ttnn.CoreGrid(y=g.y, x=g.x)
+    except (AttributeError, TypeError, RuntimeError):
+        return ttnn.CoreGrid(y=8, x=8)
 
 
 class VisionMLP(LightweightModule):
@@ -121,6 +134,8 @@ class VisionMLP(LightweightModule):
             packer_l1_acc=True,
         )
 
+        self._matmul_core_grid = _matmul_core_grid(mesh_device)
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass through MLP.
@@ -146,6 +161,7 @@ class VisionMLP(LightweightModule):
             activation="gelu",  # TTNN's gelu is the fast approximation matching pytorch_tanh
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=self._matmul_core_grid,
         )
 
         # w2
@@ -155,6 +171,7 @@ class VisionMLP(LightweightModule):
             bias=self.w2_bias,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=self._matmul_core_grid,
         )
         ttnn.deallocate(hidden)
 
