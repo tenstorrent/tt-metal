@@ -552,7 +552,6 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
         FILES
-            api/tools/profiler/host_dispatch_microbench.hpp
             api/tools/profiler/op_profiler.hpp
             api/tools/profiler/op_profiler_serialize.hpp
             api/ttnn/async_runtime.hpp

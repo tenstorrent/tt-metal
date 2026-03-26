@@ -10,7 +10,6 @@
 #include <tt-metalium/program.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "tools/profiler/host_dispatch_microbench.hpp"
 
 #include "patchable_generic_op_program_factory.hpp"
 
@@ -103,17 +102,10 @@ void patch_program_from_io_tensors(
     Program& program,
     PatchableGenericMeshProgramFactory::shared_variables_t& shared_vars,
     const patchable_tensor_args_t& tensor_args) {
-    const auto cur_addrs = [&tensor_args]() {
-        tt::tt_metal::host_dispatch_microbench::ScopedTimer _collect_timer(
-            tt::tt_metal::host_dispatch_microbench::Slot::PatchableCollectIoTensorAddresses);
-        return collect_io_addresses_flat(tensor_args);
-    }();
+    const auto cur_addrs = collect_io_addresses_flat(tensor_args);
 
     const auto& prev = shared_vars.prev_io_addresses;
     const bool have_prev = prev.size() == cur_addrs.size();
-
-    tt::tt_metal::host_dispatch_microbench::ScopedTimer _apply_patches_timer(
-        tt::tt_metal::host_dispatch_microbench::Slot::PatchableApplySlotPatches);
 
     const auto check_io_index = [&](std::uint32_t io_idx, const char* ctx) {
         TT_FATAL(
@@ -166,22 +158,14 @@ PatchableGenericMeshProgramFactory::cached_program_t PatchableGenericMeshProgram
     Program program{program_descriptor};
     shared_variables_t shared_vars;
 
-    {
-        tt::tt_metal::host_dispatch_microbench::ScopedTimer _program_build_timer(
-            tt::tt_metal::host_dispatch_microbench::Slot::PatchableCreateAtProgramBuild);
-        auto cbs = program.circular_buffers();
-        shared_vars.cb_handles.reserve(cbs.size());
-        for (const auto& cb : cbs) {
-            shared_vars.cb_handles.push_back(static_cast<CBHandle>(cb->id()));
-        }
+    auto cbs = program.circular_buffers();
+    shared_vars.cb_handles.reserve(cbs.size());
+    for (const auto& cb : cbs) {
+        shared_vars.cb_handles.push_back(static_cast<CBHandle>(cb->id()));
     }
 
-    {
-        tt::tt_metal::host_dispatch_microbench::ScopedTimer _discover_timer(
-            tt::tt_metal::host_dispatch_microbench::Slot::PatchableDiscoverAddressSlots);
-        const auto tensor_addrs = collect_io_tensor_addresses(tensor_args);
-        discover_address_slots(program_descriptor, tensor_addrs, shared_vars);
-    }
+    const auto tensor_addrs = collect_io_tensor_addresses(tensor_args);
+    discover_address_slots(program_descriptor, tensor_addrs, shared_vars);
 
     return {std::move(program), std::move(shared_vars)};
 }

@@ -4,7 +4,6 @@
 
 #include "ttnn/device_operation.hpp"
 #include "patchable_generic_op_device_operation.hpp"
-#include "tools/profiler/host_dispatch_microbench.hpp"
 
 #include <tt_stl/reflection.hpp>
 
@@ -35,8 +34,6 @@ patchable_tensor_return_value_t PatchableGenericOpDeviceOperation::create_output
 
 ttsl::hash::hash_t PatchableGenericOpDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t&) {
-    tt::tt_metal::host_dispatch_microbench::ScopedTimer _patchable_program_hash_timer(
-        tt::tt_metal::host_dispatch_microbench::Slot::PatchableComputeProgramHashOnly);
     // Must differ from GenericOpDeviceOperation::compute_program_hash — same descriptor would
     // otherwise hit the wrong cached_mesh_workload_t layout (segfault in override).
     size_t hash = ttsl::hash::type_hash<PatchableGenericOpDeviceOperation>;
@@ -53,8 +50,6 @@ namespace ttnn::prim {
 ttnn::operations::experimental::generic::patchable_tensor_return_value_t patchable_generic_op(
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::experimental::generic::patchable_operation_attributes_t& operation_attributes) {
-    tt::tt_metal::host_dispatch_microbench::ScopedTimer _patchable_prim_launch_timer(
-        tt::tt_metal::host_dispatch_microbench::Slot::PatchablePrimThroughLaunch);
     using OperationType = ttnn::operations::experimental::generic::PatchableGenericOpDeviceOperation;
     TT_FATAL(
         io_tensors.size() >= 2,
