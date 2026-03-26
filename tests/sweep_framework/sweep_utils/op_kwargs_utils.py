@@ -44,6 +44,31 @@ _INFRA_KEYS = frozenset(
         "input_hash",
         "tag",
         "timestamp",
+        # memory_config from traced kwargs must not leak into op kwargs — passing it
+        # causes "incompatible function arguments" for ops that don't accept it.
+        # Sweep modules that need memory_config should add it explicitly after
+        # calling build_op_kwargs().
+        "memory_config",
+    }
+)
+
+# Known boolean parameters in traced JSON: V2 JSON stores all numbers as floats,
+# so 0.0/1.0 must be converted back to False/True for these keys.
+_BOOL_PARAMS = frozenset(
+    {
+        "keepdim",
+        "fuse_batch",
+        "inplace",
+        "transpose_mcast",
+        "untilize_out",
+        "mcast_in0",
+        "gather_in0",
+        "fp32_dest_acc_en",
+        "packer_l1_acc",
+        "math_approx_mode",
+        "dst_full_sync_en",
+        "sorted",
+        "largest",
     }
 )
 
@@ -249,21 +274,6 @@ def build_op_kwargs(
             # V2 JSON stores all numbers as floats, but ops expect int or bool.
             if isinstance(parsed, float) and parsed == int(parsed):
                 # Known bool params: convert 0.0/1.0 to False/True
-                _BOOL_PARAMS = {
-                    "keepdim",
-                    "fuse_batch",
-                    "inplace",
-                    "transpose_mcast",
-                    "untilize_out",
-                    "mcast_in0",
-                    "gather_in0",
-                    "fp32_dest_acc_en",
-                    "packer_l1_acc",
-                    "math_approx_mode",
-                    "dst_full_sync_en",
-                    "sorted",
-                    "largest",
-                }
                 if key in _BOOL_PARAMS:
                     parsed = bool(parsed)
                 else:

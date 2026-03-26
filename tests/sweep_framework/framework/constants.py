@@ -84,11 +84,14 @@ LEAD_MODELS = _load_lead_models_from_manifest()
 MESH_SUFFIX_PATTERN = re.compile(r"__mesh_(\d+)x(\d+)(?:__hw_([a-zA-Z0-9_-]+))?$")
 
 # Maps a hardware identifier (stored in __hw_ suffix) to its CI runner config.
-# The identifier is the full device_series from the JSON (e.g. "tt-galaxy-wh")
-# combined with device count when the same device_series spans multiple
-# topologies (e.g. n300 cards are used in N300, T3K, and Galaxy setups).
+# The identifier comes from get_hardware_id_from_machine_info() and is embedded
+# in filenames by format_mesh_suffix().  Keys are the exact strings returned by
+# that function (e.g. "tt-galaxy-wh", "n300", "t3k") — NOT short aliases.
+# The split-hw YAML step uses substring matching ('galaxy' in name) which works
+# because "tt-galaxy-wh" contains "galaxy"; keep the map keys in sync if
+# get_hardware_id_from_machine_info() return values ever change.
 #
-# Key: hardware identifier string (embedded in filenames)
+# Key: hardware identifier string (embedded in filenames as __hw_<id>)
 # Value: dict with arch, runs_on, runner_label, tt_smi_cmd
 HARDWARE_RUNNER_MAP = {
     # --- Wormhole ---
