@@ -114,33 +114,32 @@ static bool dram_data_check(
     std::vector<uint32_t>& inputs) {
     /* ==================== */
     uint64_t total_transferred = dram_end_addr - dram_start_addr;
-    std::vector<uint32_t> outputs;
+    std::vector<uint32_t> outputs(total_transferred / sizeof(uint32_t));
 
     tt::tt_metal::detail::ReadFromDeviceDRAMChannel(
         recv_device, dram_bank_id, dram_start_addr, total_transferred, outputs);
     log_info(tt::LogTest, "      Read {} bytes", outputs.size() * sizeof(uint32_t));
     TT_FATAL(inputs.size() == outputs.size(), "Input and output vector sizes must match");
-    bool pass = inputs == outputs;
 
-    if (!pass) {
-        uint64_t total_mismatches = 0;
-        for (long i = 0; i < inputs.size(); i++) {
-            if (inputs[i] != outputs[i]) {
-                if (!total_mismatches) {
-                    log_critical(
-                        tt::LogTest,
-                        "      Input and output data don't match starting at: {:x}",
-                        dram_start_addr + i * sizeof(uint32_t));
-                }
-                total_mismatches++;
-                // log_critical(tt::LogTest, "      Input and output data don't match at {:x}: {:x} {:x}", i, inputs[i],
-                // 		outputs[i]);
+    uint64_t total_mismatches = 0;
+    for (long i = 0; i < inputs.size(); i++) {
+        if (inputs[i] != outputs[i]) {
+            if (!total_mismatches) {
+                log_critical(
+                    tt::LogTest,
+                    "      Input and output data don't match starting at: {:x}",
+                    dram_start_addr + i * sizeof(uint32_t));
             }
+            total_mismatches++;
+            // log_critical(tt::LogTest, "      Input and output data don't match at {:x}: {:x} {:x}", i, inputs[i],
+            // 		outputs[i]);
         }
+    }
+    if (total_mismatches) {
         log_critical(tt::LogTest, "      Total mismatches: {} words", total_mismatches);
     }
 
-    return pass;
+    return !total_mismatches;
 }
 
 #endif /* _DEPLOYMENT_COMMON_H */
