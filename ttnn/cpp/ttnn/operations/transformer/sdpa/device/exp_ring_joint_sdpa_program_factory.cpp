@@ -768,7 +768,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     const uint32_t base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
     const uint32_t extra_chunks = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
 
-    log_info(
+    log_debug(
         tt::LogOp,
         "[ExpRingJointSDPA] grid={}x{}={} cores, B={}, NH={}, num_q_chunks={}({} local+{} joint), "
         "base_chunks_per_core={} (+{} extras)",
@@ -923,11 +923,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
                 hist_str += std::to_string(chain_len_counts[len]) + "x" + std::to_string(len) + "-core ";
             }
         }
-        log_info(
-            tt::LogOp,
-            "[ExpRingJointSDPA] {} chains ({})",
-            num_chains,
-            hist_str.empty() ? "none" : hist_str);
+        log_debug(tt::LogOp, "[ExpRingJointSDPA] {} chains ({})", num_chains, hist_str.empty() ? "none" : hist_str);
     }
 
     // Third pass: Check multicast eligibility and configure mcast for eligible chains
@@ -1128,13 +1124,16 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
             static_cast<uint32_t>(candidates.size()));
     }
 
-    log_info(
+    log_debug(
         tt::LogOp,
         "[ExpRingJointSDPA] mcast: {} ({}/{} chains)",
         mcast_chains > 0 ? "ENABLED" : "DISABLED",
         mcast_chains,
-        mcast_chains > 0 ? mcast_chains : static_cast<uint32_t>(
-            std::count_if(core_chain_info.begin(), core_chain_info.end(), [](const CoreChainInfo& c) { return c.is_injector; })));
+        mcast_chains > 0 ? mcast_chains
+                         : static_cast<uint32_t>(std::count_if(
+                               core_chain_info.begin(), core_chain_info.end(), [](const CoreChainInfo& c) {
+                                   return c.is_injector;
+                               })));
 
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
