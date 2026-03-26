@@ -2178,9 +2178,9 @@ class DeepseekGenerator(WarmupForwardMixin):
         user_id: int,
         page_table: torch.Tensor | None = None,
         local_user_id: int | None = None,
+        sample_on_device: bool = False,
         prompt_len: int | None = None,
         return_last_hidden: bool = False,
-        sample_on_device: bool = False,
     ) -> ttnn.Tensor | torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Run prefill for the full prompt sequence.
 
@@ -2192,7 +2192,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         Returns:
             logits ttnn.Tensor on device if sample_on_device is True, otherwise logits torch.Tensor on host
         """
-        logger.info(f"prefill sample_on_device: {sample_on_device}, user_id: {user_id}")
 
         tokens = tokens.view(1, 1, -1)
         seq_len = tokens.shape[-1]
@@ -2699,7 +2698,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         # vLLM does not pass enable_trace param while initializing the model.
         # vLLM sets it in decode/prefill calls only, so we need to set it here too.
         self.enable_trace = enable_trace
-        logger.info(f"decode_forward sample_on_device: {sample_on_device}, enable_trace: {enable_trace}")
 
         if not enable_trace:
             return self._decode_step(tokens, start_pos, page_table, sample_on_device)

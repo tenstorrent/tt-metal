@@ -78,7 +78,6 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         return self.cache_dir
 
     def prefill_forward(self, *args, **kwargs):
-        logger.info(f"prefill_forward, kwargs keys: {kwargs.keys()}")
         start_pos = kwargs.get("start_pos", None)
         assert (start_pos is None) or all(
             x == 0 for x in start_pos
@@ -86,20 +85,21 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         assert self.model_run_config_prefill is not None, "Model run config prefill is not initialized"
 
         kwargs.pop("enable_trace", None)
-        logger.warning("Prefill tracing not supported for DeepseekGenerator. But sampling on device will be traced.")
+        logger.warning("Prefill tracing not supported for DeepseekGenerator")
         tokens = kwargs["tokens"]
         lengths = kwargs["prompt_lens"]
         page_table = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
         empty_slots = kwargs.get("empty_slots", None)
         sampling_params = kwargs.get("sampling_params", None)
-        sample_on_device_mode = kwargs.get("sample_on_device_mode", "unknown")
-        # sample_on_device_mode is not passed by vLLM, TODO
-        # sample_on_device = sample_on_device_mode in ["all"] and sampling_params is not None
-        sample_on_device = True
-        logger.info(
-            f"prefill_forward sample_on_device_mode: {sample_on_device_mode}, sampling_params: {sampling_params}, sample_on_device: {sample_on_device}"
-        )
+        sample_on_device = bool(sampling_params is not None)
+
+        if all(length == 0 for length in lengths):
+            return torch.zeros(tokens.shape[0], self.hf_config.vocab_size, device=tokens.device, dtype=tokens.dtype)
+
+        # Set kv_cache if provided and all entries are valid
+        if kv_cache is not None and not any(entry is None for entry in kv_cache):
+            self.set_kv_cache(kv_cache)
 
         pad_value = self.tokenizer.pad_token_id
         pad_block_size = self.paged_config.block_size if self.paged_config is not None else USERS_PER_ROW
@@ -120,10 +120,8 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 continue
             user_tokens = tokens[i, :prompt_len].unsqueeze(0)
             user_tokens = _pad_tokens(user_tokens, pad_value, block_size=pad_block_size).squeeze(0)
-            # prefill does not support tracing but sampling can be traced.
-            self._validate_and_initialize_sampling(
-                sampling_params, sample_on_device, enable_trace=True, enable_mtp=False
-            )
+            if sample_on_device:
+                self._validate_and_initialize_sampling(sampling_params, sample_on_device)
             prefill_logits = self._prefill(
                 user_tokens,
                 user_id,
@@ -141,15 +139,19 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 )
                 pred_token = prefill_logits_sampled_host[0]
             else:
-                assert False, "Not tested"
                 assert isinstance(prefill_logits, torch.Tensor), "prefill_logits should be a torch.Tensor on host"
-                pred_token = int(prefill_logits[0].item())
+                prefill_logits = prefill_logits.squeeze(0).squeeze(0)  # [1, 1, S, V] -> [S, V]
+                if prefill_logits.shape[0] > prompt_len:
+                    pred_token = prefill_logits[:prompt_len]
+                if prefill_logits.shape[0] < max_padded_len:
+                    pad_len = max_padded_len - prefill_logits.shape[0]
+                    pad_logits = prefill_logits[-1:].expand(pad_len, -1)
+                    pred_token = torch.cat([prefill_logits, pad_logits], dim=0)
             prefill_tokens.append(torch.tensor(pred_token, dtype=torch.int64))
         prefill_tokens = torch.stack(prefill_tokens)  # [num_of_users, S, V]
         return prefill_tokens
 
     def decode_forward(self, *args, **kwargs):
-        logger.info(f"decode_forward, kwargs keys: {kwargs.keys()}")
         assert self.model_run_config_decode is not None, "Model run config decode is not initialized"
 
         page_tables = kwargs.get("page_table", None)
@@ -157,22 +159,14 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         enable_trace = kwargs.get("enable_trace", False)
         read_from_device = kwargs.get("read_from_device", True)
         sampling_params = kwargs.get("sampling_params", None)
-        sample_on_device_mode = kwargs.get("sample_on_device_mode", "unknown")
-        # sample_on_device_mode is not passed by vLLM, TODO, check if its missing in the vLLM code
-        # sample_on_device = sample_on_device_mode in ["all", "decode_only"] and sampling_params is not None
-        sample_on_device = True
-        logger.info(
-            f"decode_forward sample_on_device_mode: {sample_on_device_mode}, sampling_params: {sampling_params}, sample_on_device: {sample_on_device}, read_from_device: {read_from_device}"
-        )
-
+        sample_on_device = bool(sampling_params is not None)
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
             self.set_kv_cache(kv_cache)
 
         tokens_step = kwargs["tokens"].squeeze(1)
-        self._validate_and_initialize_sampling(
-            sampling_params, sample_on_device, enable_trace=enable_trace, enable_mtp=False
-        )
+        if sample_on_device:
+            self._validate_and_initialize_sampling(sampling_params, sample_on_device, enable_trace=enable_trace)
         decode_logits = super().decode_forward(
             tokens=tokens_step,
             start_pos=kwargs["start_pos"],
@@ -183,24 +177,16 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         )
 
         if sample_on_device:
-            pred_tokens = self._sample_tokens_device(decode_logits, enable_trace=enable_trace)
+            decode_tokens = self._sample_tokens_device(decode_logits, enable_trace=enable_trace)
             if read_from_device:
-                pred_tokens = self._tokens_from_device(
-                    pred_tokens, self.mesh_device, batch_size_per_row=self.batch_size_per_row
+                decode_tokens = self._tokens_from_device(
+                    decode_tokens, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                 )
         else:
-            # Normalize legacy decode outputs to [B, V], then expose vLLM shape [B, 1, V].
-            # DeepseekGenerator may return either [1, 1, B, V] (non-trace path) or [B, V]
-            # (trace path). vLLM sampling expects time-major logits [B, T, V].
-            # if decode_logits.dim() == 4:
-            #     decode_logits = decode_logits.squeeze(0).squeeze(0)
-            # elif decode_logits.dim() == 3 and decode_logits.shape[1] == 1:
-            #     decode_logits = logits.decode_logits(1)
-            # elif decode_logits.dim() != 2:
-            #     raise RuntimeError(f"Unexpected decode logits rank for vLLM: shape={tuple(logits.shape)}")
-            pred_tokens = decode_logits.unsqueeze(1)
+            assert isinstance(decode_logits, torch.Tensor), "decode_logits should be a torch.Tensor on host"
+            decode_tokens = decode_logits.unsqueeze(1)
 
-        return pred_tokens
+        return decode_tokens
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         assert (
