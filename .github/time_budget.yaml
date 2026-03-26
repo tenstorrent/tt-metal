@@ -86,6 +86,9 @@ fabric:
     wh_llmbox: 40
   integration:
     wh_llmbox: 10
+  health:
+    wh_galaxy: 20
+    bh_galaxy: 10
   e2e:
     wh_llmbox: 165
     wh_galaxy: 100
