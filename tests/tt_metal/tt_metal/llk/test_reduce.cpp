@@ -609,11 +609,17 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                        continue;
+                    }
+                    if (this->arch_ == tt::ARCH::QUASAR &&
+                        !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
+                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                        // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
                     ReduceConfig test_config = {
                         .shape = shape,
-                        .reduce_dim = ReduceDim::H,
                         .reduce_type = ReduceType(reduce_type),
                         .data_gen_rand_max = 10.0f,
                         .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
@@ -627,7 +633,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
                         .math_fidelity = MathFidelity(math_fid),
                     };
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    return;
                 }
             }
         }
@@ -646,6 +651,13 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                        continue;
+                    }
+                    if (this->arch_ == tt::ARCH::QUASAR &&
+                        !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
+                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                        // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
                     ReduceConfig test_config = {
@@ -664,7 +676,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
                         .math_fidelity = MathFidelity(math_fid),
                     };
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    return;
                 }
             }
         }
@@ -687,6 +698,13 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
                 }
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                        continue;
+                    }
+                    if (this->arch_ == tt::ARCH::QUASAR &&
+                        !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
+                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                        // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
                     ReduceConfig test_config = {
@@ -704,7 +722,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    return;
                 }
             }
         }
@@ -727,6 +744,13 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                        continue;
+                    }
+                    if (this->arch_ == tt::ARCH::QUASAR &&
+                        !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
+                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                        // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
                     ReduceConfig test_config = {
@@ -745,7 +769,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    return;
                 }
             }
         }
@@ -764,6 +787,13 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                        continue;
+                    }
+                    if (this->arch_ == tt::ARCH::QUASAR &&
+                        !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
+                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                        // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
                     ReduceConfig test_config = {
@@ -782,7 +812,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    return;
                 }
             }
         }
@@ -805,6 +834,13 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
                 }
                 for (bool dst_full_sync_en : {true, false}) {
                     if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                        continue;
+                    }
+                    if (this->arch_ == tt::ARCH::QUASAR &&
+                        !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
+                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                        // TODO (#38092): Remove when we can run back to back tests on Quasar
                         continue;
                     }
                     ReduceConfig test_config = {
@@ -823,7 +859,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
-                    return;
                 }
             }
         }
