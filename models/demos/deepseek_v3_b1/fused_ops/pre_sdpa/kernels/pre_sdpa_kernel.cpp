@@ -259,7 +259,22 @@ if constexpr (!Core::skip_ccl) {
         .sin_tensor_address = get_named_compile_time_arg_val("krope_sin_tensor_address"),
         .position_ids_tensor_address = get_named_compile_time_arg_val("krope_position_ids_tensor_address")};
 
-    deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{};
+    deepseek_b1_ops::KVCacheUpdate::WriterArgs kv_cache_update_args{
+        .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(5),
+        .local_cur_pos = 0,  // set via kv_cache_update.set_local_cur_pos() below
+        .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
+        .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
+        .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
+        .krope_output_cb = get_named_compile_time_arg_val("krope_output_cb"),
+        .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
+        .full_grid_mcast_start_x = get_named_compile_time_arg_val("full_grid_mcast_start_x"),
+        .full_grid_mcast_start_y = get_named_compile_time_arg_val("full_grid_mcast_start_y"),
+        .full_grid_mcast_end_x = get_named_compile_time_arg_val("full_grid_mcast_end_x"),
+        .full_grid_mcast_end_y = get_named_compile_time_arg_val("full_grid_mcast_end_y"),
+        .full_grid_mcast_num_dests = get_named_compile_time_arg_val("full_grid_mcast_num_dests"),
+        .kv_cache_cur_pos_ready_semaphore_addr =
+            get_named_compile_time_arg_val("kv_cache_cur_pos_ready_semaphore_addr"),
+    };
 
     deepseek_b1_ops::FlashMLADecode::ReaderArgs flash_mla_args;
     if constexpr (Core::is_mla_core) {
@@ -429,22 +444,11 @@ if constexpr (!Core::skip_ccl) {
     // Writer args (empty - no-op)
     deepseek_b1_ops::Rope::WriterArgs krope_args{};
 
-    deepseek_b1_ops::KVCacheUpdate::WriterArgs kv_cache_update_args{
+    deepseek_b1_ops::KVCacheUpdate::ReaderArgs kv_cache_update_args{
         .kv_cache_buffer_base_addr = get_common_arg_val<uint32_t>(0),
         .local_cur_pos = 0,  // set via kv_cache_update.set_local_cur_pos() below
         .kv_cache_input_cb = get_named_compile_time_arg_val("kv_cache_input_cb"),
-        .kv_cache_intermed_cb = get_named_compile_time_arg_val("kv_cache_intermed_cb"),
-        .kv_cache_output_cb = get_named_compile_time_arg_val("kv_cache_output_cb"),
-        .kv_rmsnorm_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb"),
-        .krope_output_cb = get_named_compile_time_arg_val("krope_output_cb"),
         .grid_start_y = get_named_compile_time_arg_val("kv_cache_grid_start_y"),
-        .full_grid_mcast_start_x = get_named_compile_time_arg_val("full_grid_mcast_start_x"),
-        .full_grid_mcast_start_y = get_named_compile_time_arg_val("full_grid_mcast_start_y"),
-        .full_grid_mcast_end_x = get_named_compile_time_arg_val("full_grid_mcast_end_x"),
-        .full_grid_mcast_end_y = get_named_compile_time_arg_val("full_grid_mcast_end_y"),
-        .full_grid_mcast_num_dests = get_named_compile_time_arg_val("full_grid_mcast_num_dests"),
-        .kv_cache_cur_pos_ready_semaphore_addr =
-            get_named_compile_time_arg_val("kv_cache_cur_pos_ready_semaphore_addr"),
     };
 
     deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
