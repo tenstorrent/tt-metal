@@ -29,6 +29,26 @@ inline void pack_and_push(const uint32_t reg, const uint32_t cb) {
 }
 
 /**
+ * Pack two single tiles from two DEST registers to two CBs, reserve+wait+pack+push.
+ * NOTE: Call after tile_regs_commit(). The order of commit and wait does not matter when adjacent
+ * (they affect different threads). Commit releases the lock for math so pack can start; wait
+ * ensures math is done. Prefer commit first, then wait.
+ */
+inline void pack_and_push_two_tiles(
+    const uint32_t reg_1, const uint32_t cb_1, const uint32_t reg_2, const uint32_t cb_2) {
+    cb_reserve_back(cb_1, onetile);
+    cb_reserve_back(cb_2, onetile);
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_1);
+    pack_tile(reg_1, cb_1);
+    pack_reconfig_data_format(cb_2);
+    pack_tile(reg_2, cb_2);
+    tile_regs_release();
+    cb_push_back(cb_1, onetile);
+    cb_push_back(cb_2, onetile);
+}
+
+/**
  * Pack a block of n tiles from consecutive DEST registers (0..block_size-1), reserve+wait+pack+push.
  * NOTE: Call after tile_regs_commit(). The order of commit and wait does not matter when adjacent
  * (they affect different threads). Commit releases the lock for math so pack can start; wait

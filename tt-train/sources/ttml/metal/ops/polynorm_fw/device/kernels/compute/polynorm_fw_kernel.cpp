@@ -108,17 +108,8 @@ void accumulate_sum_x2_and_x6_for_row() {
         }
         cb_pop_front(cb_input_pass_1, block_size);
     }
-    cb_reserve_back(cb_sum_x2, onetile);
-    cb_reserve_back(cb_sum_x6, onetile);
     tile_regs_commit();
-    tile_regs_wait();
-    pack_reconfig_data_format(cb_sum_x2);
-    pack_tile(reg_sum_x2, cb_sum_x2);
-    pack_reconfig_data_format(cb_sum_x6);
-    pack_tile(reg_sum_x6, cb_sum_x6);
-    tile_regs_release();
-    cb_push_back(cb_sum_x2, onetile);
-    cb_push_back(cb_sum_x6, onetile);
+    pack_and_push_two_tiles(reg_sum_x2, cb_sum_x2, reg_sum_x6, cb_sum_x6);
 }
 
 // Pass-1b: compute and emit row sum for x^4.
