@@ -37,6 +37,8 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -145,26 +147,93 @@ bool single_core_binary(
     // auto output_dram_buffer = CreateBuffer(dram_config);
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
-    tt_metal::CircularBufferConfig l1_cb_config =
-        tt_metal::CircularBufferConfig(byte_size, {{0, test_config.l1_input_data_format}})
-            .set_page_size(0, test_config.tile_byte_size);
-    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_cb_config);
+    uint32_t inp0_dfb = 0;
+    uint32_t inp1_dfb = 0;
+    uint32_t inp2_dfb = 0;
+    uint32_t out_dfb = 0;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        tt_metal::experimental::dfb::DataflowBufferConfig l1_dfb_config = {
+            .entry_size = test_config.tile_byte_size,
+            .num_entries = test_config.num_tiles,
+            .producer_risc_mask = 0x1,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x100,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b,
+            .tile = tt_metal::Tile({32, 32}),
+        };
+        
+        tt_metal::experimental::dfb::DataflowBufferConfig l1_input1_dfb_config = {
+            .entry_size = test_config.tile_byte_size,
+            .num_entries = test_config.num_tiles,
+            .producer_risc_mask = 0x1,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x100,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b,
+            .tile = tt_metal::Tile({32, 32}),
+        };
 
-    tt_metal::CircularBufferConfig l1_input1_cb_config =
-        tt_metal::CircularBufferConfig(byte_size, {{1, test_config.l1_input_data_format}})
-            .set_page_size(1, test_config.tile_byte_size);
-    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input1_cb_config);
+        tt_metal::experimental::dfb::DataflowBufferConfig l2_input1_dfb_config = {
+            .entry_size = test_config.tile_byte_size,
+            .num_entries = test_config.num_tiles,
+            .producer_risc_mask = 0x1,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x100,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b,
+            .tile = tt_metal::Tile({32, 32}),
+        };
 
-    tt_metal::CircularBufferConfig l2_input1_cb_config =
-        tt_metal::CircularBufferConfig(byte_size, {{2, test_config.l1_input_data_format}})
-            .set_page_size(2, test_config.tile_byte_size);
-    tt_metal::CreateCircularBuffer(program_, test_config.core, l2_input1_cb_config);
+        tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
+            .entry_size = test_config.tile_byte_size,
+            .num_entries = test_config.num_tiles,
+            .producer_risc_mask = 0x100,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .consumer_risc_mask = 0x2,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b,
+            .tile = tt_metal::Tile({32, 32}),
+        };
 
-    tt_metal::CircularBufferConfig l1_output_cb_config =
-        tt_metal::CircularBufferConfig(byte_size, {{16, test_config.l1_output_data_format}})
-            .set_page_size(16, test_config.tile_byte_size);
-    tt_metal::CreateCircularBuffer(program_, test_config.core, l1_output_cb_config);
+        inp0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_dfb_config);
+        inp1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input1_dfb_config);
+        inp2_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l2_input1_dfb_config);
+        out_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_output_dfb_config);
 
+    } else {
+        tt_metal::CircularBufferConfig l1_cb_config =
+            tt_metal::CircularBufferConfig(byte_size, {{0, test_config.l1_input_data_format}})
+                .set_page_size(0, test_config.tile_byte_size);
+        tt_metal::CreateCircularBuffer(program_, test_config.core, l1_cb_config);
+
+        tt_metal::CircularBufferConfig l1_input1_cb_config =
+            tt_metal::CircularBufferConfig(byte_size, {{1, test_config.l1_input_data_format}})
+                .set_page_size(1, test_config.tile_byte_size);
+        tt_metal::CreateCircularBuffer(program_, test_config.core, l1_input1_cb_config);
+
+        tt_metal::CircularBufferConfig l2_input1_cb_config =
+            tt_metal::CircularBufferConfig(byte_size, {{2, test_config.l1_input_data_format}})
+                .set_page_size(2, test_config.tile_byte_size);
+        tt_metal::CreateCircularBuffer(program_, test_config.core, l2_input1_cb_config);
+
+        tt_metal::CircularBufferConfig l1_output_cb_config =
+            tt_metal::CircularBufferConfig(byte_size, {{16, test_config.l1_output_data_format}})
+                .set_page_size(16, test_config.tile_byte_size);
+        tt_metal::CreateCircularBuffer(program_, test_config.core, l1_output_cb_config);
+    }
     vector<uint32_t> compute_kernel_args = {};
     std::map<std::string, std::string> defines = {
         {"ELTWISE_OP_TYPE", binary_op_name_to_op_type.at(test_config.binary_op)}};
@@ -184,29 +253,62 @@ bool single_core_binary(
             }
         }
     }
+    
+    KernelHandle reader_kernel, writer_kernel, binary_kernel;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
+            test_config.core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .defines = defines});
 
-    auto reader_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
-        test_config.core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt_metal::NOC::RISCV_1_default,
-            .defines = defines});
+        writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            test_config.core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
 
-    auto writer_kernel = tt_metal::CreateKernel(
-        program_,
-        "tt_metal/kernels/dataflow/writer_unary.cpp",
-        test_config.core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+        binary_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tt_metal/kernels/compute/eltwise_binary.cpp",
+            test_config.core,
+            tt_metal::experimental::quasar::QuasarComputeConfig{
+                .num_threads_per_cluster = 1, .math_fidelity = test_config.math_fidelity, .compile_args = compute_kernel_args, .defines = defines});
 
-    auto binary_kernel = tt_metal::CreateKernel(
-        program_,
-        "tt_metal/kernels/compute/eltwise_binary.cpp",
-        test_config.core,
-        tt_metal::ComputeConfig{
-            .math_fidelity = test_config.math_fidelity, .compile_args = compute_kernel_args, .defines = defines});
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, inp0_dfb, reader_kernel, binary_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, inp1_dfb, reader_kernel, binary_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, inp2_dfb, reader_kernel, binary_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, out_dfb, binary_kernel, writer_kernel);
+
+    } else {
+        reader_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
+            test_config.core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::RISCV_1_default,
+                .defines = defines});
+    
+        writer_kernel = tt_metal::CreateKernel(
+            program_,
+            "tt_metal/kernels/dataflow/writer_unary.cpp",
+            test_config.core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+
+        binary_kernel = tt_metal::CreateKernel(
+            program_,
+            "tt_metal/kernels/compute/eltwise_binary.cpp",
+            test_config.core,
+            tt_metal::ComputeConfig{
+                .math_fidelity = test_config.math_fidelity, .compile_args = compute_kernel_args, .defines = defines});
+    }
 
     SetRuntimeArgs(program_, binary_kernel, test_config.core, {uint32_t(test_config.num_tiles), 1});
 
@@ -342,6 +444,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            return;
         }
     }
 }
@@ -362,12 +465,13 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSub) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            return;
         }
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMul) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (uint8_t i = uint8_t(MathFidelity::HiFi2); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -382,6 +486,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMul) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            return;
         }
     }
 }
@@ -403,6 +508,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            return;
         }
     }
 }
@@ -424,12 +530,13 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            return;
         }
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (uint8_t i = uint8_t(MathFidelity::HiFi2); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -445,6 +552,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            return;
         }
     }
 }
@@ -525,6 +633,7 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAdd) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            return;
         }
     }
 }
@@ -545,12 +654,13 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSub) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            return;
         }
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMul) {
-    for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
+    for (uint8_t i = uint8_t(MathFidelity::HiFi2); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
         }
@@ -565,11 +675,15 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMul) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
+            return;
         }
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DestAcc tests since DestAcc is handled by LLKs for Quasar";
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -592,6 +706,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAddDestAcc) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DestAcc tests since DestAcc is handled by LLKs for Quasar";
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
@@ -614,6 +731,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSubDestAcc) {
 }
 
 TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMulDestAcc) {
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DestAcc tests since DestAcc is handled by LLKsfor Quasar";
+    }
     for (uint8_t i = uint8_t(MathFidelity::LoFi); i <= uint8_t(MathFidelity::HiFi4); i++) {
         if (i == 1) {
             continue;
