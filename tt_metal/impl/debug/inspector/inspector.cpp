@@ -33,7 +33,11 @@ inspector::Data* get_inspector_data() {
 // Inspector is not used on mock devices
 bool Inspector::is_enabled() {
     if (tt::tt_metal::MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
-        return tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID).rtoptions().get_inspector_enabled();
+        auto& ctx = tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID);
+        if (ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+            return false;
+        }
+        return ctx.rtoptions().get_inspector_enabled();
     }
     return false;
 }
@@ -367,18 +371,16 @@ void Inspector::emit_debug_entry(
     if (!is_enabled()) {
         return;
     }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
     try {
-        auto* data = get_inspector_data();
-        if (!data) {
-            // Inspector failed to initialize, no need to print failure message again.
-            return;
-        }
-        const auto workload_id = mesh_workload->get_id();
-
         std::lock_guard<std::mutex> lock(data->runtime_entries_mutex);
         auto pos = data->runtime_entries_write_pos;
         auto& slot = data->runtime_entries[pos % inspector::Data::kRuntimeEntriesCapacity];
-        slot.workload_id = workload_id;
+        slot.workload_id = mesh_workload->get_id();
         slot.runtime_id = runtime_id;
         slot.operation_name = operation_name;
         slot.tensor_specs = std::move(tensor_specs);
