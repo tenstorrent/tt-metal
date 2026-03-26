@@ -3036,3 +3036,155 @@ def test_from_torch_col_tilize_batched(weight_dtype, shape):
 
     assert result_col.shape == result_manual.shape
     assert_with_pcc(result_manual, result_col, pcc=0.98)
+
+
+@pytest.mark.parametrize("pos", list(range(10)))
+@pytest.mark.parametrize("dev_id", list(range(8)))
+def test_issue_36378_qkv_matmul_single_device(device, pos, dev_id):
+    """Issue #36378: Replay the QKV DRAM-sharded matmul from Llama-3.2-90B
+    attention decode on a single device using dumped tensors from the
+    multi-device pipeline.
+
+    Compares packer_l1_acc=True vs False against:
+      (1) The original pipeline output (sanity check)
+      (2) A highest-accuracy FP32 reference matmul (HiFi4, no approx)
+
+    Parametrized over all 10 decode positions and all 8 T3K devices.
+    """
+    dump_dir = os.path.join(os.path.dirname(__file__), "issue_36378_dumps")
+    x_path = os.path.join(dump_dir, f"x_pos{pos}_dev{dev_id}.pt")
+    w_path = os.path.join(dump_dir, f"wqkv_dev{dev_id}.pt")
+    out_path = os.path.join(dump_dir, f"qkv_out_pos{pos}_dev{dev_id}.pt")
+
+    if not os.path.exists(x_path):
+        pytest.skip(f"Dump files not found at {dump_dir}. Run the attention test with ISSUE36378_DUMP_DIR first.")
+
+    x_pt = torch.load(x_path)
+    w_pt = torch.load(w_path)
+    pipeline_out_pt = torch.load(out_path)
+
+    M, K = x_pt.shape[-2], x_pt.shape[-1]
+    N = w_pt.shape[-1]
+
+    num_banks = device.dram_grid_size().x
+    N_padded = ((N + 32 * num_banks - 1) // (32 * num_banks)) * (32 * num_banks)
+    num_cores = 8
+    in0_block_w = K // num_cores // 32
+
+    in1_shard_shape = [K, N_padded // num_banks]
+    in1_shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
+            )
+        }
+    )
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    in1_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
+    interleaved = ttnn.MemoryConfig(memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.DRAM)
+    sharded_out = ttnn.MemoryConfig(memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type=ttnn.BufferType.L1)
+
+    cfg_data = torch.load(os.path.join(dump_dir, "config.pt"))
+    prog_cfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=8,
+        per_core_M=1,
+        per_core_N=2,
+        fused_activation=None,
+    )
+
+    configs = {
+        "l1acc_fp32_hifi2": ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        ),
+        "nol1acc_fp32_hifi2": ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        ),
+        "golden_hifi4_fp32": ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        ),
+    }
+
+    pt_ref = x_pt.float() @ w_pt.float()
+
+    results = {}
+    for cfg_name, compute_cfg in configs.items():
+        x_tt = ttnn.Tensor(x_pt, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device, interleaved)
+        w_tt = ttnn.Tensor(w_pt, ttnn.bfloat8_b).to(ttnn.TILE_LAYOUT).to(device, in1_mem)
+        x_tt = ttnn.interleaved_to_sharded(
+            x_tt,
+            (8, 1),
+            [M, int(in0_block_w * 32)],
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+
+        out_tt = ttnn.linear(
+            x_tt,
+            w_tt,
+            program_config=prog_cfg,
+            memory_config=sharded_out,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_cfg,
+            global_cb=None,
+            sub_device_id=None,
+        )
+        out_tt = ttnn.sharded_to_interleaved(out_tt, interleaved)
+        out_torch = out_tt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+
+        err_vs_pt = (pt_ref - out_torch.float()).abs()
+        err_vs_pipeline = (pipeline_out_pt.float() - out_torch.float()).abs()
+
+        _, pcc_vs_pt_msg = comp_pcc(pt_ref, out_torch.float(), 0.9)
+        pcc_vs_pt = (
+            float(str(pcc_vs_pt_msg).split("PCC: ")[-1]) if "PCC: " in str(pcc_vs_pt_msg) else float(pcc_vs_pt_msg)
+        )
+
+        _, pcc_vs_pipeline_msg = comp_pcc(pipeline_out_pt.float(), out_torch.float(), 0.9)
+        pcc_vs_pipeline = (
+            float(str(pcc_vs_pipeline_msg).split("PCC: ")[-1])
+            if "PCC: " in str(pcc_vs_pipeline_msg)
+            else float(pcc_vs_pipeline_msg)
+        )
+
+        results[cfg_name] = {
+            "pcc_vs_torch": pcc_vs_pt,
+            "max_atol_vs_torch": float(err_vs_pt.max()),
+            "mean_atol_vs_torch": float(err_vs_pt.mean()),
+            "max_rtol_vs_torch": float((err_vs_pt / (pt_ref.abs() + 1e-10)).max()),
+            "pcc_vs_pipeline": pcc_vs_pipeline,
+            "max_atol_vs_pipeline": float(err_vs_pipeline.max()),
+        }
+
+    logger.info(f"\n{'='*80}")
+    logger.info(f"Issue #36378 QKV Matmul - Position {pos}, Device {dev_id} (M={M}, K={K}, N={N})")
+    logger.info(f"{'='*80}")
+    for cfg_name, r in results.items():
+        logger.info(f"  [{cfg_name}]")
+        logger.info(
+            f"    vs torch FP32:  PCC={r['pcc_vs_torch']:.6f}  ATOL_max={r['max_atol_vs_torch']:.4f}  ATOL_mean={r['mean_atol_vs_torch']:.6f}  RTOL_max={r['max_rtol_vs_torch']:.4f}"
+        )
+        logger.info(f"    vs pipeline:    PCC={r['pcc_vs_pipeline']:.6f}  ATOL_max={r['max_atol_vs_pipeline']:.4f}")
+
+    l1 = results["l1acc_fp32_hifi2"]
+    nol1 = results["nol1acc_fp32_hifi2"]
+    gold = results["golden_hifi4_fp32"]
+    logger.info(f"  COMPARISON:")
+    logger.info(f"    l1acc  PCC vs torch: {l1['pcc_vs_torch']:.6f}  max_atol: {l1['max_atol_vs_torch']:.4f}")
+    logger.info(f"    nol1   PCC vs torch: {nol1['pcc_vs_torch']:.6f}  max_atol: {nol1['max_atol_vs_torch']:.4f}")
+    logger.info(f"    golden PCC vs torch: {gold['pcc_vs_torch']:.6f}  max_atol: {gold['max_atol_vs_torch']:.4f}")
+    logger.info(f"    l1acc  PCC vs pipeline: {l1['pcc_vs_pipeline']:.6f}")
+    logger.info(f"    nol1   PCC vs pipeline: {nol1['pcc_vs_pipeline']:.6f}")
+    logger.info(f"{'='*80}")
+
+    assert l1["pcc_vs_torch"] > 0.999, f"l1acc PCC too low: {l1['pcc_vs_torch']}"
+    assert nol1["pcc_vs_torch"] > 0.999, f"nol1acc PCC too low: {nol1['pcc_vs_torch']}"
+    assert gold["pcc_vs_torch"] > 0.999, f"golden PCC too low: {gold['pcc_vs_torch']}"

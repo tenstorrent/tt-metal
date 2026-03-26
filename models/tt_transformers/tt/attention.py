@@ -606,6 +606,45 @@ class Attention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
+        # #region issue-36378 dump instrumentation
+        import os as _os
+
+        _dump_dir = _os.environ.get("ISSUE36378_DUMP_DIR", "")
+        if _dump_dir:
+            _os.makedirs(_dump_dir, exist_ok=True)
+            _pos = getattr(self, "_issue36378_pos", 0)
+            _dev_tensors_x = ttnn.get_device_tensors(x)
+            _dev_tensors_w = ttnn.get_device_tensors(self.wqkv)
+            _num_devs = len(_dev_tensors_x)
+            try:
+                for _di in range(_num_devs):
+                    torch.save(ttnn.to_torch(_dev_tensors_x[_di]), f"{_dump_dir}/x_pos{_pos}_dev{_di}.pt")
+                if _pos == 0:
+                    for _di in range(_num_devs):
+                        torch.save(ttnn.to_torch(_dev_tensors_w[_di]), f"{_dump_dir}/wqkv_dev{_di}.pt")
+                    torch.save(
+                        {
+                            "mm_mem_config": repr(self.args.get_attn_qkv_mm_mem_config(Mode.DECODE, self.prefetcher)),
+                            "program_config": repr(
+                                self.args.get_attn_qkv_program_config(Mode.DECODE, 1, self.prefetcher)
+                            ),
+                            "compute_kernel_config": repr(self.li_qkv_decode_compute_kernel_cfg),
+                            "output_dtype": repr(self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16),
+                            "x_dtype": repr(x.dtype),
+                            "w_dtype": repr(self.wqkv.dtype),
+                            "num_devices": _num_devs,
+                            "has_prefetcher": self.prefetcher is not None,
+                            "global_cb": repr(self.prefetcher.global_cb if self.prefetcher is not None else None),
+                            "sub_device_id": repr(
+                                self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None
+                            ),
+                        },
+                        f"{_dump_dir}/config.pt",
+                    )
+            except Exception as _e:
+                print(f"[36378 dump] pos {_pos}: {_e}")
+        # #endregion
+
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -616,6 +655,18 @@ class Attention(LightweightModule):
             global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
             sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
         )
+
+        # #region issue-36378 dump instrumentation (output)
+        if _dump_dir:
+            try:
+                _dev_tensors_out = ttnn.get_device_tensors(xqkv_fused_sharded)
+                for _di in range(len(_dev_tensors_out)):
+                    torch.save(ttnn.to_torch(_dev_tensors_out[_di]), f"{_dump_dir}/qkv_out_pos{_pos}_dev{_di}.pt")
+            except Exception as _e:
+                print(f"[36378 dump] output pos {_pos}: {_e}")
+            self._issue36378_pos = _pos + 1
+        # #endregion
+
         # FIXME: File bug against dram-sharded matmuls with bias
         if self.wqkv_bias_decode:
             # select the bias tensor based on the number of tiles in the rows
@@ -660,6 +711,15 @@ class Attention(LightweightModule):
         xqkv_fused = ttnn.reshape(
             xqkv_fused, (1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3])
         )
+
+        # #region issue-36378 dump instrumentation (post-all-reduce)
+        if _dump_dir:
+            try:
+                _post_ar = ttnn.to_torch(ttnn.get_device_tensors(xqkv_fused)[0])
+                torch.save(_post_ar, f"{_dump_dir}/qkv_post_allreduce_pos{_pos - 1}_dev0.pt")
+            except Exception as _e:
+                print(f"[36378 dump] post-allreduce pos {_pos - 1}: {_e}")
+        # #endregion
 
         ###
         # Reshape and rotary embeddings
