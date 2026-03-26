@@ -54,13 +54,6 @@ def check_normal_distribution(data, expected_mean=0.0, expected_std=1.0, sigma_t
 
 @pytest.mark.requires_device
 class TestRandn:
-    @pytest.fixture(autouse=True)
-    def setup_device(self):
-        auto_ctx = ttml.autograd.AutoContext.get_instance()
-        auto_ctx.open_device()
-        yield
-        auto_ctx.close_device()
-
     # --- default behaviour ---
 
     def test_randn_defaults(self):

@@ -24,19 +24,22 @@
 
 namespace tt::tt_fabric {
 
-template <
-    bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE,
-    uint8_t EDM_NUM_BUFFER_SLOTS = 0,
-    uint32_t STREAM_ID = tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id>
+template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0, uint8_t VC_ID = 0>
 struct WorkerToFabricEdmSenderBase;
 
-// Type alias preserving the current name for all existing callers.
-// Stream ID 22 (sender_channel_0 free slots) is the default for VC0/VC1 worker connections.
+// VC0/VC1: connection info read from L1 conn table populated by device-init.
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
 using WorkerToFabricEdmSenderImpl =
     WorkerToFabricEdmSenderBase<I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, EDM_NUM_BUFFER_SLOTS>;
 
 using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<false, 0>;
+
+// VC2: infrastructure connection — addresses passed as runtime args, stream ID 30.
+template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0>
+using WorkerToFabricEdmSenderVC2Impl =
+    WorkerToFabricEdmSenderBase<I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, EDM_NUM_BUFFER_SLOTS, 2>;
+
+using WorkerToFabricEdmSenderVC2 = WorkerToFabricEdmSenderVC2Impl<false, 0>;
 
 namespace fabric_detail{
     template <bool STATEFUL_NOC>
@@ -60,12 +63,13 @@ namespace fabric_detail{
  * As the adapter writes into the EDM, it updates the local wrptr. As the EDM reads from its local L1 channel buffer,
  * it will notify the worker/adapter (here) by updating the worker remote_rdptr to carry the value of the EDM rdptr.
  */
-template <
-    bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE,
-    uint8_t EDM_NUM_BUFFER_SLOTS,
-    uint32_t STREAM_ID>
+template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS, uint8_t VC_ID>
 struct WorkerToFabricEdmSenderBase {
-    static_assert(STREAM_ID <= 31, "Stream ID must be in range 0-31");
+    static_assert(VC_ID == 0 || VC_ID == 2, "Only VC_ID 0 and 2 are supported");
+    // VC0 uses stream 22 (sender_channel_0 free slots); VC2 uses stream 30.
+    static constexpr uint32_t STREAM_ID =
+        VC_ID == 2 ? tt::tt_fabric::connection_interface::vc2_sender_free_slots_stream_id
+                   : tt::tt_fabric::connection_interface::sender_channel_0_free_slots_stream_id;
     static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
         true;
@@ -102,7 +106,9 @@ struct WorkerToFabricEdmSenderBase {
 
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24959
         // remove redundant nested constructor to avoid copy
-        if constexpr (my_core_type == ProgrammableCoreType::TENSIX) {
+        if constexpr (my_core_type == ProgrammableCoreType::TENSIX && VC_ID == 0) {
+            // VC0: connection info is populated into the L1 conn table by device-init;
+            // read it by eth channel index.
             tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
                 reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
             uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
@@ -121,6 +127,7 @@ struct WorkerToFabricEdmSenderBase {
                 reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
             worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
         } else {
+            // VC2 (TENSIX or ETH): addresses are passed directly as runtime args — no L1 conn table.
             // TODO: will be deprecated. currently for ethernet dispatch case
             //       ethernet core need to have same memory mapping as worker
             direction = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));

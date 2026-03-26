@@ -45,13 +45,12 @@ jobs:
             name: "WH Data Movement Regressions",
             cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter Directed --verbose-log",
           }, # Ata Tuzuner
-          # Disabled: CI regression on gh05/gh06 (~0.01 GB/s vs 500 GB/s locally). Suspected machine-specific issue. Tracking: https://github.com/tenstorrent/tt-metal/issues/39545. Re-enable this test when issue #39545 is resolved.
-          # {
-          #   arch: blackhole,
-          #   runs-on: ["BH", "pipeline-perf", "P150", "in-service"],
-          #   name: "BH P150 DRAM ubench",
-          #   cmd: "./tests/scripts/run_moreh_microbenchmark.sh",
-          # }, # Yu Gao
+          {
+            arch: blackhole,
+            runs-on: ["BH", "pipeline-perf", "P150", "in-service"],
+            name: "BH P150 DRAM ubench",
+            cmd: "./tests/scripts/run_moreh_microbenchmark.sh",
+          }, # Yu Gao
           {
             arch: blackhole,
             runs-on: ["BH", "pipeline-perf", "in-service"],
