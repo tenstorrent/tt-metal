@@ -241,15 +241,32 @@ run_t3000_falcon7b_tests(){
 }
 
 run_t3000_mistral_tests() {
+  start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_mistral_demo_tests"
 
+  # Mistral 7B text demo
   hf_model="mistralai/Mistral-7B-Instruct-v0.3"
   tt_cache_path=$TT_CACHE_HOME/$hf_model
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 10800 -k "not performance-ci-stress-1"
-  # test max_seq_len overrides
   TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py --timeout 120 -k "ci-long-context-16k" --max_seq_len=16384
+  echo "LOG_METAL: Mistral 7B tests completed (text)"
 
+  # Mistral-Small-3.1-24B text demo
+  mistral24b=mistralai/Mistral-Small-3.1-24B-Instruct-2503
+  tt_cache_mistral24b=$TT_CACHE_HOME/$mistral24b
+  MESH_DEVICE=T3K TT_CACHE_PATH=$tt_cache_mistral24b HF_MODEL=$mistral24b \
+    pytest models/tt_transformers/demo/simple_text_demo.py --timeout 10800 -k "not performance-ci-stress-1"
+  echo "LOG_METAL: Mistral-Small-3.1-24B tests completed (text)"
+
+  # Mistral-Small-3.1-24B vision demo
+  MESH_DEVICE=T3K HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b \
+    pytest models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" --timeout 900
+  echo "LOG_METAL: Mistral-Small-3.1-24B tests completed (vision)"
+
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_mistral_tests $duration seconds to complete"
 }
 
 run_t3000_mixtral_tests() {
