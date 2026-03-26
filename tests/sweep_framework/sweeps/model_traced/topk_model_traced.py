@@ -50,12 +50,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -80,7 +80,9 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, exclude={"arg1", "arg2"}, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(
+        kwargs, exclude={"arg1", "arg2", "largest", "sorted"}, output_memory_config=output_memory_config
+    )
 
     if k is None:
         k = kwargs.get("arg1", 5)
@@ -88,11 +90,10 @@ def run(
     if dim is None:
         dim = kwargs.get("arg2", -1)
     dim_val = dim
-    # Read largest and sorted from op_kwargs (from traced config)
-    largest = op_kwargs.get("largest", True)
+    largest = kwargs.get("largest", True)
     if largest is None:
         largest = True
-    sorted_flag = op_kwargs.get("sorted", True)
+    sorted_flag = kwargs.get("sorted", True)
     if sorted_flag is None:
         sorted_flag = True
     if output_memory_config is None and memory_config is not None:
@@ -133,7 +134,7 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    topk_result = ttnn.topk(input_tensor_a, k_val, dim=dim_val, **op_kwargs)
+    topk_result = ttnn.topk(input_tensor_a, k_val, dim=dim_val, largest=largest, sorted=sorted_flag, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(topk_result[0], device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

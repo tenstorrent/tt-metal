@@ -54,12 +54,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -83,13 +83,7 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
-
-    # keepdim comes from named param (consumed before kwargs), not from op_kwargs.
-    # Ensure it's bool and in op_kwargs for passing to the op.
-    if keepdim is not None:
-        keepdim = bool(keepdim)
-    op_kwargs["keepdim"] = keepdim if keepdim is not None else False
+    op_kwargs = build_op_kwargs(kwargs, exclude={"keepdim"}, output_memory_config=output_memory_config)
 
     # Handle tuple input_a_shape for sample suite
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -131,7 +125,7 @@ def run(
     if dim is None:
         output_tensor = ttnn.std(input_tensor_a, **op_kwargs)
     else:
-        output_tensor = ttnn.std(input_tensor_a, dim=dim, **op_kwargs)
+        output_tensor = ttnn.std(input_tensor_a, dim=dim, keepdim=keepdim, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

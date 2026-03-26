@@ -99,12 +99,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -132,12 +132,9 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    raw_placement_a = kwargs.get("input_a_tensor_placement", None)
-    input_a_tensor_placement = raw_placement_a
-    raw_placement_b = kwargs.get("input_b_tensor_placement", None)
-    input_b_tensor_placement = raw_placement_b
-    raw_placement_c = kwargs.get("input_c_tensor_placement", None)
-    input_c_tensor_placement = raw_placement_c
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+    input_c_tensor_placement = kwargs.get("input_c_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     is_causal = kwargs.get("is_causal", False)
     if is_causal is None:
@@ -157,8 +154,10 @@ def run(
     op_kwargs = build_op_kwargs(kwargs, exclude={"is_causal"}, output_memory_config=output_memory_config)
 
     # Clear sharded memory_config from op_kwargs too
+    if "memory_config" in op_kwargs and "SHARDED" in str(op_kwargs["memory_config"]):
+        del op_kwargs["memory_config"]
 
-    # Validate program_config grid fits current device
+    # Validate program_config grid fits test device; check each dimension (not just total)
     pc = op_kwargs.get("program_config")
     if pc is not None:
         try:
@@ -179,31 +178,20 @@ def run(
             shape_v = shape_k
     else:
         shape_q = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
-        shape_k = (
-            tuple(input_b_shape)
-            if input_b_shape is not None and input_b_shape != "__ABSENT__" and isinstance(input_b_shape, (tuple, list))
-            else shape_q
-        )
-        shape_v = (
-            tuple(input_c_shape)
-            if input_c_shape is not None and input_c_shape != "__ABSENT__" and isinstance(input_c_shape, (tuple, list))
-            else shape_k
-        )
-
-    def _or_default(val, default):
-        return val if val is not None and val != "__ABSENT__" else default
+        shape_k = tuple(input_b_shape) if input_b_shape is not None else shape_q
+        shape_v = tuple(input_c_shape) if input_c_shape is not None else shape_k
 
     dtype_q = input_a_dtype
-    dtype_k = _or_default(input_b_dtype, dtype_q)
-    dtype_v = _or_default(input_c_dtype, dtype_k)
+    dtype_k = input_b_dtype
+    dtype_v = input_c_dtype
 
     layout_q = input_a_layout
-    layout_k = _or_default(input_b_layout, layout_q)
-    layout_v = _or_default(input_c_layout, layout_k)
+    layout_k = input_b_layout
+    layout_v = input_c_layout
 
     mem_config_q = input_a_memory_config
-    mem_config_k = _or_default(input_b_memory_config, mem_config_q)
-    mem_config_v = _or_default(input_c_memory_config, mem_config_k)
+    mem_config_k = input_b_memory_config
+    mem_config_v = input_c_memory_config
 
     batch_size, num_heads_q, seq_len, head_dim = shape_q
     _, num_heads_k, _, _ = shape_k
@@ -231,29 +219,15 @@ def run(
 
     # Quantize inputs to target dtype - both PyTorch and TTNN use same quantized inputs.
     # Always use DRAM interleaved for the round-trip (safe on any device).
-    # On mesh devices, use ReplicateTensorToMesh for the round-trip; then extract
-    # device 0's copy via get_device_tensors to get a clean single-device torch tensor.
-    def _quantize_roundtrip(torch_tensor, dtype, layout):
-        if is_mesh_device:
-            t = ttnn.from_torch(
-                torch_tensor,
-                dtype=dtype,
-                layout=layout,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-            )
-            return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
-        else:
-            return ttnn.to_torch(
-                ttnn.from_torch(
-                    torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-                )
-            )
-
-    torch_q = _quantize_roundtrip(torch_q, dtype_q, layout_q)
-    torch_k = _quantize_roundtrip(torch_k, dtype_k, layout_k)
-    torch_v = _quantize_roundtrip(torch_v, dtype_v, layout_v)
+    torch_q = ttnn.to_torch(
+        ttnn.from_torch(torch_q, dtype=dtype_q, layout=layout_q, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    )
+    torch_k = ttnn.to_torch(
+        ttnn.from_torch(torch_k, dtype=dtype_k, layout=layout_k, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    )
+    torch_v = ttnn.to_torch(
+        ttnn.from_torch(torch_v, dtype=dtype_v, layout=layout_v, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    )
 
     # Ensure all tensors have the same dtype for PyTorch SDPA
     torch_q = torch_q.to(torch.float32)
@@ -282,17 +256,14 @@ def run(
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
-    # Compare raw golden (float32) against TTNN output.
-    # Do NOT requantize the golden — that introduces double-quantization error.
-    # LoFi compute kernels have lower precision — use relaxed threshold.
-    ckc = op_kwargs.get("compute_kernel_config")
-    is_lofi = False
-    if ckc is not None:
-        try:
-            is_lofi = ckc.math_fidelity == ttnn.MathFidelity.LoFi
-        except Exception:
-            pass
-    pcc_threshold = 0.98 if is_lofi else 0.99
-    pcc = check_with_pcc(torch_output_golden, output_tensor, pcc_threshold)
+    # Quantize PyTorch output to match TTNN output dtype for fair comparison
+    torch_output_tensor = ttnn.to_torch(
+        ttnn.from_torch(
+            torch_output_golden, dtype=dtype_q, layout=layout_q, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+    )
+
+    # Check with PCC (threshold 0.99 for low-precision dtypes)
+    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
 
     return [pcc, e2e_perf]

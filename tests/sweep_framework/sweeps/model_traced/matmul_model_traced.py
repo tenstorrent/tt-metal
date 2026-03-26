@@ -66,13 +66,13 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
         # Single device (default)
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -102,9 +102,20 @@ def run(
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
-    # Keep all traced params including program_config — they are required for
-    # correct matmul behavior with sharded memory configs.
-    op_kwargs = build_op_kwargs(kwargs)
+    # Don't pass output_memory_config to build_op_kwargs — it would add memory_config
+    # before we can clean up sharded configs below.
+    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"})
+
+    # Skip traced program_config: block dimensions (out_block_w, per_core_N, etc.) are computed
+    # for the original device grid and don't match the local device. Let ttnn auto-compute.
+    # When program_config is skipped, sharded output/memory configs are invalid because
+    # their shard specs depend on the program_config. Clear them so ttnn auto-determines.
+    if output_memory_config is not None and "SHARDED" in str(output_memory_config):
+        output_memory_config = None
+    if "memory_config" in op_kwargs and "SHARDED" in str(op_kwargs["memory_config"]):
+        del op_kwargs["memory_config"]
+    if input_b_memory_config is not None and "SHARDED" in str(input_b_memory_config):
+        input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
     # Use output_memory_config as fallback for memory_config in op_kwargs
     if "memory_config" not in op_kwargs and output_memory_config is not None:
@@ -125,21 +136,14 @@ def run(
     # Matrix multiplication - convert to float32 for PyTorch operations
     torch_output_tensor = torch.matmul(torch_input_tensor_a.float(), torch_input_tensor_b.float())
 
-    # Apply activation to golden if specified — check both op kwarg and program_config.fused_activation
-    activation = op_kwargs.get("activation")
-    if not activation or activation == "__ABSENT__":
-        # Check program_config for fused_activation
-        pc = op_kwargs.get("program_config")
-        if pc and hasattr(pc, "fused_activation") and pc.fused_activation is not None:
-            activation = str(pc.fused_activation)
+    # Apply activation function to golden if present (e.g., gelu_approx fused with matmul)
+    activation = kwargs.get("activation", None)
     if activation and activation != "__ABSENT__":
-        act_str = str(activation).lower()
-        if "gelu" in act_str:
-            torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor, approximate="tanh")
-        elif "relu" in act_str:
-            torch_output_tensor = torch.nn.functional.relu(torch_output_tensor)
-        elif "silu" in act_str:
-            torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
+        from ttnn.operations.activations import get_golden_function_for_activation
+
+        golden_activation = get_golden_function_for_activation(activation)
+        if golden_activation is not None:
+            torch_output_tensor = golden_activation(torch_output_tensor)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
     is_host = storage_type and "HOST" in str(storage_type)

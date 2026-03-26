@@ -48,12 +48,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -68,11 +68,6 @@ def run(
     output_memory_config=None,
     memory_config=None,
     storage_type="StorageType::DEVICE",
-    arg1=None,  # May contain starts from V2 traced configs (positional)
-    arg2=None,  # May contain ends from V2 traced configs (positional)
-    arg3=None,  # May contain steps from V2 traced configs (positional)
-    dtype=None,  # Output dtype from V2 traced configs
-    use_legacy=None,  # Legacy mode flag from V2 traced configs
     *,
     device,
     **kwargs,
@@ -83,7 +78,7 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(
         kwargs,
-        exclude={"starts", "ends", "steps", "slice_dim", "num_devices"},
+        exclude={"starts", "ends", "steps", "arg1", "arg2", "arg3", "slice_dim", "num_devices"},
         output_memory_config=output_memory_config,
     )
 
@@ -97,9 +92,9 @@ def run(
     )(shape)
 
     # Some configs use named params (starts/ends/steps), others use positional (arg1/arg2/arg3)
-    slice_start = kwargs.get("starts", None) or arg1 or [0] * len(shape)
-    slice_end = kwargs.get("ends", None) or arg2
-    slice_step = kwargs.get("steps", None) or arg3 or [1] * len(shape)
+    slice_start = kwargs.get("starts", None) or kwargs.get("arg1", None) or [0] * len(shape)
+    slice_end = kwargs.get("ends", None) or kwargs.get("arg2", None)
+    slice_step = kwargs.get("steps", None) or kwargs.get("arg3", None) or [1] * len(shape)
 
     if not slice_end:
         slice_end = list(shape)

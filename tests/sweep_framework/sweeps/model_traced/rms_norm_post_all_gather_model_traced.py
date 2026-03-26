@@ -51,12 +51,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104)
+            device = ttnn.open_device(device_id=0)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104)
+        device = ttnn.open_device(device_id=0)
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -95,9 +95,8 @@ def run(
         shape = (1, 1, 32, 32)
         stats_shape_from_trace = None
 
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
-
-    eps = op_kwargs.get("epsilon", 1e-5)
+    eps = kwargs.get("epsilon", 1e-5)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"epsilon"}, output_memory_config=output_memory_config)
     hidden_dim = shape[-1]
 
     # rms_norm_post_all_gather only supports BFLOAT16 and BFLOAT8_B input dtypes
@@ -180,7 +179,9 @@ def run(
         )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.rms_norm_post_all_gather(input_tensor, stats_tensor, weight=weight_tensor, **op_kwargs)
+    output_tensor = ttnn.rms_norm_post_all_gather(
+        input_tensor, stats_tensor, epsilon=eps, weight=weight_tensor, **op_kwargs
+    )
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

@@ -80,12 +80,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -111,7 +111,7 @@ def run(
     # Build op kwargs — auto-parses compute_kernel_config, memory_config dicts;
     # auto-filters weight_* named tensor kwargs and infrastructure keys.
     # Exclude program_config because it needs custom parsing (LayerNorm-specific).
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"program_config"}, output_memory_config=output_memory_config)
 
     # Handle program_config with custom parser
     program_config = kwargs.get("program_config")

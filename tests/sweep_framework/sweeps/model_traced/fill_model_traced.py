@@ -62,13 +62,13 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
         # Single device (default)
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -88,15 +88,15 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Extract fill_value from kwargs (from traced config) or use default
+    fill_value = kwargs.get("fill_value", 0.0)
+
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
 
     # Check if device is a mesh device (from fixture)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
-
-    # Extract fill_value from op_kwargs for golden computation
-    fill_value = op_kwargs.get("fill_value", 0.0)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"fill_value"}, output_memory_config=output_memory_config)
 
     # V2 format provides input_a_shape
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
@@ -135,8 +135,6 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # Pop fill_value from op_kwargs since ttnn.fill takes it as a positional argument
-    op_kwargs.pop("fill_value", None)
     output_tensor = ttnn.fill(input_tensor_a, fill_value, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

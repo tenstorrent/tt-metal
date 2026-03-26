@@ -55,12 +55,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -92,10 +92,6 @@ def run(
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
-
-    # Build op_kwargs early so we can read dim from traced config for golden
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
-    dim = op_kwargs.pop("dim", dim)
 
     torch_output_tensor = torch.nn.functional.softmax(torch_input_tensor_a, dim=dim)
 
@@ -136,6 +132,10 @@ def run(
             )
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
+
+    # Build op kwargs from traced config; exclude program_config since ttnn.softmax
+    # doesn't accept it (sharded program config is computed internally)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"dim", "program_config"}, output_memory_config=output_memory_config)
 
     # Sharded softmax with random test data needs numeric_stable=True to avoid
     # exp() overflow producing all-zero output

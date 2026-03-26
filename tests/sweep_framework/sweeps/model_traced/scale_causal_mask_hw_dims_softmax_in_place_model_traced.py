@@ -17,7 +17,6 @@ from models.common.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
 
@@ -43,12 +42,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -83,7 +82,8 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"head_size", "program_config"})
+
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (tuple, list)) else input_a_shape
 
     # Scale factor (arg1 in JSON, passed as scalar by loader)
@@ -94,38 +94,41 @@ def run(
         shape_a
     )
 
-    # Generate causal mask if mask params are provided (arg2 in JSON).
-    # The op expects a pre-computed causal mask with -100000 for masked (future) positions
-    # and 0 for unmasked positions, matching how falcon7b creates the attention mask.
+    # Generate causal mask if mask params are provided (arg2 in JSON)
     mask_shape = kwargs.get("input_b_shape", None)
     if mask_shape is not None:
         mask_shape = tuple(mask_shape) if isinstance(mask_shape, (list, tuple)) else mask_shape
-        h, w = mask_shape[-2], mask_shape[-1]
-        causal_bool = torch.ones(h, w, dtype=torch.bool).triu(diagonal=1)
-        torch_mask = causal_bool.float().masked_fill(causal_bool, -100000.0)
-        # Expand to full mask shape
-        while torch_mask.ndim < len(mask_shape):
-            torch_mask = torch_mask.unsqueeze(0)
-        torch_mask = torch_mask.expand(*mask_shape)
+        torch_mask = gen_func_with_cast_tt(
+            partial(torch_random, low=-10, high=10, dtype=torch.float32),
+            input_b_dtype if input_b_dtype else input_a_dtype,
+        )(mask_shape)
     else:
         torch_mask = None
 
-    # Golden: softmax(scale * input + tiled_mask)
-    # The "hw_dims" op tiles the mask across the input height — each mask-height block
-    # of rows gets its own causal mask applied independently.
+    # Golden: softmax(scale * input + mask)
     golden_input = scale * torch_input_a.float()
     if torch_mask is not None:
         mask_float = torch_mask.float()
+        # Pad mask height to match input if needed (causal mask may be smaller)
         input_h = golden_input.shape[-2]
         mask_h = mask_float.shape[-2]
         if mask_h < input_h:
-            # Tile mask to cover full input height
-            repeats = (input_h + mask_h - 1) // mask_h
-            mask_float = mask_float.repeat(1, 1, repeats, 1)[..., :input_h, :]
+            pad_h = input_h - mask_h
+            mask_float = torch.nn.functional.pad(mask_float, (0, 0, pad_h, 0), value=0.0)
         elif mask_h > input_h:
-            mask_float = mask_float[..., :input_h, :]
+            mask_float = mask_float[..., -input_h:, :]
+        # Pad mask width if needed
+        input_w = golden_input.shape[-1]
+        mask_w = mask_float.shape[-1]
+        if mask_w < input_w:
+            pad_w = input_w - mask_w
+            mask_float = torch.nn.functional.pad(mask_float, (pad_w, 0, 0, 0), value=0.0)
+        elif mask_w > input_h:
+            mask_float = mask_float[..., -input_w:]
         golden_input = golden_input + mask_float
-    torch_output = torch.softmax(golden_input, dim=-1)
+    x_max = torch.max(golden_input, dim=-1, keepdim=True)[0]
+    x_exp = torch.exp(golden_input - x_max)
+    torch_output = x_exp / torch.sum(x_exp, dim=-1, keepdim=True)
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -150,10 +153,7 @@ def run(
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            try:
-                input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, input_a_memory_config)
-            except Exception:
-                pass  # Stay on DRAM if shard spec doesn't fit device
+            input_tensor_a = ttnn.interleaved_to_sharded(input_tensor_a, input_a_memory_config)
         else:
             input_tensor_a = ttnn.from_torch(
                 torch_input_a,

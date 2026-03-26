@@ -64,12 +64,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -87,10 +87,6 @@ def run(
     input_b_memory_config=None,
     output_memory_config=None,
     storage_type="StorageType::DEVICE",
-    arg1=None,  # May contain scalar value from V2 traced configs
-    use_legacy=None,  # Legacy mode flag from V2 traced configs
-    memory_config=None,  # Alternative memory_config parameter from V2 traced configs
-    dtype=None,  # Output dtype from V2 traced configs
     *,
     device,
     **kwargs,

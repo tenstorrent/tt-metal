@@ -55,12 +55,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104)
+            device = ttnn.open_device(device_id=0)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104)
+        device = ttnn.open_device(device_id=0)
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -83,10 +83,9 @@ def run(
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
 
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
-
-    # Extract dims from op_kwargs for golden computation
-    dims = op_kwargs.get("dims", [0, 1])
+    # Extract dims from kwargs (from traced config) or use default
+    dims = kwargs.get("dims", [0, 1])
+    op_kwargs = build_op_kwargs(kwargs, exclude={"dims"}, output_memory_config=output_memory_config)
 
     # Handle tuple input_a_shape for sample suite
     if isinstance(input_a_shape, (tuple, list)):
@@ -126,7 +125,7 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, output=None, **op_kwargs)
+    output_tensor = ttnn.experimental.fast_reduce_nc(input_tensor_a, dims=dims, output=None, **op_kwargs)
 
     # Calculate expected output shape (reduce dims to 1)
     output_shape = list(shape)

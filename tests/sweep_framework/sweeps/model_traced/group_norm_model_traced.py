@@ -58,12 +58,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -150,20 +150,13 @@ def run(
     bias_tensor_placement = kwargs.get("bias_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
 
-    # Let core_grid, memory_config, num_groups, epsilon flow through op_kwargs
-    # so they get parsed from dicts. Exclude only non-op params.
+    # Let core_grid and memory_config flow through op_kwargs so they get parsed from dicts
+    # Exclude params we handle explicitly as named parameters
     op_kwargs = build_op_kwargs(
         kwargs,
-        exclude={"inplace", "negative_mask", "num_out_blocks", "use_welford"},
+        exclude={"inplace", "num_out_blocks", "use_welford", "num_groups", "epsilon", "negative_mask"},
         output_memory_config=output_memory_config,
     )
-
-    # Read num_groups and epsilon from op_kwargs (from traced config), falling back to function params
-    num_groups = op_kwargs.get("num_groups", num_groups)
-    if num_groups is not None:
-        num_groups = int(num_groups)
-        op_kwargs["num_groups"] = num_groups  # Ensure int type in op_kwargs too
-    epsilon = op_kwargs.get("epsilon", epsilon)
 
     if input_a_memory_config is None:
         input_a_memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -291,7 +284,7 @@ def run(
     # The core_grid.y value determines the num_cores_across_channel parameter
     _op_kwargs_copy = build_op_kwargs(
         kwargs,
-        exclude={"inplace", "negative_mask", "num_out_blocks", "use_welford"},
+        exclude={"inplace", "num_out_blocks", "use_welford", "num_groups", "epsilon", "negative_mask"},
         output_memory_config=output_memory_config,
     )
     if "core_grid" in _op_kwargs_copy:
@@ -410,8 +403,10 @@ def run(
     else:
         core_grid = op_kwargs.pop("core_grid")
 
-    # Build group_norm arguments - num_groups and epsilon already flow through op_kwargs
+    # Build group_norm arguments
     group_norm_kwargs = {
+        "num_groups": num_groups,
+        "epsilon": epsilon,
         "inplace": actual_inplace,
         "core_grid": core_grid,
         "memory_config": output_memory_config,
@@ -431,10 +426,7 @@ def run(
     if use_welford:
         group_norm_kwargs["use_welford"] = use_welford
 
-    # Merge op_kwargs but don't overwrite explicitly set params
-    for k, v in op_kwargs.items():
-        if k not in group_norm_kwargs:
-            group_norm_kwargs[k] = v
+    group_norm_kwargs.update(op_kwargs)
     output_tensor = ttnn.group_norm(input_tensor_a, **group_norm_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

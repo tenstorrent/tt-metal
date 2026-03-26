@@ -56,12 +56,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104)
+            device = ttnn.open_device(device_id=0)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104)
+        device = ttnn.open_device(device_id=0)
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -91,7 +91,7 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"batch_idx"}, output_memory_config=output_memory_config)
 
     # V2 vectors provide page_table as a named tensor (page_table_*) instead of input_c_*
     page_table_kwargs = extract_named_tensor_kwargs(kwargs, "page_table")
@@ -201,9 +201,9 @@ def run(
         input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=dtype_b, layout=layout_b)
         input_tensor_c = ttnn.from_torch(torch_input_tensor_c, dtype=dtype_c, layout=layout_c)
 
-    # Ensure batch_idx has a default value in op_kwargs
-    if "batch_idx" not in op_kwargs or op_kwargs["batch_idx"] is None:
-        op_kwargs["batch_idx"] = 0
+    batch_idx = kwargs.get("batch_idx", 0)
+    if batch_idx is None:
+        batch_idx = 0
 
     start_time = start_measuring_time()
     try:
@@ -211,6 +211,7 @@ def run(
             input_tensor_a,  # cache_tensor
             input_tensor_b,  # input_tensor
             input_tensor_c,  # page_table
+            batch_idx=batch_idx,
             **op_kwargs,
         )
     except TypeError:
@@ -218,6 +219,7 @@ def run(
             input_tensor_a,  # cache_tensor
             input_tensor_b,  # input_tensor
             input_tensor_c,  # page_table
+            batch_idx=batch_idx,
             **op_kwargs,
         )
     # paged_fill_cache modifies cache_tensor in place, so output is the same as input_tensor_a

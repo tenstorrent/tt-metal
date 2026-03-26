@@ -64,12 +64,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -93,65 +93,30 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    raw_placement_a = kwargs.get("input_a_tensor_placement", None)
-    input_a_tensor_placement = raw_placement_a
-    raw_placement_b = kwargs.get("input_b_tensor_placement", None)
-    input_b_tensor_placement = raw_placement_b
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config or ttnn.DRAM_MEMORY_CONFIG)
 
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
-
-    # Check if arg1 is a scalar (traced configs often have remainder(tensor, scalar))
-    # The V2 loader stores non-tensor positional args as "arg1" in kwargs.
-    arg1_scalar = kwargs.get("arg1", None)
-    if arg1_scalar is not None and arg1_scalar != "__ABSENT__":
-        # arg1 might be a scalar value or a dict with {"value": ...}
-        if isinstance(arg1_scalar, dict) and "value" in arg1_scalar:
-            arg1_scalar = arg1_scalar["value"]
-        if isinstance(arg1_scalar, (int, float)):
-            scalar_b = arg1_scalar
-        else:
-            scalar_b = None
-    else:
-        scalar_b = None
-
-    # Determine if second operand is a tensor or scalar.
-    # Filter out __ABSENT__ sentinel values from V2 loader.
-    has_tensor_b = (
-        input_b_shape is not None
-        and input_b_shape != "__ABSENT__"
-        and input_b_dtype is not None
-        and input_b_dtype != "__ABSENT__"
+    shape_b = (
+        tuple(input_b_shape)
+        if input_b_shape is not None and isinstance(input_b_shape, (list, tuple))
+        else input_b_shape
     )
-    use_scalar_b = scalar_b is not None and not has_tensor_b
+    if shape_b is None:
+        shape_b = shape_a
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape_a)
 
-    if use_scalar_b:
-        # Scalar remainder: ttnn.remainder(tensor, scalar)
-        # Ensure scalar is positive to avoid division by zero
-        if scalar_b == 0:
-            scalar_b = 1
-        torch_output_tensor = torch.remainder(torch_input_tensor_a, scalar_b)
-    else:
-        # Tensor remainder: ttnn.remainder(tensor, tensor)
-        shape_b = (
-            tuple(input_b_shape)
-            if input_b_shape is not None and isinstance(input_b_shape, (list, tuple))
-            else input_b_shape
-        )
-        if shape_b is None:
-            shape_b = shape_a
+    # Avoid division by zero for remainder
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=1, high=100, dtype=torch.float32), input_b_dtype
+    )(shape_b)
 
-        # Avoid division by zero for remainder
-        torch_input_tensor_b = gen_func_with_cast_tt(
-            partial(torch_random, low=1, high=100, dtype=torch.float32), input_b_dtype or input_a_dtype
-        )(shape_b)
-
-        torch_output_tensor = torch.remainder(torch_input_tensor_a, torch_input_tensor_b)
+    torch_output_tensor = torch.remainder(torch_input_tensor_a, torch_input_tensor_b)
 
     is_host = storage_type and "HOST" in str(storage_type)
 
@@ -177,38 +142,30 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    if use_scalar_b:
-        # Pass scalar directly to ttnn.remainder
-        input_b_operand = scalar_b
-    else:
-        # Create tensor B
-        if not is_host:
-            if is_mesh_device and input_b_tensor_placement:
-                input_b_operand = create_tensor_on_mesh(
-                    torch_input_tensor_b,
-                    device,
-                    input_b_dtype or input_a_dtype,
-                    input_b_layout or input_a_layout,
-                    input_b_memory_config or input_a_memory_config,
-                    input_b_tensor_placement,
-                )
-            else:
-                input_b_operand = ttnn.from_torch(
-                    torch_input_tensor_b,
-                    dtype=input_b_dtype or input_a_dtype,
-                    layout=input_b_layout or input_a_layout,
-                    device=device,
-                    memory_config=input_b_memory_config or input_a_memory_config,
-                )
-        else:
-            input_b_operand = ttnn.from_torch(
+    # Create tensor B
+    if not is_host:
+        if is_mesh_device and input_b_tensor_placement:
+            input_tensor_b = create_tensor_on_mesh(
                 torch_input_tensor_b,
-                dtype=input_b_dtype or input_a_dtype,
-                layout=input_b_layout or input_a_layout,
+                device,
+                input_b_dtype,
+                input_b_layout,
+                input_b_memory_config,
+                input_b_tensor_placement,
             )
+        else:
+            input_tensor_b = ttnn.from_torch(
+                torch_input_tensor_b,
+                dtype=input_b_dtype,
+                layout=input_b_layout,
+                device=device,
+                memory_config=input_b_memory_config,
+            )
+    else:
+        input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=input_b_dtype, layout=input_b_layout)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.remainder(input_tensor_a, input_b_operand, **op_kwargs)
+    output_tensor = ttnn.remainder(input_tensor_a, input_tensor_b, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 

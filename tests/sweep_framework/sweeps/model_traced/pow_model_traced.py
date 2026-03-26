@@ -65,12 +65,12 @@ def mesh_device_fixture():
             ttnn.close_mesh_device(device)
         except Exception as e:
             print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
-            device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_device(device)
     else:
-        device = ttnn.open_device(device_id=0, l1_small_size=79104, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
         device_name = ttnn.get_arch_name()
         yield (device, device_name)
         ttnn.close_device(device)
@@ -97,15 +97,13 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    op_kwargs = build_op_kwargs(kwargs, exclude={"exponent"}, output_memory_config=output_memory_config)
 
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
-    # Get exponent from op_kwargs (from traced config), falling back to function param or default
+    # Default exponent if not provided
     if exponent is None:
-        exponent = op_kwargs.get("exponent", 2.0)
-    else:
-        exponent = op_kwargs.get("exponent", exponent)
+        exponent = kwargs.get("exponent", 2.0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=0.1, high=100, dtype=torch.float32), input_a_dtype
@@ -138,8 +136,6 @@ def run(
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
     start_time = start_measuring_time()
-    # Pop exponent from op_kwargs since ttnn.pow takes it as a positional argument
-    op_kwargs.pop("exponent", None)
     output_tensor = ttnn.pow(input_tensor_a, exponent, **op_kwargs)
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
