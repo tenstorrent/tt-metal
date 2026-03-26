@@ -25,7 +25,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.demo.stage import StageContext, StageKind
+from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_FIFO_SIZE, StageContext, StageKind
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
@@ -83,7 +83,8 @@ class DecoderBlockStage(StageKind):
     M = 1
     K = 7168
     EMBEDDING_SIZE_BYTES = K * 2  # bfloat16
-    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 1
+    # D2D FIFO must match EmbeddingStage downstream and other activation stages (see ACTIVATION_FIFO_SIZE).
+    ACTIVATION_D2D_FIFO_SIZE = ACTIVATION_FIFO_SIZE
     TOKEN_SIZE_BYTES = 64
 
     def __init__(
@@ -133,8 +134,8 @@ class DecoderBlockStage(StageKind):
         return PipelineBlock(
             mesh_device,
             self.PIPELINE_CORE,
-            upstream_d2d_socket_fifo_size=self.EMBEDDING_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=self.EMBEDDING_FIFO_SIZE,
+            upstream_d2d_socket_fifo_size=self.ACTIVATION_D2D_FIFO_SIZE,
+            downstream_d2d_socket_fifo_size=self.ACTIVATION_D2D_FIFO_SIZE,
             upstream_d2d_socket_page_size=self.EMBEDDING_SIZE_BYTES,
             downstream_d2d_socket_page_size=self.EMBEDDING_SIZE_BYTES,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
@@ -280,7 +281,8 @@ class DenseBlockStage(StageKind):
     M = 1
     K = 7168
     EMBEDDING_SIZE_BYTES = K * 2  # bfloat16
-    EMBEDDING_FIFO_SIZE = EMBEDDING_SIZE_BYTES * 1
+    # D2D FIFO must match EmbeddingStage downstream and other activation stages (see ACTIVATION_FIFO_SIZE).
+    ACTIVATION_D2D_FIFO_SIZE = ACTIVATION_FIFO_SIZE
     TOKEN_SIZE_BYTES = 64
 
     def __init__(
@@ -324,8 +326,8 @@ class DenseBlockStage(StageKind):
         return PipelineBlock(
             mesh_device,
             self.PIPELINE_CORE,
-            upstream_d2d_socket_fifo_size=self.EMBEDDING_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=self.EMBEDDING_FIFO_SIZE,
+            upstream_d2d_socket_fifo_size=self.ACTIVATION_D2D_FIFO_SIZE,
+            downstream_d2d_socket_fifo_size=self.ACTIVATION_D2D_FIFO_SIZE,
             upstream_d2d_socket_page_size=self.EMBEDDING_SIZE_BYTES,
             downstream_d2d_socket_page_size=self.EMBEDDING_SIZE_BYTES,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
