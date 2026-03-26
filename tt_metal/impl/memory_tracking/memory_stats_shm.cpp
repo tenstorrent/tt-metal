@@ -262,15 +262,15 @@ void SharedMemoryStatsProvider::initialize_region() {
     region_->chip_stats[0].is_remote = 0;
 
     // Clear per-process entries
-    for (size_t i = 0; i < MAX_PROCESSES; i++) {
-        region_->processes[i].pid.store(0, std::memory_order_relaxed);  // 0 = unused
-        region_->processes[i].dram_allocated.store(0, std::memory_order_relaxed);
-        region_->processes[i].l1_allocated.store(0, std::memory_order_relaxed);
-        region_->processes[i].l1_small_allocated.store(0, std::memory_order_relaxed);
-        region_->processes[i].trace_allocated.store(0, std::memory_order_relaxed);
-        region_->processes[i].cb_allocated.store(0, std::memory_order_relaxed);
-        region_->processes[i].last_update_timestamp.store(0, std::memory_order_relaxed);
-        std::memset(region_->processes[i].process_name, 0, 64);
+    for (auto & processe : region_->processes) {
+        processe.pid = 0;  // 0 = unused
+        processe.dram_allocated = 0;
+        processe.l1_allocated = 0;
+        processe.l1_small_allocated = 0;
+        processe.trace_allocated = 0;
+        processe.cb_allocated = 0;
+        processe.last_update_timestamp = 0;
+        std::memset(processe.process_name, 0, 64);
     }
 }
 
