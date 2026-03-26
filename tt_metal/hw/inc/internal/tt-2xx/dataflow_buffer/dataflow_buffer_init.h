@@ -19,27 +19,13 @@
 
 #include "api/debug/dprint.h"
 
-FORCE_INLINE void setup_isr_csrs() {
-#ifndef COMPILE_FOR_TRISC
-    // Setup mtvec
-    uint64_t csr_reg = (uint64_t)dfb_implicit_sync_handler;
-
-    asm volatile("csrw mtvec, %0" : : "r"(csr_reg));
-
-    // Enable ROCC interrupt in mie
-    asm volatile("csrrs zero, mie, %0" : : "r"(static_cast<uint64_t>(1 << 13)));
-
-    // Enable MIE in mstatus
-    asm volatile("csrrs zero, mstatus, %0" : : "r"(static_cast<uint64_t>(1 << 3)));
-#endif
-}
-
 FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base, uint32_t local_dfb_mask) {
     uint64_t hartid;
 #ifdef COMPILE_FOR_TRISC
     std::uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
     // Building up g_dfb_interface is not at granularity of trisc in a Neo so only need Neo ID here
-    // The initialization structs track producers/consumers for a given DFB and they would only be used by one of the unpacker or packer
+    // The initialization structs track producers/consumers for a given DFB and they would only be used by one of the
+    // unpacker or packer
     hartid = 8 + neo_id;
 #else
     asm volatile("csrr %0, mhartid" : "=r"(hartid));
@@ -61,7 +47,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         volatile dfb_initializer_per_risc_t* per_risc_base =
             reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
 
-        // DPRINT << "hartid: 0x" << HEX() << hartid << " risc_mask: 0x" << risc_mask << " hart_bit: 0x" << hart_bit << DEC() << ENDL();
+        // DPRINT << "hartid: 0x" << HEX() << hartid << " risc_mask: 0x" << risc_mask << " hart_bit: 0x" << hart_bit <<
+        // DEC() << ENDL();
         if (risc_mask & hart_bit) {
             // Find this risc's per-risc config by counting set bits before this position
             uint8_t risc_index = static_cast<uint8_t>(__builtin_popcount(risc_mask & ((1 << hartid) - 1)));
@@ -101,14 +88,16 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             if (per_risc_ptr->flags.is_producer) {
                 dfb_interface.num_txn_ids = init_ptr->producer_txn_descriptor.num_txn_ids;
                 dfb_interface.num_entries_per_txn_id = init_ptr->producer_txn_descriptor.num_entries_per_txn_id;
-                dfb_interface.num_entries_per_txn_id_per_tc = init_ptr->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
+                dfb_interface.num_entries_per_txn_id_per_tc =
+                    init_ptr->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
                 for (uint8_t i = 0; i < dfb_interface.num_txn_ids; i++) {
                     dfb_interface.txn_ids[i] = init_ptr->producer_txn_descriptor.txn_ids[i];
                 }
             } else {
                 dfb_interface.num_txn_ids = init_ptr->consumer_txn_descriptor.num_txn_ids;
                 dfb_interface.num_entries_per_txn_id = init_ptr->consumer_txn_descriptor.num_entries_per_txn_id;
-                dfb_interface.num_entries_per_txn_id_per_tc = init_ptr->consumer_txn_descriptor.num_entries_per_txn_id_per_tc;
+                dfb_interface.num_entries_per_txn_id_per_tc =
+                    init_ptr->consumer_txn_descriptor.num_entries_per_txn_id_per_tc;
                 for (uint8_t i = 0; i < dfb_interface.num_txn_ids; i++) {
                     dfb_interface.txn_ids[i] = init_ptr->consumer_txn_descriptor.txn_ids[i];
                 }
@@ -145,15 +134,18 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + i;
 
                 if (per_risc_ptr->flags.is_producer) {
-                    if (per_risc_ptr->flags.remapper_en) { // Configure remapper for all producers with remapper_en (DM and Tensix)
+                    if (per_risc_ptr->flags
+                            .remapper_en) {  // Configure remapper for all producers with remapper_en (DM and Tensix)
                         enable_remapper = true;
                         uint8_t remapper_consumer_ids_mask = per_risc_ptr->remapper_consumer_ids_mask;
                         uint8_t producer_client_type = per_risc_ptr->producer_client_type;
                         uint8_t num_clientRs = static_cast<uint8_t>(__builtin_popcount(remapper_consumer_ids_mask));
                         uint8_t clientR_valid_mask = (1u << num_clientRs) - 1;
-                        g_remapper_configurator.set_pair_index(static_cast<uint32_t>(per_risc_ptr->flags.remapper_pair_index));
+                        g_remapper_configurator.set_pair_index(
+                            static_cast<uint32_t>(per_risc_ptr->flags.remapper_pair_index));
                         // DPRINT << "Setting clientL fields clientL=" << static_cast<uint32_t>(producer_client_type)
-                        //        << " tc: " << static_cast<uint32_t>(get_counter_id(per_risc_ptr->packed_tile_counter[0]))
+                        //        << " tc: " <<
+                        //        static_cast<uint32_t>(get_counter_id(per_risc_ptr->packed_tile_counter[0]))
                         //        << " mask: " << static_cast<uint32_t>(clientR_valid_mask) << ENDL();
                         g_remapper_configurator.configure_clientL_all_fields(
                             producer_client_type,
@@ -169,7 +161,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                             mask_remaining &= mask_remaining - 1;
                             uint8_t tc_R = (per_risc_ptr->consumer_tcs >> (clientR_idx * 5)) & 0x1F;
                             // DPRINT << "Setting clientR slot " << static_cast<uint32_t>(clientR_idx)
-                            //        << " id: " << static_cast<uint32_t>(id_R) << " tc: " << static_cast<uint32_t>(tc_R)
+                            //        << " id: " << static_cast<uint32_t>(id_R) << " tc: " <<
+                            //        static_cast<uint32_t>(tc_R)
                             //        << ENDL();
                             g_remapper_configurator.set_clientR_slot(clientR_idx, id_R, tc_R);
                         }
@@ -197,7 +190,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     dst.tile_counters[j] = producer_tcs[j];
                 }
                 dst.tiles_to_post = init_ptr->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
-                SET_TILES_TO_PROCESS_THRES_TR_ACK(txn_id, init_ptr->producer_txn_descriptor.num_entries_to_process_threshold);
+                SET_TILES_TO_PROCESS_THRES_TR_ACK(
+                    txn_id, init_ptr->producer_txn_descriptor.num_entries_to_process_threshold);
             }
             for (uint8_t i = 0; i < init_ptr->consumer_txn_descriptor.num_txn_ids; i++) {
                 uint8_t txn_id = init_ptr->consumer_txn_descriptor.txn_ids[i];
@@ -208,7 +202,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     dst.tile_counters[j] = consumer_tcs[j];
                 }
                 dst.tiles_to_ack = init_ptr->consumer_txn_descriptor.num_entries_per_txn_id_per_tc;
-                SET_TILES_TO_PROCESS_THRES_WR_SENT(txn_id, init_ptr->consumer_txn_descriptor.num_entries_to_process_threshold);
+                SET_TILES_TO_PROCESS_THRES_WR_SENT(
+                    txn_id, init_ptr->consumer_txn_descriptor.num_entries_to_process_threshold);
             }
             base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
         }
@@ -220,7 +215,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         CMDBUF_WR_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);
 
         // per_trid_wr_tiles_to_process_set_interrupt_enable_cmdbuf_0(consumer_txn_id_mask);
-        uint64_t reg_val = CMDBUF_RD_REG(0, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);
+        reg_val = CMDBUF_RD_REG(0, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);
         reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (consumer_txn_id_mask & 0xFFFFFFFFULL);
         CMDBUF_WR_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);
 
@@ -230,7 +225,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         }
 
         if ((producer_txn_id_mask | consumer_txn_id_mask) != 0) {
-            setup_isr_csrs();
+            enable_dfb_tile_isr();
+        } else {
+            disable_dfb_tile_isr();
         }
     }  // end if (hartid == 0)
 #endif
