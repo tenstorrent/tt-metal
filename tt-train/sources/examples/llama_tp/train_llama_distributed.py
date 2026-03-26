@@ -46,6 +46,7 @@ from ttml.distributed import (
 )
 from ttml.distributed.debug import DispatchTraceCallback
 
+
 # Memory profiling
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
 
@@ -648,6 +649,7 @@ def main():
         max_grad_norm=clip_norm if use_clip else 0.0,
         log_interval=1,
         gradient_checkpointing=args.gradient_checkpointing,
+        track_memory=args.track_memory,
     )
 
     # Build optimizer config from yaml (use optimizer_cfg directly, with defaults)

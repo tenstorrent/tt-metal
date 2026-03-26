@@ -97,6 +97,7 @@ class SFTConfig:
     max_grad_norm: float = 0.0
     log_interval: int = 1
     gradient_checkpointing: bool = False
+    track_memory: bool = False
 
 
 class SFTTrainer:
@@ -185,10 +186,14 @@ class SFTTrainer:
         self.config = config
         self.step = 0  # 0-based; incremented after each optimizer step
 
-        # Start memory tracking from optimizer creation (will be printed in train())
-        self._memory_guard = MemoryUsageTracker.begin_capture()
+        # Match train_nanogpt / C++: begin_capture → MODEL_CREATION snapshot → optimizer →
+        # OPTIMIZER_CREATION snapshot. (Model may already exist; first segment can be ~empty.)
+        self._memory_guard = (
+            MemoryUsageTracker.begin_capture() if config.track_memory else None
+        )
+        if config.track_memory:
+            MemoryUsageTracker.snapshot("MODEL_CREATION")
         self._optimizer = self._build_optimizer(optimizer)
-        MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
 
         self._lr_schedule = (
             lr_schedule if lr_schedule is not None else self._build_lr_schedule()
@@ -230,7 +235,7 @@ class SFTTrainer:
         is_first_step = True
 
         def memory_snapshot(name: str) -> None:
-            if is_first_step:
+            if is_first_step and cfg.track_memory:
                 MemoryUsageTracker.snapshot(name)
 
         bar = tqdm(range(cfg.max_steps), desc="SFTTrainer")
@@ -291,14 +296,15 @@ class SFTTrainer:
             # Print memory report after first step
             if is_first_step:
                 is_first_step = False
-                MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
-                print("\n" + "=" * 70)
-                print("MEMORY USAGE REPORT (First Step)")
-                print("=" * 70)
-                MemoryUsageTracker.print_memory_usage()
-                MemoryUsageTracker.clear()
-                self._memory_guard.release()
-                print("=" * 70 + "\n")
+                if cfg.track_memory:
+                    MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
+                    print("\n" + "=" * 70)
+                    print("MEMORY USAGE REPORT (First Step)")
+                    print("=" * 70)
+                    MemoryUsageTracker.print_memory_usage()
+                    MemoryUsageTracker.clear()
+                    self._memory_guard.release()
+                    print("=" * 70 + "\n")
 
             step_loss = float(np.mean(micro_losses))
             if cfg.log_interval > 0 and self.step % cfg.log_interval == 0:
@@ -422,7 +428,7 @@ class SFTTrainer:
     def _build_optimizer(self, optimizer: Any):
         """Resolve the *optimizer* argument into an ``OptimizerBase``.
 
-        * ``OptimizerBase`` instance -- returned as-is.
+        * ``OptimizerBase`` instance -- returned as-is (no memory snapshot taken).
         * ``dict`` -- forwarded to ``ttml.optimizers.create_optimizer``.
         * ``None`` -- a default AdamW is created with ``learning_rate=config.learning_rate``.
         """
@@ -430,13 +436,18 @@ class SFTTrainer:
             return optimizer
 
         if isinstance(optimizer, dict):
-            return ttml.optimizers.create_optimizer(optimizer, self.model.parameters())
-
-        # Default: AdamW with lr from config
-        return ttml.optimizers.create_optimizer(
-            {"type": "AdamW", "lr": self.config.learning_rate},
-            self.model.parameters(),
-        )
+            result = ttml.optimizers.create_optimizer(
+                optimizer, self.model.parameters()
+            )
+        else:
+            # Default: AdamW with lr from config
+            result = ttml.optimizers.create_optimizer(
+                {"type": "AdamW", "lr": self.config.learning_rate},
+                self.model.parameters(),
+            )
+        if self.config.track_memory:
+            MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
+        return result
 
     def _build_lr_schedule(self):
         """Return a callable ``step -> lr`` implementing linear warmup then constant."""
