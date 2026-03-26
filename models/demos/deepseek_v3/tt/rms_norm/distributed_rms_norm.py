@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -35,6 +37,7 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 
 
 def _has_distinct_buffer(a: ttnn.Tensor, b: ttnn.Tensor) -> bool:
@@ -44,7 +47,7 @@ def _has_distinct_buffer(a: ttnn.Tensor, b: ttnn.Tensor) -> bool:
         return a is not b
 
 
-class DistributedRMSNorm(RMSNormBase):
+class DistributedRMSNorm(SharedStateAddOn, RMSNormBase):
     @classmethod
     def convert_weights(
         cls,
@@ -176,6 +179,54 @@ class DistributedRMSNorm(RMSNormBase):
             "ccl": ccl,
         }
 
+    @classmethod
+    def create_shared_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelState:
+        """Create shared model state containing tensors that are constant across all instances.
+
+        Args:
+            hf_config: HuggingFace model configuration object
+            mesh_device: TTNN mesh device the model will be placed later on
+
+        Returns:
+            ModelState containing shared tensors
+        """
+        logger.info("Creating RMSNorm shared state: 32x32 tiled tensor and semaphore...")
+        tensor_start = perf_counter()
+
+        # Create a 32x32 sharded tensor on core (0,0) as required by fused_rms_minimal
+        # Shape per device (32,32) and sharded with shard shape (32,32) on core (0,0)
+        shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+        persistent_tensor = ttnn.from_torch(
+            torch.zeros((32, 32), dtype=torch.bfloat16),
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.bfloat16,
+            memory_config=sharded_mem_config,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+        # Create semaphore for fused_rms_minimal
+        grid = mesh_device.compute_with_storage_grid_size()
+        num_cores = grid.x * grid.y
+        core_range_set = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
+        semaphore = ttnn.create_global_semaphore(mesh_device, core_range_set, 0)
+
+        # Synchronize to ensure semaphore is created
+        ttnn.synchronize_device(mesh_device)
+
+        logger.info(f"Created RMSNorm persistent tensor and semaphore in {perf_counter() - tensor_start:.2f}s")
+
+        return {
+            "persistent_tensor": persistent_tensor,
+            "semaphore": semaphore,
+        }
+
     @staticmethod
     def _fwd_rms_norm_pre_all_gather(x: ttnn.Tensor, cfg: dict, program_config: Any) -> ttnn.Tensor:
         """Wrapper for distributed RMS norm part 1: compute local statistics.
@@ -243,20 +294,25 @@ class DistributedRMSNorm(RMSNormBase):
         tensor_in = ttnn.to_memory_config(x, memory_config)
 
         program_config = cls._get_pc(memory_config)
-        # Run distributed rmsnorm part 1
-        tt_stats = cls._fwd_rms_norm_pre_all_gather(tensor_in, cfg, program_config=program_config)
+        # Get mesh device from the all_gather config (it's available there)
+        tt_out = ttnn.fused_rms_minimal(
+            tensor_in,
+            program_config,
+            1,
+            cfg["all_gather"]["mesh_device"],
+            cfg["semaphore"],
+            topology=ttnn.Topology.Linear,
+            residual_input_tensor=None,
+            num_links=1,
+            epsilon=cfg["rms_norm_post_all_gather"]["epsilon"],
+            weight=cfg["rms_norm_post_all_gather"]["weight"],
+            stats=cfg["persistent_tensor"],
+            memory_config=output_memory_config,
+            use_noc1_only=False,
+        )
 
-        # AllGather stats
-        ccl = cfg["ccl"]
-        tt_gathered_stats = cls._fwd_all_gather_stats(tt_stats, cfg, ccl)
-        ttnn.deallocate(tt_stats)
-
-        # Run distributed rmsnorm part 2
-        tt_out = cls._fwd_rms_norm_post_all_gather(tensor_in, tt_gathered_stats, cfg, program_config=program_config)
         if _has_distinct_buffer(x, tensor_in):
             ttnn.deallocate(tensor_in)
-        ttnn.deallocate(tt_gathered_stats)
-        tt_out = ttnn.to_memory_config(tt_out, output_memory_config)
 
         return tt_out
 

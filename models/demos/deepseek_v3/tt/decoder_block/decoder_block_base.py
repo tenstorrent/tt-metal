@@ -86,15 +86,28 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.MeshDevice,
     ) -> ModelState:
         logger.info(f"Creating {cls.__name__} shared state...")
+
+        # Create MLP shared state
         mlp_start = perf_counter()
         mlp_shared_state = cls.create_mlp_shared_state(
             hf_config,
             mesh_device,
         )
         logger.info(f"Created {cls.__name__} MLP shared state in {perf_counter() - mlp_start:.2f}s")
+
+        # Create RMSNorm shared state
+        rmsnorm_start = perf_counter()
+        rmsnorm_shared_state = DistributedRMSNorm.create_shared_state(
+            hf_config,
+            mesh_device,
+        )
+        logger.info(f"Created {cls.__name__} RMSNorm shared state in {perf_counter() - rmsnorm_start:.2f}s")
+
         state = {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mlp": mlp_shared_state,
+            "mla_norm": rmsnorm_shared_state,
+            "mlp_norm": rmsnorm_shared_state,  # Share the same state
         }
         logger.info(f"Created {cls.__name__} shared state")
         return state
