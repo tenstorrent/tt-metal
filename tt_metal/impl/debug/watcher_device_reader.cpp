@@ -762,8 +762,31 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     }
     std::string error_msg = fmt::format(
         "{}: {} ", core_str_, get_riscv_name(reader_.env.get_hal(), programmable_core_type_, assert_status.which()));
+
+    // Build the candidate source path list for file_id resolution.
+    // The kernel name for the tripped processor is the primary candidate (it is
+    // the top-level source file compiled for that RISC).  All other running
+    // kernel names are included as secondary candidates to handle the case where
+    // the assert fires in a shared header included by multiple kernels.
+    std::vector<std::string> candidate_paths;
+    const std::string& tripped_kernel = GetKernelName(assert_status.which());
+    candidate_paths.push_back(tripped_kernel);
+    const auto& hal = reader_.env.get_hal();
+    auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
+    for (uint32_t i = 0; i < num_processors; ++i) {
+        if (i != assert_status.which()) {
+            const std::string& name = GetKernelName(i);
+            if (!name.empty() && name != tripped_kernel) {
+                candidate_paths.push_back(name);
+            }
+        }
+    }
+
     std::string assert_msg = get_debug_assert_message(
-        static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()), assert_status.line_num());
+        static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()),
+        assert_status.line_num(),
+        assert_status.file_id(),
+        candidate_paths);
     if (assert_msg.empty()) {
         LogRunningKernels();
         TT_THROW(
@@ -772,7 +795,7 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
             assert_status.tripped());
     }
     error_msg += assert_msg;
-    error_msg += fmt::format(" Current kernel: {}.", GetKernelName(assert_status.which()));
+    error_msg += fmt::format(" Current kernel: {}.", tripped_kernel);
     log_warning(tt::LogMetal, "Watcher stopped the device due to tripped assert, see watcher log for more details");
     log_warning(tt::LogMetal, "{}", error_msg);
     DumpWaypoints(true);
