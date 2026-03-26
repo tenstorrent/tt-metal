@@ -18,6 +18,7 @@
 #include "ttnn/operations/experimental/ccl/all_reduce_async/device/all_reduce_async_program_factory.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
@@ -155,7 +156,7 @@ LlamaAllGatherMatmulAsyncProgramFactory::cached_program_t LlamaAllGatherMatmulAs
     // Cannot have CCL workers on the same cores as the worker_receiver (for now!)
     auto sub_device_core_range_set = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        args.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0)));
+        args.sub_device_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id()));
     // auto bbox = sub_device_core_range_set.bounding_box();
     // CoreRangeSet bbox_crs(bbox);
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_scatter_device_operation.hpp"
+#include "ttnn/device_context.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
@@ -31,9 +32,10 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    ttnn::DeviceContext device_ctx(tensor_args.input_tensor);
+    auto subdevice_core_range_set = device_ctx.get_worker_cores();
+    auto sd_id = device_ctx.get_current_sub_device_id();
+    auto* mesh_device = device_ctx.raw_mesh_device();
     // create semaphores
     // 3 semaphores used for within op synchronizations
     std::vector<tt::tt_metal::GlobalSemaphore> multidevice_semaphores = {
@@ -75,7 +77,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
     tt::tt_metal::Program program{};
 
     // Get mesh and axis related information
-    auto* mesh_device = tensor_args.input_tensor.device();
+    ttnn::DeviceContext device_ctx(tensor_args.input_tensor);
     uint32_t target_ring_size =
         ::ttnn::ccl::get_topological_dimension(tensor_args.input_tensor, operation_attributes.cluster_axis);
 
@@ -100,8 +102,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
     log_debug(tt::LogOp, "Device index for {} is {}", mesh_coordinate, device_index);
 
     // Get core and subdevice related information
-    auto sd_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    const tt::tt_metal::CoreRangeSet subdevice_core_range_set = device_ctx.get_worker_cores();
     auto bbox = subdevice_core_range_set.bounding_box();
     auto first_coord = bbox.start_coord;
 
@@ -125,9 +126,9 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
         operation_attributes.topology,
         multidevice_semaphores,
         barrier_semaphore,
-        false,  // since we don't have a persistent intermediate buffer option, this must be false
-        operation_attributes.subdevice_id,
-        no_fuse,  // never fusing with this
+        false,         // since we don't have a persistent intermediate buffer option, this must be false
+        std::nullopt,  // sub_device_id: use context
+        no_fuse,       // never fusing with this
         operation_attributes.chunks_per_sync,
         operation_attributes.num_workers_per_link,
         operation_attributes.num_buffers_per_channel,

@@ -28,7 +28,6 @@ struct ReduceScatterDeviceOperation {
         const std::optional<MemoryConfig> optional_intermediate_mem_config;
         uint32_t dim;
         const std::optional<uint32_t> cluster_axis;
-        const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
         const tt::tt_fabric::Topology topology;
         const uint32_t num_links;
         const std::optional<uint32_t> chunks_per_sync;
@@ -90,7 +89,6 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
     const ttnn::Tensor& input_tensor,
     uint32_t dim,
     std::optional<uint32_t> cluster_axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::MemoryConfig>& optional_intermediate_mem_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,

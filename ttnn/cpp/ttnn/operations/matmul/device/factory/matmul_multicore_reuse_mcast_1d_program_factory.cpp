@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
+#include "ttnn/device_context.hpp"
 #include <algorithm>
 #include <utility>
 
@@ -31,7 +32,7 @@ namespace reuse_mcast_1d_optimized_helpers {
 uint32_t get_preferred_noc(
     const ttnn::CoreCoord src,
     const ttnn::CoreCoord dst,
-    const tt_metal::IDevice* device,
+    const ttnn::DeviceContext& device_ctx,
     const bool use_dedicated_noc = false) {
     /*
         NOC0: Preferred +x -> +y
@@ -41,8 +42,9 @@ uint32_t get_preferred_noc(
     uint32_t src_x = src.x, src_y = src.y;
     uint32_t dst_x = dst.x, dst_y = dst.y;
 
-    uint32_t MAX_X = device->grid_size().x;
-    uint32_t MAX_Y = device->grid_size().y;
+    const auto grid = device_ctx.get_grid_size();
+    uint32_t MAX_X = grid.x;
+    uint32_t MAX_Y = grid.y;
 
     // Get the wrapped distances
     uint32_t dist_right = src_x <= dst_x ? dst_x - src_x : MAX_X - src_x + dst_x;
@@ -1917,6 +1919,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<CoreRangeSet> restricted_cores,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    const ttnn::DeviceContext device_ctx(device);
     const auto& b = b_tensors[0];
     const auto num_output_cb = out_buffers.size();
     const auto batch = b_tensors.size();
@@ -1930,9 +1933,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
-    auto subdevice_cores = device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    auto effective_sd_id = sub_device_id.value_or(device_ctx.get_current_sub_device_id());
+    auto subdevice_cores = device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, effective_sd_id);
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }
@@ -2430,7 +2432,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             };
 
             // Build complete maps for all possible y-coordinates (0 to max worker y)
-            auto compute_grid = device->compute_with_storage_grid_size();
+            auto compute_grid = device_ctx.get_compute_with_storage_grid_size();
             for (uint32_t y = 0; y < compute_grid.y; ++y) {
                 if (!first_col_anchors.empty()) {
                     worker_y_to_dram_bank_first_col[y] = find_nearest_bank(y, first_col_anchors);
@@ -2459,7 +2461,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             next_core = worker_cores_vec[next_i % num_cores];
         }
         const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
-        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
+        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device_ctx, use_dedicated_noc);
 
         std::vector<uint32_t> mm_in0_args = {
             (std::uint32_t)core_type,
@@ -2571,7 +2573,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         /* in0 */
         CoreCoord next_core = end_of_hop ? worker_cores_vec[num_cores - 1] : hop_cores_vec[i + 1];
         const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
-        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
+        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device_ctx, use_dedicated_noc);
 
         std::vector<uint32_t> mm_in0_args = {
             (std::uint32_t)core_type,

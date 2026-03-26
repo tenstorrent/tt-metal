@@ -1,7 +1,7 @@
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/test/ttnn)
 
 add_library(test_common_utils STATIC)
-target_sources(test_common_utils PUBLIC common_test_utils.cpp)
+target_sources(test_common_utils PRIVATE common_test_utils.cpp)
 target_link_libraries(test_common_utils PRIVATE TTNN::CPP)
 tt_reuse_precompile_headers(test_common_utils TTNN::PCH)
 
@@ -59,6 +59,7 @@ target_link_libraries(
     PRIVATE
         TTNN::Test::Smoke
         TTNN::Test::Basic
+        test_common_utils
 )
 
 # unit_tests_ttnn_ccl

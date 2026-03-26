@@ -27,7 +27,6 @@ struct AllGatherDeviceOperation {
         const MemoryConfig memory_config;
         uint32_t dim;
         const std::optional<uint32_t> cluster_axis;
-        const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
         const tt::tt_fabric::Topology topology;
         const uint32_t num_links;
         const std::optional<uint32_t> chunks_per_sync;
@@ -92,7 +91,6 @@ ttnn::Tensor all_gather(
     const ttnn::Tensor& input_tensor,
     uint32_t dim,
     std::optional<uint32_t> cluster_axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     uint32_t num_links,

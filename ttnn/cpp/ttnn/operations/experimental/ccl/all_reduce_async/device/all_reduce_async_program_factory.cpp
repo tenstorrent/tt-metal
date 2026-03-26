@@ -14,6 +14,7 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -199,8 +200,8 @@ AllReduceAsyncMeshWorkloadFactory::cached_program_t AllReduceAsyncMeshWorkloadFa
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
     const auto num_output_cores = output_tensor_cores.num_cores();
 
-    auto sub_device_cores = mesh_device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0)));
+    auto effective_sd_id = sub_device_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id());
+    auto sub_device_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, effective_sd_id);
 
     std::vector<CoreRange> output_cores;
     for (const auto& cr : sub_device_cores.ranges()) {

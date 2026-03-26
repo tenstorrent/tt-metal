@@ -17,7 +17,6 @@ struct BroadcastParams {
     MemoryConfig output_mem_config;
     tt::tt_fabric::Topology topology{};
     std::optional<uint32_t> cluster_axis;
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
     BroadcastParams(
         const MeshCoordinate& sender_coord_,
@@ -25,15 +24,13 @@ struct BroadcastParams {
         uint32_t ring_size_,
         const MemoryConfig& output_mem_config_,
         tt::tt_fabric::Topology topology_,
-        std::optional<uint32_t> cluster_axis_,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id_) :
+        std::optional<uint32_t> cluster_axis_) :
         sender_coord(sender_coord_),
         num_links(num_links_),
         ring_size(ring_size_),
         output_mem_config(output_mem_config_),
         topology(topology_),
-        cluster_axis(cluster_axis_),
-        sub_device_id(sub_device_id_) {}
+        cluster_axis(cluster_axis_) {}
 
     // Add attributes method for reflection
     auto attributes() const {

@@ -8,6 +8,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "reduce_scatter_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/device_context.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -98,10 +99,8 @@ ttsl::hash::hash_t ReduceScatterDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "ReduceScatterDeviceOperation::compute_program_hash is called");
 
-    auto subdevice_id = operation_attributes.subdevice_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    ttnn::DeviceContext device_ctx(tensor_args.input_tensor);
+    auto subdevice_core_range_set = device_ctx.get_worker_cores();
     return tt::tt_metal::operation::hash_operation<ReduceScatterDeviceOperation>(
         operation_attributes.dim,
         operation_attributes.num_links,
@@ -124,7 +123,6 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
     const ttnn::Tensor& input_tensor,
     uint32_t dim,
     std::optional<uint32_t> cluster_axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const ttnn::MemoryConfig& memory_config,
     const std::optional<ttnn::MemoryConfig>& optional_intermediate_mem_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
@@ -141,7 +139,6 @@ ttnn::operations::ccl::ReduceScatterDeviceOperation::tensor_return_value_t reduc
             .optional_intermediate_mem_config = optional_intermediate_mem_config,
             .dim = dim,
             .cluster_axis = cluster_axis,
-            .subdevice_id = subdevice_id,
             .topology = topology,
             .num_links = num_links,
             .chunks_per_sync = chunks_per_sync,

@@ -6,6 +6,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
@@ -421,8 +422,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
     auto sub_device_cores = mesh_device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0)));
-
+        operation_attributes.subdevice_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id()));
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     size_t packet_size_bytes =

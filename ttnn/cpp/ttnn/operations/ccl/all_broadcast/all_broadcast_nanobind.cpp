@@ -27,7 +27,6 @@ void bind_all_broadcast(nb::module_& mod) {
 
         Keyword Args:
             cluster_axis (int, optional): The axis on the mesh device to broadcast across. Defaults to `None`.
-            subdevice_id (ttnn.SubDeviceId, optional): Subdevice id for worker cores.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration. Defaults to input tensor memory config.
             num_links (int, optional): The number of links to use for the all-broadcast operation. Defaults to `1`.
             topology (ttnn.Topology, optional): Fabric topology. Defaults to `ttnn.Topology.Linear`.
@@ -56,7 +55,6 @@ void bind_all_broadcast(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::kw_only(),
             nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("num_links") = 1,
             nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Linear)));

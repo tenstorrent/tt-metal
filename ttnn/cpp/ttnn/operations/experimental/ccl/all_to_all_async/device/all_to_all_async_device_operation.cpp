@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_to_all_async_device_operation.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
@@ -179,7 +180,7 @@ ttsl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
 
     auto subdevice_id = operation_attributes.sub_device_id;
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto sd_id = subdevice_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id());
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     return tt::tt_metal::operation::hash_operation<AllToAllAsyncDeviceOperation>(
         operation_attributes.in_dim,

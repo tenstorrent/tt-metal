@@ -4,6 +4,7 @@
 ///
 
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_program_factory.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
@@ -29,10 +30,11 @@ AllBroadcastProgramFactory::cached_mesh_workload_t AllBroadcastProgramFactory::c
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto* mesh_device = input.device();
-    auto subdevice_id = operation_attributes.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    ttnn::DeviceContext device_ctx(input);
+    const auto available_cores = device_ctx.get_worker_cores();
+    auto subdevice_id = device_ctx.get_current_sub_device_id();
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
+    auto* mesh_device = device_ctx.raw_mesh_device();
 
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
@@ -60,7 +62,8 @@ AllBroadcastProgramFactory::cached_program_t AllBroadcastProgramFactory::create_
     const auto& input_tensor = input;
     tt::tt_metal::Program program{};
 
-    auto* mesh_device = input_tensor.device();
+    ttnn::DeviceContext device_ctx(input_tensor);
+    auto* mesh_device = device_ctx.raw_mesh_device();
 
     uint32_t ring_size = operation_attributes.ring_size;
     uint32_t ring_index = ::ttnn::ccl::get_linearized_index_from_physical_coord(
@@ -98,7 +101,7 @@ AllBroadcastProgramFactory::cached_program_t AllBroadcastProgramFactory::create_
         operation_attributes.num_links,
         num_workers_per_link,
         mesh_device,
-        operation_attributes.sub_device_id,
+        std::nullopt,  // sub_device_id: use context
         CoreCoord(0, 0),
         std::nullopt);
 

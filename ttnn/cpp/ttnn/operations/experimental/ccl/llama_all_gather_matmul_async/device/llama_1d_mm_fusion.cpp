@@ -16,6 +16,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
@@ -85,7 +86,7 @@ process_agmm_fusion_program_and_create_override_variables(
     std::vector<CoreRange> non_idle_cores_vec;
     auto subdevice_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+        sub_device_id.value_or(ttnn::DeviceContext(device).get_current_sub_device_id()));
     if (restricted_cores.has_value()) {
         subdevice_cores = subdevice_cores.subtract(restricted_cores.value());
     }

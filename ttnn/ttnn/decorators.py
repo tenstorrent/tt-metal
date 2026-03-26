@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -132,6 +132,36 @@ def command_queue(cq_id: int):
                 f"Restoring to original value {cq_id}."
             )
         pop_current_command_queue_id_for_thread()
+
+
+@contextmanager
+def sub_device(device: "ttnn.MeshDevice", sub_device_id: "ttnn.SubDeviceId | int"):
+    """Context manager to set the current sub device for all TTNN operations within this context.
+
+    Operations within this context will use the specified sub_device_id on the given device.
+    Sub-device is set by infrastructure (this context or the FastOperation decorator); ops do not
+    accept a sub_device_id parameter—same as command queues (queue_id is set by decorator/context).
+
+    Args:
+        device: The MeshDevice on which to set the sub device context.
+        sub_device_id: The sub device ID (int or SubDeviceId) to use for operations in this context.
+
+    Example:
+        with ttnn.sub_device(device, 0):
+            result = ttnn.some_operation(tensor)  # Will use sub_device_id 0
+    """
+    if sub_device_id is None:
+        raise ValueError("sub_device_id cannot be None in sub_device context")
+    if not isinstance(sub_device_id, (int, ttnn.SubDeviceId)):
+        raise TypeError(f"sub_device_id must be int or ttnn.SubDeviceId, got {type(sub_device_id).__name__}")
+    if isinstance(sub_device_id, int):
+        sub_device_id = ttnn.SubDeviceId(sub_device_id)
+    guard = device.set_current_sub_device(sub_device_id)
+    try:
+        yield
+    finally:
+        # Release guard so its destructor runs and restores the previous sub-device.
+        del guard
 
 
 @contextmanager
@@ -453,11 +483,27 @@ class FastOperation:
         )
 
     def __call__(self, *function_args, **function_kwargs):
-        cq_id = None
-        if "queue_id" in function_kwargs:
-            cq_id = function_kwargs.pop("queue_id")
-        elif "cq_id" in function_kwargs:
-            cq_id = function_kwargs.pop("cq_id")
+        from contextlib import nullcontext
+
+        _sentinel = object()
+        cq_id = function_kwargs.pop("queue_id", _sentinel)
+        if cq_id is _sentinel:
+            cq_id = function_kwargs.pop("cq_id", None)
+        # Pop sub_device_id/subdevice_id (like queue_id): set context only; do not pass to the op.
+        sub_device_id = function_kwargs.pop("sub_device_id", _sentinel)
+        if sub_device_id is _sentinel:
+            sub_device_id = function_kwargs.pop("subdevice_id", None)
+        else:
+            function_kwargs.pop("subdevice_id", None)  # remove alternate name if present
+
+        cq_ctx = command_queue(cq_id) if cq_id is not None else nullcontext()
+        # Apply sub-device context only when we can infer exactly one mesh device from args/kwargs.
+        devices = get_devices((function_args, function_kwargs))
+        mesh_devices = [d for d in devices if hasattr(d, "set_current_sub_device")]
+        if sub_device_id is not None and len(mesh_devices) == 1:
+            sd_ctx = sub_device(mesh_devices[0], sub_device_id)
+        else:
+            sd_ctx = nullcontext()
 
         tracking = ttnn.graph.is_graph_capture_active()
         if tracking:
@@ -469,11 +515,8 @@ class FastOperation:
             set_tensor_id(input_tensors)
 
         try:
-            if cq_id is None:
+            with cq_ctx, sd_ctx:
                 result = self.function(*function_args, **function_kwargs)
-            else:
-                with command_queue(cq_id):
-                    result = self.function(*function_args, **function_kwargs)
         except TypeError as e:
             enhanced_msg = self._enhance_type_error_message(str(e), function_args, function_kwargs)
             if enhanced_msg:

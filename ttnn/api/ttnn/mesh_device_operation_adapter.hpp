@@ -4,14 +4,13 @@
 
 #pragma once
 
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/program_cache.hpp>
 
-#include <memory>
-#include <optional>
-#include <functional>
 #include <concepts>
 #include <variant>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
@@ -156,11 +155,14 @@ struct MeshDeviceOperationAdapter {
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        // Hash the program hash and the tensor coordinates the workload is targeting.
+        // Hash the program hash, the tensor coordinates, and the current sub-device's worker core region.
+        // Sub-device is set by infrastructure (decorator/context); ops do not take sub_device_id.
         auto hash = compute_program_hash(attrs, tensor_args);
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
             hash = ttsl::hash::hash_objects(hash, coord);
         }
+        const CoreRangeSet worker_cores = ttnn::DeviceContext(mesh_device).get_worker_cores();
+        ttsl::hash::hash_combine(hash, worker_cores);
         return hash;
     }
 

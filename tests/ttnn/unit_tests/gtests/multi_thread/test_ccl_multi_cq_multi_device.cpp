@@ -25,7 +25,9 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -34,7 +36,10 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt_stl/span.hpp>
 
 #include "gtest/gtest.h"
 
@@ -161,7 +166,6 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
         auto all_gathered_tensor = ttnn::all_gather(
             aggregated_tensor,
             /* dim */ 0,
-            std::nullopt,
             std::nullopt,
             std::nullopt,
             aggregated_output_tensor);
@@ -342,7 +346,6 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
         auto all_gathered_tensor = ttnn::all_gather(
             aggregated_tensor,
             /* dim */ dim,
-            std::nullopt,
             std::nullopt,
             std::nullopt,
             aggregated_output_tensor);
@@ -550,7 +553,6 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
             /* dim */ dim,
             std::nullopt,
             std::nullopt,
-            std::nullopt,
             aggregated_output_tensor);
 
         // Quiesce parent mesh after all gather
@@ -633,6 +635,136 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
     }
 
     log_info(tt::LogTest, "Finished");
+}
+
+// Sets up 2 subdevices (IDs 0, 1), each with 2 cores in one row, so CCL and matmul can run on different subdevices.
+static tt::tt_metal::SubDeviceManagerId setup_two_sub_devices_for_parallel(MeshDevice* device) {
+    constexpr int cores_per_subdevice = 2;
+    constexpr int num_sub_devices = 2;
+    std::vector<tt::tt_metal::CoreRangeSet> core_range_sets;
+    core_range_sets.reserve(num_sub_devices);
+    for (int row = 0; row < num_sub_devices; ++row) {
+        tt::tt_metal::CoreRange range(
+            tt::tt_metal::CoreCoord(0, row), tt::tt_metal::CoreCoord(cores_per_subdevice - 1, row));
+        core_range_sets.push_back(tt::tt_metal::CoreRangeSet(range));
+    }
+    std::vector<tt::tt_metal::SubDevice> sub_devices;
+    sub_devices.reserve(num_sub_devices);
+    for (int i = 0; i < num_sub_devices; ++i) {
+        sub_devices.push_back(
+            tt::tt_metal::SubDevice(ttsl::Span<const tt::tt_metal::CoreRangeSet>(&core_range_sets[i], 1)));
+    }
+    const auto id = device->create_sub_device_manager(
+        ttsl::Span<const tt::tt_metal::SubDevice>(sub_devices.data(), sub_devices.size()), tt::tt_metal::DeviceAddr{0});
+    device->load_sub_device_manager(id);
+    const std::array<tt::tt_metal::SubDeviceId, num_sub_devices> ids = {
+        tt::tt_metal::SubDeviceId{0}, tt::tt_metal::SubDeviceId{1}};
+    device->set_sub_device_stall_group(ttsl::Span<const tt::tt_metal::SubDeviceId>(ids.data(), ids.size()));
+    return id;
+}
+
+// Runs CCL all_gather (CQ 0, subdevice 0) and matmul (CQ 1, subdevice 1) in parallel so both execute on different
+// subdevices, matching the Python test pattern.
+TEST_F(MultiCQFabricMeshDevice2x4Fixture, ParallelCclAndMatmul) {
+    constexpr size_t num_devices = 4;
+    MeshDevice* mesh_device = this->mesh_device_.get();
+
+    const tt::tt_metal::SubDeviceManagerId sub_device_manager_id = setup_two_sub_devices_for_parallel(mesh_device);
+
+    std::vector<std::shared_ptr<distributed::MeshDevice>> single_meshes = {
+        mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0)),
+        mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 1)),
+        mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 2)),
+        mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 3)),
+    };
+    std::vector<IDevice*> devices = {
+        single_meshes[0].get(),
+        single_meshes[1].get(),
+        single_meshes[2].get(),
+        single_meshes[3].get(),
+    };
+
+    const uint32_t dim = 0;
+    const ttnn::Shape ag_input_shape = ttnn::Shape{1, 1, 32, 32};
+    ttnn::Shape ag_output_shape = ag_input_shape;
+    ag_output_shape[dim] *= num_devices;
+    const MemoryConfig mem_cfg(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const auto ag_num_elems = ag_input_shape.volume();
+
+    TensorSpec ag_tensor_spec(ag_input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
+    TensorSpec ag_output_spec(ag_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
+
+    std::vector<Tensor> ag_input_tensors(num_devices), ag_output_tensors(num_devices);
+    for (size_t i = 0; i < num_devices; i++) {
+        std::vector<bfloat16> in_data(ag_num_elems, bfloat16(static_cast<float>(i)));
+        ag_input_tensors[i] = Tensor::from_vector(std::move(in_data), ag_tensor_spec).to_device(single_meshes[i].get());
+        std::vector<bfloat16> out_data(ag_output_spec.logical_shape().volume(), bfloat16(-1));
+        ag_output_tensors[i] =
+            Tensor::from_vector(std::move(out_data), ag_output_spec).to_device(single_meshes[i].get());
+    }
+    auto aggregated_input = tt::tt_metal::experimental::unit_mesh::aggregate(ag_input_tensors);
+    auto aggregated_output = tt::tt_metal::experimental::unit_mesh::aggregate(ag_output_tensors);
+
+    const ttnn::Shape matmul_shape = ttnn::Shape{1, 1, 32, 32};
+    TensorSpec matmul_spec(matmul_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
+    std::vector<bfloat16> a_data(matmul_shape.volume(), bfloat16(1.0f));
+    std::vector<bfloat16> b_data(matmul_shape.volume(), bfloat16(1.0f));
+    Tensor tensor_a = Tensor::from_vector(a_data, matmul_spec).to_device(single_meshes[0].get());
+    Tensor tensor_b = Tensor::from_vector(b_data, matmul_spec).to_device(single_meshes[0].get());
+
+    mesh_device_->quiesce_devices();
+
+    QueueId ccl_cq(0);
+    QueueId matmul_cq(1);
+    constexpr tt::tt_metal::SubDeviceId ccl_subdevice{0};
+    constexpr tt::tt_metal::SubDeviceId matmul_subdevice{1};
+
+    auto ccl_future = std::async(std::launch::async, [&]() {
+        auto sub_guard = ttnn::DeviceContext(mesh_device).set_current_sub_device(ccl_subdevice);
+        auto cq_guard = ttnn::with_command_queue_id(ccl_cq);
+        return ttnn::all_gather(
+            aggregated_input, static_cast<int32_t>(dim), std::nullopt, std::nullopt, aggregated_output);
+    });
+
+    Tensor matmul_result;
+    auto matmul_future = std::async(std::launch::async, [&]() {
+        auto sub_guard = ttnn::DeviceContext(mesh_device).set_current_sub_device(matmul_subdevice);
+        auto cq_guard = ttnn::with_command_queue_id(matmul_cq);
+        matmul_result = ttnn::matmul(
+            tensor_a,
+            tensor_b,
+            false,
+            false,
+            std::nullopt,
+            std::nullopt,
+            ttnn::operations::matmul::MatmulMultiCoreProgramConfig{});
+    });
+
+    ASSERT_NO_THROW(ccl_future.get());
+    ASSERT_NO_THROW(matmul_future.get());
+
+    mesh_device_->quiesce_devices();
+
+    for (size_t i = 0; i < num_devices; i++) {
+        auto data = ag_output_tensors[i].to_vector<bfloat16>();
+        for (size_t j = 0; j < data.size(); j++) {
+            size_t slice = j / ag_num_elems;
+            EXPECT_EQ(static_cast<float>(data[j]), static_cast<float>(slice))
+                << "all_gather output device " << i << " idx " << j;
+        }
+    }
+
+    auto matmul_cpu = matmul_result.cpu().to_vector<bfloat16>();
+    const float expected_val = 32.0f;  // 32x32 matmul of ones: each output = sum of 32 ones
+    for (size_t i = 0; i < matmul_cpu.size(); i++) {
+        EXPECT_NEAR(static_cast<float>(matmul_cpu[i]), expected_val, 2.0f) << "matmul output idx " << i;
+    }
+
+    mesh_device->reset_sub_device_stall_group();
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(sub_device_manager_id);
+
+    log_info(tt::LogTest, "ParallelCclAndMatmul finished");
 }
 
 }  // namespace ttnn::distributed::test
