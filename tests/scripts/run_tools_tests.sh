@@ -59,3 +59,7 @@ echo "MGD generation tests finished"
 echo "Running descriptor merger tests..."
 TT_METAL_LOGGER_LEVEL=Fatal ./build/test/tools/scaleout/test_descriptor_merger
 echo "Descriptor merger tests finished"
+
+echo "Running generate_rank_bindings helper unit tests..."
+TT_METAL_LOGGER_LEVEL=Fatal ./build/test/tools/scaleout/test_generate_rank_bindings
+echo "generate_rank_bindings helper unit tests finished"
