@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/exp_ring_fusion.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
@@ -189,7 +190,8 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.logical_shape()[-1]));
     }
 
-    std::optional<ttnn::prim::RingSDPAFusedOpSignaler> sdpa_fused_op_signaler = ttnn::prim::RingSDPAFusedOpSignaler();
+    std::optional<ttnn::prim::ExpRingSDPAFusedOpSignaler> sdpa_fused_op_signaler =
+        ttnn::prim::ExpRingSDPAFusedOpSignaler();
 
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ccl::get_forward_backward_configuration(
         args.ring_size, device_index, args.topology);

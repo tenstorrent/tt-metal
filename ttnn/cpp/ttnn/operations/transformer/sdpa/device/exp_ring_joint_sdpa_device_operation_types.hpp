@@ -14,7 +14,6 @@
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
-#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"
 
 namespace ttnn::prim {
 

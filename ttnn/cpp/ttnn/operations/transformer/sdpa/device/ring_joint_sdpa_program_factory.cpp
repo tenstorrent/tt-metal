@@ -138,8 +138,29 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     std::optional<ttnn::prim::RingSDPAFusedOpSignaler> sdpa_fused_op_signaler = ttnn::prim::RingSDPAFusedOpSignaler();
 
+    auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ccl::get_forward_backward_configuration(
+        args.all_gather_operation_attributes.ring_size, device_index, args.all_gather_operation_attributes.topology);
+    if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring && device_index % 2 == 0) {
+        std::swap(num_targets_forward, num_targets_backward);
+    }
+
+    uint32_t forward_writes_expected, backward_writes_expected;
+    if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear) {
+        forward_writes_expected = num_targets_backward;
+        backward_writes_expected = num_targets_forward;
+    } else {
+        TT_FATAL(
+            args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring,
+            "Topology must be Linear or Ring");
+        forward_writes_expected = num_targets_forward;
+        backward_writes_expected = num_targets_backward;
+    }
     // Minimally use matmul fused op signaler
-    sdpa_fused_op_signaler->init_all_gather(args.all_gather_operation_attributes.ring_size, device_index);
+    sdpa_fused_op_signaler->init_all_gather(
+        args.all_gather_operation_attributes.ring_size,
+        device_index,
+        forward_writes_expected,
+        backward_writes_expected);
 
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
@@ -877,38 +898,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         }
     }
 
-    // Log chain summary
-    {
-        uint32_t num_chains = 0;
-        std::vector<uint32_t> chain_len_counts(num_cores + 1, 0);
-        for (uint32_t hi = 0; hi < total_heads; ++hi) {
-            const auto& segs = head_segments[hi];
-            const uint32_t batch_id = hi / NH, head_id = hi % NH;
-            uint32_t chain_len = 0;
-            for (const auto& seg : segs) {
-                const auto& ci = core_chain_info[seg.core_idx];
-                if (ci.participates && ci.batch == batch_id && ci.head == head_id) {
-                    chain_len++;
-                }
-            }
-            if (chain_len >= 2) {
-                num_chains++;
-                chain_len_counts[chain_len]++;
-            }
-        }
-        std::string hist_str;
-        for (uint32_t len = 2; len <= num_cores; ++len) {
-            if (chain_len_counts[len] > 0) {
-                hist_str += std::to_string(chain_len_counts[len]) + "x" + std::to_string(len) + "-core ";
-            }
-        }
-        log_info(
-            tt::LogOp,
-            "[RingJointSDPA] {} chains ({})",
-            num_chains,
-            hist_str.empty() ? "none" : hist_str);
-    }
-
     // Third pass: Check multicast eligibility and configure mcast for eligible chains
     uint32_t mcast_chains = 0;
     {
@@ -1096,14 +1085,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             static_cast<uint32_t>(candidates.size()));
     }
 
-    log_info(
-        tt::LogOp,
-        "[RingJointSDPA] mcast: {} ({}/{} chains)",
-        mcast_chains > 0 ? "ENABLED" : "DISABLED",
-        mcast_chains,
-        mcast_chains > 0 ? mcast_chains : static_cast<uint32_t>(
-            std::count_if(core_chain_info.begin(), core_chain_info.end(), [](const CoreChainInfo& c) { return c.is_injector; })));
-
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
 
@@ -1196,7 +1177,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         reader_args.push_back(chain.mcast_sender_wait);
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args, 0 /* direction=backward */);
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(reader_args);
 
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
 
@@ -1208,7 +1189,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             global_q_start,
             global_q_end,
         };
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args, 0 /* direction=backward */);
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
         SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
 
         // Compute args
@@ -1216,7 +1197,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             global_q_start,
             global_q_end,
         };
-        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args, 0 /* direction=backward */);
+        sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
 

@@ -1,23 +1,20 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ring_fusion.hpp"
+#include "exp_ring_fusion.hpp"
 
 using namespace tt::tt_metal;
 namespace ttnn::prim {
 
-void RingSDPAFusedOpSignaler::init_all_gather(
-    uint32_t ring_size, uint32_t ring_index, uint32_t forward_writes_expected, uint32_t backward_writes_expected) {
+void ExpRingSDPAFusedOpSignaler::init_all_gather(uint32_t ring_size, uint32_t ring_index) {
     this->ring_size = ring_size;
     this->ring_index = ring_index;
-    this->forward_writes_expected = forward_writes_expected;
-    this->backward_writes_expected = backward_writes_expected;
 
     this->initialized_all_gather = true;
 }
 
-void RingSDPAFusedOpSignaler::init_fused_op(
+void ExpRingSDPAFusedOpSignaler::init_fused_op(
     Program& program,
     const IDevice* device,
     const std::variant<CoreRange, CoreRangeSet>& core_range_to_signal,
@@ -59,15 +56,15 @@ void RingSDPAFusedOpSignaler::init_fused_op(
     this->initialized_fused_op = true;
 }
 
-void RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(std::vector<uint32_t>& out_rt_args) {
+void ExpRingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(
+    std::vector<uint32_t>& out_rt_args, uint32_t direction) {
     TT_ASSERT(
-        this->initialized_all_gather && this->initialized_fused_op, "RingSDPAFusedOpSignaler not initialized fully.");
+        this->initialized_all_gather && this->initialized_fused_op,
+        "ExpRingSDPAFusedOpSignaler not initialized fully.");
 
     out_rt_args.push_back(static_cast<uint32_t>(this->ring_size));
     out_rt_args.push_back(static_cast<uint32_t>(this->ring_index));
-    out_rt_args.push_back(static_cast<uint32_t>(this->forward_writes_expected));
-    out_rt_args.push_back(static_cast<uint32_t>(this->backward_writes_expected));
-    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[0]));
-    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
+    out_rt_args.push_back(static_cast<uint32_t>(direction));
+    out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[direction]));
 }
 }  // namespace ttnn::prim
