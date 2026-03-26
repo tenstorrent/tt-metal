@@ -4029,6 +4029,5 @@ class AttentionBlock:
                 extend_fabric_args(sender_brisc_rt_args_ref, sender_fabric_args)
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
-        print("Run")
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
         return result
