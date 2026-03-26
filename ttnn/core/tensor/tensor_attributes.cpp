@@ -53,9 +53,9 @@ const TensorTopology& TensorAttributes::get_tensor_topology() const {
 
 void TensorAttributes::update_tensor_topology(TensorTopology tensor_topology) {
     if (auto* host_storage = std::get_if<HostStorage>(&storage_)) {
-        host_storage->host_tensor().update_tensor_topology(std::move(tensor_topology));
+        host_storage->host_tensor().update_tensor_topology(tensor_topology);
     }
-    tensor_topology_ = std::move(tensor_topology);
+    tensor_topology_ = tensor_topology;
 }
 
 }  // namespace tt::tt_metal
