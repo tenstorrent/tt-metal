@@ -7,14 +7,73 @@ import re
 
 from loguru import logger
 
-import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
-
 # NOTE: We need to override trace_region_size before the mesh device is opened
 # NOTE: When using DP, we need to have the imlpemented logic because when we parametrize the test with a specific trace region size, all submeshes will have that trace region size
 # example of the above : T3K (DP-8-b1 ; @parametrize(trace_region_size=X) -> we efectivly have 8 N150's with trace_region_size=X which could leed to OOM if X is too large)
 
 # TODO: For now, each confest.py should call get_supported_trace_region_size if they want to override the trace region size
+
+
+TRACE_REGION_SIZE_OVERRIDES = {
+    "Llama-3.1-8B": {
+        "N150": 25000000,
+        "N300": 38000000,
+        "T3K": 50000000,
+        "TG": 50000000,
+    },
+    "Llama-3.3-70B": {
+        "T3K": 90000000,
+        "TG": 80000000,
+        "P150": 80000000,
+        "P300": 80000000,
+        "P150x4": 95000000,
+        "P150x8": 83000000,
+    },
+    "Llama-3.1-70B": {
+        "T3K": 90000000,
+        "TG": 90000000,
+        "P150": 90000000,
+        "P300": 90000000,
+        "P150x4": 90000000,
+        "P150x8": 90000000,
+    },
+    "Llama-3.2-90B": {
+        "T3K": 20000000,
+    },
+    "Qwen3-32B": {
+        "T3K": 90000000,
+        "TG": 96000000,
+        "P150": 90000000,
+        "P300": 90000000,
+        "P150x4": 90000000,
+        "P150x8": 90000000,
+    },
+    "GPT-OSS-20B": {
+        "T3K": 50000000,
+        "TG": 50000000,
+    },
+    "GPT-OSS-120B": {
+        "T3K": 50000000,
+        "TG": 50000000,
+    },
+    "Qwen2.5-72B": {
+        "T3K": 70000000,
+        "TG": 70000000,
+    },
+    "gemma-3-27b": {
+        "T3K": 70000000,
+        "TG": 70000000,
+    },
+    "DeepSeek-R1-Distill-Llama-70B": {
+        "P150x4": 90000000,
+    },
+    "Llama-3.2-3B": {
+        "N150": 10000000,
+    },
+    "Qwen2.5-VL-7B": {
+        "N300": 10000000,
+    },
+}
 
 
 def get_base_model_name(model_name: str) -> str:
@@ -24,6 +83,9 @@ def get_base_model_name(model_name: str) -> str:
 
 
 def get_mesh_device_name(num_devices, mesh_device_name):
+    import ttnn
+    from models.common.utility_functions import is_blackhole, is_wormhole_b0
+
     if mesh_device_name == "P100":
         return "P100"
 
@@ -77,65 +139,6 @@ def device_name_based_on_data_parallel(request, num_devices, mesh_device_name):
 
 
 def get_supported_trace_region_size(request, mesh_device):
-    # TODO: If no specific trace region size is listed for a model and device, the default one will be used (the one set in simple_text_demo.py @parametrize)
-    trace_region_size_dict = {
-        "Llama-3.1-8B": {
-            "N150": 25000000,
-            "N300": 38000000,
-            "T3K": 50000000,
-            "TG": 50000000,
-        },
-        "Llama-3.3-70B": {
-            "T3K": 90000000,
-            "TG": 80000000,
-            "P150": 80000000,
-            "P300": 80000000,
-            "P150x4": 95000000,
-            "P150x8": 83000000,
-        },
-        "Llama-3.1-70B": {
-            "T3K": 90000000,
-            "TG": 90000000,
-            "P150": 90000000,
-            "P300": 90000000,
-            "P150x4": 90000000,
-            "P150x8": 90000000,
-        },
-        "Qwen3-32B": {
-            "T3K": 90000000,
-            "TG": 96000000,
-            "P150": 90000000,
-            "P300": 90000000,
-            "P150x4": 90000000,
-            "P150x8": 90000000,
-        },
-        "GPT-OSS-20B": {
-            "T3K": 50000000,
-            "TG": 50000000,
-        },
-        "GPT-OSS-120B": {
-            "T3K": 50000000,
-            "TG": 50000000,
-        },
-        "Qwen2.5-72B": {
-            "T3K": 70000000,
-            "TG": 70000000,
-        },
-        "gemma-3-27b": {
-            "T3K": 70000000,
-            "TG": 70000000,
-        },
-        "DeepSeek-R1-Distill-Llama-70B": {
-            "P150x4": 90000000,
-        },
-        "Llama-3.2-3B": {
-            "N150": 10000000,
-        },
-        "Qwen2.5-VL-7B": {
-            "N300": 10000000,
-        },
-    }
-
     device_name_based_on_dp = device_name_based_on_data_parallel(request, mesh_device, os.getenv("MESH_DEVICE"))
     base_model_name = base_model_name_from_env()
-    return trace_region_size_dict.get(base_model_name, {}).get(device_name_based_on_dp, None)
+    return TRACE_REGION_SIZE_OVERRIDES.get(base_model_name, {}).get(device_name_based_on_dp, None)
