@@ -519,3 +519,42 @@ def flush_subnormal_values_to_zero(tensor):
     mask = torch.abs(tensor) < SUBNORMAL_THRESHOLD
     tensor[mask] = 0.0
     return tensor
+
+
+def assert_numeric_metrics(
+    expected,
+    actual,
+    rtol=1e-05,
+    atol=1e-08,
+    frobenius_threshold=0.01,
+    pcc_threshold=0.99,
+    ulp_threshold=10,
+    check_allclose=True,
+    check_frobenius=True,
+    check_pcc=True,
+    check_ulp=False,
+):
+    # pcc_threshold = 1
+    if check_allclose:
+        allclose_kwargs = {}
+        if rtol is not None:
+            allclose_kwargs["rtol"] = rtol
+        if atol is not None:
+            allclose_kwargs["atol"] = atol
+        assert_allclose(expected, actual, **allclose_kwargs)
+
+    if check_frobenius:
+        frobenius_kwargs = {}
+        if frobenius_threshold is not None:
+            frobenius_kwargs["threshold"] = frobenius_threshold
+        assert_relative_frobenius(expected, actual, **frobenius_kwargs)
+
+    if check_pcc:
+        threshold = 0.98 if pcc_threshold is None else pcc_threshold
+        passing_pcc, pcc_message = comp_pcc(expected, actual, threshold)
+        assert passing_pcc, pcc_message
+    if check_ulp:
+        ulp_kwargs = {}
+        # if ulp_threshold is not None:
+        #     ulp_kwargs["threshold"] = ulp_threshold
+        assert_with_ulp(expected, actual, ulp_threshold=ulp_threshold, allow_nonfinite=False)
