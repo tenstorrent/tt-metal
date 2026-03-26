@@ -5,12 +5,11 @@
 import math
 
 import ml_dtypes
-
 import ttnn
 import ttml
 
 from .module_base import AbstractModuleBase
-from .parameter import Parameter
+from .parameter import Parameter, TensorMetadata
 
 
 class LinearLayer(AbstractModuleBase):
@@ -21,29 +20,31 @@ class LinearLayer(AbstractModuleBase):
         in_features: int,
         out_features: int,
         has_bias: bool = True,
-        weight_init=None,
-        bias_init=None,
+        **kwargs,
     ) -> None:
-        super().__init__()
-
         self.in_features = in_features
         self.out_features = out_features
 
-        if weight_init is None:
-            k = math.sqrt(1.0 / in_features)
-            weight_init = ttml.init.uniform(-k, k)
+        k = math.sqrt(1.0 / in_features)
 
-        weight_shape = (1, 1, out_features, in_features)
-        self.weight = Parameter(weight_init(weight_shape))
+        self.weight = Parameter(
+            TensorMetadata(
+                shape=(1, 1, out_features, in_features),
+                init_fn=ttml.init.uniform(-k, k),
+            )
+        )
 
         if has_bias:
-            if bias_init is None:
-                k = math.sqrt(1.0 / in_features)
-                bias_init = ttml.init.uniform(-k, k)
-            bias_shape = (1, 1, 1, out_features)
-            self.bias = Parameter(bias_init(bias_shape))
+            self.bias = Parameter(
+                TensorMetadata(
+                    shape=(1, 1, 1, out_features),
+                    init_fn=ttml.init.uniform(-k, k),
+                )
+            )
         else:
             self.bias = None
+
+        super().__init__(**kwargs)
 
     def __reduce__(self):
         return (

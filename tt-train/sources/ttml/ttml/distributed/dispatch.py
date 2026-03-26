@@ -42,6 +42,17 @@ def _get_raw(op_name: str) -> Callable:
     return _RAW_OPS[op_name]
 
 
+def _tensor_input_shapes_for_trace(tensor_args: List[Any]) -> List[Tuple[int, ...]]:
+    """Logical shapes at the Python op boundary (``tuple(t.shape())`` per tensor input)."""
+    shapes: List[Tuple[int, ...]] = []
+    for t in tensor_args:
+        try:
+            shapes.append(tuple(int(x) for x in t.shape()))
+        except (TypeError, ValueError, AttributeError):
+            shapes.append(())
+    return shapes
+
+
 # ---------------------------------------------------------------------------
 # Plan cache helpers
 # ---------------------------------------------------------------------------
@@ -107,6 +118,7 @@ def _fallback_replicated(op_name: str, tensor_args, other_args, kwargs):
                 redistributions=redistributions,
                 post_collectives=[],
                 output_layout=rep,
+                input_shapes=_tensor_input_shapes_for_trace(tensor_args),
                 op_kwargs=dict(kwargs),
             )
         )
@@ -157,6 +169,7 @@ def dispatch(op_name: str, *args, **kwargs):
                     redistributions=[],
                     post_collectives=[],
                     output_layout=None,
+                    input_shapes=_tensor_input_shapes_for_trace(tensor_args),
                     op_kwargs=dict(kwargs),
                 )
             )
@@ -268,6 +281,7 @@ def dispatch(op_name: str, *args, **kwargs):
                 redistributions=redistributions,
                 post_collectives=post_collectives_log,
                 output_layout=plan.output_layout,
+                input_shapes=_tensor_input_shapes_for_trace(tensor_args),
                 op_kwargs=dict(rule_kwargs),
             )
         )

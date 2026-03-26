@@ -5,11 +5,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Dict, Optional
 
+import numpy as np
+import ml_dtypes
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, Embedding, ModuleList, LinearLayer
+from ttml.modules import Embedding, ModuleList, LinearLayer, TransformerBase
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
 from .transformer import LlamaBlock, RMSNormLayer
@@ -73,28 +75,43 @@ class LlamaConfig:
             )
 
 
-class Llama(AbstractModuleBase):
-    def __init__(self, config: LlamaConfig) -> None:
-        super().__init__()
+def initialize_parameters(parameters: Dict[str, ttml.autograd.Tensor]) -> None:
+    for name, tensor in parameters.items():
+        shape = tensor.shape()
 
+        if "weight" in name:
+            # Re-initialize weights with normal(0, 0.02)
+            weight_np = np.random.normal(0.0, 0.02, size=shape).astype(
+                ml_dtypes.bfloat16
+            )
+            new_tensor = ttml.autograd.Tensor.from_numpy(
+                weight_np, layout=ttnn.Layout.TILE
+            )
+            tensor.assign(new_tensor)
+        elif "bias" in name:
+            # Re-initialize biases with 0
+            bias_np = np.zeros(shape, dtype=ml_dtypes.bfloat16)
+            new_tensor = ttml.autograd.Tensor.from_numpy(
+                bias_np, layout=ttnn.Layout.TILE
+            )
+            tensor.assign(new_tensor)
+
+
+class Llama(TransformerBase):
+    def __init__(self, config: LlamaConfig, **kwargs) -> None:
         self.config = config
 
-        self.fc = LinearLayer(
-            config.hidden_size,
-            config.vocab_size,
-            False,
-            weight_init=ttml.init.normal(0.0, 0.02),
-        )
+        self.fc = LinearLayer(config.hidden_size, config.vocab_size, False, **kwargs)
 
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
         self.tok_emb = Embedding(
-            vocab_size_divisible_by_32,
-            config.hidden_size,
-            weight_init=ttml.init.normal(0.0, 0.02),
+            vocab_size_divisible_by_32, config.hidden_size, **kwargs
         )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            self.tok_emb.weight = self.fc.weight.tensor
+            # Share the Parameter object so lazy materialization runs once; assigning
+            # .tensor would copy TensorMetadata and break Embedding.forward (expects Parameter).
+            self.tok_emb.weight = self.fc.weight
 
         head_dim = config.hidden_size // config.num_attention_heads
 
@@ -124,12 +141,16 @@ class Llama(AbstractModuleBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
+                    **kwargs,
                 )
                 for _ in range(config.num_hidden_layers)
-            ]
+            ],
+            **kwargs,
         )
 
-        self.ln_fc = RMSNormLayer(config.hidden_size)
+        self.ln_fc = RMSNormLayer(config.hidden_size, **kwargs)
+
+        super().__init__(**kwargs)
 
     def forward(
         self,

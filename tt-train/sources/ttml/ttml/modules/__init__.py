@@ -12,8 +12,8 @@ from _ttml.modules import InferenceMode, ModuleBase, RunMode
 from .embedding import Embedding
 from .linear import LinearLayer
 from .lora import LoraConfig, LoraLinear, LoraModel
-from .module_base import AbstractModuleBase, ModuleDict, ModuleList
-from .parameter import Buffer, Parameter
+from .module_base import AbstractModuleBase, ModuleDict, ModuleList, TransformerBase
+from .parameter import Buffer, Parameter, TensorMetadata
 
 __all__ = [
     # C++ bindings
@@ -31,4 +31,6 @@ __all__ = [
     "ModuleDict",
     "ModuleList",
     "Parameter",
+    "TensorMetadata",
+    "TransformerBase",
 ]
