@@ -72,6 +72,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/topology.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/fd_kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/prefetch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/prefetch_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/dispatch_s.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/relay_mux.cpp

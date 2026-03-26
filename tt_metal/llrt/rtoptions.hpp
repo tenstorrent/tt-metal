@@ -236,6 +236,8 @@ class RunTimeOptions {
 
     bool fast_dispatch = true;
 
+    bool split_prefetcher = false;
+
     bool skip_eth_cores_with_retrain = false;
 
     // Relaxed ordering on BH allows loads to bypass stores when going to separate addresses
@@ -622,6 +624,7 @@ public:
 
     void set_fast_dispatch(bool enable) { fast_dispatch = enable; }
 
+    bool get_split_prefetcher() const { return split_prefetcher; }
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
     uint32_t get_arc_debug_buffer_size() const { return arc_debug_buffer_size; }

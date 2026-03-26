@@ -79,6 +79,7 @@ static std::vector<std::string> dispatch_kernel_file_names = {
     "tt_metal/impl/dispatch/kernels/vc_packet_router.cpp",         // PACKET_ROUTER_DEMUX
     "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",              // FABRIC_MUX
     "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",              // FABRIC_RETURN_MUX
+    "tt_metal/impl/dispatch/kernels/cq_prefetch_writer.cpp",       // PREFETCH_HD_WRITER
     ""                                                             // COUNT
 };
 
