@@ -17,4 +17,12 @@ autograd::TensorPtr polynorm3(
     const autograd::TensorPtr& bias,
     float epsilon = 1e-5F);
 
+// Composite-forward variant with the same autograd backward as polynorm3.
+// Intended for parity checks and experimentation.
+autograd::TensorPtr polynorm3_composite(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& weight,
+    const autograd::TensorPtr& bias,
+    float epsilon = 1e-5F);
+
 }  // namespace ttml::ops

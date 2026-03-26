@@ -274,6 +274,30 @@ TEST_F(PolyNormOpTest, PolyNorm_Compare_BasicSmall) {
     CompareKernelVsReferenceWithShape({1, 1, 2, 32});
 }
 
+TEST_F(PolyNormOpTest, PolyNorm_Compare_FusedVsCompositeForward_Small) {
+    using namespace ttml;
+    const float epsilon = 1e-5F;
+    const auto data = make_case_data({1, 1, 2, 128});
+    auto* device = &autograd::ctx().get_device();
+
+    auto x = autograd::create_tensor(core::from_xtensor(data.input, device), /*requires_grad=*/true);
+    auto w = autograd::create_tensor(core::from_xtensor(data.weight, device), /*requires_grad=*/true);
+    auto b = autograd::create_tensor(core::from_xtensor(data.bias, device), /*requires_grad=*/true);
+
+    const auto fused = ops::polynorm3(x, w, b, epsilon);
+    const auto composite = ops::polynorm3_composite(x, w, b, epsilon);
+
+    const auto fused_xt = core::to_xtensor(fused->get_value());
+    const auto composite_xt = core::to_xtensor(composite->get_value());
+    EXPECT_EQ(fused_xt.shape(), composite_xt.shape());
+    EXPECT_TRUE(xt::all(xt::isfinite(fused_xt)));
+    EXPECT_TRUE(xt::all(xt::isfinite(composite_xt)));
+    expect_allclose_with_metrics(
+        fused_xt, composite_xt, kForwardRtol, kForwardAtol, "fused_forward_vs_composite_forward");
+
+    autograd::ctx().reset_graph();
+}
+
 TEST_F(PolyNormOpTest, PolyNorm_Compare_BlockSizeRemainders) {
     CompareKernelVsReferenceWithShape({1, 1, 1, 32});   // Wt=1, Wt%4=1
     CompareKernelVsReferenceWithShape({1, 1, 1, 64});   // Wt=2, Wt%4=2

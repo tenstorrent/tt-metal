@@ -152,9 +152,13 @@ ttnn::Tensor polynorm3_composite_forward(
     return ttnn::add(sum, bias_tensor, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
 }
 
-ttnn::Tensor polynorm3_forward(
-    const ttnn::Tensor& x, const ttnn::Tensor& weight_tensor, const ttnn::Tensor& bias_tensor, float epsilon) {
-    if (kPolyNorm3ForwardVariant == PolyNorm3ForwardVariant::Fused) {
+ttnn::Tensor polynorm3_forward_variant(
+    const ttnn::Tensor& x,
+    const ttnn::Tensor& weight_tensor,
+    const ttnn::Tensor& bias_tensor,
+    float epsilon,
+    PolyNorm3ForwardVariant forward_variant) {
+    if (forward_variant == PolyNorm3ForwardVariant::Fused) {
         if (x.logical_shape()[-1] % 32U != 0U) {
             throw std::runtime_error(
                 "polynorm3 fused forward currently requires C to be divisible by 32 (no tail-channel masking yet).");
@@ -165,19 +169,18 @@ ttnn::Tensor polynorm3_forward(
     return polynorm3_composite_forward(x, weight_tensor, bias_tensor, epsilon);
 }
 
-}  // namespace
-
-autograd::TensorPtr polynorm3(
+autograd::TensorPtr polynorm3_impl(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& weight,
     const autograd::TensorPtr& bias,
-    float epsilon) {
+    float epsilon,
+    PolyNorm3ForwardVariant forward_variant) {
     validate_input_shapes(tensor, weight, bias);
 
     const auto x = tensor->get_value();
     const auto weight_tensor = weight->get_value();
     const auto bias_tensor = bias->get_value();
-    const auto out_value = polynorm3_forward(x, weight_tensor, bias_tensor, epsilon);
+    const auto out_value = polynorm3_forward_variant(x, weight_tensor, bias_tensor, epsilon, forward_variant);
 
     auto out = autograd::create_tensor(out_value);
 
@@ -253,6 +256,24 @@ autograd::TensorPtr polynorm3(
 
     out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, weight, bias));
     return out;
+}
+
+}  // namespace
+
+autograd::TensorPtr polynorm3(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& weight,
+    const autograd::TensorPtr& bias,
+    float epsilon) {
+    return polynorm3_impl(tensor, weight, bias, epsilon, kPolyNorm3ForwardVariant);
+}
+
+autograd::TensorPtr polynorm3_composite(
+    const autograd::TensorPtr& tensor,
+    const autograd::TensorPtr& weight,
+    const autograd::TensorPtr& bias,
+    float epsilon) {
+    return polynorm3_impl(tensor, weight, bias, epsilon, PolyNorm3ForwardVariant::CompositeComparisonOnly);
 }
 
 }  // namespace ttml::ops
