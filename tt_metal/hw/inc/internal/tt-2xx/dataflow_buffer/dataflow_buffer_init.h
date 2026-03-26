@@ -114,8 +114,10 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     if (hartid == 0) {
         // Pass A: configure remapper for all DM producers across all DFBs, then enable
         bool enable_remapper = false;
-        bool enable_implicit_sync = false;
         base_ptr = reinterpret_cast<volatile uint8_t*>(dfb_config_base);
+        // These masks track which transaction ids should trigger the implicit sync ISR
+        uint32_t producer_txn_id_mask = 0;
+        uint32_t consumer_txn_id_mask = 0;
         for (uint32_t logical_dfb_id = 0; logical_dfb_id < num_dfbs; logical_dfb_id++) {
             volatile dfb_initializer_t* init_ptr = reinterpret_cast<volatile dfb_initializer_t*>(base_ptr);
             uint16_t risc_mask = (init_ptr->risc_mask_bits.tensix_mask << 8) | init_ptr->risc_mask_bits.dm_mask;
@@ -179,8 +181,6 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             }
 
             // Got all info from producers and consumers, now set up the TxnDFBDescriptor for producer and consumer
-            uint32_t producer_txn_id_mask = 0;
-            uint32_t consumer_txn_id_mask = 0;
             for (uint8_t i = 0; i < init_ptr->producer_txn_descriptor.num_txn_ids; i++) {
                 uint8_t txn_id = init_ptr->producer_txn_descriptor.txn_ids[i];
                 producer_txn_id_mask |= (1u << txn_id);
@@ -205,32 +205,26 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 SET_TILES_TO_PROCESS_THRES_WR_SENT(
                     txn_id, init_ptr->consumer_txn_descriptor.num_entries_to_process_threshold);
             }
-            if (producer_txn_id_mask != 0) {
-                enable_implicit_sync = true;
-                // per_trid_tiles_to_process_set_interrupt_enable_cmdbuf_0(producer_txn_id_mask);
-                uint64_t reg_val = CMDBUF_RD_REG(0, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);
-                reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(producer_txn_id_mask & 0xFFFFFFFFULL) << 32);
-                CMDBUF_WR_REG(
-                    OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);
-            }
-            if (consumer_txn_id_mask != 0) {
-                enable_implicit_sync = true;
-                // per_trid_wr_tiles_to_process_set_interrupt_enable_cmdbuf_0(consumer_txn_id_mask);
-                uint64_t reg_val = CMDBUF_RD_REG(0, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);
-                reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (consumer_txn_id_mask & 0xFFFFFFFFULL);
-                CMDBUF_WR_REG(
-                    OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);
-            }
-
             base_ptr += sizeof(dfb_initializer_t) + (num_riscs * sizeof(dfb_initializer_per_risc_t));
         }
+
+        // Program which transaction ids should trigger the implicit sync ISR
+        // per_trid_tiles_to_process_set_interrupt_enable_cmdbuf_0(producer_txn_id_mask);
+        uint64_t reg_val = CMDBUF_RD_REG(0, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET);
+        reg_val = (reg_val & 0x00000000FFFFFFFFULL) | ((uint64_t)(producer_txn_id_mask & 0xFFFFFFFFULL) << 32);
+        CMDBUF_WR_REG(OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_1_REG_OFFSET, reg_val);
+
+        // per_trid_wr_tiles_to_process_set_interrupt_enable_cmdbuf_0(consumer_txn_id_mask);
+        reg_val = CMDBUF_RD_REG(0, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET);
+        reg_val = (reg_val & 0xFFFFFFFF00000000ULL) | (consumer_txn_id_mask & 0xFFFFFFFFULL);
+        CMDBUF_WR_REG(OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IE_2_REG_OFFSET, reg_val);
 
         if (enable_remapper) {
             // DPRINT << "Enabling remapper" << ENDL();
             g_remapper_configurator.enable_remapper();
         }
 
-        if (enable_implicit_sync) {
+        if ((producer_txn_id_mask | consumer_txn_id_mask) != 0) {
             enable_dfb_tile_isr();
         } else {
             disable_dfb_tile_isr();

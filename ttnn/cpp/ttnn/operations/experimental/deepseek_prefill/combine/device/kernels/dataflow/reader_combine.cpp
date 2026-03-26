@@ -7,6 +7,7 @@
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/zero_init_common.hpp"
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
@@ -17,23 +18,8 @@
     DebugPrinter()
 #endif
 
+// Signal last element to writer to break out of loop
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
-
-void zero_page_async(uint64_t noc_addr, uint32_t page_size) {
-    uint32_t bytes = page_size;
-    while (bytes > 0) {
-        uint32_t curr_bytes = (bytes < (uint32_t)MEM_ZEROS_SIZE) ? bytes : (uint32_t)MEM_ZEROS_SIZE;
-        noc_async_write(MEM_ZEROS_BASE, noc_addr, curr_bytes);
-        noc_addr += curr_bytes;
-        bytes -= curr_bytes;
-    }
-}
-
-#if defined(IS_L1_OUTPUT) && IS_L1_OUTPUT && defined(L1_BANK_NOC_X_START) && defined(NUM_L1_BANKS)
-#define USE_L1_MULTICAST_ZERO 1
-#else
-#define USE_L1_MULTICAST_ZERO 0
-#endif
 
 void kernel_main() {
     using namespace ttnn::operations::ccl::common;
@@ -96,6 +82,12 @@ void kernel_main() {
         TensorAccessorArgs<dispatched_metadata_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<experts_tok_counter_args.next_compile_time_args_offset()>();
 
+#if INIT_ZEROS
+    // Zero-init args follow immediately after the TensorAccessorArgs block
+    constexpr uint32_t zi_cb_id = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
+    constexpr uint32_t num_idle_cores = get_compile_time_arg_val(output_args.next_compile_time_args_offset() + 1);
+#endif
+
     // ===== Runtime Args =====
     uint32_t rt_args = 0;
     uint32_t dispatched_buffer_addr = get_arg_val<uint32_t>(rt_args++);
@@ -115,30 +107,27 @@ void kernel_main() {
 
     const auto output_addr_gen = TensorAccessor(output_args, output_addr, aligned_output_page_size);
 
-    // Only core 0 (expert_start_idx == 0) performs zero-init to avoid race between cores
 #if INIT_ZEROS
-    if (expert_start_idx == 0) {
-#if USE_L1_MULTICAST_ZERO
-        constexpr uint32_t per_bank_bytes = OUTPUT_BYTES_PER_BANK;
-        for (uint32_t offset = 0; offset < per_bank_bytes; offset += MEM_ZEROS_SIZE) {
-            uint32_t chunk_size = ((uint32_t)MEM_ZEROS_SIZE < (per_bank_bytes - offset)) ? (uint32_t)MEM_ZEROS_SIZE
-                                                                                         : (per_bank_bytes - offset);
-            uint64_t mcast_addr = get_noc_multicast_addr(
-                L1_BANK_NOC_X_START, L1_BANK_NOC_Y_START, L1_BANK_NOC_X_END, L1_BANK_NOC_Y_END, output_addr + offset);
-            noc_async_write_multicast_loopback_src(MEM_ZEROS_BASE, mcast_addr, chunk_size, NUM_L1_BANKS);
-        }
-        noc_async_write_barrier();
-#else
-        for (uint32_t page = 0; page < output_pages; page++) {
-            uint64_t page_noc_addr = get_noc_addr(page, output_addr_gen);
-            zero_page_async(page_noc_addr, aligned_output_page_size);
-        }
-        noc_async_write_barrier();
-#endif
+    // Hybrid row zero-init: this core zeroes its assigned page range, then waits for idle row cores
+    {
+        uint32_t page_start = get_arg_val<uint32_t>(rt_args++);
+        uint32_t page_end = get_arg_val<uint32_t>(rt_args++);
+        uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
+        uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
+
+        fill_zero_buffer(zi_cb_id);
+        uint32_t zero_buf = get_write_ptr(zi_cb_id);
+
+        zero_pages(zero_buf, page_start, page_end, aligned_output_page_size, output_addr_gen);
+
+        volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
+        noc_semaphore_wait(zi_done_sem_ptr, num_idle_cores);
+        noc_semaphore_set(zi_done_sem_ptr, 0);
     }
 #endif
 
-    // Signal writer that zero-init is complete (or skipped for non-core-0)
+    // Signal writer that zero-init is complete
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
     noc_semaphore_set(zero_init_sem_ptr, 1);
