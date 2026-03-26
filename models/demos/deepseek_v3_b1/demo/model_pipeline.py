@@ -90,6 +90,7 @@ class ModelPipeline:
                 write_fn=self.pipeline.write_token,
                 read_fn=self.pipeline.read_output,
                 batch_size=1,
+                pipeline_depth=config.num_stages,
             )
         logger.info(f"Created ModelPipeline for mesh id {self.pipeline.my_mesh_id}.")
 
