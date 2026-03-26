@@ -149,17 +149,21 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
     optimizer_cfg.lr = 3e-4F;
     optimizer_cfg.weight_decay = 1e-2F;
 
+    constexpr uint32_t kFeaturesSeedBase = 2026U;
+    constexpr uint32_t kTargetsSeedBase = 3039U;
     const size_t token_count = static_cast<size_t>(batch_size) * cfg.sequence_length;
-    auto features_host = make_random_tokens(token_count, model_cfg.vocab_size, 2026U + batch_size + num_blocks);
-    auto targets_host = make_random_tokens(token_count, model_cfg.vocab_size, 3039U + batch_size + num_blocks);
+    const auto features_host =
+        make_random_tokens(token_count, model_cfg.vocab_size, kFeaturesSeedBase + batch_size + num_blocks);
+    const auto targets_host =
+        make_random_tokens(token_count, model_cfg.vocab_size, kTargetsSeedBase + batch_size + num_blocks);
     const ttnn::Shape features_shape({batch_size, 1, 1, cfg.sequence_length});
     const ttnn::Shape targets_shape({batch_size, cfg.sequence_length});
 
-    auto make_batch = [&]() {
+    const auto make_batch = [&]() {
         auto* const dev = &ttml::autograd::ctx().get_device();
-        auto features = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        const auto features = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
             features_host, features_shape, dev, ttnn::Layout::ROW_MAJOR));
-        auto targets = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        const auto targets = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
             targets_host, targets_shape, dev, ttnn::Layout::ROW_MAJOR));
         return std::pair{features, targets};
     };
@@ -169,7 +173,7 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
     // Memory pass: mirror nano_gpt first-iteration summary semantics.
     ttml::utils::MemoryUsageTracker::clear();
     {
-        auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
+        const auto guard = ttml::utils::MemoryUsageTracker::begin_capture();
         (void)guard;
 
         auto model_mem = ttml::models::llama::create(model_cfg);
@@ -178,10 +182,10 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
         auto optimizer_mem = std::make_shared<ttml::optimizers::AdamW>(model_mem->parameters(), optimizer_cfg);
         ttml::utils::MemoryUsageTracker::snapshot("OPTIMIZER_CREATION");
 
-        auto run_step_with_snapshots = [&](double& step_ms) {
+        const auto run_step_with_snapshots = [&](double& step_ms) {
             auto [features, targets] = make_batch();
             auto* const dev = &ttml::autograd::ctx().get_device();
-            auto t0 = std::chrono::high_resolution_clock::now();
+            const auto t0 = std::chrono::high_resolution_clock::now();
             optimizer_mem->zero_grad();
             auto logits = (*model_mem)(features, std::nullopt);
             ttml::utils::MemoryUsageTracker::snapshot("FORWARD_PASS");
@@ -190,7 +194,7 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
             ttml::utils::MemoryUsageTracker::snapshot("BACKWARD_PASS");
             optimizer_mem->step();
             tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
-            auto t1 = std::chrono::high_resolution_clock::now();
+            const auto t1 = std::chrono::high_resolution_clock::now();
             ttml::autograd::ctx().reset_graph();
             step_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
         };
@@ -210,17 +214,17 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
         auto model_timed = ttml::models::llama::create(model_cfg);
         auto optimizer_timed = std::make_shared<ttml::optimizers::AdamW>(model_timed->parameters(), optimizer_cfg);
 
-        auto run_step_timed = [&]() -> double {
+        const auto run_step_timed = [&]() -> double {
             auto [features, targets] = make_batch();  // mimic dataloader/collate outside timing region
             auto* const dev = &ttml::autograd::ctx().get_device();
-            auto t0 = std::chrono::high_resolution_clock::now();
+            const auto t0 = std::chrono::high_resolution_clock::now();
             optimizer_timed->zero_grad();
             auto logits = (*model_timed)(features, std::nullopt);
             auto loss = ttml::ops::cross_entropy_loss(logits, targets);
             loss->backward();
             optimizer_timed->step();
             tt::tt_metal::distributed::Synchronize(dev, std::nullopt);
-            auto t1 = std::chrono::high_resolution_clock::now();
+            const auto t1 = std::chrono::high_resolution_clock::now();
             ttml::autograd::ctx().reset_graph();
             return std::chrono::duration<double, std::milli>(t1 - t0).count();
         };
@@ -228,7 +232,7 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
         const uint32_t max_steps = cfg.num_warmup + cfg.num_measure;
         for (uint32_t step = 0; step < max_steps; ++step) {
             const bool is_measured = step >= cfg.num_warmup;
-            double step_ms = run_step_timed();
+            const double step_ms = run_step_timed();
             if (is_measured) {
                 result.step_times.push_back(step_ms);
             }
@@ -309,7 +313,7 @@ int main() {
         }
         const auto& models = all_models();
 
-        const auto mesh = tt::tt_metal::distributed::MeshShape(1, 1);
+        const tt::tt_metal::distributed::MeshShape mesh(1, 1);
         ttml::autograd::ctx().open_device(mesh);
 
         fmt::print("SwiGLU training-like benchmark (composite baseline vs fused)\n");

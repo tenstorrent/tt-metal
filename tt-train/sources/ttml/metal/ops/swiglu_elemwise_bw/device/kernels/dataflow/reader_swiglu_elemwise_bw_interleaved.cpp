@@ -32,7 +32,7 @@ void kernel_main() {
     for (uint32_t r = start_row; r < end_row; ++r) {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             const uint32_t row_tile_idx = (r * Wt) + c;
-            const uint32_t current_block_size = (c + block_size <= Wt) ? block_size : (Wt - c);
+            const uint32_t current_block_size = std::min(block_size, Wt - c);
 
             read_tiles_by_row<false>(
                 cb_linear1_idx, linear1_gen, row_tile_idx, current_block_size, tile_bytes, block_size);
