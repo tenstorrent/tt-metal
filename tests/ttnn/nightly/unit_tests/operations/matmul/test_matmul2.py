@@ -13,7 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
 
 
 @pytest.mark.parametrize("batch", [16, 96])
@@ -108,6 +108,14 @@ def test_matmul_1d_in0_batched(
 
         tt_out = tt2torch_tensor(output_t)
         output_t.deallocate()
+        if activations_dtype == ttnn.bfloat4_b or weights_dtype == ttnn.bfloat4_b:
+            test_dtype_str = "bfloat4"
+        elif activations_dtype == ttnn.bfloat8_b or weights_dtype == ttnn.bfloat8_b:
+            test_dtype_str = "bfloat8"
+        elif activations_dtype == ttnn.bfloat16 or weights_dtype == ttnn.bfloat16:
+            test_dtype_str = "bfloat16"
+        else:
+            test_dtype_str = "float32"
         test_name = f"test_matmul_1d_in0_batched[batch={batch},in0_sharded={in0_sharded},out_sharded={out_sharded},M={M},N={N},activations_dtype={activations_dtype},weights_dtype={weights_dtype},num_loops={num_loops}]"
         collect_and_dump_numeric_metrics(
             pt_out,
@@ -116,7 +124,9 @@ def test_matmul_1d_in0_batched(
             csv_filename="test_matmul2_nightly_numeric_results.csv",
             test_params=None,
             k=K,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
+            input1_condition_number=_cond(in0),
+            input2_condition_number=_cond(in1),
         )
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
@@ -444,6 +454,14 @@ def test_matmul_1d_fp32_input_output(
 
         tt_out = tt2torch_tensor(output_t)
 
+        if activations_dtype == ttnn.bfloat4_b or weights_dtype == ttnn.bfloat4_b:
+            test_dtype_str = "bfloat4"
+        elif activations_dtype == ttnn.bfloat8_b or weights_dtype == ttnn.bfloat8_b:
+            test_dtype_str = "bfloat8"
+        elif activations_dtype == ttnn.bfloat16 or weights_dtype == ttnn.bfloat16:
+            test_dtype_str = "bfloat16"
+        else:
+            test_dtype_str = "float32"
         test_name = f"test_matmul_1d_fp32_input_output[packer_l1_acc={packer_l1_acc},fp32_acc_mode={fp32_acc_mode},batch={batch},in0_sharded={in0_sharded},out_sharded={out_sharded},M={M},N={N},activations_dtype={activations_dtype},weights_dtype={weights_dtype},num_loops={num_loops}]"
         collect_and_dump_numeric_metrics(
             pt_out,
@@ -452,7 +470,9 @@ def test_matmul_1d_fp32_input_output(
             csv_filename="test_matmul2_nightly_numeric_results.csv",
             test_params=None,
             k=K,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
+            input1_condition_number=_cond(in0),
+            input2_condition_number=_cond(in1),
         )
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
@@ -566,6 +586,14 @@ def test_matmul_no_mcast_fp32_input_output(
 
         tt_out = tt2torch_tensor(output_t)
 
+        if activations_dtype == ttnn.bfloat4_b:
+            test_dtype_str = "bfloat4"
+        elif activations_dtype == ttnn.bfloat8_b:
+            test_dtype_str = "bfloat8"
+        elif activations_dtype == ttnn.bfloat16:
+            test_dtype_str = "bfloat16"
+        else:
+            test_dtype_str = "float32"
         test_name = f"test_matmul_no_mcast_fp32_input_output[packer_l1_acc={packer_l1_acc},fp32_acc_mode={fp32_acc_mode},in0_sharded={in0_sharded},in1_sharded={in1_sharded},out_sharded={out_sharded},B={B},H={H},M={M},K={K},N={N},out_subblock_h={out_subblock_h},out_subblock_w={out_subblock_w},activations_dtype={activations_dtype},num_loops={num_loops}]"
         collect_and_dump_numeric_metrics(
             pt_out,
@@ -574,7 +602,9 @@ def test_matmul_no_mcast_fp32_input_output(
             csv_filename="test_matmul2_nightly_numeric_results.csv",
             test_params=None,
             k=K,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
+            input1_condition_number=_cond(in0),
+            input2_condition_number=_cond(in1),
         )
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)

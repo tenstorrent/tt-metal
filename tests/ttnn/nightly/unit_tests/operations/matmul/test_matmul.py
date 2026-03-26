@@ -9,7 +9,7 @@ import math
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
 
 
 @pytest.mark.parametrize(
@@ -105,6 +105,14 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
         )
 
     output_tensor = ttnn.to_torch(output_tensor)
+    if dtype == ttnn.bfloat4_b:
+        test_dtype_str = "bfloat4"
+    elif dtype == ttnn.bfloat8_b:
+        test_dtype_str = "bfloat8"
+    elif dtype == ttnn.bfloat16:
+        test_dtype_str = "bfloat16"
+    else:
+        test_dtype_str = "float32"
     test_name = f"test_sd_matmul[batch_size={batch_size},channel_a={channel_a},channel_b={channel_b},m_size={m_size},k_size={k_size},n_size={n_size},has_bias={has_bias},dtype={dtype}]"
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
@@ -113,7 +121,9 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
         csv_filename="test_matmul_nightly_numeric_results.csv",
         test_params=None,
         k=k_size,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_input_tensor_a),
+        input2_condition_number=_cond(torch_input_tensor_b),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
 
@@ -199,6 +209,7 @@ def test_sdxl_matmul(
 
     if not perf_test_mode:
         output_tensor = ttnn.to_torch(output_tensor)
+        test_dtype_str = "bfloat8"
         test_name = f"test_sdxl_matmul[core_grid={core_grid},M={M},K={K},N={N},in0_block_w={in0_block_w},out_subblock_h={out_subblock_h},out_subblock_w={out_subblock_w},per_core_M={per_core_M},per_core_N={per_core_N},has_gelu={has_gelu}]"
         collect_and_dump_numeric_metrics(
             torch_output_tensor,
@@ -207,6 +218,8 @@ def test_sdxl_matmul(
             csv_filename="test_matmul_nightly_numeric_results.csv",
             test_params=None,
             k=K,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
+            input1_condition_number=_cond(torch_act),
+            input2_condition_number=_cond(torch_weights),
         )
         assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)

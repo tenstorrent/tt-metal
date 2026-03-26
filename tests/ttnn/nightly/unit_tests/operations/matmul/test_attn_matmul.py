@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.utility_functions import comp_pcc
 import ttnn
-from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
 
 
 def generate_input_shapes():
@@ -62,6 +62,14 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
 
             # Extract K from input shapes: input_shape_a = [q_len, q_heads, batch, K], input_shape_b = [batch, kv_heads, K, seq_len]
             K = input_shape_a[-1]
+            if in0_dtype == ttnn.bfloat4_b or in1_dtype == ttnn.bfloat4_b or out_dtype == ttnn.bfloat4_b:
+                test_dtype_str = "bfloat4"
+            elif in0_dtype == ttnn.bfloat8_b or in1_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
+                test_dtype_str = "bfloat8"
+            elif in0_dtype == ttnn.bfloat16 or in1_dtype == ttnn.bfloat16 or out_dtype == ttnn.bfloat16:
+                test_dtype_str = "bfloat16"
+            else:
+                test_dtype_str = "float32"
             test_name = f"test_attn_matmul[num_loops={num_loops},in0_dtype={in0_dtype},in1_dtype={in1_dtype},out_dtype={out_dtype},input_shape_a={input_shape_a},input_shape_b={input_shape_b}]"
             collect_and_dump_numeric_metrics(
                 golden_output_tensor,
@@ -70,7 +78,9 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
                 csv_filename="test_attn_matmul_nightly_numeric_results.csv",
                 test_params=None,
                 k=K,
-                test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+                test_dtype=test_dtype_str,
+                input1_condition_number=_cond(input_tensor_a),
+                input2_condition_number=_cond(input_tensor_b),
             )
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
@@ -113,6 +123,14 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
 
             # Extract K from input shapes: input_shape_a = [q_len, q_heads, batch, K], input_shape_b = [batch, kv_heads, K, seq_len]
             K = input_shape_a[-1]
+            if in_dtype == ttnn.bfloat4_b:
+                test_dtype_str = "bfloat4"
+            elif in_dtype == ttnn.bfloat8_b:
+                test_dtype_str = "bfloat8"
+            elif in_dtype == ttnn.bfloat16:
+                test_dtype_str = "bfloat16"
+            else:
+                test_dtype_str = "float32"
             test_name = f"test_attn_matmul_fp32[num_loops={num_loops},in_dtype={in_dtype},input_shape_a={input_shape_a},input_shape_b={input_shape_b}]"
             collect_and_dump_numeric_metrics(
                 golden_output_tensor,
@@ -121,7 +139,9 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
                 csv_filename="test_attn_matmul_nightly_numeric_results.csv",
                 test_params=None,
                 k=K,
-                test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+                test_dtype=test_dtype_str,
+                input1_condition_number=_cond(input_tensor_a),
+                input2_condition_number=_cond(input_tensor_b),
             )
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
@@ -156,6 +176,14 @@ def test_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, out_dty
 
             # Extract K from input shapes: input_shape_a = [q_len, q_heads, batch, K], input_shape_b = [batch, kv_heads, K, seq_len]
             K = input_shape_a[-1]
+            if in0_dtype == ttnn.bfloat4_b or in1_dtype == ttnn.bfloat4_b or out_dtype == ttnn.bfloat4_b:
+                test_dtype_str = "bfloat4"
+            elif in0_dtype == ttnn.bfloat8_b or in1_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
+                test_dtype_str = "bfloat8"
+            elif in0_dtype == ttnn.bfloat16 or in1_dtype == ttnn.bfloat16 or out_dtype == ttnn.bfloat16:
+                test_dtype_str = "bfloat16"
+            else:
+                test_dtype_str = "float32"
             test_name = f"test_attn_matmul[num_loops={num_loops},in0_dtype={in0_dtype},in1_dtype={in1_dtype},out_dtype={out_dtype},input_shape_a={input_shape_a},input_shape_b={input_shape_b}]"
             collect_and_dump_numeric_metrics(
                 golden_output_tensor,
@@ -164,7 +192,9 @@ def test_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, out_dty
                 csv_filename="test_attn_matmul_nightly_numeric_results.csv",
                 test_params=None,
                 k=K,
-                test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+                test_dtype=test_dtype_str,
+                input1_condition_number=_cond(input_tensor_a),
+                input2_condition_number=_cond(input_tensor_b),
             )
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
@@ -279,6 +309,7 @@ def test_group_attn_matmul(
         input_tensor_b = torch.repeat_interleave(input_tensor_b.to(torch.float), q_heads // kv_heads, dim=1)
         golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
+        test_dtype_str = "bfloat8"
         test_name = f"test_group_attn_matmul[num_loops={num_loops},batch={batch},K={K},seq_len={seq_len},q_heads={q_heads},kv_heads={kv_heads},in0_sharded={in0_sharded},in1_sharded={in1_sharded},output_sharded={output_sharded},shard_orientation={shard_orientation}]"
         collect_and_dump_numeric_metrics(
             golden_output_tensor,
@@ -287,7 +318,9 @@ def test_group_attn_matmul(
             csv_filename="test_attn_matmul_nightly_numeric_results.csv",
             test_params=None,
             k=K,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
+            input1_condition_number=_cond(input_tensor_a),
+            input2_condition_number=_cond(input_tensor_b),
         )
         allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
         assert allclose, f"FAILED: {output}"
@@ -374,6 +407,14 @@ def test_group_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, o
 
             # Extract K from input shapes: input_shape_a = [q_len, q_heads, batch, K], input_shape_b = [batch, kv_heads, K, seq_len]
             K = input_shape_a[-1]
+            if in0_dtype == ttnn.bfloat4_b or in1_dtype == ttnn.bfloat4_b or output_dtype == ttnn.bfloat4_b:
+                test_dtype_str = "bfloat4"
+            elif in0_dtype == ttnn.bfloat8_b or in1_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
+                test_dtype_str = "bfloat8"
+            elif in0_dtype == ttnn.bfloat16 or in1_dtype == ttnn.bfloat16 or output_dtype == ttnn.bfloat16:
+                test_dtype_str = "bfloat16"
+            else:
+                test_dtype_str = "float32"
             test_name = f"test_group_attn_matmul_with_program_cache[num_loops={num_loops},in0_dtype={in0_dtype},in1_dtype={in1_dtype},output_dtype={output_dtype},sharded={sharded},K={K},seq_len={seq_len},q_heads={q_heads},kv_heads={kv_heads}]"
             collect_and_dump_numeric_metrics(
                 golden_output_tensor,
@@ -382,7 +423,9 @@ def test_group_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, o
                 csv_filename="test_attn_matmul_nightly_numeric_results.csv",
                 test_params=None,
                 k=K,
-                test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+                test_dtype=test_dtype_str,
+                input1_condition_number=_cond(input_tensor_a),
+                input2_condition_number=_cond(input_tensor_b),
             )
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
@@ -506,6 +549,14 @@ def test_group_attn_matmul_fp32(
         input_tensor_b = torch.repeat_interleave(input_tensor_b.to(torch.float), q_heads // kv_heads, dim=1)
         golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
+        if in_dtype == ttnn.bfloat4_b:
+            test_dtype_str = "bfloat4"
+        elif in_dtype == ttnn.bfloat8_b:
+            test_dtype_str = "bfloat8"
+        elif in_dtype == ttnn.bfloat16:
+            test_dtype_str = "bfloat16"
+        else:
+            test_dtype_str = "float32"
         test_name = f"test_group_attn_matmul_fp32[num_loops={num_loops},batch={batch},K={K},seq_len={seq_len},q_heads={q_heads},kv_heads={kv_heads},in0_sharded={in0_sharded},in1_sharded={in1_sharded},output_sharded={output_sharded},shard_orientation={shard_orientation},in_dtype={in_dtype}]"
         collect_and_dump_numeric_metrics(
             golden_output_tensor,
@@ -514,7 +565,9 @@ def test_group_attn_matmul_fp32(
             csv_filename="test_attn_matmul_nightly_numeric_results.csv",
             test_params=None,
             k=K,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
+            input1_condition_number=_cond(input_tensor_a),
+            input2_condition_number=_cond(input_tensor_b),
         )
         allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
         assert allclose, f"FAILED: {output}"

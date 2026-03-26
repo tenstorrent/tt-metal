@@ -8,6 +8,17 @@ from tests.ttnn.utils_for_testing import logger, _normalize_tensor, comp_relativ
 from models.common.utility_functions import comp_pcc, comp_allclose_custom
 
 
+def _cond(t):
+    """Max condition number across batches for a >=2-D torch tensor."""
+    if t is None or not isinstance(t, torch.Tensor) or t.ndim < 2:
+        return None
+    try:
+        m = t.float().reshape(-1, t.shape[-2], t.shape[-1]) if t.ndim > 2 else t.float().unsqueeze(0)
+        return float(torch.linalg.cond(m).max().item())
+    except Exception:
+        return None
+
+
 def _get_bool_env(env_var, default):
     """Get boolean from environment variable, with default fallback."""
     value = os.environ.get(env_var, "").lower()
@@ -140,6 +151,8 @@ def collect_and_dump_numeric_metrics(
     actual,
     test_name="",
     test_dtype=None,
+    input1_condition_number=None,
+    input2_condition_number=None,
     csv_filename=None,
     csv_dir=None,
     test_params=None,
@@ -422,7 +435,7 @@ def collect_and_dump_numeric_metrics(
             writer = csv.writer(f)
             if write_header:
                 # Build header row
-                header = ["test_name", "output_dtype"]
+                header = ["test_name", "test_dtype"]
                 if test_params:
                     header.extend(test_params.keys())
                 header.extend(
@@ -460,6 +473,7 @@ def collect_and_dump_numeric_metrics(
                                 "frobenius_value_div_k",
                             ]
                         )
+                header.extend(["input1_condition_number", "input2_condition_number"])
                 writer.writerow(header)
 
             # Build data row
@@ -503,6 +517,12 @@ def collect_and_dump_numeric_metrics(
                             f"{frob_val / k:.6e}",
                         ]
                     )
+            row.extend(
+                [
+                    f"{float(input1_condition_number):.6e}" if input1_condition_number is not None else "",
+                    f"{float(input2_condition_number):.6e}" if input2_condition_number is not None else "",
+                ]
+            )
             # print(row)
             writer.writerow(row)
 

@@ -13,7 +13,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.matmul.test_matmul import pad_to_dram_banks
 from models.common.utility_functions import comp_pcc, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
 
 
 # numeric_check : comparison not necessary
@@ -414,6 +414,8 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
         test_params=None,
         k=k,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(in0),
+        input2_condition_number=_cond(in1),
     )
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
@@ -651,6 +653,8 @@ def test_matmul_batched_dram_sharded(device, test_case):
         test_params=None,
         k=k,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(in0_orig),
+        input2_condition_number=_cond(in1_orig),
     )
     assert pcc_passed
 
@@ -789,6 +793,8 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
             test_params=None,
             k=k,
             test_dtype=test_dtype_str,
+            input1_condition_number=_cond(in0_orig),
+            input2_condition_number=_cond(in1_orig),
         )
         assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
@@ -1076,6 +1082,8 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
     test_name = f"test_prefill_mm_interleaved_sharded[test_case={test_case},seq_len={seq_len}]"
 
     test_dtype_str = "bfloat8" if (in1_dtype == ttnn.bfloat8_b) else "bfloat16"
+    cond_in0 = in0 if batch == 1 else in0_orig
+    cond_in1 = in1 if batch == 1 else in1_orig
     collect_and_dump_numeric_metrics(
         pt_out,
         output_tensor,
@@ -1084,5 +1092,7 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
         test_params=None,
         k=k,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(cond_in0),
+        input2_condition_number=_cond(cond_in1),
     )
     assert pcc_passed, f"PCC check failed: {pcc_message}"

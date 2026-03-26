@@ -18,7 +18,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
 from models.common.utility_functions import is_wormhole_b0, is_blackhole
 from loguru import logger
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
-from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
 
 
 @pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
@@ -211,6 +211,7 @@ def test_bert_linear_batch7(
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 
+    test_dtype_str = "bfloat8"
     test_name = f"test_bert_linear_batch7[fidelity={fidelity},in0_sharded={in0_sharded},out_sharded={out_sharded},in1_in_dram={in1_in_dram},has_bias={has_bias},fp32_acc_mode={fp32_acc_mode},packer_l1_acc={packer_l1_acc},M={M},K={K},N={N},activation={activation}]"
     collect_and_dump_numeric_metrics(
         pt_out,
@@ -219,7 +220,9 @@ def test_bert_linear_batch7(
         csv_filename="test_bert_matmuls_nightly_numeric_results.csv",
         test_params=None,
         k=K,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
+        input1_condition_number=_cond(in0),
+        input2_condition_number=_cond(in1),
     )
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -350,6 +353,7 @@ def run_bert_linear_batch4(
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 
+    test_dtype_str = "bfloat8"
     test_name = f"run_bert_linear_batch4[in0_sharded={in0_sharded},out_sharded={out_sharded},in1_in_dram={in1_in_dram},M={M},K={K},N={N},fidelity={fidelity},has_bias={has_bias},activation={activation},packer_l1_acc={packer_l1_acc},fp32_acc_mode={fp32_acc_mode}]"
     collect_and_dump_numeric_metrics(
         pt_out,
@@ -358,7 +362,9 @@ def run_bert_linear_batch4(
         csv_filename="test_bert_matmuls_nightly_numeric_results.csv",
         test_params=None,
         k=K,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
+        input1_condition_number=_cond(in0),
+        input2_condition_number=_cond(in1),
     )
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -583,6 +589,7 @@ def test_bert_linear_batch4_fp32_input_output(
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 
+    test_dtype_str = "float32"
     test_name = f"test_bert_linear_fp32[fidelity={fidelity},has_bias={has_bias},fp32_acc_mode={fp32_acc_mode},packer_l1_acc={packer_l1_acc},M={M},K={K},N={N},activation={activation}]"
     collect_and_dump_numeric_metrics(
         pt_out,
@@ -591,7 +598,9 @@ def test_bert_linear_batch4_fp32_input_output(
         csv_filename="test_bert_matmuls_nightly_numeric_results.csv",
         test_params=None,
         k=K,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
+        input1_condition_number=_cond(in0),
+        input2_condition_number=_cond(in1),
     )
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)

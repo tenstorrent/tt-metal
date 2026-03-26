@@ -17,7 +17,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
 from tt_lib.utils import (
     pad_weight,
     tilize_to_list,
@@ -185,6 +185,11 @@ def run_test_matmul_in1_dram_sharded(
 
     tt_out = tt2torch_tensor(output_t)
 
+    test_dtype_str = (
+        "bfloat4"
+        if ttnn.bfloat4_b in [in0_dtype, in1_dtype, out_dtype]
+        else ("bfloat8" if ttnn.bfloat8_b in [in0_dtype, in1_dtype, out_dtype] else "bfloat16")
+    )
     test_name = f"run_test_matmul_in1_dram_sharded[in0_sharded={in0_sharded},out_sharded={out_sharded},in1_in_dram={in1_in_dram},M={M},K={K},N={N},fidelity={fidelity},packer_l1_acc={packer_l1_acc},has_bias={has_bias},activation={activation},grid_size={grid_size},in0_dtype={in0_dtype},in1_dtype={in1_dtype},out_dtype={out_dtype}]"
     collect_and_dump_numeric_metrics(
         pt_out,
@@ -193,7 +198,9 @@ def run_test_matmul_in1_dram_sharded(
         csv_filename="test_matmul_dram_sharded_nightly_numeric_results.csv",
         test_params=None,
         k=K,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
+        input1_condition_number=_cond(in0),
+        input2_condition_number=_cond(in1),
     )
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)

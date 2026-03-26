@@ -12,7 +12,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
 
 
 @pytest.mark.parametrize("mkn", [(16, 128, 512)])
@@ -117,6 +117,8 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, t
             test_params=None,
             k=k,
             test_dtype=test_dtype_str,
+            input1_condition_number=_cond(in0_batch),
+            input2_condition_number=_cond(in1_batch),
         )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
 
@@ -223,6 +225,8 @@ def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_batches, tile_h
             test_params=None,
             k=k,
             test_dtype=test_dtype_str,
+            input1_condition_number=_cond(in0_batch),
+            input2_condition_number=_cond(in1_batch),
         )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
 
@@ -332,6 +336,8 @@ def test_batched_sparse_matmul_with_nnz(device, mkn, num_experts, tile_h, tile_w
             test_params=None,
             k=k,
             test_dtype=test_dtype_str,
+            input1_condition_number=_cond(in0_batch),
+            input2_condition_number=_cond(in1_batch),
         )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, :, :], expected_pcc)
 
@@ -436,6 +442,8 @@ def test_batched_sparse_matmul_without_nnz(device, mkn, num_experts, tile_h, til
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
             test_dtype=test_dtype_str,
+            input1_condition_number=_cond(in0_batch),
+            input2_condition_number=_cond(in1_batch),
         )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, :, :], expected_pcc)
 
@@ -546,6 +554,8 @@ def test_sparse_matmul_inputA_with_nnz(device, mkn, num_experts, num_batches, ti
             test_params=None,
             k=k,
             test_dtype=test_dtype_str,
+            input1_condition_number=_cond(in0_batch),
+            input2_condition_number=_cond(in1_batch),
         )
         assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)
 
@@ -652,5 +662,7 @@ def test_sparse_matmul_inputA_without_nnz(device, mkn, num_experts, num_batches,
             test_params=None,
             k=k,
             test_dtype=test_dtype_str,
+            input1_condition_number=_cond(in0_batch),
+            input2_condition_number=_cond(in1_batch),
         )
         assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)

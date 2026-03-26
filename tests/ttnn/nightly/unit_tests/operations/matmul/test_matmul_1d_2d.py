@@ -11,7 +11,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
 
 
 def find_max_subblock(out_block_h, out_block_w):
@@ -163,6 +163,7 @@ def test_llama2_matmul(
 
     tt_out = tt2torch_tensor(output_t)
 
+    test_dtype_str = "bfloat8"
     test_name = f"test_llama2_matmul[in1_in_dram={in1_in_dram},out_sharded={out_sharded},in0_sharded={in0_sharded},M={M},K={K},N={N},activation={activation},grid_size={grid_size},fidelity={fidelity},has_bias={has_bias},packer_l1_acc={packer_l1_acc},fp32_acc_mode={fp32_acc_mode}]"
     collect_and_dump_numeric_metrics(
         pt_out,
@@ -171,7 +172,9 @@ def test_llama2_matmul(
         csv_filename="test_matmul_1d_2d_nightly_numeric_results.csv",
         test_params=None,
         k=K,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
+        input1_condition_number=_cond(in0),
+        input2_condition_number=_cond(in1),
     )
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -502,6 +505,14 @@ def test_multi_core_matmul_2d_wh(
         pt_out = torch.nn.functional.gelu(pt_out)
     tt_out = tt2torch_tensor(output_t)
 
+    if dtype == ttnn.bfloat4_b:
+        test_dtype_str = "bfloat4"
+    elif dtype == ttnn.bfloat8_b:
+        test_dtype_str = "bfloat8"
+    elif dtype == ttnn.bfloat16:
+        test_dtype_str = "bfloat16"
+    else:
+        test_dtype_str = "float32"
     test_name = f"test_multi_core_matmul_2d_wh[dtype={dtype},fidelity={fidelity},in0_sharded={in0_sharded},out_sharded={out_sharded},in1_in_dram={in1_in_dram},has_bias={has_bias},fp32_acc_mode={fp32_acc_mode},packer_l1_acc={packer_l1_acc},M={M},K={K},N={N},activation={activation}]"
     collect_and_dump_numeric_metrics(
         pt_out,
@@ -510,7 +521,9 @@ def test_multi_core_matmul_2d_wh(
         csv_filename="test_matmul_1d_2d_nightly_numeric_results.csv",
         test_params=None,
         k=K,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
+        input1_condition_number=_cond(in0),
+        input2_condition_number=_cond(in1),
     )
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
@@ -809,6 +822,14 @@ def test_multi_core_matmul_1d_wh(
 
     tt_out = tt2torch_tensor(output_t)
 
+    if dtype == ttnn.bfloat4_b:
+        test_dtype_str = "bfloat4"
+    elif dtype == ttnn.bfloat8_b:
+        test_dtype_str = "bfloat8"
+    elif dtype == ttnn.bfloat16:
+        test_dtype_str = "bfloat16"
+    else:
+        test_dtype_str = "float32"
     test_name = f"test_multi_core_matmul_1d_wh[dtype={dtype},fidelity={fidelity},in0_sharded={in0_sharded},out_sharded={out_sharded},in1_in_dram={in1_in_dram},has_bias={has_bias},fp32_acc_mode={fp32_acc_mode},packer_l1_acc={packer_l1_acc},M={M},K={K},N={N},activation={activation}]"
     collect_and_dump_numeric_metrics(
         pt_out,
@@ -817,7 +838,9 @@ def test_multi_core_matmul_1d_wh(
         csv_filename="test_matmul_1d_2d_nightly_numeric_results.csv",
         test_params=None,
         k=K,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
+        input1_condition_number=_cond(in0),
+        input2_condition_number=_cond(in1),
     )
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)

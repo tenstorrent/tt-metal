@@ -13,7 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
 import random
 import math
 from tracy import signpost
@@ -367,6 +367,14 @@ def run_multi_core_matmul_1d(
         act_fnc = torch.nn.functional.silu if activation == ttnn.UnaryOpType.SILU else torch.nn.functional.relu
         pt_out = act_fnc(pt_out)
 
+    if in0_dtype == ttnn.bfloat4_b or in1_dtype == ttnn.bfloat4_b or output_dtype == ttnn.bfloat4_b:
+        test_dtype_str = "bfloat4"
+    elif in0_dtype == ttnn.bfloat8_b or in1_dtype == ttnn.bfloat8_b or output_dtype == ttnn.bfloat8_b:
+        test_dtype_str = "bfloat8"
+    elif in0_dtype == ttnn.bfloat16 or in1_dtype == ttnn.bfloat16 or output_dtype == ttnn.bfloat16:
+        test_dtype_str = "bfloat16"
+    else:
+        test_dtype_str = "float32"
     test_name = f"run_multi_core_matmul_1d[in0_dtype={in0_dtype},in1_dtype={in1_dtype},fidelity={fidelity},has_bias={has_bias},fp32_acc_mode={fp32_acc_mode},packer_l1_acc={packer_l1_acc},B={B},M={M},K={K},N={N},activation={activation},grid={grid},use_arbitrary_cores={use_arbitrary_cores},num_iters={num_iters},output_dtype={output_dtype},max_dst_tiles={max_dst_tiles},pcc_threshold={pcc_threshold},use_physical_to_logical_mapping={use_physical_to_logical_mapping},hop_grid={hop_grid},in1_is_dram_interleaved={in1_is_dram_interleaved},in1_is_in_dram={in1_is_in_dram},untilize_out={untilize_out}]"
     collect_and_dump_numeric_metrics(
         pt_out,
@@ -375,7 +383,9 @@ def run_multi_core_matmul_1d(
         csv_filename="test_matmul_1d_gather_in0_nightly_numeric_results.csv",
         test_params=None,
         k=K,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
+        input1_condition_number=_cond(in0),
+        input2_condition_number=_cond(in1),
     )
     passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
     logger.info(output)

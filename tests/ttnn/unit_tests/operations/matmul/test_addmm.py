@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
 
 pytestmark = pytest.mark.use_module_device
 
@@ -60,6 +60,8 @@ def test_addmm_square_matrices(device, dtype, matrix_size):
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=matrix_size,
+        input1_condition_number=_cond(torch_mat1_tensor),
+        input2_condition_number=_cond(torch_mat2_tensor),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
@@ -114,6 +116,8 @@ def test_addmm_with_alpha_beta(device, dtype, matrix_size, alpha, beta):
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=matrix_size,
+        input1_condition_number=_cond(torch_mat1_tensor),
+        input2_condition_number=_cond(torch_mat2_tensor),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
@@ -181,6 +185,8 @@ def test_addmm_rectangular_matrices(device, dtype, matrix_dims):
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=m,
+        input1_condition_number=_cond(torch_mat1_tensor),
+        input2_condition_number=_cond(torch_mat2_tensor),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
@@ -251,6 +257,8 @@ def test_vector_matrix_multiplication(device, dtype, size, case_type):
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=m,
+        input1_condition_number=_cond(torch_mat1_tensor),
+        input2_condition_number=_cond(torch_mat2_tensor),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
@@ -319,6 +327,8 @@ def test_addmm_non_tile_multiple_dimensions(device, dtype, shape):
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=m,
+        input1_condition_number=_cond(torch_mat1_tensor),
+        input2_condition_number=_cond(torch_mat2_tensor),
     )
     assert_with_pcc(torch_output_tensor, output_tensor_torch, pcc=target_pcc)
 
@@ -548,6 +558,8 @@ def test_addmm_with_output_tensor_inplace_op(device, dtype):
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=32,
+        input1_condition_number=_cond(torch_mat1_tensor),
+        input2_condition_number=_cond(torch_mat2_tensor),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
     assert_with_pcc(torch_output_tensor, out_tensor, pcc=target_pcc)
@@ -606,6 +618,8 @@ def test_addmm_with_output_tensor_inplace_op_with_different_dtype(device):
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=32,
+        input1_condition_number=_cond(torch_mat1_tensor),
+        input2_condition_number=_cond(torch_mat2_tensor),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
     assert_with_pcc(torch_output_tensor, out_tensor, pcc=0.9999)

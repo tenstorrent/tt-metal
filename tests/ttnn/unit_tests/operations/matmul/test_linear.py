@@ -10,7 +10,7 @@ from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.common.utility_functions import torch_random
-from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics, _cond
 
 pytestmark = pytest.mark.use_module_device
 
@@ -83,6 +83,8 @@ def test_linear(
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
         k=k_size,
+        input1_condition_number=_cond(torch_input_tensor_a),
+        input2_condition_number=_cond(torch_input_tensor_b),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
@@ -160,6 +162,8 @@ def test_linear_with_core_grid(
         test_params=None,
         k=k_size,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_input_tensor_a),
+        input2_condition_number=_cond(torch_input_tensor_b),
     )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
@@ -198,6 +202,8 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
         test_params=None,
         k=k_size,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_input_tensor_a),
+        input2_condition_number=_cond(torch_input_tensor_b),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -248,6 +254,8 @@ def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_s
         test_params=None,
         k=k_size,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_input_tensor_a),
+        input2_condition_number=_cond(torch_input_tensor_b),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -287,6 +295,8 @@ def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_siz
         test_params=None,
         k=k_size,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_input_tensor_a),
+        input2_condition_number=_cond(torch_input_tensor_b),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -330,6 +340,8 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
         test_params=None,
         k=k_size,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_input_tensor_a),
+        input2_condition_number=_cond(torch_input_tensor_b),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -380,6 +392,8 @@ def test_bloom_ff2_linear(device):
         test_params=None,
         k=4096,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_input_tensor),
+        input2_condition_number=_cond(torch_weight),
     )
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9992
 
@@ -437,6 +451,8 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
         test_params=None,
         k=k_size,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_input_tensor_a),
+        input2_condition_number=_cond(torch_input_tensor_b),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
     assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.997)
@@ -481,6 +497,8 @@ def test_linear_with_fp32_dest_acc_and_bias(device):
         test_params=None,
         k=384,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_input_tensor_a),
+        input2_condition_number=_cond(torch),
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -562,6 +580,8 @@ def test_resnet50_linear(device):
         test_params=None,
         k=2048,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_input_tensor),
+        input2_condition_number=_cond(torch_weight_tensor),
     )
     assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
 
@@ -662,6 +682,8 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
         test_params=None,
         k=k_value,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_a),
+        input2_condition_number=_cond(torch_weight),
     )
     assert_with_pcc(torch_result, ttnn_result_torch, 0.99)
 
@@ -794,6 +816,8 @@ def test_linear_yolov7(
         test_params=None,
         k=512,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_input_tensor),
+        input2_condition_number=_cond(torch_weight_tensor),
     )
     assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
 
@@ -896,6 +920,8 @@ def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose
             test_params=None,
             k=k_size,
             test_dtype=test_dtype_str,
+            input1_condition_number=_cond(torch_input_a),
+            input2_condition_number=_cond(torch_input_b),
         )
         assert_with_pcc(torch_output, output, 0.999)
     finally:
@@ -941,6 +967,8 @@ def test_linear_on_subdevice_variable_start_row(device, m_size, k_size, n_size, 
             test_params=None,
             k=k_size,
             test_dtype=test_dtype_str,
+            input1_condition_number=_cond(torch_input_a),
+            input2_condition_number=_cond(torch_input_b),
         )
         assert_with_pcc(torch_output, output, 0.999)
     finally:
@@ -1003,5 +1031,7 @@ def test_linear_bias_cb_estimation_with_large_n_small_k(device, batch_size, seq_
         test_params=None,
         k=k_size,
         test_dtype=test_dtype_str,
+        input1_condition_number=_cond(torch_input_a),
+        input2_condition_number=_cond(torch_input_b),
     )
     assert_with_pcc(torch_output, output, 0.99)
