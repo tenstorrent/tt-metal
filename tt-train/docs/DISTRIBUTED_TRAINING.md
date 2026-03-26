@@ -736,18 +736,11 @@ This section describes the **rule-based layout and dispatch layer** used for Pyt
 
 ### How to Use the Infrastructure
 
-1. **Activate dispatch** (once, before creating the model):
+1. **Define a parallelize plan**: map module name patterns to a style. Use exact names or regex; regex is matched with `re.fullmatch` against the module path (e.g. `"layers.0.attention.q_linear"`).
 
    ```python
-   import ttml.distributed
-   from ttml.distributed import init_ops, parallelize_module, ColwiseParallel, RowwiseParallel
+   from ttml.distributed import parallelize_module, ColwiseParallel, RowwiseParallel
 
-   init_ops()  # Patch ttml.ops.* so linear, matmul, etc. go through dispatch
-   ```
-
-2. **Define a parallelize plan**: map module name patterns to a style. Use exact names or regex; regex is matched with `re.fullmatch` against the module path (e.g. `"layers.0.attention.q_linear"`).
-
-   ```python
    LLAMA_TP_PLAN = {
        r".*\.(q_linear|kv_linear|w1|w3)": ColwiseParallel(),
        r".*\.(out_linear|w2)": RowwiseParallel(),
@@ -755,16 +748,16 @@ This section describes the **rule-based layout and dispatch layer** used for Pyt
    }
    ```
 
-3. **Parallelize the model** after construction:
+2. **Parallelize the model** after construction. `parallelize_module` automatically activates dispatch (patches `ttml.ops.*` so `linear`, `matmul`, etc. go through dispatch) and sets the mesh runtime — no separate `init_ops()` call is needed:
 
    ```python
    mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
    model = parallelize_module(model, mesh_device, LLAMA_TP_PLAN, tp_axis=1, cp_axis=0)
    ```
 
-4. **Gradient synchronization** is handled automatically by `SFTTrainer`. After each backward pass, the trainer calls `ttml.core.distributed.synchronize_gradients`, which inspects each parameter's tensor topology and all-reduces gradients along any axis where the parameter is replicated. No explicit wrapping or sync call is needed — DP and CP gradient sync works out of the box as long as parameters are replicated on the corresponding mesh axes.
+3. **Gradient synchronization** is handled automatically by `SFTTrainer`. After each backward pass, the trainer calls `ttml.core.distributed.synchronize_gradients`, which inspects each parameter's tensor topology and all-reduces gradients along any axis where the parameter is replicated. No explicit wrapping or sync call is needed — DP and CP gradient sync works out of the box as long as parameters are replicated on the corresponding mesh axes.
 
-5. **Forward/backward**: Patched ops run through dispatch; rules decide input/output layouts and collectives. No layout code in the model itself.
+4. **Forward/backward**: Patched ops run through dispatch; rules decide input/output layouts and collectives. No layout code in the model itself.
 
 See `tt-train/sources/examples/llama_tp/train_llama_distributed.py` for a full example.
 
@@ -870,9 +863,102 @@ So the rule should **not** call `distribute_linear` on sub-linears that are matc
        return module
    ```
 
-3. **Ensure the rule is loaded**: `ttml.distributed` imports `module_rules`, so any `@register_module_rule` in that package runs at import time. For a new rule in a new file, add an import in `ttml/distributed/__init__.py` or in `module_rules.py`.
+3. **Ensure the rule is loaded**: Define (or import) the rule before calling `parallelize_module`. The decorator registers into a global registry at execution time, so any file you import in your training script works — no changes to the library are needed.
 
 4. **Use the plan**: In the parallelize plan, use name patterns that match the **submodule** paths (e.g. `r".*\.q_linear"`, `r".*\.out_linear"`). `parallelize_module` calls your rule then recurses so those children receive the matching styles.
+
+### End-to-End Example: Custom Op, Rule, and Module Rule
+
+The snippet below shows how to wire a new op and a composite module together in one place, analogous to adding a custom layer in HuggingFace Transformers:
+
+```python
+# my_distributed_layer.py
+import ttml
+from ttml.distributed import parallelize_module, register_op
+from ttml.distributed.rules.registry import (
+    ShardingPlan,
+    AllReduce,
+    register_rule,
+    register_module_rule,
+)
+from ttml.distributed.layout import Layout, Shard, Replicate
+
+
+# ── 1. Raw op (wraps a ttnn / Python call) ──────────────────────────────────
+def _my_proj_raw(x, w):
+    """Row-parallel projection: expects x sharded on last dim, w sharded on rows."""
+    return ttml.ops.linear.linear_raw(x, w)   # or your ttnn call
+
+# Register under a unique name; use the returned wrapper everywhere.
+my_proj = register_op("my_proj", _my_proj_raw)
+
+
+# ── 2. Op rule: tells dispatch how inputs/outputs are sharded ───────────────
+@register_rule("my_proj")
+def _my_proj_rule(x_layout, w_layout, *, runtime=None, **kwargs):
+    """Row-parallel: x sharded on last dim → partial sums → all_reduce."""
+    tp_axis = runtime.tp_axis
+    required_x = Layout(ndim=x_layout.ndim, axis_placements={tp_axis: Shard(-1)})
+    required_w = Layout(ndim=w_layout.ndim, axis_placements={tp_axis: Shard(0)})
+    out_layout = Layout(ndim=x_layout.ndim)   # fully replicated after reduce
+    return ShardingPlan(
+        input_layouts=[required_x, required_w],
+        output_layout=out_layout,
+        post_output_collectives=[AllReduce(tp_axis)],
+    )
+
+
+# ── 3. Composite module ──────────────────────────────────────────────────────
+class MyAttentionBlock(ttml.modules.ModuleBase):
+    def __init__(self, hidden_size, num_heads):
+        super().__init__()
+        self.num_heads = num_heads
+        self.q_linear  = ttml.modules.LinearLayer(hidden_size, hidden_size)
+        self.kv_linear = ttml.modules.LinearLayer(hidden_size, hidden_size * 2)
+        self.out_linear = ttml.modules.LinearLayer(hidden_size, hidden_size)
+
+    def forward(self, x):
+        q  = ttml.ops.linear.linear(x, self.q_linear.weight)
+        kv = ttml.ops.linear.linear(x, self.kv_linear.weight)
+        # ... attention logic ...
+        return my_proj(x, self.out_linear.weight)   # uses registered op
+
+
+# ── 4. Module rule: composite-only setup (head counts, CP swap, etc.) ────────
+@register_module_rule(MyAttentionBlock)
+def _distribute_my_attention(module, mesh_device, tp_axis, cp_axis=None):
+    """Adjust head count for TP; optionally swap to ring attention for CP."""
+    if tp_axis is not None:
+        tp_size = mesh_device.shape[tp_axis]
+        module.num_heads = module.num_heads // tp_size
+    if cp_axis is not None:
+        # swap module.forward or attention op for ring variant here
+        pass
+    # Do NOT shard sub-linears here — parallelize_module recurses and applies
+    # the plan's ColwiseParallel / RowwiseParallel styles to q_linear etc.
+    return module
+
+
+# ── 5. Parallelize plan + call ───────────────────────────────────────────────
+MY_PLAN = {
+    r".*\.q_linear":   ColwiseParallel(),
+    r".*\.kv_linear":  ColwiseParallel(),
+    r".*\.out_linear": RowwiseParallel(),
+}
+
+model = MyModel(...)
+mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
+
+# parallelize_module: calls the module rule for MyAttentionBlock, then recurses
+# into children and applies ColwiseParallel / RowwiseParallel via the plan.
+# init_ops() is called automatically — no separate call needed.
+model = parallelize_module(model, mesh_device, MY_PLAN, tp_axis=1, cp_axis=0)
+```
+
+Key points:
+- **`register_op`** returns the dispatch-aware wrapper; use it instead of `ttml.ops.*` in your module.
+- **`register_rule`** must use the **same string** as `register_op`.
+- **Module rule** only does composite-specific work (head counts, ring_sdpa swap). Sub-linear sharding comes from the plan styles on recursion.
 
 ### Custom ParallelStyle
 
@@ -890,7 +976,7 @@ To define a new style (e.g. a variant of column/row parallel):
 | **Op rule** | Maps op name + input layouts → ShardingPlan (layouts + optional pre/post collectives). |
 | **Module rule** | For composite modules: called with `(module, mesh_device, tp_axis, cp_axis)`; handles TP/CP logic (e.g. head counts, rope, ring_sdpa); children get styles on recursion. |
 | **ParallelStyle** | Assignable by name pattern; applies to leaf modules (e.g. LinearLayer). Optional `get_layout` for introspection / tests. |
-| **parallelize_module** | Walks the model, applies styles by pattern and module rules by type; no layout code in user model. |
+| **parallelize_module** | Walks the model, applies styles by pattern and module rules by type; activates dispatch (`init_ops`) internally; no layout code in user model. |
 | **SFTTrainer (gradient sync)** | After each backward pass, automatically all-reduces gradients across any mesh axis where a parameter is replicated (topology-based; no explicit sync needed). |
 
 ---
