@@ -612,16 +612,16 @@ DeviceMemoryRegion::ChipStats* SharedMemoryStatsProvider::find_or_create_chip_en
     }
 
     // Not found, create new entry
-    for (size_t i = 0; i < MAX_CHIPS_PER_DEVICE; i++) {
-        if (region_->chip_stats[i].chip_id == 0) {
-            region_->chip_stats[i].chip_id = chip_id;
-            region_->chip_stats[i].is_remote = 0;  // Will be set by register_chip if needed
-            region_->chip_stats[i].dram_allocated.store(0, std::memory_order_relaxed);
-            region_->chip_stats[i].l1_allocated.store(0, std::memory_order_relaxed);
-            region_->chip_stats[i].l1_small_allocated.store(0, std::memory_order_relaxed);
-            region_->chip_stats[i].trace_allocated.store(0, std::memory_order_relaxed);
-            region_->chip_stats[i].cb_allocated.store(0, std::memory_order_relaxed);
-            return &region_->chip_stats[i];
+    for (auto & chip_stat : region_->chip_stats) {
+        if (chip_stat.chip_id == 0) {
+            chip_stat.chip_id = chip_id;
+            chip_stat.is_remote = 0;  // Will be set by register_chip if needed
+            chip_stat.dram_allocated.store(0, std::memory_order_relaxed);
+            chip_stat.l1_allocated.store(0, std::memory_order_relaxed);
+            chip_stat.l1_small_allocated.store(0, std::memory_order_relaxed);
+            chip_stat.trace_allocated.store(0, std::memory_order_relaxed);
+            chip_stat.cb_allocated.store(0, std::memory_order_relaxed);
+            return &chip_stat;
         }
     }
 
