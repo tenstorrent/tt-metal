@@ -20,10 +20,10 @@ It is inspired by Karpathy's autoresearch pattern: rather than one-shot code gen
 These are three distinct things that must not be conflated:
 
 - **Skills** — how to accomplish a task. Procedural instructions for the agent. Examples: how to profile a kernel, how to iterate toward a perf target, how to review code with TT standards.
-- **Knowledge** — stable, hardware-level facts that don't change between releases. Tensix core model, NOC topology, tile granularity, CB producer/consumer pattern. Written once and rarely updated.
+- **Knowledge** — stable, hardware-level facts that don't change between software releases. Tensix core model, NOC topology, tile granularity, CB producer/consumer pattern. Written once, rarely updated. Plus curated references: pointers to canonical examples and key documents in the codebase, organized by topic, for developers and agents to use as a starting point.
 - **Notes** — shared, evolving findings produced during work. Context briefs from tt-learn, experiment logs from tt-iterator, profiler findings, plans. Written by agents and humans alike; shared across sessions and team members.
 
-The key insight: the TT software stack evolves rapidly. API signatures, op implementations, sharding patterns — these change with every PR. **Volatile knowledge is never written down.** Instead, the `tt-learn` skill researches the live codebase on demand and writes its findings to `notes/`. Knowledge files in `knowledge/` are reserved for hardware invariants that are stable across software releases.
+The key insight: the TT software stack evolves rapidly. API signatures, op implementations, sharding patterns — these change with every PR. **Volatile knowledge is never written down.** Instead, the `tt-learn` skill researches the live codebase on demand and writes its findings to `notes/`. Knowledge files in `knowledge/hardware/` are reserved for hardware invariants that are stable across software releases. Knowledge files in `knowledge/references/` are curated pointers to canonical examples — they change slowly (examples don't move as often as implementations) and serve as the onboarding reading list for new developers and the starting point for tt-learn searches.
 
 ### Platform-Agnostic Content
 
@@ -69,31 +69,18 @@ tt-metal/
         tt-learn/                    # research codebase, write findings to notes/
       meta/
         tt-skill-creator/            # help write new TT skills
-    knowledge/                       # stable hardware invariants only
-      hardware/
-        tensix-architecture.md
-        dataflow-patterns.md
-        compute-patterns.md
-        circular-buffers.md
-      kernel/
-        quirks.md
-      operator/
-        device-operation-pattern.md
-        program-factory.md
-        sharding-strategies.md
-        data-formats.md
-        multi-core.md
-        quirks.md
-      model/
-        model-patterns.md
-        bringup-flow.md
-        optimization.md
-        perf-targets.md
-        block-extraction.md
-        quirks.md
-      ops/
-        matmul.md
-        ccl.md
+    knowledge/
+      hardware/                      # stable hardware invariants (silicon facts)
+        tensix-architecture.md       # cores, FPU, SFPU, L1, NOC topology
+        circular-buffer-model.md     # CB producer/consumer coordination primitive
+        quirks.md                    # hardware gotchas: no malloc, 32-bit, tile sizes
+      references/                    # curated pointers to canonical examples, per topic
+        operators.md                 # canonical op examples, program factory patterns
+        kernels.md                   # reader/compute/writer, kernel fusion examples
+        sharding.md                  # sharding strategies, tensor sharding deep dive
+        matmul.md                    # matmul perf analysis, matrix engine docs
+        ccl.md                       # ethernet guide, CCL op patterns
+        models.md                    # model bringup examples, inference patterns
 ```
 
 ---
@@ -127,7 +114,7 @@ What differs between them is triggering context and convergence criteria:
 | `tt-ci-fixer` | failing CI run | all tests green |
 | `tt-bisect` | regression report | first bad commit identified |
 
-`tt-iterator` is the primary autoresearch skill. It uses hardware roofline analysis (`knowledge/model/perf-targets.md`, `knowledge/ops/matmul.md`) to reason about why a result is suboptimal and what to try next. The search is guided by understanding (compute-bound vs memory-bound vs NOC-bound), not random.
+`tt-iterator` is the primary autoresearch skill. It uses hardware roofline analysis learned via `tt-learn` (starting from `knowledge/references/matmul.md` as a guide to canonical sources) to reason about why a result is suboptimal and what to try next. The search is guided by understanding (compute-bound vs memory-bound vs NOC-bound), not random.
 
 ### Tool layer
 
@@ -143,6 +130,22 @@ Concrete, single-purpose skills. Each does one thing well. Invoked by workflow s
 ### Meta layer
 
 - **`tt-skill-creator`** — helps TT developers write new skills for tt-agent. Knows the skill format, the knowledge directory structure, the "point to code not inline APIs" principle, and how to structure progressive load tables.
+
+---
+
+## Knowledge: Hardware Invariants and References
+
+`knowledge/hardware/` contains three files of stable, silicon-derived facts: the Tensix architecture (five RISC-V cores, FPU, SFPU, L1, NOC), the circular buffer coordination model, and hardware quirks (no dynamic allocation, 32-bit RISC-V, tile size constants). These are written once and updated only when the hardware changes.
+
+`knowledge/references/` contains curated pointers to canonical examples in the codebase, one file per topic. Each entry is a path and a one-line description — no content inlined. References are the onboarding reading list for new developers and the starting point for `tt-learn` searches. They change slowly (a good operator example stays a good operator example even as its internals evolve) and are easy to maintain when they do go stale (update a path, not a content block).
+
+Example entry in `knowledge/references/operators.md`:
+```
+## Canonical simple eltwise op
+ttnn/cpp/ttnn/operations/eltwise/binary/device/
+Best example of the full device operation pattern: validate, compute_output_specs,
+program factory, runtime args.
+```
 
 ---
 
