@@ -24,6 +24,25 @@ from models.demos.rvc.tt_impl.vc.utils import load_hubert
 bh, ah = signal.butter(N=5, Wn=48, btype="high", fs=16000)
 
 
+def _interpolate_1d(
+    x: ttnn.Tensor,
+    scale_factor: int | float,
+    mode: str = "nearest",
+) -> ttnn.Tensor:
+    # 1D upsample for [N, L, C] via 2D NHWC upsample with height fixed to 1.
+    if mode not in ("nearest", "linear"):
+        raise ValueError(f"Unsupported 1D interpolate mode: {mode}")
+    upsample_mode = "nearest" if mode == "nearest" else "bilinear"
+    x_nhwc = ttnn.unsqueeze(x, dim=1)
+    y_nhwc = ttnn.upsample(
+        x_nhwc,
+        [1, scale_factor],
+        mode=upsample_mode,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    return ttnn.squeeze(y_nhwc, dim=1)
+
+
 def _get_configs_dir() -> str:
     configs_dir = os.getenv("RVC_CONFIGS_DIR")
     if not configs_dir:
@@ -218,17 +237,17 @@ class Pipeline:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.tt_device,
         )
-        with torch.no_grad():
-            logits = self.hubert_model(
-                source=hubert_input,
-                output_layer=9 if self.version == "v1" else 12,
-            )
-            feats = self.hubert_model.final_proj(logits) if self.version == "v1" else logits
+        logits = self.hubert_model(
+            source=hubert_input,
+            output_layer=9 if self.version == "v1" else 12,
+        )
+        feats = self.hubert_model.final_proj(logits) if self.version == "v1" else logits
 
-        feats = ttnn.to_torch(feats).to(torch.float32)
+        feats = ttnn.to_layout(feats, ttnn.ROW_MAJOR_LAYOUT)
+        num_frames = feats.shape[1] * 2
 
         if protect < 0.5 and pitch is not None and pitchf is not None:
-            protected_features = feats.clone()
+            protected_features = ttnn.clone(feats)
         if index is not None and big_npy is not None and index_rate != 0:
             index_features = feats[0].cpu().numpy()
             scores, indices = index.search(index_features, k=8)
@@ -238,58 +257,52 @@ class Pipeline:
             index_features = torch.sum(big_npy[indices] * weights.unsqueeze(2), dim=1)
             feats = index_features * index_rate + (1 - index_rate) * feats
 
-        feats = F.interpolate(feats.permute(0, 2, 1), scale_factor=2).permute(0, 2, 1)
+        feats = _interpolate_1d(feats, scale_factor=2, mode="linear")
         if protect < 0.5 and pitch is not None and pitchf is not None:
-            protected_features = F.interpolate(protected_features.permute(0, 2, 1), scale_factor=2).permute(0, 2, 1)
+            protected_features = _interpolate_1d(protected_features, scale_factor=2, mode="linear")
 
-        num_frames = feats.shape[1]
         if pitch is not None and pitchf is not None:
             pitch = pitch[:, :num_frames]
             pitchf = pitchf[:, :num_frames]
-        if protect < 0.5 and pitch is not None and pitchf is not None:
-            pitchff = pitchf.clone()
-            pitchff[pitchf > 0] = 1
-            pitchff[pitchf < 1] = protect
-            pitchff = pitchff.unsqueeze(-1)
-            feats = feats * pitchff + protected_features * (1 - pitchff)
-            feats = feats.to(protected_features.dtype)
-
-        with torch.no_grad():
-            tt_feats = ttnn.from_torch(
-                feats,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.tt_device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            tt_speaker_id = ttnn.from_torch(
-                speaker_id,
+            pitch = ttnn.from_torch(
+                pitch,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.tt_device,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                # memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            if pitch is not None and pitchf is not None:
-                tt_pitch = ttnn.from_torch(
-                    pitch,
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=self.tt_device,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-                tt_pitchf = ttnn.from_torch(
-                    pitch,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=self.tt_device,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-                tt_output = self.synthesizer(tt_feats, tt_pitch, tt_pitchf, tt_speaker_id)
-            else:
-                tt_output = self.synthesizer(tt_feats, tt_speaker_id)
+            pitchf = ttnn.from_torch(
+                pitchf,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.tt_device,
+                # memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
 
-            output_torch = ttnn.to_torch(tt_output).to(torch.float32)
-            output = output_torch[0, :, 0].contiguous()
+        if protect < 0.5 and pitch is not None and pitchf is not None:
+            pitchff = protect + (1 - protect) * (pitchf >= 1)
+            pitchff = ttnn.unsqueeze(pitchff, -1)
+            feats = feats * pitchff + protected_features * ttnn.rsub(pitchff, 1)
+            ttnn.deallocate(protected_features)
+
+        speaker_id = ttnn.from_torch(
+            speaker_id,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.tt_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        if pitch is not None and pitchf is not None:
+            feats = ttnn.reallocate(feats)
+            pitch = ttnn.reallocate(pitch)
+            pitchf = ttnn.reallocate(pitchf)
+            speaker_id = ttnn.reallocate(speaker_id)
+            output = self.synthesizer(feats, pitch, pitchf, speaker_id)
+        else:
+            output = self.synthesizer(feats, speaker_id)
+
+        output_torch = ttnn.to_torch(output).to(torch.float32)
+        output = output_torch[0, :, 0].contiguous()
         return output
 
     def _run_pipeline(
@@ -305,10 +318,8 @@ class Pipeline:
         protect,
     ):
         index = big_npy = None
-        print(f"audio (before filtering): {type(audio)}")
         audio = signal.filtfilt(bh, ah, audio)
         audio = torch.from_numpy(audio.copy())
-        print(f"audio: {type(audio)}")
         audio_padded = F.pad(audio.unsqueeze(0), (self.window // 2, self.window // 2), mode="reflect").squeeze(0)
         opt_ts = []
         if audio_padded.shape[0] > self.t_max:
