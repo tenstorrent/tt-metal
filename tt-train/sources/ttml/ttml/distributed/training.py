@@ -10,20 +10,18 @@ system into the model initialization and gradient synchronization steps.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
-import numpy as np
-import ml_dtypes
 import ttnn
 
 import ttml
 from ttml.modules import AbstractModuleBase
-from ttml.modules.module_base import ModuleList
 
-from .layout import Layout, Shard, Replicate, get_layout, set_layout, replicated_layout
-from .mesh_runtime import MeshRuntime, get_runtime, set_runtime
+from .layout import Layout, Shard, set_layout
+from .mesh_runtime import MeshRuntime, set_runtime
 from .rules.registry import get_module_rule
 from .style import ParallelStyle
+from ._register_ops import init_ops
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +177,7 @@ def parallelize_module(
         })
     """
     runtime = MeshRuntime(mesh_device=mesh_device, tp_axis=tp_axis, cp_axis=cp_axis)
+    init_ops()
     set_runtime(runtime)
 
     _apply_parallelize_plan(
