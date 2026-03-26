@@ -8,6 +8,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_sqrt_custom.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
@@ -16,11 +17,11 @@ using namespace sfpi;
 
 namespace ckernel::sfpu {
 
-static const float PI = 3.1415927f;
-static const float PI_2 = 1.5707964f;
-static const float PI_4 = 0.7853982f;
-static const float FRAC_1_PI = 0.31830987f;
-static const float FRAC_2_PI = 0.636619747f;
+static const float PI = 3.14159274101257324f;
+static const float PI_2 = 1.5707963705062866f;
+static const float PI_4 = 0.7853981852531433f;
+static const float FRAC_1_PI = 0.31830987334251404f;
+static const float FRAC_2_PI = 0.6366197466850281f;
 
 template <bool is_fp32_dest_acc_en>
 static sfpi::vFloat sfpu_tan(sfpi::vFloat x, sfpi::vInt i);
@@ -385,37 +386,46 @@ inline void calculate_atan() {
 }
 
 template <bool APPROXIMATION_MODE>
-sfpi_inline sfpi::vFloat sfpu_asine_maclaurin_series(sfpi::vFloat val) {
-    // Valid for x in [-1, 1].
-    // Maclaurin series
-    // arcsin(x) = x + [(1/2) *x^3/3] + [(1 * 3) / (2 * 4) * x^5 / 5] + [(1 * 3 * 5) / (2 * 4 * 6) * x^7 / 7 ] + ...
-    // arcsin(x) ≈ x + (1/6) * x^3 + (3/40) * x^5 + (5/112) * x^7 + (35/1152) * x^9 + (63/2816) * x^11
+sfpi_inline sfpi::vFloat sfpu_asin_ratio_poly_direct(sfpi::vFloat val) {
+    // Polynomial in Horner form for asin(z)/z, evaluated over reduced intervals.
+    // asin(z) = z * (1 + c1*z^2 + c2*z^4 + ...).
+    sfpi::vFloat z2 = val * val;
+    sfpi::vFloat ratio = PolynomialEvaluator::eval(
+        z2,
+        sfpi::vConst1,
+        0.16666666666666666f,
+        0.075f,
+        0.044642857142857144f,
+        0.030381944444444444f,
+        0.022372159090909091f,
+        0.017352764423076923f,
+        0.01396484375f,
+        0.011551800896139705f,
+        0.009761609529194078f);
+    return val * ratio;
+}
 
-    sfpi::vFloat tmp = val;
-    sfpi::vFloat val_square = val * val;
-    // x
-    sfpi::vFloat output = tmp;
-    // (1/6) * x^3
-    tmp = tmp * val_square;
-    output += 0.166666666 * tmp;
-    // (3/40) * x^5
-    tmp = tmp * val_square;
-    output += 0.075 * tmp;
+template <bool APPROXIMATION_MODE>
+sfpi_inline sfpi::vFloat sfpu_asin_range_reduced(sfpi::vFloat val) {
+    // Use symmetry + range transform for better accuracy near |x| ~= 1:
+    // asin(x) = sign(x) * [pi/2 - 2*asin(sqrt((1-|x|)/2))].
+    sfpi::vFloat abs_v = sfpi::abs(val);
+    sfpi::vFloat asin_abs;
 
-    //(5/112) * x^7
-    tmp = tmp * val_square;
-    output += 0.044642857 * tmp;
+    v_if(abs_v == sfpi::vConst1) { asin_abs = PI_2; }
+    v_else {
+        v_if(abs_v <= 0.625f) { asin_abs = sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE>(abs_v); }
+        v_else {
+            sfpi::vFloat t = (1.0f - abs_v) * 0.5f;
+            sfpi::vFloat root = sfpu_sqrt_custom<APPROXIMATION_MODE>(t);
+            sfpi::vFloat asin_root = sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE>(root);
+            asin_abs = PI_2 - 2.0f * asin_root;
+        }
+        v_endif;
+    }
+    v_endif;
 
-    // (35/1152) *x^9
-    tmp = tmp * val_square;
-    output += 0.03038194 * tmp;
-
-    //(63/2816) * x^11
-    tmp = tmp * val_square;
-    output += 0.02237216 * tmp;
-
-    // Write out output
-    return output;
+    return sfpi::setsgn(asin_abs, val);
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
@@ -424,7 +434,7 @@ inline void calculate_asin() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         v_if(v < sfpi::vConstNeg1 || v > sfpi::vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
-        v_else { sfpi::dst_reg[0] = sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v); }
+        v_else { sfpi::dst_reg[0] = sfpu_asin_range_reduced<APPROXIMATION_MODE>(v); }
         v_endif;
         sfpi::dst_reg++;
     }
@@ -433,11 +443,30 @@ inline void calculate_asin() {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_acos() {
     // SFPU microcode
-    // acos(x) = PI/2 - asin(x)
+    // Use identities to reduce cancellation near +/-1:
+    //  x >  0.5: acos(x) = 2*asin(sqrt((1-x)/2))
+    //  x < -0.5: acos(x) = pi - 2*asin(sqrt((1+x)/2))
+    //  else    : acos(x) = pi/2 - asin(x)
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         v_if(v < sfpi::vConstNeg1 || v > sfpi::vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
-        v_else { sfpi::dst_reg[0] = PI_2 - sfpu_asine_maclaurin_series<APPROXIMATION_MODE>(v); }
+        v_else {
+            sfpi::vFloat result;
+            v_if(v > 0.5f) {
+                sfpi::vFloat root = sfpu_sqrt_custom<APPROXIMATION_MODE>((1.0f - v) * 0.5f);
+                result = 2.0f * sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE>(root);
+            }
+            v_else {
+                v_if(v < -0.5f) {
+                    sfpi::vFloat root = sfpu_sqrt_custom<APPROXIMATION_MODE>((1.0f + v) * 0.5f);
+                    result = PI - 2.0f * sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE>(root);
+                }
+                v_else { result = PI_2 - sfpu_asin_range_reduced<APPROXIMATION_MODE>(v); }
+                v_endif;
+            }
+            v_endif;
+            sfpi::dst_reg[0] = result;
+        }
         v_endif;
         sfpi::dst_reg++;
     }
