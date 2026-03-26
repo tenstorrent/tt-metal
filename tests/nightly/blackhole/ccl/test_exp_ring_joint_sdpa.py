@@ -24,6 +24,12 @@ import pytest
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
 
 
+def create_fabric_router_config(max_payload_size):
+    config = ttnn.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
 # ============================================================================
 # HARDWARE CONFIGURATION CONSTANTS
 # ============================================================================
@@ -144,6 +150,7 @@ def run_exp_ring_joint_sdpa_nightly(
     num_links=2,
     num_workers_per_link=5,
     num_buffers_per_channel=32,
+    max_payload_size=8192,
 ):
     """
     Run exp_ring_joint_scaled_dot_product_attention and verify accuracy or determinism.
@@ -173,6 +180,7 @@ def run_exp_ring_joint_sdpa_nightly(
         ttnn.FabricTensixConfig.DISABLED,
         ttnn.FabricUDMMode.DISABLED,
         ttnn.FabricManagerMode.DEFAULT,
+        router_config=create_fabric_router_config(max_payload_size),
     )
 
     sp_axis = 1  # column axis for sequence parallel (ring axis)
@@ -414,18 +422,35 @@ TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs()
 
 # === TEST 1: PERFORMANCE SWEEP (skipped on CI) ===
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.parametrize("max_payload_size", [4096, 8192], ids=["4k", "8k"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS, ids=TEST_CONFIG_IDS)
-def test_exp_ring_joint_attention_sdpa_sweep_perf_impl(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype):
+def test_exp_ring_joint_attention_sdpa_sweep_perf_impl(
+    b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, max_payload_size
+):
     """Performance sweep test — run locally, skipped on CI."""
-    run_exp_ring_joint_sdpa_nightly(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, do_check=False)
+    run_exp_ring_joint_sdpa_nightly(
+        b,
+        nh,
+        total_seq,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        num_iterations=5,
+        do_check=False,
+        max_payload_size=max_payload_size,
+    )
 
 
 # === TEST 2: ACCURACY VERIFICATION ===
 @pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("max_payload_size", [4096, 8192], ids=["4k", "8k"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS, ids=TEST_CONFIG_IDS)
-def test_exp_ring_joint_attention_sdpa_accuracy(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, reset_seeds):
+def test_exp_ring_joint_attention_sdpa_accuracy(
+    b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, max_payload_size, reset_seeds
+):
     """
     Accuracy verification: 1 iteration, compare against PyTorch SDPA reference.
 
@@ -443,14 +468,18 @@ def test_exp_ring_joint_attention_sdpa_accuracy(b, nh, total_seq, d, q_chunk_siz
         dtype,
         pcc_threshold=DEFAULT_PCC_THRESHOLD,
         max_mse=DEFAULT_MAX_MSE,
+        max_payload_size=max_payload_size,
     )
 
 
 # === TEST 3: DETERMINISM VERIFICATION ===
 @pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("max_payload_size", [4096, 8192], ids=["4k", "8k"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
 @pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS, ids=TEST_CONFIG_IDS)
-def test_exp_ring_joint_attention_sdpa_determinism(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, reset_seeds):
+def test_exp_ring_joint_attention_sdpa_determinism(
+    b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, max_payload_size, reset_seeds
+):
     """
     Determinism verification: run 10 times with same inputs, verify all outputs are bitwise equal.
     """
@@ -463,4 +492,5 @@ def test_exp_ring_joint_attention_sdpa_determinism(b, nh, total_seq, d, q_chunk_
         k_chunk_size,
         dtype,
         num_iterations=10,
+        max_payload_size=max_payload_size,
     )
