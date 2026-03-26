@@ -10,7 +10,6 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <initializer_list>
 #include <map>
 #include <set>
@@ -18,8 +17,6 @@
 #include <cstdint>
 #include <random>
 #include <unordered_set>
-#include <string_view>
-#include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -59,99 +56,6 @@ protected:
         for (MeshId m : meshes) {
             config.mesh_validation_modes[m] = ::tt::tt_fabric::ConnectionValidationMode::STRICT;
         }
-    }
-
-    // Debug dumps for mesh-level exit / cardinality tests (stderr — always visible; no gtest failure).
-    // map_multi_mesh_to_physical also emits Fabric log_critical lines for each mesh-level exit cardinality constraint
-    // (min_count, fabric nodes, exit ASICs) from topology_mapper_utils.cpp.
-    static void dump_logical_multi_mesh_debug(std::string_view tag, const LogicalMultiMeshGraph& g) {
-        using namespace ::tt::tt_fabric;
-        std::cerr << "\n========== DEBUG: " << tag << " — LogicalMultiMeshGraph ==========\n";
-        std::cerr << "Mesh-level adjacency (repeated neighbor id = channel multiplicity):\n";
-        for (const auto& mid : g.mesh_level_graph_.get_nodes()) {
-            std::cerr << "  mesh " << mid.get() << " -> [";
-            const auto& nb = g.mesh_level_graph_.get_neighbors(mid);
-            for (size_t i = 0; i < nb.size(); ++i) {
-                if (i) {
-                    std::cerr << ", ";
-                }
-                std::cerr << nb[i].get();
-            }
-            std::cerr << "]\n";
-        }
-        std::cerr << "Per-mesh fabric node adjacency (intra-mesh):\n";
-        for (const auto& [mid, adj_g] : g.mesh_adjacency_graphs_) {
-            std::cerr << "  mesh " << mid.get() << ":\n";
-            for (const auto& n : adj_g.get_nodes()) {
-                std::cerr << "    " << n << " -> ";
-                const auto& nb = adj_g.get_neighbors(n);
-                for (size_t i = 0; i < nb.size(); ++i) {
-                    if (i) {
-                        std::cerr << ", ";
-                    }
-                    std::cerr << nb[i];
-                }
-                std::cerr << "\n";
-            }
-        }
-        std::cerr << "Logical exit-node graphs (parallel edges = logical inter-mesh channel count):\n";
-        for (const auto& [mid, exg] : g.mesh_exit_node_graphs_) {
-            std::cerr << "  mesh " << mid.get() << ":\n";
-            for (const auto& src : exg.get_nodes()) {
-                const auto& nb = exg.get_neighbors(src);
-                std::cerr << "    " << fmt::format("{}", src) << " -> " << nb.size() << " edge(s):";
-                for (const auto& d : nb) {
-                    std::cerr << " " << fmt::format("{}", d);
-                }
-                std::cerr << "\n";
-            }
-        }
-        std::cerr << "================================================================\n\n";
-    }
-
-    static void dump_physical_multi_mesh_debug(std::string_view tag, const PhysicalMultiMeshGraph& g) {
-        using namespace ::tt::tt_fabric;
-        std::cerr << "\n========== DEBUG: " << tag << " — PhysicalMultiMeshGraph ==========\n";
-        std::cerr << "Mesh-level adjacency:\n";
-        for (const auto& mid : g.mesh_level_graph_.get_nodes()) {
-            std::cerr << "  mesh " << mid.get() << " -> [";
-            const auto& nb = g.mesh_level_graph_.get_neighbors(mid);
-            for (size_t i = 0; i < nb.size(); ++i) {
-                if (i) {
-                    std::cerr << ", ";
-                }
-                std::cerr << nb[i].get();
-            }
-            std::cerr << "]\n";
-        }
-        std::cerr << "Per-mesh ASIC adjacency (intra-mesh):\n";
-        for (const auto& [mid, adj_g] : g.mesh_adjacency_graphs_) {
-            std::cerr << "  mesh " << mid.get() << ":\n";
-            for (const auto& a : adj_g.get_nodes()) {
-                std::cerr << "    " << a << " -> ";
-                const auto& nb = adj_g.get_neighbors(a);
-                for (size_t i = 0; i < nb.size(); ++i) {
-                    if (i) {
-                        std::cerr << ", ";
-                    }
-                    std::cerr << nb[i];
-                }
-                std::cerr << "\n";
-            }
-        }
-        std::cerr << "Physical exit-node graphs (parallel edges = physical inter-mesh links per exit ASIC):\n";
-        for (const auto& [mid, exg] : g.mesh_exit_node_graphs_) {
-            std::cerr << "  mesh " << mid.get() << ":\n";
-            for (const auto& src : exg.get_nodes()) {
-                const auto& nb = exg.get_neighbors(src);
-                std::cerr << "    " << fmt::format("{}", src) << " -> " << nb.size() << " edge(s):";
-                for (const auto& d : nb) {
-                    std::cerr << " " << fmt::format("{}", d);
-                }
-                std::cerr << "\n";
-            }
-        }
-        std::cerr << "================================================================\n\n";
     }
 
     // -------------------------------------------------------------------------
@@ -1616,15 +1520,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_MeshLevelExitMultiplicity
     config.disable_rank_bindings = true;
     config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
 
-    dump_logical_multi_mesh_debug(
-        "MapMultiMeshToPhysical_MeshLevelExitMultiplicityFour_RelaxedCapsCardinality_Succeeds", logical);
-    dump_physical_multi_mesh_debug(
-        "MapMultiMeshToPhysical_MeshLevelExitMultiplicityFour_RelaxedCapsCardinality_Succeeds", physical);
-
     const auto result = map_multi_mesh_to_physical(logical, physical, config);
-
-    std::cerr << "[DEBUG] map_multi_mesh_to_physical success=" << result.success
-              << " fabric_node_to_asic.size()=" << result.fabric_node_to_asic.size() << "\n";
 
     ASSERT_TRUE(result.success) << result.error_message;
     verify_bidirectional_consistency(result);
@@ -1696,19 +1592,7 @@ TEST_F(
     config.disable_rank_bindings = true;
     config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
 
-    dump_logical_multi_mesh_debug(
-        "MapMultiMeshToPhysical_MeshLevelExitEightLogicalChannelsTwoPhysicalLinksPerExitAsic_RelaxedCapsCardinality_"
-        "Succeeds",
-        logical);
-    dump_physical_multi_mesh_debug(
-        "MapMultiMeshToPhysical_MeshLevelExitEightLogicalChannelsTwoPhysicalLinksPerExitAsic_RelaxedCapsCardinality_"
-        "Succeeds",
-        physical);
-
     const auto result = map_multi_mesh_to_physical(logical, physical, config);
-
-    std::cerr << "[DEBUG] map_multi_mesh_to_physical success=" << result.success
-              << " fabric_node_to_asic.size()=" << result.fabric_node_to_asic.size() << "\n";
 
     ASSERT_TRUE(result.success) << result.error_message;
     verify_bidirectional_consistency(result);
@@ -1740,15 +1624,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeMeshesTwoNodesExitMu
     config.disable_rank_bindings = true;
     config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
 
-    dump_logical_multi_mesh_debug(
-        "MapMultiMeshToPhysical_ThreeMeshesTwoNodesExitMultiplicityMatchesNodes_Succeeds", logical);
-    dump_physical_multi_mesh_debug(
-        "MapMultiMeshToPhysical_ThreeMeshesTwoNodesExitMultiplicityMatchesNodes_Succeeds", physical);
-
     const auto result = map_multi_mesh_to_physical(logical, physical, config);
-
-    std::cerr << "[DEBUG] map_multi_mesh_to_physical success=" << result.success
-              << " fabric_node_to_asic.size()=" << result.fabric_node_to_asic.size() << "\n";
 
     ASSERT_TRUE(result.success) << result.error_message;
     verify_bidirectional_consistency(result);
@@ -1769,13 +1645,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeMeshesTwoNodesExitMu
     config.disable_rank_bindings = true;
     config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
 
-    dump_logical_multi_mesh_debug("MapMultiMeshToPhysical_ThreeMeshesTwoNodesExitMultiplicityOne_Succeeds", logical);
-    dump_physical_multi_mesh_debug("MapMultiMeshToPhysical_ThreeMeshesTwoNodesExitMultiplicityOne_Succeeds", physical);
-
     const auto result = map_multi_mesh_to_physical(logical, physical, config);
-
-    std::cerr << "[DEBUG] map_multi_mesh_to_physical success=" << result.success
-              << " fabric_node_to_asic.size()=" << result.fabric_node_to_asic.size() << "\n";
 
     ASSERT_TRUE(result.success) << result.error_message;
     verify_bidirectional_consistency(result);
@@ -1835,15 +1705,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FabricExitEdgeMultiplicit
     config.disable_rank_bindings = true;
     config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
 
-    dump_logical_multi_mesh_debug(
-        "MapMultiMeshToPhysical_FabricExitEdgeMultiplicityExceedsPhysicalExitAsics_Fails", logical);
-    dump_physical_multi_mesh_debug(
-        "MapMultiMeshToPhysical_FabricExitEdgeMultiplicityExceedsPhysicalExitAsics_Fails", physical);
-
     const auto result = map_multi_mesh_to_physical(logical, physical, config);
-
-    std::cerr << "[DEBUG] map_multi_mesh_to_physical success=" << result.success
-              << " fabric_node_to_asic.size()=" << result.fabric_node_to_asic.size() << "\n";
 
     EXPECT_FALSE(result.success)
         << "Three parallel fabric-level exit edges to one neighbor require more than two physical exit ASICs";
@@ -1900,15 +1762,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_FabricExitEdgeMultiplicit
     config.disable_rank_bindings = true;
     config.inter_mesh_validation_mode = ConnectionValidationMode::RELAXED;
 
-    dump_logical_multi_mesh_debug(
-        "MapMultiMeshToPhysical_FabricExitEdgeMultiplicityWithinPhysicalCap_Succeeds", logical);
-    dump_physical_multi_mesh_debug(
-        "MapMultiMeshToPhysical_FabricExitEdgeMultiplicityWithinPhysicalCap_Succeeds", physical);
-
     const auto result = map_multi_mesh_to_physical(logical, physical, config);
-
-    std::cerr << "[DEBUG] map_multi_mesh_to_physical success=" << result.success
-              << " fabric_node_to_asic.size()=" << result.fabric_node_to_asic.size() << "\n";
 
     ASSERT_TRUE(result.success) << result.error_message;
     verify_bidirectional_consistency(result);
@@ -2489,28 +2343,6 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ImpossibleIntraMeshConstr
 
     TopologyMappingResult result =
         map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
-
-    // Debug: Print the mapping results
-    std::cout << "\n=== Mapping Results ===" << std::endl;
-    std::cout << "Success: " << (result.success ? "true" : "false") << std::endl;
-    std::cout << "Error message: " << result.error_message << std::endl;
-    std::cout << "Number of mapped nodes: " << result.fabric_node_to_asic.size() << std::endl;
-    std::cout << "\n=== Mappings ===" << std::endl;
-
-    // Group mappings by logical mesh
-    std::map<MeshId, std::vector<std::pair<FabricNodeId, tt::tt_metal::AsicID>>> mappings_by_mesh;
-    for (const auto& [logical_node, asic] : result.fabric_node_to_asic) {
-        mappings_by_mesh[logical_node.mesh_id].emplace_back(logical_node, asic);
-    }
-
-    for (const auto& [mesh_id, mappings] : mappings_by_mesh) {
-        std::cout << "\nLogical Mesh " << mesh_id.get() << " -> Physical Mesh mappings:" << std::endl;
-        for (const auto& [logical_node, asic] : mappings) {
-            std::cout << "  Logical node (mesh=" << logical_node.mesh_id.get() << ", chip=" << logical_node.chip_id
-                      << ") -> ASIC " << asic.get() << std::endl;
-        }
-    }
-    std::cout << "======================\n" << std::endl;
 
     EXPECT_FALSE(result.success) << "Multi-mesh mapping should fail due to impossible intra-mesh constraints "
                                     "(2x2 logical grid cannot map to 3x3 physical grid)";
@@ -3890,46 +3722,6 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoHostsTwoAsicsEach_Rota
     }
 }
 
-// Dumps mapping inputs to stderr when MapMultiMeshToPhysical_PartialRankBinding_* fails (exception or result.success).
-void PrintPartialRankBindingOneHostUnsetContext(
-    const ::tt::tt_fabric::MeshId& mesh_id,
-    const std::map<::tt::tt_fabric::MeshId, std::map<tt::tt_metal::AsicID, ::tt::tt_fabric::MeshHostRankId>>&
-        asic_id_to_mesh_rank,
-    const std::map<::tt::tt_fabric::MeshId, std::map<::tt::tt_fabric::FabricNodeId, ::tt::tt_fabric::MeshHostRankId>>&
-        fabric_node_id_to_mesh_rank,
-    const TopologyMappingConfig& config,
-    const char* exception_what,
-    const std::string& result_error_message) {
-    std::cerr << "\n=== MapMultiMeshToPhysical_PartialRankBinding_OneHostExplicitOthersUnset (failure context) ===\n";
-    if (exception_what != nullptr && exception_what[0] != '\0') {
-        std::cerr << "exception: " << exception_what << "\n";
-    }
-    if (!result_error_message.empty()) {
-        std::cerr << "result.error_message: " << result_error_message << "\n";
-    }
-    std::cerr << "strict_mode=" << config.strict_mode << " disable_rank_bindings=" << config.disable_rank_bindings
-              << "\n";
-    std::cerr << "hostname_to_asics:\n";
-    for (const auto& [host, asics] : config.hostname_to_asics) {
-        std::cerr << "  " << host << ":";
-        for (const auto& a : asics) {
-            std::cerr << " " << a.get();
-        }
-        std::cerr << "\n";
-    }
-    std::cerr << "fabric_node -> mesh rank (mesh " << mesh_id.get() << "):\n";
-    for (const auto& [fn, r] : fabric_node_id_to_mesh_rank.at(mesh_id)) {
-        std::cerr << "  " << fn << " -> " << r.get() << (r == ::tt::tt_fabric::MESH_HOST_RANK_UNSET ? " (UNSET)" : "")
-                  << "\n";
-    }
-    std::cerr << "asic -> mesh rank (mesh " << mesh_id.get() << "):\n";
-    for (const auto& [asic, r] : asic_id_to_mesh_rank.at(mesh_id)) {
-        std::cerr << "  asic " << asic.get() << " -> " << r.get()
-                  << (r == ::tt::tt_fabric::MESH_HOST_RANK_UNSET ? " (UNSET)" : "") << "\n";
-    }
-    std::cerr << "================================================================================\n" << std::flush;
-}
-
 TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHostExplicitOthersUnset_Succeeds) {
     using namespace ::tt::tt_fabric;
 
@@ -3983,24 +3775,8 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHos
     config.hostname_to_asics["host_0"] = {physical_asics[0], physical_asics[1]};
     config.hostname_to_asics["host_1"] = {physical_asics[2], physical_asics[3]};
 
-    TopologyMappingResult result;
-    try {
-        result = map_multi_mesh_to_physical(
-            logical_multi_mesh_graph,
-            physical_multi_mesh_graph,
-            config,
-            asic_id_to_mesh_rank,
-            fabric_node_id_to_mesh_rank);
-    } catch (const std::exception& e) {
-        PrintPartialRankBindingOneHostUnsetContext(
-            mesh_id, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank, config, e.what(), "");
-        throw;
-    }
-
-    if (!result.success) {
-        PrintPartialRankBindingOneHostUnsetContext(
-            mesh_id, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank, config, nullptr, result.error_message);
-    }
+    const auto result = map_multi_mesh_to_physical(
+        logical_multi_mesh_graph, physical_multi_mesh_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
 
     ASSERT_TRUE(result.success)
         << "Partial rank binding (one host explicit, others UNSET) should succeed with UNSET pooling: "
@@ -4627,10 +4403,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     config.strict_mode = true;
     config.disable_rank_bindings = true;
 
-    const auto topology_mapping_result =
-        map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
-
-    log_info(tt::LogFabric, "Topology mapping result: {}", topology_mapping_result.success);
-    log_info(tt::LogFabric, "Topology mapping error message: {}", topology_mapping_result.error_message);
+    const auto mapping_result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
+    ASSERT_TRUE(mapping_result.success) << mapping_result.error_message;
 }
 }  // namespace tt::tt_metal::experimental::tt_fabric
