@@ -12,7 +12,7 @@ Issue: ttnn.group_norm with use_welford=True has numerical precision issues
 on Blackhole's DRAM architecture (8 banks vs Wormhole's 12 banks).
 
 To run this test:
-        pytest models/demos/stable_diffusion_xl_base/vae/tests/pcc/test_welford_bug_reproduction.py -v
+        TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/demos/stable_diffusion_xl_base/vae/tests/pcc/test_welford_bug_reproduction.py -v
 
 Expected behavior:
     - test_resnetblock2d_welford_disabled: PASSES (PCC > 0.99)

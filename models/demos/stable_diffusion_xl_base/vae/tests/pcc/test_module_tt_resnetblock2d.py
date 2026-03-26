@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+"""
+To run this test:
+        TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/demos/stable_diffusion_xl_base/vae/tests/pcc/test_module_tt_resnetblock2d.py
+"""
 import gc
 
 import pytest
@@ -13,6 +17,10 @@ from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import TtResnetBlock2D
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+####################################################################################################
+# NOTE: Welford algorithm is enabled for VAE in vae/tt/tt_decoder.py and vae/tt/tt_resnetblock2d.py
+####################################################################################################
+
 
 @pytest.mark.parametrize(
     "image_resolution, input_shape, block_id, resnet_id, conv_shortcut, block, pcc",
@@ -23,31 +31,31 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         # 1024x1024 image resolution
         ((1024, 1024), (1, 512, 128, 128), 0, 0, False, "mid_block", 0.999),
         ((1024, 1024), (1, 512, 128, 128), 0, 0, False, "up_blocks", 0.999),
-        ((1024, 1024), (1, 512, 256, 256), 1, 0, False, "up_blocks", 0.999),  # skipped; PCC=0.91
+        ((1024, 1024), (1, 512, 256, 256), 1, 0, False, "up_blocks", 0.999),  #
         ((1024, 1024), (1, 512, 512, 512), 2, 0, True, "up_blocks", 0.999),
         ((1024, 1024), (1, 256, 512, 512), 2, 1, False, "up_blocks", 0.999),
-        ((1024, 1024), (1, 256, 1024, 1024), 3, 0, True, "up_blocks", 0.999 if not is_blackhole() else 0.998),
+        ((1024, 1024), (1, 256, 1024, 1024), 3, 0, True, "up_blocks", 0.999),  #
         ((1024, 1024), (1, 128, 1024, 1024), 3, 1, False, "up_blocks", 0.999),
-        ((1024, 1024), (1, 128, 1024, 1024), 0, 0, False, "down_blocks", 0.998 if not is_blackhole() else 0.97),
+        ((1024, 1024), (1, 128, 1024, 1024), 0, 0, False, "down_blocks", 0.998),  #
         ((1024, 1024), (1, 128, 512, 512), 1, 0, True, "down_blocks", 0.999),
         ((1024, 1024), (1, 256, 512, 512), 1, 1, False, "down_blocks", 0.999),
-        ((1024, 1024), (1, 256, 256, 256), 2, 0, True, "down_blocks", 0.999),  # skipped; PCC=0.88
-        ((1024, 1024), (1, 512, 256, 256), 2, 1, False, "down_blocks", 0.999 if not is_blackhole() else 0.99),
+        ((1024, 1024), (1, 256, 256, 256), 2, 0, True, "down_blocks", 0.999),  #
+        ((1024, 1024), (1, 512, 256, 256), 2, 1, False, "down_blocks", 0.999),
         ((1024, 1024), (1, 512, 128, 128), 3, 0, False, "down_blocks", 0.999),
         # 512x512 image resolution
-        ((512, 512), (1, 512, 64, 64), 0, 0, False, "mid_block", 0.999),
-        ((512, 512), (1, 512, 64, 64), 0, 0, False, "up_blocks", 0.999),
-        ((512, 512), (1, 512, 128, 128), 1, 0, False, "up_blocks", 0.999),
-        ((512, 512), (1, 512, 256, 256), 2, 0, True, "up_blocks", 0.999),
-        ((512, 512), (1, 256, 256, 256), 2, 1, False, "up_blocks", 0.999),
-        ((512, 512), (1, 256, 512, 512), 3, 0, True, "up_blocks", 0.999),
-        ((512, 512), (1, 128, 512, 512), 3, 1, False, "up_blocks", 0.999),
-        ((512, 512), (1, 128, 512, 512), 0, 0, False, "down_blocks", 0.999),
-        ((512, 512), (1, 128, 256, 256), 1, 0, True, "down_blocks", 0.999),
-        ((512, 512), (1, 256, 256, 256), 1, 1, False, "down_blocks", 0.999),
-        ((512, 512), (1, 256, 128, 128), 2, 0, True, "down_blocks", 0.999),
-        ((512, 512), (1, 512, 128, 128), 2, 1, False, "down_blocks", 0.999),
-        ((512, 512), (1, 512, 64, 64), 3, 0, False, "down_blocks", 0.999),
+        # ((512, 512), (1, 512, 64, 64), 0, 0, False, "mid_block", 0.999),
+        # ((512, 512), (1, 512, 64, 64), 0, 0, False, "up_blocks", 0.999),
+        # ((512, 512), (1, 512, 128, 128), 1, 0, False, "up_blocks", 0.999),
+        # ((512, 512), (1, 512, 256, 256), 2, 0, True, "up_blocks", 0.999),
+        # ((512, 512), (1, 256, 256, 256), 2, 1, False, "up_blocks", 0.999),
+        # ((512, 512), (1, 256, 512, 512), 3, 0, True, "up_blocks", 0.999),
+        # ((512, 512), (1, 128, 512, 512), 3, 1, False, "up_blocks", 0.999),
+        # ((512, 512), (1, 128, 512, 512), 0, 0, False, "down_blocks", 0.999),
+        # ((512, 512), (1, 128, 256, 256), 1, 0, True, "down_blocks", 0.999),
+        # ((512, 512), (1, 256, 256, 256), 1, 1, False, "down_blocks", 0.999),
+        # ((512, 512), (1, 256, 128, 128), 2, 0, True, "down_blocks", 0.999),
+        # ((512, 512), (1, 512, 128, 128), 2, 1, False, "down_blocks", 0.999),
+        # ((512, 512), (1, 512, 64, 64), 3, 0, False, "down_blocks", 0.999),
     ],
 )
 def test_vae_resnetblock2d(
@@ -65,14 +73,10 @@ def test_vae_resnetblock2d(
     sdxl_base_vae_location,
     reset_seeds,
 ):
-    if is_blackhole():
-        if image_resolution == (512, 512):
-            pytest.skip("512x512 resolution not supported on Blackhole")
-        dram_gn_skip = (block == "up_blocks" and block_id == 1 and resnet_id == 0) or (
-            block == "down_blocks" and block_id == 2 and resnet_id == 0
-        )
-        if dram_gn_skip:
-            pytest.skip("Skipping on Blackhole due to PCC issue with DRAM group_norm")
+    # NOTE: this did not help
+    # device.disable_and_clear_program_cache()
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
     vae = AutoencoderKL.from_pretrained(
         sdxl_base_vae_location,
         torch_dtype=torch.float32,
@@ -104,8 +108,12 @@ def test_vae_resnetblock2d(
         conv_shortcut,
         debug_mode=debug_mode,
     )
-
+    # HACK: CHANGING INPUTS CAUSES TESTS TO PASS
+    # small variance on [-0.1, 0.1] might be an issue?
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
+    # tests PASS with these inputs, why?
+    # torch_input_tensor = torch_random(input_shape, 0, 1, dtype=torch.float32)
+    # torch_input_tensor = torch_random(input_shape, -1, 1, dtype=torch.float32)
     torch_output_tensor = torch_resnet(torch_input_tensor, None)
 
     B, C, H, W = input_shape

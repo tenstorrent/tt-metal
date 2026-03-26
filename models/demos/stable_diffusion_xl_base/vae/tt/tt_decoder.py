@@ -164,8 +164,7 @@ class TtDecoder(LightweightModule):
             )
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        # On Blackhole, disable Welford algorithm due to precision issues
-        # use_welford_decoder = not is_blackhole()
+        # USE WELFORD EVEN ON BH
         use_welford_decoder = True
         hidden_states = ttnn.group_norm(
             hidden_states,
