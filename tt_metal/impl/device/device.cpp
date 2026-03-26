@@ -197,25 +197,30 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                 // Reset the host manager's pointer for this command queue
                 this->sysmem_manager_->reset(cq_id);
 
-                pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] =
-                    (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-                pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] =
-                    (cq_start + get_absolute_cq_offset(channel, cq_id, cq_size)) >> 4;
-                pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] =
-                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) +
-                     get_absolute_cq_offset(channel, cq_id, cq_size)) >>
-                    4;
-                pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] =
-                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) +
-                     get_absolute_cq_offset(channel, cq_id, cq_size)) >>
-                    4;
+                const uint32_t cq_offset =
+                    this->sysmem_manager_->is_dram_backed()
+                        ? get_absolute_cq_offset(
+                              channel, cq_id, cq_size, this->sysmem_manager_->get_dram_region_base_addr())
+                        : get_absolute_cq_offset(channel, cq_id, cq_size);
 
-                MetalEnvAccessor(*env_).impl().get_cluster().write_sysmem(
-                    pointers.data(),
-                    pointers.size() * sizeof(uint32_t),
-                    get_absolute_cq_offset(channel, cq_id, cq_size),
-                    mmio_device_id,
-                    get_umd_channel(channel));
+                pointers[host_issue_q_rd_ptr / sizeof(uint32_t)] = (cq_start + cq_offset) >> 4;
+                pointers[host_issue_q_wr_ptr / sizeof(uint32_t)] = (cq_start + cq_offset) >> 4;
+                pointers[host_completion_q_wr_ptr / sizeof(uint32_t)] =
+                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
+                pointers[host_completion_q_rd_ptr / sizeof(uint32_t)] =
+                    (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
+
+                if (this->sysmem_manager_->is_dram_backed()) {
+                    MetalEnvAccessor(*env_).impl().get_cluster().write_dram_vec(
+                        pointers.data(), pointers.size() * sizeof(uint32_t), this->id(), 0, cq_offset);
+                } else {
+                    MetalEnvAccessor(*env_).impl().get_cluster().write_sysmem(
+                        pointers.data(),
+                        pointers.size() * sizeof(uint32_t),
+                        cq_offset,
+                        mmio_device_id,
+                        get_umd_channel(channel));
+                }
             }
         }
     }

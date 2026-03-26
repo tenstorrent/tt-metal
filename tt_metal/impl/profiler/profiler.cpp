@@ -244,7 +244,23 @@ void populateZoneSrcLocations(
         std::getline(ss, source_file, ',');
         std::getline(ss, line_num_str, ',');
 
-        tracy::MarkerDetails details(zone_name, source_file, std::stoull(line_num_str));
+        if (line_num_str.empty()) {
+            log_warning(tt::LogMetal, "Skipping malformed zone source location entry: {}", zone_src_location);
+            continue;
+        }
+        uint64_t line_num = 0;
+        try {
+            line_num = std::stoull(line_num_str);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "Skipping zone source location entry '{}' with invalid line number '{}': {}",
+                zone_src_location,
+                line_num_str,
+                e.what());
+            continue;
+        }
+        tracy::MarkerDetails details(zone_name, source_file, line_num);
 
         auto ret = hash_to_zone_src_locations.emplace(hash_16bit, details);
         if (ret.second && push_new) {
