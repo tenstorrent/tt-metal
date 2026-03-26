@@ -126,7 +126,7 @@ def train_grpo():
                 lr=grpo_cfg.base_lr * warmup_factor,
             )
 
-            if num_steps % 100 == 1:
+            if num_steps % 50 == 1:
                 run.save_checkpoint(ctx.tt_model, step=num_steps)
 
             run.logger.info(f"{mini_epoch=} done!")
