@@ -1,0 +1,461 @@
+name: "[internal] ttnn sweep validation impl"
+
+on:
+  workflow_call:
+    inputs:
+      manifest-path:
+        required: true
+        type: string
+      scope-targets:
+        required: true
+        type: string
+      models:
+        required: true
+        type: string
+      trace-ids:
+        required: true
+        type: string
+      caller-id:
+        required: false
+        type: string
+      allow-partial-hash-changes:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: Release
+      build-wheel: true
+      platform: Ubuntu 22.04
+      enable-lto: false
+
+  prepare-validation-inputs:
+    name: Prepare validation inputs
+    runs-on: ubuntu-latest
+    outputs:
+      master-json-artifact-name: ${{ steps.set-artifact-names.outputs.master-json-artifact-name }}
+      preflight-artifact-name: ${{ steps.set-artifact-names.outputs.preflight-artifact-name }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Display validation request
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest-path }}
+          SCOPE_TARGETS: ${{ inputs.scope-targets }}
+          MODELS: ${{ inputs.models }}
+          TRACE_IDS: ${{ inputs.trace-ids }}
+          CALLER_ID: ${{ inputs.caller-id }}
+          ALLOW_PARTIAL_HASH_CHANGES: ${{ inputs.allow-partial-hash-changes }}
+        run: |
+          echo "========================================"
+          echo " Sweep Validation v2"
+          echo "========================================"
+          echo "  Branch:        ${GITHUB_REF_NAME}"
+          echo "  Manifest:      ${MANIFEST_PATH}"
+          echo "  Scope targets: ${SCOPE_TARGETS}"
+          echo "  Models:        ${MODELS}"
+          echo "  Trace IDs:     ${TRACE_IDS}"
+          echo "  Allow partial: ${ALLOW_PARTIAL_HASH_CHANGES}"
+          if [ -n "${CALLER_ID}" ]; then
+            echo "  Caller ID:     ${CALLER_ID}"
+          fi
+          echo "========================================"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          pip install pyyaml psycopg2-binary tqdm
+
+      - name: Set artifact names
+        id: set-artifact-names
+        run: |
+          echo "master-json-artifact-name=ttnn-operations-master-json" >> "$GITHUB_OUTPUT"
+          echo "preflight-artifact-name=validation-preflight" >> "$GITHUB_OUTPUT"
+
+      - name: Generate JSON from database via manifest
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          MANIFEST_PATH: ${{ inputs.manifest-path }}
+        run: |
+          python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+            "$MANIFEST_PATH" \
+            model_tracer/traced_operations/ttnn_operations_master.json
+
+      - name: Run config hash preflight
+        env:
+          MANIFEST_PATH: ${{ inputs.manifest-path }}
+          SCOPE_TARGETS: ${{ inputs.scope-targets }}
+          MODELS: ${{ inputs.models }}
+          TRACE_IDS: ${{ inputs.trace-ids }}
+          ALLOW_PARTIAL_HASH_CHANGES: ${{ inputs.allow-partial-hash-changes }}
+        run: |
+          mkdir -p validation_artifacts
+          python3 - <<'PY'
+          import json
+          import os
+          import shutil
+          from pathlib import Path
+
+          from model_tracer.generic_ops_tracer import recompute_config_hashes
+
+          json_path = Path("model_tracer/traced_operations/ttnn_operations_master.json")
+          recomputed_path = Path("validation_artifacts/ttnn_operations_master.recomputed.json")
+          report_path = Path("validation_artifacts/config_hash_preflight.txt")
+
+          if not json_path.exists():
+              report_path.write_text(
+                  f"Missing reconstructed master JSON: {json_path}\n",
+                  encoding="utf-8",
+              )
+              raise SystemExit(1)
+
+          with json_path.open("r", encoding="utf-8") as f:
+              before = json.load(f)
+
+          shutil.copyfile(json_path, recomputed_path)
+          changed = recompute_config_hashes(str(recomputed_path))
+
+          with recomputed_path.open("r", encoding="utf-8") as f:
+              after = json.load(f)
+
+          total_configs = sum(
+              len(op_data.get("configurations", []))
+              for op_data in before.get("operations", {}).values()
+          )
+
+          changed_entries = []
+          for op_name, op_data in before.get("operations", {}).items():
+              before_configs = op_data.get("configurations", [])
+              after_configs = after.get("operations", {}).get(op_name, {}).get("configurations", [])
+              if len(before_configs) != len(after_configs):
+                  report_path.write_text(
+                      "\n".join(
+                          [
+                              "Config hash preflight",
+                              f"- JSON: {json_path}",
+                              f"- Error: configuration count mismatch for operation {op_name}",
+                              f"- Before configs: {len(before_configs)}",
+                              f"- After configs: {len(after_configs)}",
+                          ]
+                      )
+                      + "\n",
+                      encoding="utf-8",
+                  )
+                  raise SystemExit(1)
+
+              for index, (before_config, after_config) in enumerate(zip(before_configs, after_configs)):
+                  old_hash = before_config.get("config_hash")
+                  new_hash = after_config.get("config_hash")
+                  if old_hash != new_hash:
+                      changed_entries.append(
+                          {
+                              "operation": op_name,
+                              "config_id": before_config.get("config_id", index),
+                              "old_hash": old_hash,
+                              "new_hash": new_hash,
+                          }
+                      )
+
+          allow_partial = os.environ["ALLOW_PARTIAL_HASH_CHANGES"].lower() == "true"
+          percent_changed = (changed / total_configs * 100.0) if total_configs else 0.0
+          all_changed = total_configs > 0 and changed == total_configs
+
+          decision = "pass"
+          if all_changed:
+              decision = "fail_all_changed"
+          elif changed > 0 and not allow_partial:
+              decision = "fail_partial_changed"
+          elif changed > 0 and allow_partial:
+              decision = "continue_partial_changed"
+
+          report_lines = [
+              "Config hash preflight",
+              f"- Manifest: {os.environ['MANIFEST_PATH']}",
+              f"- Scope targets: {os.environ['SCOPE_TARGETS']}",
+              f"- Models: {os.environ['MODELS']}",
+              f"- Trace IDs: {os.environ['TRACE_IDS']}",
+              f"- JSON: {json_path}",
+              f"- Configurations checked: {total_configs}",
+              f"- Hashes changed: {changed}",
+              f"- Percent changed: {percent_changed:.2f}%",
+              f"- Allow partial changes: {allow_partial}",
+              f"- Decision: {decision}",
+          ]
+          if changed_entries:
+              report_lines.append("")
+              report_lines.append("Changed hashes:")
+              for entry in changed_entries:
+                  report_lines.append(
+                      f"- {entry['operation']} config_id={entry['config_id']}: "
+                      f"{entry['old_hash']} -> {entry['new_hash']}"
+                  )
+          report_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+
+          if changed_entries:
+              print(report_path.read_text(encoding="utf-8"))
+          if all_changed:
+              raise SystemExit(1)
+          if changed > 0 and not allow_partial:
+              raise SystemExit(1)
+          PY
+
+      - name: Upload master JSON artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ttnn-operations-master-json
+          path: model_tracer/traced_operations/ttnn_operations_master.json
+          retention-days: 1
+
+      - name: Upload preflight artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-preflight
+          path: validation_artifacts/config_hash_preflight.txt
+          retention-days: 1
+
+  # generate-sweeps:
+  #   name: Generate validation sweeps
+  #   needs: [build-artifact, prepare-validation-inputs]
+  #   container:
+  #     image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     env:
+  #       TT_METAL_HOME: /work
+  #       PYTHONPATH: /work
+  #       LD_LIBRARY_PATH: /work/build/lib
+  #       LOGURU_LEVEL: INFO
+  #       GITHUB_ACTIONS: true
+  #     volumes:
+  #       - ${{ github.workspace }}/docker-job:/work
+  #   defaults:
+  #     run:
+  #       shell: bash
+  #       working-directory: /work
+  #   timeout-minutes: 30
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
+  #       with:
+  #         submodules: recursive
+  #         path: docker-job
+
+  #     - name: Setup job
+  #       uses: ./docker-job/.github/actions/setup-job
+  #       timeout-minutes: 10
+  #       with:
+  #         build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #         wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  #     - name: Download master JSON artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
+  #         path: /work/model_tracer/traced_operations
+
+  #     - name: Generate sweep vectors
+  #       env:
+  #         MANIFEST_PATH: ${{ inputs.manifest-path }}
+  #         SCOPE_TARGETS: ${{ inputs.scope-targets }}
+  #       run: |
+  #         mkdir -p tests/sweep_framework/vectors_export
+  #         cat <<EOF > tests/sweep_framework/vectors_export/validation.placeholder.json
+  #         {
+  #           "manifest_path": "${MANIFEST_PATH}",
+  #           "scope_targets": "${SCOPE_TARGETS}",
+  #           "note": "Placeholder vector generation step"
+  #         }
+  #         EOF
+
+  #     - name: Upload sweep vectors
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: sweeps-vectors-all
+  #         path: /work/tests/sweep_framework/vectors_export/
+  #         retention-days: 7
+
+  # compute-sweep-matrix:
+  #   name: Compute validation sweep matrix
+  #   needs: [generate-sweeps]
+  #   runs-on: ubuntu-latest
+  #   outputs:
+  #     matrix: ${{ steps.set-matrix.outputs.matrix }}
+  #   steps:
+  #     - name: Download sweep vectors
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         pattern: sweeps-vectors-*
+  #         path: /tmp/validation-vectors
+  #         merge-multiple: true
+
+  #     - name: Compute execution matrix
+  #       id: set-matrix
+  #       run: |
+  #         cat <<'EOF' >> "$GITHUB_OUTPUT"
+  #         matrix={"include":[{"test_group_name":"validation-placeholder","batch_display":"1/1","module_selector":"validation.placeholder","suite_name":"model_traced","arch":"wormhole_b0","runner_label":"ubuntu-latest","runs_on":"ubuntu-latest","tt_smi_cmd":"tt-smi -r"}]}
+  #         EOF
+
+  # run-sweeps-with-tracer:
+  #   name: Run validation sweeps (${{ matrix.test_group_name }}, ${{ matrix.batch_display }})
+  #   needs: [build-artifact, prepare-validation-inputs, generate-sweeps, compute-sweep-matrix]
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       include: ${{ fromJSON(needs.compute-sweep-matrix.outputs.matrix).include }}
+  #   container:
+  #     image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+  #     env:
+  #       TT_METAL_HOME: /work
+  #       PYTHONPATH: /work
+  #       LD_LIBRARY_PATH: /work/build/lib
+  #       ARCH_NAME: ${{ matrix.arch }}
+  #       RUNNER_LABEL: ${{ matrix.runner_label }}
+  #       LOGURU_LEVEL: INFO
+  #       GITHUB_ACTIONS: true
+  #       TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
+  #       TRACY_NO_INVARIANT_CHECK: 1
+  #     volumes:
+  #       - ${{ github.workspace }}/docker-job:/work
+  #   defaults:
+  #     run:
+  #       shell: bash
+  #       working-directory: /work
+  #   timeout-minutes: 60
+  #   runs-on: ${{ matrix.runs_on }}
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
+  #       with:
+  #         submodules: recursive
+  #         path: docker-job
+
+  #     - name: Setup job
+  #       uses: ./docker-job/.github/actions/setup-job
+  #       timeout-minutes: 10
+  #       with:
+  #         build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+  #         wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  #     - name: Download sweep vectors
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         pattern: sweeps-vectors-*
+  #         path: /work/tests/sweep_framework/vectors_export
+  #         merge-multiple: true
+
+  #     - name: Run sweeps with tracer
+  #       run: |
+  #         mkdir -p /work/tests/sweep_framework/results_export
+  #         mkdir -p /work/model_tracer/traced_operations
+  #         cat <<EOF > /work/tests/sweep_framework/results_export/${{ matrix.test_group_name }}.json
+  #         {
+  #           "status": "placeholder",
+  #           "module_selector": "${{ matrix.module_selector }}",
+  #           "suite_name": "${{ matrix.suite_name }}"
+  #         }
+  #         EOF
+  #         cat <<EOF > /work/model_tracer/traced_operations/sweep_trace_${{ matrix.test_group_name }}.json
+  #         {
+  #           "status": "placeholder",
+  #           "source": "generic_ops_tracer skeleton"
+  #         }
+  #         EOF
+
+  #     - name: Compute artifact suffix
+  #       shell: bash
+  #       run: |
+  #         DISPLAY_LABEL="${{ matrix.batch_display }}"
+  #         GROUP_LABEL="${{ matrix.test_group_name }}"
+  #         SUITE_LABEL="${{ matrix.suite_name }}"
+  #         FINGERPRINT="$GROUP_LABEL|$DISPLAY_LABEL"
+  #         if [[ -n "$SUITE_LABEL" ]]; then
+  #           FINGERPRINT="$FINGERPRINT|$SUITE_LABEL"
+  #         fi
+  #         echo "BATCH_SUFFIX=$(echo -n "$FINGERPRINT" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> "$GITHUB_ENV"
+
+  #     - name: Upload sweep traces
+  #       if: always()
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: sweep-traces-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
+  #         path: /work/model_tracer/traced_operations/sweep_trace_*.json
+  #         retention-days: 7
+
+  #     - name: Upload sweep results
+  #       if: always()
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
+  #         path: /work/tests/sweep_framework/results_export/
+  #         retention-days: 7
+
+  # analyze-and-report:
+  #   name: Analyze validation results
+  #   needs: [prepare-validation-inputs, run-sweeps-with-tracer]
+  #   if: always() && needs.run-sweeps-with-tracer.result != 'cancelled'
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
+
+  #     - name: Download master JSON artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: ${{ needs.prepare-validation-inputs.outputs.master-json-artifact-name }}
+  #         path: model_tracer/traced_operations
+
+  #     - name: Download preflight artifact
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: ${{ needs.prepare-validation-inputs.outputs.preflight-artifact-name }}
+  #         path: validation_artifacts
+
+  #     - name: Download sweep traces
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         pattern: sweep-traces-*
+  #         path: validation_traces
+  #         merge-multiple: true
+
+  #     - name: Download sweep results
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         pattern: sweeps-results-*
+  #         path: validation_results
+  #         merge-multiple: true
+
+  #     - name: Match traces and summarize results
+  #       run: |
+  #         cat <<'EOF' > validation_summary.md
+  #         # Sweep Validation Summary
+
+  #         This is a placeholder summary for the validation pipeline skeleton.
+
+  #         Planned analysis stages:
+  #         - compare DB-derived master JSON against traced sweep output
+  #         - run trace matching program/algorithm
+  #         - summarize mismatches by trace, model, and module
+  #         EOF
+  #         cat validation_summary.md >> "$GITHUB_STEP_SUMMARY"
+
+  #     - name: Upload validation summary
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: validation-summary
+  #         path: validation_summary.md
+  #         retention-days: 7
