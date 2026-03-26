@@ -1,9 +1,12 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import ttnn
 
+from models.experimental.tt_symbiote.core.utils import safe_permute
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearIReplicatedWColSharded
 from models.experimental.tt_symbiote.modules.rope import TTNNRotaryPositionEmbedding
@@ -37,6 +40,30 @@ class TTNNQwen3OmniMoeCode2WavAttention(TTNNModule):
         self.sliding_window = None
 
         self.use_windowed_attention = False  # optional fast path; keep False for HF parity
+
+    def _effective_batch_chunk(self, batch_size):
+        v = os.environ.get("TT_SYMBIOTE_ATTN_BATCH_CHUNK")
+        if v is not None:
+            return max(0, int(v))
+        if batch_size > 256:
+            return 64
+        return 0
+
+    def _reshape_permute_bshd_to_bhsd(self, x, B, S, num_heads, head_dim):
+        chunk_b = self._effective_batch_chunk(B)
+        if chunk_b <= 0 or B <= chunk_b:
+            x = ttnn.reshape(x, (B, S, num_heads, head_dim))
+            return safe_permute(x, (0, 2, 1, 3))
+
+        hidden = num_heads * head_dim
+        parts = []
+        for b0 in range(0, B, chunk_b):
+            b1 = min(b0 + chunk_b, B)
+            xc = ttnn.slice(x, (b0, 0, 0), (b1, S, hidden))
+            xc = ttnn.reshape(xc, (b1 - b0, S, num_heads, head_dim))
+            xc = safe_permute(xc, (0, 2, 1, 3))
+            parts.append(xc)
+        return parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     # ------------------------------------------------------------
     # INIT FROM TORCH
@@ -216,13 +243,9 @@ class TTNNQwen3OmniMoeCode2WavAttention(TTNNModule):
         value = self._to_ttnn(self.v_proj(hidden_states))
 
         # reshape → [B, H, S, D]
-        query = ttnn.reshape(query, (B, S, self.num_heads, self.head_dim))
-        key = ttnn.reshape(key, (B, S, self.num_kv_heads, self.head_dim))
-        value = ttnn.reshape(value, (B, S, self.num_kv_heads, self.head_dim))
-
-        query = ttnn.permute(query, (0, 2, 1, 3))
-        key = ttnn.permute(key, (0, 2, 1, 3))
-        value = ttnn.permute(value, (0, 2, 1, 3))
+        query = self._reshape_permute_bshd_to_bhsd(query, B, S, self.num_heads, self.head_dim)
+        key = self._reshape_permute_bshd_to_bhsd(key, B, S, self.num_kv_heads, self.head_dim)
+        value = self._reshape_permute_bshd_to_bhsd(value, B, S, self.num_kv_heads, self.head_dim)
 
         # --------------------------------------------------------
         # ROPE
@@ -313,7 +336,7 @@ class TTNNQwen3OmniMoeCode2WavAttention(TTNNModule):
                 self._to_raw_ttnn(attn_output),
                 (B, num_windows, W, self.num_heads, self.head_dim),
             )
-            attn_output = ttnn.permute(attn_output, (0, 3, 1, 2, 4))
+            attn_output = safe_permute(attn_output, (0, 3, 1, 2, 4))
             attn_output = ttnn.reshape(attn_output, (B, self.num_heads, S, self.head_dim))
 
         # ========================================================

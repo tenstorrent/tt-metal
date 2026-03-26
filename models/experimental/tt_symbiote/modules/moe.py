@@ -10,10 +10,16 @@ from torch import nn
 import ttnn
 from transformers.configuration_utils import PretrainedConfig
 from torch.nn import functional as F
-from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.module import (
+    TTNNModule,
+    set_distributed_tensor_config,
+    run_on_devices,
+    DeviceArch,
+)
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from ttnn.model_preprocessing import preprocess_linear_weight
-from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after, run_on_devices, DeviceArch
+from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig
+from models.experimental.tt_symbiote.core.utils import tree_map
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
     TTNNLinearSilu,
@@ -22,6 +28,7 @@ from models.experimental.tt_symbiote.modules.linear import (
 )
 from models.experimental.tt_symbiote.core.run_config import disable_trace
 import math
+import os
 
 
 # Helper to robustly convert various tensor types to a torch.Tensor
@@ -1111,6 +1118,39 @@ class TTNNMoERouterDecode(TTNNModule):
         topk_weights = ttnn.reshape(topk_weights, ttnn.Shape((T, r.top_k)))
         return topk_expert_idx, topk_weights
 
+    def set_output_tensors_config_impl(self, output_tensors):
+        """Override distributed config for top-k outputs.
+
+        The top-k outputs are typically small and may have a last dimension that
+        is not divisible by the mesh width, which triggers an unnecessary
+        replication warning. Prefer sharding along dim 0 when possible; fall
+        back to explicit replication otherwise.
+        """
+        if self.device_state is None or self.device is None or self.device.get_num_devices() <= 1:
+            return output_tensors
+
+        num_devices = self.device.get_num_devices()
+
+        def _set_config(tensor):
+            try:
+                shape = list(tensor.shape)
+            except Exception:
+                return tensor
+
+            if len(shape) >= 1 and shape[0] % num_devices == 0:
+                config = DistributedTensorConfig(
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+                    mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+                )
+            else:
+                config = DistributedTensorConfig(
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+                    mesh_composer=ttnn.create_mesh_composer(self.device, ttnn.MeshComposerConfig([0, len(shape)])),
+                )
+            return set_distributed_tensor_config(config)(tensor)
+
+        return tree_map(_set_config, output_tensors)
+
 
 class TTNNExperts(TTNNModule):
     """
@@ -1819,20 +1859,74 @@ class TTNNQwen3MoE(TTNNMoE):
         for d in x_shape[:-1]:
             T *= d
         H = x_shape[-1]
-        x_2d = ttnn.reshape(x, ttnn.Shape((T, H)))
-        router_logits = ttnn.linear(
-            x_2d,
-            self._gate_weight_tt,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        topk_experts_indices, topk_experts_weights = self.route_tokens_to_experts(router_logits)
+        if len(x_shape) == 3:
+            b, s, h = int(x_shape[0]), int(x_shape[1]), int(x_shape[2])
+        else:
+            b, s, h = int(x_shape[0]), int(x_shape[2]), int(x_shape[3])
 
-        # 3. Expert dispatch → compute → combine → weight
-        # Ensure x is 4D (batch, 1, seq, hidden) for TTNNExperts
+        seq_chunk = int(os.environ.get("TT_SYMBIOTE_MOE_SEQ_CHUNK", "1024"))
+        if seq_chunk <= 0:
+            seq_chunk = s + 1
+
+        # shared_expert_gate uses full activations before the 4D reshape used by experts
         x_full = x
-        if len(x.shape) == 3:
-            x = ttnn.reshape(x, ttnn.Shape((x.shape[0], 1, x.shape[1], x.shape[2])))
-        routed_output = self.experts(x, topk_experts_indices, topk_experts_weights)
+
+        # Long prefill: chunk along sequence so router + TTNNExperts stay within DRAM (same env as thinker MoE).
+        if s > seq_chunk:
+            x4d = ttnn.reshape(x, ttnn.Shape((b, 1, s, h))) if len(x_shape) == 3 else x
+            routed_parts = []
+            for s0 in range(0, s, seq_chunk):
+                s1 = min(s0 + seq_chunk, s)
+                x_c = ttnn.slice(x4d, (0, 0, s0, 0), (b, 1, s1, h))
+                sc = s1 - s0
+                Tc = b * sc
+                x_2d = ttnn.reshape(x_c, ttnn.Shape((Tc, H)))
+                router_logits = ttnn.linear(
+                    x_2d,
+                    self._gate_weight_tt,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                topk_experts_indices, topk_experts_weights = self.route_tokens_to_experts(router_logits)
+                routed_parts.append(self.experts(x_c, topk_experts_indices, topk_experts_weights))
+                try:
+                    ttnn.deallocate(x_c)
+                except Exception:
+                    pass
+            if len(x_shape) == 3:
+                try:
+                    ttnn.deallocate(x4d)
+                except Exception:
+                    pass
+            # ttnn.concat requires raw ttnn.Tensor; experts may return TorchTTNNTensor / symbiote wrappers.
+            routed_ttnn_parts = []
+            for p in routed_parts:
+                u = p.to_ttnn if hasattr(p, "to_ttnn") else p
+                routed_ttnn_parts.append(_to_ttnn_raw(u))
+            routed_output = (
+                routed_ttnn_parts[0]
+                if len(routed_ttnn_parts) == 1
+                else ttnn.concat(routed_ttnn_parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            )
+            if len(routed_ttnn_parts) > 1:
+                for p in routed_ttnn_parts:
+                    try:
+                        ttnn.deallocate(p)
+                    except Exception:
+                        pass
+        else:
+            x_2d = ttnn.reshape(x, ttnn.Shape((T, H)))
+            router_logits = ttnn.linear(
+                x_2d,
+                self._gate_weight_tt,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            topk_experts_indices, topk_experts_weights = self.route_tokens_to_experts(router_logits)
+
+            # 3. Expert dispatch → compute → combine → weight
+            # Ensure x is 4D (batch, 1, seq, hidden) for TTNNExperts
+            if len(x.shape) == 3:
+                x = ttnn.reshape(x, ttnn.Shape((x.shape[0], 1, x.shape[1], x.shape[2])))
+            routed_output = self.experts(x, topk_experts_indices, topk_experts_weights)
 
         # 4. Reduce-scatter (scale by 1/n_rs so sum then scatter matches single-device magnitude)
         routed_out = routed_output.to_ttnn if hasattr(routed_output, "to_ttnn") else routed_output
@@ -2240,111 +2334,169 @@ class TTNNQwen3OmniMoeThinkerTextSparseMoeBlock(TTNNModule):
         return ttnn.reshape(expert_out, ttnn.Shape((b, s, h)))
 
 
-class TTNNQwen3OmniThinkerNaiveMoE(TTNNModule):
+class TTNNQwen3OmniThinkerMoE(TTNNModule):
     """
-    TTNN MoE for Qwen3-Omni thinker with per-expert computation on TT device.
+    Qwen3-Omni thinker sparse MoE with routing and expert pipeline on TTNN.
 
-    Gate (softmax routing) runs on torch.  Each expert's gate/up/down projections
-    are stored as raw ttnn weight tensors and executed via ``ttnn.linear`` /
-    ``ttnn.silu`` / ``ttnn.mul`` on the accelerator.  Uses a naive per-expert
-    loop so input/output shapes are preserved (no all-gather / reduce-scatter).
+    Router matches HuggingFace ``Qwen3OmniMoeThinkerTextTopKRouter``: ``F.linear`` → softmax
+    over experts → top-``k``, optional normalization of the selected weights.
+
+    Experts use ``TTNNExperts`` (``ttnn.all_to_all_dispatch``, sparse expert matmuls,
+    ``ttnn.all_to_all_combine``), same path as DeepSeek-style MoE in this file.
+
+    Returns a **PyTorch** tensor (same shape/dtype as input activations) so PyTorch
+    decoder blocks can follow without extra symbiote glue.
     """
 
     @classmethod
     def from_torch(cls, thinker_mlp):
         module = cls()
         module._fallback_torch_layer = thinker_mlp
-        module.gate = thinker_mlp.gate
-        hf_experts = thinker_mlp.experts
-        E, two_I, H = hf_experts.gate_up_proj.shape
-        I = two_I // 2
-        module.num_experts = E
-        module.intermediate_size = I
-        module._gate_w_torch = [hf_experts.gate_up_proj.data[i, :I, :] for i in range(E)]
-        module._up_w_torch = [hf_experts.gate_up_proj.data[i, I:, :] for i in range(E)]
-        module._down_w_torch = [hf_experts.down_proj.data[i] for i in range(E)]
+        g = thinker_mlp.gate
+        module._gate_w_torch = g.weight.data.clone()
+        module.top_k = int(g.top_k)
+        module.norm_topk_prob = bool(g.norm_topk_prob)
+        module.num_experts = int(g.num_experts)
+        experts_for_tt = _thinker_experts_adapter(thinker_mlp)
+        module.experts = TTNNExperts.from_torch(experts_for_tt)
         return module
 
     def preprocess_weights_impl(self):
-        self._gate_tt_host = [
-            preprocess_linear_weight(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for w in self._gate_w_torch
-        ]
-        self._up_tt_host = [
-            preprocess_linear_weight(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for w in self._up_w_torch
-        ]
-        self._down_tt_host = [
-            preprocess_linear_weight(w, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for w in self._down_w_torch
-        ]
+        self._gate_tt_host = preprocess_linear_weight(self._gate_w_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         del self._gate_w_torch
-        del self._up_w_torch
-        del self._down_w_torch
+        self.experts.preprocess_weights()
 
     def move_weights_to_device_impl(self):
-        self._gate_tt = [ttnn.to_device(w, self.device) for w in self._gate_tt_host]
-        self._up_tt = [ttnn.to_device(w, self.device) for w in self._up_tt_host]
-        self._down_tt = [ttnn.to_device(w, self.device) for w in self._down_tt_host]
+        self.gate_weight_tt = ttnn.to_device(self._gate_tt_host, self.device)
+        self.experts.move_weights_to_device()
 
     def deallocate_weights_impl(self):
-        for w in self._gate_tt:
-            ttnn.deallocate(w)
-        for w in self._up_tt:
-            ttnn.deallocate(w)
-        for w in self._down_tt:
-            ttnn.deallocate(w)
-        self._weights_on_device = False
+        gw = getattr(self, "gate_weight_tt", None)
+        if gw is not None:
+            ttnn.deallocate(gw)
+            self.gate_weight_tt = None
+        self.experts.deallocate_weights()
 
-    @deallocate_weights_after
+    @property
+    def _is_distributed(self):
+        return (
+            self.device_state is not None
+            and hasattr(self.device_state, "ccl_manager")
+            and self.device_state.ccl_manager is not None
+        )
+
+    def _maybe_all_gather(self, tensor):
+        if not self._is_distributed:
+            return tensor
+        return ttnn.experimental.all_gather_async(
+            tensor,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+
+    def _moe_from_tiled_4d(self, hidden_states_tile, b, s, h, orig_batch, out_dtype):
+        """Run gate + experts on TILE activations (b, 1, s, h). Returns torch (b, s, hidden_size)."""
+        t = b * s
+        x_2d = ttnn.reshape(hidden_states_tile, ttnn.Shape((t, h)))
+        gate_logits = ttnn.linear(x_2d, self.gate_weight_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        probs = ttnn.softmax(gate_logits, dim=-1)
+        ttnn.deallocate(gate_logits)
+
+        topk_vals, topk_idx = ttnn.topk(probs, k=self.top_k, dim=-1)
+        ttnn.deallocate(probs)
+
+        if self.norm_topk_prob:
+            denom = ttnn.sum(topk_vals, dim=-1, keepdim=True)
+            topk_vals = ttnn.div(topk_vals, denom)
+            ttnn.deallocate(denom)
+
+        topk_idx = ttnn.to_layout(topk_idx, ttnn.ROW_MAJOR_LAYOUT)
+        topk_vals = ttnn.to_layout(topk_vals, ttnn.ROW_MAJOR_LAYOUT)
+        topk_idx = ttnn.reshape(topk_idx, ttnn.Shape((t, self.top_k)))
+        topk_vals = ttnn.reshape(topk_vals, ttnn.Shape((t, self.top_k)))
+
+        expert_out = self.experts.forward(hidden_states_tile, topk_idx, topk_vals)
+        try:
+            from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+            if isinstance(expert_out, TorchTTNNTensor):
+                expert_out = expert_out.to_ttnn
+        except Exception:
+            pass
+        expert_out = _to_ttnn_raw(expert_out)
+        h_out = int(self.experts.hidden_size)
+        expert_out = ttnn.reshape(expert_out, ttnn.Shape((b, s, h_out)))
+
+        mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0) if self.device.get_num_devices() > 1 else None
+        out_torch = ttnn.to_torch(expert_out, mesh_composer=mesh_composer).to(out_dtype)
+        ttnn.deallocate(expert_out)
+        if mesh_composer is not None:
+            out_torch = out_torch.narrow(0, 0, int(orig_batch))
+        return out_torch
+
     @run_on_devices(DeviceArch.T3K)
     def forward(self, hidden_states):
         hidden_states_torch = _to_torch_any(hidden_states)
         orig_shape = hidden_states_torch.shape
-        x_flat = hidden_states_torch.reshape(-1, hidden_states_torch.shape[-1])
+        out_dtype = hidden_states_torch.dtype
+        orig_batch = int(orig_shape[0])
 
-        with torch.no_grad():
-            _, routing_weights, selected_experts = self.gate(x_flat)
-
-        num_tokens = x_flat.shape[0]
-        final_hidden_states = torch.zeros_like(x_flat)
-        expert_mask = F.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
-        expert_hit = (expert_mask.sum(dim=(-1, -2)) > 0).nonzero()
-
-        is_mesh = self.device.get_num_devices() > 1
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None
-        mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0) if is_mesh else None
-
-        for eidx in expert_hit:
-            eidx = eidx[0].item()
-            if eidx == self.num_experts:
-                continue
-            top_k_pos, token_idx = torch.where(expert_mask[eidx])
-            current_state = x_flat[token_idx]
-            n_tok = current_state.shape[0]
-
-            x_tt = ttnn.from_torch(
-                current_state.unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                mesh_mapper=mesh_mapper,
+        hidden_states_tt = _to_ttnn_raw(hidden_states)
+        hidden_states_tt = self._maybe_all_gather(hidden_states_tt)
+        if len(hidden_states_tt.shape) == 3:
+            b, s, h = (int(hidden_states_tt.shape[0]), int(hidden_states_tt.shape[1]), int(hidden_states_tt.shape[2]))
+            hidden_states_tt = ttnn.reshape(hidden_states_tt, ttnn.Shape((b, 1, s, h)))
+        else:
+            b, s, h = (
+                int(hidden_states_tt.shape[0]),
+                int(hidden_states_tt.shape[2]),
+                int(hidden_states_tt.shape[3]),
             )
 
-            gate_tt = ttnn.linear(x_tt, self._gate_tt[eidx], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            gate_tt = ttnn.silu(gate_tt)
-            up_tt = ttnn.linear(x_tt, self._up_tt[eidx], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(x_tt)
+        seq_chunk = int(os.environ.get("TT_SYMBIOTE_MOE_SEQ_CHUNK", "1024"))
+        if seq_chunk <= 0:
+            seq_chunk = s + 1
 
-            hidden_tt = ttnn.mul(gate_tt, up_tt)
-            ttnn.deallocate(gate_tt)
-            ttnn.deallocate(up_tt)
+        # Long prefill: drop full-sequence TILE if present (dense RM is usually smaller), then tile only each chunk.
+        # Set TT_SYMBIOTE_MOE_SEQ_CHUNK=0 to force the single-shot path (legacy behavior).
+        if s > seq_chunk:
+            if hidden_states_tt.layout == ttnn.TILE_LAYOUT:
+                hidden_rm = ttnn.to_layout(
+                    hidden_states_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                try:
+                    ttnn.deallocate(hidden_states_tt)
+                except Exception:
+                    pass
+                hidden_states_tt = hidden_rm
+            parts = []
+            for s0 in range(0, s, seq_chunk):
+                s1 = min(s0 + seq_chunk, s)
+                sc = s1 - s0
+                h_rm = ttnn.slice(hidden_states_tt, (0, 0, s0, 0), (b, 1, s1, h))
+                h_tile = ttnn.to_layout(h_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                try:
+                    ttnn.deallocate(h_rm)
+                except Exception:
+                    pass
+                parts.append(self._moe_from_tiled_4d(h_tile, b, sc, h, orig_batch, out_dtype))
+                try:
+                    ttnn.deallocate(h_tile)
+                except Exception:
+                    pass
+            out_torch = torch.cat(parts, dim=1)
+            return out_torch.reshape(orig_shape)
 
-            out_tt = ttnn.linear(hidden_tt, self._down_tt[eidx], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(hidden_tt)
+        if hidden_states_tt.layout != ttnn.TILE_LAYOUT:
+            hidden_states_tt = ttnn.to_layout(hidden_states_tt, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-            out_torch = ttnn.to_torch(out_tt, mesh_composer=mesh_composer).to(torch.float32)
-            ttnn.deallocate(out_tt)
-            out_torch = out_torch.view(-1, out_torch.shape[-1])[:n_tok]
+        out_torch = self._moe_from_tiled_4d(hidden_states_tt, b, s, h, orig_batch, out_dtype)
+        return out_torch.reshape(orig_shape)
 
-            current_hidden_states = out_torch * routing_weights[token_idx, top_k_pos, None]
-            final_hidden_states.index_add_(0, token_idx, current_hidden_states.to(final_hidden_states.dtype))
 
-        return final_hidden_states.view(*orig_shape)
+# Historical name used by symbiote tests and ``test_qwen_omni`` registration.
+TTNNQwen3OmniThinkerNaiveMoE = TTNNQwen3OmniThinkerMoE

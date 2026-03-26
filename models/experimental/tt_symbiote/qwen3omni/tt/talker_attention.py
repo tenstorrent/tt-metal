@@ -1,5 +1,8 @@
+import os
+
 import ttnn
 
+from models.experimental.tt_symbiote.core.utils import safe_permute
 from models.experimental.tt_symbiote.core.module import TTNNModule
 
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearIReplicatedWColSharded
@@ -116,6 +119,30 @@ class TTNNQwen3Attention(TTNNModule):
             topology=ttnn.Topology.Ring,
         )
 
+    def _effective_batch_chunk(self, batch_size):
+        v = os.environ.get("TT_SYMBIOTE_ATTN_BATCH_CHUNK")
+        if v is not None:
+            return max(0, int(v))
+        if batch_size > 256:
+            return 64
+        return 0
+
+    def _reshape_permute_bshd_to_bhsd(self, x, batch_size, seq_length, num_heads, head_dim):
+        chunk_b = self._effective_batch_chunk(batch_size)
+        if chunk_b <= 0 or batch_size <= chunk_b:
+            x = ttnn.reshape(x, (batch_size, seq_length, num_heads, head_dim))
+            return safe_permute(x, (0, 2, 1, 3))
+
+        hidden = num_heads * head_dim
+        parts = []
+        for b0 in range(0, batch_size, chunk_b):
+            b1 = min(b0 + chunk_b, batch_size)
+            xc = ttnn.slice(x, (b0, 0, 0), (b1, seq_length, hidden))
+            xc = ttnn.reshape(xc, (b1 - b0, seq_length, num_heads, head_dim))
+            xc = safe_permute(xc, (0, 2, 1, 3))
+            parts.append(xc)
+        return parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     # -------------------------
     # Forward
     # -------------------------
@@ -146,14 +173,13 @@ class TTNNQwen3Attention(TTNNModule):
         num_q_heads = query_states.shape[-1] // self.head_dim
         num_kv_heads = key_states.shape[-1] // self.head_dim
 
-        query_states = ttnn.reshape(query_states, (batch_size, seq_length, num_q_heads, self.head_dim))
-        query_states = ttnn.permute(query_states, (0, 2, 1, 3))
-
-        key_states = ttnn.reshape(key_states, (batch_size, seq_length, num_kv_heads, self.head_dim))
-        key_states = ttnn.permute(key_states, (0, 2, 1, 3))
-
-        value_states = ttnn.reshape(value_states, (batch_size, seq_length, num_kv_heads, self.head_dim))
-        value_states = ttnn.permute(value_states, (0, 2, 1, 3))
+        query_states = self._reshape_permute_bshd_to_bhsd(
+            query_states, batch_size, seq_length, num_q_heads, self.head_dim
+        )
+        key_states = self._reshape_permute_bshd_to_bhsd(key_states, batch_size, seq_length, num_kv_heads, self.head_dim)
+        value_states = self._reshape_permute_bshd_to_bhsd(
+            value_states, batch_size, seq_length, num_kv_heads, self.head_dim
+        )
 
         # -------------------------
         # Q / K normalization

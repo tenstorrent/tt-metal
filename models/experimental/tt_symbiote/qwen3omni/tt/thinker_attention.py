@@ -1,5 +1,8 @@
+import os
+
 import ttnn
 
+from models.experimental.tt_symbiote.core.utils import safe_permute
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear, TTNNLinearIReplicatedWColSharded
 from models.experimental.tt_symbiote.modules.rope import TTNNRotaryPositionEmbedding
@@ -111,6 +114,72 @@ class TTNNQwen3OmniAttention(TTNNModule):
             topology=ttnn.Topology.Ring,
         )
 
+    def _seq_chunk_for_attn(self):
+        """Align with MoE prefill chunking: same knob as ``TT_SYMBIOTE_MOE_SEQ_CHUNK`` unless overridden."""
+        v = os.environ.get("TT_SYMBIOTE_ATTN_SEQ_CHUNK")
+        if v is not None:
+            return int(v)
+        v = os.environ.get("TT_SYMBIOTE_MOE_SEQ_CHUNK")
+        if v is not None:
+            return int(v)
+        return 1024
+
+    def _effective_batch_chunk(self, batch_size):
+        """Cap ``ttnn.permute`` working set when logical batch is huge (e.g. multimodal token count).
+
+        ``TT_SYMBIOTE_ATTN_BATCH_CHUNK``: explicit size, or ``0`` to disable batch chunking.
+        When unset, chunk to 64 rows if ``batch_size`` > 256 (128 was too large for a single
+        TILE permute under ~124 MiB largest free DRAM block on WH).
+        """
+        v = os.environ.get("TT_SYMBIOTE_ATTN_BATCH_CHUNK")
+        if v is not None:
+            return max(0, int(v))
+        if batch_size > 256:
+            return 64
+        return 0
+
+    def _reshape_permute_bshd_to_bhsd(self, x, batch_size, seq_length, num_heads, head_dim):
+        """
+        [B, S, num_heads * head_dim] -> [B, num_heads, S, head_dim].
+
+        Long prefill: ``ttnn.permute`` allocates a full-sequence output buffer (~GB on TILE);
+        optional seq chunking caps peak DRAM (see ``TT_SYMBIOTE_ATTN_SEQ_CHUNK`` /
+        ``TT_SYMBIOTE_MOE_SEQ_CHUNK``). Large **batch** (e.g. 1528) also needs chunking:
+        see ``TT_SYMBIOTE_ATTN_BATCH_CHUNK`` / ``_effective_batch_chunk``.
+        """
+        hidden = num_heads * head_dim
+        s_chunk = self._seq_chunk_for_attn()
+        b_chunk = self._effective_batch_chunk(batch_size)
+        need_seq = s_chunk > 0 and seq_length > s_chunk
+        need_batch = b_chunk > 0 and batch_size > b_chunk
+        if not need_seq and not need_batch:
+            x = ttnn.reshape(x, (batch_size, seq_length, num_heads, head_dim))
+            return safe_permute(x, (0, 2, 1, 3))
+
+        if b_chunk <= 0:
+            b_chunk = batch_size
+        if s_chunk <= 0:
+            s_chunk = seq_length
+
+        b_parts = []
+        for b0 in range(0, batch_size, b_chunk):
+            b1 = min(b0 + b_chunk, batch_size)
+            sb_parts = []
+            for s0 in range(0, seq_length, s_chunk):
+                s1 = min(s0 + s_chunk, seq_length)
+                sc = s1 - s0
+                xc = ttnn.slice(x, (b0, s0, 0), (b1, s1, hidden))
+                xc = ttnn.reshape(xc, (b1 - b0, sc, num_heads, head_dim))
+                xc = safe_permute(xc, (0, 2, 1, 3))
+                sb_parts.append(xc)
+            xb = (
+                sb_parts[0]
+                if len(sb_parts) == 1
+                else ttnn.concat(sb_parts, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            )
+            b_parts.append(xb)
+        return b_parts[0] if len(b_parts) == 1 else ttnn.concat(b_parts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     # ------------------------------------------------------------------ forward
 
     def forward(
@@ -140,14 +209,13 @@ class TTNNQwen3OmniAttention(TTNNModule):
         # 3) Reshape [B,S,H*D] → [B,H,S,D] using raw ttnn ops
         #    (ttnn.reshape / ttnn.permute keep data as ttnn — no torch conversion,
         #     so no re-sharding at the next module boundary)
-        query_states = ttnn.reshape(query_states, (batch_size, seq_length, num_q_heads, self.head_dim))
-        query_states = ttnn.permute(query_states, (0, 2, 1, 3))
-
-        key_states = ttnn.reshape(key_states, (batch_size, seq_length, num_kv_heads, self.head_dim))
-        key_states = ttnn.permute(key_states, (0, 2, 1, 3))
-
-        value_states = ttnn.reshape(value_states, (batch_size, seq_length, num_kv_heads, self.head_dim))
-        value_states = ttnn.permute(value_states, (0, 2, 1, 3))
+        query_states = self._reshape_permute_bshd_to_bhsd(
+            query_states, batch_size, seq_length, num_q_heads, self.head_dim
+        )
+        key_states = self._reshape_permute_bshd_to_bhsd(key_states, batch_size, seq_length, num_kv_heads, self.head_dim)
+        value_states = self._reshape_permute_bshd_to_bhsd(
+            value_states, batch_size, seq_length, num_kv_heads, self.head_dim
+        )
 
         # 4) Q/K normalisation — inline ttnn.rms_norm (no module boundary)
         #    Same pattern as Glm4MoeLiteAttention line 1205.

@@ -1,5 +1,7 @@
 import ttnn
 
+from models.experimental.tt_symbiote.core.utils import safe_permute
+
 
 class TtConv1d:
     def __init__(self, device, parameters, stride=1, dilation=1, groups=1):
@@ -143,7 +145,7 @@ class TtConv1d:
         # -----------------
         # Step 2: reshape → Conv2D
         # -----------------
-        x = ttnn.permute(x, [0, 2, 1])
+        x = safe_permute(x, [0, 2, 1])
         x = ttnn.reshape(x, [batch_size, 1, new_length, self.in_channels])
 
         # -----------------
@@ -155,6 +157,6 @@ class TtConv1d:
         # Step 4: reshape back
         # -----------------
         result = ttnn.reshape(result, [batch_size, result.shape[2], self.out_channels])
-        result = ttnn.permute(result, [0, 2, 1])
+        result = safe_permute(result, [0, 2, 1])
 
         return result

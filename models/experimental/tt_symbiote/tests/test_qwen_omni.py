@@ -22,6 +22,16 @@ cluster memory and enables distributed routing; per-chip DRAM can still fragment
 if OOM persists, use ``TT_SYMBIOTE_RUN_MODE=CPU``, trim inputs, or preload/evict MoE
 weights explicitly.
 
+For long thinker prefill, ``export TT_SYMBIOTE_MOE_SEQ_CHUNK=512`` chunks **thinker MoE**
+and (same value unless overridden) **thinker self-attention** Q/K/V reshape+permute along
+sequence. Override attention only with ``TT_SYMBIOTE_ATTN_SEQ_CHUNK``. Use ``0`` to disable
+that chunking.
+
+For huge logical **batch** (e.g. ~1528 image/audio tokens), attention permute peak memory is
+capped by ``TT_SYMBIOTE_ATTN_BATCH_CHUNK`` (explicit rows per chunk; ``0`` = no batch chunking).
+When unset, thinker/talker/code2wav attention defaults to chunking by 64 when batch > 256 (fits
+TILE permute under typical per-bank free blocks; use ``32`` if still OOM).
+
 Example (8-chip mesh on T3K):
 
 .. code-block:: bash
@@ -36,7 +46,7 @@ Symbiote registration (``register_qwen_omni_symbiote_modules``) replaces:
 - **Thinker** self-attention with ``TTNNQwen3OmniAttention`` (same as ``test_thinker_attn.py``)
 - **Talker** text MoE with ``TTNNQwen3TalkerMoE`` (same pattern as ``test_qwen3_talker_moe.py``)
 - **Talker** self-attention with ``TTNNQwen3Attention`` (same implementation pattern as ``test_talker.py``)
-- **Thinker** audio encoder self-attention with ``TTNNQwenAudioAttention`` (see ``audio_attention.py`` / ``test_audio.py``)
+- **Thinker** audio encoder self-attention with ``TTNNQwenAudioAttentionOptimized`` (see ``audio_attention.py`` / ``test_audio.py``)
 - **Code2Wav** pre-transformer self-attention with ``TTNNQwen3OmniMoeCode2WavAttention`` (see ``code2wav_attn.py`` / ``test_code2wav.py``)
 
 Vision encoder stays on stock PyTorch modules.
@@ -57,7 +67,7 @@ from qwen_omni_utils import process_mm_info
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from models.experimental.tt_symbiote.modules.moe import TTNNQwen3OmniThinkerNaiveMoE, TTNNQwen3TalkerMoE
 from models.experimental.tt_symbiote.qwen3omni.hf_generation_compat import apply_qwen3_omni_talker_prepare_inputs_fix
-from models.experimental.tt_symbiote.qwen3omni.tt.audio_attention import TTNNQwenAudioAttention
+from models.experimental.tt_symbiote.qwen3omni.tt.audio_attention import TTNNQwenAudioAttentionOptimized
 from models.experimental.tt_symbiote.qwen3omni.tt.code2wav_attn import TTNNQwen3OmniMoeCode2WavAttention
 from models.experimental.tt_symbiote.qwen3omni.tt.talker_attention import TTNNQwen3Attention
 from models.experimental.tt_symbiote.qwen3omni.tt.thinker_attention import TTNNQwen3OmniAttention
@@ -101,7 +111,7 @@ def _patch_thinker_talker_device_dtype(model):
 
 
 def register_qwen_omni_symbiote_modules(model) -> dict:
-    """Replace thinker/talker MoE + attention, thinker audio attention, and code2wav attention with TTNN modules."""
+    """Replace thinker/talker MoE and attention paths with TTNN modules."""
     thinker_mlp_class = type(model.thinker.model.layers[0].mlp)
     thinker_attn_class = type(model.thinker.model.layers[0].self_attn)
     audio_attn_class = type(model.thinker.audio_tower.layers[0].self_attn)
@@ -112,7 +122,7 @@ def register_qwen_omni_symbiote_modules(model) -> dict:
         {
             thinker_mlp_class: TTNNQwen3OmniThinkerNaiveMoE,
             thinker_attn_class: TTNNQwen3OmniAttention,
-            audio_attn_class: TTNNQwenAudioAttention,
+            audio_attn_class: TTNNQwenAudioAttentionOptimized,
         },
         model_config=None,
     )
@@ -173,7 +183,7 @@ pytestmark = [
 
 
 def test_qwen_omni_symbiote_replacements_verified(mesh_device):
-    """Load model, apply symbiote replacements, assert thinker/talker/audio attention + MoE are TTNN (no generate)."""
+    """Load model, apply symbiote replacements, assert TTNN modules are installed (no generate)."""
     _require_symbiote_run_mode()
     apply_qwen3_omni_talker_prepare_inputs_fix()
 
@@ -218,8 +228,8 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
     n_audio = len(model.thinker.audio_tower.layers)
     for i, layer in enumerate(model.thinker.audio_tower.layers):
         assert isinstance(
-            layer.self_attn, TTNNQwenAudioAttention
-        ), f"thinker.audio_tower.layers[{i}].self_attn expected TTNNQwenAudioAttention, got {type(layer.self_attn)}"
+            layer.self_attn, TTNNQwenAudioAttentionOptimized
+        ), f"thinker.audio_tower.layers[{i}].self_attn expected TTNNQwenAudioAttentionOptimized, got {type(layer.self_attn)}"
 
     code2wav = getattr(model, "code2wav", None)
     n_code2wav = 0
@@ -231,12 +241,9 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
             ), f"code2wav.pre_transformer.layers[{i}].self_attn expected TTNNQwen3OmniMoeCode2WavAttention, got {type(layer.self_attn)}"
 
     print(
-        f"Replacements OK: thinker {n_thinker} (MoE + attn) + "
-        f"audio_tower {n_audio} (attn) + "
-        f"code2wav {n_code2wav} (attn) + "
-        f"talker {n_talker} (attn) + "
-        f"talker MoE layers {len(talker_moe_layer_indices)}/{n_talker} "
-        f"(mesh {mesh_device.get_num_devices()} device(s))"
+        f"Replacements OK: thinker {n_thinker} (MoE+attn), talker MoE+attn "
+        f"(mesh {mesh_device.get_num_devices()} device(s)); "
+        f"audio_tower {n_audio}, code2wav {n_code2wav}, talker {n_talker} layers"
     )
 
 

@@ -1,5 +1,6 @@
 import ttnn
 
+from models.experimental.tt_symbiote.core.utils import safe_permute
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 from models.experimental.tt_symbiote.modules.attention import TTNNSDPAAttention
@@ -129,9 +130,9 @@ class TTNNQwen3VLMoeVisionAttention(TTNNModule):
         q, k = self.apply_rotary_pos_emb_vision(q, k, cos, sin)
 
         # reshape to SDPA format
-        q = ttnn.permute(q, (1, 0, 2))
-        k = ttnn.permute(k, (1, 0, 2))
-        v = ttnn.permute(v, (1, 0, 2))
+        q = safe_permute(q, (1, 0, 2))
+        k = safe_permute(k, (1, 0, 2))
+        v = safe_permute(v, (1, 0, 2))
 
         q = ttnn.unsqueeze(q, 0)
         k = ttnn.unsqueeze(k, 0)

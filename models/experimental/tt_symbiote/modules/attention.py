@@ -15,6 +15,7 @@ except ImportError:
     print("Could not import sdpa_attention_forward from transformers.integrations.sdpa_attention. ")
 
 import ttnn
+from models.experimental.tt_symbiote.core.utils import safe_permute
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.linear import (
@@ -304,7 +305,7 @@ class TTNNSDPAAttention(TTNNModule):
         import math
 
         scale = scaling if scaling is not None else 1.0 / math.sqrt(query.shape[-1])
-        key_t = ttnn.permute(key, (0, 1, 3, 2))
+        key_t = safe_permute(key, (0, 1, 3, 2))
         scores = ttnn.matmul(query, key_t)
         scores = ttnn.multiply(scores, scale)
 
@@ -325,7 +326,7 @@ class TTNNSDPAAttention(TTNNModule):
         attn_output = ttnn.matmul(scores, value)
 
         if transpose_output:
-            attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
+            attn_output = safe_permute(attn_output, (0, 2, 1, 3))
         return attn_output
 
     def forward(
@@ -374,7 +375,7 @@ class TTNNSDPAAttention(TTNNModule):
                     memory_config=self.memory_config,
                 )
                 if transpose_output:
-                    attn_output = ttnn.permute(attn_output, (0, 2, 1, 3))
+                    attn_output = safe_permute(attn_output, (0, 2, 1, 3))
                 return attn_output
             except RuntimeError as e:
                 print(
@@ -713,7 +714,7 @@ class TTNNWhisperAttention(TTNNModule):
 
     def _reshape_heads(self, x: ttnn.Tensor, seq_len: int, bsz: int) -> ttnn.Tensor:
         x = ttnn.reshape(x, (bsz, seq_len, self.num_heads, self.head_dim))
-        return ttnn.permute(x, (0, 2, 1, 3))
+        return safe_permute(x, (0, 2, 1, 3))
 
     def forward(
         self,
@@ -1181,7 +1182,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         q_states = self._maybe_all_gather(q_states)
 
         q_states = ttnn.reshape(q_states, (batch_size, seq_length, self.num_heads, -1))
-        q_states = ttnn.permute(q_states, (0, 2, 1, 3))
+        q_states = safe_permute(q_states, (0, 2, 1, 3))
 
         q_pass = ttnn.slice(q_states, (0, 0, 0, 0), (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim))
         q_rot = ttnn.slice(
@@ -1210,7 +1211,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         kv_full = ttnn.reshape(
             kv_full, (batch_size, seq_length, self.num_heads, self.qk_nope_head_dim + self.v_head_dim)
         )
-        kv_full = ttnn.permute(kv_full, (0, 2, 1, 3))
+        kv_full = safe_permute(kv_full, (0, 2, 1, 3))
 
         key_nope = ttnn.slice(kv_full, (0, 0, 0, 0), (batch_size, self.num_heads, seq_length, self.qk_nope_head_dim))
         value_states = ttnn.slice(
@@ -1397,9 +1398,9 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         )
 
         # --- permute B H S D  →  S B H D  (the layout paged kernels expect) ---
-        query_states = ttnn.permute(query_states, (2, 0, 1, 3))
-        key_states = ttnn.permute(key_states, (2, 0, 1, 3))
-        value_states = ttnn.permute(value_states, (2, 0, 1, 3))
+        query_states = safe_permute(query_states, (2, 0, 1, 3))
+        key_states = safe_permute(key_states, (2, 0, 1, 3))
+        value_states = safe_permute(value_states, (2, 0, 1, 3))
 
         # --- pad V to qk_head_dim so K/V caches share the same last dim ---
         if self.qk_head_dim != self.v_head_dim:
@@ -1451,7 +1452,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         # attn_output: [1, B, H, qk_head_dim]
 
         # --- convert back to [B, S, H*D_v] for the output projection ---
-        attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))  # [B, 1, H, qk_head_dim]
+        attn_output = safe_permute(attn_output, (1, 0, 2, 3))  # [B, 1, H, qk_head_dim]
         if self.qk_head_dim != self.v_head_dim:
             attn_output = attn_output[:, :, :, : self.v_head_dim]
         attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_heads * self.v_head_dim))
