@@ -212,6 +212,7 @@ class TestTraceEntry:
         )
         d = entry.to_dict()
         assert d["op_kwargs"] == {"dim": -1, "cluster_axis": 1}
+        assert d["input_shapes"] == []
 
 
 # ---------------------------------------------------------------------------

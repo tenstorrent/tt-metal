@@ -185,8 +185,10 @@ class SFTTrainer:
         self.config = config
         self.step = 0  # 0-based; incremented after each optimizer step
 
-        # Start memory tracking from optimizer creation (will be printed in train())
+        # Match train_nanogpt / C++: begin_capture → MODEL_CREATION snapshot → optimizer →
+        # OPTIMIZER_CREATION snapshot. (Model may already exist; first segment can be ~empty.)
         self._memory_guard = MemoryUsageTracker.begin_capture()
+        MemoryUsageTracker.snapshot("MODEL_CREATION")
         self._optimizer = self._build_optimizer(optimizer)
         MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
 

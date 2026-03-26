@@ -10,7 +10,7 @@ via parallelize_module(); no Layout construction in user code.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from .layout import Layout, Shard, Replicate
 
@@ -26,8 +26,15 @@ def _mesh_ndim(mesh_device) -> int:
 class ParallelStyle(ABC):
     """Contract for how a module should be parallelized.
 
-    Defines _apply for parallelize_module to use.
+    Subclasses must implement:
+    - ``get_layouts`` — return a ``{param_name: Layout}`` dict for materialization.
+    - ``_apply`` — apply forward hooks / redistribute for parallelize_module.
     """
+
+    @abstractmethod
+    def get_layouts(self, mesh_device, tp_axis: int) -> dict[str, Layout]:
+        """Return a mapping of parameter name to Layout for this parallel style."""
+        ...
 
     @abstractmethod
     def _apply(
@@ -38,6 +45,41 @@ class ParallelStyle(ABC):
     ) -> "AbstractModuleBase":
         """Apply parallelization to the module. Returns the (mutated) module."""
         ...
+
+
+class TpPlan:
+    """Tensor-parallel plan: style patterns + axis.
+
+    Bundles a ``{pattern: ParallelStyle}`` dict with the mesh axis
+    so callers pass a single object to ``TransformerBase``.
+
+    Usage::
+
+        plan = TpPlan({
+            r".*\\.(q_linear|kv_linear)": ColwiseParallel(),
+            r".*\\.out_linear": RowwiseParallel(),
+        }, tp_axis=1)
+        model = Llama(config, mesh_device=mesh, tp_plan=plan)
+    """
+
+    __slots__ = ("styles", "tp_axis")
+
+    def __init__(self, styles: dict[str, ParallelStyle], tp_axis: int = 0) -> None:
+        self.styles = styles
+        self.tp_axis = tp_axis
+
+    def resolve(self, mesh_device) -> dict:
+        """Convert styles to a ``{pattern: Layout}`` dict for materialization."""
+        resolved = {}
+        for pattern, style in self.styles.items():
+            for param_name, layout in style.get_layouts(
+                mesh_device, self.tp_axis
+            ).items():
+                resolved[pattern + r"\." + param_name] = layout
+        return resolved
+
+    def __len__(self) -> int:
+        return len(self.styles)
 
 
 class ColwiseParallel(ParallelStyle):
@@ -57,10 +99,12 @@ class ColwiseParallel(ParallelStyle):
         """
         self.gather_output = gather_output
 
-    def get_layout(self, mesh_device, tp_axis: int) -> Layout:
-        """Return the weight layout for this style (for composite module rules)."""
+    def get_layouts(self, mesh_device, tp_axis: int) -> dict[str, Layout]:
         ndim = _mesh_ndim(mesh_device)
-        return Layout(ndim=ndim, axis_placements={tp_axis: Shard(-2)})
+        return {
+            "weight": Layout(ndim=ndim, axis_placements={tp_axis: Shard(-2)}),
+            "bias": Layout(ndim=ndim, axis_placements={tp_axis: Shard(-1)}),
+        }
 
     def _apply(
         self,
@@ -76,21 +120,31 @@ class ColwiseParallel(ParallelStyle):
             )
 
         from .training import distribute_tensor
+        from .layout import get_layout
 
-        layout = self.get_layout(mesh_device, tp_axis)
+        layouts = self.get_layouts(mesh_device, tp_axis)
+        layout = layouts["weight"]
 
-        # Distribute weight
-        new_w = distribute_tensor(module.weight.tensor, mesh_device, layout)
-        module.weight.tensor = new_w
-        module.override_tensor(new_w, "weight")
+        # Skip distribute_tensor if weight is already in the correct layout.
+        # This happens when the model was built with lazy init (mesh_device + tp_plan).
+        current_layout = None
+        try:
+            current_layout = get_layout(module.weight.tensor)
+        except Exception:
+            pass
 
-        # Distribute bias (sharded on last dim for column-parallel)
-        if module.bias is not None:
-            ndim = _mesh_ndim(mesh_device)
-            bias_layout = Layout(ndim=ndim, axis_placements={tp_axis: Shard(-1)})
-            new_b = distribute_tensor(module.bias.tensor, mesh_device, bias_layout)
-            module.bias.tensor = new_b
-            module.override_tensor(new_b, "bias")
+        if current_layout != layout:
+            # Distribute weight
+            new_w = distribute_tensor(module.weight.tensor, mesh_device, layout)
+            module.weight.tensor = new_w
+            module.override_tensor(new_w, "weight")
+
+            # Distribute bias (sharded on last dim for column-parallel)
+            if module.bias is not None:
+                bias_layout = layouts["bias"]
+                new_b = distribute_tensor(module.bias.tensor, mesh_device, bias_layout)
+                module.bias.tensor = new_b
+                module.override_tensor(new_b, "bias")
 
         import ttml
         from .layout import get_layout, set_layout
@@ -130,10 +184,12 @@ class RowwiseParallel(ParallelStyle):
         parallelize_module(model, mesh, {"w2": RowwiseParallel()})
     """
 
-    def get_layout(self, mesh_device, tp_axis: int) -> Layout:
-        """Return the weight layout for this style (for composite module rules)."""
+    def get_layouts(self, mesh_device, tp_axis: int) -> dict[str, Layout]:
         ndim = _mesh_ndim(mesh_device)
-        return Layout(ndim=ndim, axis_placements={tp_axis: Shard(-1)})
+        return {
+            "weight": Layout(ndim=ndim, axis_placements={tp_axis: Shard(-1)}),
+            "bias": Layout(ndim=ndim),
+        }
 
     def _apply(
         self,
@@ -149,21 +205,31 @@ class RowwiseParallel(ParallelStyle):
             )
 
         from .training import distribute_tensor
+        from .layout import get_layout
 
-        layout = self.get_layout(mesh_device, tp_axis)
+        layouts = self.get_layouts(mesh_device, tp_axis)
+        layout = layouts["weight"]
 
-        # Distribute weight
-        new_w = distribute_tensor(module.weight.tensor, mesh_device, layout)
-        module.weight.tensor = new_w
-        module.override_tensor(new_w, "weight")
+        # Skip distribute_tensor if weight is already in the correct layout.
+        # This happens when the model was built with lazy init (mesh_device + tp_plan).
+        current_layout = None
+        try:
+            current_layout = get_layout(module.weight.tensor)
+        except Exception:
+            pass
 
-        # Bias stays replicated for row-parallel
-        if module.bias is not None:
-            ndim = _mesh_ndim(mesh_device)
-            bias_layout = Layout(ndim=ndim)
-            new_b = distribute_tensor(module.bias.tensor, mesh_device, bias_layout)
-            module.bias.tensor = new_b
-            module.override_tensor(new_b, "bias")
+        if current_layout != layout:
+            # Distribute weight
+            new_w = distribute_tensor(module.weight.tensor, mesh_device, layout)
+            module.weight.tensor = new_w
+            module.override_tensor(new_w, "weight")
+
+            # Bias stays replicated for row-parallel
+            if module.bias is not None:
+                bias_layout = layouts["bias"]
+                new_b = distribute_tensor(module.bias.tensor, mesh_device, bias_layout)
+                module.bias.tensor = new_b
+                module.override_tensor(new_b, "bias")
 
         # Post: all_reduce on output (row-parallel partial sums)
         from .layout import get_layout, set_layout

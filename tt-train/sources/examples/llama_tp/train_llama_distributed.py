@@ -40,11 +40,65 @@ from ttml.datasets import Batch, InMemoryDataloader
 # Layout-aware dispatch layer
 from ttml.distributed import (
     parallelize_module,
+    TpPlan,
     ColwiseParallel,
     RowwiseParallel,
     init_ops,
 )
 from ttml.distributed.debug import DispatchTraceCallback
+from ttml.distributed.layout import Shard, get_layout
+
+
+def _mesh_axis_sizes(mesh_device) -> list[int]:
+    ms = mesh_device.shape
+    if hasattr(ms, "dims"):
+        return [int(ms[i]) for i in range(ms.dims())]
+    return [int(x) for x in ms]
+
+
+def _global_numel_from_shard_shape_and_layout(
+    local_shape: tuple[int, ...],
+    layout,
+    mesh_device,
+) -> int:
+    """Invert ``Layout.shard_shape``: recover global element count from shard-local logical shape.
+
+    For each ``Shard(dim)`` on mesh axis ``a``, multiplies ``local_shape[dim]`` by
+    ``mesh_shape[a]``. Replicated axes leave sizes unchanged.
+    """
+    if layout is None or mesh_device is None:
+        return math.prod(local_shape)
+    mesh_sizes = _mesh_axis_sizes(mesh_device)
+    rank = len(local_shape)
+    g = list(local_shape)
+    for mesh_axis, placement in enumerate(layout.placements):
+        if mesh_axis >= len(mesh_sizes):
+            break
+        if isinstance(placement, Shard):
+            dim = placement.dim if placement.dim >= 0 else rank + placement.dim
+            n = mesh_sizes[mesh_axis]
+            if n > 1:
+                g[dim] *= n
+    return math.prod(g)
+
+
+def parameter_count_stats_from_sharding(model, mesh_device) -> tuple[int, int]:
+    """Sum over ``model.parameters()``: (local_shard_numel, global_unique_numel).
+
+    ``local_shard_numel`` is ``sum(prod(t.shape()))`` as reported by the runtime.
+    ``global_unique_numel`` applies the mesh × ``Layout`` shard inverse (same convention
+    as ``Layout.shard_shape``) so TP-sharded weights count once at full width.
+    """
+    local_total = 0
+    global_total = 0
+    for _name, t in model.parameters().items():
+        sh = tuple(int(x) for x in t.shape())
+        local_total += math.prod(sh)
+        layout = get_layout(t)
+        global_total += _global_numel_from_shard_shape_and_layout(
+            sh, layout, mesh_device
+        )
+    return local_total, global_total
 
 # Memory profiling
 MemoryUsageTracker = ttml.core.utils.MemoryUsageTracker
@@ -292,8 +346,9 @@ def distributed_collate_fn(
 # TP plan for Llama (PyTorch-style ParallelStyle)
 # ---------------------------------------------------------------------------
 
-# Module name patterns (regex or exact) -> ParallelStyle. No Layout in user code.
-LLAMA_TP_PLAN = {
+# Module name patterns (regex or exact) -> ParallelStyle.
+# tp_axis is set at model creation time via TpPlan(..., tp_axis=...).
+LLAMA_TP_STYLES = {
     r".*\.(q_linear|kv_linear|w1|w3)": ColwiseParallel(),
     r".*\.(out_linear|w2)": RowwiseParallel(),
     "fc": ColwiseParallel(gather_output=True),  # LM head
@@ -569,25 +624,36 @@ def main():
     if args.track_memory:
         model_guard = MemoryUsageTracker.begin_capture()
 
-    model = Llama(llama_config)
-    total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
+    # Build model — when TP is enabled, pass a TpPlan so TransformerBase
+    # creates weights directly sharded on device (no allocate-full → scatter).
+    tp_plan = TpPlan(LLAMA_TP_STYLES, tp_axis=tp_axis) if tp_axis is not None else None
+    if tp_plan is not None:
+        print(f"   Using lazy init with {len(tp_plan)} tp_plan patterns")
+    model = Llama(llama_config, mesh_device=mesh_device, tp_plan=tp_plan)
+
+    local_p, global_p = parameter_count_stats_from_sharding(model, mesh_device)
     print(
         f"   Config: {llama_config.num_hidden_layers} layers, {llama_config.hidden_size} hidden, "
         f"{llama_config.num_attention_heads} heads, {llama_config.num_key_value_heads} kv_heads"
     )
-    print(f"   Total parameters: {total_params:,}")
+    print(
+        f"   Parameters (local shard logical, sum of prod(shape) per weight): {local_p:,}"
+    )
+    print(f"   Parameters (global unique, from Layout × mesh sharding): {global_p:,}")
 
     if args.track_memory:
         MemoryUsageTracker.end_capture("MODEL_CREATION")
         print_memory_stats("MODEL_CREATION")
 
-    # Distribute model with TP and/or CP
+    # Install forward collective hooks (all_reduce / all_gather / ring_sdpa).
+    # Weights are already sharded from lazy init; parallelize_module only patches
+    # module.forward here (skips distribute_tensor for already-distributed tensors).
     if tp_axis is not None or cp_axis is not None:
-        print("\n4. Distributing model...")
+        print("\n4. Installing distributed forward hooks...")
         if tp_axis is not None:
             print(f"   TP enabled on axis {tp_axis}")
             print(
-                f"   Plan: {len(LLAMA_TP_PLAN)} module patterns (ColwiseParallel / RowwiseParallel)"
+                f"   Plan: {len(LLAMA_TP_STYLES)} module patterns (ColwiseParallel / RowwiseParallel)"
             )
         if cp_axis is not None:
             print(f"   CP enabled on axis {cp_axis}")
@@ -599,7 +665,7 @@ def main():
             model = parallelize_module(
                 model,
                 mesh_device,
-                LLAMA_TP_PLAN,
+                LLAMA_TP_STYLES,
                 tp_axis=tp_axis,
                 cp_axis=cp_axis,
             )
@@ -613,7 +679,7 @@ def main():
             MemoryUsageTracker.end_capture("MODEL_DISTRIBUTION")
             print_memory_stats("MODEL_DISTRIBUTION")
 
-        print("   Model distributed.")
+        print("   Hooks installed.")
     else:
         print("\n4. TP/CP not enabled, skipping distribution...")
 

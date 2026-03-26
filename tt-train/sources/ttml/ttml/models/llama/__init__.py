@@ -12,7 +12,7 @@ import ml_dtypes
 
 import ttnn
 import ttml
-from ttml.modules import AbstractModuleBase, ModuleList, LinearLayer
+from ttml.modules import ModuleList, LinearLayer, TransformerBase
 
 from .. import RunnerType, WeightTyingType, memory_efficient_runner
 from .embedding import Embedding
@@ -99,19 +99,21 @@ def initialize_parameters(parameters: Dict[str, ttml.autograd.Tensor]) -> None:
             tensor.assign(new_tensor)
 
 
-class Llama(AbstractModuleBase):
-    def __init__(self, config: LlamaConfig) -> None:
-        super().__init__()
-
+class Llama(TransformerBase):
+    def __init__(self, config: LlamaConfig, **kwargs) -> None:
         self.config = config
 
-        self.fc = LinearLayer(config.hidden_size, config.vocab_size, False)
+        self.fc = LinearLayer(config.hidden_size, config.vocab_size, False, **kwargs)
 
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
-        self.tok_emb = Embedding(vocab_size_divisible_by_32, config.hidden_size)
+        self.tok_emb = Embedding(
+            vocab_size_divisible_by_32, config.hidden_size, **kwargs
+        )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            self.tok_emb.weight = self.fc.weight.tensor
+            # Share the Parameter object so lazy materialization runs once; assigning
+            # .tensor would copy TensorMetadata and break Embedding.forward (expects Parameter).
+            self.tok_emb.weight = self.fc.weight
 
         head_dim = config.hidden_size // config.num_attention_heads
 
@@ -146,13 +148,16 @@ class Llama(AbstractModuleBase):
                     mlp_dropout=config.mlp_dropout,
                     intermediate_size=config.intermediate_size,
                     attention_bias=config.attention_bias,
+                    **kwargs,
                 )
                 for _ in range(config.num_hidden_layers)
-            ]
+            ],
+            **kwargs,
         )
 
-        self.ln_fc = RMSNormLayer(config.hidden_size)
-        initialize_parameters(self.parameters())
+        self.ln_fc = RMSNormLayer(config.hidden_size, **kwargs)
+
+        super().__init__(**kwargs)
 
     def forward(
         self,

@@ -4,33 +4,67 @@
 
 """Python module base inheriting from C++ ModuleBase with auto-registration."""
 
+import re
 from typing import Any, Iterable, Iterator, Optional, Union, overload
 from _ttml.modules import ModuleBase as CppModuleBase
-from .parameter import Buffer, Parameter
+from .parameter import Buffer, Parameter, TensorMetadata
+
+
+def _match_policy(path: str, tp_plan: Optional[dict]) -> Any:
+    """Return the Layout for the first matching pattern in tp_plan, or None."""
+    if tp_plan is None:
+        return None
+    for pattern, layout in tp_plan.items():
+        if re.search(pattern, path):
+            return layout
+    return None
 
 
 class AbstractModuleBase(CppModuleBase):
-    """Module base with PyTorch-like auto-registration via __setattr__."""
+    """Module base with PyTorch-like auto-registration via __setattr__.
 
-    def __init__(self) -> None:
+    Subclasses create ``TensorMetadata`` Parameters in their constructor
+    **before** calling ``super().__init__()``.  No materialization happens
+    here — use ``TransformerBase`` as the root to materialize the full tree.
+    """
+
+    def __init__(self, **kwargs) -> None:
         super().__init__()
         object.__setattr__(self, "_buffers", {})
         self.create_name(self.__class__.__name__)
 
+        # Retroactively register modules/params assigned before super().__init__().
+        for name, value in list(self.__dict__.items()):
+            if name.startswith("_"):
+                continue
+            if isinstance(value, CppModuleBase):
+                self._bind_module(value, name)
+            elif isinstance(value, Parameter) and not isinstance(
+                value.tensor, TensorMetadata
+            ):
+                self._bind_parameter(value.tensor, name)
+            elif isinstance(value, Buffer):
+                self._bind_buffer(value.tensor, name)
+
+    # ------------------------------------------------------------------
+    # Attribute registration
+    # ------------------------------------------------------------------
+
     def __setattr__(self, name: str, value: Any) -> None:
         object.__setattr__(self, name, value)
 
-        # Skip if not initialized yet
+        # Skip if not initialized yet.
         if "_buffers" not in self.__dict__:
             return
 
-        # Auto-register modules and tensors
         if isinstance(value, CppModuleBase):
             self._bind_module(value, name)
             return
 
         if isinstance(value, Parameter):
-            self._bind_parameter(value.tensor, name)
+            # TensorMetadata Parameters are not bound to C++ until materialized.
+            if not isinstance(value.tensor, TensorMetadata):
+                self._bind_parameter(value.tensor, name)
             return
 
         if isinstance(value, Buffer):
@@ -43,6 +77,10 @@ class AbstractModuleBase(CppModuleBase):
     def __delattr__(self, name: str) -> None:
         self._buffers.pop(name, None)
         object.__delattr__(self, name)
+
+    # ------------------------------------------------------------------
+    # C++ registration helpers
+    # ------------------------------------------------------------------
 
     def _bind_module(self, module, name: str) -> None:
         """Register or override a child module by name."""
@@ -61,6 +99,10 @@ class AbstractModuleBase(CppModuleBase):
     def _bind_buffer(self, buffer, name: str) -> None:
         """Register a buffer by name."""
         self._buffers[name] = buffer
+
+    # ------------------------------------------------------------------
+    # Introspection helpers
+    # ------------------------------------------------------------------
 
     def named_parameters(self, prefix: str = "") -> Iterator[tuple[str, Any]]:
         """Yield (name, parameter) pairs."""
@@ -124,6 +166,63 @@ class AbstractModuleBase(CppModuleBase):
         return result
 
 
+class TransformerBase(AbstractModuleBase):
+    """Root-level transformer base that materializes the full module tree.
+
+    Subclasses create child modules in their constructor, then call
+    ``super().__init__(**kwargs)``.  This class captures ``mesh_device``
+    and ``tp_plan``, then walks the tree to materialize every
+    ``TensorMetadata`` Parameter.
+
+    Usage::
+
+        class Llama(TransformerBase):
+            def __init__(self, config, **kwargs):
+                self.fc = LinearLayer(...)
+                super().__init__(**kwargs)
+    """
+
+    def __init__(self, mesh_device=None, tp_plan=None, **kwargs) -> None:
+        self._mesh_device = mesh_device
+        self._tp_plan = tp_plan.resolve(mesh_device) if tp_plan is not None else None
+        super().__init__(**kwargs)
+        self._materialize_tree()
+
+    # ------------------------------------------------------------------
+    # Materialization
+    # ------------------------------------------------------------------
+
+    def _materialize_tree(self) -> None:
+        """Walk the full module tree and materialize all TensorMetadata Parameters."""
+        for prefix, module in self.named_modules():
+            if isinstance(module, AbstractModuleBase):
+                self._materialize_module_params(module, prefix)
+
+    def _materialize_module_params(
+        self, module: AbstractModuleBase, prefix: str
+    ) -> None:
+        """Materialize a single module's own TensorMetadata Parameters."""
+        for name in list(vars(module)):
+            attr = getattr(module, name, None)
+            if isinstance(attr, Parameter) and isinstance(attr.tensor, TensorMetadata):
+                full_path = f"{prefix}.{name}" if prefix else name
+                self._materialize_param(module, name, attr, full_path)
+
+    def _materialize_param(
+        self, module: AbstractModuleBase, name: str, param: Parameter, full_path: str
+    ) -> None:
+        """Convert a single TensorMetadata Parameter into a device tensor."""
+        metadata = param.tensor
+        layout = _match_policy(full_path, self._tp_plan)
+
+        tensor = metadata.init_fn(
+            metadata.shape, layout=layout, mesh_device=self._mesh_device
+        )
+        tensor.set_requires_grad(metadata.requires_grad)
+        param.tensor = tensor
+        module._bind_parameter(tensor, name)
+
+
 class ModuleList(AbstractModuleBase):
     """A list of modules with automatic registration (PyTorch-compatible).
 
@@ -142,13 +241,12 @@ class ModuleList(AbstractModuleBase):
                 return x
     """
 
-    def __init__(self, modules: Optional[Iterable[CppModuleBase]] = None) -> None:
-        """Initialize ModuleList.
-
-        Args:
-            modules: Optional iterable of modules to add.
-        """
-        super().__init__()
+    def __init__(
+        self,
+        modules: Optional[Iterable[CppModuleBase]] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
         self._modules_list: list[CppModuleBase] = []
         if modules is not None:
             for module in modules:
@@ -342,13 +440,9 @@ class ModuleDict(AbstractModuleBase):
         modules: Optional[
             Union[dict[str, CppModuleBase], Iterable[tuple[str, CppModuleBase]]]
         ] = None,
+        **kwargs,
     ) -> None:
-        """Initialize ModuleDict.
-
-        Args:
-            modules: Optional dict or iterable of (name, module) pairs.
-        """
-        super().__init__()
+        super().__init__(**kwargs)
         self._modules_dict: dict[str, CppModuleBase] = {}
         if modules is not None:
             if isinstance(modules, dict):

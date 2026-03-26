@@ -11,8 +11,8 @@ from _ttml.modules import InferenceMode, ModuleBase, RunMode
 # Python implementations
 from .linear import LinearLayer
 from .lora import LoraConfig, LoraLinear, LoraModel
-from .module_base import AbstractModuleBase, ModuleDict, ModuleList
-from .parameter import Buffer, Parameter
+from .module_base import AbstractModuleBase, ModuleDict, ModuleList, TransformerBase
+from .parameter import Buffer, Parameter, TensorMetadata
 
 __all__ = [
     "AbstractModuleBase",
@@ -27,4 +27,6 @@ __all__ = [
     "ModuleList",
     "Parameter",
     "RunMode",
+    "TensorMetadata",
+    "TransformerBase",
 ]
