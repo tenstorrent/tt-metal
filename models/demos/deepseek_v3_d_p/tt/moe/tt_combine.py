@@ -29,11 +29,8 @@ class TtCombineModule(LightweightModule):
         cluster_axis: int = 0,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
-        memory_config: ttnn.MemoryConfig = None,
+        memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
-        distributed_zero_init: bool = True,
-        inline_zero_init: bool = False,
-        column_sender_layout: bool = False,
     ):
         """
         Initialize combine module wrapper.
@@ -45,10 +42,8 @@ class TtCombineModule(LightweightModule):
             experts_per_chip: Number of experts per chip
             num_experts_per_tok: Number of experts each token is routed to
             seq_len_per_chip: Sequence length per chip
-            memory_config: Output memory configuration (L1 or DRAM interleaved)
-            init_zeros: Whether to zero-initialize the output buffer
-            distributed_zero_init: Use distributed multi-core DRAM zero init (True) or legacy single-core (False)
-            column_sender_layout: Use column-wise sender core placement (True) or row-wise (False)
+            memory_config: Output memory configuration (DRAM interleaved)
+            init_zeros: Whether to zero-initialize the output buffer using hybrid row zero-init
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -62,9 +57,6 @@ class TtCombineModule(LightweightModule):
         self.topology = topology
         self.memory_config = memory_config
         self.init_zeros = init_zeros
-        self.distributed_zero_init = distributed_zero_init
-        self.inline_zero_init = inline_zero_init
-        self.column_sender_layout = column_sender_layout
 
     def forward(
         self,
@@ -96,8 +88,5 @@ class TtCombineModule(LightweightModule):
             topology=self.topology,
             memory_config=self.memory_config,
             init_zeros=self.init_zeros,
-            distributed_zero_init=self.distributed_zero_init,
-            inline_zero_init=self.inline_zero_init,
-            column_sender_layout=self.column_sender_layout,
         )
         return output

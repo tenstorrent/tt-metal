@@ -111,10 +111,7 @@ ttnn::Tensor prefill_combine(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    bool init_zeros,
-    bool distributed_zero_init,
-    bool inline_zero_init,
-    bool column_sender_layout) {
+    bool init_zeros) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::combine::CombineDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -127,10 +124,7 @@ ttnn::Tensor prefill_combine(
             .topology = topology,
             .output_mem_config = memory_config,
             .worker_core_range_set = worker_core_range_set,
-            .init_zeros = init_zeros,
-            .distributed_zero_init = distributed_zero_init,
-            .inline_zero_init = inline_zero_init,
-            .column_sender_layout = column_sender_layout},
+            .init_zeros = init_zeros},
         OperationType::tensor_args_t{
             .dispatched_buffer = dispatched_buffer,
             .dispatched_metadata = dispatched_metadata,

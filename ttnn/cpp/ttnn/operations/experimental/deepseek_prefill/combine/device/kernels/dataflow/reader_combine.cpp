@@ -19,12 +19,6 @@
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 
-#if defined(IS_L1_OUTPUT) && IS_L1_OUTPUT && defined(L1_BANK_NOC_X_START) && defined(NUM_L1_BANKS)
-#define USE_L1_MULTICAST_ZERO 1
-#else
-#define USE_L1_MULTICAST_ZERO 0
-#endif
-
 void kernel_main() {
     using namespace ttnn::operations::ccl::common;
 
@@ -99,10 +93,6 @@ void kernel_main() {
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args++);
     uint32_t zero_init_semaphore_address = get_semaphore(zero_init_semaphore_id);
     uint32_t zero_init_barrier_address = get_semaphore(zero_init_barrier_semaphore_id);
-#if defined(DRAM_ZERO_INIT_EXTERNAL)
-    uint32_t zi_done_semaphore_id = get_arg_val<uint32_t>(rt_args++);
-    uint32_t zi_done_sem_address = get_semaphore(zi_done_semaphore_id);
-#endif
 
     DPRINT_COMBINE << "Combine Reader: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
                    << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
@@ -112,26 +102,6 @@ void kernel_main() {
     constexpr uint32_t read_batch_size = 8;
 
 #if INIT_ZEROS
-#if USE_L1_MULTICAST_ZERO
-    if (expert_start_idx == 0) {
-        constexpr uint32_t per_bank_bytes = OUTPUT_BYTES_PER_BANK;
-        for (uint32_t offset = 0; offset < per_bank_bytes; offset += MEM_ZEROS_SIZE) {
-            uint32_t chunk_size = ((uint32_t)MEM_ZEROS_SIZE < (per_bank_bytes - offset)) ? (uint32_t)MEM_ZEROS_SIZE
-                                                                                         : (per_bank_bytes - offset);
-            uint64_t mcast_addr = get_noc_multicast_addr(
-                L1_BANK_NOC_X_START, L1_BANK_NOC_Y_START, L1_BANK_NOC_X_END, L1_BANK_NOC_Y_END, output_addr + offset);
-            noc_async_write_multicast_loopback_src(MEM_ZEROS_BASE, mcast_addr, chunk_size, NUM_L1_BANKS);
-        }
-        noc_async_write_barrier();
-    }
-#elif defined(DRAM_ZERO_INIT_EXTERNAL)
-    {
-        volatile tt_l1_ptr uint32_t* zi_done_sem_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zi_done_sem_address);
-        noc_semaphore_wait(zi_done_sem_ptr, NUM_ZERO_INIT_CORES);
-        noc_semaphore_set(zi_done_sem_ptr, 0);
-    }
-#elif defined(DRAM_ZERO_INIT_INLINE)
     {
         uint32_t inline_page_start = get_arg_val<uint32_t>(rt_args++);
         uint32_t inline_page_end = get_arg_val<uint32_t>(rt_args++);
@@ -168,21 +138,6 @@ void kernel_main() {
         noc_semaphore_set(zi_done_sem_ptr_inline, 0);
 #endif
     }
-#else
-    if (expert_start_idx == 0) {
-        for (uint32_t page = 0; page < output_pages; page++) {
-            uint64_t page_noc_addr = get_noc_addr(page, output_addr_gen);
-            uint32_t bytes = aligned_output_page_size;
-            while (bytes > 0) {
-                uint32_t curr_bytes = (bytes < (uint32_t)MEM_ZEROS_SIZE) ? bytes : (uint32_t)MEM_ZEROS_SIZE;
-                noc_async_write(MEM_ZEROS_BASE, page_noc_addr, curr_bytes);
-                page_noc_addr += curr_bytes;
-                bytes -= curr_bytes;
-            }
-        }
-        noc_async_write_barrier();
-    }
-#endif
 #endif
 
     // Signal writer that zero-init is complete (or skipped for non-core-0)
