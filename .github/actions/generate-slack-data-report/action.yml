@@ -31,5 +31,20 @@ runs:
         mkdir -p "$(dirname "$report_path")"
         prompt_text="$(cat "$prompt_file")"
         prompt_text="${prompt_text//__INPUT_JSON_PATH__/$input_json}"
-        agent --trust --model "$model" -p "$prompt_text" > "$report_path"
+        run_prompt="$prompt_text"
+        run_prompt+=$'\n\nImportant output contract:\n'
+        run_prompt+=$'- You may reason however you want while working.\n'
+        run_prompt+=$'- At the very end, emit this exact marker on its own line:\n'
+        run_prompt+=$'===FINAL_REPORT_MD===\n'
+        run_prompt+=$'- After that marker, output only the final markdown report.\n'
+        raw_output_path="${report_path}.raw.log"
+        echo "Running Cursor agent with model: $model"
+        echo "Writing report to: $report_path"
+        agent --trust --model "$model" -p "$run_prompt" | tee "$raw_output_path"
+        awk 'found {print} /^===FINAL_REPORT_MD===$/ {found=1; next}' "$raw_output_path" > "$report_path"
+        if [ ! -s "$report_path" ]; then
+          echo "Failed to extract final markdown report from agent output."
+          echo "Raw output was saved to: $raw_output_path"
+          exit 1
+        fi
         test -s "$report_path"

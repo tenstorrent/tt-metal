@@ -13,4 +13,3 @@ Requirements:
 - If an item is ambiguous, classify as "still failing/unresolved" and mention ambiguity.
 - Show percentages with one decimal place.
 - If no resolved items exist, report average time as "N/A".
-- Output markdown only (no code fences).
