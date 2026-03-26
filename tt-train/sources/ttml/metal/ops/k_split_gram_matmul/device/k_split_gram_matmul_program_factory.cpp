@@ -11,7 +11,7 @@
 namespace ttml::metal::ops::k_split_gram_matmul::device {
 
 namespace {
-tt::tt_metal::CoreRangeSet make_crs(const std::vector<tt::tt_metal::CoreCoord>& cores) {
+tt::tt_metal::CoreRangeSet make_core_range_set(const std::vector<tt::tt_metal::CoreCoord>& cores) {
     std::set<tt::tt_metal::CoreRange> ranges;
     for (const auto& c : cores) {
         ranges.insert(tt::tt_metal::CoreRange(c, c));
@@ -59,13 +59,13 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     auto out_tile_format = tt::DataFormat::Float16_b;
     auto out_tile_sz = tt::tile_size(out_tile_format);
 
-    bool mirror = (attrs.output_mode == ttml::metal::OutputMode::Full);
+    bool mirror_active = (attrs.output_mode == ttml::metal::OutputMode::Full);
 
     // Joint optimization of K_block_tiles and M_block with N_block = M_block streaming.
-    // Mirror mode adds c_4 (mb tiles) + c_7 (mb tiles) = +2*mb*out_sz to linear term.
+    // Mirror mode adds c_4 (mb tiles) + c_7 (mb tiles) L1 overhead
     const uint32_t L1_BUDGET =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    uint32_t mirror_out_overhead = mirror ? 2 * out_tile_sz : 0;  // per-mb extra for c_4 + c_7
+    uint32_t mirror_out_overhead = mirror_active ? 2 * out_tile_sz : 0;  // per-mb extra for c_4 + c_7
 
     uint32_t best_subs = UINT32_MAX;
     uint32_t best_kb = 0, best_mb = 0, best_db = 1;
@@ -148,7 +148,6 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     uint32_t db_factor = best_db;
     uint32_t M_num_subblocks = best_subs;
     uint32_t N_num_subblocks = (Mpc + N_block - 1) / N_block;
-    bool mirror_active = mirror;
     uint32_t block_sz = K_block_tiles * M_block;
     uint32_t cb_size = db_factor * block_sz;
     uint32_t num_tiles = M_block * K_tiles;  // tiles per sender per nsb pass
@@ -271,7 +270,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         row_sender_reduce_kid = CreateKernel(
             program,
             sender_path,
-            make_crs({{0, 0}}),
+            make_core_range_set({{0, 0}}),
             DataMovementConfig{
                 .processor = risc_0, .noc = noc_0, .compile_args = ct, .defines = {{"SENDER_REDUCE_SEND", "1"}}});
     }
@@ -295,7 +294,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         row_sender_kid = CreateKernel(
             program,
             sender_path,
-            make_crs(row_senders),
+            make_core_range_set(row_senders),
             DataMovementConfig{.processor = risc_0, .noc = noc_0, .compile_args = ct});
     }
 
@@ -318,7 +317,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         col_sender_kid = CreateKernel(
             program,
             sender_path,
-            make_crs(col_senders),
+            make_core_range_set(col_senders),
             DataMovementConfig{.processor = risc_1, .noc = noc_1, .compile_args = ct});
     }
 
@@ -382,7 +381,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         row_lower_offdiag_kid = CreateKernel(
             program,
             receiver_writer_path,
-            make_crs(row_lower_offdiag),
+            make_core_range_set(row_lower_offdiag),
             DataMovementConfig{
                 .processor = risc_0, .noc = noc_0, .compile_args = ct, .defines = {{"REDUCE_SEND", "1"}}});
     }
@@ -393,7 +392,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         row_lower_diag_kid = CreateKernel(
             program,
             receiver_writer_path,
-            make_crs(row_lower_diag),
+            make_core_range_set(row_lower_diag),
             DataMovementConfig{
                 .processor = risc_0, .noc = noc_0, .compile_args = ct, .defines = {{"REDUCE_SEND", "1"}}});
     }
@@ -409,7 +408,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         row_upper_recv_kid = CreateKernel(
             program,
             receiver_writer_path,
-            make_crs(row_upper_recv),
+            make_core_range_set(row_upper_recv),
             DataMovementConfig{.processor = risc_0, .noc = noc_0, .compile_args = ct, .defines = recv_defines});
     }
 
@@ -427,7 +426,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         col_lower_recv_kid = CreateKernel(
             program,
             receiver_path,
-            make_crs(col_lower_recv_interior),
+            make_core_range_set(col_lower_recv_interior),
             DataMovementConfig{.processor = risc_1, .noc = noc_1, .compile_args = ct});
     }
 
@@ -451,7 +450,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         col_lower_recv_edge_kid = CreateKernel(
             program,
             receiver_writer_path,
-            make_crs(col_lower_recv_edge),
+            make_core_range_set(col_lower_recv_edge),
             DataMovementConfig{
                 .processor = risc_1, .noc = noc_1, .compile_args = ct, .defines = {{"REDUCE_SEND", "1"}}});
     }
@@ -470,7 +469,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         col_upper_recv_kid = CreateKernel(
             program,
             receiver_path,
-            make_crs(col_upper_recv),
+            make_core_range_set(col_upper_recv),
             DataMovementConfig{.processor = risc_1, .noc = noc_1, .compile_args = ct});
     }
 
@@ -544,14 +543,15 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         CreateKernel(
             program,
             compute_matmul_path,
-            make_crs(sender_transpose_cores),
+            make_core_range_set(sender_transpose_cores),
             compute_cfg({{"REDUCE_SENDER_TRANSPOSE", "1"}}));
     }
 
     // Diagonal: REDUCE_SENDER
     std::vector<tt::tt_metal::CoreCoord> sender_diag_cores;
     for (uint32_t d = 0; d < grid_dim; d++) sender_diag_cores.push_back({d, d});
-    CreateKernel(program, compute_matmul_path, make_crs(sender_diag_cores), compute_cfg({{"REDUCE_SENDER", "1"}}));
+    CreateKernel(
+        program, compute_matmul_path, make_core_range_set(sender_diag_cores), compute_cfg({{"REDUCE_SENDER", "1"}}));
 
     // Upper: REDUCE_ACCUMULATOR (or diagnostic variant)
     std::string accum_define = "REDUCE_ACCUMULATOR";
@@ -563,7 +563,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         auto defines = std::map<std::string, std::string>{{accum_define, "1"}};
         if (mirror_active)
             defines["MIRROR_OUTPUT"] = "1";
-        CreateKernel(program, compute_matmul_path, make_crs(accum_cores), compute_cfg(defines));
+        CreateKernel(program, compute_matmul_path, make_core_range_set(accum_cores), compute_cfg(defines));
     }
 
     // Helpers: REDUCE_ACCUMULATOR (no mirror — diagonal blocks are self-symmetric)
@@ -589,21 +589,21 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
              (uint32_t)row_lower_start_p.y,
              (uint32_t)row_lower_end_p.x,
              (uint32_t)row_lower_end_p.y,
-             1u,
+             1u,  // lower_num_dests (diagonal only at row 0)
              (uint32_t)row_upper_start_p.x,
              (uint32_t)row_upper_start_p.y,
              (uint32_t)row_upper_end_p.x,
              (uint32_t)row_upper_end_p.y,
-             upper_x_end,  // num upper dests
-             0u,
-             1u,
-             0u,  // tile_offset_row = 0 (grid row 0)
+             upper_x_end,  // upper_num_dests
+             0u,           // injector_keeps_odd (row 0 keeps even)
+             1u,           // lower_loopback (diagonal is self)
+             0u,           // tile_offset_row (grid row 0)
              Mpc,
              K_tiles,
              logical_M_tiles,
              logical_K_tiles,
-             (uint32_t)helper_p.x,
-             (uint32_t)helper_p.y});
+             (uint32_t)helper_p.x,    // partner_noc_x (helper core)
+             (uint32_t)helper_p.y});  // partner_noc_y
     }
 
     // --- Row sender at (0, y>0) ---
@@ -628,15 +628,15 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
              (uint32_t)row_lower_start_p.y,
              (uint32_t)row_lower_end_p.x,
              (uint32_t)row_lower_end_p.y,
-             row_lower_num,
+             row_lower_num,  // lower_num_dests
              (uint32_t)row_upper_start_p.x,
              (uint32_t)row_upper_start_p.y,
              (uint32_t)row_upper_end_p.x,
              (uint32_t)row_upper_end_p.y,
-             row_upper_num,
-             0u,
-             1u,
-             y * Mpc,  // tile_offset_row (not flat)
+             row_upper_num,  // upper_num_dests
+             0u,             // injector_keeps_odd (row senders keep even)
+             1u,             // lower_loopback (sender is part of lower mcast)
+             y * Mpc,        // tile_offset_row
              Mpc,
              K_tiles,
              logical_M_tiles,
@@ -768,10 +768,10 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
                  Mpc,
                  K_tiles,
                  out_addr,
-                 y * Mpc,
-                 y * Mpc,
+                 y * Mpc,  // M_start_tile (diagonal)
+                 y * Mpc,  // N_start_tile (diagonal)
                  logical_M_tiles,
-                 logical_K_tiles});  // M_start = y*Mpc, N_start = y*Mpc (diagonal)
+                 logical_K_tiles});
         }
     }
 
