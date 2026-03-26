@@ -32,8 +32,8 @@ TOKEN_PAGE_SIZE_BYTES = 64
 TOKEN_FIFO_SIZE = 1024
 ACTIVATION_DIM = 7168
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
-ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 4
-PIPELINE_CORE_COORD = ttnn.CoreCoord(11, 0)
+ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 1
+PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)
 
 
 @dataclass
@@ -108,54 +108,6 @@ class PassthroughStage(StageKind):
             upstream_d2d_socket_page_size=up_page,
             downstream_d2d_socket_page_size=down_page,
         )
-
-
-class MoEDecoderStage(StageKind):
-    """Decoder stage that runs an MoE layer; activation in, activation out. Compute stubbed for now."""
-
-    def __init__(self, weights: DeepSeekV3MoELayerWeights) -> None:
-        self._weights = weights
-
-    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
-        mesh_device = ctx.mesh_device
-        return PipelineBlock(
-            mesh_device,
-            PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-        )
-
-    def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        pass
-
-    def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        pass
-
-
-class DenseDecoderStage(StageKind):
-    """Decoder stage that runs a dense layer; activation in, activation out. Compute stubbed for now."""
-
-    def __init__(self, weights: DeepSeekV3DenseLayerWeights) -> None:
-        self._weights = weights
-
-    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
-        mesh_device = ctx.mesh_device
-        return PipelineBlock(
-            mesh_device,
-            PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-        )
-
-    def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        pass
-
-    def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        pass
 
 
 class LMHeadStage(StageKind):
