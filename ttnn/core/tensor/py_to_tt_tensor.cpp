@@ -167,7 +167,8 @@ Tensor create_tt_tensor_from_host_data(
             enable_device_typecast,
             preserve_nan_values);
 
-        // TODO: For single-device tensors, we cannot enable layout/data type changes due to tt-sim CI failures
+        // TODO: #https://github.com/tenstorrent/tt-metal/issues/40850
+        // For single-device tensors, we cannot enable layout/data type changes due to tt-sim CI failures
         // caused by limited support for the SFPLOADMACRO instruction.
         // LLK does not currently provide an alternative implementation with SFPLOADMACRO disabled
         // for all data type combinations.
