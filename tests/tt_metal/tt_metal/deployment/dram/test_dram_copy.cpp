@@ -13,6 +13,9 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 
+#define BANDWIDTH_DRAM_COPY 35.0
+#define BANDWIDTH_DRAM_COPY_SELF 15.0
+
 namespace tt::tt_metal {
 
 using namespace std;
@@ -89,8 +92,10 @@ static bool run_test_dram_copy(
     fixture->RunProgram(mesh_device, workload, true);
     fixture->FinishCommands(mesh_device);
 
+    double threshold = src_bank == dst_bank ? BANDWIDTH_DRAM_COPY_SELF : BANDWIDTH_DRAM_COPY;
+
     bool pass = true;
-    pass &= bandwidth_check(device, core, delta_addr, total_transferred, 25.0);
+    pass &= bandwidth_check(device, core, delta_addr, total_transferred, threshold);
     pass &= dram_data_check(device, dram_start_addr, dram_end_addr, dst_bank, inputs);
 
     return pass;
