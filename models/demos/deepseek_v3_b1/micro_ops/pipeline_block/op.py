@@ -48,6 +48,8 @@ class PipelineBlock:
         stage_idx=None,
         my_local_submeshes={},
         prev_stage_exit_socket=None,
+        local_socket_downstream_core_coord=None,
+        local_host_io_upstream_socket=None,
     ):
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
@@ -81,16 +83,19 @@ class PipelineBlock:
         upstream_mesh_id = pipeline_config[upstream_stage_idx].mesh_id
         downstream_mesh_id = pipeline_config[downstream_stage_idx].mesh_id
 
-        if upstream_stage_idx in my_local_submeshes:
-            print("Using upstream mesh device: ", my_local_submeshes[upstream_mesh_id])
-            upstream_mesh_wrapper = MeshWrapper(mesh_device=my_local_submeshes[upstream_mesh_id])
+        upstream_submesh_id = pipeline_config[upstream_stage_idx].submesh_idx
+        downstream_submesh_id = pipeline_config[downstream_stage_idx].submesh_idx
+
+        if upstream_submesh_id in my_local_submeshes:
+            print("Using upstream mesh device: ", my_local_submeshes[upstream_submesh_id])
+            upstream_mesh_wrapper = MeshWrapper(mesh_device=my_local_submeshes[upstream_submesh_id])
         else:
             print("Creating upstream mesh wrapper for mesh id: ", upstream_mesh_id)
             upstream_mesh_wrapper = MeshWrapper(mesh_id=upstream_mesh_id)
 
-        if downstream_mesh_id in my_local_submeshes:
-            print("Using downstream mesh device: ", my_local_submeshes[downstream_mesh_id])
-            downstream_mesh_wrapper = MeshWrapper(mesh_device=my_local_submeshes[downstream_mesh_id])
+        if downstream_submesh_id in my_local_submeshes:
+            print("Using downstream mesh device: ", my_local_submeshes[downstream_submesh_id])
+            downstream_mesh_wrapper = MeshWrapper(mesh_device=my_local_submeshes[downstream_submesh_id])
         else:
             print("Creating downstream mesh wrapper for mesh id: ", downstream_mesh_id)
             downstream_mesh_wrapper = MeshWrapper(mesh_id=downstream_mesh_id)
@@ -151,6 +156,7 @@ class PipelineBlock:
                 embedding_tensor=embedding_tensor,
             )
 
+            print("SOCKET INTERFACE, pipeline start exit ", local_socket_downstream_core_coord)
             self.exit_socket_interface = SocketInterface(
                 downstream_d2d_socket_page_size,
                 downstream_d2d_socket_fifo_size,
@@ -158,31 +164,35 @@ class PipelineBlock:
                 ttnn.MeshCoreCoord(pipeline_config[self.stage_idx].exit_node_coord, pipeline_core_coord),
                 ttnn.MeshCoreCoord(pipeline_config[self.stage_idx + 1].entry_node_coord, pipeline_core_coord),
                 upstream_socket=self.host_io.get_downstream_socket(),
-                downstream_core_coord=ttnn.MeshCoreCoord(
-                    pipeline_config[self.stage_idx + 1].exit_node_coord, pipeline_core_coord
-                ),
+                downstream_core_coord=local_socket_downstream_core_coord,
                 sender_mesh=MeshWrapper(mesh_device),
                 receiver_mesh=downstream_mesh_wrapper,
             )
 
-            if (self.last_stage_idx - 1) in my_local_submeshes:
-                loopback_sender_mesh_wrapper = MeshWrapper(mesh_device=my_local_submeshes[self.last_stage_idx - 1])
-            else:
+            loopback_submesh_id = pipeline_config[self.last_stage_idx - 1].submesh_idx
+            # If the loopback sender mesh is in local submeshes, the last stage's exit_node_interface will setup the connection
+            if loopback_submesh_id not in my_local_submeshes:
                 loopback_sender_mesh_wrapper = MeshWrapper(mesh_id=pipeline_config[self.last_stage_idx - 1].mesh_id)
-
-            self.entry_socket_interface = SocketInterface(
-                upstream_d2d_socket_page_size,  # Entry node page size needs to be configurable
-                upstream_d2d_socket_fifo_size,
-                upstream_d2d_socket_page_size,
-                ttnn.MeshCoreCoord(pipeline_config[self.last_stage_idx - 1].exit_node_coord, pipeline_core_coord),
-                ttnn.MeshCoreCoord(pipeline_config[self.last_stage_idx].entry_node_coord, pipeline_core_coord),
-                downstream_socket=self.host_io.get_upstream_socket(),
-                sender_mesh=loopback_sender_mesh_wrapper,
-                receiver_mesh=MeshWrapper(mesh_device),
-            )
+                print("SOCKET INTERFACE, pipeline start entry ")
+                self.entry_socket_interface = SocketInterface(
+                    upstream_d2d_socket_page_size,  # Entry node page size needs to be configurable
+                    upstream_d2d_socket_fifo_size,
+                    upstream_d2d_socket_page_size,
+                    ttnn.MeshCoreCoord(pipeline_config[self.last_stage_idx - 1].exit_node_coord, pipeline_core_coord),
+                    ttnn.MeshCoreCoord(pipeline_config[self.last_stage_idx].entry_node_coord, pipeline_core_coord),
+                    downstream_socket=self.host_io.get_upstream_socket(),
+                    sender_mesh=loopback_sender_mesh_wrapper,
+                    receiver_mesh=MeshWrapper(mesh_device),
+                )
+            else:
+                # same submesh, the last pipeline block will create the loopback connection
+                self.entry_socket_interface = None
 
         else:
             if prev_stage_exit_socket is not None:
+                print(
+                    "SOCKET INTERFACE, non-pipeline start exit ", local_socket_downstream_core_coord, exit_node_upstream
+                )
                 self._prev_stage_exit_socket = prev_stage_exit_socket
                 self.entry_socket_interface = None
                 self.exit_socket_interface = SocketInterface(
@@ -192,10 +202,13 @@ class PipelineBlock:
                     ttnn.MeshCoreCoord(pipeline_config[self.stage_idx].exit_node_coord, pipeline_core_coord),
                     ttnn.MeshCoreCoord(pipeline_config[self.stage_idx + 1].entry_node_coord, pipeline_core_coord),
                     upstream_socket=prev_stage_exit_socket,
+                    downstream_core_coord=local_socket_downstream_core_coord,
+                    downstream_socket=local_host_io_upstream_socket,
                     sender_mesh=MeshWrapper(mesh_device),
                     receiver_mesh=downstream_mesh_wrapper,
                 )
             else:
+                print(" HERE?")
                 self._prev_stage_exit_socket = None
                 self.entry_socket_interface = SocketInterface(
                     upstream_d2d_socket_page_size,
@@ -230,7 +243,8 @@ class PipelineBlock:
             print("Running exit socket interface")
             self.exit_socket_interface.run()
             print("Running entry socket interface")
-            self.entry_socket_interface.run()
+            if self.entry_socket_interface is not None:
+                self.entry_socket_interface.run()
         else:
             print("Running exit socket interface")
             self.exit_socket_interface.run()
@@ -245,7 +259,8 @@ class PipelineBlock:
         ttnn.distributed_context_barrier()
         if self.is_pipeline_start:
             self.host_io.terminate(False)
-            self.entry_socket_interface.terminate(False)
+            if self.entry_socket_interface is not None:
+                self.entry_socket_interface.terminate(False)
             self.exit_socket_interface.terminate(True)
         else:
             if self.entry_socket_interface is not None:
@@ -275,3 +290,6 @@ class PipelineBlock:
 
     def get_exit_downstream_socket(self):
         return self.exit_socket_interface.get_downstream_socket()
+
+    def get_host_io_upstream_socket(self):
+        return self.host_io.get_upstream_socket()

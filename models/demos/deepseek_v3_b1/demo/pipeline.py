@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 import ttnn
 from models.demos.deepseek_v3_b1.demo.stage import (
+    PIPELINE_CORE_COORD,
     DenseDecoderStage,
     EmbeddingStage,
     LMHeadStage,
@@ -240,10 +241,13 @@ class Pipeline:
     def my_stage_idx(self) -> int:
         return self._my_stage_idx
 
-    def configure_block(self, prev_stage_exit_socket=None) -> None:
+    def configure_block(
+        self, prev_stage_exit_socket=None, local_socket_downstream_core_coord=None, local_host_io_upstream_socket=None
+    ) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""
         if self._pipeline_block is None:
             self._ctx.prev_stage_exit_socket = prev_stage_exit_socket
+            self._ctx.local_socket_downstream_core_coord = local_socket_downstream_core_coord
             self._pipeline_block = self._stage_kind.create_pipeline_block(self._ctx)
 
     def setup(self) -> None:
@@ -290,6 +294,11 @@ class Pipeline:
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called first")
         return self._pipeline_block.get_exit_downstream_socket()
+
+    def get_host_io_upstream_socket(self):
+        if self._pipeline_block is None:
+            raise RuntimeError("Pipeline.configure_block() must be called first")
+        return self._pipeline_block.get_host_io_upstream_socket()
 
     def barrier(self) -> None:
         ttnn.distributed_context_barrier()
@@ -402,7 +411,7 @@ class PipelineBuilder:
             my_local_submeshes[stage_idx] = submeshes[submesh_idx]
 
         print("my local submeshes: ", my_local_submeshes)
-        prev_stage_exit_socket = None
+        stage_entry_core_coords = []
         for stage_idx, stage_factory in self._stage_factories.items():
             submesh_idx = pipeline_configs[stage_idx].submesh_idx
             stage_kind = stage_factory(submeshes[submesh_idx])
@@ -413,8 +422,35 @@ class PipelineBuilder:
                 stage_idx=stage_idx,
                 my_local_submeshes=my_local_submeshes,
             )
-            pipeline_stage.configure_block(prev_stage_exit_socket=prev_stage_exit_socket)
-            prev_stage_exit_socket = pipeline_stage.get_exit_downstream_socket()
             pipeline_stages.append(pipeline_stage)
+            stage_entry_core_coords.append(stage_kind.get_entry_core_coord())
+
+        prev_stage_exit_socket = None
+        for stage_idx in range(len(pipeline_stages) - 1):
+            pipeline_stage = pipeline_stages[stage_idx]
+            next_stage_idx = stage_idx + 1
+            entry_core = stage_entry_core_coords[next_stage_idx]
+            if entry_core is not None:
+                local_socket_downstream_core_coord = ttnn.MeshCoreCoord(
+                    pipeline_configs[next_stage_idx].entry_node_coord, entry_core
+                )
+            else:
+                local_socket_downstream_core_coord = ttnn.MeshCoreCoord(
+                    pipeline_configs[next_stage_idx].exit_node_coord, PIPELINE_CORE_COORD
+                )
+            print("stage ", stage_idx, "local socket downstream core coord: ", local_socket_downstream_core_coord)
+            pipeline_stage.configure_block(
+                prev_stage_exit_socket=prev_stage_exit_socket,
+                local_socket_downstream_core_coord=local_socket_downstream_core_coord,
+            )
+            prev_stage_exit_socket = pipeline_stage.get_exit_downstream_socket()
+
+        # configure the last stage that has a downstream host io
+        last_stage = pipeline_stages[-1]
+        first_stage = pipeline_stages[0]
+        local_host_io_upstream_socket = first_stage.get_host_io_upstream_socket()
+        last_stage.configure_block(
+            prev_stage_exit_socket=prev_stage_exit_socket, local_host_io_upstream_socket=local_host_io_upstream_socket
+        )
 
         return pipeline_stages

@@ -1989,32 +1989,35 @@ def test_pipline_block_4stage_galaxy_1_iteration_with_submeshes(mesh_device, use
     pipelines = builder.create_pipeline_stages(submeshes)
     print(f"Pipeline built")
     try:
+        io_pipeline = None
         for pipeline in pipelines:
-            print(f"Pipeline my_stage_idx: {pipeline.my_stage_idx}")
-            pipeline.setup_and_run()
-            print(f"Pipeline setup and run completed")
-
             if pipeline.my_stage_idx == 0:
-                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 0] = 0
-                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                output_tensor = ttnn.from_torch(
-                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-                print(f"Writing token for iteration 0")
-                pipeline.write_token(token_tensor)
-                print(f"Reading output for iteration 0")
-                pipeline.read_output(output_tensor)
-                print(f"Output tensor: {output_tensor}")
-                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
-                print(f"Got token: {got}")
-                print(f"Expected index: {torch_expected_idx}")
-                assert torch.equal(
-                    got, torch_expected_idx
-                ), f"PipelineBlock 4-stage token mismatch. expected={int(torch_expected_idx.item())}, got={int(got.item())}"
-
+                io_pipeline = pipeline
+                continue
+            else:
+                pipeline.setup_and_run()
+        if io_pipeline is not None:
+            io_pipeline.setup_and_run()
+            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+            torch_token[0, 0] = 0
+            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            output_tensor = ttnn.from_torch(
+                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            print(f"Writing token for iteration 0")
+            pipeline.write_token(token_tensor)
+            print(f"Reading output for iteration 0")
+            pipeline.read_output(output_tensor)
+            print(f"Output tensor: {output_tensor}")
+            got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
+            print(f"Got token: {got}")
+            print(f"Expected index: {torch_expected_idx}")
+            assert torch.equal(
+                got, torch_expected_idx
+            ), f"PipelineBlock 4-stage token mismatch. expected={int(torch_expected_idx.item())}, got={int(got.item())}"
+        for pipeline in pipelines:
             pipeline.barrier()
     finally:
         for pipeline in pipelines:

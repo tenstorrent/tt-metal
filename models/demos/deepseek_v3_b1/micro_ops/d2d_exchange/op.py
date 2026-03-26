@@ -82,7 +82,6 @@ class SocketInterface:
                 # If an existing socket is provided, assert that it is on the sender mesh
                 assert upstream_socket.get_mesh_device().get_system_mesh_id() == sender_mesh.get_mesh_id()
                 self.upstream_socket = upstream_socket
-                assert upstream_core_coord is None
             elif upstream_core_coord is not None:
                 # Upstream socket not provided, create a new socket, on the sender mesh
                 socket_connection = ttnn.SocketConnection(upstream_core_coord, send_core_coord)
@@ -97,7 +96,6 @@ class SocketInterface:
                 # If an existing socket is provided, assert that it is on the receiver mesh
                 assert downstream_socket.get_mesh_device().get_system_mesh_id() == receiver_mesh.get_mesh_id()
                 self.downstream_socket = downstream_socket
-                assert downstream_core_coord is None
             elif downstream_core_coord is not None:
                 socket_connection = ttnn.SocketConnection(recv_core_coord, downstream_core_coord)
                 socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
@@ -108,6 +106,10 @@ class SocketInterface:
                 # Initialize downstream as sender socket
                 self.downstream_socket = self.downstream_socket_pair[0]
 
+        print("send core coord: ", send_core_coord)
+        print("recv core coord: ", recv_core_coord)
+        print("upstream core coord: ", upstream_core_coord)
+        print("downstream core coord: ", downstream_core_coord)
         self.page_size = page_size
         self.send_core_coord = send_core_coord
         self.recv_core_coord = recv_core_coord
@@ -345,22 +347,22 @@ class SocketInterface:
                     ttnn.MeshCoordinateRange(self.recv_core_coord.device_coord, self.recv_core_coord.device_coord)
                 ] = receiver_program
 
-            dummy_tensor = ttnn.allocate_tensor_on_device(
+            sender_mesh_dummy_tensor = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.sender_mesh
             )
-            dummy_tensor_2 = ttnn.allocate_tensor_on_device(
+            receiver_mesh_dummy_tensor = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.receiver_mesh
             )
-            io_tensors = [
-                dummy_tensor,
-                dummy_tensor,
+            sender_mesh_io_tensors = [
+                sender_mesh_dummy_tensor,
+                sender_mesh_dummy_tensor,
             ]
-            io_tensors_2 = [
-                dummy_tensor_2,
-                dummy_tensor_2,
+            receiver_mesh_io_tensors = [
+                receiver_mesh_dummy_tensor,
+                receiver_mesh_dummy_tensor,
             ]
-            ttnn.generic_op(io_tensors, sender_mesh_program_descriptor)
-            ttnn.generic_op(io_tensors_2, receiver_mesh_program_descriptor)
+            ttnn.generic_op(sender_mesh_io_tensors, sender_mesh_program_descriptor)
+            ttnn.generic_op(receiver_mesh_io_tensors, receiver_mesh_program_descriptor)
         else:
             dummy_tensor = ttnn.allocate_tensor_on_device(
                 ttnn.Shape([0, 0, 0, 0]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.mesh_device

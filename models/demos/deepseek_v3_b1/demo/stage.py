@@ -43,6 +43,7 @@ class StageContext:
     my_stage_idx: int
     my_local_submeshes: dict[int, ttnn.MeshDevice]
     prev_stage_exit_socket: object = None
+    local_socket_downstream_core_coord: ttnn.MeshCoreCoord = None
 
 
 class StageKind(ABC):
@@ -58,6 +59,9 @@ class StageKind(ABC):
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         """Launch compute kernels after pipeline_block.run(). Default: no-op."""
 
+    def get_entry_core_coord(self) -> ttnn.MeshCoreCoord:
+        """Get the core coordinate for the entry node of the stage."""
+
 
 class EmbeddingStage(StageKind):
     """Stage 0: H2D + embedding lookup, forwards activation; loopback receives token."""
@@ -67,7 +71,7 @@ class EmbeddingStage(StageKind):
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
-        print(f"EmbeddingStage creating pipeline block for mesh device: {mesh_device}")
+        print("making an embedding pipeline block")
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -83,7 +87,11 @@ class EmbeddingStage(StageKind):
             stage_idx=ctx.my_stage_idx,
             my_local_submeshes=ctx.my_local_submeshes,
             prev_stage_exit_socket=ctx.prev_stage_exit_socket,
+            local_socket_downstream_core_coord=ctx.local_socket_downstream_core_coord,
         )
+
+    def get_entry_core_coord(self) -> ttnn.MeshCoreCoord:
+        return None
 
 
 class PassthroughPayload(Enum):
@@ -105,6 +113,7 @@ class PassthroughStage(StageKind):
         else:
             up_fifo = down_fifo = TOKEN_FIFO_SIZE
             up_page = down_page = TOKEN_PAGE_SIZE_BYTES
+        print("making a passthrough pipeline block")
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -116,7 +125,11 @@ class PassthroughStage(StageKind):
             stage_idx=ctx.my_stage_idx,
             my_local_submeshes=ctx.my_local_submeshes,
             prev_stage_exit_socket=ctx.prev_stage_exit_socket,
+            local_socket_downstream_core_coord=ctx.local_socket_downstream_core_coord,
         )
+
+    def get_entry_core_coord(self) -> ttnn.MeshCoreCoord:
+        return None
 
 
 class MoEDecoderStage(StageKind):
@@ -214,6 +227,8 @@ class LMHeadStage(StageKind):
         lmhead_exit_core = ttnn.MeshCoreCoord(
             pipeline_config[my_stage_idx].exit_node_coord, LMHeadStage.ARGMAX_FINAL_CORE
         )
+        print("lmhead_entry_core: ", lmhead_entry_core)
+        print("lmhead_exit_core: ", lmhead_exit_core)
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -227,7 +242,11 @@ class LMHeadStage(StageKind):
             stage_idx=ctx.my_stage_idx,
             my_local_submeshes=ctx.my_local_submeshes,
             prev_stage_exit_socket=ctx.prev_stage_exit_socket,
+            local_socket_downstream_core_coord=ctx.local_socket_downstream_core_coord,
         )
+
+    def get_entry_core_coord(self) -> ttnn.CoreCoord:
+        return LMHeadStage.LMHEAD_INPUT_CORE
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         mesh_device = ctx.mesh_device
