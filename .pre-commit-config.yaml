@@ -11,6 +11,16 @@ repos:
     - id: check-yaml
       args: ["--unsafe"]
     - id: check-added-large-files
+      args: ["--maxkb=1024"]  # 1MB hard limit (mirrors our local hook below)
+- repo: local
+  hooks:
+    - id: check-large-files
+      name: Flag large files (>1MB blocks, >512KB warns)
+      language: python
+      entry: python scripts/check_large_files.py
+      pass_filenames: false
+      always_run: false
+      stages: [pre-commit]
 # Using this mirror lets us use mypyc-compiled black, which is about 2x faster
 - repo: https://github.com/psf/black-pre-commit-mirror
   rev: 23.10.1
