@@ -31,9 +31,9 @@ class CreateQHeads:
         - Offset = (8*512) * elem_size + 2*qrope_col*64*elem_size
         - Signals semaphore once
 
-    RISC assignment (matching pre_sdpa gather pattern):
-      - All senders use NCRISC (RISCV_1)
-      - All receivers use BRISC (RISCV_0)
+    RISC assignment:
+      - All data movement (sender + receiver) uses NCRISC (RISCV_1)
+      - BRISC is idle
     """
 
     # Mapping from sender row index to target receiver core
@@ -287,14 +287,13 @@ class CreateQHeads:
         ]
 
         # ========================================================================
-        # Common sender compile-time args (shared by NOC0 and NOC1 senders)
+        # Common compile-time args for sender + receiver (all on NCRISC)
         # Uses 3 separate semaphores for race-free synchronization
         # ========================================================================
-        def create_sender_named_compile_time_args():
+        def create_common_named_compile_time_args(is_receiver):
             args = [
-                # Sender role flags (all senders use NCRISC, matching pre_sdpa pattern)
                 ("is_sender_core", 1),
-                ("is_receiver_core", 0),
+                ("is_receiver_core", 1 if is_receiver else 0),
                 # Sender grid info for offset computation
                 ("sender_grid_start_x", sender_grid_start_x),
                 ("sender_grid_start_y", sender_grid_start_y),
@@ -313,82 +312,70 @@ class CreateQHeads:
                 ("rope_semaphore_id", rope_semaphore_id),
             ]
             # Add target NOC coordinates for each row (packed: x in lower 16 bits, y in upper 16 bits)
-            # Kernel expects args for all 8 rows (hardcoded array size), so always pass all 8
             for row in range(8):
                 if row in target_noc_coords:
                     noc_x, noc_y = target_noc_coords[row]
                     packed_coords = noc_x | (noc_y << 16)
                     args.append((f"target_noc_coords_row{row}", packed_coords))
                 else:
-                    # Fill missing rows with dummy coordinates (0,0)
                     args.append((f"target_noc_coords_row{row}", 0))
+            if is_receiver:
+                args.extend(
+                    [
+                        ("receiver_in_cb", receiver_in_cb),
+                        ("out_cb", out_cb),
+                        ("dst_num_pages", dst_num_pages),
+                        ("nope_tiles", nope_tiles),
+                        ("rope_tiles", rope_tiles),
+                        ("sender_grid_width", sender_grid_width),
+                        ("receiver_grid_start_x", receiver_grid_start_x),
+                        ("receiver_grid_start_y", receiver_grid_start_y),
+                        ("receiver_cols", receiver_cols),
+                        ("num_nope_senders", qnope_cols),
+                        ("num_rope_senders", sender_grid_width - qnope_cols),
+                    ]
+                )
             return args
 
         # ========================================================================
-        # Sender kernel (NCRISC) - all senders use NCRISC (matching pre_sdpa pattern)
+        # NCRISC kernels - all data movement (sender + receiver) on NCRISC
         # ========================================================================
-        sender_kernel = ttnn.KernelDescriptor(
-            kernel_source=kernel_path,
-            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-            core_ranges=sender_core_grid,
-            named_compile_time_args=create_sender_named_compile_time_args(),
-            common_runtime_args=[receiver_data_addr],
-            config=ttnn.DataMovementConfigDescriptor(
-                processor=ttnn.DataMovementProcessor.RISCV_1,  # NCRISC
-                noc=ttnn.NOC.NOC_0,
-            ),
-        )
-        kernels.append(sender_kernel)
+        # Sender-only cores (not receivers)
+        sender_only_cores = [c for c in sender_cores_list if not receiver_core_grid.contains(c)]
+        if sender_only_cores:
+            sender_only_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in sender_only_cores])
+            sender_only_kernel = ttnn.KernelDescriptor(
+                kernel_source=kernel_path,
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=sender_only_core_range_set,
+                named_compile_time_args=create_common_named_compile_time_args(is_receiver=False),
+                common_runtime_args=[receiver_data_addr],
+                config=ttnn.DataMovementConfigDescriptor(
+                    processor=ttnn.DataMovementProcessor.RISCV_1,  # NCRISC
+                    noc=ttnn.NOC.NOC_0,
+                ),
+            )
+            kernels.append(sender_only_kernel)
 
-        # ========================================================================
-        # Receiver kernel (BRISC) - all receivers use BRISC (matching pre_sdpa pattern)
-        # ========================================================================
-        def create_receiver_named_compile_time_args():
-            """Create receiver compile-time args (all receivers use BRISC)."""
-            args = [
-                # All receiver cores are also sender cores (receiver grid is within sender grid)
-                ("is_sender_core", 1),
-                ("is_receiver_core", 1),
-                # Semaphores (3 separate for race-free synchronization)
-                ("nope_phase1_semaphore_id", nope_phase1_semaphore_id),
-                ("nope_phase2_semaphore_id", nope_phase2_semaphore_id),
-                ("rope_semaphore_id", rope_semaphore_id),
-                ("receiver_in_cb", receiver_in_cb),
-                ("out_cb", out_cb),
-                ("dst_num_pages", dst_num_pages),
-                ("nope_tiles", nope_tiles),
-                ("rope_tiles", rope_tiles),
-                ("sender_grid_width", sender_grid_width),
-                ("receiver_grid_start_x", receiver_grid_start_x),
-                ("receiver_grid_start_y", receiver_grid_start_y),
-                ("receiver_cols", receiver_cols),
-                # Number of QNOPE senders (8 cols) and QROPE senders (4 cols) per receiver row
-                ("num_nope_senders", qnope_cols),
-                ("num_rope_senders", sender_grid_width - qnope_cols),
-            ]
-            return args
-
-        # All receivers use BRISC (matching pre_sdpa pattern)
+        # Sender+receiver cores (receiver cores are always also senders)
         if not receiver_core_grid.empty():
-            receiver_kernel = ttnn.KernelDescriptor(
+            sender_receiver_kernel = ttnn.KernelDescriptor(
                 kernel_source=kernel_path,
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=receiver_core_grid,
-                named_compile_time_args=create_receiver_named_compile_time_args(),
+                named_compile_time_args=create_common_named_compile_time_args(is_receiver=True),
+                common_runtime_args=[receiver_data_addr],
                 config=ttnn.DataMovementConfigDescriptor(
-                    processor=ttnn.DataMovementProcessor.RISCV_0,  # BRISC
-                    noc=ttnn.NOC.NOC_1,  # Use different NOC than sender
+                    processor=ttnn.DataMovementProcessor.RISCV_1,  # NCRISC
+                    noc=ttnn.NOC.NOC_0,
                 ),
             )
-            kernels.append(receiver_kernel)
+            kernels.append(sender_receiver_kernel)
 
         # ========================================================================
         # Compute kernels (TRISC) - tilization on receiver cores
         # ========================================================================
-        # Sender-only cores need no-op compute kernel
-        sender_only_cores = [c for c in sender_cores_list if not receiver_core_grid.contains(c)]
         if sender_only_cores:
-            sender_only_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in sender_only_cores])
             sender_compute_kernel = ttnn.KernelDescriptor(
                 kernel_source=kernel_path,
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,

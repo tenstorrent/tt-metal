@@ -3,15 +3,15 @@
 
 // Flash MLA Decode kernel: uses FlashMLADecode Op from flash_mla_kernel.hpp
 //
-// NCRISC (Reader): Read Q from sharded memory, pipelined DRAM reads of K chunks
-// BRISC (Writer):  Multicast K to S block receivers, tree reduction send/receive
+// BRISC (Reader): Read Q from sharded memory, pipelined DRAM reads of K chunks
+// NCRISC (Writer):  Multicast K to S block receivers, tree reduction send/receive
 // TRISC (Compute): SDPA flash attention chunking, tree reduction tail
 
 #include "../../../unified_kernels/flash_mla.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
 
 void kernel_main() {
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC)
     uint32_t arg_idx = 0;
     deepseek_b1_ops::FlashMLADecode::ReaderArgs args{
         .k_addr = get_common_arg_val<uint32_t>(0),
@@ -41,7 +41,7 @@ void kernel_main() {
 
     using FlashMLACTArgs = deepseek_b1_ops::FlashMLADecode::ReaderCTArgs;
 
-#elif defined(COMPILE_FOR_BRISC)
+#elif defined(COMPILE_FOR_NCRISC)
     constexpr uint32_t num_tree_reduction_steps = get_named_compile_time_arg_val("num_tree_reduction_steps");
     uint32_t arg_idx = 0;
     uint32_t cur_batch = get_arg_val<uint32_t>(arg_idx++);
@@ -141,15 +141,15 @@ void kernel_main() {
     deepseek_compute_kernel_init();
 #endif
 
-#if defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_NCRISC)
     if (args.is_output_core == 1) {
         unified_kernels::setup_sharded_buffer(args.cb_q_in, args.DHt);
     }
 #endif
 
-#if defined(COMPILE_FOR_NCRISC)
+#if defined(COMPILE_FOR_BRISC)
     uint32_t pos_addr = get_common_arg_val<uint32_t>(1);
-#elif defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
+#elif defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_TRISC)
     uint32_t pos_addr = get_common_arg_val<uint32_t>(0);
 #endif
 
