@@ -2639,21 +2639,18 @@ class TTNNBailingMoEAttention(TTNNModule):
         if hasattr(value_states, "to_ttnn"):
             value_states = value_states.to_ttnn
 
-        # Fuse Q/K/V and reshape for nlp_create_qkv_heads_decode
-        xqkv_fused = ttnn.concat([query_states, key_states, value_states], dim=-1)
-        fused_dim = xqkv_fused.shape[-1]
-        xqkv_fused = ttnn.reshape(xqkv_fused, (1, 1, batch_size, fused_dim))
-        if xqkv_fused.dtype != ttnn.bfloat16:
-            xqkv_fused = ttnn.typecast(xqkv_fused, ttnn.bfloat16)
-        xqkv_fused = self._to_replicated(xqkv_fused)
+        # Reshape Q/K/V to decode format [1, batch, heads, head_dim] directly
+        # This avoids the concat + _to_replicated + nlp_create_qkv_heads_decode round-trip
+        query_states = ttnn.reshape(query_states, (1, batch_size, self.num_heads, self.head_dim))
+        key_states = ttnn.reshape(key_states, (1, batch_size, self.num_kv_heads, self.head_dim))
+        value_states = ttnn.reshape(value_states, (1, batch_size, self.num_kv_heads, self.head_dim))
 
-        # Split into heads -> [1, B, H, D]
-        query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads_decode(
-            xqkv_fused,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_kv_heads,
-        )
-        ttnn.deallocate(xqkv_fused)
+        if query_states.dtype != ttnn.bfloat16:
+            query_states = ttnn.typecast(query_states, ttnn.bfloat16)
+        if key_states.dtype != ttnn.bfloat16:
+            key_states = ttnn.typecast(key_states, ttnn.bfloat16)
+        if value_states.dtype != ttnn.bfloat16:
+            value_states = ttnn.typecast(value_states, ttnn.bfloat16)
 
         # Move to L1 for QK norm (reshape doesn't work on sharded tensors)
         query_states = ttnn.to_memory_config(query_states, ttnn.L1_MEMORY_CONFIG)
