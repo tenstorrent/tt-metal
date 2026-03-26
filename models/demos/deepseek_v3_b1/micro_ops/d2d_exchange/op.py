@@ -422,11 +422,15 @@ class SocketInterface:
         )
 
         # NCRISC kernel: handles sockets N/2..N-1, packet header slots 2-3, fabric link 1
+        if use_fabric_on_sender and not use_fabric_on_receiver:
+            ncrisc_pkt_hdr_slot_start = 1
+        else:
+            ncrisc_pkt_hdr_slot_start = 2
         ncrisc_kernel = ttnn.KernelDescriptor(
             kernel_source=kernel_source,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_ranges,
-            compile_time_args=_build_ct_args(ncrisc_socket_addrs, num_sockets_per_risc, 2),
+            compile_time_args=_build_ct_args(ncrisc_socket_addrs, num_sockets_per_risc, ncrisc_pkt_hdr_slot_start),
             config=ttnn.ReaderConfigDescriptor(),
         )
 
