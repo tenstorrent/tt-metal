@@ -109,7 +109,7 @@ OffsetCumsumProgramFactory::cached_mesh_workload_t OffsetCumsumProgramFactory::c
         auto result = create_program(input, tensor_return_value, row_idx);
         auto coord_range = ttnn::MeshCoordinateRange(coord);
         mesh_workload.add_program(coord_range, std::move(result.program));
-        shared_variables.emplace(coord_range, std::move(result.shared_variables));
+        shared_variables.emplace(coord_range, result.shared_variables);
     }
 
     return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};

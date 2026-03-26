@@ -20,7 +20,7 @@ struct OffsetCumsumSharedVariables {
 
 struct OffsetCumsumProgramFactory {
     using shared_variables_t = OffsetCumsumSharedVariables;
-    using cached_mesh_workload_t = tt::tt_metal::program_cache::detail::AdaptedCachedMeshWorkload<shared_variables_t>;
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
     using tensor_return_value_t = std::array<Tensor, 2>;
 
     static cached_mesh_workload_t create_mesh_workload(
