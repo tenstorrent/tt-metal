@@ -82,49 +82,26 @@ class BgeM3Model(LightweightModule):
         padding_idx: int,
         past_key_values_length: int = 0,
     ) -> ttnn.Tensor:
+        """
+        HuggingFace RoBERTa-compatible, padding-aware position ID derivation.
+        """
         self._require_rank2(input_ids, "input_ids")
 
-        # mask: 1 for valid tokens, 0 for padding
         mask = ttnn.ne(input_ids, padding_idx)
         if mask.layout != ttnn.TILE_LAYOUT:
             mask = ttnn.to_layout(mask, ttnn.TILE_LAYOUT)
         mask = ttnn.typecast(mask, dtype=ttnn.int32)
 
-        batch_size, seq_len = input_ids.shape
-
-        # Fast base positions: [0,1,2,...]
-        base_positions = ttnn.arange(
-            start=0,
-            end=seq_len,
-            step=1,
-            device=input_ids.device(),
-            dtype=ttnn.int32,
-        )
-        base_positions = ttnn.unsqueeze(base_positions, 0)
-        base_positions = ttnn.expand(base_positions, [batch_size, seq_len])
-
-        # Compute shift: number of pads before each token
-        # shift = index - valid_position_index
-        pad_counts = base_positions - ttnn.cumsum(mask, dim=1, dtype=ttnn.int32)
-
-        # Corrected positions
-        position_ids = base_positions - pad_counts
-
+        incremental_indices = ttnn.cumsum(mask, dim=1, dtype=ttnn.int32)
         if past_key_values_length:
-            position_ids = position_ids + int(past_key_values_length)
+            incremental_indices = incremental_indices + int(past_key_values_length)
+        incremental_indices = incremental_indices * mask
 
-        # Zero out padding
-        position_ids = position_ids * mask
-
-        # Add padding_idx offset
-        position_ids = position_ids + int(padding_idx)
-
+        position_ids = incremental_indices + int(padding_idx)
         if position_ids.dtype != ttnn.uint32:
             position_ids = ttnn.typecast(position_ids, dtype=ttnn.uint32)
-
         if position_ids.layout != input_ids.layout:
             position_ids = ttnn.to_layout(position_ids, input_ids.layout)
-
         return position_ids
 
     def _prepare_attention_mask(
@@ -139,10 +116,13 @@ class BgeM3Model(LightweightModule):
         self._require_rank2(input_ids, "input_ids")
         seq_len = input_ids.shape[1]
 
+        # if attention_mask is None:
+        #     pad_mask = ttnn.eq(input_ids, self.pad_token_id)
+        #     if not self._has_any_masked_positions(pad_mask):
+        #         return None
+        #     additive_mask = self._build_additive_attention_mask(pad_mask)
         if attention_mask is None:
             pad_mask = ttnn.eq(input_ids, self.pad_token_id)
-            if not self._has_any_masked_positions(pad_mask):
-                return None
             additive_mask = self._build_additive_attention_mask(pad_mask)
         else:
             rank = len(attention_mask.shape)
@@ -159,7 +139,11 @@ class BgeM3Model(LightweightModule):
             else:
                 raise ValueError(f"attention_mask rank must be 2 or 4, got shape={attention_mask.shape}")
 
-        if getattr(additive_mask, "layout", None) != ttnn.TILE_LAYOUT:
+        # if getattr(additive_mask, "layout", None) != ttnn.TILE_LAYOUT:
+        #     additive_mask = ttnn.to_layout(additive_mask, ttnn.TILE_LAYOUT)
+        # if additive_mask.dtype != self._MASK_DTYPE:
+        #     additive_mask = ttnn.typecast(additive_mask, self._MASK_DTYPE)
+        if additive_mask.layout != ttnn.TILE_LAYOUT:
             additive_mask = ttnn.to_layout(additive_mask, ttnn.TILE_LAYOUT)
         if additive_mask.dtype != self._MASK_DTYPE:
             additive_mask = ttnn.typecast(additive_mask, self._MASK_DTYPE)
@@ -198,12 +182,25 @@ class BgeM3Model(LightweightModule):
         else:
             self._require_rank2(token_type_ids, "token_type_ids")
 
+        # if position_ids is None:
+        #     position_ids = self.create_position_ids_from_input_ids(
+        #         input_ids=input_ids,
+        #         padding_idx=self.pad_token_id,
+        #         past_key_values_length=0,
+        #     )
         if position_ids is None:
-            position_ids = self.create_position_ids_from_input_ids(
-                input_ids=input_ids,
-                padding_idx=self.pad_token_id,
-                past_key_values_length=0,
+            # no-padding fast path: avoids cumsum/accumulation op
+            batch_size, seq_len = input_ids.shape
+            base_positions = ttnn.arange(
+                start=1,
+                end=seq_len + 1,
+                step=1,
+                device=input_ids.device(),
+                dtype=ttnn.uint32,
             )
+            base_positions = ttnn.unsqueeze(base_positions, 0)
+            position_ids = ttnn.expand(base_positions, [batch_size, seq_len])
+            position_ids = position_ids + int(self.pad_token_id)
 
         prepared_attention_mask = self._prepare_attention_mask(input_ids=input_ids, attention_mask=attention_mask)
 
