@@ -241,7 +241,9 @@ def local_device_to_torch(tt_tensor: ttnn.Tensor) -> torch.Tensor:
             torch_tensor = ttnn.to_torch(device_tensor)
             break
 
-    assert torch_tensor is not None, "Failed to find local device tensor"
+    if torch_tensor is None:
+        msg = "Failed to find local device tensor"
+        raise RuntimeError(msg)
     return torch_tensor
 
 
