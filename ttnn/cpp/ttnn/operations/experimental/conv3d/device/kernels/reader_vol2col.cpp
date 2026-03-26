@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include <tools/profiler/kernel_profiler.hpp>
 
 // Pre-zero CB pages via NOC DMA from MEM_ZEROS so tile-alignment padding is zero.
 // Uses MEM_ZEROS_SIZE-aligned transactions (same pattern as zero_out_tiles in conv_reader_common.hpp).
@@ -185,150 +186,142 @@ void kernel_main() {
                                 const uint32_t H_shard_cur = (h_block_end - 1 - h_block) * stride_h + kH;
                                 const uint32_t W_shard_cur = (w_block_end - 1 - w_block) * stride_w + kW;
 
-                                // --- Phase 1: DRAM -> L1 Gather ---
-                                const bool shard_all_in_bounds =
-                                    t_shard_start >= 0 &&
-                                    (static_cast<uint32_t>(t_shard_start) + T_shard_cur) <= T_in &&
-                                    h_shard_start >= 0 &&
-                                    (static_cast<uint32_t>(h_shard_start) + H_shard_cur) <= H_in &&
-                                    w_shard_start >= 0 && (static_cast<uint32_t>(w_shard_start) + W_shard_cur) <= W_in;
+                                // --- H-ROW INTERLEAVED GATHER + VOL2COL ---
+                                // Gather shard rows incrementally per output h, so compute
+                                // gets first data sooner (after kH rows instead of all H_shard rows).
 
-                                if (shard_all_in_bounds) {
-                                    // Fast path: no boundary checks needed
-                                    uint32_t page_t =
-                                        batch_page_base + static_cast<uint32_t>(t_shard_start) * H_in_W_in;
-                                    for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
-                                        uint32_t page_h = page_t + static_cast<uint32_t>(h_shard_start) * W_in;
-                                        for (uint32_t h_local = 0; h_local < H_shard_cur; h_local++) {
-                                            uint32_t page_idx = page_h + static_cast<uint32_t>(w_shard_start);
-                                            uint32_t shard_offset =
-                                                (t_local * H_shard_max_W_shard_max + h_local * W_shard_max) *
-                                                C_in_block_bytes;
-                                            for (uint32_t w_local = 0; w_local < W_shard_cur; w_local++) {
-                                                const uint64_t noc_addr = get_input_noc_addr(
-                                                    in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes);
-                                                noc_async_read(
-                                                    noc_addr, shard_l1_base + shard_offset, C_in_block_bytes);
-                                                page_idx++;
-                                                shard_offset += C_in_block_bytes;
-                                            }
-                                            page_h += W_in;
-                                        }
-                                        page_t += H_in_W_in;
-                                    }
-                                } else {
-                                    // Slow path: per-position boundary checking
-                                    for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
-                                        const int32_t t_in = t_shard_start + static_cast<int32_t>(t_local);
-                                        const bool t_outside = (t_in < 0 || t_in >= static_cast<int32_t>(T_in));
-                                        const int32_t t_clamped = clampIndex(t_in, 0, static_cast<int32_t>(T_in) - 1);
-
-                                        for (uint32_t h_local = 0; h_local < H_shard_cur; h_local++) {
-                                            const int32_t h_in = h_shard_start + static_cast<int32_t>(h_local);
-                                            const bool h_outside = (h_in < 0 || h_in >= static_cast<int32_t>(H_in));
-                                            const int32_t h_clamped =
-                                                clampIndex(h_in, 0, static_cast<int32_t>(H_in) - 1);
-
-                                            uint32_t shard_offset =
-                                                (t_local * H_shard_max_W_shard_max + h_local * W_shard_max) *
-                                                C_in_block_bytes;
-
-                                            for (uint32_t w_local = 0; w_local < W_shard_cur; w_local++) {
-                                                const int32_t w_in = w_shard_start + static_cast<int32_t>(w_local);
-                                                const bool w_outside = (w_in < 0 || w_in >= static_cast<int32_t>(W_in));
-                                                const bool in_padding = t_outside || h_outside || w_outside;
-                                                const uint32_t shard_addr = shard_l1_base + shard_offset;
-
-                                                if (in_padding) {
-                                                    if constexpr (is_padding_zeros) {
-                                                        zeroPad<C_in_block_bytes>(shard_addr);
-                                                    } else {
-                                                        const int32_t w_clamped =
-                                                            clampIndex(w_in, 0, static_cast<int32_t>(W_in) - 1);
-                                                        const uint32_t page_idx =
-                                                            batch_page_base +
-                                                            static_cast<uint32_t>(t_clamped) * H_in_W_in +
-                                                            static_cast<uint32_t>(h_clamped) * W_in +
-                                                            static_cast<uint32_t>(w_clamped);
-                                                        const uint64_t noc_addr = get_input_noc_addr(
-                                                            in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes);
-                                                        noc_async_read(noc_addr, shard_addr, C_in_block_bytes);
-                                                    }
-                                                } else {
-                                                    const uint32_t page_idx = batch_page_base +
-                                                                              static_cast<uint32_t>(t_in) * H_in_W_in +
-                                                                              static_cast<uint32_t>(h_in) * W_in +
-                                                                              static_cast<uint32_t>(w_in);
-                                                    const uint64_t noc_addr = get_input_noc_addr(
-                                                        in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes);
-                                                    noc_async_read(noc_addr, shard_addr, C_in_block_bytes);
-                                                }
-
-                                                shard_offset += C_in_block_bytes;
-                                            }
-                                        }
-                                    }
-                                }
-                                noc_async_read_barrier();
-
-                                // --- Phase 2: L1 Vol2col -> CB ---
-                                // Push patches in TILE_HEIGHT-sized chunks to keep cb_vol2col small.
-                                // Use stateful NOC read: L1->L1 with constexpr transfer size.
                                 constexpr uint32_t kW_bytes = kW * C_in_block_bytes;
                                 static_assert(kW_bytes <= NOC_MAX_BURST_SIZE, "kW_bytes exceeds NOC_MAX_BURST_SIZE");
                                 constexpr uint32_t chunk_max = 32;  // TILE_HEIGHT
                                 uint32_t patches_remaining = num_patches;
+                                uint32_t patches_in_chunk = 0;
                                 uint32_t chunk_size = patches_remaining < chunk_max ? patches_remaining : chunk_max;
                                 cb_reserve_back(cb_vol2col, chunk_size);
                                 uint32_t cb_write_addr = get_write_ptr(cb_vol2col);
                                 if constexpr (patch_pad_bytes > 0) {
                                     pre_zero_pages<padded_page_bytes>(cb_write_addr, chunk_size);
                                 }
-                                noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
-                                uint32_t patches_in_chunk = 0;
+
+                                uint32_t h_rows_gathered = 0;
 
                                 for (uint32_t t = t_block; t < t_block_end; t++) {
                                     const uint32_t t_base = (t - t_block) * stride_t;
                                     for (uint32_t h = h_block; h < h_block_end; h++) {
                                         const uint32_t h_base = (h - h_block) * stride_h;
-                                        for (uint32_t w = w_block; w < w_block_end; w++) {
-                                            const uint32_t w_base = (w - w_block) * stride_w;
 
-                                            for (uint32_t kt = 0; kt < kT; kt++) {
-                                                const uint32_t t_local = t_base + kt;
-                                                for (uint32_t kh = 0; kh < kH; kh++) {
-                                                    const uint32_t h_local = h_base + kh;
-                                                    uint32_t shard_offset = (t_local * H_shard_max_W_shard_max +
-                                                                             h_local * W_shard_max + w_base) *
-                                                                            C_in_block_bytes;
-                                                    noc_async_read_one_packet_with_state(
-                                                        shard_l1_base + shard_offset, cb_write_addr);
-                                                    cb_write_addr += kW_bytes;
-                                                }
-                                            }
-
-                                            if constexpr (patch_pad_bytes > 0) {
-                                                cb_write_addr += patch_pad_bytes;
-                                            }
-
-                                            patches_in_chunk++;
-                                            if (patches_in_chunk == chunk_size) {
-                                                noc_async_read_barrier();
-                                                cb_push_back(cb_vol2col, chunk_size);
-                                                patches_remaining -= chunk_size;
-                                                patches_in_chunk = 0;
-                                                if (patches_remaining > 0) {
-                                                    chunk_size =
-                                                        patches_remaining < chunk_max ? patches_remaining : chunk_max;
-                                                    cb_reserve_back(cb_vol2col, chunk_size);
-                                                    cb_write_addr = get_write_ptr(cb_vol2col);
-                                                    if constexpr (patch_pad_bytes > 0) {
-                                                        pre_zero_pages<padded_page_bytes>(cb_write_addr, chunk_size);
+                                        // Gather shard rows needed for this output h (incremental)
+                                        const uint32_t h_needed = h_base + kH;
+                                        if (h_needed > h_rows_gathered) {
+                                            DeviceZoneScopedN("reader-dram-gather");
+                                            for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
+                                                const int32_t t_in = t_shard_start + static_cast<int32_t>(t_local);
+                                                const bool t_outside = (t_in < 0 || t_in >= static_cast<int32_t>(T_in));
+                                                const int32_t t_clamped =
+                                                    clampIndex(t_in, 0, static_cast<int32_t>(T_in) - 1);
+                                                for (uint32_t h_local = h_rows_gathered; h_local < h_needed;
+                                                     h_local++) {
+                                                    const int32_t h_in = h_shard_start + static_cast<int32_t>(h_local);
+                                                    const bool h_outside =
+                                                        (h_in < 0 || h_in >= static_cast<int32_t>(H_in));
+                                                    const int32_t h_clamped =
+                                                        clampIndex(h_in, 0, static_cast<int32_t>(H_in) - 1);
+                                                    uint32_t shard_offset =
+                                                        (t_local * H_shard_max_W_shard_max + h_local * W_shard_max) *
+                                                        C_in_block_bytes;
+                                                    for (uint32_t w_local = 0; w_local < W_shard_cur; w_local++) {
+                                                        const int32_t w_in =
+                                                            w_shard_start + static_cast<int32_t>(w_local);
+                                                        const bool w_outside =
+                                                            (w_in < 0 || w_in >= static_cast<int32_t>(W_in));
+                                                        const bool in_padding = t_outside || h_outside || w_outside;
+                                                        const uint32_t shard_addr = shard_l1_base + shard_offset;
+                                                        if (in_padding) {
+                                                            if constexpr (is_padding_zeros) {
+                                                                zeroPad<C_in_block_bytes>(shard_addr);
+                                                            } else {
+                                                                const int32_t w_clamped =
+                                                                    clampIndex(w_in, 0, static_cast<int32_t>(W_in) - 1);
+                                                                const uint32_t page_idx =
+                                                                    batch_page_base +
+                                                                    static_cast<uint32_t>(t_clamped) * H_in_W_in +
+                                                                    static_cast<uint32_t>(h_clamped) * W_in +
+                                                                    static_cast<uint32_t>(w_clamped);
+                                                                noc_async_read(
+                                                                    get_input_noc_addr(
+                                                                        in_reader,
+                                                                        page_idx,
+                                                                        c_in_offset_bytes,
+                                                                        in_row_size_bytes),
+                                                                    shard_addr,
+                                                                    C_in_block_bytes);
+                                                            }
+                                                        } else {
+                                                            const uint32_t page_idx =
+                                                                batch_page_base +
+                                                                static_cast<uint32_t>(t_in) * H_in_W_in +
+                                                                static_cast<uint32_t>(h_in) * W_in +
+                                                                static_cast<uint32_t>(w_in);
+                                                            noc_async_read(
+                                                                get_input_noc_addr(
+                                                                    in_reader,
+                                                                    page_idx,
+                                                                    c_in_offset_bytes,
+                                                                    in_row_size_bytes),
+                                                                shard_addr,
+                                                                C_in_block_bytes);
+                                                        }
+                                                        shard_offset += C_in_block_bytes;
                                                     }
-                                                    noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
                                                 }
                                             }
+                                            noc_async_read_barrier();
+                                            h_rows_gathered = h_needed;
                                         }
+
+                                        // Vol2col for this (t, h) across all w
+                                        {
+                                            DeviceZoneScopedN("reader-vol2col");
+                                            noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
+                                            for (uint32_t w = w_block; w < w_block_end; w++) {
+                                                const uint32_t w_base = (w - w_block) * stride_w;
+
+                                                for (uint32_t kt = 0; kt < kT; kt++) {
+                                                    const uint32_t t_local = t_base + kt;
+                                                    for (uint32_t kh = 0; kh < kH; kh++) {
+                                                        const uint32_t h_local = h_base + kh;
+                                                        uint32_t shard_offset = (t_local * H_shard_max_W_shard_max +
+                                                                                 h_local * W_shard_max + w_base) *
+                                                                                C_in_block_bytes;
+                                                        noc_async_read_one_packet_with_state(
+                                                            shard_l1_base + shard_offset, cb_write_addr);
+                                                        cb_write_addr += kW_bytes;
+                                                    }
+                                                }
+
+                                                if constexpr (patch_pad_bytes > 0) {
+                                                    cb_write_addr += patch_pad_bytes;
+                                                }
+
+                                                patches_in_chunk++;
+                                                if (patches_in_chunk == chunk_size) {
+                                                    noc_async_read_barrier();
+                                                    cb_push_back(cb_vol2col, chunk_size);
+                                                    patches_remaining -= chunk_size;
+                                                    patches_in_chunk = 0;
+                                                    if (patches_remaining > 0) {
+                                                        chunk_size = patches_remaining < chunk_max ? patches_remaining
+                                                                                                   : chunk_max;
+                                                        cb_reserve_back(cb_vol2col, chunk_size);
+                                                        cb_write_addr = get_write_ptr(cb_vol2col);
+                                                        if constexpr (patch_pad_bytes > 0) {
+                                                            pre_zero_pages<padded_page_bytes>(
+                                                                cb_write_addr, chunk_size);
+                                                        }
+                                                        noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
+                                                    }
+                                                }
+                                            }
+                                        }  // end reader-vol2col scope
                                     }
                                 }
 
