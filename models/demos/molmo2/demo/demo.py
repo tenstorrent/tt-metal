@@ -944,8 +944,9 @@ class Molmo2Generator:
             page_table=page_table_for_trace,
             trace_id=trace_id,
         )
-
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        first_run_env = os.getenv("First_run", "false").lower() == "true"
+        if not first_run_env and not current_run_trace:
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         if self.use_paged_attention:
             logger.info("Unified vision + prefill trace captured with paged attention")
         else:
@@ -1226,8 +1227,13 @@ class Molmo2Generator:
             # Synchronize before trace capture to ensure all copies are complete
             ttnn.synchronize_device(self.mesh_device)
 
-            # Capture trace
-            trace_id, trace_output = self._capture_unified_trace(trace_tensors)
+            # Capture trace (double capture when First_run=true: first pass ends in attention, second ends here)
+            first_run = os.getenv("First_run", "false").lower() == "true"
+            print("first Run Demo : ", first_run, " : ", os.getenv("First_run"))
+            num_runs = 2 if first_run else 1
+            for run_idx in range(num_runs):
+                current_run_trace = bool(first_run and run_idx == 0)
+                trace_id, trace_output = self._capture_unified_trace(trace_tensors, current_run_trace=current_run_trace)
             self.unified_traces[trace_key] = (trace_id, trace_tensors, trace_output)
 
         trace_id, trace_tensors, trace_output = self.unified_traces[trace_key]

@@ -8,11 +8,15 @@ LayerNorm implementation for Molmo2 Vision Transformer.
 The Molmo2 ViT uses standard LayerNorm (not RMSNorm) with both weight and bias.
 """
 
+import math
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 TILE = 32
-SHARD_HEIGHT = TILE
+# Block shard: split hidden dim across X cores, sequence across Y cores (32 cores total).
+BLOCK_SHARD_CORES_X = 4
+BLOCK_SHARD_CORES_Y = 8
 
 
 class VisionLayerNorm(LightweightModule):
@@ -32,6 +36,7 @@ class VisionLayerNorm(LightweightModule):
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         weight_dtype=ttnn.bfloat16,
         eps: float = 1e-6,
+        num_tokens_for_l1_shard: int | None = None,
     ):
         """
         Initialize VisionLayerNorm.
@@ -45,18 +50,18 @@ class VisionLayerNorm(LightweightModule):
             weight_memory_config: Memory config for weights
             weight_dtype: Data type for weights
             eps: Epsilon for numerical stability
+            num_tokens_for_l1_shard: Logical sequence length (last dim -2) used to size block shards
+                for L1 sharded layernorm. Defaults to 729 (27×27 ViT patches). Set higher for video /
+                multi-crop so shard height covers your padded token count (multiple of 32 per row of cores).
         """
         super().__init__()
         self.device = device
         self.eps = eps
         self.dim = dim
 
-        # Prepare weight and bias tensors
-        # Expand to [1, SHARD_HEIGHT, dim] for sharded LayerNorm
-        torch_weight = (
-            state_dict[f"{state_dict_prefix}.weight"].unsqueeze(0).view(1, 1, dim).expand([1, SHARD_HEIGHT, dim])
-        )
-        torch_bias = state_dict[f"{state_dict_prefix}.bias"].unsqueeze(0).view(1, 1, dim).expand([1, SHARD_HEIGHT, dim])
+        # Prepare weight and bias tensors (TILE-high shard for sharded LN gamma/beta)
+        torch_weight = state_dict[f"{state_dict_prefix}.weight"].unsqueeze(0).view(1, 1, dim).expand([1, TILE, dim])
+        torch_bias = state_dict[f"{state_dict_prefix}.bias"].unsqueeze(0).view(1, 1, dim).expand([1, TILE, dim])
 
         if weight_cache_path is None:
             cache_name = lambda *_: None
@@ -85,28 +90,22 @@ class VisionLayerNorm(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
 
-        # Set up sharded configs for efficient LayerNorm
         assert (
-            dim % SHARD_HEIGHT == 0
-        ), f"Input dimension dim ({dim}) must be a multiple of SHARD_HEIGHT ({SHARD_HEIGHT})"
+            dim % BLOCK_SHARD_CORES_X == 0
+        ), f"hidden dim ({dim}) must be divisible by block shard X ({BLOCK_SHARD_CORES_X})"
+        shard_w = dim // BLOCK_SHARD_CORES_X
+        assert shard_w % TILE == 0, f"per-core shard width ({shard_w}) must be tile-aligned"
 
-        shard_width = dim // SHARD_HEIGHT
-        core_grid = ttnn.CoreGrid(x=8, y=SHARD_HEIGHT // 8)
+        seq = num_tokens_for_l1_shard if num_tokens_for_l1_shard is not None else 729
+        rows_per_core = math.ceil(seq / BLOCK_SHARD_CORES_Y)
+        shard_h = math.ceil(rows_per_core / TILE) * TILE
 
         self.sharded_input_config = ttnn.create_sharded_memory_config(
-            shape=(SHARD_HEIGHT, shard_width),
-            core_grid=core_grid,
-            strategy=ttnn.ShardStrategy.WIDTH,
+            shape=(shard_h, shard_w),
+            core_grid=ttnn.CoreGrid(x=BLOCK_SHARD_CORES_X, y=BLOCK_SHARD_CORES_Y),
+            strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
-        )
-
-        self.sharded_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=[core_grid.x, core_grid.y],
-            subblock_w=shard_width // TILE,
-            block_h=SHARD_HEIGHT // TILE,
-            block_w=shard_width // TILE,
-            inplace=False,
         )
 
         self.sharded_output_config = self.sharded_input_config
@@ -132,13 +131,13 @@ class VisionLayerNorm(LightweightModule):
             Normalized tensor of same shape
         """
         if in_sharded:
+            # Derive block_h / block_w from the actual shard shape (matches layernorm.cpp default).
             x = ttnn.layer_norm(
                 x,
                 epsilon=self.eps,
                 weight=self.weight,
                 bias=self.bias,
-                program_config=self.sharded_program_config,
-                memory_config=self.sharded_output_config,
+                memory_config=x.memory_config(),
                 compute_kernel_config=self.compute_kernel_config,
             )
             if out_sharded:
