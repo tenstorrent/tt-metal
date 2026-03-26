@@ -266,6 +266,9 @@ get_requested_intermesh_from_mgd(const ::tt::tt_fabric::MeshGraphDescriptor& mgd
         bool is_device_level = (src_instance.kind == ::tt::tt_fabric::NodeKind::Device) &&
                                (dst_instance.kind == ::tt::tt_fabric::NodeKind::Device);
 
+        uint32_t src_mesh_id_val;
+        uint32_t dst_mesh_id_val;
+
         if (is_device_level) {
             const auto& src_mesh_instance = mgd.get_instance(src_instance.hierarchy.back());
             const auto& dst_mesh_instance = mgd.get_instance(dst_instance.hierarchy.back());
