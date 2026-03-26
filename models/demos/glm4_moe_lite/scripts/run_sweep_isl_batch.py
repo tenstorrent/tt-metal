@@ -68,9 +68,15 @@ def run_one(isl: int, batch_size: int, repo_root: Path, dry_run: bool, timeout_s
     env["GLM4_MOE_LITE_BATCHED_PREFILL"] = "1"
     env["GLM4_MOE_LITE_DECODE_L1_ACT"] = "1"
     env["GLM4_MOE_LITE_EP_L1"] = "1"
-    # env["GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE"] = str(PREFILL_CHUNK_SIZE)
+    env["GLM4_MOE_LITE_MAX_PREFILL_CHUNK_SIZE"] = str(PREFILL_CHUNK_SIZE)
     # env["GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP"] = "1"
     env["GLM4_MOE_LITE_BATCHED_PREFILL"] = "1"
+    env["GLM4_MOE_LITE_TP"] = "1"
+    env["GLM4_MOE_LITE_EXPERTS_TT_DTYPE"] = "bf4"
+    env["GLM4_MOE_LITE_CCL_NUM_LINKS"] = "4"
+    env["GLM4_MOE_LITE_CCL_TOPOLOGY"] = "ring"
+    env["GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE"] = "1"
+    env["GLM4_MOE_LITE_SKIP_TYPECAST"] = "1"
 
     result = {
         "isl": isl,

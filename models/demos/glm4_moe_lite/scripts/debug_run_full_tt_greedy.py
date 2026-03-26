@@ -18,6 +18,8 @@ from models.demos.glm4_moe_lite.tt.layer0_tt import _alloc_contiguous_page_table
 from models.demos.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT
 from models.demos.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
 
+_profiler_read_interval = int(os.environ.get("GLM4_MOE_LITE_PROFILER_READ_INTERVAL", "0").strip() or "0")
+
 
 def _sampling_result_to_token(result, mesh_device) -> int:
     """Extract token ID from trace-sampling result, handling mesh-distributed tensors."""
@@ -129,7 +131,7 @@ def main() -> int:
         default="auto",
         help="Comma-separated physical device ids (length=mesh-cols) or 'auto' to let TTNN choose.",
     )
-    ap.add_argument("--kv-cache-dtype", default="bf16", help="bf16 (correctness) or bf8 (memory/perf).")
+    ap.add_argument("--kv-cache-dtype", default="bf8", help="bf8 (memory/perf) or bf16 (correctness).")
     ap.add_argument("--block-size", type=int, default=64)
     ap.add_argument("--min-cache-tokens", type=int, default=128, help="Allocate at least this many tokens in KV cache.")
     ap.add_argument("--batch-size", type=int, default=1, help="Batch size for decode (replicates the prompt B times).")
@@ -376,6 +378,8 @@ def main() -> int:
                 seq_pad_multiple=block_size,
             )
             prefill_s = time.perf_counter() - t0
+            if _profiler_read_interval > 0:
+                ttnn.ReadDeviceProfiler(mesh_device)
             print(f"\n=== Prefill (real flash_mla_prefill) ===", flush=True)
             print(f"batch_size={batch_size} prompt_len={prompt_len} prefill_s={prefill_s:.3f}", flush=True)
             if phase == "prefill":
@@ -497,6 +501,8 @@ def main() -> int:
 
             step_ms = (time.perf_counter() - t_step) * 1000
             step_times.append(step_ms)
+            if _profiler_read_interval > 0 and step % _profiler_read_interval == 0:
+                ttnn.ReadDeviceProfiler(mesh_device)
             for b in range(batch_size):
                 generated[b].append(tokens_in[b])
         decode_s = time.perf_counter() - t_decode0

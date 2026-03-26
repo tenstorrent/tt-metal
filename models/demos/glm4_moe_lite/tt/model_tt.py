@@ -22,6 +22,8 @@ _SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
 if _SIGNPOST_ENABLED:
     from tracy import signpost
 
+_PROFILER_READ_INTERVAL = int(os.environ.get("GLM4_MOE_LITE_PROFILER_READ_INTERVAL", "0").strip() or "0")
+
 from models.demos.glm4_moe_lite.tt.decoder_layer_tt import (
     prepare_decode_rope_and_positions_tt,
     prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt,
@@ -792,6 +794,8 @@ class Glm4MoeLiteDenseOnlyTT:
                 for key, value in layer_profile.items():
                     stage_key = f"layer_{key}"
                     prefill_profile[stage_key] = prefill_profile.get(stage_key, 0.0) + float(value)
+            if _PROFILER_READ_INTERVAL > 0 and layer_idx % _PROFILER_READ_INTERVAL == 0:
+                ttnn.ReadDeviceProfiler(self.device)
             ttnn.deallocate(x, force=False)
             x = x_next
 
@@ -916,6 +920,8 @@ class Glm4MoeLiteDenseOnlyTT:
                     for key, value in layer_profile.items():
                         stage_key = f"layer_{key}"
                         prefill_profile[stage_key] = prefill_profile.get(stage_key, 0.0) + float(value)
+                if _PROFILER_READ_INTERVAL > 0 and layer_idx % _PROFILER_READ_INTERVAL == 0:
+                    ttnn.ReadDeviceProfiler(self.device)
                 ttnn.deallocate(x, force=False)
                 x = x_next
 
@@ -1098,6 +1104,8 @@ class Glm4MoeLiteDenseOnlyTT:
                 for key, value in layer_profile.items():
                     stage_key = f"layer_{key}"
                     prefill_profile[stage_key] = prefill_profile.get(stage_key, 0.0) + float(value)
+            if _PROFILER_READ_INTERVAL > 0 and layer_idx % _PROFILER_READ_INTERVAL == 0:
+                ttnn.ReadDeviceProfiler(self.device)
             ttnn.deallocate(x, force=False)
             x = x_next
 
@@ -1469,6 +1477,8 @@ class Glm4MoeLiteDenseOnlyTT:
                 for key, value in layer_profile.items():
                     stage_key = f"layer_{key}"
                     decode_profile[stage_key] = decode_profile.get(stage_key, 0.0) + float(value)
+            if _PROFILER_READ_INTERVAL > 0 and layer_idx % _PROFILER_READ_INTERVAL == 0:
+                ttnn.ReadDeviceProfiler(self.device)
             ttnn.deallocate(x, force=False)
             x = x_next
 

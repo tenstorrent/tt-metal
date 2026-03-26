@@ -112,7 +112,10 @@ TT_METAL_GTEST_ETH_DISPATCH=1 python \
 | `GLM4_MOE_LITE_FUSE_SHARED_GATE_UP=1` | Off | Fuse shared MLP gate + up projections |
 | `GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP=1` | Off | Fuse expert gate + up projections |
 | `GLM4_MOE_LITE_FUSE_QKV_A=1` | Off | Fuse Q and KV_A projections into a single matmul |
-| `GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE=1` | Off | Fuse MLP + MoE reduce step |
+| `GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE=1` | Off | Fuse MLP + MoE reduce step (consolidates dual ReduceScatter+AllGather pairs in MoE layers) |
+| `GLM4_MOE_LITE_SKIP_TYPECAST=1` | Off | Skip unnecessary bf16 typecasts in attention path (eliminates ~1,500 TypecastDeviceOperation calls per decode step) |
+| `GLM4_MOE_LITE_CONCAT_HEADS=1` | Off | Use `ttnn.transformer.concatenate_heads` for attention output head-flattening (tested neutral in traced mode; not recommended) |
+| `GLM4_MOE_LITE_NLP_CONCAT_HEADS=1` | Off | Use `ttnn.experimental.nlp_concat_heads` for prefill attention output path |
 | `GLM4_MOE_LITE_DRAM_SHARDED_WEIGHTS=1` | Off | Use DRAM-sharded weight layout |
 | `GLM4_MOE_LITE_DRAM_SHARDED_ATTN=1` | Off | DRAM-sharded attention weights (requires `DRAM_SHARDED_WEIGHTS=1`) |
 | `GLM4_MOE_LITE_DRAM_SHARDED_MLP=1` | On (if `DRAM_SHARDED_WEIGHTS=1`) | DRAM-sharded MLP weights |
@@ -764,9 +767,76 @@ Best config: `GLM4_MOE_LITE_CCL_NUM_LINKS=4 GLM4_MOE_LITE_CCL_TOPOLOGY=ring`
 
 **Deferred** — too complex for quick integration. GLM4 has variable weight tensor counts per layer (dense vs MoE layers), but `dram_prefetcher` requires uniform `n_tensors`. Also requires global-CB-aware matmul calls and SubDevice core splitting.
 
-### Combined Winners (bf4 + 4-link ring CCL)
+### Phase 3: Profiler-Driven Optimizations
 
-Best-performing configuration: baseline + `EXPERTS_TT_DTYPE=bf4` + `CCL_NUM_LINKS=4` + `CCL_TOPOLOGY=ring`
+Analyzed `ops_perf_results` CSV (~175K rows) from a full decode step to identify redundant or optimizable operations. Key findings:
+
+- **71.9% of device kernel time** spent in data movement/layout ops (reshape, permute, typecast, clone, to_layout)
+- **ReshapeViewDeviceOperation** consuming 12.67% of device time due to materializing reshapes where zero-cost views are possible
+- **1,504 TypecastDeviceOperation** calls adding unnecessary format conversions
+- **Dual ReduceScatter+AllGather pairs** in MoE layers that can be consolidated
+
+Three optimizations were implemented and tested (ISL=128, batch=1, trace-sampling, 4x8 Galaxy):
+
+| Change | Type | Description |
+|---|---|---|
+| `FUSE_MLP_MOE_REDUCE=1` | Env var | Consolidates dual ReduceScatter+AllGather pairs into one per MoE layer |
+| `SKIP_TYPECAST=1` | Env var | Eliminates unnecessary bf16 typecast ops in attention Q/KV paths |
+| MoE decode permute-to-reshape | Code change in `moe_tt.py` | Replaces `permute+clone+reshape` with zero-cost `ttnn.reshape` for decode-mode expert output aggregation (when `num_blocks==1`) |
+
+#### Results (with Combined Winners baseline + TP=1)
+
+| Config | Decode Mean (ms) | Improvement |
+|---|---|---|
+| Before (Combined Winners + TP) | 98.0 | -- |
+| After (+ all 3 optimizations) | 90.0 | **-8.2%** |
+
+`CONCAT_HEADS=1` was also tested but showed no benefit in traced mode (93.6ms vs 92.9ms without -- within noise). The `concatenate_heads` device kernel does not outperform the permute-reshape-permute chain when host dispatch overhead is already eliminated by trace replay. Not included in the recommended config.
+
+#### Profiler Analysis Script
+
+A reusable analysis script is available at `experiments/analyze_ops_perf.py`:
+
+```bash
+python models/demos/glm4_moe_lite/experiments/analyze_ops_perf.py \
+  generated/profiler/reports/<timestamp>/ops_perf_results_<timestamp>.csv
+```
+
+It reports: top ops by device time, data movement breakdown, reshape materialization patterns, host overhead analysis, fusion candidates, and anti-pattern detection.
+
+### Combined Winners (bf4 + 4-link ring CCL + profiler optimizations)
+
+Best-performing configuration: baseline + `EXPERTS_TT_DTYPE=bf4` + `CCL_NUM_LINKS=4` + `CCL_TOPOLOGY=ring` + `FUSE_MLP_MOE_REDUCE=1` + `SKIP_TYPECAST=1` + MoE decode permute-to-reshape code change.
+
+Recommended run command (Galaxy 4x8, all optimizations):
+
+```bash
+GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES=1 \
+GLM4_MOE_LITE_FUSE_QKV_A=1 \
+GLM4_MOE_LITE_FUSE_SHARED_GATE_UP=1 \
+GLM4_MOE_LITE_BATCHED_PREFILL=1 \
+GLM4_MOE_LITE_DECODE_L1_ACT=1 \
+GLM4_MOE_LITE_EP_L1=1 \
+GLM4_MOE_LITE_TP=1 \
+GLM4_MOE_LITE_EXPERTS_TT_DTYPE=bf4 \
+GLM4_MOE_LITE_CCL_NUM_LINKS=4 \
+GLM4_MOE_LITE_CCL_TOPOLOGY=ring \
+GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE=1 \
+GLM4_MOE_LITE_SKIP_TYPECAST=1 \
+python models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
+  --prompt "Summarize" \
+  --simulate-context-len 128 \
+  --min-cache-tokens 256 \
+  --max-new-tokens 32 \
+  --batch-size 1 \
+  --mesh-rows 4 --mesh-cols 8 \
+  --kv-cache-dtype bf8 \
+  --phase both --enable-trace --trace-mode sampling
+```
+
+The sweep script (`run_sweep_isl_batch.py`) includes all these flags automatically.
+
+The tables below show results from the bf4 + 4-link ring CCL configuration (before profiler optimizations). With profiler optimizations enabled, expect an additional ~8% decode speedup.
 
 #### Decode Latency (ms)
 
@@ -801,5 +871,10 @@ Best-performing configuration: baseline + `EXPERTS_TT_DTYPE=bf4` + `CCL_NUM_LINK
 | G5 Batch Scaling | Tested | 358 agg TPS at batch=32 |
 | G6 DRAM Sharded Weights | Tested | -12% regression |
 | G7 bf4 Expert Weights | Tested | +0-1.2% at batch=1 |
-| G8 Fused MOE | Tested | Crashed |
+| G8 Fused MOE | Tested | Crashed (persistent_moe_compute kernel is a WIP stub) |
 | **Combined (G1+G7)** | **Implemented** | **2-3% decode speedup, 367 agg TPS at batch=32** |
+| FUSE_MLP_MOE_REDUCE | Implemented | Consolidates CCL pairs in MoE layers |
+| SKIP_TYPECAST | Implemented | Eliminates ~1,500 typecast ops |
+| MoE decode permute-to-reshape | Implemented (code) | Zero-cost view replaces permute+clone chain |
+| CONCAT_HEADS | Tested | Neutral in traced mode (not recommended) |
+| **Combined (G1+G7+profiler opts)** | **Implemented** | **~10% total decode speedup vs original baseline** |

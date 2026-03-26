@@ -1265,15 +1265,11 @@ def moe_sparse_experts_forward_tt(
     - The older all-to-all dispatch/combine path remains available behind
       `GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL=a2a` for future DP-sharded inputs.
     """
-    if os.environ.get("GLM4_MOE_LITE_FUSED_MOE", "0") == "1":
-        return ttnn.experimental.fused_persistent_moe_decode(
-            hidden_states,
-            topk_expert_indices,
-            topk_expert_weights,
-            moe_w.w1_experts,
-            moe_w.w3_experts,
-            moe_w.w2_experts,
-        )
+    # NOTE: GLM4_MOE_LITE_FUSED_MOE=1 is disabled. The underlying
+    # ttnn.experimental.fused_persistent_moe_decode device kernel
+    # (persistent_moe_compute.cpp) is a WIP stub whose includes
+    # don't resolve at JIT compile time. Re-enable once the kernel
+    # is completed and the build is fixed.
 
     packer_l1_acc = _env_bool("GLM4_MOE_LITE_PACKER_L1_ACC", default=False)
     # Default to BF16-speed settings for sparse MoE. Users can opt back into
@@ -1709,20 +1705,21 @@ def moe_sparse_experts_forward_tt(
     if tuple(expert_output_sparse.shape) != _eos_target:
         expert_output_sparse = ttnn.reshape(expert_output_sparse, _eos_target)
 
-    # `permute` can behave like a view (no refcounting). Materialize before freeing
-    # the source to avoid intermittent use-after-free corruption during decode.
-    if skip_defensive_clones:
-        expert_output = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))  # [E, num_blocks, block, H]
-        # expert_output_sparse stays alive — consumed by reshape/mul downstream
+    # Reorder expert output from [num_blocks, E, block, H] to [E, 1, total_tokens, H].
+    # For decode (num_blocks=1), the permute (1,0,2,3) swaps dim0 (size 1) with dim1,
+    # so we can use reshape (zero-cost view) instead of the TransposeDeviceOperation.
+    _target_eo_shape = (int(rt.num_experts_per_device), 1, total_tokens, hidden_size)
+    if num_blocks == 1:
+        expert_output = ttnn.reshape(expert_output_sparse, _target_eo_shape)
+    elif skip_defensive_clones:
+        expert_output = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))
+        expert_output = ttnn.reshape(expert_output, _target_eo_shape)
     else:
-        expert_output_view = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))  # [E, num_blocks, block, H]
+        expert_output_view = ttnn.permute(expert_output_sparse, (1, 0, 2, 3))
         expert_output = ttnn.clone(expert_output_view, memory_config=memory_config)
         ttnn.deallocate(expert_output_view, force=False)
         ttnn.deallocate(expert_output_sparse, force=False)
-    expert_output = ttnn.reshape(
-        expert_output,
-        shape=(int(rt.num_experts_per_device), 1, total_tokens, hidden_size),
-    )
+        expert_output = ttnn.reshape(expert_output, _target_eo_shape)
 
     if use_all_to_all:
         # Convert expert output to row-major for all_to_all_combine.
