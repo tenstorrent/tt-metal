@@ -152,6 +152,7 @@ def run_matmul_1d_dram_sharded(device, num_iters=1):
 
         # --- PCC comparisons ---
         test_name = f"run_matmul_1d_dram_sharded[num_iters={num_iters}]_iter{_}"
+        test_dtype_str = "bfloat16"
         collect_and_dump_numeric_metrics(
             torch_out,
             ring_out,
@@ -159,7 +160,7 @@ def run_matmul_1d_dram_sharded(device, num_iters=1):
             csv_filename="test_ring_matmul_numeric_results.csv",
             k=1280,
             test_params=None,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
         )
         assert_with_pcc(ring_out, torch_out, 0.9)
 

@@ -31,13 +31,14 @@ def test_ttnn_experimental_tensor_exp(device, height, width):
     output_tensor = ttnn.to_torch(output_tensor)
 
     test_name = f"test_ttnn_experimental_tensor_exp[height={height},width={width}]"
+    test_dtype_str = "bfloat16"
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         test_name=test_name,
         csv_filename="test_experimental_numeric_results.csv",
         test_params=None,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
     )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
@@ -60,6 +61,7 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
     output_tensor = ttnn.to_torch(output_tensor)
 
     test_name = f"test_ttnn_matmul[m_size={m_size},k_size={k_size},n_size={n_size}]"
+    test_dtype_str = "bfloat16"
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -67,7 +69,7 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
         csv_filename="test_experimental_numeric_results.csv",
         test_params=None,
         k=k_size,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
     )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
@@ -162,6 +164,7 @@ def test_ttnn_linear(
         ttnn.tracer.visualize(output_tensor)
 
     test_name = f"test_ttnn_linear[input_a_is_sharded={input_a_is_sharded},output_is_sharded={output_is_sharded},m_size={m_size},k_size={k_size},n_size={n_size},num_cores={num_cores},input_a_dtype={input_a_dtype},input_b_dtype={input_b_dtype}]"
+    test_dtype_str = "bfloat8" if (input_a_dtype == ttnn.bfloat8_b or input_b_dtype == ttnn.bfloat8_b) else "bfloat16"
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -169,7 +172,7 @@ def test_ttnn_linear(
         csv_filename="test_experimental_numeric_results.csv",
         test_params=None,
         k=k_size,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 
@@ -250,6 +253,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     test_name = f"test_ttnn_matmul_dram_sharded[m_size={m_size},k_size={k_size},n_size={n_size}]"
+    test_dtype_str = "bfloat16"
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         output_tensor,
@@ -257,7 +261,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
         csv_filename="test_experimental_numeric_results.csv",
         test_params=None,
         k=k_size,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
 
@@ -320,13 +324,14 @@ def test_sharded_partial_op(device, H, num_cores, num_slices):
     pt_out = in0
 
     tt_out = ttnn.to_torch(out_tt_tensor)
-    # test_name = f"test_sharded_partial_op[H={H},num_cores={num_cores},num_slices={num_slices}]"
-    # collect_and_dump_numeric_metrics(
-    #     pt_out,
-    #     tt_out,
-    #     test_name=test_name,
-    test_dtype = ((str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),)
-    #     csv_filename="test_experimental_numeric_results.csv",
-    #     test_params=None,
-    # )
+    test_name = f"test_sharded_partial_op[H={H},num_cores={num_cores},num_slices={num_slices}]"
+    test_dtype_str = "float32"
+    collect_and_dump_numeric_metrics(
+        pt_out,
+        tt_out,
+        test_name=test_name,
+        test_dtype=test_dtype_str,
+        csv_filename="test_experimental_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(pt_out, tt_out)

@@ -16,6 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
 
 
+# numeric_check : comparison not necessary
 def pad_batch_to_dram_banks(batch, num_dram_banks=12):
     """Pad batch dimension to be divisible by number of DRAM banks."""
     if batch % num_dram_banks == 0:
@@ -24,6 +25,7 @@ def pad_batch_to_dram_banks(batch, num_dram_banks=12):
     return padded_batch
 
 
+# numeric_check : comparison not necessary
 def pad_to_tile(dim, tile_size):
     """Pad dimension to be a multiple of tile size."""
     if dim % tile_size == 0:
@@ -396,6 +398,14 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
     logger.info(pcc_message)
     test_name = f"test_matmul_l1_dram_sharded[test_case={test_case},num_iters={num_iters}]"
+
+    if in0_dtype == ttnn.bfloat4_b or in1_dtype == ttnn.bfloat4_b or out_dtype == ttnn.bfloat4_b:
+        test_dtype_str = "bfloat4"
+    elif in0_dtype == ttnn.bfloat8_b or in1_dtype == ttnn.bfloat8_b or out_dtype == ttnn.bfloat8_b:
+        test_dtype_str = "bfloat8"
+    else:
+        test_dtype_str = "bfloat16"
+
     collect_and_dump_numeric_metrics(
         pt_out,
         output_tensor,
@@ -403,7 +413,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
         csv_filename="test_matmul_deepseek_numeric_results.csv",
         test_params=None,
         k=k,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
     )
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
@@ -627,6 +637,12 @@ def test_matmul_batched_dram_sharded(device, test_case):
     # Lower PCC threshold due to bfloat8_b weights (lower precision than bfloat16)
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
     test_name = f"test_matmul_batched_dram_sharded[test_case={test_case}]"
+
+    if in0_dtype == ttnn.bfloat8_b or in1_dtype == ttnn.bfloat8_b:
+        test_dtype_str = "bfloat8"
+    else:
+        test_dtype_str = "bfloat16"
+
     collect_and_dump_numeric_metrics(
         pt_out,
         output_tensor,
@@ -634,7 +650,7 @@ def test_matmul_batched_dram_sharded(device, test_case):
         csv_filename="test_matmul_deepseek_numeric_results.csv",
         test_params=None,
         k=k,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
     )
     assert pcc_passed
 
@@ -764,6 +780,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
         output_tensor = output_tensor[:, :batch, :m, :n]
         pt_out = torch.matmul(in0_orig, in1_orig)
         test_name = f"test_matmul_batched_dram_sharded_program_cache[batch={batch},m={m},k={k},n={n}]"
+        test_dtype_str = "bfloat16"
         collect_and_dump_numeric_metrics(
             pt_out,
             output_tensor,
@@ -771,7 +788,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
             csv_filename="test_matmul_deepseek_numeric_results.csv",
             test_params=None,
             k=k,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
         )
         assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
@@ -1057,6 +1074,8 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
 
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
     test_name = f"test_prefill_mm_interleaved_sharded[test_case={test_case},seq_len={seq_len}]"
+
+    test_dtype_str = "bfloat8" if (in1_dtype == ttnn.bfloat8_b) else "bfloat16"
     collect_and_dump_numeric_metrics(
         pt_out,
         output_tensor,
@@ -1064,6 +1083,6 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
         csv_filename="test_matmul_deepseek_numeric_results.csv",
         test_params=None,
         k=k,
-        test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+        test_dtype=test_dtype_str,
     )
     assert pcc_passed, f"PCC check failed: {pcc_message}"

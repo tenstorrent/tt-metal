@@ -323,6 +323,7 @@ def test_addmm_non_tile_multiple_dimensions(device, dtype, shape):
     assert_with_pcc(torch_output_tensor, output_tensor_torch, pcc=target_pcc)
 
 
+# numeric_check : comparison not necessary
 def test_alpha_zero_should_throw_error(device):
     torch.manual_seed(0)
 
@@ -358,6 +359,7 @@ def test_alpha_zero_should_throw_error(device):
         pytest.fail("Calling ttnn.addmm with alpha=0 should throw an error.")
 
 
+# numeric_check : comparison not necessary
 def test_input_tensor_with_invalid_shape_should_throw_error(device):
     torch.manual_seed(0)
 
@@ -393,6 +395,7 @@ def test_input_tensor_with_invalid_shape_should_throw_error(device):
         pytest.fail("Calling ttnn.addmm with incompatible shapes should throw an error.")
 
 
+# numeric_check : comparison not necessary
 def test_input_tensor_with_invalid_shape_should_be_ignored_if_beta_is_0(device):
     torch.manual_seed(0)
 
@@ -422,6 +425,7 @@ def test_input_tensor_with_invalid_shape_should_be_ignored_if_beta_is_0(device):
     ttnn.addmm(input_tensor, mat1_tensor, mat2_tensor, beta=0.0)
 
 
+# numeric_check : comparison not necessary
 def test_cast_to_another_dtype(device):
     torch.manual_seed(0)
 
@@ -452,6 +456,7 @@ def test_cast_to_another_dtype(device):
     assert output_tensor.dtype == ttnn.float32, "Output tensor must be float32"
 
 
+# numeric_check : comparison not necessary
 def test_unsupported_dtype_should_throw_error(device):
     torch.manual_seed(0)
 
@@ -592,11 +597,12 @@ def test_addmm_with_output_tensor_inplace_op_with_different_dtype(device):
     out_tensor = ttnn.to_torch(out_tensor)
 
     test_name = "test_addmm_with_output_tensor_inplace_op_with_different_dtype"
+    test_dtype_str = "bfloat16"
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
         output_tensor,
         test_name=test_name,
-        test_dtype="bfloat16",
+        test_dtype=test_dtype_str,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
         k=32,

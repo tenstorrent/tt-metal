@@ -108,6 +108,7 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, t
         # Compare with output tensor
         expected_pcc = 0.999
         test_name = f"test_sparse_matmul_without_nnz[mkn={mkn},num_experts={num_experts},num_batches={num_batches},tile_h={tile_h},tile_w={tile_w},in1_dtype={in1_dtype},core_grid={core_grid}]_b{b_i}_s{s_i}_e{e_i}"
+        test_dtype_str = "bfloat16"
         collect_and_dump_numeric_metrics(
             pt_out,
             output_tensor[b_i, s_i, 0, e_i, :, :],
@@ -115,7 +116,7 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, t
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
             k=k,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
         )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
 
@@ -209,6 +210,20 @@ def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_batches, tile_h
 
         # Compare with output tensor
         expected_pcc = 0.999
+        test_name = f"test_sparse_matmul_without_nnz[mkn={mkn},num_experts={num_experts},num_batches={num_batches},tile_h={tile_h},tile_w={tile_w},in1_dtype={in1_dtype},core_grid={core_grid}]_b{b_i}_s{s_i}_e{e_i}"
+        if in1_dtype == ttnn.bfloat8_b:
+            test_dtype_str = "bfloat8"
+        else:
+            test_dtype_str = "bfloat16"
+        collect_and_dump_numeric_metrics(
+            pt_out,
+            output_tensor[b_i, s_i, 0, e_i, :, :],
+            test_name=test_name,
+            csv_filename="test_sparse_matmul_numeric_results.csv",
+            test_params=None,
+            k=k,
+            test_dtype=test_dtype_str,
+        )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
 
 
@@ -304,6 +319,11 @@ def test_batched_sparse_matmul_with_nnz(device, mkn, num_experts, tile_h, tile_w
         # Compare with output tensor
         expected_pcc = 0.999
         test_name = f"test_batched_sparse_matmul_with_nnz[mkn={mkn},num_experts={num_experts},tile_h={tile_h},tile_w={tile_w},in1_dtype={in1_dtype},core_grid={core_grid}]_b{b_i}_s{s_i}"
+        if in1_dtype == ttnn.bfloat8_b:
+            test_dtype_str = "bfloat8"
+        else:
+            test_dtype_str = "bfloat16"
+
         collect_and_dump_numeric_metrics(
             pt_out,
             output_tensor[b_i, s_i, :, :],
@@ -311,7 +331,7 @@ def test_batched_sparse_matmul_with_nnz(device, mkn, num_experts, tile_h, tile_w
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
             k=k,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
         )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, :, :], expected_pcc)
 
@@ -404,13 +424,18 @@ def test_batched_sparse_matmul_without_nnz(device, mkn, num_experts, tile_h, til
         # Compare with output tensor
         expected_pcc = 0.999
         test_name = f"test_batched_sparse_matmul_without_nnz[mkn={mkn},num_experts={num_experts},tile_h={tile_h},tile_w={tile_w},in1_dtype={in1_dtype},core_grid={core_grid}]_b{b_i}_s{s_i}"
+        if in1_dtype == ttnn.bfloat8_b:
+            test_dtype_str = "bfloat8"
+        else:
+            test_dtype_str = "bfloat16"
+
         collect_and_dump_numeric_metrics(
             pt_out,
             output_tensor[b_i, s_i, :, :],
             test_name=test_name,
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
         )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, :, :], expected_pcc)
 
@@ -509,6 +534,10 @@ def test_sparse_matmul_inputA_with_nnz(device, mkn, num_experts, num_batches, ti
         # Compare with output tensor
         expected_pcc = 0.999
         test_name = f"test_sparse_matmul_inputA_with_nnz[mkn={mkn},num_experts={num_experts},num_batches={num_batches},tile_h={tile_h},tile_w={tile_w},in1_dtype={in1_dtype},core_grid={core_grid}]_b{b_i}_e{e_i}"
+        if in1_dtype == ttnn.bfloat8_b:
+            test_dtype_str = "bfloat8"
+        else:
+            test_dtype_str = "bfloat16"
         collect_and_dump_numeric_metrics(
             pt_out,
             output_tensor[b_i, e_i, :, :],
@@ -516,7 +545,7 @@ def test_sparse_matmul_inputA_with_nnz(device, mkn, num_experts, num_batches, ti
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
             k=k,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
         )
         assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)
 
@@ -611,6 +640,10 @@ def test_sparse_matmul_inputA_without_nnz(device, mkn, num_experts, num_batches,
         # Compare with output tensor
         expected_pcc = 0.999
         test_name = f"test_sparse_matmul_inputA_without_nnz[mkn={mkn},num_experts={num_experts},num_batches={num_batches},tile_h={tile_h},tile_w={tile_w},in1_dtype={in1_dtype},core_grid={core_grid}]_b{b_i}_e{e_i}"
+        if in1_dtype == ttnn.bfloat8_b:
+            test_dtype_str = "bfloat8"
+        else:
+            test_dtype_str = "bfloat16"
         collect_and_dump_numeric_metrics(
             pt_out,
             output_tensor[b_i, e_i, :, :],
@@ -618,6 +651,6 @@ def test_sparse_matmul_inputA_without_nnz(device, mkn, num_experts, num_batches,
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
             k=k,
-            test_dtype=(str(dtype).replace("ttnn.", "") if "dtype" in locals() else None),
+            test_dtype=test_dtype_str,
         )
         assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)

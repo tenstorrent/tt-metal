@@ -663,7 +663,7 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False, find_ulp_
     # If we passed golden tensor to ulp() as is, we would get ULP of higher precision.
     # e.g. ulp of float32 rather bfloat16 calculation, which would give us a wrong value.
     # if golden.dtype != calculated.dtype:
-    #     ulp_value = ulp(golden.type(calculated.dtype))
+    ulp_value = ulp(golden.type(calculated.dtype))
     # else:
     #     ulp_value = ulp(golden)
     # ulp_value = ulp(golden)
@@ -674,22 +674,22 @@ def comp_ulp(golden, calculated, ulp_threshold, allow_nonfinite=False, find_ulp_
         #     print(f"{ulp_value[i].item():.20f}")
         # print("--------------------------------")
 
-        # calculated = calculated.type(golden.dtype)
-        # ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
-        golden_bits = torch.finfo(golden.dtype).bits
-        calc_bits = torch.finfo(calculated.dtype).bits
-        ulp_dtype = golden.dtype if golden_bits <= calc_bits else calculated.dtype
+        calculated = calculated.type(golden.dtype)
+        ulp_value = ulp_value.type(golden.dtype)  # Convert ULP to higher precision (for sub-1 ULP measurements)
+        # golden_bits = torch.finfo(golden.dtype).bits
+        # calc_bits = torch.finfo(calculated.dtype).bits
+        # ulp_dtype = golden.dtype if golden_bits <= calc_bits else calculated.dtype
 
         # print("Ulp value after ****************")
         # for i in range(len(ulp_value)):
         #     print(f"{ulp_value[i].item():.20f}")
         # print("--------------------------------")
-    else:
-        ulp_dtype = golden.dtype
+    # else:
+    #     ulp_dtype = golden.dtype
 
-    ulp_value = ulp(golden.type(ulp_dtype))
-    calculated = calculated.type(ulp_dtype)
-    golden = golden.type(ulp_dtype)
+    # ulp_value = ulp(golden.type(ulp_dtype))
+    # calculated = calculated.type(ulp_dtype)
+    # golden = golden.type(ulp_dtype)
     # for i in range(len(golden)):
     #     print(f"golden[i]: {golden[i].item():.20f}, calculated[i]: {calculated[i].item():.20f}")
     # for i in range(len(golden)):
