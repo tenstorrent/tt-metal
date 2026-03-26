@@ -59,4 +59,9 @@ Architecture docs:
 
 Low-level kernels (LLK):
   tt_metal/third_party/tt_llk/                   # Tenstorrent low-level kernels
+
+tt-agent skills:
+  tt-agent/skills/                               # Agentic workflow skills
+  tt-agent/knowledge/                            # Stable hardware knowledge + references
+  notes/                                         # Shared blackboard (agent + developer findings)
 ```
