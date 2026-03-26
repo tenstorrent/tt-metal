@@ -30,13 +30,20 @@ def _mesh_scratch_shape_per_device(mesh_device, k: int = 1):
     total_slots = mesh_rows + mesh_cols
     if k == 1:
         slot_bytes = 16  # bf16 score + uint32 index, padded to 16
+        total_bytes = total_slots * slot_bytes
+        scratch_width_uint32 = _round_up(total_bytes, 4) // 4
+        return (1, scratch_width_uint32)
     else:
-        topk_scores_stride = _round_up(k * 2, 16)
-        topk_indices_stride = _round_up(k * 4, 16)
-        slot_bytes = topk_scores_stride + topk_indices_stride
-    total_bytes = total_slots * slot_bytes
-    scratch_width_uint32 = _round_up(total_bytes, 4) // 4
-    return (1, scratch_width_uint32)
+        bf16_tile_size = 2 * 32 * 32
+        uint32_tile_size = 4 * 32 * 32
+        stage1_tiles = (mesh_rows * k + 1023) // 1024
+        stage2_tiles = (mesh_cols * k + 1023) // 1024
+        total_tiles = stage1_tiles + stage2_tiles
+        scores_bytes = total_tiles * bf16_tile_size
+        indices_bytes = total_tiles * uint32_tile_size
+        scores_width_bf16 = _round_up(scores_bytes, 2) // 2
+        indices_width_uint32 = _round_up(indices_bytes, 4) // 4
+        return (1, scores_width_bf16), (1, indices_width_uint32)
 
 
 def _mesh_device_index(final_mesh_coord, mesh_device):
@@ -583,7 +590,7 @@ def _run_sampling_topk_mesh(
     global_vocab_size = num_devices * vocab_per_device
     input_shard_shape = (1, 160)
     output_shape_per_device = (1, 1)
-    scratch_shape_per_device = _mesh_scratch_shape_per_device(mesh_device, k=k)
+    scores_scratch_shape, indices_scratch_shape = _mesh_scratch_shape_per_device(mesh_device, k=k)
     tile_1x32 = ttnn.Tile([1, 32])
 
     logger.info(
@@ -636,11 +643,21 @@ def _run_sampling_topk_mesh(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(final_core_grid, output_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
     )
-    scratch_shard_spec = ttnn.ShardSpec(final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR)
-    scratch_mem_config = ttnn.MemoryConfig(
+    scores_scratch_shard_spec = ttnn.ShardSpec(
+        final_core_grid, scores_scratch_shape, ttnn.ShardOrientation.ROW_MAJOR
+    )
+    scores_scratch_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
-        scratch_shard_spec,
+        scores_scratch_shard_spec,
+    )
+    indices_scratch_shard_spec = ttnn.ShardSpec(
+        final_core_grid, indices_scratch_shape, ttnn.ShardOrientation.ROW_MAJOR
+    )
+    indices_scratch_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        indices_scratch_shard_spec,
     )
 
     mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
@@ -677,12 +694,20 @@ def _run_sampling_topk_mesh(
         memory_config=rand_output_mem_config,
         mesh_mapper=mesh_mapper,
     )
-    ttnn_fabric_scratch = ttnn.from_torch(
-        torch.zeros((num_devices, *scratch_shape_per_device), dtype=torch.uint32),
+    ttnn_scores_scratch = ttnn.from_torch(
+        torch.zeros((num_devices, *scores_scratch_shape), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=scores_scratch_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    ttnn_indices_scratch = ttnn.from_torch(
+        torch.zeros((num_devices, *indices_scratch_shape), dtype=torch.uint32),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
-        memory_config=scratch_mem_config,
+        memory_config=indices_scratch_mem_config,
         mesh_mapper=mesh_mapper,
     )
 
@@ -703,7 +728,8 @@ def _run_sampling_topk_mesh(
         final_mesh_coord=final_mesh_coord,
         global_semaphore=global_semaphore,
         global_stage2_semaphore=global_stage2_semaphore,
-        fabric_scratch_tensor=ttnn_fabric_scratch,
+        scores_scratch_tensor=ttnn_scores_scratch,
+        indices_scratch_tensor=ttnn_indices_scratch,
         mesh_axis="x",
     )
     ttnn.synchronize_device(mesh_device)

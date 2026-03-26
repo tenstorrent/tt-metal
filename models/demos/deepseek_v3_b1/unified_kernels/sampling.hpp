@@ -444,7 +444,11 @@ struct TopKSampling {
         uint32_t TopKOutScoresCBId = 0xFFFFFFFF,
         uint32_t TopKOutIndicesCBId = 0xFFFFFFFF,
         uint32_t Phase2ScoresByteOffset = 0,
-        uint32_t Phase2IndicesByteOffset = 0>
+        uint32_t Phase2IndicesByteOffset = 0,
+        uint32_t MeshStageScoresCBId = 0xFFFFFFFF,
+        uint32_t MeshStageIndicesCBId = 0xFFFFFFFF,
+        uint32_t ScoresScratchStage2Offset = 0,
+        uint32_t IndicesScratchStage2Offset = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t topk_k = TopK;
@@ -494,6 +498,10 @@ struct TopKSampling {
         static constexpr uint32_t topk_indices_size = TopK * sizeof(uint32_t);
         static constexpr uint32_t topk_scores_stride = (topk_scores_size + 15u) & ~15u;
         static constexpr uint32_t topk_indices_stride = (topk_indices_size + 15u) & ~15u;
+        static constexpr uint32_t mesh_stage_scores_cb = MeshStageScoresCBId;
+        static constexpr uint32_t mesh_stage_indices_cb = MeshStageIndicesCBId;
+        static constexpr uint32_t scores_scratch_stage2_offset = ScoresScratchStage2Offset;
+        static constexpr uint32_t indices_scratch_stage2_offset = IndicesScratchStage2Offset;
     };
 
     template <
@@ -539,13 +547,20 @@ struct TopKSampling {
         uint32_t Seed = 520,
         uint32_t TopK = 1,
         uint32_t MeshMode = 0,
+        uint32_t Stage1Receiver = 0,
         uint32_t Stage2Receiver = 0,
         uint32_t NumValues = 0,
         uint32_t NumSenders = 0,
         uint32_t TopKInScoresCBId = 0xFFFFFFFF,
         uint32_t TopKInIndicesCBId = 0xFFFFFFFF,
         uint32_t TopKOutScoresCBId = 0xFFFFFFFF,
-        uint32_t TopKOutIndicesCBId = 0xFFFFFFFF>
+        uint32_t TopKOutIndicesCBId = 0xFFFFFFFF,
+        uint32_t MeshStageScoresCBId = 0xFFFFFFFF,
+        uint32_t MeshStageIndicesCBId = 0xFFFFFFFF,
+        uint32_t Stage1RowElements = 0,
+        uint32_t Stage1NumInputTiles = 0,
+        uint32_t Stage2RowElements = 0,
+        uint32_t Stage2NumInputTiles = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t softmax_in_cb = SoftmaxInCBId;
         static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
@@ -559,6 +574,7 @@ struct TopKSampling {
         static constexpr uint32_t seed = Seed;
         static constexpr uint32_t topk_k = TopK;
         static constexpr bool mesh_mode = MeshMode == 1;
+        static constexpr bool stage1_receiver = Stage1Receiver == 1;
         static constexpr bool stage2_receiver = Stage2Receiver == 1;
         static constexpr uint32_t num_values = NumValues;
         static constexpr uint32_t num_senders = NumSenders;
@@ -569,6 +585,12 @@ struct TopKSampling {
         static constexpr uint32_t topk_out_scores_cb = TopKOutScoresCBId;
         static constexpr uint32_t topk_out_indices_cb = TopKOutIndicesCBId;
         static constexpr uint32_t phase1_num_input_tiles = (NumValues + 1023) / 1024;
+        static constexpr uint32_t mesh_stage_scores_cb = MeshStageScoresCBId;
+        static constexpr uint32_t mesh_stage_indices_cb = MeshStageIndicesCBId;
+        static constexpr uint32_t stage1_row_elements = Stage1RowElements;
+        static constexpr uint32_t stage1_num_input_tiles = Stage1NumInputTiles;
+        static constexpr uint32_t stage2_row_elements = Stage2RowElements;
+        static constexpr uint32_t stage2_num_input_tiles = Stage2NumInputTiles;
     };
 
     struct ReaderArgs {
@@ -577,7 +599,8 @@ struct TopKSampling {
         uint32_t output_addr;
         uint32_t final_noc_x;
         uint32_t final_noc_y;
-        uint32_t scratch_addr;
+        uint32_t scores_scratch_addr;
+        uint32_t indices_scratch_addr;
         uint32_t global_sem_addr;
         uint32_t global_stage2_sem_addr;
     };
@@ -1070,29 +1093,49 @@ struct TopKSampling {
                     phase2_merge_global_topk(p2_scores_base, p2_indices_base, global_scores, global_indices);
                 }
 
-                // Mesh inter-device reduction stages (top-K payload).
-                // Scratch layout per stage (contiguous, LLK-friendly):
-                //   [scores_0 | scores_1 | ... | scores_N] [indices_0 | indices_1 | ... | indices_N]
+                // Mesh inter-device reduction stages via LLK (k==32) or scalar merge.
                 if constexpr (CTArgs::mesh_mode) {
                     if constexpr (CTArgs::stage1_receiver) {
-                        constexpr uint32_t s1_scores_base = CTArgs::stage1_slot_base_offset;
-                        constexpr uint32_t s1_indices_base =
-                            s1_scores_base + CTArgs::stage1_num_slots * CTArgs::topk_scores_stride;
                         write_topk_slot(
-                            args.scratch_addr + s1_scores_base +
+                            args.scores_scratch_addr +
                                 CTArgs::stage1_local_slot_idx * CTArgs::topk_scores_stride,
-                            args.scratch_addr + s1_indices_base +
+                            args.indices_scratch_addr +
                                 CTArgs::stage1_local_slot_idx * CTArgs::topk_indices_stride,
                             global_scores,
                             global_indices);
                         auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
                         wait_and_reset_semaphore(global_sem_ptr, CTArgs::stage1_expected_remote_incs);
-                        phase3_merge_mesh_stage_topk_slots(
-                            args.scratch_addr + s1_scores_base,
-                            args.scratch_addr + s1_indices_base,
-                            CTArgs::stage1_num_slots,
-                            global_scores,
-                            global_indices);
+
+                        if constexpr (CTArgs::topk_k == 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
+                            constexpr uint32_t s1_tiles = CTArgs::stage1_num_slots * CTArgs::topk_k;
+                            constexpr uint32_t s1_input_tiles = (s1_tiles + 1023) / 1024;
+                            cb_reserve_back(CTArgs::mesh_stage_scores_cb, s1_input_tiles);
+                            cb_push_back(CTArgs::mesh_stage_scores_cb, s1_input_tiles);
+                            cb_reserve_back(CTArgs::mesh_stage_indices_cb, s1_input_tiles);
+                            cb_push_back(CTArgs::mesh_stage_indices_cb, s1_input_tiles);
+
+                            cb_wait_front(CTArgs::topk_out_scores_cb, 1);
+                            cb_wait_front(CTArgs::topk_out_indices_cb, 1);
+
+                            auto llk_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                                get_read_ptr(CTArgs::topk_out_scores_cb));
+                            auto llk_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                get_read_ptr(CTArgs::topk_out_indices_cb));
+                            for (uint32_t i = 0; i < CTArgs::topk_k; ++i) {
+                                global_scores[i] = llk_scores[i];
+                                global_indices[i] = llk_indices[i];
+                            }
+
+                            cb_pop_front(CTArgs::topk_out_scores_cb, 1);
+                            cb_pop_front(CTArgs::topk_out_indices_cb, 1);
+                        } else {
+                            phase3_merge_mesh_stage_topk_slots(
+                                args.scores_scratch_addr,
+                                args.indices_scratch_addr,
+                                CTArgs::stage1_num_slots,
+                                global_scores,
+                                global_indices);
+                        }
                     }
 
                     // Signal BRISC to send via fabric (sends from winner CB directly).
@@ -1103,25 +1146,47 @@ struct TopKSampling {
                     }
 
                     if constexpr (CTArgs::stage2_receiver) {
-                        constexpr uint32_t s2_scores_base = CTArgs::stage2_slot_base_offset;
-                        constexpr uint32_t s2_indices_base =
-                            s2_scores_base + CTArgs::stage2_num_slots * CTArgs::topk_scores_stride;
                         write_topk_slot(
-                            args.scratch_addr + s2_scores_base +
+                            args.scores_scratch_addr + CTArgs::scores_scratch_stage2_offset +
                                 CTArgs::stage2_local_slot_idx * CTArgs::topk_scores_stride,
-                            args.scratch_addr + s2_indices_base +
+                            args.indices_scratch_addr + CTArgs::indices_scratch_stage2_offset +
                                 CTArgs::stage2_local_slot_idx * CTArgs::topk_indices_stride,
                             global_scores,
                             global_indices);
                         auto global_stage2_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_stage2_sem_addr);
                         wait_and_reset_semaphore(global_stage2_sem_ptr, CTArgs::stage2_expected_remote_incs);
-                        phase3_merge_mesh_stage_topk_slots(
-                            args.scratch_addr + s2_scores_base,
-                            args.scratch_addr + s2_indices_base,
-                            CTArgs::stage2_num_slots,
-                            global_scores,
-                            global_indices);
+
+                        if constexpr (CTArgs::topk_k == 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
+                            constexpr uint32_t s2_tiles = CTArgs::stage2_num_slots * CTArgs::topk_k;
+                            constexpr uint32_t s2_input_tiles = (s2_tiles + 1023) / 1024;
+                            cb_reserve_back(CTArgs::mesh_stage_scores_cb, s2_input_tiles);
+                            cb_push_back(CTArgs::mesh_stage_scores_cb, s2_input_tiles);
+                            cb_reserve_back(CTArgs::mesh_stage_indices_cb, s2_input_tiles);
+                            cb_push_back(CTArgs::mesh_stage_indices_cb, s2_input_tiles);
+
+                            cb_wait_front(CTArgs::topk_out_scores_cb, 1);
+                            cb_wait_front(CTArgs::topk_out_indices_cb, 1);
+
+                            auto llk_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                                get_read_ptr(CTArgs::topk_out_scores_cb));
+                            auto llk_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                get_read_ptr(CTArgs::topk_out_indices_cb));
+                            for (uint32_t i = 0; i < CTArgs::topk_k; ++i) {
+                                global_scores[i] = llk_scores[i];
+                                global_indices[i] = llk_indices[i];
+                            }
+
+                            cb_pop_front(CTArgs::topk_out_scores_cb, 1);
+                            cb_pop_front(CTArgs::topk_out_indices_cb, 1);
+                        } else {
+                            phase3_merge_mesh_stage_topk_slots(
+                                args.scores_scratch_addr + CTArgs::scores_scratch_stage2_offset,
+                                args.indices_scratch_addr + CTArgs::indices_scratch_stage2_offset,
+                                CTArgs::stage2_num_slots,
+                                global_scores,
+                                global_indices);
+                        }
                     }
                 }
 
@@ -1275,6 +1340,24 @@ struct TopKSampling {
                     CTArgs::topk_in_scores_cb, CTArgs::topk_in_indices_cb,
                     CTArgs::topk_out_scores_cb, CTArgs::topk_out_indices_cb,
                     true>(CTArgs::phase2_row_elements, CTArgs::phase2_num_input_tiles);
+            }
+
+            // Mesh stage 1 merge via LLK (stage1_receiver, final core, k==32)
+            if constexpr (IsFinalCore && CTArgs::mesh_mode && CTArgs::stage1_receiver &&
+                          CTArgs::topk_k == 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
+                run_top32_llk<
+                    CTArgs::mesh_stage_scores_cb, CTArgs::mesh_stage_indices_cb,
+                    CTArgs::topk_out_scores_cb, CTArgs::topk_out_indices_cb,
+                    true>(CTArgs::stage1_row_elements, CTArgs::stage1_num_input_tiles);
+            }
+
+            // Mesh stage 2 merge via LLK (stage2_receiver, final core, k==32)
+            if constexpr (IsFinalCore && CTArgs::mesh_mode && CTArgs::stage2_receiver &&
+                          CTArgs::topk_k == 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
+                run_top32_llk<
+                    CTArgs::mesh_stage_scores_cb, CTArgs::mesh_stage_indices_cb,
+                    CTArgs::topk_out_scores_cb, CTArgs::topk_out_indices_cb,
+                    true>(CTArgs::stage2_row_elements, CTArgs::stage2_num_input_tiles);
             }
 
             // Softmax + random (final core only)

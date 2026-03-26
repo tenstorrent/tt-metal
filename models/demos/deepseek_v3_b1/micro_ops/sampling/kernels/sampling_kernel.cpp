@@ -58,7 +58,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_topk_out_scores_cb"),
         get_named_compile_time_arg_val("sampling_topk_out_indices_cb"),
         get_named_compile_time_arg_val("sampling_phase2_scores_byte_offset"),
-        get_named_compile_time_arg_val("sampling_phase2_indices_byte_offset")>;
+        get_named_compile_time_arg_val("sampling_phase2_indices_byte_offset"),
+        get_named_compile_time_arg_val("sampling_mesh_stage_scores_cb"),
+        get_named_compile_time_arg_val("sampling_mesh_stage_indices_cb"),
+        get_named_compile_time_arg_val("sampling_scores_scratch_stage2_offset"),
+        get_named_compile_time_arg_val("sampling_indices_scratch_stage2_offset")>;
 
     deepseek_b1_ops::TopKSampling::ReaderArgs args{
         .scores_addr = get_common_arg_val<uint32_t>(0),
@@ -66,9 +70,10 @@ void kernel_main() {
         .output_addr = get_common_arg_val<uint32_t>(2),
         .final_noc_x = get_common_arg_val<uint32_t>(3),
         .final_noc_y = get_common_arg_val<uint32_t>(4),
-        .scratch_addr = get_common_arg_val<uint32_t>(5),
-        .global_sem_addr = get_common_arg_val<uint32_t>(6),
-        .global_stage2_sem_addr = get_common_arg_val<uint32_t>(7),
+        .scores_scratch_addr = get_common_arg_val<uint32_t>(5),
+        .indices_scratch_addr = get_common_arg_val<uint32_t>(6),
+        .global_sem_addr = get_common_arg_val<uint32_t>(7),
+        .global_stage2_sem_addr = get_common_arg_val<uint32_t>(8),
     };
 
     deepseek_b1_ops::TopKSampling::
@@ -119,13 +124,20 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_seed"),
         get_named_compile_time_arg_val("sampling_topk_k"),
         get_named_compile_time_arg_val("sampling_mesh_mode"),
+        get_named_compile_time_arg_val("sampling_stage1_receiver"),
         get_named_compile_time_arg_val("sampling_stage2_receiver"),
         get_named_compile_time_arg_val("sampling_num_values"),
         get_named_compile_time_arg_val("sampling_num_senders"),
         get_named_compile_time_arg_val("sampling_topk_in_scores_cb"),
         get_named_compile_time_arg_val("sampling_topk_in_indices_cb"),
         get_named_compile_time_arg_val("sampling_topk_out_scores_cb"),
-        get_named_compile_time_arg_val("sampling_topk_out_indices_cb")>;
+        get_named_compile_time_arg_val("sampling_topk_out_indices_cb"),
+        get_named_compile_time_arg_val("sampling_mesh_stage_scores_cb"),
+        get_named_compile_time_arg_val("sampling_mesh_stage_indices_cb"),
+        get_named_compile_time_arg_val("sampling_stage1_row_elements"),
+        get_named_compile_time_arg_val("sampling_stage1_num_input_tiles"),
+        get_named_compile_time_arg_val("sampling_stage2_row_elements"),
+        get_named_compile_time_arg_val("sampling_stage2_num_input_tiles")>;
     deepseek_b1_ops::TopKSampling::ComputeArgs args{};
     deepseek_b1_ops::TopKSampling::
         Op<SamplingComputeCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>
