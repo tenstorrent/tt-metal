@@ -7,6 +7,11 @@ on:
         description: "Number of days of Slack history to export"
         required: false
         default: "30"
+      data-gathering-mode:
+        description: "If checked, run Cursor agent to generate Slack stats report"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -57,3 +62,41 @@ jobs:
           name: slack-C05GRJC4J4A-U08GTDV8MDH-threads
           path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json
           retention-days: 7
+
+      - name: Ensure CURSOR_API_KEY is configured (data gathering mode)
+        if: ${{ inputs['data-gathering-mode'] }}
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "Missing secret EVAN_CURSOR_API_KEY"
+            exit 1
+          fi
+
+      - name: Generate Slack data gathering report with Cursor agent
+        if: ${{ inputs['data-gathering-mode'] }}
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        uses: ./.github/actions/generate-slack-data-report
+        with:
+          input-json-path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json
+          report-path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_report.md
+
+      - name: Upload data gathering report artifact
+        if: ${{ inputs['data-gathering-mode'] }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: slack-C05GRJC4J4A-U08GTDV8MDH-report
+          path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_report.md
+          retention-days: 7
+
+      - name: Publish report to run summary
+        if: ${{ inputs['data-gathering-mode'] }}
+        run: |
+          set -euo pipefail
+          report_path="build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_report.md"
+          {
+            echo "# Slack Data Gathering Report"
+            echo
+            cat "$report_path"
+          } >> "$GITHUB_STEP_SUMMARY"

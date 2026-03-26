@@ -1,0 +1,30 @@
+name: "Generate Slack Data Report"
+description: "Runs Cursor Agent over exported Slack JSON and writes a markdown report"
+inputs:
+  input-json-path:
+    description: "Path to exported Slack JSON"
+    required: true
+  report-path:
+    description: "Path where markdown report should be written"
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Generate markdown report with Cursor agent
+      shell: bash
+      run: |
+        set -euo pipefail
+        input_json="${{ inputs.input-json-path }}"
+        report_path="${{ inputs.report-path }}"
+        prompt_file="${{ github.action_path }}/prompt.md"
+
+        if [ ! -f "$input_json" ]; then
+          echo "Input JSON not found: $input_json"
+          exit 1
+        fi
+
+        mkdir -p "$(dirname "$report_path")"
+        prompt_text="$(cat "$prompt_file")"
+        prompt_text="${prompt_text//__INPUT_JSON_PATH__/$input_json}"
+        agent --trust -p "$prompt_text" > "$report_path"
+        test -s "$report_path"
