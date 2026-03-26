@@ -14,6 +14,9 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<3>();
 
     uint32_t producer_mask = get_arg_val<uint32_t>(0);
+    // Base page offset for this core's slice of the global buffer.
+    // Single-core callers pass 0; multi-core callers pass core_idx * entries_per_core.
+    const uint32_t chunk_offset = get_arg_val<uint32_t>(1);
     const uint32_t num_producers = static_cast<uint32_t>(__builtin_popcount(producer_mask));
 
     experimental::DataflowBuffer dfb(0);
@@ -31,12 +34,13 @@ void kernel_main() {
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
-        // DPRINT << "producer tile id " << tile_id << " page id " << ((tile_id * num_producers) + producer_idx) << ENDL();
+        const uint32_t page_id = chunk_offset + tile_id * num_producers + producer_idx;
+        // DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
         if constexpr (implicit_sync) {
-            dfb.read_in(noc, tensor_accessor, {.page_id = tile_id * num_producers + producer_idx});
+            dfb.read_in(noc, tensor_accessor, {.page_id = page_id});
         } else {
             dfb.reserve_back(1);
-            noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = tile_id * num_producers + producer_idx}, {});
+            noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = page_id}, {});
             noc.async_read_barrier();
             dfb.push_back(1);
         }
