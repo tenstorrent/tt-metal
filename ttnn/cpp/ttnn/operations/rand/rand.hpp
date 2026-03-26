@@ -5,6 +5,7 @@
 #pragma once
 #include "ttnn/decorators.hpp"
 #include <ttnn/distributed/distributed_configs.hpp>
+#include <optional>
 
 namespace ttnn {
 

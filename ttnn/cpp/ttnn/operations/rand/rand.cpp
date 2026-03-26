@@ -22,7 +22,8 @@ ttnn::Shape compute_shard_shape(
     const tt::tt_metal::distributed::MeshShape& mesh_shape) {
     ttnn::Shape::Container shard_dims(logical_shape.view().begin(), logical_shape.view().end());
     for (size_t i = 0; i < config.placements.size() && i < mesh_shape.dims(); ++i) {
-        if (auto* shard = std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&config.placements[i])) {
+        if (const auto* shard =
+                std::get_if<tt::tt_metal::distributed::MeshMapperConfig::Shard>(&config.placements[i])) {
             auto dim = static_cast<size_t>(shard->dim);
             TT_FATAL(
                 dim < shard_dims.size(),
