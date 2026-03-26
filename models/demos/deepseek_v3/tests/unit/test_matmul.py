@@ -259,7 +259,7 @@ def test_matmul_dram_sharded_single_device(
     "device_params",
     [
         {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,  # TODO: Remove this once we have a fix for issue #40860
             "trace_region_size": 90112,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         }
