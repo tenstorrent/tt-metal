@@ -8,6 +8,9 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc_semaphore.h"
 
 void kernel_main() {
     // in0 mcast args
@@ -22,7 +25,6 @@ void kernel_main() {
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(2);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(3);
     // in0 mcast args
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(4));
     uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(5));
     // batch args
     constexpr uint32_t batch = get_compile_time_arg_val(6);
@@ -32,11 +34,13 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::Semaphore<> sender_sem(get_compile_time_arg_val(4));
+    experimental::Semaphore<> receiver_sem(get_compile_time_arg_val(5));
+
     volatile tt_l1_ptr uint32_t* in0_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_receiver_semaphore_addr);
-
-    const uint64_t in0_mcast_sender_semaphore_noc_addr =
-        get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_mcast_sender_semaphore_addr);
 
     for (uint32_t b = 0; b < batch; ++b) {
         if constexpr (get_batch_from_reader) {
@@ -45,11 +49,11 @@ void kernel_main() {
             // We do this by passing the value to the compute kernel via mailbox.
             // But first, lets wait for the sparsity data to be multicast to us.
             // Set in0 semaphore value to INVALID
-            noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
+            receiver_sem.set(INVALID);
             // Atomic increment source core counter
-            noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
+            sender_sem.up(noc, in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, 1);
             // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
-            noc_semaphore_wait_min(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+            receiver_sem.wait_min(VALID);
 
             const auto is_batch_valid = *in0_mcast_receiver_semaphore_addr_ptr == VALID;
 
@@ -68,18 +72,18 @@ void kernel_main() {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     // Operand 0
-                    cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                    cb_in0.reserve_back(in0_block_num_tiles);
 
                     // Set in0 semaphore value to INVALID
-                    noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
+                    receiver_sem.set(INVALID);
 
                     // Atomic increment source core counter
-                    noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
+                    sender_sem.up(noc, in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, 1);
 
                     // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+                    receiver_sem.wait(VALID);
 
-                    cb_push_back(cb_id_in0, in0_block_num_tiles);
+                    cb_in0.push_back(in0_block_num_tiles);
                 }
             }
         }

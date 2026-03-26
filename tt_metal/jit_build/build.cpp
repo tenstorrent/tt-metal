@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -660,7 +661,12 @@ void JitBuildState::weaken(const string& out_dir) const {
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
     // ZoneScoped;
     static std::atomic<bool> new_log = true;
+    // Mutex to serialize concurrent writes to the shared zone src locations log file.
+    // Multiple kernels are compiled in parallel; without serialization their grep outputs
+    // interleave in the file, producing corrupted lines that fail to parse.
+    static std::mutex zone_log_mutex;
     if (env_.get_rtoptions().get_profiler_enabled()) {
+        std::lock_guard<std::mutex> lk(zone_log_mutex);
         if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
             std::remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
         }
