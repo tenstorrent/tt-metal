@@ -258,7 +258,7 @@ def test_forward_pass(
         per_group_offsets[group] = offsets.long()
         per_group_totals[group] = cum_sum[-1:].long()
 
-    expert_offsets, _, _ = get_gate_outputs(
+    expert_offsets, expert_token_counts, _ = get_gate_outputs(
         indices=indices_for_gate,
         dispatch_group_size=n_sp_devices,
         num_routed_experts=n_routed_experts,
@@ -268,6 +268,7 @@ def test_forward_pass(
     )
 
     reference_offsets = expert_offsets.long()
+    reference_totals = expert_token_counts.squeeze(0).long()  # Shape: (num_routed_experts,)
 
     per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
     for device_id in range(len(per_device_dispatch_offsets)):

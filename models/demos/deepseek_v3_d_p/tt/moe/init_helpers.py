@@ -281,8 +281,8 @@ def get_gate_outputs(
     Returns:
         expert_offsets: Base offset for each expert from each chip
             Shape: (dispatch_group_size, num_routed_experts)
-        expert_token_counts: Total tokens per expert per chip
-            Shape: (dispatch_group_size, experts_per_chip)
+        expert_token_counts: Total tokens per expert (replicated across dispatch groups)
+            Shape: (num_dispatch_groups, num_routed_experts)
         expert_counter: Per-chip token counts for each expert (debug only).
             Shows how many tokens from each chip route to each expert.
             Shape: (dispatch_group_size, num_routed_experts)
@@ -298,11 +298,8 @@ def get_gate_outputs(
     # Compute cumulative offsets
     cum_sum = torch.cumsum(expert_counter, dim=0)
     expert_offsets = torch.vstack([torch.zeros([1, num_routed_experts], dtype=torch.int32), cum_sum[:-1]])
-    expert_token_counts = (
-        cum_sum[-1]
-        .view(num_routed_experts // experts_per_chip // dispatch_group_size, dispatch_group_size, experts_per_chip)
-        .to(torch.int32)
-    )
+    num_dispatch_groups = num_routed_experts // experts_per_chip // dispatch_group_size
+    expert_token_counts = cum_sum[-1].unsqueeze(0).expand(num_dispatch_groups, -1).contiguous().to(torch.int32)
     # expert_token_counts = expert_token_counts.permute(1, 0, 2)
     logger.debug(f"[get_gate_outputs] OUTPUT SHAPES:")
     logger.debug(f"  expert_counter.shape={expert_counter.shape}")
@@ -526,6 +523,23 @@ def get_ep_mesh_mapper(mesh_device):
         mesh_device,
         mesh_shape=mesh_device.shape,
         dims=(1, 0),
+    )
+
+
+def get_expert_token_counts_mesh_mapper(mesh_device):
+    """
+    Create mesh mapper for expert_token_counts tensor.
+
+    Shape: [num_dispatch_groups, num_routed_experts]
+
+    Shards dimension 0 (num_dispatch_groups) across mesh columns and
+    replicates across mesh rows. Each device receives [1, num_routed_experts]
+    containing the token counts for its dispatch group.
+    """
+    return ttnn.ShardTensor2dMesh(
+        mesh_device,
+        mesh_shape=mesh_device.shape,
+        dims=(None, 0),  # Replicate across rows, shard dim 0 across cols
     )
 
 

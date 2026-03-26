@@ -25,7 +25,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     extract_mesh_config,
     get_dispatch_input_mesh_mapper,
     get_ep_mesh_composer,
-    get_ep_mesh_mapper,
+    get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
@@ -373,10 +373,9 @@ def test_ttnn_dispatch_combine(
     torch_output = torch_combine_module(torch_dispatched_buffer, torch_dispatched_metadata, expert_token_counts)
 
     # Convert counter to TTNN tensor for combine module
-    mesh_mapper_combine_counter = get_ep_mesh_mapper(mesh_device)
     tt_expert_token_counts = ttnn.from_torch(
         expert_token_counts,
-        mesh_mapper=mesh_mapper_combine_counter,
+        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.int32,
@@ -399,6 +398,7 @@ def test_ttnn_dispatch_combine(
     # Run TTNN combine
     logger.debug("Running TTNN combine...")
     tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
+    ttnn.synchronize_device(mesh_device)
     logger.debug("Combine complete!")
 
     # Convert TTNN output back to torch

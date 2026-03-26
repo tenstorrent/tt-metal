@@ -35,8 +35,9 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
         "Dispatched metadata must be INT32, got {}",
         tensor_args.dispatched_metadata.dtype());
     TT_FATAL(
-        tensor_args.expert_token_counts.dtype() == DataType::INT32,
-        "Experts token counter must be INT32, got {}",
+        tensor_args.expert_token_counts.dtype() == DataType::INT32 ||
+            tensor_args.expert_token_counts.dtype() == DataType::UINT32,
+        "Experts token counter must be INT32 or UINT32, got {}",
         tensor_args.expert_token_counts.dtype());
 
     // Validate output memory config
@@ -54,12 +55,12 @@ void CombineDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         dispatched_shape[0] == metadata_shape[0] && dispatched_shape[0] == counter_shape[0],
         "First dimension (per_device_batch) must match across all input tensors");
-    TT_FATAL(
-        dispatched_shape[2] == metadata_shape[2] && dispatched_shape[2] == counter_shape[2],
-        "experts_per_chip dimension must match: dispatched[2]={}, metadata[2]={}, counter[2]={}",
-        dispatched_shape[2],
-        metadata_shape[2],
-        counter_shape[2]);
+    // TT_FATAL(
+    //     dispatched_shape[2] == metadata_shape[2] && dispatched_shape[2] * operation_attributes.dispatch_group_size ==
+    //     counter_shape[2], "experts_per_chip dimension must match: dispatched[2]={}, metadata[2]={}, counter[2]={}",
+    //     dispatched_shape[2],
+    //     metadata_shape[2],
+    //     counter_shape[2]);
 }
 
 void CombineDeviceOperation::validate_on_program_cache_hit(

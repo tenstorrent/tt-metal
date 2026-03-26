@@ -11,6 +11,7 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 
 def trace_token_source(
@@ -54,11 +55,7 @@ def trace_token_source(
     local_expert_in_group = expert_id % experts_per_group
     local_expert = local_expert_in_group % experts_per_chip
 
-    # Handle both 2D [chip, expert] and 3D [dispatch_group, chip, expert] shapes
-    if expert_token_counts.dim() == 2:
-        total_tokens = expert_token_counts[expert_chip, local_expert].item()
-    else:
-        total_tokens = expert_token_counts[dispatch_group_idx, expert_chip, local_expert].item()
+    total_tokens = expert_token_counts[dispatch_group_idx, expert_id].item()
 
     # Find send order by counting tokens sent before this one
     # This mirrors the kernel's iteration order: for each token routed to this expert
@@ -491,7 +488,16 @@ def validate_dispatch_data(
 
                 total_slots += 1
                 validated_cells.add((r, dst_chip_id))
-                count = expert_token_counts[r, dst_chip_id, expert_id].item()
+                global_expert_idx = ExpertMapping.get_global_expert_idx(
+                    group=r,
+                    chip=dst_chip_id,
+                    local_expert=expert_id,
+                    experts_per_chip=experts_per_chip,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
+                    is_col_major=True,
+                )
+                count = expert_token_counts[r, global_expert_idx].item()
 
                 torch_slot = torch_data[r, dst_chip_id, expert_id, :count]
                 ttnn_slot = ttnn_data[r, dst_chip_id, expert_id, :count]
@@ -693,7 +699,16 @@ def validate_dispatch_metadata(
 
                 total_slots += 1
                 validated_cells.add((r, dst_chip_id))
-                count = expert_token_counts[r, dst_chip_id, expert_id].item()
+                global_expert_idx = ExpertMapping.get_global_expert_idx(
+                    group=r,
+                    chip=dst_chip_id,
+                    local_expert=expert_id,
+                    experts_per_chip=experts_per_chip,
+                    dispatch_group_size=dispatch_group_size,
+                    num_dispatch_groups=num_dispatch_groups,
+                    is_col_major=True,
+                )
+                count = expert_token_counts[r, global_expert_idx].item()
 
                 # Compare fields 1-3 directly
                 out = ttnn_metadata[r, dst_chip_id, expert_id, :count, 1:4]

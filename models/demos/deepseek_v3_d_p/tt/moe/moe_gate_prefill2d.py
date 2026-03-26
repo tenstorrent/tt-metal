@@ -240,6 +240,10 @@ class MoERoutingSetup(LightweightModule):
             value=257,
         )
 
+        assert (
+            seq_len_per_chip % MASKED_BINCOUNT_CORE_COUNT == 0
+        ), "seq_len_per_chip must be divisible by MASKED_BINCOUNT_CORE_COUNT for sharding to work correctly"
+
         self.expert_index_sharded_mem_config = ttnn.create_sharded_memory_config(
             shape=(seq_len_per_chip // MASKED_BINCOUNT_CORE_COUNT, num_routed_experts),
             core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
@@ -288,4 +292,5 @@ class MoERoutingSetup(LightweightModule):
         )
         signpost(header="moe_gate_calculate_dispatch_offsets")
 
+        total_counts_per_expert = ttnn.unsqueeze(total_counts_per_expert, 0)
         return dispatch_offsets, total_counts_per_expert, expert_histograms

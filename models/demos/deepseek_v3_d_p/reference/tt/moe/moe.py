@@ -226,7 +226,7 @@ class TorchMoe(nn.Module):
                         self.num_dispatch_groups,
                         is_col_major=True,
                     )
-                    token_count = expert_token_counts[group, chip, local_expert].item()
+                    token_count = expert_token_counts[group, global_expert].item()
 
                     if token_count > 0:
                         expert_input = dispatched_buffer[group, chip, local_expert, :token_count, :]

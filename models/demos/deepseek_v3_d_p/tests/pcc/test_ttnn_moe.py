@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_fabric_router_config,
     extract_mesh_config,
     get_ep_mesh_composer,
+    get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
     get_tp_mesh_composer,
     initialize_test_inputs,
@@ -357,14 +358,9 @@ def test_ttnn_moe(
     tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
 
     # Expert token counts
-    mesh_mapper_2d = ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(1, 0),  # Shard tensor dim 1 across mesh rows, tensor dim 0 across mesh cols
-    )
     tt_expert_token_counts = ttnn.from_torch(
         expert_token_counts,
-        mesh_mapper=mesh_mapper_2d,
+        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.int32,
