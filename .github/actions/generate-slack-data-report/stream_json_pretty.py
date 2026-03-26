@@ -35,6 +35,14 @@ def tool_label(obj: dict[str, Any]) -> str:
     return "unknown"
 
 
+def overlap_suffix_prefix(old: str, new: str) -> int:
+    max_k = min(len(old), len(new))
+    for k in range(max_k, 0, -1):
+        if old[-k:] == new[:k]:
+            return k
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: stream_json_pretty.py <raw_output_path>", file=sys.stderr)
@@ -46,6 +54,8 @@ def main() -> int:
     assistant_chars = 0
     assistant_buffer = ""
     last_assistant_snapshot = ""
+    final_marker_seen = False
+    final_marker = "===FINAL_REPORT_MD==="
 
     def flush_assistant(force: bool = False) -> None:
         nonlocal assistant_buffer
@@ -106,26 +116,34 @@ def main() -> int:
             if event_type == "assistant":
                 text = safe_get_text(obj)
                 if text:
-                    # stream-json may emit cumulative assistant snapshots.
-                    # Keep only novel suffix to avoid duplicate/repeated logs.
+                    # stream-json often emits cumulative snapshots, sometimes with
+                    # resets/overlaps. Compute a stable incremental delta.
                     if text.startswith(last_assistant_snapshot):
                         delta = text[len(last_assistant_snapshot) :]
-                        last_assistant_snapshot = text
                     elif last_assistant_snapshot.startswith(text):
                         # Older snapshot replayed; ignore.
                         delta = ""
                     else:
-                        # Snapshot discontinuity (new turn / reset): emit separator.
-                        if assistant_buffer:
-                            flush_assistant(force=True)
-                        print("[assistant] ---", flush=True)
-                        delta = text
-                        last_assistant_snapshot = text
+                        overlap = overlap_suffix_prefix(last_assistant_snapshot, text)
+                        delta = text[overlap:]
+                    last_assistant_snapshot = text
 
                     if delta:
                         assistant_chars += len(delta)
-                        assistant_buffer += delta
-                        flush_assistant(force=False)
+
+                        if not final_marker_seen:
+                            merged = assistant_buffer + delta
+                            marker_idx = merged.find(final_marker)
+                            if marker_idx >= 0:
+                                # Flush any pre-marker text and stop detailed logging.
+                                assistant_buffer = merged[:marker_idx]
+                                flush_assistant(force=True)
+                                print("[assistant] final markdown section started", flush=True)
+                                final_marker_seen = True
+                                assistant_buffer = ""
+                            else:
+                                assistant_buffer = merged
+                                flush_assistant(force=False)
                 continue
 
             if event_type == "result":
