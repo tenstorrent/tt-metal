@@ -29,11 +29,12 @@ Prerequisites:
 
 Run from tt-metal root with ``PYTHONPATH`` including the repo root, e.g.::
 
-    cd /path/to/tt-metal
+    export TT_METAL_HOME=/path/to/tt-metal   # optional; also accepts TT_METAL
+    cd "$TT_METAL_HOME"
     export PYTHONPATH=$(pwd)
     export GLM4_MOE_REDUCE_IMPL=native
     export GLM4_MOE_EP_REDUCE_DEVICE=1
-    python models/demos/glm4_moe/scripts/debug_run_full_tt_greedy.py \\
+    python models/experimental/glm4_moe/scripts/debug_run_full_tt_greedy.py \\
         --mesh-rows 8 --mesh-cols 4 --model-id cerebras/GLM-4.7-REAP-218B-A32B
 """
 
@@ -50,9 +51,9 @@ import torch
 from transformers import AutoTokenizer
 
 import ttnn
-from models.demos.glm4_moe.tt.layer_weights import _tp_axis_and_size
-from models.demos.glm4_moe.tt.model_tt import Glm4MoeTT
-from models.demos.glm4_moe.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
+from models.experimental.glm4_moe.tt.layer_weights import _tp_axis_and_size
+from models.experimental.glm4_moe.tt.model_tt import Glm4MoeTT
+from models.experimental.glm4_moe.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
 
 
 def _round_up(x: int, multiple: int) -> int:

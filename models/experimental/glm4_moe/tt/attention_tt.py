@@ -20,9 +20,9 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.glm4_moe.tt.ccl import glm4_moe_ccl_num_links_for_axis, glm4_moe_ccl_topology_for_collectives
-from models.demos.glm4_moe.tt.config import Glm4MoeHParams
-from models.demos.glm4_moe.tt.layer_weights import DecoderLayerTTWeights
+from models.experimental.glm4_moe.tt.ccl import glm4_moe_ccl_num_links_for_axis, glm4_moe_ccl_topology_for_collectives
+from models.experimental.glm4_moe.tt.config import Glm4MoeHParams
+from models.experimental.glm4_moe.tt.layer_weights import DecoderLayerTTWeights
 
 _REDUCE_IMPL = os.environ.get("GLM4_MOE_REDUCE_IMPL", "host").strip().lower()
 _REDUCE_IMPL_AXIS1 = os.environ.get("GLM4_MOE_REDUCE_IMPL_AXIS1", "").strip().lower()

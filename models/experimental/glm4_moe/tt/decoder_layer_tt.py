@@ -21,9 +21,9 @@ from loguru import logger
 
 import ttnn
 
-from models.demos.glm4_moe.tt.config import Glm4MoeHParams
-from models.demos.glm4_moe.tt.layer_weights import DecoderLayerTTWeights
-from models.demos.glm4_moe.tt.moe_tt import (
+from models.experimental.glm4_moe.tt.config import Glm4MoeHParams
+from models.experimental.glm4_moe.tt.layer_weights import DecoderLayerTTWeights
+from models.experimental.glm4_moe.tt.moe_tt import (
     Glm4MoeMoERuntime,
     moe_sparse_experts_forward_tt,
     moe_topk_tt,
@@ -33,7 +33,7 @@ from models.demos.glm4_moe.tt.moe_tt import (
     _moe_sparse_tokens_multiple,
     _parse_math_fidelity,
 )
-from models.demos.glm4_moe.tt.attention_tt import Glm4MoeAttention, _simple_all_reduce
+from models.experimental.glm4_moe.tt.attention_tt import Glm4MoeAttention, _simple_all_reduce
 
 
 # ---------------------------------------------------------------------------

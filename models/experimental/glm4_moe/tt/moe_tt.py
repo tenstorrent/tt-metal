@@ -17,9 +17,9 @@ from typing import Any
 import torch
 
 import ttnn
-from models.demos.glm4_moe.tt.ccl import glm4_moe_ccl_num_links_for_axis, glm4_moe_ccl_topology_for_collectives
-from models.demos.glm4_moe.tt.config import Glm4MoeHParams
-from models.demos.glm4_moe.tt.layer_weights import MoELayerTTWeights
+from models.experimental.glm4_moe.tt.ccl import glm4_moe_ccl_num_links_for_axis, glm4_moe_ccl_topology_for_collectives
+from models.experimental.glm4_moe.tt.config import Glm4MoeHParams
+from models.experimental.glm4_moe.tt.layer_weights import MoELayerTTWeights
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -648,13 +648,13 @@ def moe_sparse_experts_forward_tt(
             ttnn.deallocate(routed_out, force=False)
             routed_out = result
         elif ep_reduce == "2step":
-            from models.demos.glm4_moe.tt.attention_tt import _simple_all_reduce
+            from models.experimental.glm4_moe.tt.attention_tt import _simple_all_reduce
 
             routed_out = _simple_all_reduce(routed_out, device, cluster_axis=0, memory_config=memory_config)
             routed_out = _simple_all_reduce(routed_out, device, cluster_axis=1, memory_config=memory_config)
         else:
             # host fallback
-            from models.demos.glm4_moe.tt.attention_tt import _simple_all_reduce_host
+            from models.experimental.glm4_moe.tt.attention_tt import _simple_all_reduce_host
 
             routed_out = _simple_all_reduce_host(routed_out, device, cluster_axis=0, memory_config=memory_config)
             routed_out = _simple_all_reduce_host(routed_out, device, cluster_axis=1, memory_config=memory_config)

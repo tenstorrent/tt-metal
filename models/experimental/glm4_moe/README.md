@@ -19,15 +19,21 @@ So unless you update imports and all references, functionality will be affected.
 
 ## Key Commands
 
+Set the repo root once (example):
+
+```bash
+export TT_METAL_HOME=/path/to/tt-metal   # e.g. /home/cust-team/sdawle/mike_glm4.7_reap_268b_a32b/tt-metal
+```
+
 ### 1) Greedy debug run (trace + sampling)
 
 ```bash
-cd /home/cust-team/sdawle/mike_glm4.7_reap_268b_a32b/tt-metal
-export PYTHONPATH=$(pwd)
+cd "$TT_METAL_HOME"
+export PYTHONPATH="$TT_METAL"
 export GLM4_MOE_REDUCE_IMPL=native
 export GLM4_MOE_EP_REDUCE_DEVICE=1
-/home/cust-team/sdawle/mike_glm4.7_reap_268b_a32b/tt-metal/python_env/bin/python3 \
-  /home/cust-team/sdawle/mike_glm4.7_reap_268b_a32b/tt-metal/models/demos/glm4_moe/scripts/debug_run_full_tt_greedy.py \
+"$TT_METAL_HOME/python_env/bin/python3" \
+  "$TT_METAL_HOME/models/experimental/glm4_moe/scripts/debug_run_full_tt_greedy.py" \
   --model-id cerebras/GLM-4.7-REAP-218B-A32B \
   --prompt "Summarize the following document. " \
   --simulate-context-len 128 \
@@ -53,7 +59,9 @@ export GLM4_MOE_CCL_TOPOLOGY=ring
 ### 3) Sweep run
 
 ```bash
-python3 models/demos/glm4_moe/scripts/run_sweep_isl_batch.py \
+cd "$TT_METAL_HOME"
+export PYTHONPATH="$TT_METAL_HOME"
+python3 models/experimental/glm4_moe/scripts/run_sweep_isl_batch.py \
   --out-dir models/demos/glm4_moe/experiments/g1_multilink_4_ring_isl_sweep \
   --timeout 1200 \
   --mesh-rows 8 --mesh-cols 4 \

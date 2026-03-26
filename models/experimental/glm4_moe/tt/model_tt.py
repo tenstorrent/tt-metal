@@ -32,9 +32,9 @@ import ttnn
 from loguru import logger
 
 from models.common.rmsnorm import RMSNorm
-from models.demos.glm4_moe.tt.config import Glm4MoeHParams
-from models.demos.glm4_moe.tt.decoder_layer_tt import Glm4MoeDecoderLayer, _sharded_rms_norm
-from models.demos.glm4_moe.tt.layer_weights import (
+from models.experimental.glm4_moe.tt.config import Glm4MoeHParams
+from models.experimental.glm4_moe.tt.decoder_layer_tt import Glm4MoeDecoderLayer, _sharded_rms_norm
+from models.experimental.glm4_moe.tt.layer_weights import (
     DecoderLayerTTWeights,
     _env_dense_dtype,
     _tp_axis_and_size,
@@ -42,13 +42,13 @@ from models.demos.glm4_moe.tt.layer_weights import (
     _linear_weight_tt,
     convert_decoder_layer_weights,
 )
-from models.demos.glm4_moe.tt.attention_tt import _simple_all_gather
-from models.demos.glm4_moe.tt.ccl import CCL
-from models.demos.glm4_moe.tt.moe_tt import create_moe_runtime, Glm4MoeMoERuntime
-from models.demos.glm4_moe.tt.tt_embedding import (
+from models.experimental.glm4_moe.tt.attention_tt import _simple_all_gather
+from models.experimental.glm4_moe.tt.ccl import CCL
+from models.experimental.glm4_moe.tt.moe_tt import create_moe_runtime, Glm4MoeMoERuntime
+from models.experimental.glm4_moe.tt.tt_embedding import (
     convert_embedding_weight_to_tt,
 )
-from models.demos.glm4_moe.tt.weights import (
+from models.experimental.glm4_moe.tt.weights import (
     load_glm_lazy_state_dict,
 )
 
@@ -564,7 +564,7 @@ class Glm4MoeTT:
         # ---- DRAM Weight Prefetcher (optional, for decode latency optimization) ----
         prefetcher = None
         if os.environ.get("GLM4_MOE_PREFETCH", "0").strip() == "1":
-            from models.demos.glm4_moe.tt.prefetcher_setup import Glm4MoePrefetcherSetup
+            from models.experimental.glm4_moe.tt.prefetcher_setup import Glm4MoePrefetcherSetup
 
             n_tensors_per_layer = 2  # QKV + O-proj (attention weights only for Phase 2)
             prefetcher = Glm4MoePrefetcherSetup(

@@ -14,7 +14,7 @@ from loguru import logger
 import ttnn
 
 from models.common.rmsnorm import RMSNorm
-from models.demos.glm4_moe.tt.config import Glm4MoeHParams
+from models.experimental.glm4_moe.tt.config import Glm4MoeHParams
 from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
 
 

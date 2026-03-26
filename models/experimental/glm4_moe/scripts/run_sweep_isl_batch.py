@@ -12,7 +12,8 @@ Outputs: CSV, markdown tables, matplotlib graphs.
 
 Usage (from tt-metal repo root, PYTHONPATH=repo root, venv activated):
 
-  python models/demos/glm4_moe/scripts/run_sweep_isl_batch.py [--dry-run] [--out-dir DIR]
+  export TT_METAL_HOME=/path/to/tt-metal   # optional; also accepts TT_METAL
+  python models/experimental/glm4_moe/scripts/run_sweep_isl_batch.py [--dry-run] [--out-dir DIR]
 
 Override tuning by exporting GLM4_MOE_* before running; this script overwrites a small
 default set (see ``_glm4_moe_sweep_env``) — edit that function or export after if you
@@ -39,8 +40,25 @@ MAX_NEW_TOKENS = 2
 MESH_ROWS = 8
 MESH_COLS = 4
 PREFILL_CHUNK_SIZE = 32768
-SCRIPT_PATH = "models/demos/glm4_moe/scripts/debug_run_full_tt_greedy.py"
+SCRIPT_PATH = "models/experimental/glm4_moe/scripts/debug_run_full_tt_greedy.py"
 DEFAULT_MODEL_ID = "cerebras/GLM-4.7-REAP-218B-A32B"
+
+
+def _resolve_tt_metal_root(script_relative: str) -> Path:
+    """Prefer ``TT_METAL_HOME`` or ``TT_METAL`` if they point at a tree containing the greedy script."""
+    for key in ("TT_METAL_HOME", "TT_METAL"):
+        raw = (os.environ.get(key) or "").strip()
+        if not raw:
+            continue
+        p = Path(os.path.expanduser(raw)).resolve()
+        if p.is_dir() and (p / script_relative).is_file():
+            return p
+    here = Path(__file__).resolve().parent
+    for _ in range(12):
+        if (here / script_relative).is_file():
+            return here
+        here = here.parent
+    return Path.cwd()
 
 
 def _glm4_moe_sweep_env(
@@ -141,6 +159,9 @@ def run_one(
         "sampling",
     ]
     env = os.environ.copy()
+    env["TT_METAL_HOME"] = str(repo_root)
+    env.setdefault("TT_METAL", str(repo_root))
+    env.setdefault("PYTHONPATH", str(repo_root))
     env.update(
         _glm4_moe_sweep_env(
             prefill_chunk=prefill_chunk,
@@ -596,7 +617,7 @@ def main() -> int:
     ap.add_argument(
         "--out-dir",
         type=Path,
-        default=Path("models/demos/glm4_moe/experiments/sweep_isl_batch"),
+        default=Path("models/experimental/glm4_moe/experiments/sweep_isl_batch"),
         help="Output directory for CSV, table, and graphs",
     )
     ap.add_argument("--start-from", type=int, metavar="N", default=1, help="1-based run index to resume from")
@@ -660,15 +681,10 @@ def main() -> int:
         print(f"Recovered {len(results)} runs ({n_ok} ok) from {log_path}", flush=True)
         return 0
 
-    repo_root = Path(__file__).resolve().parent
-    for _ in range(6):
-        if (repo_root / SCRIPT_PATH).exists():
-            break
-        repo_root = repo_root.parent
-    else:
-        repo_root = Path.cwd()
-    if not (repo_root / SCRIPT_PATH).exists():
+    repo_root = _resolve_tt_metal_root(SCRIPT_PATH)
+    if not (repo_root / SCRIPT_PATH).is_file():
         print(f"Script not found: {repo_root / SCRIPT_PATH}", file=sys.stderr)
+        print("Set TT_METAL_HOME (or TT_METAL) to the tt-metal repo root.", file=sys.stderr)
         return 1
 
     max_batch = args.max_batch_size

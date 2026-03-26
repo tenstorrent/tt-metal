@@ -26,8 +26,8 @@ from loguru import logger
 from torch import nn
 
 import ttnn
-from models.demos.glm4_moe.tt.model_tt import Glm4MoeTT, _torch_dtype_to_ttnn
-from models.demos.glm4_moe.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
+from models.experimental.glm4_moe.tt.model_tt import Glm4MoeTT, _torch_dtype_to_ttnn
+from models.experimental.glm4_moe.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
 
 
 class Glm4MoeForCausalLM(nn.Module):
@@ -53,7 +53,7 @@ class Glm4MoeForCausalLM(nn.Module):
         super().__init__()
         self.hf_config = hf_config
 
-        from models.demos.glm4_moe.tt.config import Glm4MoeHParams
+        from models.experimental.glm4_moe.tt.config import Glm4MoeHParams
 
         self.hparams = Glm4MoeHParams.from_hf_config(hf_config)
         self.hparams.validate()
