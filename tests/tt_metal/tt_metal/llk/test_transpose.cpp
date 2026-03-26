@@ -181,6 +181,9 @@ void run_single_core_transpose(
     std::vector<uint32_t> reader_cta;
     tt::tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_cta);
     std::vector<uint32_t> writer_cta;
+    writer_cta.push_back(
+        MetalContext::instance().get_cluster().arch() == ARCH::QUASAR ? dfb_output
+                                                                      : static_cast<uint32_t>(tt::CBIndex::c_16));
     tt::tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_cta);
 
     vector<uint32_t> compute_kernel_args = {uint(Ht * Wt * NC)};
@@ -203,7 +206,6 @@ void run_single_core_transpose(
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
                 .num_threads_per_cluster = 1, .compile_args = reader_cta});
 
-        writer_cta.push_back(dfb_output);
         unary_writer_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
