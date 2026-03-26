@@ -78,6 +78,13 @@ def _normalize_tensor(tensor):
     return tensor
 
 
+# since torch.norm(error, p="fro"), rejects non-float input
+def _to_float_for_norm(t: torch.Tensor) -> torch.Tensor:
+    if t.dtype in (torch.float32, torch.bfloat16):
+        return t
+    return t.to(torch.float32)
+
+
 def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     """
     Assert that two PyTorch tensors are similar within a specified Pearson Correlation Coefficient (PCC) threshold.
@@ -298,11 +305,6 @@ def comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result):
     assert list(expected_pytorch_result.shape) == list(
         actual_pytorch_result.shape
     ), f"Shape mismatch: expected {list(expected_pytorch_result.shape)} vs actual {list(actual_pytorch_result.shape)}"
-
-    def _to_float_for_norm(t: torch.Tensor) -> torch.Tensor:
-        if torch.is_floating_point(t) or torch.is_complex(t):
-            return t
-        return t.to(torch.float64)
 
     expected_pytorch_result = _to_float_for_norm(expected_pytorch_result)
     actual_pytorch_result = _to_float_for_norm(actual_pytorch_result)
