@@ -31,7 +31,6 @@ def test_sum_for_dim_hw(device, shape_dim):
     x = 1.0 + torch.arange(0, N * C * H * W).reshape(input_shape).bfloat16()
 
     torch_output = x.sum(dim=dim, keepdim=True)
-    value = torch_output[0, 0, 0, 0]
 
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
     tt_npu = ttnn.sum(dev_x, dim=dim, keepdim=True)
