@@ -256,7 +256,7 @@ def _trace_replay_metrics_pair(
             batch_size=batch_size,
             warmup_iterations=warmup_iterations,
             measured_iterations=measured_iterations,
-            inner_iterations=measured_inner_iterations,
+            measured_inner_iterations=measured_inner_iterations,
         )
     finally:
         if primary_trace_state is not None:
@@ -278,7 +278,7 @@ def _trace_replay_metrics_pair(
                 batch_size=batch_size,
                 warmup_iterations=warmup_iterations,
                 measured_iterations=measured_iterations,
-                inner_iterations=measured_inner_iterations,
+                measured_inner_iterations=measured_inner_iterations,
             )
         finally:
             if compare_trace_state is not None:
