@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Multicast receiver + output/reduce kernel with M_block x N_block streaming.
-// Phase 1: receives block_size tiles per handshake (for msb: for nsb: for blk:).
+// Phase 1: receives block_size tiles per handshake (for m_sub: for n_sub: for blk:).
 // Phase 2 (default):      writes compute output to DRAM row by row.
 // Phase 2 (REDUCE_SEND):  NOC-writes compute output to partner's reduce CB.
 // Phase 2 (REDUCE_RECV):  waits for partner's partial in reduce CB, then writes combined to DRAM.
-// Phase 2 happens per-msb (after all nsb for that msb complete).
+// Phase 2 happens per-m_sub (after all n_sub for that m_sub complete).
 
 #include <stdint.h>
 
@@ -27,22 +27,22 @@ void kernel_main() {
 #ifdef REDUCE_SEND
     constexpr uint32_t reduce_cb = get_compile_time_arg_val(9);
     uint32_t reduce_sem_addr = get_semaphore(get_compile_time_arg_val(10));
-    constexpr uint32_t M_num_subblocks = get_compile_time_arg_val(11);
+    constexpr uint32_t num_m_blocks = get_compile_time_arg_val(11);
     constexpr uint32_t M_block = get_compile_time_arg_val(12);
-    constexpr uint32_t N_num_subblocks = get_compile_time_arg_val(13);
+    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(13);
 #else
     constexpr uint32_t padded_out_tiles = get_compile_time_arg_val(9);
 #ifdef REDUCE_RECV
     constexpr uint32_t reduce_cb = get_compile_time_arg_val(10);
     uint32_t reduce_sem_addr = get_semaphore(get_compile_time_arg_val(11));
-    constexpr uint32_t M_num_subblocks = get_compile_time_arg_val(12);
+    constexpr uint32_t num_m_blocks = get_compile_time_arg_val(12);
     constexpr uint32_t M_block = get_compile_time_arg_val(13);
-    constexpr uint32_t N_num_subblocks = get_compile_time_arg_val(14);
+    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(14);
     constexpr auto out_tensor_args = TensorAccessorArgs<15>();
 #else
-    constexpr uint32_t M_num_subblocks = get_compile_time_arg_val(10);
+    constexpr uint32_t num_m_blocks = get_compile_time_arg_val(10);
     constexpr uint32_t M_block = get_compile_time_arg_val(11);
-    constexpr uint32_t N_num_subblocks = get_compile_time_arg_val(12);
+    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(12);
     constexpr auto out_tensor_args = TensorAccessorArgs<13>();
 #endif
 #endif
@@ -73,13 +73,13 @@ void kernel_main() {
 
     constexpr uint32_t num_blocks = num_tiles / block_size;
 
-    for (uint32_t msb = 0; msb < M_num_subblocks; msb++) {
-        uint32_t M_start = msb * M_block;
+    for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
+        uint32_t M_start = m_sub * M_block;
         uint32_t current_M_block = (M_block < Mpc - M_start) ? M_block : (Mpc - M_start);
-        uint32_t msb_tiles = current_M_block * Mpc;
+        uint32_t m_sub_tiles = current_M_block * Mpc;
 
-        // --- Phase 1: receive tiles via multicast (for all nsb) ---
-        for (uint32_t nsb = 0; nsb < N_num_subblocks; nsb++) {
+        // --- Phase 1: receive tiles via multicast (for all n_sub) ---
+        for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
             for (uint32_t blk = 0; blk < num_blocks; blk++) {
                 cb_reserve_back(cb_id, block_size);
 
@@ -92,32 +92,32 @@ void kernel_main() {
             }
         }
 
-        // --- Phase 2 (per-msb) ---
+        // --- Phase 2 (per-m_sub) ---
 #ifdef REDUCE_SEND
         // Send own partial to partner's reduce CB via NOC write
         uint32_t partner_reduce_addr = get_write_ptr(reduce_cb);
         uint64_t partner_noc_addr = get_noc_addr(partner_noc_x, partner_noc_y, partner_reduce_addr);
         uint64_t partner_sem_noc = get_noc_addr(partner_noc_x, partner_noc_y, reduce_sem_addr);
 
-        cb_wait_front(cb_out, msb_tiles);
+        cb_wait_front(cb_out, m_sub_tiles);
         uint32_t l1_addr = get_read_ptr(cb_out);
-        noc_async_write(l1_addr, partner_noc_addr, msb_tiles * out_tile_size);
+        noc_async_write(l1_addr, partner_noc_addr, m_sub_tiles * out_tile_size);
         noc_async_write_barrier();
         noc_semaphore_inc(partner_sem_noc, 1);
-        cb_pop_front(cb_out, msb_tiles);
+        cb_pop_front(cb_out, m_sub_tiles);
 #else
         // Receive partner's partial into reduce CB (if REDUCE_RECV)
 #ifdef REDUCE_RECV
         volatile tt_l1_ptr uint32_t* reduce_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sem_addr);
-        cb_reserve_back(reduce_cb, msb_tiles);
+        cb_reserve_back(reduce_cb, m_sub_tiles);
         noc_semaphore_wait(reduce_sem_ptr, 1);
         noc_semaphore_set(reduce_sem_ptr, 0);
-        cb_push_back(reduce_cb, msb_tiles);
+        cb_push_back(reduce_cb, m_sub_tiles);
 #endif
 
         const auto out_writer = TensorAccessor(out_tensor_args, out_addr, out_tile_size);
 
-#ifdef PER_NSB_REDUCTION
+#ifdef BLOCK_STREAMING
         // Row-major write: compute pushes rows of Mpc tiles each
         for (uint32_t m = 0; m < current_M_block; m++) {
             cb_wait_front(cb_out, Mpc);

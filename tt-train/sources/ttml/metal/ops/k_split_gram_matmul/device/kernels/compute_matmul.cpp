@@ -5,12 +5,12 @@
 // Matmul compute kernel with M_block x N_block streaming for Mpc×Mpc gram matmul.
 // in0: M_block rows per K-block, in1: N_block rows per K-block.
 //
-// PER_NSB_REDUCTION path (subs=1):
+// BLOCK_STREAMING path (subs=1):
 //   Non-accumulator: matmul → c_2, pack c_2 → c_5 (row-major), DM sends c_5
 //   REDUCE_ACCUMULATOR: matmul → c_2, add c_2(FP32) + c_5(BF16) → c_6
 //
 // Per-msb path (original):
-//   Loop: for msb: reserve c_3; for nsb: matmul → c_2, copy_subblock → c_3; push c_3; reduction.
+//   Loop: for m_sub: reserve c_3; for n_sub: matmul → c_2, copy_subblock → c_3; push c_3; reduction.
 
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
@@ -78,7 +78,7 @@ void matmul_blocks(
     }
 }
 
-#ifndef PER_NSB_REDUCTION
+#ifndef BLOCK_STREAMING
 // Copy M_block×N_block intermediate into c_3 at N-offset (per-msb path only).
 // REDUCE_SENDER_TRANSPOSE: transpose_wh_tile + column-major Mpc×M_block indexing.
 // Others: copy_tile + column-major Mpc×M_block indexing.
@@ -126,9 +126,9 @@ void copy_subblock_to_output(
     }
 #endif
 }
-#endif  // !PER_NSB_REDUCTION
+#endif  // !BLOCK_STREAMING
 
-#ifdef PER_NSB_REDUCTION
+#ifdef BLOCK_STREAMING
 // Per-nsb: pack c_2 → c_5 in row-major order matching receiver's c_2 layout.
 // REDUCE_SENDER_TRANSPOSE: transpose tile content + swap indices so receiver can add directly.
 // REDUCE_SENDER: identity copy with FP32 → BF16 format conversion.
@@ -164,7 +164,7 @@ void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, u
     }
 #endif
 }
-#endif  // PER_NSB_REDUCTION
+#endif  // BLOCK_STREAMING
 
 // Copy block → output, pushing N_cols tiles at a time.
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_rows, uint32_t N_cols) {
@@ -256,16 +256,16 @@ void kernel_main() {
     constexpr uint32_t M_block = get_compile_time_arg_val(4);
     constexpr uint32_t subblock_h = get_compile_time_arg_val(5);
     constexpr uint32_t N_block = get_compile_time_arg_val(6);
-    constexpr uint32_t N_num_subblocks = get_compile_time_arg_val(7);
+    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(7);
     constexpr uint32_t K_num_blocks = K_half / K_block_tiles;
     constexpr uint32_t tiles_per_in0_block = K_block_tiles * M_block;
     constexpr uint32_t tiles_per_in1_block = K_block_tiles * N_block;
-    constexpr uint32_t M_num_subblocks = (Mpc + M_block - 1) / M_block;
+    constexpr uint32_t num_m_blocks = (Mpc + M_block - 1) / M_block;
 
     constexpr uint32_t in0_cb = tt::CBIndex::c_0;
     constexpr uint32_t in1_cb = tt::CBIndex::c_1;
     constexpr uint32_t intermed_cb = tt::CBIndex::c_2;
-#ifdef PER_NSB_REDUCTION
+#ifdef BLOCK_STREAMING
     constexpr uint32_t out_cb = tt::CBIndex::c_5;
 #else
     constexpr uint32_t out_cb = tt::CBIndex::c_3;
@@ -281,17 +281,17 @@ void kernel_main() {
     reconfig_data_format(in1_cb, in0_cb);
     pack_reconfig_data_format(intermed_cb);
 
-    for (uint32_t msb = 0; msb < M_num_subblocks; msb++) {
-        uint32_t current_M_block = std::min(M_block, Mpc - msb * M_block);
+    for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
+        uint32_t current_M_block = std::min(M_block, Mpc - m_sub * M_block);
 
-#ifndef PER_NSB_REDUCTION
+#ifndef BLOCK_STREAMING
         uint32_t out_block_num_tiles = current_M_block * Mpc;
-        // Reserve c_3 for full msb output (Mpc × current_M_block, accumulated across nsb)
+        // Reserve c_3 for full m_sub output (Mpc × current_M_block, accumulated across n_sub)
         cb_reserve_back(out_cb, out_block_num_tiles);
 #endif
 
-        for (uint32_t nsb = 0; nsb < N_num_subblocks; nsb++) {
-            uint32_t N_start = nsb * N_block;
+        for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
+            uint32_t N_start = n_sub * N_block;
             uint32_t current_N = std::min(N_block, Mpc - N_start);
             uint32_t intermed_tiles = current_M_block * current_N;
 
@@ -324,8 +324,8 @@ void kernel_main() {
             cb_push_back(intermed_cb, intermed_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
-#ifdef PER_NSB_REDUCTION
-            // Per-nsb: pack or reduce immediately after each nsb
+#ifdef BLOCK_STREAMING
+            // Per-nsb: pack or reduce immediately after each n_sub
 #if !defined(REDUCE_ACCUMULATOR) && !defined(REDUCE_ACCUMULATOR_OWN_ONLY) && !defined(REDUCE_ACCUMULATOR_RECV_ONLY)
             // Non-accumulator: pack c_2 → c_5 in row-major order
             cb_reserve_back(out_cb, intermed_tiles);
@@ -365,7 +365,7 @@ void kernel_main() {
 #endif
 
             // Re-init matmul pipeline after copy/pack changed data formats
-            if (nsb + 1 < N_num_subblocks) {
+            if (n_sub + 1 < num_n_blocks) {
                 mm_init(in0_cb, in1_cb, intermed_cb);
                 mm_block_init_short(in0_cb, in1_cb, true, subblock_w, subblock_h, 1);
                 reconfig_data_format(in1_cb, in0_cb);
@@ -373,10 +373,10 @@ void kernel_main() {
             }
         }
 
-#ifndef PER_NSB_REDUCTION
+#ifndef BLOCK_STREAMING
         cb_push_back(out_cb, out_block_num_tiles);
 
-        // --- Post-msb reduction ---
+        // --- Post-m_sub reduction ---
         // For REDUCE_SENDER_TRANSPOSE, REDUCE_SENDER, and no-reduction:
         //   DM reads c_3 and pops it — compute must NOT pop c_3.
         // For REDUCE_ACCUMULATOR variants:
@@ -410,8 +410,8 @@ void kernel_main() {
 #endif
 #endif
 
-        // Re-init matmul pipeline for next msb
-        if (msb + 1 < M_num_subblocks) {
+        // Re-init matmul pipeline for next m_sub
+        if (m_sub + 1 < num_m_blocks) {
             mm_init(in0_cb, in1_cb, intermed_cb);
             mm_block_init_short(in0_cb, in1_cb, true, subblock_w, subblock_h, 1);
             reconfig_data_format(in1_cb, in0_cb);

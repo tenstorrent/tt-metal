@@ -4,7 +4,7 @@
 //
 // DRAM reader for diagonal helper cores with M_block x N_block streaming.
 // Phase 1: Reads N_block odd K-columns from DRAM into c_1 for compute.
-//          Loop: for msb: for nsb: for blk: read N_block rows.
+//          Loop: for m_sub: for n_sub: for blk: read N_block rows.
 // Phase 2: Writes combined output (c_6, after accumulation) to DRAM row by row (per msb).
 
 #include <stdint.h>
@@ -31,9 +31,9 @@ void kernel_main() {
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(5);
     constexpr uint32_t Mpc = get_compile_time_arg_val(6);
     constexpr uint32_t padded_out_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t M_num_subblocks = get_compile_time_arg_val(8);
+    constexpr uint32_t num_m_blocks = get_compile_time_arg_val(8);
     constexpr uint32_t M_block = get_compile_time_arg_val(9);
-    constexpr uint32_t N_num_subblocks = get_compile_time_arg_val(10);
+    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(10);
 
     constexpr auto input_ta = TensorAccessorArgs<11>();
     constexpr auto output_ta = TensorAccessorArgs<input_ta.next_compile_time_args_offset()>();
@@ -55,13 +55,13 @@ void kernel_main() {
     // block_size = K_block_tiles * M_block (compile-time), so K_block_tiles = block_size / M_block
     constexpr uint32_t K_block_tiles = block_size / M_block;
 
-    for (uint32_t msb = 0; msb < M_num_subblocks; msb++) {
-        uint32_t M_start = msb * M_block;
+    for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
+        uint32_t M_start = m_sub * M_block;
         uint32_t current_M_block = (M_block < Mpc - M_start) ? M_block : (Mpc - M_start);
 
         // --- Phase 1: read odd K-columns from DRAM, N_block rows per pass ---
-        for (uint32_t nsb = 0; nsb < N_num_subblocks; nsb++) {
-            uint32_t row_base = nsb * M_block;
+        for (uint32_t n_sub = 0; n_sub < num_n_blocks; n_sub++) {
+            uint32_t row_base = n_sub * M_block;
 
             for (uint32_t blk = 0; blk < num_blocks; blk++) {
                 uint32_t first_k_col = blk * K_block_tiles * 2 + 1;
@@ -88,7 +88,7 @@ void kernel_main() {
 
         const auto out_writer = TensorAccessor(output_ta, out_addr, out_tile_size);
 
-#ifdef PER_NSB_REDUCTION
+#ifdef BLOCK_STREAMING
         for (uint32_t m = 0; m < current_M_block; m++) {
             cb_wait_front(cb_out, Mpc);
             uint32_t l1_read_addr = get_read_ptr(cb_out);
