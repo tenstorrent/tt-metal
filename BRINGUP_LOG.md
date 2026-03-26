@@ -203,3 +203,155 @@
 - `init_kv_cache()` called before prefill trace capture
 - Page_table trace tensors initialized with `torch.arange(max_num_blocks)`
 - Removed incorrect paged attention + prefill trace incompatibility check
+
+---
+
+### 2026-03-26 — tt-inference-server warmup fixes
+
+**Status:** Completed. Applied demo.py warmup fixes to generator_vllm.py for vLLM server.
+
+**Changes to `generator_vllm.py`:**
+
+| Method | Change |
+|--------|--------|
+| `warmup_model_prefill()` | Two-phase approach: allocate ALL tensors first, then capture traces |
+| `warmup_model_prefill()` | Initialize page_table trace tensors with sequential block mapping |
+| `warmup_model_prefill()` | Extended bucket sizes to [128, 256, 512, 1024, 2048, 4096] for video |
+| `warmup_model_prefill()` | Skip buckets exceeding max_seq_len parameter |
+| `warmup_model_decode()` | Initialize page_table trace tensor with sequential block mapping |
+
+**Why Two-Phase Approach:**
+Allocating tensors and capturing traces in the same loop iteration caused trace memory corruption. By allocating ALL tensors first, the memory layout is stable before any traces are captured.
+
+**Why Initialize page_table:**
+Uninitialized page_table trace tensors contain garbage values that corrupt attention output during warmup forward pass. Initializing with `torch.arange(num_blocks)` ensures valid block indices.
+
+**Test Commands:**
+```bash
+# Start vLLM server
+cd tt-inference-server
+python run.py --model Molmo2-8B --workflow server --device t3k --docker-server
+
+# Run test script
+pytest models/demos/molmo2/tests/test_vllm_server.py -v
+```
+
+---
+
+### 2026-03-26 — Page table batch size fix for vLLM
+
+**Status:** Completed. Fixed page_table batch dimension mismatch when vLLM batches multiple requests.
+
+**Problem:**
+When vLLM batches multiple requests, it provides `page_table` with shape `[num_reqs, num_blocks]`. The trace tensors have shape `[1, num_blocks]` (batch_size=1). When trying to copy the full batched page_table to the trace tensor, the batch dimension mismatched causing:
+```
+TT_FATAL: Batch size between page_table and input_tensor must match
+RuntimeError @ paged_update_cache_device_operation.cpp:93
+```
+
+**Solution:**
+Create per-user page_table tensors inside the user loop instead of converting the entire batched page_table once:
+
+| Change | Description |
+|--------|-------------|
+| Added `_get_user_page_table_tt()` | Helper function that slices `page_table[user_id:user_id+1]`, pads to trace size, returns TTNN tensor |
+| Modified `prefill_forward()` | Extract `trace_num_blocks` from trace tensors, create per-user page_table_tt inside loop |
+| Per-user deallocation | Deallocate page_table_tt at end of each user iteration (including `continue` path) |
+
+**Code Changes to `generator_vllm.py`:**
+```python
+# New helper function
+def _get_user_page_table_tt(self, page_table, user_id, trace_num_blocks):
+    user_page_table = page_table[user_id : user_id + 1]  # [1, num_blocks]
+    if trace_num_blocks and user_page_table.shape[-1] < trace_num_blocks:
+        user_page_table = torch.nn.functional.pad(user_page_table, (0, pad_size), value=0)
+    return ttnn.from_torch(user_page_table, ...)
+
+# In prefill_forward loop
+for user_id in range(batch_size):
+    page_table_tt = self._get_user_page_table_tt(page_table, user_id, trace_num_blocks)
+    # ... process user ...
+    if page_table_tt is not None:
+        ttnn.deallocate(page_table_tt)
+```
+
+**Why This Fixes the Issue:**
+- Trace tensors have shape `[1, trace_num_blocks]` for batch_size=1
+- Per-user page_table now has shape `[1, trace_num_blocks]` after slicing and padding
+- `ttnn.copy(page_table_tt, trace_tensors["page_table"])` succeeds because shapes match
+
+---
+
+### 2026-03-26 — decode_forward page_table batch size fix
+
+**Status:** Completed. Fixed decode_forward to slice page_table to actual batch size.
+
+**Problem:**
+After fixing `prefill_forward`, the same batch dimension mismatch error occurred in `decode_forward`:
+- vLLM provides page_table with shape `[max_num_seqs, num_blocks]` = `[32, 64]`
+- Page_table gets padded to trace size: `[32, 2049]`
+- But actual decode batch size is often 1 (tokens.shape[0])
+- `paged_update_cache` expects `input_tensor.shape[1] == page_table.shape[0]`
+
+**Solution:**
+Slice page_table to match actual batch size before converting to TTNN:
+
+```python
+# In decode_forward, before creating page_table_tt:
+batch_size = tokens.shape[0]
+page_table_sliced = page_table[:batch_size]  # [batch_size, num_blocks]
+# Then pad to trace num_blocks if needed
+```
+
+**Test Results:**
+- Text-only requests: ✅ Working (3 sequential requests tested)
+- No batch dimension mismatch errors
+- Decode trace used successfully (batch_compatible=True)
+
+---
+
+### 2026-03-26 — vLLM batch size constraint and image request fixes
+
+**Status:** Partially complete. Text requests working. Image requests timeout without tracing.
+
+**Root Cause Analysis:**
+
+1. **vLLM batches decode calls**: vLLM was calling `decode_forward` with `tokens.shape=[32, 1]` (batch_size=32), but `text_attention.py` has `batch_size=1` hardcoded (line 451).
+
+2. **Batch dimension mismatch**: The K/V tensors created by `nlp_create_qkv_heads_decode` have batch=1 embedded, but page_table had batch=32, causing `paged_update_cache` to fail.
+
+**Solution:**
+Run vLLM with `--max-num-seqs 1` to force single-request processing:
+```bash
+python -m vllm.entrypoints.openai.api_server --model allenai/Molmo2-8B \
+  --max-num-seqs 1 --block-size 64 --max-model-len 4096
+```
+
+**Test Results with max-num-seqs=1:**
+| Test | Status | Notes |
+|------|--------|-------|
+| Text-only requests | ✅ Working | Multiple sequential requests work |
+| Image requests | ❌ Timeout | Non-traced prefill too slow (>5 min) |
+
+**Why Image Requests Fail:**
+- Prefill traces are captured with text-only dummy inputs during warmup
+- Vision inputs have different hidden state patterns (fused visual+text embeddings)
+- Code has `use_trace=False` for vision inputs to avoid garbage output
+- Non-traced prefill runs 36 transformer layers sequentially = very slow
+
+**Performance (with max-num-seqs=1):**
+| Metric | Text-only | Image |
+|--------|-----------|-------|
+| Prefill (traced) | ~500ms | N/A (trace disabled) |
+| Prefill (no trace) | N/A | >5 min (timeout) |
+| Decode | ~130ms/token | N/A |
+
+**Known Limitations:**
+1. `text_attention.py` hardcodes `batch_size=1` - prevents vLLM batching
+2. Prefill traces incompatible with vision input - captured with text-only patterns
+3. Image/video requests require non-traced prefill which is prohibitively slow
+
+**Future Work:**
+1. Make `text_attention.py` support dynamic batch sizes
+2. Capture separate prefill traces for vision inputs during warmup
+3. Or implement vision-aware trace capture that handles both modalities

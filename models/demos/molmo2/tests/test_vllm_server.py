@@ -8,7 +8,7 @@ Test script for Molmo2 vLLM server integration.
 Usage:
     1. Start the vLLM server:
        cd /path/to/tt-inference-server
-       python run.py --model Molmo2-8B --workflow vllm-server --device t3k
+       python run.py --model Molmo2-8B --workflow server --device t3k --docker-server
 
     2. Run this test script:
        python models/demos/molmo2/tests/test_vllm_server.py
@@ -78,7 +78,7 @@ def server_running():
     if not check_server_health():
         pytest.skip(
             f"vLLM server not running at {SERVER_URL}. "
-            "Start with: python run.py --model Molmo2-8B --workflow vllm-server --device t3k"
+            "Start with: python run.py --model Molmo2-8B --workflow server --device t3k --docker-server"
         )
 
 
@@ -218,7 +218,7 @@ def run_manual_tests():
     print("\n1. Checking server health...")
     if not check_server_health():
         print(f"ERROR: Server not running at {SERVER_URL}")
-        print("Start with: python run.py --model Molmo2-8B --workflow vllm-server --device t3k")
+        print("Start with: python run.py --model Molmo2-8B --workflow server --device t3k --docker-server")
         return False
 
     print("   Server is healthy!")

@@ -502,16 +502,74 @@ class Molmo2ProcessorWrapper:
                         "pooled_w": pooled_w,
                     }
 
-        # Process images normally (for non-video case)
+        # Process images using raw pixels (same as video frame processing)
+        # Our TTNN model expects [n_crops, 3, H, W] raw pixels, not HF's pre-embedded format
         if images is not None and not self._is_video_input:
-            logger.info(f"  Processing images: type={type(images)}")
-            image_outputs = self.image_processor(images, return_tensors="np")
-            if "image_grids" not in image_outputs:
-                num_images = 1 if not isinstance(images, list) else len(images)
-                image_outputs["image_grids"] = np.array([[14, 14, 14, 14]] * num_images)
-            if "image_num_crops" not in image_outputs:
-                num_images = 1 if not isinstance(images, list) else len(images)
-                image_outputs["image_num_crops"] = np.array([1] * num_images)
+            logger.info(f"  Processing images using RAW PIXEL format: type={type(images)}")
+
+            base_size = 378
+            patch_size = 14
+            pool_h, pool_w = 2, 2
+            crop_patches = base_size // patch_size  # 27
+
+            # Handle single image or list of images
+            if not isinstance(images, list):
+                images_list = [images]
+            else:
+                images_list = images
+
+            all_crops = []
+            all_pooling_idx = []
+            patches_per_crop = crop_patches * crop_patches  # 729
+
+            # Pre-compute pooling indices template
+            resize_idx_template = np.arange(patches_per_crop).reshape(crop_patches, crop_patches)
+            resize_idx_template = arange_for_pooling(resize_idx_template, pool_h, pool_w)
+            pooled_h, pooled_w = resize_idx_template.shape[0], resize_idx_template.shape[1]
+            resize_idx_flat = resize_idx_template.reshape(-1, pool_h * pool_w)
+
+            crop_idx = 0
+            for img in images_list:
+                # Convert PIL Image to numpy array
+                if hasattr(img, "convert"):
+                    img_np = np.array(img.convert("RGB"))
+                elif isinstance(img, np.ndarray):
+                    img_np = img
+                else:
+                    img_np = np.array(img)
+
+                # Resize and normalize (same as video frame processing)
+                img_resized = resize_image(img_np, [base_size, base_size])
+                img_normalized = normalize_image(img_resized, IMAGENET_MEAN, IMAGENET_STD)
+                # [H, W, C] -> [C, H, W]
+                crop = torch.from_numpy(img_normalized).permute(2, 0, 1).float()
+                all_crops.append(crop)
+
+                # Pooling indices with offset for this crop
+                offset = crop_idx * patches_per_crop
+                crop_idx_with_offset = np.where(
+                    resize_idx_flat >= 0,
+                    resize_idx_flat + offset,
+                    resize_idx_flat,
+                )
+                all_pooling_idx.append(crop_idx_with_offset)
+                crop_idx += 1
+
+            # Stack into combined tensors
+            pixel_values = torch.stack(all_crops, dim=0)  # [n_crops, 3, H, W]
+            image_token_pooling = torch.from_numpy(np.concatenate(all_pooling_idx, axis=0)).long()
+
+            num_crops = len(all_crops)
+            logger.info(
+                f"    Processed {num_crops} image(s): pixel_values={pixel_values.shape}, pooling={image_token_pooling.shape}"
+            )
+
+            image_outputs = {
+                "pixel_values": pixel_values.numpy(),  # [n_crops, 3, H, W] - raw pixels for TTNN
+                "image_token_pooling": image_token_pooling.numpy(),  # [total_tokens, K_pool]
+                "image_grids": np.array([[pooled_h, pooled_w, 0, 0]] * len(images_list)),
+                "image_num_crops": np.array([1] * len(images_list)),  # 1 crop per image for simple mode
+            }
         elif self._video_data is not None:
             # For video: create video-specific outputs
             # vLLM will handle token replacement via _get_prompt_updates
@@ -1031,8 +1089,25 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         """
         if pixel_values is not None and pooled_patches_idx is not None:
             # Vision + text fusion
+            logger.info(f"_prepare_text_inputs: Starting vision+text fusion")
+            logger.info(
+                f"  pixel_values.shape={pixel_values.shape}, pooled_patches_idx.shape={pooled_patches_idx.shape}"
+            )
+            logger.info(f"  input_ids.shape={input_ids.shape}")
+
+            logger.info(f"_prepare_text_inputs: Calling embed_image...")
             visual_embeddings_ttnn, valid_token = self.model.embed_image(pixel_values, pooled_patches_idx)
+            # CRITICAL: Synchronize after vision backbone to ensure operations complete
+            # Without this, async TTNN operations may not finish, causing garbage output or hangs
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info(f"_prepare_text_inputs: embed_image completed, valid_token.shape={valid_token.shape}")
+
+            logger.info(f"_prepare_text_inputs: Calling prepare_inputs_for_multimodal...")
             fused_ttnn = self.model.prepare_inputs_for_multimodal(input_ids, visual_embeddings_ttnn, valid_token)
+            # CRITICAL: Synchronize after multimodal fusion to ensure operations complete
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info(f"_prepare_text_inputs: prepare_inputs_for_multimodal completed")
+
             ttnn.deallocate(visual_embeddings_ttnn)
             return fused_ttnn
         else:
@@ -1112,6 +1187,11 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             logits_ttnn = trace_output
         else:
             # Direct model forward (no trace)
+            logger.info(f"_run_prefill: Starting text model forward (no trace)")
+            logger.info(f"  hidden_states shape info: padded_seq_len={padded_seq_len}")
+            logger.info(f"  kv_caches is None: {prefill_kv_cache is None}")
+            logger.info(f"  page_table is None: {page_table is None}")
+
             logits_ttnn, _ = self.model.text_model.forward(
                 hidden_states=hidden_states_ttnn,
                 start_pos=0,
@@ -1120,6 +1200,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 rot_mats=rot_mats,
                 page_table=page_table,
             )
+            logger.info(f"_run_prefill: text model forward returned")
 
             # Clean up rot_mats
             ttnn.deallocate(rot_mats[0])
@@ -1183,6 +1264,48 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             ttnn.deallocate(new_rot_idxs)
 
         self.decode_position = start_pos
+
+    def _get_user_page_table_tt(
+        self, page_table: torch.Tensor, user_id: int, trace_num_blocks: Optional[int]
+    ) -> Optional["ttnn.Tensor"]:
+        """
+        Create a per-user page_table TTNN tensor, padded to match trace tensor shape.
+
+        Args:
+            page_table: Full batched page_table from vLLM [batch, num_blocks]
+            user_id: Index of the user in the batch
+            trace_num_blocks: Number of blocks in trace tensor (for padding)
+
+        Returns:
+            Per-user page_table TTNN tensor [1, padded_num_blocks], or None if page_table is None
+        """
+        if page_table is None:
+            return None
+
+        # Slice page_table for this user: [batch, num_blocks] -> [1, num_blocks]
+        user_page_table = page_table[user_id : user_id + 1]
+
+        # Pad to match trace tensor shape if needed
+        if trace_num_blocks is not None:
+            actual_num_blocks = user_page_table.shape[-1]
+            if actual_num_blocks < trace_num_blocks:
+                pad_size = trace_num_blocks - actual_num_blocks
+                user_page_table = torch.nn.functional.pad(user_page_table, (0, pad_size), value=0)
+                logger.debug(
+                    f"Padded user {user_id} page_table from {page_table.shape[-1]} to {trace_num_blocks} blocks"
+                )
+
+        # Convert to TTNN tensor
+        page_table_tt = ttnn.from_torch(
+            user_page_table,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        return page_table_tt
 
     @classmethod
     def initialize_vllm_model(
@@ -1341,35 +1464,15 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         if prompt_lens is None:
             prompt_lens = torch.tensor([tokens.shape[1]] * batch_size)
 
-        # Convert page_table to ttnn tensor if provided
-        # For traced prefill, pad to match trace tensor shape
-        page_table_tt = None
-        if page_table is not None:
-            page_table_padded = page_table
-            # Check if we need to pad to match trace tensor shape
-            if hasattr(self, "prefill_traces") and self.prefill_traces is not None:
-                # Get trace tensor shape from any prefill trace
-                for seq_len, (trace_id, trace_tensors, trace_output) in self.prefill_traces.items():
-                    if "page_table" in trace_tensors:
-                        trace_page_table_shape = list(trace_tensors["page_table"].shape)
-                        trace_num_blocks = trace_page_table_shape[-1]
-                        actual_num_blocks = page_table.shape[-1]
-                        if actual_num_blocks < trace_num_blocks:
-                            # Pad with zeros to match trace tensor shape
-                            pad_size = trace_num_blocks - actual_num_blocks
-                            page_table_padded = torch.nn.functional.pad(page_table, (0, pad_size), value=0)
-                            logger.debug(f"Padded page_table from {page_table.shape} to {page_table_padded.shape}")
-                        break
-
-            page_table_tt = ttnn.from_torch(
-                page_table_padded,
-                device=self.mesh_device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            logger.info(f"Converted page_table to ttnn: shape={page_table_padded.shape} (original: {page_table.shape})")
+        # Get trace num_blocks for page_table padding (used per-user below)
+        trace_num_blocks = None
+        if page_table is not None and hasattr(self, "prefill_traces") and self.prefill_traces:
+            for seq_len, (trace_id, trace_tensors, trace_output) in self.prefill_traces.items():
+                if "page_table" in trace_tensors:
+                    trace_page_table_shape = list(trace_tensors["page_table"].shape)
+                    trace_num_blocks = trace_page_table_shape[-1]
+                    logger.info(f"Trace page_table num_blocks={trace_num_blocks}")
+                    break
 
         # Check if we have pre-processed data from vLLM
         has_vllm_images = pixel_values is not None and len(pixel_values) > 0
@@ -1383,6 +1486,10 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         output_logits = []
 
         for user_id in range(batch_size):
+            # Create per-user page_table_tt with proper padding for trace tensors
+            # This is critical for batched requests - trace expects [1, num_blocks]
+            page_table_tt = self._get_user_page_table_tt(page_table, user_id, trace_num_blocks)
+
             # Check for VIDEO first (new vLLM multimodal flow)
             if has_vllm_videos and user_id < len(pixel_values_videos) and pixel_values_videos[user_id] is not None:
                 # VIDEO PATH: vLLM provides pixel_values_videos [n_frames, 3, H, W]
@@ -1456,6 +1563,9 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     page_table=page_table_tt,
                 )
                 output_logits.append(logits)
+                # Deallocate per-user page_table_tt before continue
+                if page_table_tt is not None:
+                    ttnn.deallocate(page_table_tt)
                 continue
 
             # Check for vLLM-style pre-processed images
@@ -1539,15 +1649,16 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     logger.warning(f"  No image_token_pooling available - vision features may not work correctly")
 
                 # Run prefill with pre-processed image/video
-                # NOTE: Vision trace disabled for vLLM mode because vLLM uses multi-crop
-                # images with variable patch counts, but trace requires fixed tensor sizes.
-                # The pre-allocated vision trace tensors assume single-crop (729 patches),
-                # but vLLM may send 5+ crops (3645+ patches).
+                # NOTE: Prefill traces DISABLED for vision input because:
+                # 1. Warmup captures text-only traces (no vision backbone involved)
+                # 2. Vision-fused hidden states have different numerical properties
+                # 3. Running text-only trace with vision input causes garbage output or device hangs
+                # TODO: Implement vision-aware prefill traces during warmup
                 logits_ttnn, prefill_timing = self._run_prefill(
                     input_ids=tokens[user_id : user_id + 1, : prompt_lens[user_id]],
                     pixel_values=pv_tensor,
                     pooled_patches_idx=pooling,
-                    use_trace=enable_trace,
+                    use_trace=False,  # DISABLED: text-only traces incompatible with vision input
                     use_vision_trace=False,  # Disabled for vLLM: variable multi-crop sizes
                     use_unified_trace=False,
                     page_table=page_table_tt,
@@ -1612,6 +1723,10 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
             output_logits.append(last_token_logits.unsqueeze(0).unsqueeze(1))  # [1, 1, vocab_size]
 
+            # Deallocate per-user page_table_tt at end of iteration
+            if page_table_tt is not None:
+                ttnn.deallocate(page_table_tt)
+
         # Stack all users' logits: [batch_size, 1, vocab_size]
         # vLLM expects 3D: [batch, seq_len, vocab] and indexes with [:batch, -1, :]
         logits = torch.cat(output_logits, dim=0)
@@ -1621,11 +1736,6 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             logits = logits.unsqueeze(0).unsqueeze(1)  # [vocab] -> [1, 1, vocab]
         elif logits.dim() == 2:
             logits = logits.unsqueeze(1)  # [batch, vocab] -> [batch, 1, vocab]
-
-        # Deallocate page_table_tt if allocated
-        if page_table_tt is not None:
-            ttnn.deallocate(page_table_tt)
-
         logger.info(f"prefill_forward returning: shape={logits.shape}")
         return logits
 
@@ -1654,6 +1764,11 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         Returns:
             Logits tensor
         """
+        # Debug logging for shape investigation
+        logger.info(
+            f"decode_forward called: tokens.shape={tokens.shape}, page_table.shape={page_table.shape if page_table is not None else None}"
+        )
+
         # Check if generator is properly initialized (has run prefill)
         # rot_mat_idxs is set during prefill - if not set, return dummy output
         if not hasattr(self, "rot_mat_idxs") or self.rot_mat_idxs is None:
@@ -1674,9 +1789,18 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
 
         # Convert page_table to ttnn tensor if provided
         # For traced decode, pad to match trace tensor shape
+        # CRITICAL: Slice page_table to match actual batch size (tokens.shape[0])
+        # vLLM provides page_table with shape [max_num_seqs, num_blocks] but we only
+        # decode batch_size requests at a time
         page_table_tt = None
         if page_table is not None:
-            page_table_padded = page_table
+            batch_size = tokens.shape[0]
+            # Slice to actual batch size first
+            page_table_sliced = page_table[:batch_size]  # [batch_size, num_blocks]
+            logger.info(
+                f"decode_forward: page_table sliced from {page_table.shape} to {page_table_sliced.shape} (batch_size={batch_size})"
+            )
+
             # Check if we need to pad to match trace tensor shape
             if (
                 hasattr(self, "decode_trace_tensors")
@@ -1685,15 +1809,15 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             ):
                 trace_page_table_shape = list(self.decode_trace_tensors["page_table"].shape)
                 trace_num_blocks = trace_page_table_shape[-1]
-                actual_num_blocks = page_table.shape[-1]
+                actual_num_blocks = page_table_sliced.shape[-1]
                 if actual_num_blocks < trace_num_blocks:
                     # Pad with zeros to match trace tensor shape
                     pad_size = trace_num_blocks - actual_num_blocks
-                    page_table_padded = torch.nn.functional.pad(page_table, (0, pad_size), value=0)
-                    logger.debug(f"Padded page_table from {page_table.shape} to {page_table_padded.shape}")
+                    page_table_sliced = torch.nn.functional.pad(page_table_sliced, (0, pad_size), value=0)
+                    logger.debug(f"Padded page_table from {page_table.shape} to {page_table_sliced.shape}")
 
             page_table_tt = ttnn.from_torch(
-                page_table_padded,
+                page_table_sliced,
                 device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1843,12 +1967,16 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         can_sample_on_device: bool = False,
         non_greedy_decoding_on_device: bool = False,
         num_blocks: int = 64,
+        max_seq_len: int = 8192,
         **kwargs,
     ) -> None:
         """
         Warmup prefill path for Molmo2.
 
         This method is called by tt-inference-server to capture prefill traces.
+        Uses a two-phase approach to avoid trace memory corruption:
+        Phase 1: Allocate ALL trace tensors before capturing any traces
+        Phase 2: Capture traces for each bucket
 
         Args:
             kv_cache: KV cache tensors from vLLM (paged format)
@@ -1856,12 +1984,13 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             can_sample_on_device: Whether sampling can happen on device
             non_greedy_decoding_on_device: Whether non-greedy decoding is on device
             num_blocks: Number of KV cache blocks
+            max_seq_len: Maximum sequence length (buckets exceeding this are skipped)
         """
         if not enable_trace:
             logger.info("Prefill trace disabled - skipping warmup_model_prefill")
             return
 
-        logger.info("Warmup: Capturing prefill trace...")
+        logger.info("Warmup: Capturing prefill traces (two-phase approach)...")
 
         # Use vLLM's paged KV cache if provided, otherwise fall back to internal cache
         if kv_cache is not None and len(kv_cache) > 0 and kv_cache[0] is not None:
@@ -1871,6 +2000,18 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # CRITICAL: Set generator's kv_caches to vLLM's cache so run_prefill uses it
             self.kv_caches = warmup_kv_cache
             logger.info(f"Warmup: Using vLLM paged KV cache with {len(warmup_kv_cache)} layers")
+
+            # CRITICAL: Infer actual num_blocks from KV cache shape
+            # KV cache shape is [num_blocks, 1, num_kv_heads, head_dim]
+            # The num_blocks parameter default (64) is often wrong - vLLM allocates more blocks
+            if len(warmup_kv_cache) > 0 and warmup_kv_cache[0] is not None:
+                k_cache = warmup_kv_cache[0][0]  # First layer's K cache
+                actual_num_blocks = k_cache.shape[0]
+                if actual_num_blocks != num_blocks:
+                    logger.info(
+                        f"Warmup: Overriding num_blocks from {num_blocks} to {actual_num_blocks} (from KV cache shape)"
+                    )
+                    num_blocks = actual_num_blocks
         else:
             # Fall back to internal generator cache (for non-paged mode)
             if not hasattr(self, "kv_caches") or self.kv_caches is None:
@@ -1879,33 +2020,69 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             warmup_kv_cache = self.kv_caches
             logger.info("Warmup: Using internal KV cache (non-paged mode)")
 
+        # Create warmup page_table with sequential block mapping
+        # This is used to initialize page_table trace tensors before capture
+        warmup_page_table_torch = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
+        warmup_page_table = ttnn.from_torch(
+            warmup_page_table_torch,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
         # Capture prefill traces for multiple bucket sizes
-        # This ensures run_prefill finds pre-captured traces instead of creating its own
-        # Bucket sizes match PREFILL_SEQ_BUCKETS in demo.py: [128, 256, 512, 1024, ...]
-        # Include 1024 for image requests (741 tokens with images → padded to 1024)
-        warmup_bucket_sizes = [128, 256, 512, 1024]  # Text + image bucket sizes
+        # Include 2048 and 4096 for video requests (video with 8 frames can exceed 4000 tokens)
+        warmup_bucket_sizes = [128, 256, 512, 1024, 2048, 4096]
         hidden_dim = 4096
 
         if not hasattr(self, "prefill_traces"):
             self.prefill_traces = {}
 
+        # PHASE 1: Allocate ALL trace tensors BEFORE capturing any traces
+        # This prevents memory corruption from interleaved allocation/capture
+        all_trace_tensors = {}
+        valid_buckets = []
+
         for warmup_seq_len in warmup_bucket_sizes:
+            if warmup_seq_len > max_seq_len:
+                logger.info(f"Warmup: Skipping bucket {warmup_seq_len} (exceeds max_seq_len {max_seq_len})")
+                continue
+
+            valid_buckets.append(warmup_seq_len)
             logger.info(
-                f"Warmup: Allocating prefill trace tensors for seq_len={warmup_seq_len}, num_blocks={num_blocks}"
+                f"Warmup: Phase 1 - Allocating prefill trace tensors for seq_len={warmup_seq_len}, num_blocks={num_blocks}"
             )
             prefill_trace_tensors = self._allocate_prefill_trace_tensors(
                 warmup_seq_len, hidden_dim, max_num_blocks=num_blocks
             )
 
+            # Initialize page_table with sequential block mapping
+            # This is CRITICAL - uninitialized page_table causes garbage output
+            if "page_table" in prefill_trace_tensors:
+                ttnn.copy(warmup_page_table, prefill_trace_tensors["page_table"])
+
+            all_trace_tensors[warmup_seq_len] = prefill_trace_tensors
+
+        logger.info(f"Warmup: Phase 1 complete - allocated tensors for {len(valid_buckets)} buckets")
+
+        # PHASE 2: Capture traces for each bucket (tensors already allocated)
+        for warmup_seq_len in valid_buckets:
+            prefill_trace_tensors = all_trace_tensors[warmup_seq_len]
+
             # Capture prefill trace with appropriate KV cache
-            logger.info(f"Warmup: Capturing prefill trace for seq_len={warmup_seq_len}...")
+            logger.info(f"Warmup: Phase 2 - Capturing prefill trace for seq_len={warmup_seq_len}...")
             trace_id, trace_output = self._capture_prefill_trace(prefill_trace_tensors, kv_cache=warmup_kv_cache)
 
             # Store trace for reuse - run_prefill will find this
             self.prefill_traces[warmup_seq_len] = (trace_id, prefill_trace_tensors, trace_output)
             logger.info(f"Warmup: Prefill trace captured for seq_len={warmup_seq_len}")
 
-        logger.info(f"Warmup: Prefill traces captured for buckets: {warmup_bucket_sizes}")
+        # Clean up warmup page_table
+        ttnn.deallocate(warmup_page_table)
+
+        logger.info(f"Warmup: Prefill traces captured for buckets: {valid_buckets}")
 
     def warmup_model_decode(
         self,
@@ -1939,6 +2116,18 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # CRITICAL: Set generator's kv_caches to vLLM's cache so run_decode_step uses it
             self.kv_caches = warmup_kv_cache
             logger.info(f"Warmup: Using vLLM paged KV cache with {len(warmup_kv_cache)} layers")
+
+            # CRITICAL: Infer actual num_blocks from KV cache shape
+            # KV cache shape is [num_blocks, 1, num_kv_heads, head_dim]
+            # The num_blocks parameter default (64) is often wrong - vLLM allocates more blocks
+            if len(warmup_kv_cache) > 0 and warmup_kv_cache[0] is not None:
+                k_cache = warmup_kv_cache[0][0]  # First layer's K cache
+                actual_num_blocks = k_cache.shape[0]
+                if actual_num_blocks != num_blocks:
+                    logger.info(
+                        f"Warmup decode: Overriding num_blocks from {num_blocks} to {actual_num_blocks} (from KV cache shape)"
+                    )
+                    num_blocks = actual_num_blocks
         else:
             # Fall back to internal generator cache (for non-paged mode)
             if not hasattr(self, "kv_caches") or self.kv_caches is None:
@@ -1952,10 +2141,26 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             logger.info("Warmup: Initializing position tensors...")
             self._init_decode_position_tensors()
 
+        # Create warmup page_table with sequential block mapping
+        warmup_page_table_torch = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
+        warmup_page_table = ttnn.from_torch(
+            warmup_page_table_torch,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
         # Allocate decode trace tensors with num_blocks matching the KV cache
         hidden_dim = 4096
         logger.info(f"Warmup: Allocating decode trace tensors (num_blocks={num_blocks})...")
         decode_trace_tensors = self._allocate_decode_trace_tensors(hidden_dim, max_num_blocks=num_blocks)
+
+        # Initialize page_table with sequential block mapping
+        # This is CRITICAL - uninitialized page_table causes garbage output
+        if "page_table" in decode_trace_tensors:
+            ttnn.copy(warmup_page_table, decode_trace_tensors["page_table"])
 
         # Create dummy hidden states for trace capture
         dummy_hidden = ttnn.allocate_tensor_on_device(
@@ -1976,6 +2181,9 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         self.decode_trace_id = trace_id
         self.decode_trace_tensors = decode_trace_tensors
         self.decode_trace_output = trace_output
+
+        # Clean up warmup page_table
+        ttnn.deallocate(warmup_page_table)
 
         logger.info("Warmup: Decode trace captured")
 
