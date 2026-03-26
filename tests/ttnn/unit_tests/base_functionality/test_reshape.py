@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from models.common.utility_functions import skip_for_simulator
 
 import pytest
 
@@ -755,6 +756,7 @@ def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, u
     assert tt_output_tensor.shape == torch.Size(output_shape)
 
 
+@skip_for_simulator()
 @pytest.mark.xfail(
     reason="Test that the previously supported reshape accounting for the physical shape is no longer possible"
 )
