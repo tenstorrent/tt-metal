@@ -155,12 +155,6 @@ jobs:
 
   metalium-smoke-tests:
     needs: [ asan-build, find-changed-files ]
-    if: ${{
-        github.ref_name == 'main' ||
-        needs.find-changed-files.outputs.cmake-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-      }}
     strategy:
       fail-fast: false
       matrix:
@@ -179,13 +173,6 @@ jobs:
 
   ttnn-smoke-tests:
     needs: [ asan-build, find-changed-files ]
-    if: ${{
-        github.ref_name == 'main' ||
-        needs.find-changed-files.outputs.cmake-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-      }}
     strategy:
       fail-fast: false
       matrix:
@@ -230,9 +217,6 @@ jobs:
       manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
 
   build-docs:
-    if: >-
-      ${{ needs.find-changed-files.outputs.any-code-changed == 'true' ||
-          needs.find-changed-files.outputs.docs-changed == 'true' }}
     needs: [find-changed-files, build]
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
@@ -242,11 +226,6 @@ jobs:
 
   metalium-examples:
     needs: [ build, find-changed-files ]
-    if: ${{
-        github.ref_name == 'main' ||
-        needs.find-changed-files.outputs.cmake-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-metalium-changed == 'true'
-      }}
     strategy:
       fail-fast: false
       matrix:
@@ -262,11 +241,6 @@ jobs:
 
   ttnn-examples:
     needs: [ build, find-changed-files ]
-    if: ${{
-        github.ref_name == 'main' ||
-        needs.find-changed-files.outputs.cmake-changed == 'true' ||
-        needs.find-changed-files.outputs.tt-nn-changed == 'true'
-      }}
     strategy:
       fail-fast: false
       matrix:
@@ -284,7 +258,6 @@ jobs:
   # and ensures that models attributes are in sync.
   model-charts-sync:
     needs: [find-changed-files]
-    if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
     runs-on: ubuntu-latest
     steps:
     - name: Checkout repo
