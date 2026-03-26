@@ -340,9 +340,12 @@ LayerNormPostAllGatherProgramFactory::cached_program_t LayerNormPostAllGatherPro
             .set_page_size(tt::CBIndex::c_4, bfloat16_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_eps_config);
     // c_in5 -> reduce scalar
+    const bool scaler_is_fp32 = (in_data_format == tt::DataFormat::Float32 && device->arch() != tt::ARCH::BLACKHOLE);
+    const tt::DataFormat scaler_data_format = scaler_is_fp32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const uint32_t scaler_tile_size = tt::tile_size(scaler_data_format);
     CircularBufferConfig cb_reduce_config =
-        CircularBufferConfig(in5_tiles * single_tile_size, {{tt::CBIndex::c_5, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_5, single_tile_size);
+        CircularBufferConfig(in5_tiles * scaler_tile_size, {{tt::CBIndex::c_5, scaler_data_format}})
+            .set_page_size(tt::CBIndex::c_5, scaler_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_reduce_config);
 
     // LN and RMS shared intermediates
