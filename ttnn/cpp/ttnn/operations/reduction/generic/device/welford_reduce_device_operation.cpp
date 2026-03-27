@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -104,8 +104,6 @@ WelfordReduceDeviceOperation::tensor_return_value_t WelfordReduceDeviceOperation
 ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
-    // TODO: Add hash for any paremeters added later.
 
     return tt::tt_metal::operation::hash_operation<WelfordReduceDeviceOperation>(
         operation_attributes.math_op,
