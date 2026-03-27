@@ -6,6 +6,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat
@@ -23,7 +26,8 @@ void kernel_main() {
     uint32_t MtNt = get_arg_val<uint32_t>(11);
 
     constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(0);
-    constexpr auto src0_args = TensorAccessorArgs<1>();
+    constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(1);
+    constexpr auto src0_args = TensorAccessorArgs<2>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
@@ -50,28 +54,36 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
     const auto s1 = TensorAccessor(src1_args, src1_addr, in1_tile_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         for (uint32_t kt = 0; kt < Kt; kt++) {
             {  // Read A's tile at (mt, kt)
-                cb_reserve_back(cb_id_in0, onetile);
-                uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(itileA, s0, l1_write_addr_in0);
-                noc_async_read_barrier();
+                cb_in0.reserve_back(onetile);
+                noc.async_read(s0, cb_in0, in0_tile_bytes, {.page_id = itileA}, {.offset_bytes = 0});
+                noc.async_read_barrier();
                 if constexpr (in0_last_ktile_w > 0) {
                     if (kt == Kt - 1) {
                         constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
-                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(l1_write_addr_in0);
+                        pad_last_ktile<in0_data_format, in0_last_ktile_w>(cb_in0.get_write_ptr());
                     }
                 }
-                cb_push_back(cb_id_in0, onetile);
+                if constexpr (in0_last_ktile_h > 0) {
+                    if (kt == Kt - 1) {
+                        constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+                        pad_last_transposed_ktile<in0_data_format, in0_last_ktile_h>(cb_in0.get_write_ptr());
+                    }
+                }
+                cb_in0.push_back(onetile);
             }
 
             {  // Read B's tile at (kt, nt)
-                cb_reserve_back(cb_id_in1, onetile);
-                uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(itileB, s1, l1_write_addr_in1);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in1, onetile);
+                cb_in1.reserve_back(onetile);
+                noc.async_read(s1, cb_in1, in1_tile_bytes, {.page_id = itileB}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                cb_in1.push_back(onetile);
             }
             // DPRINT << "Pushed itileA=" << itileA << " itileB=" << itileB << ENDL();
 

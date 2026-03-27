@@ -7,7 +7,13 @@ import torch
 import ttnn
 import numpy as np
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_with_ulp,
+    assert_allclose,
+    generate_all_bfloat16_bitpatterns,
+    flush_subnormal_values_to_zero,
+)
 
 pytestmark = pytest.mark.use_module_device
 
@@ -489,3 +495,58 @@ def test_xielu(alpha_p, alpha_n, dtype, device):
         assert_allclose(torch_output, ttnn_output, rtol=6e-05, atol=1e-06)
     else:
         assert_with_ulp(torch_output, ttnn_output, 1)
+
+
+def test_lgamma_bfloat16(device):
+    high = 1000
+    low = -1000
+
+    # All 2^16 bfloat16 bit patterns (256x256), flattened for masking
+    input_tensor = generate_all_bfloat16_bitpatterns(torch.bfloat16).flatten()
+    input_tensor = flush_subnormal_values_to_zero(input_tensor)
+    input_tensor_f32 = input_tensor.to(torch.float32)
+
+    in_range = (input_tensor_f32 >= low) & (input_tensor_f32 <= high)
+    is_non_positive_int = (input_tensor_f32 <= 0) & (input_tensor_f32 == torch.floor(input_tensor_f32))
+    mask = in_range & ~is_non_positive_int  # exclude lgamma poles at 0,-1,-2,...
+
+    input_tensor = input_tensor[mask]
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.lgamma)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.lgamma(tt_in)
+    result = ttnn.to_torch(tt_result)
+
+    assert_with_pcc(golden, result, 0.999)
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        (3, 4, 64, 32),
+        (128, 128),
+    ],
+)
+def test_lgamma_fp32(device, shapes):
+    torch.manual_seed(42)
+    torch_dtype = torch.float32
+    ttnn_dtype = ttnn.float32
+
+    x_torch = torch.empty(shapes, dtype=torch_dtype).uniform_(-5, 5)
+    z_torch = torch.lgamma(x_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.lgamma(x_tt)
+
+    tt_out = ttnn.to_torch(z_tt)
+
+    assert_with_pcc(z_torch, tt_out, 0.999)

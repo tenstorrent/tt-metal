@@ -139,7 +139,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         const auto& optional_output_tensor_shape = optional_output_tensor_c->logical_shape();
         TT_FATAL(
             optional_output_tensor_shape == output_tensor_spec.logical_shape(),
-            "Shape of Optional Output Tensor {} doesnt match Output Tensor {}",
+            "Shape of Optional Output Tensor {} doesn't match Output Tensor {}",
             optional_output_tensor_shape,
             output_tensor_spec.logical_shape());
         TT_FATAL(
@@ -154,8 +154,24 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             optional_output_tensor_c->memory_config(),
             attributes.output_mem_config);
     } else {
+        // Allow BLOCK_SHARDED on 1D grids to be converted to HEIGHT_SHARDED or WIDTH_SHARDED
+        bool memory_layout_compatible =
+            output_tensor_spec.memory_config().memory_layout() == attributes.output_mem_config.memory_layout();
+        if (!memory_layout_compatible &&
+            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+            attributes.output_mem_config.shard_spec().has_value()) {
+            auto grid_bbox = attributes.output_mem_config.shard_spec()->grid.bounding_box();
+            bool is_1d_column = (grid_bbox.end_coord.x == grid_bbox.start_coord.x);
+            bool is_1d_row = (grid_bbox.end_coord.y == grid_bbox.start_coord.y);
+            if ((is_1d_column &&
+                 output_tensor_spec.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) ||
+                (is_1d_row &&
+                 output_tensor_spec.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED)) {
+                memory_layout_compatible = true;
+            }
+        }
         TT_FATAL(
-            output_tensor_spec.memory_config().memory_layout() == attributes.output_mem_config.memory_layout(),
+            memory_layout_compatible,
             "Mismatch between computed {} and provided {} mem config memory layout",
             output_tensor_spec.memory_config().memory_layout(),
             attributes.output_mem_config.memory_layout());
@@ -164,8 +180,21 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             "Mismatch between computed {} and provided {} mem config buffer type",
             output_tensor_spec.memory_config().buffer_type(),
             attributes.output_mem_config.buffer_type());
+        // Don't warn when BLOCK_SHARDED on 1D grid is intentionally converted to HEIGHT/WIDTH_SHARDED
+        bool is_intentional_1d_conversion = false;
+        if (attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+            attributes.output_mem_config.shard_spec().has_value()) {
+            auto grid_bbox = attributes.output_mem_config.shard_spec()->grid.bounding_box();
+            bool is_1d_column = (grid_bbox.end_coord.x == grid_bbox.start_coord.x);
+            bool is_1d_row = (grid_bbox.end_coord.y == grid_bbox.start_coord.y);
+            bool is_single_core = is_1d_column && is_1d_row;
+            // Only 1D grids (not single-core) trigger intentional conversion
+            if (!is_single_core && (is_1d_column || is_1d_row)) {
+                is_intentional_1d_conversion = true;
+            }
+        }
         if (attributes.output_mem_config.shard_spec().has_value() &&
-            output_tensor_spec.memory_config() != attributes.output_mem_config) {
+            output_tensor_spec.memory_config() != attributes.output_mem_config && !is_intentional_1d_conversion) {
             log_warning(
                 tt::LogOp,
                 "Mismatch between computed {} and provided {} mem config. Using computed config.",
@@ -181,19 +210,6 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             get_batch_size(b_shape) == 1,
             "The batch bcast variant of matmul requires input tensors of shapes BCMK*11KN=BCMN "
             "or equivalent. Please change the second input tensor or adjust the program config.");
-    } else {
-        // same condition as above, different message
-        TT_FATAL(
-            a_shape.rank() == b_shape.rank() && "bmm (non-bcast matmul) expects input tensors of the same rank",
-            "Input tensors must have the same rank, got a_shape rank: {} vs b_shape rank: {}",
-            a_shape.rank(),
-            b_shape.rank());
-        for (auto i = 0; i < a_shape.rank() - 2; i++) {
-            TT_FATAL(
-                a_shape[i] == b_shape[i],
-                "bmm (non-bcast matmul) expects input tensors of shapes "
-                "BCMK*BCKN=BCMN or equivalent");
-        }
     }
 
     TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
@@ -216,6 +232,56 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         attributes.transpose_b,
         bias_single_tile_size,
         attributes);
+
+    // Validate batch dimensions for non-bcast matmul
+    if (!attributes.bcast_batch.value()) {
+        TT_FATAL(
+            a_shape.rank() == b_shape.rank() && "bmm (non-bcast matmul) expects input tensors of the same rank",
+            "Input tensors must have the same rank, got a_shape rank: {} vs b_shape rank: {}",
+            a_shape.rank(),
+            b_shape.rank());
+
+        // Check if in0 reuse optimization can be applied
+        // This optimization keeps input A (batch=1) in L1 and reuses it across all input B batches
+        // 1. Program config requirements: must use 1D mcast with specific settings
+        // 2. Shape requirements: must be rank-4 tensors (to ensure dim 1 is the batch dimension)
+        // 3. Batch dimension requirement: input A must have batch size 1 on dim 1
+        // 4. Memory layout requirement: inputs must not be sharded
+        auto can_use_in0_reuse = [&]() {
+            if (!std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
+                    chosen_program_config)) {
+                return false;
+            }
+            const auto& config =
+                std::get<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(chosen_program_config);
+            if (config.fuse_batch || config.fused_activation.has_value() || config.mcast_in0) {
+                return false;
+            }
+            if (a_shape.rank() != 4 || b_shape.rank() != 4) {
+                return false;
+            }
+            if (a_shape[1] != 1) {
+                return false;
+            }
+            if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
+                return false;
+            }
+            return true;
+        };
+
+        for (auto i = 0; i < a_shape.rank() - 2; i++) {
+            TT_FATAL(
+                a_shape[i] == b_shape[i] || (i == 1 && can_use_in0_reuse()),
+                "bmm (non-bcast matmul) expects input tensors of shapes "
+                "BCMK*BCKN=BCMN or batch dimension {} mismatch: a={} vs b={} (dimension mismatch only allowed on dim 1 "
+                "for rank-4 tensors when a[1]=1 and using MatmulMultiCoreReuseMultiCast1DProgramConfig with "
+                "fuse_batch=false, fused_activation=none, mcast_in0=false, and non-sharded inputs for in0 reuse "
+                "optimization)",
+                i,
+                a_shape[i],
+                b_shape[i]);
+        }
+    }
 
     if (std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
             chosen_program_config) &&
@@ -460,9 +526,19 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         }
                     }
                     if (attributes.output_mem_config.is_sharded()) {
+                        // Allow BLOCK_SHARDED on 1-row grids (equivalent to WIDTH_SHARDED)
+                        bool is_width_sharded =
+                            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
+                        bool is_block_sharded_1d_row = false;
+                        if (attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+                            attributes.output_mem_config.shard_spec().has_value()) {
+                            auto grid_bbox = attributes.output_mem_config.shard_spec()->grid.bounding_box();
+                            is_block_sharded_1d_row = (grid_bbox.end_coord.y == grid_bbox.start_coord.y);
+                        }
                         TT_FATAL(
-                            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
-                            "Error: Output memory layout must be WIDTH_SHARDED. Provided tensor memory layout: {}",
+                            is_width_sharded || is_block_sharded_1d_row,
+                            "Error: Output memory layout must be WIDTH_SHARDED or BLOCK_SHARDED on a 1-row grid. "
+                            "Provided tensor memory layout: {}",
                             attributes.output_mem_config.memory_layout());
                         const auto M = operations::matmul::utilities::get_M_dim(
                             a_shape_padded, in0_tile, program_config.fuse_batch);
@@ -532,9 +608,18 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             "Error: K must be equal to shard_shape[1] / in0_tile.get_width().");
                     }
                     if (attributes.output_mem_config.is_sharded()) {
+                        // Allow BLOCK_SHARDED on 1-column grids (equivalent to HEIGHT_SHARDED)
+                        bool is_height_sharded =
+                            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+                        bool is_block_sharded_1d_column = false;
+                        if (attributes.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+                            attributes.output_mem_config.shard_spec().has_value()) {
+                            auto grid_bbox = attributes.output_mem_config.shard_spec()->grid.bounding_box();
+                            is_block_sharded_1d_column = (grid_bbox.end_coord.x == grid_bbox.start_coord.x);
+                        }
                         TT_FATAL(
-                            attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-                            "Error: Output memory layout must be HEIGHT_SHARDED.");
+                            is_height_sharded || is_block_sharded_1d_column,
+                            "Error: Output memory layout must be HEIGHT_SHARDED or BLOCK_SHARDED on a 1-column grid.");
                         const auto N = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
                         uint32_t per_core_N = program_config.per_core_N;
 
@@ -793,9 +878,13 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             K);
                         uint32_t batches_per_bank = in1_shard_height_in_tiles / K;
                         uint32_t B = get_batch_size(b_shape_padded);
+                        // The kernel addresses batch b via: bank_id = b / batches_per_bank.
+                        // Total shard capacity (batches_per_bank * num_banks) must be >= B
+                        // to ensure all batches map to valid banks. It may exceed B when the
+                        // batch dimension is padded up to distribute evenly across banks.
                         TT_FATAL(
-                            batches_per_bank * num_banks == B,
-                            "HEIGHT_SHARDED input B: batches_per_bank ({}) * num_banks ({}) = {} must equal "
+                            batches_per_bank * num_banks >= B,
+                            "HEIGHT_SHARDED input B: batches_per_bank ({}) * num_banks ({}) = {} must be >= "
                             "batch size B ({})",
                             batches_per_bank,
                             num_banks,
@@ -1090,16 +1179,38 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         "per_core_N must be divisible by override output tile width");
                     auto mem_config = attributes.output_mem_config;
                     if (!program_config.gather_in0) {
-                        uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
-                        uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
-                        uint32_t num_cores = num_blocks_x * num_blocks_y;
-                        CoreRangeSet all_cores =
-                            num_cores_to_corerangeset(num_cores, program_config.compute_with_storage_grid_size, true);
-                        tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
-                            all_cores,
-                            {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
-                            ShardOrientation::ROW_MAJOR};
-                        mem_config = mem_config.with_shard_spec(shard_spec);
+                        // Check if BLOCK_SHARDED on 1D grid - if so, use user's shard spec with converted memory layout
+                        auto memory_layout = mem_config.memory_layout();
+                        bool is_block_sharded_1d = false;
+                        if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED && mem_config.shard_spec().has_value()) {
+                            auto grid_bbox = mem_config.shard_spec()->grid.bounding_box();
+                            bool is_1d_column = (grid_bbox.end_coord.x == grid_bbox.start_coord.x);
+                            bool is_1d_row = (grid_bbox.end_coord.y == grid_bbox.start_coord.y);
+                            is_block_sharded_1d = is_1d_column || is_1d_row;
+                        }
+
+                        if (is_block_sharded_1d) {
+                            // Use user's shard spec with converted memory layout
+                            auto user_shard_spec = mem_config.shard_spec().value();
+                            auto grid_bbox = user_shard_spec.grid.bounding_box();
+                            bool is_1d_column = (grid_bbox.end_coord.x == grid_bbox.start_coord.x);
+                            memory_layout =
+                                is_1d_column ? TensorMemoryLayout::HEIGHT_SHARDED : TensorMemoryLayout::WIDTH_SHARDED;
+                            mem_config =
+                                tt::tt_metal::MemoryConfig{memory_layout, mem_config.buffer_type(), user_shard_spec};
+                        } else {
+                            // Compute shard spec from per_core values
+                            uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
+                            uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
+                            uint32_t num_cores = num_blocks_x * num_blocks_y;
+                            CoreRangeSet all_cores = num_cores_to_corerangeset(
+                                num_cores, program_config.compute_with_storage_grid_size, true);
+                            tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
+                                all_cores,
+                                {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
+                                ShardOrientation::ROW_MAJOR};
+                            mem_config = mem_config.with_shard_spec(shard_spec);
+                        }
                     }
                     // support for multi-tensor output
                     const ttnn::TensorSpec tensor_spec(
@@ -1295,7 +1406,7 @@ MatmulDeviceOperation::tensor_return_value_t MatmulDeviceOperation::create_outpu
     return output_tensors;
 }
 
-tt::stl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& args) {
     const auto& input_tensors = args.input_tensors;
     const auto& input_tensor_a = input_tensors.at(0);
@@ -1308,13 +1419,13 @@ tt::stl::hash::hash_t MatmulDeviceOperation::compute_program_hash(
 
     for (const auto& optional_input_tensor : args.optional_input_tensors) {
         if (optional_input_tensor.has_value()) {
-            hash = tt::stl::hash::hash_objects(hash, optional_input_tensor.value());
+            hash = ttsl::hash::hash_objects(hash, optional_input_tensor.value());
         }
     }
 
     for (const auto& optional_output_tensor : args.optional_output_tensors) {
         if (optional_output_tensor.has_value()) {
-            hash = tt::stl::hash::hash_objects(hash, optional_output_tensor.value());
+            hash = ttsl::hash::hash_objects(hash, optional_output_tensor.value());
         }
     }
     return hash;

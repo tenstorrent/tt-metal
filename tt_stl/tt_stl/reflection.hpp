@@ -27,6 +27,7 @@
 #include <nlohmann/json.hpp>
 #include <enchantum/scoped.hpp>
 #include <tt_stl/type_name.hpp>
+#include <tt_stl/fmt.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 // NOLINTBEGIN(bugprone-multi-level-implicit-pointer-conversion)
@@ -348,7 +349,7 @@ std::ostream& operator<<(std::ostream& os, const std::pair<T1, T2>& pair) {
     return os;
 }
 
-static std::ostream& operator<<(std::ostream& os, const std::filesystem::path& path) {
+inline std::ostream& operator<<(std::ostream& os, const std::filesystem::path& path) {
     os << path.c_str();
     return os;
 }
@@ -515,6 +516,153 @@ typename std::enable_if_t<detail::supports_conversion_to_string_v<T>, std::ostre
     }
     return os;
 }
+
+template <typename T>
+struct count_object_of_type_t;
+
+template <typename object_t, typename T>
+std::size_t count_object_of_type(T&& object) {
+    return count_object_of_type_t<std::decay_t<T>>{}.template operator()<object_t>(std::forward<T>(object));
+}
+
+template <typename T>
+    requires(not ttsl::concepts::Reflectable<std::decay_t<T>>) and (not requires { std::decay_t<T>::attribute_names; })
+struct count_object_of_type_t<T> {
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    std::size_t operator()(T&& /*value*/) const {
+        return 1;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    std::size_t operator()(T&& /*value*/) const {
+        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
+    }
+
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    std::size_t operator()(const T& /*value*/) const {
+        return 1;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    std::size_t operator()(const T& /*value*/) const {
+        throw std::runtime_error(fmt::format("Unsupported visit of object of type: {}", get_type_name<T>()));
+    }
+};
+
+template <typename T>
+struct count_object_of_type_t<std::optional<T>> {
+    template <typename object_t>
+    std::size_t operator()(const std::optional<T>& value) const {
+        if (value.has_value()) {
+            return count_object_of_type<object_t>(value.value());
+        }
+        return 0;
+    }
+};
+
+template <typename T>
+struct count_object_of_type_t<std::vector<T>> {
+    template <typename object_t>
+    std::size_t operator()(const std::vector<T>& value) const {
+        std::size_t count = 0;
+        for (auto& tensor : value) {
+            count += count_object_of_type<object_t>(tensor);
+        }
+        return count;
+    }
+};
+
+template <typename T, auto N>
+struct count_object_of_type_t<std::array<T, N>> {
+    template <typename object_t>
+    std::size_t operator()(const std::array<T, N>& value) const {
+        std::size_t count = 0;
+        for (auto& tensor : value) {
+            count += count_object_of_type<object_t>(tensor);
+        }
+        return count;
+    }
+};
+
+template <typename... Ts>
+struct count_object_of_type_t<std::tuple<Ts...>> {
+    template <typename object_t>
+    std::size_t operator()(const std::tuple<Ts...>& value) const {
+        std::size_t count = 0;
+        [&count, &value]<size_t... Ns>(std::index_sequence<Ns...>) {
+            ((count += count_object_of_type<object_t>(std::get<Ns>(value))), ...);
+        }(std::make_index_sequence<sizeof...(Ts)>{});
+        return count;
+    }
+};
+
+template <typename T>
+    requires requires { std::decay_t<T>::attribute_names; }
+struct count_object_of_type_t<T> {
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    std::size_t operator()(T&& /*value*/) const {
+        return 1;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    std::size_t operator()(T&& object) const {
+        constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
+        return count_object_of_type<object_t>(object.attribute_values());
+    }
+
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    std::size_t operator()(const T& /*value*/) const {
+        return 1;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    std::size_t operator()(const T& object) const {
+        constexpr auto num_attributes = std::tuple_size_v<decltype(std::decay_t<T>::attribute_names)>;
+        return count_object_of_type<object_t>(object.attribute_values());
+    }
+};
+
+template <typename T>
+    requires ttsl::concepts::Reflectable<std::decay_t<T>>
+struct count_object_of_type_t<T> {
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    std::size_t operator()(T&& /*value*/) const {
+        return 1;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    std::size_t operator()(T&& object) const {
+        std::size_t count = 0;
+        reflect::for_each(
+            [&count, &object](auto I) { count += count_object_of_type<object_t>(reflect::get<I>(object)); }, object);
+        return count;
+    }
+
+    template <typename object_t>
+        requires std::same_as<std::decay_t<T>, object_t>
+    std::size_t operator()(const T& /*value*/) const {
+        return 1;
+    }
+
+    template <typename object_t>
+        requires(not std::same_as<std::decay_t<T>, object_t>)
+    std::size_t operator()(const T& object) const {
+        std::size_t count = 0;
+        reflect::for_each(
+            [&count, &object](auto I) { count += count_object_of_type<object_t>(reflect::get<I>(object)); }, object);
+        return count;
+    }
+};
 
 template <typename T>
 struct visit_object_of_type_t;
@@ -953,146 +1101,24 @@ std::ostream& operator<<(std::ostream& os, const SmallVector<T, PREALLOCATED_SIZ
 
 }  // namespace ttsl
 
-template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<ttsl::reflection::detail::supports_conversion_to_string_v<T>>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+// fmt::formatter specializations for standard containers, enums, filesystem::path,
+// and SmallVector are provided by the lightweight <tt_stl/fmt.hpp> header (included above)
+// so that translation units that only need formatting can avoid the heavy <reflect> and
+// <nlohmann/json.hpp> includes.
+//
+// The formatters below are for types that require the full reflection machinery.
 
-    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
+template <typename T>
+struct fmt::formatter<
+    T,
+    char,
+    std::enable_if_t<ttsl::reflection::detail::supports_conversion_to_string_v<T> && !ttsl::is_strong_type_v<T>>> {
+    constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const T& object, fmt::format_context& ctx) const -> fmt::format_context::iterator {
         using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << object;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<T, char, std::enable_if_t<std::is_enum_v<T>>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const T& value, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << value;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <>
-struct fmt::formatter<std::filesystem::path> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::filesystem::path& path, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << path;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<std::optional<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::optional<T>& optional, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << optional;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename... Ts>
-struct fmt::formatter<std::variant<Ts...>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::variant<Ts...>& variant, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << variant;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<std::reference_wrapper<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::reference_wrapper<T> reference, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << reference;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename... Ts>
-struct fmt::formatter<std::tuple<Ts...>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::tuple<Ts...>& tuple, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << tuple;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T, std::size_t N>
-struct fmt::formatter<std::array<T, N>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::array<T, N>& array, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << array;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<std::vector<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::vector<T>& vector, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << vector;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T>
-struct fmt::formatter<std::set<T>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::set<T>& set, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << set;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename K, typename V>
-struct fmt::formatter<std::map<K, V>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::map<K, V>& map, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << map;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename K, typename V>
-struct fmt::formatter<std::unordered_map<K, V>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const std::unordered_map<K, V>& map, format_context& ctx) const -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << map;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
@@ -1102,25 +1128,12 @@ template <typename T>
         ttsl::concepts::Reflectable<T> and
         not(std::integral<T> or std::is_array_v<T> or ttsl::reflection::detail::supports_conversion_to_string_v<T>))
 struct fmt::formatter<T> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
+    constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const T& object, format_context& ctx) const -> format_context::iterator {
+    auto format(const T& object, fmt::format_context& ctx) const -> fmt::format_context::iterator {
         using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << object;
-        return fmt::format_to(ctx.out(), "{}", ss.str());
-    }
-};
-
-template <typename T, size_t PREALLOCATED_SIZE>
-struct fmt::formatter<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    auto format(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vector, format_context& ctx) const
-        -> format_context::iterator {
-        using ttsl::reflection::operator<<;
-        std::stringstream ss;
-        ss << vector;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };

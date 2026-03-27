@@ -1,0 +1,2 @@
+put -r generated/tt-train-metrics/*.json
+ls -hal

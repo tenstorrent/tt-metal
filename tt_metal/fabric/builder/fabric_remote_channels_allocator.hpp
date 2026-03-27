@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstddef>
+#include <sstream>
 #include <vector>
 
 namespace tt::tt_fabric {
@@ -50,6 +51,12 @@ public:
      * @param ct_args Vector to append compile-time arguments to
      */
     void emit_ct_args(std::vector<uint32_t>& ct_args) const override;
+
+    /**
+     * Emit the complete ChannelAllocations CT arg block for remote receiver channels.
+     * Format: [tag] [num_entries] [per-entry data...] [receiver_to_entry_idx...]
+     */
+    void emit_channel_allocations_ct_args(std::vector<uint32_t>& ct_args, size_t num_used_receiver_channels) const;
 
     /**
      * Get the base address for a specific remote receiver channel in a specific VC.
@@ -101,7 +108,11 @@ public:
      * @return Total number of used receiver channels
      */
     size_t get_num_receiver_channels() const {
-        return num_used_receiver_channels_per_vc_[0] + num_used_receiver_channels_per_vc_[1];
+        size_t total = 0;
+        for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+            total += num_used_receiver_channels_per_vc_[vc];
+        }
+        return total;
     }
 
     /**
@@ -115,7 +126,7 @@ private:
         remote_receiver_channels_base_address_ = {};
     std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
         remote_receiver_channels_num_buffers_ = {};
-    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc_ = {0, 0};
+    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc_ = {};
 };
 
 inline void FabricRemoteChannelsAllocator::print(std::ostream& os) const {
@@ -136,3 +147,13 @@ inline void FabricRemoteChannelsAllocator::print(std::ostream& os) const {
 }
 
 }  // namespace tt::tt_fabric
+
+// fmt formatter specialization for FabricRemoteChannelsAllocator
+template <>
+struct fmt::formatter<tt::tt_fabric::FabricRemoteChannelsAllocator> : fmt::formatter<std::string> {
+    auto format(const tt::tt_fabric::FabricRemoteChannelsAllocator& allocator, fmt::format_context& ctx) const {
+        std::ostringstream stream;
+        stream << allocator;
+        return formatter<std::string>::format(stream.str(), ctx);
+    }
+};

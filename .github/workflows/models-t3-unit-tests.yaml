@@ -12,8 +12,18 @@ on:
           - all
           - llama3.2-1b
           - llama3.2-3b
+          - llama3.2-11b-vision
+          - falcon-7b
+          - falcon-40b
+          - qwen2.5-7b
+          - qwen2.5-72b
+          - qwen2.5-vl-32b
+          - qwq-32b
+          - phi-3-mini
+          - phi-4-mini
+          - mamba-2.8b
       sku:
-        description: "Select SKU to test"
+        description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
         default: "all"
         type: choice
@@ -21,6 +31,7 @@ on:
           - all
           - "wh_n150 (N150)"
           - "wh_n300 (N300)"
+          - "wh_llmbox_perf (T3000)"
       platform:
         required: false
         type: choice
@@ -45,6 +56,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access)"
 
 permissions:
   packages: write
@@ -59,7 +75,7 @@ jobs:
       - name: Resolve SKU selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox_perf"
           SKU_INPUT="${{ inputs.sku || 'all' }}"
           if [[ "$SKU_INPUT" == "all" ]]; then
             echo "enabled-skus=$ALL_SKUS" >> $GITHUB_OUTPUT
@@ -88,4 +104,5 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "3"

@@ -12,18 +12,16 @@
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt_stl/span.hpp>
 
 #include "tt_metal/impl/context/metal_context.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
-namespace tt::tt_metal::experimental::distributed {
+namespace tt::tt_metal::experimental::blitz {
 
 using ::tt::tt_metal::distributed::MeshCoordinate;
-using ::tt::tt_metal::distributed::MeshCoordinateRange;
-using ::tt::tt_metal::distributed::MeshDevice;
-namespace multihost = ::tt::tt_metal::distributed::multihost;
 
 namespace {
 
@@ -92,12 +90,10 @@ std::unordered_map<tt::tt_metal::AsicID, distributed::MeshCoordinate> get_asic_i
 PhysicalSystemDescriptor create_physical_system_descriptor() {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    constexpr bool run_discovery = true;
-    const auto& driver = cluster.get_driver();
+    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
 
-    return tt::tt_metal::PhysicalSystemDescriptor(driver, distributed_context, &hal, rtoptions, run_discovery);
+    return tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
 }
 
 std::vector<PhysicalPipelineStageConfig> generate_physical_pipeline_config() {
@@ -202,6 +198,137 @@ std::vector<PhysicalPipelineStageConfig> generate_physical_pipeline_config() {
                  .exit_node_asic_location = 6},
             };
 
+        case 32:
+            return {
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                // jump to pod 3
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 7},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 2,
+                 .entry_node_asic_location = 6,
+                 .exit_node_asic_location = 5},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 5,
+                 .exit_node_asic_location = 6},
+                {.entry_node_tray_id = 1,
+                 .exit_node_tray_id = 1,
+                 .entry_node_asic_location = 7,
+                 .exit_node_asic_location = 8},
+                {.entry_node_tray_id = 2,
+                 .exit_node_tray_id = 4,
+                 .entry_node_asic_location = 8,
+                 .exit_node_asic_location = 4}};
         case 64:
             return {
                 {.entry_node_tray_id = 2,
@@ -509,4 +636,4 @@ std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(const distr
     return build_pipeline(physical_system_descriptor, asic_id_to_mesh_coord);
 }
 
-}  // namespace tt::tt_metal::experimental::distributed
+}  // namespace tt::tt_metal::experimental::blitz

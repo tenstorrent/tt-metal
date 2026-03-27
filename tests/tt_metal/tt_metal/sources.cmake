@@ -24,11 +24,15 @@ set(UNIT_TESTS_LEGACY_SRC
     test_multi_core_kernel.cpp
     test_multi_dm_add_two_ints.cpp
     test_multiple_programs.cpp
+    test_pack_relu.cpp
     test_quasar_compute_kernels.cpp
+    test_quasar_semaphores.cpp
     test_sdpa_reduce_c.cpp
     test_single_dm_l1_write.cpp
     test_stress_noc_mcast.cpp
     test_transpose_hc.cpp
     test_untilize_eltwise_binary.cpp
     test_unaligned_read_write_core.cpp
+    test_riscv_atomics.cpp
+    test_globals_tls.cpp
 )

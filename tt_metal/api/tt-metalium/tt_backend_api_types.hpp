@@ -61,6 +61,7 @@ constexpr static uint32_t datum_size(const DataFormat& format) {
         case DataFormat::Float16_b: return 2;
         case DataFormat::Float32: return 4;
         case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
+        case DataFormat::Fp8_e4m3:
         case DataFormat::Int8:
         case DataFormat::Lf8:
         case DataFormat::UInt8:
@@ -96,6 +97,7 @@ constexpr static uint32_t tile_size(const DataFormat& format) {
         case DataFormat::Float16_b: return (1024 * 2);
         case DataFormat::Float32: return (1024 * 4);
         case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
+        case DataFormat::Fp8_e4m3:
         case DataFormat::Int8:
         case DataFormat::Lf8:
         case DataFormat::UInt8:

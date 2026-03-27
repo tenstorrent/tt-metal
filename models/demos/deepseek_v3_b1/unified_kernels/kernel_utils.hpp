@@ -67,8 +67,8 @@ FORCE_INLINE void setup_sharded_buffer(uint32_t cb_id, uint32_t num_tiles) {
 }
 
 // Atomic semaphore decrement (for global semaphore reset across iterations)
-FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) {
-    __atomic_fetch_sub(sem_addr, 1, __ATOMIC_RELAXED);
+FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val = 1) {
+    __atomic_fetch_sub(sem_addr, val, __ATOMIC_RELAXED);
 }
 
 #endif
@@ -91,6 +91,9 @@ FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) {
 // Phase 1: BR/TR0/TR2 signal done → NC waits for all 3
 FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
 #if defined(COMPILE_FOR_BRISC) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+    tensix_sync();
+#endif
     __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
 #elif defined(COMPILE_FOR_NCRISC)
     while (__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) < 3) {
@@ -111,6 +114,19 @@ FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
 }
 
 // ============================================================================
+// CB read-pointer utilities (TRISC only)
+// ============================================================================
+
+#if defined(COMPILE_FOR_TRISC)
+
+// Override a CB's read pointer to a byte address (converted to cb_addr_shift units).
+FORCE_INLINE void override_cb_rd_ptr(uint32_t cb_id, uint32_t byte_address) {
+    get_local_cb_interface(cb_id).fifo_rd_ptr = byte_address >> cb_addr_shift;
+}
+
+#endif  // COMPILE_FOR_TRISC
+
+// ============================================================================
 // CB reconfig utilities
 // ============================================================================
 
@@ -127,7 +143,7 @@ FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
 //   NCRISC/BRISC:  read=true,  write=true
 //   TRISC0/unpack: read=true,  write=false
 //   TRISC2/pack:   read=false, write=true
-template <bool do_read, bool do_write, bool do_reset_stream_regs>
+template <bool do_read, bool do_write, bool do_write_tile_ptr, bool do_reset_stream_regs>
 FORCE_INLINE void reconfig_cbs_for_mask(uint32_t tt_l1_ptr* cb_config, uint32_t mask, uint32_t start_cb) {
     uint32_t cb = start_cb;
     while (mask) {
@@ -146,6 +162,9 @@ FORCE_INLINE void reconfig_cbs_for_mask(uint32_t tt_l1_ptr* cb_config, uint32_t 
                 iface.fifo_wr_ptr = fifo_addr;
                 iface.fifo_num_pages = fifo_num_pages;
             }
+            if constexpr (do_write_tile_ptr) {
+                iface.fifo_wr_tile_ptr = 0;
+            }
             iface.fifo_size = fifo_size;
             iface.fifo_limit = fifo_addr + fifo_size;
             iface.fifo_page_size = fifo_page_size;
@@ -162,35 +181,57 @@ FORCE_INLINE void reconfig_cbs_for_mask(uint32_t tt_l1_ptr* cb_config, uint32_t 
 }
 
 FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* cb_config) {
+#if defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_BRISC) or defined(UCK_CHLKC_UNPACK) or defined(UCK_CHLKC_PACK)
 #if defined(COMPILE_FOR_NCRISC)
     constexpr bool do_read = true;
     constexpr bool do_write = true;
+    constexpr bool do_write_tile_ptr = false;
     constexpr bool do_reset_stream_regs = true;
 #elif defined(COMPILE_FOR_BRISC)
     constexpr bool do_read = true;
     constexpr bool do_write = true;
+    constexpr bool do_write_tile_ptr = false;
     constexpr bool do_reset_stream_regs = false;
 #elif defined(UCK_CHLKC_UNPACK)
     constexpr bool do_read = true;
     constexpr bool do_write = false;
+    constexpr bool do_write_tile_ptr = false;
     constexpr bool do_reset_stream_regs = false;
 #elif defined(UCK_CHLKC_PACK)
     constexpr bool do_read = false;
     constexpr bool do_write = true;
-    constexpr bool do_reset_stream_regs = false;
-#else
-    constexpr bool do_read = false;
-    constexpr bool do_write = false;
+    constexpr bool do_write_tile_ptr = true;
     constexpr bool do_reset_stream_regs = false;
 #endif
 
     volatile uint32_t tt_l1_ptr* reconfig_sem = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(&cb_config[258]);
     sync_riscs_enter(reconfig_sem);
 
-    reconfig_cbs_for_mask<do_read, do_write, do_reset_stream_regs>(cb_config, cb_config[256], 0);
-    reconfig_cbs_for_mask<do_read, do_write, do_reset_stream_regs>(cb_config, cb_config[257], 32);
+    reconfig_cbs_for_mask<do_read, do_write, do_write_tile_ptr, do_reset_stream_regs>(cb_config, cb_config[256], 0);
+    reconfig_cbs_for_mask<do_read, do_write, do_write_tile_ptr, do_reset_stream_regs>(cb_config, cb_config[257], 32);
 
     sync_riscs_exit(reconfig_sem);
+#else
+    return;
+#endif
 }
+
+#if defined(COMPILE_FOR_TRISC)
+// Helper functions to manipulate CB read pointer (from bmm_large_block_zm_fused_bias_activation_gathered.cpp)
+FORCE_INLINE uint32_t get_local_cb_rd_ptr(uint32_t cb_id) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    return local_cb.fifo_rd_ptr;
+}
+
+FORCE_INLINE uint32_t get_local_cb_page_size(uint32_t cb_id) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    return local_cb.fifo_page_size;
+}
+
+FORCE_INLINE void update_local_cb_rd_ptr(uint32_t cb_id, uint32_t val) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    local_cb.fifo_rd_ptr = val;
+}
+#endif
 
 }  // namespace unified_kernels

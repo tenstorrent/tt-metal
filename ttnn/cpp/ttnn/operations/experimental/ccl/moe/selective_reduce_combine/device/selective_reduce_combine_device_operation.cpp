@@ -9,12 +9,40 @@
 #include "selective_reduce_combine_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::experimental::prim {
 
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
+
+    const auto num_devices = token_activations_tensor.device()->get_view().num_devices();
+
+    const auto experts = operation_attributes.experts;
+    const auto batch_size = operation_attributes.batch_size;
+    const auto seq_size = operation_attributes.seq_size;
+    const auto total_tokens = batch_size * seq_size;
+
+    const auto experts_per_device = experts / num_devices;
+
+    const uint32_t activations_stride_elm = token_activations_tensor.logical_shape()[-1] / total_tokens;
+
+    const auto datum_size =
+        tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(token_activations_tensor.dtype()));
+
+    const auto alignment = (token_activations_tensor.memory_config().buffer_type() == BufferType::L1)
+                               ? tt::tt_metal::hal::get_l1_alignment()
+                               : tt::tt_metal::hal::get_dram_alignment();
+    const uint32_t expected_activations_stride_elm =
+        tt::align((2 * experts_per_device + 1) * datum_size, alignment) / datum_size;
+
+    TT_FATAL(
+        activations_stride_elm == expected_activations_stride_elm,
+        "The token activations tensor is expected to have aligned 2 * experts_per_device + 1 elements per token");
+}
 
 SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -28,17 +56,13 @@ SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombin
 
     const uint32_t batch_size = operation_attributes.batch_size;
     const uint32_t seq_size = operation_attributes.seq_size;
-
-    const uint32_t experts = operation_attributes.experts;
+    const uint32_t select_experts_k = operation_attributes.select_experts_k;
 
     const auto& axis = operation_attributes.axis;
     const auto num_devices_cluster = (axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    const auto num_clusters = (axis.value() == 1) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     const uint32_t total_tokens_per_device = batch_size * seq_size / num_devices_cluster;
-    const uint32_t experts_per_cluster = experts / num_clusters;
-
-    auto output_shape = ttnn::Shape({experts_per_cluster, total_tokens_per_device, hidden_size});
+    auto output_shape = ttnn::Shape({select_experts_k, total_tokens_per_device, hidden_size});
 
     auto mem_config = operation_attributes.output_memory_config;
     return TensorSpec(
@@ -58,7 +82,7 @@ SelectiveReduceCombineDeviceOperation::create_output_tensors(
 namespace ttnn::prim {
 ttnn::Tensor selective_reduce_combine(
     const ttnn::Tensor& dense_input_tensor,
-    const ttnn::Tensor& dense_metadata_tensor,
+    const ttnn::Tensor& dense_activations_tensor,
     const ttnn::Tensor& dense_token_maps_tensor,
     const ttnn::Tensor& dense_token_counts_tensor,
     uint32_t hidden_size,
@@ -96,7 +120,7 @@ ttnn::Tensor selective_reduce_combine(
             .optional_cross_device_semaphore = optional_cross_device_semaphore},
         OperationType::tensor_args_t{
             .dense_input_tensor = dense_input_tensor,
-            .dense_metadata_tensor = dense_metadata_tensor,
+            .dense_activations_tensor = dense_activations_tensor,
             .dense_token_maps_tensor = dense_token_maps_tensor,
             .dense_token_counts_tensor = dense_token_counts_tensor,
             .optional_output_tensor = optional_output_tensor});

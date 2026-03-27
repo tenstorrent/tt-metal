@@ -384,7 +384,8 @@ jobs:
       - cloud-virtual-machine
       # Targeting cloud machines with pipeline-functional per now per
       # https://github.com/tenstorrent/tt-metal/issues/21738#issuecomment-2925788342
-      - pipeline-functional
+      # Run P100 on baremetal to try and workaround https://github.com/tenstorrent/tt-umd/issues/1582
+      - ${{ matrix.bh-card == 'P100' && 'pipeline-perf' || 'pipeline-functional' }}
     steps:
       - name: Run image
         timeout-minutes: 40
@@ -407,6 +408,12 @@ jobs:
         run: |
           docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent \
             ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+      - name: Run stress test (P150 only)
+        if: ${{ matrix.bh-card == 'P150' }}
+        timeout-minutes: 30
+        run: |
+          docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent \
+            ${{ needs.get-image-tags.outputs.bh-image-tag }} blackhole_ttnn_stress_tests
   calculate-to-publish:
     if: ${{ !cancelled() }}
     needs:

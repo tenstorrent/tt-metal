@@ -2,13 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import pytest
 import torch
-import math
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.matmul.test_matmul_deepseek import _run_matmul_2d_interleaved_in0_sharded_in1
 
 
 @pytest.mark.parametrize(
@@ -189,3 +188,75 @@ def test_sdxl_matmul(
     if not perf_test_mode:
         output_tensor = ttnn.to_torch(output_tensor)
         assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
+
+
+@pytest.mark.parametrize("batch", [1, 25])
+@pytest.mark.parametrize("seq_len", [63, 5000])
+@pytest.mark.parametrize("k", [63, 32])
+@pytest.mark.parametrize("n", [63, 32])
+@pytest.mark.parametrize("num_dram_banks", [8, 9, 11, 12])
+@pytest.mark.timeout(120)
+def test_matmul_2d_interleaved_sharded_dimension_sweep(device, batch, seq_len, k, n, num_dram_banks):
+    """
+    Sweep test for 2D matmul with DRAM interleaved in0 and DRAM sharded in1
+    across various tensor dimension combinations and DRAM bank counts.
+    Exercises both batched (HEIGHT sharded) and unbatched (WIDTH sharded) paths.
+    """
+    _run_matmul_2d_interleaved_in0_sharded_in1(
+        device=device,
+        batch=batch,
+        seq_len=seq_len,
+        k=k,
+        n=n,
+        in0_dtype=ttnn.bfloat16,
+        in1_dtype=ttnn.bfloat8_b,
+        out_dtype=ttnn.bfloat16,
+        has_bias=False,
+        num_dram_banks=num_dram_banks,
+        expected_pcc=0.99,
+    )
+
+
+@pytest.mark.parametrize(
+    "batch, seq_len, k, n, num_dram_banks",
+    [
+        (1, 512, 128, 128, 12),
+    ],
+)
+@pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
+@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32])
+@pytest.mark.parametrize(
+    "has_bias, bias_dtype",
+    [
+        (False, None),
+        (True, ttnn.bfloat16),
+        (True, ttnn.bfloat8_b),
+        (True, ttnn.float32),
+    ],
+)
+@pytest.mark.timeout(120)
+def test_matmul_2d_interleaved_sharded_dtype_bias_sweep(
+    device, batch, seq_len, k, n, num_dram_banks, in0_dtype, in1_dtype, out_dtype, has_bias, bias_dtype
+):
+    """
+    Sweep test for 2D matmul with DRAM interleaved in0 and DRAM sharded in1
+    across various data type combinations for inputs, outputs, and bias,
+    restricted to batch == 1 so that ttnn.Linear() can be used with bias.
+    """
+    expected_pcc = 0.99
+
+    _run_matmul_2d_interleaved_in0_sharded_in1(
+        device=device,
+        batch=batch,
+        seq_len=seq_len,
+        k=k,
+        n=n,
+        in0_dtype=in0_dtype,
+        in1_dtype=in1_dtype,
+        out_dtype=out_dtype,
+        has_bias=has_bias,
+        bias_dtype=bias_dtype if has_bias else None,
+        num_dram_banks=num_dram_banks,
+        expected_pcc=expected_pcc,
+    )

@@ -180,7 +180,7 @@ void AllReduceCreateQkvHeadsDeviceOperation::validate_on_program_cache_miss(
     // 1 User Per Core Max and 32 users for now
     TT_FATAL(
         num_cores >= 2 * num_users,
-        "Input coregrid size is {}. Need cores atleast double of num_users={} for decode when q and k heads are not "
+        "Input coregrid size is {}. Need cores at least double of num_users={} for decode when q and k heads are not "
         "overlapping coregrid",
         num_cores,
         num_users);
@@ -272,7 +272,7 @@ AllReduceCreateQkvHeadsDeviceOperation::create_output_tensors(
         .v = create_device_tensor(output_specs.v, device)};
 }
 
-tt::stl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto input_shape = input_tensor.padded_shape();

@@ -91,6 +91,10 @@ fabric:
     wh_galaxy: 100
     bh_galaxy: 60
 
+shield:
+  e2e:
+    wh_llmbox: 45
+
 scaleout:
   e2e:
     wh_llmbox: 20
@@ -101,13 +105,13 @@ scaleout:
 
 models:
   e2e:
-    wh_llmbox: 180
-    wh_llmbox_perf: 60
+    wh_llmbox: 198
+    wh_llmbox_perf: 90
     wh_n150: 30
     wh_n300: 30
     wh_galaxy: 30
   unit:
-    wh_llmbox: 296
+    wh_llmbox: 320
     wh_llmbox_perf: 60
     wh_n150: 30
     wh_n300: 30
@@ -117,11 +121,19 @@ models:
   perf:
     wh_llmbox_perf: 685
     wh_galaxy: 280
+    wh_galaxy_perf: 150
+  device_perf:
+    wh_n150: 100
+    bh_p150: 100
+    bh_p300: 100
+
   demo:
     wh_llmbox_perf: 1090
     wh_llmbox_perf_release: 1090
-    wh_galaxy: 287
+    wh_galaxy: 0
+    wh_galaxy_perf: 279
     wh_galaxy_release: 345
+    bh_galaxy: 30
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
@@ -129,6 +141,13 @@ models:
     wh_n300_perf: 200
     bh_p150: 250
     bh_p150_perf: 420
+    bh_p150b_civ2: 250
+    bh_deskbox: 250
     bh_llmbox: 1200
     bh_loudbox: 1200
     bh_p300: 800
+    bh_quietbox_2: 250
+  sweep:
+    wh_n150: 15
+    wh_llmbox_perf: 30
+    wh_galaxy: 30

@@ -272,6 +272,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)in0_block_h,          // in0_block_h
         (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
         (std::uint32_t)in0_last_ktile_w,
+        (std::uint32_t)0,  // in0_last_ktile_h (transpose not supported for sparse)
 
         (std::uint32_t)false,  // extract_shard_sub_blocks (not used for interleaved)
         (std::uint32_t)0,      // shard_width_in_tiles (not used for interleaved)
@@ -287,6 +288,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)in0_mcast_receiver_num_cores - 1,  // in0_mcast_num_cores
         // batch args
         (std::uint32_t)Mt * Kt,  // MtKt
+        (std::uint32_t)batchA,   // batchA
         (std::uint32_t)batchA,   // batchA
         // sparsity args
         (std::uint32_t)batchB,                                  // batchB
