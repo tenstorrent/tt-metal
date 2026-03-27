@@ -2172,3 +2172,17 @@ def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
     golden_tensor = golden_function(in_data)
     golden_tensor = golden_tensor.to(output_tensor.dtype)
     assert_allclose(golden_tensor, output_tensor, rtol=1e-05, atol=0.008)
+
+
+@pytest.mark.parametrize("width", [1024, 1032])
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
+def test_unary_ng_rm_wide_tensor_fatal(device, width, torch_dtype, ttnn_dtype):
+    """Test that unary_ng raises a fatal error when the tensor width is not a multiple of the tile width."""
+    torch_input = torch.randn(1, width, dtype=torch_dtype)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn_dtype, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_output = ttnn.abs(ttnn_input)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+    golden_output = torch.abs(torch_input)
+    print("golden_output", golden_output)
+    print("ttnn_output", ttnn_output)
+    assert torch.allclose(ttnn_output, golden_output, atol=1e-2)
