@@ -11,6 +11,7 @@ on:
         options:
           - all
           - module
+          - perf
         default: 'all'
       platform:
         required: false
