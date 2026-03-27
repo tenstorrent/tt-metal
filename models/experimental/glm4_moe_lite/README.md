@@ -12,64 +12,27 @@
 
 ```
 models/experimental/glm4_moe_lite/
-├── README.md                                   # This file
-├── tt/
-│   ├── model_tt.py                             # Top-level model runner (prefill, decode, trace)
-│   ├── decoder_layer_tt.py                     # Decoder layer (attention + MLP/MoE)
-│   ├── attention_decode.py                     # Decode-mode attention (Q projection, FlashMLA, output)
-│   ├── mlp_decode.py                           # Shared MLP + MoE forwarding
-│   ├── moe_tt.py                               # MoE implementation (sparse, dense, packed, fused)
-│   ├── layer_weights.py                        # Weight conversion (torch → TT)
-│   ├── linear_helpers.py                       # Linear op helpers (TP, matmul configs)
-│   ├── config.py                               # Hyperparameters (HParams)
-│   ├── runtime_config.py                       # Runtime feature-flag config (env vars)
-│   ├── decode_trace_state.py                   # Trace state management for decode
-│   ├── layer0_tt.py                            # Layer-0 isolated implementation
-│   ├── reference_layer0.py                     # Reference (torch) layer-0 for PCC
-│   ├── reference_moe.py                        # Reference (torch) MoE for PCC
-│   ├── tt_embedding.py                         # Token embedding (TT)
-│   ├── weights.py                              # Weight loading / caching
-│   ├── debug_runtime.py                        # Debug helpers
-│   ├── mtp_forward.py                          # Multi-token prediction (MTP) forward
-│   └── generator_vllm.py                       # vLLM backend integration
-├── fused_ops/
-│   ├── kv_cache_branch/
-│   │   ├── op.py                               # GLMKVCacheBranch op (DKV+RMSNorm+RoPE fused)
-│   │   └── kernels/
-│   │       ├── kv_cache_branch_kernel.cpp      # Compute kernel
-│   │       ├── matmul_wormhole.hpp             # Matmul helpers
-│   │       └── rmsnorm_wormhole.hpp            # RMSNorm helpers
-│   └── pre_sdpa/
-│       ├── op.py                               # Pre-SDPA fused op
-│       └── kernels/
-│           ├── pre_sdpa_kernel.cpp             # Compute kernel
-│           ├── wormhole_matmul.hpp
-│           ├── wormhole_mcast.hpp
-│           └── wormhole_rmsnorm.hpp
-├── scripts/
-│   ├── debug_run_full_tt_greedy.py             # Main debug/benchmark script
-│   └── run_sweep_isl_batch.py                  # ISL × batch sweep automation
-└── tests/
-    ├── test_real_model_optional.py             # End-to-end model PCC test
-    ├── test_reference_layer0.py                # Layer-0 reference test
-    ├── test_reference_moe_layer1_optional.py   # MoE layer-1 reference test
-    ├── test_pre_sdpa_kernel.py                 # Pre-SDPA fused kernel test
-    ├── test_flash_mla_decode_boundary_optional.py
-    ├── test_tt_layer0_optional.py
-    ├── test_tt_layer0_decode_optional.py
-    ├── test_tt_layer0_decode_unpaged_optional.py
-    ├── test_tt_layer0_decode_batch32_optional.py
-    ├── test_tt_layer0_decode_update_cache_optional.py
-    ├── test_tt_decoder_layer0_decode_update_cache_optional.py
-    ├── test_tt_decoder_layer0_prefill_update_cache_optional.py
-    ├── test_tt_golden_truncated_n2_optional.py
-    ├── test_tt_moe_layer1_optional.py
-    ├── test_tt_moe_layer1_mesh_optional.py
-    ├── test_tt_embedding_optional.py
-    └── test_weights.py
+├── tt/                        # Core model implementation
+│   ├── model_tt.py            #   Top-level runner (prefill, decode, trace)
+│   ├── decoder_layer_tt.py    #   Decoder layer (attention + MLP/MoE)
+│   ├── attention_decode.py    #   Decode attention (Q proj, FlashMLA, output)
+│   ├── mlp_decode.py          #   Shared MLP + MoE forwarding
+│   ├── moe_tt.py              #   MoE (sparse, dense, packed)
+│   ├── layer_weights.py       #   Weight conversion (torch → TT)
+│   ├── config.py              #   Hyperparameters
+│   ├── runtime_config.py      #   Env-var feature flags
+│   ├── weights.py             #   Weight loading / caching
+│   └── ...                    #   linear_helpers, embedding, trace, refs, vLLM
+├── fused_ops/                 # Custom device kernels
+│   ├── kv_cache_branch/       #   DKV + RMSNorm + RoPE fused kernel
+│   └── pre_sdpa/              #   Pre-SDPA fused kernel
+├── scripts/                   # Run & sweep scripts
+│   ├── debug_run_full_tt_greedy.py   # Single-run debug / benchmark
+│   └── run_sweep_isl_batch.py        # ISL × batch sweep
+└── tests/                     # PCC & integration tests (17 files)
 ```
 
-> **Note:** The `experiments/` directory (sweep results, plots, profiler scripts) is excluded from git via `.gitignore` and lives only on the local machine.
+> `experiments/` (sweep results, plots, profiler scripts) is git-ignored — local only.
 
 ---
 
