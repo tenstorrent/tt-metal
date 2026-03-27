@@ -40,7 +40,12 @@ void kernel_main() {
             // in this case we just sequentially add to accumulator all the W-tiles in a row
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 // Negate input tile: cb_input -> -x -> cb_ineg
-                compute_kernel_lib::sfpu_op<cb_input>(cb_ineg, 1, compute_kernel_lib::Neg<>{});
+                // OUTPUT reconfig needed: packer was configured for cb_output/cb_acc by startup/reduce
+                compute_kernel_lib::sfpu_op<
+                    cb_input,
+                    compute_kernel_lib::SfpuInputPolicy::WaitAndPopPerTile,
+                    compute_kernel_lib::SfpuOutputPolicy::PerTile,
+                    compute_kernel_lib::SfpuDataFormatReconfig::OUTPUT>(cb_ineg, 1, compute_kernel_lib::Neg<>{});
 
                 acquire_dst();
                 if (wt > 0 || ht > 0) {
@@ -65,6 +70,7 @@ void kernel_main() {
         }  // ht
 
         // Negate accumulated result: cb_acc -> -acc -> cb_output
+        // INPUT_AND_OUTPUT (default): reduce left unpacker/packer on different CBs
         compute_kernel_lib::sfpu_op<cb_acc>(cb_output, 1, compute_kernel_lib::Neg<>{});
     }  // nc
 }
