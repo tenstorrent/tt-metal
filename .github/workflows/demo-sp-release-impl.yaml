@@ -122,6 +122,12 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
+          # Source T3K test scripts if needed (for run_t3000_* functions)
+          if [[ "${{ matrix.test-group.cmd }}" == *"run_t3000"* ]]; then
+            source tests/scripts/t3000/run_t3000_demo_tests.sh
+            source tests/scripts/t3000/run_t3000_perf_tests.sh
+            source tests/scripts/t3000/run_t3000_integration_tests.sh
+          fi
           echo "${{ matrix.test-group.cmd }}"
           ${{ matrix.test-group.cmd }}
       - name: Save environment data
