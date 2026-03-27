@@ -528,13 +528,8 @@ def run_ring_joint_sdpa(
     ],
 )
 @pytest.mark.parametrize("n_iters", [1, 3], ids=["single_run", "determinism_check"])
-@pytest.mark.parametrize(
-    "trace_enabled, skip_check",
-    [
-        (False, False),
-    ],
-    ids=["no_trace"],
-)
+@pytest.mark.parametrize("trace_enabled", [False], ids=["no_trace"])
+@pytest.mark.parametrize("skip_check", [True, False], ids=["skip_pcc", "pcc_check"])
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
