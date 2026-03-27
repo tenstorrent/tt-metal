@@ -254,4 +254,20 @@ ALWI void pack_rows_uninit() {
 #endif  // TODO: AM; add Quasar implementation
 }
 
+/**
+ * Configures packer ReLU activation at runtime.
+ *
+ * The packed config encodes the ReLU mode in bits [1:0] and a bfloat16
+ * threshold in bits [31:16].
+ *
+ * Return value: None
+ *
+ * | Param Type | Name   | Description                                          | Type     | Valid Range | Required |
+ * |------------|--------|------------------------------------------------------|----------|-------------|----------|
+ * | Function   | config | Packed ReLU config (mode in [1:0], threshold [31:16])| uint32_t | Any         | True     |
+ */
+ALWI void pack_relu_config(const uint32_t config) {
+    PACK((llk_pack_relu_config(config)));
+}
+
 }  // namespace ckernel
