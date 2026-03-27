@@ -150,7 +150,6 @@ struct Matmul {
                 // Per-tile: matmul -> activation on PACK -> pack
                 for (uint32_t w = 0; w < out_w; w++) {
                     tile_regs_acquire();
-                    custom_mm_block_zero_dest();
 
                     custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, w * args.k_num_tiles, 0, args.k_num_tiles);
 
@@ -181,7 +180,6 @@ struct Matmul {
             } else {
                 // Batch processing - all tiles at once
                 tile_regs_acquire();
-                custom_mm_block_zero_dest();
 
                 custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
 

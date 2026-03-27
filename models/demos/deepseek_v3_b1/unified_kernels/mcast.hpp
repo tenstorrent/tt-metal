@@ -342,47 +342,6 @@ struct Mcast {
         }
 
         // ====================================================================
-        // restore_noc_state - Re-apply persistent cmd_buf register config
-        // Call this if anything between iterations clobbers write_cmd_buf
-        // (e.g. noc_write_init_state<write_cmd_buf> in deferred socket send).
-        // Only restores NOC_CTRL / coordinates; does NOT send semaphores.
-        // ====================================================================
-        void restore_noc_state([[maybe_unused]] const RTArgs& args) {
-#if defined(COMPILE_FOR_BRISC)
-            if constexpr (IsSenderCore) {
-                uint64_t mcast_flag_noc_addr = get_noc_multicast_addr<noc_index>(
-                    args.dest_noc_start_x,
-                    args.dest_noc_start_y,
-                    args.dest_noc_end_x,
-                    args.dest_noc_end_y,
-                    (uint64_t)(args.data_receiver_semaphore_addr));
-                mcast_send_set_state<
-                    CTArgsT::mcast_num_cores,
-                    CTArgsT::loopback,
-                    CTArgsT::is_part_of_receiver_grid,
-                    linked,
-                    posted,
-                    true,
-                    false,
-                    false,
-                    write_cmd_buf>(0, mcast_flag_noc_addr, 0);
-                if constexpr (!mcast_is_shared_write_cmd_buf) {
-                    mcast_send_set_state<
-                        CTArgsT::mcast_num_cores,
-                        CTArgsT::loopback,
-                        CTArgsT::is_part_of_receiver_grid,
-                        linked,
-                        posted,
-                        true,
-                        true,
-                        true,
-                        write_reg_cmd_buf>(args.data_sender_semaphore_addr, mcast_flag_noc_addr, 4);
-                }
-            }
-#endif
-        }
-
-        // ====================================================================
         // operator() - Send data via mcast (BRISC sender) / Full receive logic (NCRISC receiver)
         // For BRISC: Must call init() first, waits for src CB, sends data
         // For NCRISC: Reserve CB, wait for semaphore, push CB (complete receive)

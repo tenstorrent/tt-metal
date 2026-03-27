@@ -325,20 +325,20 @@ struct Broadcast {
                     DPRINT << "<fc2" << ENDL();
 
                 } else {
-                    DPRINT << ">fc3" << ENDL();
+                    DPRINT << ">fc3st" << ENDL();
                     // Receiver: wait for data from broadcaster
                     if (args.wait_output_semaphore) {
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
                     }
-                    DPRINT << ">fc3 mid" << ENDL();
+                    DPRINT << ">fc3mid" << ENDL();
                     // Reset global semaphore
                     if (args.reset_global_semaphore) {
                         unified_kernels::semaphore_dec(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
-                    DPRINT << "<fc3" << ENDL();
+                    DPRINT << "<fc3d" << ENDL();
                 }
                 if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
                     close_connections(fabric_connection);

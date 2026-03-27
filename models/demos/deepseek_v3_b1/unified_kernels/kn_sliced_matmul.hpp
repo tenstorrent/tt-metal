@@ -125,7 +125,6 @@ struct KNSlicedMatmul {
             cb_reserve_back(args.out_cb, out_w);
 
             tile_regs_acquire();
-            custom_mm_block_zero_dest();
             custom_mm_block<finalize, false>(args.act_cb, args.weights_cb, args.k_offset, 0, 0, args.k_per_core, out_w);
             tile_regs_commit();
 
