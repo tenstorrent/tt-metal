@@ -45,6 +45,7 @@ def _assert_no_garbage_tokens(results: dict) -> None:
     if failures:
         pytest.fail("Garbage tokens detected during demo:\n" + "\n".join(failures))
 
+
 def _demo_case(
     *,
     max_prompts: int,
