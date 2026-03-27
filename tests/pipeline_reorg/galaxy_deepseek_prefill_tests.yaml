@@ -17,8 +17,8 @@
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py -k mesh-8x4-3200_pcc
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE='10,9' pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE='10,9' pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py -k mesh-8x4-3200_pcc --timeout==900
   test_type: module
   skus:
     bh_galaxy:
@@ -32,7 +32,7 @@
     export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
     export MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    pytest --noconftest models/demos/deepseek_v3_d_p/tests/perf/ -v
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE='10,9' pytest --noconftest models/demos/deepseek_v3_d_p/tests/perf/ -v
   test_type: perf
   skus:
     bh_galaxy:
