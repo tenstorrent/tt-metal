@@ -29,55 +29,16 @@ volatile tt_l1_ptr realtime_profiler_msg_t* realtime_profiler_mailbox =
 
 volatile RtProfilerRingBuffer* ring_buffer = reinterpret_cast<volatile RtProfilerRingBuffer*>(RING_BUFFER_ADDR);
 
-// D2H socket state
-static SocketSenderInterface profiler_socket;
-static bool socket_initialized = false;
-static uint32_t pcie_xy_enc = 0;
-static uint32_t data_addr_hi = 0;
-static uint32_t host_write_ptr = 0;
-static uint32_t host_fifo_start = 0;
-static uint32_t fifo_page_aligned_size = 0;
-
-#ifdef PCIE_NOC_X
+// On WH, NCRISC uses NOC1 which requires a different PCIe XY encoding than
+// what the D2H socket config provides (NOC0-based).  The host passes NOC0
+// coordinates via RT_PROFILER_PCIE_NOC_X/Y kernel defines (WH only) so we
+// can compute the NOC1 encoding at compile time.  On BH, no override is
+// needed — the socket's encoding is already correct.
+#ifdef RT_PROFILER_PCIE_NOC_X
 constexpr uint64_t pcie_noc_xy_full =
-    uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
+    uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(RT_PROFILER_PCIE_NOC_X), NOC_Y_PHYS_COORD(RT_PROFILER_PCIE_NOC_Y)));
 constexpr uint32_t pcie_xy_enc_noc1 = static_cast<uint32_t>(pcie_noc_xy_full >> 32);
 #endif
-
-FORCE_INLINE
-bool init_socket() {
-    if (socket_initialized) {
-        return true;
-    }
-
-    invalidate_l1_cache();
-
-    uint32_t socket_config_addr = realtime_profiler_mailbox->config_buffer_addr;
-    if (socket_config_addr == 0) {
-        return false;
-    }
-
-    profiler_socket = create_sender_socket_interface(socket_config_addr);
-    set_sender_socket_page_size(profiler_socket, realtime_profiler_page_size);
-
-#ifdef PCIE_NOC_X
-    profiler_socket.d2h.pcie_xy_enc = pcie_xy_enc_noc1;
-    pcie_xy_enc = pcie_xy_enc_noc1;
-#else
-    pcie_xy_enc = profiler_socket.d2h.pcie_xy_enc;
-#endif
-    data_addr_hi = profiler_socket.d2h.data_addr_hi;
-    uint32_t data_addr_lo = profiler_socket.downstream_fifo_addr;
-
-    fifo_page_aligned_size = profiler_socket.downstream_fifo_total_size -
-                             (profiler_socket.downstream_fifo_total_size % realtime_profiler_page_size);
-
-    host_write_ptr = data_addr_lo;
-    host_fifo_start = data_addr_lo;
-
-    socket_initialized = true;
-    return true;
-}
 
 // Push one ring buffer entry to the host via PCIe D2H socket
 __attribute__((noinline)) void push_entry_to_host(
@@ -146,7 +107,7 @@ void kernel_main() {
     SocketSenderInterface profiler_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(profiler_socket, realtime_profiler_page_size);
 
-#ifdef PCIE_NOC_X
+#ifdef RT_PROFILER_PCIE_NOC_X
     profiler_socket.d2h.pcie_xy_enc = pcie_xy_enc_noc1;
     uint32_t pcie_xy_enc = pcie_xy_enc_noc1;
 #else

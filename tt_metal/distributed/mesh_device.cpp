@@ -2035,8 +2035,8 @@ void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDev
             ncrisc_config.noc = NOC::RISCV_1_default;
             ncrisc_config.defines["RING_BUFFER_ADDR"] = std::to_string(ring_buffer_addr);
             if (need_pcie_noc_defines) {
-                ncrisc_config.defines["PCIE_NOC_X"] = std::to_string(pcie_noc_x);
-                ncrisc_config.defines["PCIE_NOC_Y"] = std::to_string(pcie_noc_y);
+                ncrisc_config.defines["RT_PROFILER_PCIE_NOC_X"] = std::to_string(pcie_noc_x);
+                ncrisc_config.defines["RT_PROFILER_PCIE_NOC_Y"] = std::to_string(pcie_noc_y);
             }
             CreateKernel(
                 realtime_profiler_program, realtime_profiler_push_kernel_path, realtime_profiler_core, ncrisc_config);
