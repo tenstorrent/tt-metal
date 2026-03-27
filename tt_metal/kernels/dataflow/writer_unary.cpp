@@ -27,8 +27,8 @@ void kernel_main() {
         ublock_size_bytes = dfb_out.get_entry_size();
     #else
         constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
-        ublock_size_bytes = get_tile_size(cb_out_id);
         experimental::CircularBuffer cb(cb_out_id);
+        ublock_size_bytes = get_tile_size(cb_out_id);
     #endif
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
