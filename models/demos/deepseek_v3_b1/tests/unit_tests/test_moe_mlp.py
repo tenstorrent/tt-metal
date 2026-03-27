@@ -20,11 +20,11 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.prepare_weights import (
+    _compute_tp,
     create_gate_bias_tensor,
     create_gate_indices_tensor,
     prepare_attention_weights,
@@ -172,8 +172,7 @@ def create_shared_expert_tensors(
     mcast_gather_core = DownProj.MCAST_GATHER_CORE
     sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_gather_core, mcast_gather_core)])
 
-    bdw = BlitzDecodeWeights(device)
-    moe_tp = bdw.moe_tp
+    _, moe_tp = _compute_tp(device)
     K_down_full = K_down * moe_tp
 
     assert layer_idx is not None, "layer_idx must be provided"
@@ -232,7 +231,7 @@ def create_shared_expert_tensors(
     torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
 
     shared_weights = prepare_shared_expert_weights(
-        bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
+        device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True
     )
 
     return SharedExpertTensors(
@@ -315,7 +314,6 @@ def create_routed_expert_tensors(
     gate_scaling_factor = RoutedExpert.GATE_SCALING_FACTOR
 
     # ── Use provided state dict (gate weight/bias/rmsnorm_gamma all from state dict) ──
-    bdw = BlitzDecodeWeights(device)
     if layer_idx is None:
         layer_idx = ROUTED_EXPERT_LAYER_IDX if is_moe else DENSE_LAYER_IDX
     layer_key = f"model.layers.{layer_idx}"
@@ -361,7 +359,7 @@ def create_routed_expert_tensors(
     num_gate_proj_cores = len(gate_proj_worker_cores)
 
     # Build attention-side overlapped tensors from state dict via prepare_weights.
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
+    attn = prepare_attention_weights(device, state_dict, layer_idx=layer_idx, is_moe=is_moe, move_to_device=True)
     ttnn_gate_mm_weights = attn.gate_mm
     ttnn_rmsnorm_gamma = attn.ffn_norm
     if ttnn_gate_mm_weights is not None:
@@ -410,7 +408,7 @@ def create_routed_expert_tensors(
             down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
 
         routed_weights = prepare_routed_expert_weights(
-            bdw,
+            device,
             state_dict,
             layer_idx=layer_idx,
             is_moe=True,
@@ -442,7 +440,7 @@ def create_routed_expert_tensors(
             down_proj_weights_dict[e] = w_d.reshape(1, 1, down_proj_K, down_proj_N)
 
         routed_weights = prepare_routed_expert_weights(
-            bdw,
+            device,
             state_dict,
             layer_idx=layer_idx,
             is_moe=False,

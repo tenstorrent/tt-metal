@@ -18,7 +18,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
@@ -26,6 +25,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3MoELayerWeights,
     DenseRoutedExpertWeights,
     MoERoutedExpertWeights,
+    _create_moe_routed_experts,
     prepare_attention_weights,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
@@ -155,8 +155,7 @@ def test_prepare_attention_weights_dense_4x2(bh_2d_mesh_device):
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=False)
-    bdw = BlitzDecodeWeights(submesh)
-    attn = prepare_attention_weights(bdw, state, 0, is_moe=False)
+    attn = prepare_attention_weights(submesh, state, 0, is_moe=False)
     assert attn.gate_mm is None
     assert attn.q_a_proj.tensor_shape == (3584, 3072)
     assert attn.q_b_proj.tensor_shape == (1536, 12288)
@@ -177,8 +176,7 @@ def test_prepare_attention_weights_moe_4x2(bh_2d_mesh_device):
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=True, seed=43)
-    bdw = BlitzDecodeWeights(submesh)
-    attn = prepare_attention_weights(bdw, state, 0, is_moe=True)
+    attn = prepare_attention_weights(submesh, state, 0, is_moe=True)
     assert attn.gate_mm is not None
     assert attn.gate_mm.tensor_shape == (7168, 256)
     assert attn.gate_bias is not None
@@ -197,8 +195,7 @@ def test_prepare_shared_expert_weights_dense_4x2(bh_2d_mesh_device):
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=False)
-    bdw = BlitzDecodeWeights(submesh)
-    shared = prepare_shared_expert_weights(bdw, state, 0, is_moe=False)
+    shared = prepare_shared_expert_weights(submesh, state, 0, is_moe=False)
     assert shared.shared_gate_proj.tensor_shape is not None
     assert shared.shared_up_proj.tensor_shape is not None
     assert shared.shared_down_proj.shape is not None
@@ -214,8 +211,7 @@ def test_prepare_shared_expert_weights_moe_4x2(bh_2d_mesh_device):
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=True, seed=43)
-    bdw = BlitzDecodeWeights(submesh)
-    shared = prepare_shared_expert_weights(bdw, state, 0, is_moe=True)
+    shared = prepare_shared_expert_weights(submesh, state, 0, is_moe=True)
     assert shared.shared_gate_proj.tensor_shape == (7168, 256)
     assert shared.shared_up_proj.tensor_shape == (7168, 256)
     assert shared.shared_down_proj.shape is not None
@@ -231,8 +227,7 @@ def test_prepare_routed_expert_weights_dense_4x2(bh_2d_mesh_device):
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=False)
-    bdw = BlitzDecodeWeights(submesh)
-    routed = prepare_routed_expert_weights(bdw, state, 0, is_moe=False)
+    routed = prepare_routed_expert_weights(submesh, state, 0, is_moe=False)
     assert isinstance(routed, DenseRoutedExpertWeights)
     assert routed.routed_gate_proj.shape is not None
     assert routed.routed_up_proj.shape is not None
@@ -249,9 +244,8 @@ def test_prepare_routed_expert_weights_moe_4x2(bh_2d_mesh_device):
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=True, seed=43)
-    bdw = BlitzDecodeWeights(submesh)
     routed = prepare_routed_expert_weights(
-        bdw,
+        submesh,
         state,
         0,
         is_moe=True,
@@ -285,9 +279,8 @@ def test_prepare_dense_layer_single_layer_4x2(bh_2d_mesh_device):
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=False)
-    bdw = BlitzDecodeWeights(submesh)
     t0 = time.perf_counter()
-    layer = prepare_dense_layer_weights(bdw, state, 0)
+    layer = prepare_dense_layer_weights(submesh, state, 0)
     elapsed = time.perf_counter() - t0
     logger.info("prepare_dense_layer_weights (1 dense layer, 4x2 mesh): {:.3f} s", elapsed)
     assert isinstance(layer, DeepSeekV3DenseLayerWeights)
@@ -318,11 +311,10 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=True, seed=43)
-    bdw = BlitzDecodeWeights(submesh)
     logger.info(f"State dict prepared")
     t0 = time.perf_counter()
     logger.info(f"Preparing weights...")
-    layer = prepare_moe_layer_weights(bdw, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS)
+    layer = prepare_moe_layer_weights(submesh, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS)
     logger.info(f"Weights prepared")
     elapsed = time.perf_counter() - t0
     logger.info("prepare_moe_layer_weights (1 MoE layer, 4x2 mesh): {:.3f} s", elapsed)
@@ -412,12 +404,11 @@ def test_cache_routed_experts_miss_and_hit_4x2(bh_2d_mesh_device, tmp_path):
     )
 
     gate_stacked, up_stacked, down_stacked = _moe_routed_expert_stacked_tensors(seed=44)
-    bdw = BlitzDecodeWeights(submesh)
     create_called = [0]
 
     def _create_gate():
         create_called[0] += 1
-        g, _u, _d = bdw.get_tt_moe_routed_expert_weights(gate_stacked, up_stacked, down_stacked)
+        g, _u, _d = _create_moe_routed_experts(submesh, gate_stacked, up_stacked, down_stacked)
         return list(g)
 
     result1 = cache.get_or_create_tensor_list(fp, create=_create_gate, device=submesh)

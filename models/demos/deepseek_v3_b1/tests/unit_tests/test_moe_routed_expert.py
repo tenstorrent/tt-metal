@@ -22,8 +22,12 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MoeRoutedExpert
+from models.demos.deepseek_v3_b1.prepare_weights import (
+    _compute_tp,
+    _create_moe_routed_experts,
+    _fuse_o_proj_gate_mm_norms,
+)
 
 
 @pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
@@ -119,13 +123,14 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
     )
 
     # Gate matmul weights via overlapped tensor (fused with o_proj + gammas, matching production layout)
-    bdw = BlitzDecodeWeights(device)
-    torch_o_proj_weights = torch.zeros((8192 * bdw.mla_tp, K), dtype=torch.bfloat16)
+    mla_tp, _ = _compute_tp(device)
+    torch_o_proj_weights = torch.zeros((8192 * mla_tp, K), dtype=torch.bfloat16)
     torch_attn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
     torch_q_norm = torch.zeros((1, 1536), dtype=torch.bfloat16)
     torch_kv_norm = torch.zeros((1, 512), dtype=torch.bfloat16)
     torch_ffn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
-    o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = _fuse_o_proj_gate_mm_norms(
+        device,
         torch_o_proj_weights,
         torch_gate_mm_weights,
         torch_attn_norm,
@@ -296,15 +301,14 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
     up_stacked, up_proj_weights_dict = _gen_experts(num_experts, gate_proj_K, gate_proj_N_padded, seed=256)
     down_stacked, down_proj_weights_dict = _gen_experts(num_experts, down_proj_K, down_proj_N_padded, seed=512)
 
-    # ── Upload expert weights via BlitzDecodeWeights ──
-    bdw = BlitzDecodeWeights(device)
-    gate_proj_expert_tensors, up_proj_expert_tensors, down_proj_expert_tensors = bdw.get_tt_moe_routed_expert_weights(
-        gate_stacked, up_stacked, down_stacked
+    # ── Upload expert weights ──
+    gate_proj_expert_tensors, up_proj_expert_tensors, down_proj_expert_tensors = _create_moe_routed_experts(
+        device, gate_stacked, up_stacked, down_stacked
     )
     gate_proj_weights = gate_proj_expert_tensors[0]
     up_proj_weights = up_proj_expert_tensors[0]
     down_proj_weights = down_proj_expert_tensors[0]
-    logger.info("Uploaded gate/up/down expert weights via BlitzDecodeWeights")
+    logger.info("Uploaded gate/up/down expert weights")
 
     # ── Create matmul output tensors (WIDTH_SHARDED in L1) ──
     def _create_dram_mm_output(N_pad, per_core_N_val):
@@ -639,13 +643,14 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
 
     # Gate matmul weights via overlapped tensor (fused with o_proj + gammas, matching production layout)
-    bdw = BlitzDecodeWeights(submesh)
-    torch_o_proj_weights = torch.zeros((8192 * bdw.mla_tp, K), dtype=torch.bfloat16)
+    mla_tp, _ = _compute_tp(submesh)
+    torch_o_proj_weights = torch.zeros((8192 * mla_tp, K), dtype=torch.bfloat16)
     torch_attn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
     torch_q_norm = torch.zeros((1, 1536), dtype=torch.bfloat16)
     torch_kv_norm = torch.zeros((1, 512), dtype=torch.bfloat16)
     torch_ffn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
-    o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = _fuse_o_proj_gate_mm_norms(
+        submesh,
         torch_o_proj_weights,
         torch_gate_mm_weights,
         torch_attn_norm,
@@ -816,15 +821,14 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
         num_experts, down_proj_K, down_proj_N_padded, seed=512
     )
 
-    # ── Upload expert weights via BlitzDecodeWeights ──
-    bdw = BlitzDecodeWeights(submesh)
-    gate_proj_expert_tensors, up_proj_expert_tensors, down_proj_expert_tensors = bdw.get_tt_moe_routed_expert_weights(
-        gate_stacked, up_stacked, down_stacked
+    # ── Upload expert weights ──
+    gate_proj_expert_tensors, up_proj_expert_tensors, down_proj_expert_tensors = _create_moe_routed_experts(
+        submesh, gate_stacked, up_stacked, down_stacked
     )
     gate_proj_weights = gate_proj_expert_tensors[0]
     up_proj_weights = up_proj_expert_tensors[0]
     down_proj_weights = down_proj_expert_tensors[0]
-    logger.info("Uploaded gate/up/down expert weights via BlitzDecodeWeights")
+    logger.info("Uploaded gate/up/down expert weights")
 
     # ── Create matmul output tensors (WIDTH_SHARDED in L1) ──
     def _create_dram_mm_output(dev, N_pad, per_core_N_val):

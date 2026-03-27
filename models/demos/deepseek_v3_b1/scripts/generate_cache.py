@@ -35,7 +35,6 @@ import ttnn
 # Same mesh device setup as test_prepare_weights.py (bh_2d_mesh_device fixture).
 from conftest import bh_2d_mesh_device_context
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.prepare_weights import (
     CACHE_TYPE_OVERLAPPED,
     CACHE_TYPE_TENSOR,
@@ -334,20 +333,18 @@ def main() -> int:
             logger.info("Mesh device opened in {:.3f}s", time.perf_counter() - t0)
 
             submesh = mesh_device.create_submesh(ttnn.MeshShape(*DEVICE_MESH_SHAPE))
-            logger.info("Creating BlitzDecodeWeights on 4x2 submesh...")
-            bdw = BlitzDecodeWeights(submesh)
 
             if mode == "dense":
                 for layer_num in layer_nums:
                     layer_t0 = time.perf_counter()
                     logger.info("Preparing and caching dense decoder layer {} weights...", layer_num)
-                    prepare_dense_layer_weights(bdw, state_dict, layer_num, cache_config=cc)
+                    prepare_dense_layer_weights(submesh, state_dict, layer_num, cache_config=cc)
                     logger.info("Layer {} done in {:.3f}s", layer_num, time.perf_counter() - layer_t0)
             elif mode == "moe":
                 for layer_num in layer_nums:
                     layer_t0 = time.perf_counter()
                     logger.info("Preparing and caching MoE layer {} weights...", layer_num)
-                    prepare_moe_layer_weights(bdw, state_dict, layer_num, cache_config=cc)
+                    prepare_moe_layer_weights(submesh, state_dict, layer_num, cache_config=cc)
                     logger.info("Layer {} done in {:.3f}s", layer_num, time.perf_counter() - layer_t0)
             elif mode == "embedding":
                 logger.info("Preparing and caching embedding weights...")

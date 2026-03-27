@@ -8,10 +8,6 @@ import math
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import (
-    KVB12_PROJ_SingleDeviceOverlapSpec,
-    O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
-)
 from models.demos.deepseek_v3_b1.circular_buffer_utils import (
     CircularBufferIdManager,
     build_cb_reconfig_tensor,
@@ -25,6 +21,10 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import (
     FlashMLADecode,
     get_max_page_size_and_num_pages,
     get_noc_max_page_size,
+)
+from models.demos.deepseek_v3_b1.overlap_specs import (
+    KVB12_PROJ_SingleDeviceOverlapSpec,
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
 )
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,

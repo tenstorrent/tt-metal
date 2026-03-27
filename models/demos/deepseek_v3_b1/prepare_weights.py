@@ -6,8 +6,8 @@
 Prepare DeepSeek V3 fused (blitz decode) weights from a state dict.
 
 Takes full HuggingFace state dict tensors (full logical shapes for the target
-mesh), applies key mapping, transpose, and kv_b split, then passes to
-BlitzDecodeWeights which fuses and shards onto the mesh.
+mesh), applies key mapping, transpose, kv_b split, and fuses/shards onto
+the device mesh.
 
 When a ``CacheConfig`` is provided, each fusion group / standalone tensor /
 routed-expert list is routed through ``TensorCache`` for content-addressed
@@ -17,20 +17,20 @@ on-disk caching.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import (
+from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedShardSpec, OverlappedTensor, overlap_tensors
+from models.demos.deepseek_v3_b1.overlap_specs import (
+    DOWN_PROJ_SINGLE_DEVICE_SPEC,
     GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
     QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
-    BlitzDecodeWeights,
-    OverlappedTensor,
 )
 from models.demos.deepseek_v3_b1.tensor_cache import _TRANSFORM_VERSION, CacheConfig, Fingerprint
 
@@ -38,6 +38,33 @@ from models.demos.deepseek_v3_b1.tensor_cache import _TRANSFORM_VERSION, CacheCo
 # Sender core = (grid.x - 1, grid.y - 1) = (12, 9); must match test_moe_mlp create_runtime_tensors.
 MOE_SENDER_GRID_SIZE = (13, 10)
 _GATE_BIAS_TILE = ttnn.Tile([16, 16])
+
+
+# ---------------------------------------------------------------------------
+# Device topology helpers
+# ---------------------------------------------------------------------------
+
+
+def _compute_tp(device) -> tuple[int, int]:
+    """Derive (mla_tp, moe_tp) from the device mesh shape."""
+    num_devices = device.get_num_devices()
+    if num_devices == 1:
+        return 1, 1
+    mesh_shape = (device.shape[0], device.shape[1])
+    assert mesh_shape == (
+        4,
+        2,
+    ), f"Only single-device or 4x2 mesh supported, got {mesh_shape[0]}x{mesh_shape[1]}"
+    return 2, 8
+
+
+def _mesh_shape(device) -> tuple[int, int]:
+    return (device.shape[0], device.shape[1])
+
+
+# ---------------------------------------------------------------------------
+# Cache fingerprint helpers
+# ---------------------------------------------------------------------------
 
 
 def _make_fp(
@@ -84,8 +111,6 @@ def _kv_b12_spec_fps() -> tuple[str, ...]:
     in the Fingerprint, this uniquely identifies the layout.
     """
     cfg = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
-    from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedShardSpec
-
     kv_b1_fp = OverlappedShardSpec(
         core_range_set=cfg.kv_b1_core_range_set,
         raw_tensor_shape=cfg.kv_b1_proj_shape,
@@ -104,8 +129,6 @@ def _kv_b12_spec_fps() -> tuple[str, ...]:
 def _gate_up_spec_fps() -> tuple[str, ...]:
     """Fingerprint from the config-level shapes and core grids."""
     cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
-    from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedShardSpec
-
     gate_fp = OverlappedShardSpec(
         core_range_set=cfg.gate_core_range_set,
         raw_tensor_shape=cfg.stacked_shape,
@@ -177,6 +200,11 @@ def lm_head_fingerprints(
         "lm_head": (fp("lm_head"), CACHE_TYPE_TENSOR),
         "final_norm": (fp("final_norm"), CACHE_TYPE_TENSOR),
     }
+
+
+# ---------------------------------------------------------------------------
+# Output dataclasses
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -279,33 +307,21 @@ class MoERoutedExpertWeights:
 
 @dataclass
 class DeepSeekV3DenseLayerWeights:
-    """Weights for a dense layer (0..first_k_dense_replace-1).
+    """Weights for a dense layer (0..first_k_dense_replace-1)."""
 
-    Has the 3 attention fusion groups and o_proj + norms (no gate_mm).
-    """
-
-    # From get_tt_q_ab_proj_and_kv_a_proj_weights
     q_a_proj: OverlappedTensor
     q_b_proj: OverlappedTensor
     kv_a_proj: OverlappedTensor
-
-    # From get_tt_o_proj_and_gate_mm_weights (no gate_mm for dense)
     o_proj: OverlappedTensor
     attn_norm: OverlappedTensor
     q_norm: OverlappedTensor
     kv_norm: OverlappedTensor
     ffn_norm: OverlappedTensor
-
-    # From get_tt_kv_b12_proj_weights
     kv_b1_proj: OverlappedTensor
     kv_b2_proj: OverlappedTensor
-
-    # From get_tt_mlp_shared_expert_weights
     shared_gate_proj: OverlappedTensor
     shared_up_proj: OverlappedTensor
     shared_down_proj: ttnn.Tensor
-
-    # From get_tt_mlp_routed_expert_weights (1 DRAM expert per device)
     routed_gate_proj: ttnn.Tensor
     routed_up_proj: ttnn.Tensor
     routed_down_proj: ttnn.Tensor
@@ -313,37 +329,23 @@ class DeepSeekV3DenseLayerWeights:
 
 @dataclass
 class DeepSeekV3MoELayerWeights:
-    """Weights for an MoE layer (first_k_dense_replace..num_layers-1).
+    """Weights for an MoE layer (first_k_dense_replace..num_layers-1)."""
 
-    Extends dense with gate_mm and shared expert projections.
-    """
-
-    # From get_tt_q_ab_proj_and_kv_a_proj_weights
     q_a_proj: OverlappedTensor
     q_b_proj: OverlappedTensor
     kv_a_proj: OverlappedTensor
-
-    # From get_tt_o_proj_and_gate_mm_weights (includes gate_mm)
     o_proj: OverlappedTensor
     gate_mm: OverlappedTensor
     attn_norm: OverlappedTensor
     q_norm: OverlappedTensor
     kv_norm: OverlappedTensor
     ffn_norm: OverlappedTensor
-
-    # MoE gate e_score_correction_bias (standalone)
     gate_bias: ttnn.Tensor
-
-    # From get_tt_kv_b12_proj_weights
     kv_b1_proj: OverlappedTensor
     kv_b2_proj: OverlappedTensor
-
-    # From get_tt_moe_shared_expert_weights (replaces get_tt_gate_up_proj_weights)
     shared_gate_proj: OverlappedTensor
     shared_up_proj: OverlappedTensor
     shared_down_proj: ttnn.Tensor
-
-    # From get_tt_moe_routed_expert_weights (256 DRAM experts)
     routed_gate_proj: list[ttnn.Tensor]
     routed_up_proj: list[ttnn.Tensor]
     routed_down_proj: list[ttnn.Tensor]
@@ -364,9 +366,11 @@ class DeepSeekV3LMHeadWeights:
     final_norm: ttnn.Tensor  # model.norm.weight, (1, 7168)
 
 
-# Constants for kv_b_proj split (HF stores one matrix; we split into kv_b1 and kv_b2).
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
 _NUM_HEADS = 64
-# MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
 NUM_ROUTED_EXPERTS = 256
 _QK_NOPE_HEAD_DIM = 128
 _QK_ROPE_HEAD_DIM = 64
@@ -375,24 +379,543 @@ _KV_LORA_RANK = 512
 _KV_B_PROJ_HEAD_DIM = _QK_NOPE_HEAD_DIM + _V_HEAD_DIM  # 256
 _Q_HEAD_DIM = _QK_NOPE_HEAD_DIM + _QK_ROPE_HEAD_DIM  # 192
 
+# Per-TP attention tensor dimensions
+_MLA_TP1_Q_B_WIDTH = 12288
+_MLA_TP1_O_PROJ_HEIGHT = 8192
+_MLA_TP1_KV_B1_HEIGHT = 8192
+_MLA_TP1_KV_B2_WIDTH = 8192
+
+# Per-TP shared expert dimensions
+_MOE_TP1_SHARED_GATE_UP_N = 256
+_MOE_TP1_SHARED_DOWN_K = 256
+
+
+# ---------------------------------------------------------------------------
+# Tensor transformation functions (formerly BlitzDecodeWeights methods)
+# ---------------------------------------------------------------------------
+
+
+def _fuse_q_ab_kv_a(
+    device,
+    q_a_proj_weights: torch.Tensor,
+    q_b_proj_weights: torch.Tensor,
+    kv_a_proj_weights: torch.Tensor,
+    *,
+    dtype: ttnn.DataType = ttnn.bfloat8_b,
+    move_to_device: bool = True,
+) -> dict[str, OverlappedTensor]:
+    """Fuse q_a_proj, q_b_proj, and kv_a_proj via ``overlap_tensors``."""
+    cfg = QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    mesh = _mesh_shape(device)
+    q_b_tp = cfg.q_b_shard_spec.tp(mesh)
+
+    device_grid = device.compute_with_storage_grid_size()
+    q_ab_bb = cfg.q_a_shard_spec.core_range_set.bounding_box()
+    kv_bb = cfg.kv_a_shard_spec.core_range_set.bounding_box()
+    required_rows = max(q_ab_bb.end.y, kv_bb.end.y) + 1
+    required_cols = max(q_ab_bb.end.x, kv_bb.end.x) + 1
+    assert device_grid.y >= required_rows, f"Device grid needs at least {required_rows} rows, got {device_grid.y}"
+    assert device_grid.x >= required_cols, f"Device grid needs at least {required_cols} cols, got {device_grid.x}"
+
+    assert (
+        q_a_proj_weights.shape == cfg.q_a_proj_shape
+    ), f"q_a_proj_weights must be {cfg.q_a_proj_shape}, got {tuple(q_a_proj_weights.shape)}"
+    expected_q_b_shape = (cfg.q_b_proj_shape[0], cfg.q_b_proj_shape[1] * q_b_tp)
+    assert (
+        tuple(q_b_proj_weights.shape) == expected_q_b_shape
+    ), f"q_b_proj_weights must be {expected_q_b_shape}, got {tuple(q_b_proj_weights.shape)}"
+    assert (
+        kv_a_proj_weights.shape == cfg.kv_a_proj_shape
+    ), f"kv_a_proj_weights must be {cfg.kv_a_proj_shape}, got {tuple(kv_a_proj_weights.shape)}"
+
+    q_a_packed = cfg.shuffle_q_a(q_a_proj_weights)
+    kv_reordered = cfg.shuffle_kv_a(kv_a_proj_weights)
+
+    q_b_shuffled_slices = [
+        cfg.shuffle_q_b(cfg.get_q_b_slice(q_b_proj_weights, tp_idx, mesh)) for tp_idx in range(q_b_tp)
+    ]
+    q_b_preprocessed = torch.cat(q_b_shuffled_slices, dim=1) if q_b_tp > 1 else q_b_shuffled_slices[0]
+
+    q_ab_cores = cfg.q_a_shard_spec.core_range_set
+    kv_cores = cfg.kv_a_shard_spec.core_range_set
+
+    return overlap_tensors(
+        [
+            [
+                (
+                    "q_a_proj",
+                    q_a_packed,
+                    OverlappedShardSpec(
+                        core_range_set=q_ab_cores,
+                        raw_tensor_shape=tuple(q_a_packed.shape),
+                        dtype=dtype,
+                    ),
+                ),
+                (
+                    "q_b_proj",
+                    q_b_preprocessed,
+                    OverlappedShardSpec(
+                        core_range_set=q_ab_cores,
+                        raw_tensor_shape=tuple(q_b_preprocessed.shape),
+                        dtype=dtype,
+                        tp_dim=(None, 1),
+                    ),
+                ),
+            ],
+            [
+                (
+                    "kv_a_proj",
+                    kv_reordered,
+                    OverlappedShardSpec(
+                        core_range_set=kv_cores,
+                        raw_tensor_shape=tuple(kv_reordered.shape),
+                        dtype=dtype,
+                    ),
+                ),
+            ],
+        ],
+        device=device,
+        move_to_device=move_to_device,
+    )
+
+
+def _fuse_o_proj_gate_mm_norms(
+    device,
+    o_proj_weights: torch.Tensor,
+    gate_mm_weights: torch.Tensor,
+    attn_norm: torch.Tensor,
+    q_norm: torch.Tensor,
+    kv_norm: torch.Tensor,
+    ffn_norm: torch.Tensor,
+    *,
+    o_proj_dtype: ttnn.DataType = ttnn.bfloat8_b,
+    move_to_device: bool = True,
+) -> dict[str, OverlappedTensor]:
+    """Fuse o_proj, gate_mm, and 4 RMSNorm gammas into one WIDTH_SHARDED tensor."""
+    cfg = O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC
+
+    return overlap_tensors(
+        [
+            [
+                (
+                    "o_proj",
+                    o_proj_weights,
+                    replace(cfg.o_proj, raw_tensor_shape=tuple(o_proj_weights.shape), dtype=o_proj_dtype),
+                )
+            ],
+            [("gate_mm", gate_mm_weights, cfg.gate_mm)],
+            [
+                ("attn_norm", attn_norm, cfg.attn_norm),
+                ("q_norm", q_norm, cfg.q_norm),
+                ("ffn_norm", ffn_norm, cfg.ffn_norm),
+            ],
+            [("kv_norm", kv_norm, cfg.kv_norm)],
+        ],
+        device=device,
+        move_to_device=move_to_device,
+    )
+
+
+def _fuse_kv_b12(
+    device,
+    kv_b1_proj_weights: torch.Tensor,
+    kv_b2_proj_weights: torch.Tensor,
+    *,
+    dtype: ttnn.DataType = ttnn.bfloat8_b,
+    move_to_device: bool = True,
+) -> dict[str, OverlappedTensor]:
+    """Fuse kv_b1_proj and kv_b2_proj via ``overlap_tensors``."""
+    cfg = KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+    mla_tp, _ = _compute_tp(device)
+
+    expected_b1_shape = (cfg.kv_b1_proj_shape[0] * mla_tp, cfg.kv_b1_proj_shape[1])
+    assert (
+        tuple(kv_b1_proj_weights.shape) == expected_b1_shape
+    ), f"kv_b1 expected {expected_b1_shape}, got {tuple(kv_b1_proj_weights.shape)}"
+    expected_b2_shape = (cfg.kv_b2_proj_shape[0], cfg.kv_b2_proj_shape[1] * mla_tp)
+    assert (
+        tuple(kv_b2_proj_weights.shape) == expected_b2_shape
+    ), f"kv_b2 expected {expected_b2_shape}, got {tuple(kv_b2_proj_weights.shape)}"
+
+    per_device_b2_w = cfg.kv_b2_proj_shape[1]
+    b2_shuffled = []
+    for tp_idx in range(mla_tp):
+        b2_slice = kv_b2_proj_weights[:, tp_idx * per_device_b2_w : (tp_idx + 1) * per_device_b2_w]
+        b2_shuffled.append(cfg.shuffle_kv_b2(b2_slice))
+    kv_b2_preprocessed = torch.cat(b2_shuffled, dim=0) if mla_tp > 1 else b2_shuffled[0]
+
+    return overlap_tensors(
+        [
+            [
+                (
+                    "kv_b1_proj",
+                    kv_b1_proj_weights,
+                    OverlappedShardSpec(
+                        core_range_set=cfg.kv_b1_core_range_set,
+                        raw_tensor_shape=tuple(kv_b1_proj_weights.shape),
+                        dtype=dtype,
+                        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        tp_dim=(None, 0),
+                    ),
+                ),
+            ],
+            [
+                (
+                    "kv_b2_proj",
+                    kv_b2_preprocessed,
+                    OverlappedShardSpec(
+                        core_range_set=cfg.kv_b2_core_range_set,
+                        raw_tensor_shape=tuple(kv_b2_preprocessed.shape),
+                        dtype=dtype,
+                        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        tp_dim=(None, 0),
+                        logical_tensor_shape=cfg.kv_b2_proj_shape,
+                    ),
+                ),
+            ],
+        ],
+        device=device,
+        move_to_device=move_to_device,
+    )
+
+
+def _fuse_gate_up(
+    device,
+    gate_proj_weights: torch.Tensor,
+    up_proj_weights: torch.Tensor,
+    *,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
+    move_to_device: bool = True,
+) -> dict[str, OverlappedTensor]:
+    """Fuse gate and up projections into one HEIGHT_SHARDED tensor."""
+    _, moe_tp = _compute_tp(device)
+    cfg = GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+
+    expected_gate_shape = (cfg.gate_proj_shape[0], cfg.gate_proj_shape[1] * moe_tp)
+    assert (
+        tuple(gate_proj_weights.shape) == expected_gate_shape
+    ), f"gate_proj must be {expected_gate_shape}, got {tuple(gate_proj_weights.shape)}"
+    expected_up_shape = (cfg.up_proj_shape[0], cfg.up_proj_shape[1] * moe_tp)
+    assert (
+        tuple(up_proj_weights.shape) == expected_up_shape
+    ), f"up_proj must be {expected_up_shape}, got {tuple(up_proj_weights.shape)}"
+
+    mesh_rows = device.shape[0]
+    mesh_cols = device.shape[1]
+    per_device_n = cfg.gate_proj_shape[1]
+    stacked_h, stacked_w = cfg.stacked_shape
+
+    gate_stacked_list = []
+    up_stacked_list = []
+    for tp_idx in range(moe_tp):
+        gate_slice = gate_proj_weights[:, tp_idx * per_device_n : (tp_idx + 1) * per_device_n]
+        up_slice = up_proj_weights[:, tp_idx * per_device_n : (tp_idx + 1) * per_device_n]
+        gate_stacked_list.append(cfg.reshuffle_block_to_height_sharded(gate_slice, cfg.gate_core_range_set))
+        up_stacked_list.append(cfg.reshuffle_block_to_height_sharded(up_slice, cfg.up_core_range_set))
+
+    if moe_tp == 1:
+        gate_preprocessed = gate_stacked_list[0]
+        up_preprocessed = up_stacked_list[0]
+    else:
+        gate_preprocessed = (
+            torch.stack(gate_stacked_list)
+            .reshape(mesh_rows, mesh_cols, stacked_h, stacked_w)
+            .permute(0, 2, 1, 3)
+            .reshape(mesh_rows * stacked_h, mesh_cols * stacked_w)
+            .contiguous()
+        )
+        up_preprocessed = (
+            torch.stack(up_stacked_list)
+            .reshape(mesh_rows, mesh_cols, stacked_h, stacked_w)
+            .permute(0, 2, 1, 3)
+            .reshape(mesh_rows * stacked_h, mesh_cols * stacked_w)
+            .contiguous()
+        )
+
+    return overlap_tensors(
+        [
+            [
+                (
+                    "gate_proj",
+                    gate_preprocessed,
+                    OverlappedShardSpec(
+                        core_range_set=cfg.gate_core_range_set,
+                        raw_tensor_shape=tuple(gate_preprocessed.shape),
+                        dtype=dtype,
+                        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        tp_dim=(0, 1),
+                        logical_tensor_shape=cfg.gate_proj_shape,
+                    ),
+                ),
+            ],
+            [
+                (
+                    "up_proj",
+                    up_preprocessed,
+                    OverlappedShardSpec(
+                        core_range_set=cfg.up_core_range_set,
+                        raw_tensor_shape=tuple(up_preprocessed.shape),
+                        dtype=dtype,
+                        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                        tp_dim=(0, 1),
+                        logical_tensor_shape=cfg.up_proj_shape,
+                    ),
+                ),
+            ],
+        ],
+        device=device,
+        move_to_device=move_to_device,
+    )
+
+
+def _create_shared_down_proj(
+    device,
+    down_proj_weights: torch.Tensor,
+    *,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
+    move_to_device: bool = True,
+) -> ttnn.Tensor:
+    """Create the down projection as a standalone WIDTH_SHARDED tensor on 112 matmul cores."""
+    _, moe_tp = _compute_tp(device)
+    dp_spec = DOWN_PROJ_SINGLE_DEVICE_SPEC
+    K_down_per_device = 256
+    N_per_core = 64
+    N_down = N_per_core * dp_spec.NUM_MATMUL_CORES  # 7168
+
+    expected_down_shape = (K_down_per_device * moe_tp, N_down)
+    assert (
+        tuple(down_proj_weights.shape) == expected_down_shape
+    ), f"down_proj_weights must be {expected_down_shape}, got {tuple(down_proj_weights.shape)}"
+
+    matmul_core_grid = dp_spec.build_matmul_core_grid()
+
+    if moe_tp == 1:
+        dp_combined = down_proj_weights
+        dp_mapper = ttnn.ReplicateTensorToMesh(device)
+    else:
+        mesh_rows = device.shape[0]
+        mesh_cols = device.shape[1]
+        dp_combined = (
+            down_proj_weights.reshape(mesh_rows, mesh_cols, K_down_per_device, N_down)
+            .permute(0, 2, 1, 3)
+            .reshape(mesh_rows * K_down_per_device, mesh_cols * N_down)
+        )
+        dp_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1))
+    device_dp = device if move_to_device else None
+
+    dp_shard_spec = ttnn.ShardSpec(matmul_core_grid, (K_down_per_device, N_per_core), ttnn.ShardOrientation.ROW_MAJOR)
+    dp_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, dp_shard_spec)
+
+    return ttnn.from_torch(
+        dp_combined,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device_dp,
+        memory_config=dp_mem,
+        tile=ttnn.Tile([32, 32]),
+        mesh_mapper=dp_mapper,
+    )
+
+
+def _shuffle_dram_tiles(tensor: torch.Tensor, tile_size: int, num_banks: int) -> torch.Tensor:
+    """Reorder tiles within each DRAM bank shard from row-major to column-major.
+
+    WIDTH_SHARDED DRAM layout stores tiles row-major, but the streaming
+    matmul kernel expects K tiles contiguous for each N column.  This
+    function transposes the tile order within each shard so that the
+    kernel can linearly read K tiles at a time.
+    """
+    orig_shape = tensor.shape
+    K, N = orig_shape[-2], orig_shape[-1]
+
+    lcm = tile_size * num_banks
+    n_padded = ((N + lcm - 1) // lcm) * lcm
+    needs_padding = n_padded != N
+
+    tensor = tensor.reshape(-1, K, N)
+    batch_size = tensor.shape[0]
+
+    if needs_padding:
+        tensor = torch.nn.functional.pad(tensor, (0, n_padded - N))
+
+    K_tiles = K // tile_size
+    per_N = n_padded // num_banks
+    per_N_tiles = per_N // tile_size
+    num_tiles_per_shard = K_tiles * per_N_tiles
+
+    tensor = tensor.reshape(batch_size, K, num_banks, per_N)
+    tensor = tensor.permute(0, 2, 1, 3).contiguous()
+    shards = tensor.reshape(-1, K, per_N)
+
+    tiles = shards.reshape(-1, K_tiles, tile_size, per_N_tiles, tile_size)
+    tiles = tiles.permute(0, 1, 3, 2, 4).contiguous()
+    tiles = tiles.reshape(-1, num_tiles_per_shard, tile_size, tile_size)
+
+    i = torch.arange(num_tiles_per_shard, device=tensor.device)
+    source_idx = (i % K_tiles) * per_N_tiles + (i // K_tiles)
+    shuffled_tiles = tiles[:, source_idx, :, :]
+
+    shuffled_tiles = shuffled_tiles.reshape(-1, K_tiles, per_N_tiles, tile_size, tile_size)
+    shuffled_tiles = shuffled_tiles.permute(0, 1, 3, 2, 4).contiguous()
+    shuffled_shards = shuffled_tiles.reshape(-1, K, per_N)
+
+    shuffled = shuffled_shards.reshape(batch_size, num_banks, K, per_N)
+    shuffled = shuffled.permute(0, 2, 1, 3).contiguous()
+    shuffled = shuffled.reshape(batch_size, K, n_padded)
+
+    if needs_padding:
+        shuffled = shuffled[:, :, :N]
+
+    return shuffled.reshape(*orig_shape)
+
+
+def _create_moe_routed_experts(
+    device,
+    gate_proj_weights: torch.Tensor,
+    up_proj_weights: torch.Tensor,
+    down_proj_weights: torch.Tensor,
+    *,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
+    move_to_device: bool = True,
+) -> tuple[list[ttnn.Tensor], list[ttnn.Tensor], list[ttnn.Tensor]]:
+    """Create DRAM WIDTH_SHARDED expert weight tensors for routed MoE.
+
+    Each expert projection is uploaded as a separate WIDTH_SHARDED tensor
+    across all DRAM banks as ``bfloat4_b``.
+
+    **IMPORTANT (DRAM layout):** For each projection list, experts must be allocated
+    contiguously in DRAM. The inner ``upload()`` loop allocates all experts of one
+    projection before the next, which guarantees contiguity.
+    """
+    tile_w = 32
+    num_banks = device.dram_grid_size().x
+    mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+    device_for_torch = device if move_to_device else None
+
+    def upload(expert_weights: torch.Tensor) -> list[ttnn.Tensor]:
+        num_experts, K, N = expert_weights.shape
+        N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        per_core_N = N_padded // num_banks
+
+        dram_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+                )
+            }
+        )
+        shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+        tensors = []
+        for i in range(num_experts):
+            w = expert_weights[i]
+            if N_padded != N:
+                w = torch.nn.functional.pad(w, (0, N_padded - N))
+
+            w_shuffled = _shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks)
+            w_shuffled = w_shuffled.reshape(1, 1, K, N_padded)
+
+            tensors.append(
+                ttnn.from_torch(
+                    w_shuffled.contiguous(),
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device_for_torch,
+                    memory_config=mem_config,
+                    mesh_mapper=mesh_mapper,
+                )
+            )
+            if (i + 1) % 32 == 0:
+                logger.info(f"  Uploaded {i + 1}/{num_experts} experts")
+        return tensors
+
+    return upload(gate_proj_weights), upload(up_proj_weights), upload(down_proj_weights)
+
+
+def _create_mlp_routed_experts(
+    device,
+    gate_proj_weights: torch.Tensor,
+    up_proj_weights: torch.Tensor,
+    down_proj_weights: torch.Tensor,
+    *,
+    dtype: ttnn.DataType = ttnn.bfloat4_b,
+    move_to_device: bool = True,
+) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    """Create MLP per-device routed expert weights (DRAM).
+
+    After the shared expert (first 2048), the remaining ``8 * 2048``
+    columns (gate/up) or rows (down) are split into 8 routed experts,
+    one per device.
+    """
+    shared_n = 2048
+    num_routed = 8
+    expert_n = 2048
+
+    K_gate = gate_proj_weights.shape[0]  # 7168
+    N_down = down_proj_weights.shape[1]  # 7168
+
+    gate_experts = (
+        gate_proj_weights[:, shared_n:].reshape(K_gate, num_routed, expert_n).permute(1, 0, 2).contiguous()
+    )  # (8, 7168, 2048)
+    up_experts = (
+        up_proj_weights[:, shared_n:].reshape(K_gate, num_routed, expert_n).permute(1, 0, 2).contiguous()
+    )  # (8, 7168, 2048)
+    down_experts = down_proj_weights[shared_n:, :].reshape(num_routed, expert_n, N_down).contiguous()  # (8, 2048, 7168)
+
+    tile_w = 32
+    num_banks = device.dram_grid_size().x
+    mesh_rows = device.shape[0]
+    mesh_cols = device.shape[1]
+    mesh_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1))
+    device_for_torch = device if move_to_device else None
+
+    def upload(experts: torch.Tensor) -> ttnn.Tensor:
+        n_exp, K, N = experts.shape
+        N_padded = ((N + num_banks * tile_w - 1) // (num_banks * tile_w)) * (num_banks * tile_w)
+        per_core_N = N_padded // num_banks
+
+        processed = []
+        for i in range(n_exp):
+            w = experts[i]
+            if N_padded != N:
+                w = torch.nn.functional.pad(w, (0, N_padded - N))
+            w_shuffled = _shuffle_dram_tiles(w.unsqueeze(0), tile_w, num_banks)
+            processed.append(w_shuffled.reshape(K, N_padded))
+
+        stacked = torch.stack(processed).reshape(mesh_rows, mesh_cols, K, N_padded)
+
+        dram_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+                )
+            }
+        )
+        shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+        mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+        return ttnn.from_torch(
+            stacked.contiguous(),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device_for_torch,
+            memory_config=mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+    return upload(gate_experts), upload(up_experts), upload(down_experts)
+
+
+# ---------------------------------------------------------------------------
+# Utility functions
+# ---------------------------------------------------------------------------
+
 
 def deinterleave_q_b_proj(q_b_proj: torch.Tensor, num_heads: int | None = None) -> torch.Tensor:
-    """Convert q_b_proj.weight from HF interleaved to [ALL_NOPE | ALL_ROPE] layout.
-
-    HF stores q_b_proj with out_features = num_heads * q_head_dim, where each head's
-    nope and rope dims are contiguous: [h0_nope|h0_rope|h1_nope|h1_rope|...].
-    After .T the columns follow this interleaved order.
-
-    The b1 pipeline expects columns grouped as [ALL_NOPE | ALL_ROPE]:
-    [h0_nope|h1_nope|...|hN_nope|h0_rope|h1_rope|...|hN_rope].
-
-    Args:
-        q_b_transposed: q_b_proj.weight.T with shape (K, num_heads * q_head_dim).
-        num_heads: Number of attention heads.  If None, inferred from the width.
-
-    Returns:
-        Tensor of the same shape with columns reordered to [ALL_NOPE | ALL_ROPE].
-    """
+    """Convert q_b_proj.weight from HF interleaved to [ALL_NOPE | ALL_ROPE] layout."""
     q_b_transposed = q_b_proj.T
     K, N = q_b_transposed.shape
     if num_heads is None:
@@ -409,14 +932,7 @@ def _key(layer_idx: int, suffix: str) -> str:
 
 
 def create_gate_bias_tensor(raw_tensor: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
-    """Build gate_bias (e_score_correction_bias) as HEIGHT_SHARDED on sender core, replicated across mesh.
-
-    raw_tensor: shape (256,) from state dict (model.layers.{i}.mlp.gate.e_score_correction_bias).
-    Returns ttnn.Tensor with layout expected by MoE op: (16, 16) on sender core, tile 16x16.
-    Sender core uses MOE_SENDER_GRID_SIZE so cache layout is consistent across slow/fast dispatch.
-    When move_to_device is False (default), tensor is not placed (device=None) for cache generation.
-    When move_to_device is True, tensor is placed on device so is_sharded() is true for runtime use.
-    """
+    """Build gate_bias (e_score_correction_bias) as HEIGHT_SHARDED on sender core, replicated across mesh."""
     sender_core = ttnn.CoreCoord(MOE_SENDER_GRID_SIZE[0] - 1, MOE_SENDER_GRID_SIZE[1] - 1)
     sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
     gate_bias_reshaped = raw_tensor.reshape(16, 16).T.contiguous().to(torch.bfloat16)
@@ -437,13 +953,7 @@ def create_gate_bias_tensor(raw_tensor: torch.Tensor, device, *, move_to_device:
 
 
 def split_kv_b_proj(kv_b_proj: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Split HF kv_b_proj (out_features, in_features) into kv_b1 and kv_b2.
-
-    Expects full logical shape (32768, 512) for 4x2 mesh.
-    out_features = num_heads * (qk_nope_head_dim + v_head_dim) = num_heads * 256.
-    Reshape to (num_heads, 256, 512); first 128 dims are k (b1), last 128 are v (b2).
-    Only kv_b2 is transposed for blitz.
-    """
+    """Split HF kv_b_proj (out_features, in_features) into kv_b1 and kv_b2."""
     out_features, kv_lora_rank = kv_b_proj.shape
     assert kv_lora_rank == _KV_LORA_RANK
     num_heads = out_features // _KV_B_PROJ_HEAD_DIM
@@ -453,17 +963,6 @@ def split_kv_b_proj(kv_b_proj: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor
     return kv_b1, kv_b2
 
 
-# Per-TP attention tensor dimensions (match BlitzDecodeWeights configs for single device)
-_MLA_TP1_Q_B_WIDTH = 12288
-_MLA_TP1_O_PROJ_HEIGHT = 8192
-_MLA_TP1_KV_B1_HEIGHT = 8192
-_MLA_TP1_KV_B2_WIDTH = 8192
-
-# Per-TP shared expert dimensions (gate/up (7168, 256), down (256, 7168) for moe_tp=1)
-_MOE_TP1_SHARED_GATE_UP_N = 256
-_MOE_TP1_SHARED_DOWN_K = 256
-
-
 def _slice_attention_weights_for_mla_tp(
     q_b: torch.Tensor,
     o_proj: torch.Tensor,
@@ -471,15 +970,9 @@ def _slice_attention_weights_for_mla_tp(
     kv_b2: torch.Tensor,
     mla_tp: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    """When state dict has full (2-TP) logical shapes and mla_tp==1, slice to single-TP.
-
-    Single-device tests use mla_tp=1; the reference state dict uses full logical
-    shapes (24576 q_b, 16384 o_proj, etc.). Slice to per-TP so BlitzDecodeWeights
-    receives the shapes it expects.
-    """
+    """When state dict has full (2-TP) logical shapes and mla_tp==1, slice to single-TP."""
     if mla_tp > 1:
         return q_b, o_proj, kv_b1, kv_b2
-    # Full logical: q_b (1536, 24576), o_proj (16384, 7168), kv_b1 (16384, 512), kv_b2 (512, 16384)
     if q_b.shape[1] == _MLA_TP1_Q_B_WIDTH * 2:
         q_b = q_b[:, :_MLA_TP1_Q_B_WIDTH].contiguous()
     if o_proj.shape[0] == _MLA_TP1_O_PROJ_HEIGHT * 2:
@@ -497,12 +990,7 @@ def _slice_shared_expert_weights_for_moe_tp(
     shared_down: torch.Tensor,
     moe_tp: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """When state dict has full (8-TP) logical shapes and moe_tp==1, slice to single-TP.
-
-    Single-device tests use moe_tp=1; the reference state dict uses full logical
-    shapes (gate/up width 2048, down height 2048). Slice to per-TP so BlitzDecodeWeights
-    receives (7168, 256) and (256, 7168).
-    """
+    """When state dict has full (8-TP) logical shapes and moe_tp==1, slice to single-TP."""
     if moe_tp > 1:
         return shared_gate, shared_up, shared_down
     full_n = _MOE_TP1_SHARED_GATE_UP_N * 8  # 2048
@@ -530,24 +1018,6 @@ def get_layer_raw_tensors(
     torch.Tensor,
 ]:
     """Extract and transform raw tensors for one layer from the state dict.
-
-    Expects full logical HF shapes. We transpose HF
-    (out_features, in_features) to (K, N); norms unsqueeze(0) to
-    (1, W); kv_b_proj is split into kv_b1 and kv_b2 (see split_kv_b_proj).
-
-    Transformation (HF full logical -> transform -> passed to BlitzDecodeWeights):
-
-        Weight        | HF key (under model.layers.{i}.)     | HF shape      | Transform   | To blitz
-        --------------|-------------------------------------|---------------|-------------|------------------
-        q_b_proj      | self_attn.q_b_proj.weight            | (24576, 1536) | .T + deinterleave | (1536, 24576) [ALL_NOPE|ALL_ROPE]
-        o_proj        | self_attn.o_proj.weight              | (7168, 16384) | .T          | (16384, 7168)
-        kv_b_proj     | self_attn.kv_b_proj.weight           | (32768, 512)  | split       | kv_b1, kv_b2
-        q_a_proj      | self_attn.q_a_proj.weight            | (1536, 7168)  | .T          | (7168, 1536)
-        kv_a_proj     | self_attn.kv_a_proj_with_mqa.weight  | (576, 7168)   | .T          | (7168, 576)
-        norms         | input_layernorm, q_a_layernorm, etc. | (7168,), …    | unsqueeze(0)| (1, 7168), …
-
-    MoE-only (gate_mm, shared_gate_proj, shared_up_proj) are read in
-    prepare_moe_layer_weights.
 
     Returns:
         (q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm).
@@ -577,10 +1047,7 @@ def create_gate_indices_tensor(
     *,
     mesh_mapper: Any = None,
 ) -> ttnn.Tensor:
-    """Build constant gate indices 0..255 as HEIGHT_SHARDED on sender core.
-
-    Same layout as gate_bias: (16, 16), HEIGHT_SHARDED, tile 16x16, uint16.
-    """
+    """Build constant gate indices 0..255 as HEIGHT_SHARDED on sender core."""
     indices = torch.arange(_GATE_NUM_INDICES, dtype=torch.int32).reshape(
         _GATE_BIAS_INDICES_SHAPE[0], _GATE_BIAS_INDICES_SHAPE[1]
     )
@@ -603,8 +1070,32 @@ def create_gate_indices_tensor(
     )
 
 
+# ---------------------------------------------------------------------------
+# Cache-aware helpers
+# ---------------------------------------------------------------------------
+
+
+def _cached_or_fuse(cache_config, mesh_shape, group_name, layer_idx, spec_fps_fn, fuse_fn, device):
+    if cache_config is not None:
+        fp = _make_fp(cache_config, mesh_shape, group_name, layer_idx, spec_fps_fn())
+        return cache_config.cache.get_or_create(fp, fuse=fuse_fn, device=device)
+    return fuse_fn()
+
+
+def _cached_or_create(cache_config, mesh_shape, tensor_name, layer_idx, create_fn, device):
+    if cache_config is not None:
+        fp = _make_fp(cache_config, mesh_shape, tensor_name, layer_idx, ())
+        return cache_config.cache.get_or_create_tensor(fp, create=create_fn, device=device)
+    return create_fn()
+
+
+# ---------------------------------------------------------------------------
+# Public prepare_* API
+# ---------------------------------------------------------------------------
+
+
 def prepare_attention_weights(
-    bdw: BlitzDecodeWeights,
+    device,
     state_dict: dict[str, torch.Tensor],
     layer_idx: int,
     *,
@@ -618,41 +1109,38 @@ def prepare_attention_weights(
     :meth:`TensorCache.get_or_create`.  On a hit the raw tensors are still
     loaded (cheap) but the expensive tilize-pack-fuse step is skipped.
     """
-    mesh_shape = (bdw._device.shape[0], bdw._device.shape[1])
+    mesh = _mesh_shape(device)
+    mla_tp, _ = _compute_tp(device)
 
     logger.debug("Loading raw tensors from state dict for layer {}", layer_idx)
     t0 = time.perf_counter()
     q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = get_layer_raw_tensors(
         state_dict, layer_idx
     )
-    q_b, o_proj, kv_b1, kv_b2 = _slice_attention_weights_for_mla_tp(q_b, o_proj, kv_b1, kv_b2, bdw.mla_tp)
+    q_b, o_proj, kv_b1, kv_b2 = _slice_attention_weights_for_mla_tp(q_b, o_proj, kv_b1, kv_b2, mla_tp)
     logger.debug("  load raw tensors: {:.3f}s", time.perf_counter() - t0)
     logger.debug("Converting attention fusion groups for layer {} (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)", layer_idx)
     t0 = time.perf_counter()
 
-    def _cached_or_fuse(group_name, spec_fps_fn, fuse_fn):
-        if cache_config is not None:
-            fp = _make_fp(cache_config, mesh_shape, group_name, layer_idx, spec_fps_fn())
-            return cache_config.cache.get_or_create(fp, fuse=fuse_fn, device=bdw._device)
-        return fuse_fn()
-
-    def _cached_or_create(tensor_name, create_fn):
-        if cache_config is not None:
-            fp = _make_fp(cache_config, mesh_shape, tensor_name, layer_idx, ())
-            return cache_config.cache.get_or_create_tensor(fp, create=create_fn, device=bdw._device)
-        return create_fn()
-
     qab_kva = _cached_or_fuse(
+        cache_config,
+        mesh,
         "q_ab_kv_a",
+        layer_idx,
         _qab_kva_spec_fps,
-        lambda: bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(q_a, q_b, kv_a, move_to_device=move_to_device),
+        lambda: _fuse_q_ab_kv_a(device, q_a, q_b, kv_a, move_to_device=move_to_device),
+        device,
     )
     q_a_proj, q_b_proj, kv_a_proj = qab_kva["q_a_proj"], qab_kva["q_b_proj"], qab_kva["kv_a_proj"]
 
     kv_b12 = _cached_or_fuse(
+        cache_config,
+        mesh,
         "kv_b12",
+        layer_idx,
         _kv_b12_spec_fps,
-        lambda: bdw.get_tt_kv_b12_proj_weights(kv_b1, kv_b2, move_to_device=move_to_device),
+        lambda: _fuse_kv_b12(device, kv_b1, kv_b2, move_to_device=move_to_device),
+        device,
     )
     kv_b1_proj, kv_b2_proj = kv_b12["kv_b1_proj"], kv_b12["kv_b2_proj"]
     logger.debug("  convert q_ab_kv_a + kv_b12: {:.3f}s", time.perf_counter() - t0)
@@ -660,16 +1148,24 @@ def prepare_attention_weights(
     if is_moe:
         gate_mm = state_dict[_key(layer_idx, "mlp.gate.weight")].T.contiguous()
         o_norms = _cached_or_fuse(
+            cache_config,
+            mesh,
             "o_proj_gate_mm_norms",
+            layer_idx,
             _o_proj_norms_spec_fps,
-            lambda: bdw.get_tt_o_proj_and_gate_mm_weights(
-                o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
+            lambda: _fuse_o_proj_gate_mm_norms(
+                device, o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
             ),
+            device,
         )
         gate_bias_raw = state_dict[_key(layer_idx, "mlp.gate.e_score_correction_bias")]
         gate_bias_tt = _cached_or_create(
+            cache_config,
+            mesh,
             "gate_bias",
-            lambda: create_gate_bias_tensor(gate_bias_raw, bdw._device, move_to_device=move_to_device),
+            layer_idx,
+            lambda: create_gate_bias_tensor(gate_bias_raw, device, move_to_device=move_to_device),
+            device,
         )
         logger.debug("  convert o_proj_gate_mm_norms (MoE): {:.3f}s", time.perf_counter() - t0)
         return AttentionWeights(
@@ -689,11 +1185,15 @@ def prepare_attention_weights(
     else:
         gate_mm_dummy = torch.zeros(7168, 256, dtype=torch.bfloat16, device=next(iter(state_dict.values())).device)
         o_norms = _cached_or_fuse(
+            cache_config,
+            mesh,
             "o_proj_gate_mm_norms",
+            layer_idx,
             _o_proj_norms_spec_fps,
-            lambda: bdw.get_tt_o_proj_and_gate_mm_weights(
-                o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
+            lambda: _fuse_o_proj_gate_mm_norms(
+                device, o_proj, gate_mm_dummy, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
             ),
+            device,
         )
         logger.debug("  convert o_proj_gate_mm_norms (dense): {:.3f}s", time.perf_counter() - t0)
         return AttentionWeights(
@@ -713,7 +1213,7 @@ def prepare_attention_weights(
 
 
 def prepare_shared_expert_weights(
-    bdw: BlitzDecodeWeights,
+    device,
     state_dict: dict[str, torch.Tensor],
     layer_idx: int,
     *,
@@ -721,13 +1221,9 @@ def prepare_shared_expert_weights(
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
 ) -> SharedExpertWeights:
-    """Prepare shared expert weights (gate_up fusion group + shared_down_proj) for one layer.
-
-    When ``cache_config`` is provided, the gate_up fusion group is routed
-    through :meth:`TensorCache.get_or_create`.  The standalone down_proj
-    tensor is not cached (Phase 2 standalone caching).
-    """
-    mesh_shape = (bdw._device.shape[0], bdw._device.shape[1])
+    """Prepare shared expert weights (gate_up fusion group + shared_down_proj) for one layer."""
+    mesh = _mesh_shape(device)
+    _, moe_tp = _compute_tp(device)
     logger.debug("Converting shared expert weights for layer {} (is_moe={})", layer_idx, is_moe)
     t0 = time.perf_counter()
 
@@ -736,32 +1232,20 @@ def prepare_shared_expert_weights(
         shared_up = state_dict[_key(layer_idx, "mlp.shared_experts.up_proj.weight")].T.contiguous()
         shared_down = state_dict[_key(layer_idx, "mlp.shared_experts.down_proj.weight")].T.contiguous()
         shared_gate, shared_up, shared_down = _slice_shared_expert_weights_for_moe_tp(
-            shared_gate, shared_up, shared_down, bdw.moe_tp
+            shared_gate, shared_up, shared_down, moe_tp
         )
-        fuse_gate_up = lambda: bdw.get_tt_gate_up_proj_weights(shared_gate, shared_up, move_to_device=move_to_device)
-        create_down = lambda: bdw.get_tt_shared_down_proj_weights(shared_down, move_to_device=move_to_device)
+        fuse_gate_up = lambda: _fuse_gate_up(device, shared_gate, shared_up, move_to_device=move_to_device)
+        create_down = lambda: _create_shared_down_proj(device, shared_down, move_to_device=move_to_device)
     else:
         shared_n = 2048
         mlp_gate = state_dict[_key(layer_idx, "mlp.gate_proj.weight")].T.contiguous()[:, :shared_n]
         mlp_up = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()[:, :shared_n]
         mlp_down = state_dict[_key(layer_idx, "mlp.down_proj.weight")].T.contiguous()[:shared_n, :]
-        fuse_gate_up = lambda: bdw.get_tt_gate_up_proj_weights(mlp_gate, mlp_up, move_to_device=move_to_device)
-        create_down = lambda: bdw.get_tt_shared_down_proj_weights(mlp_down, move_to_device=move_to_device)
+        fuse_gate_up = lambda: _fuse_gate_up(device, mlp_gate, mlp_up, move_to_device=move_to_device)
+        create_down = lambda: _create_shared_down_proj(device, mlp_down, move_to_device=move_to_device)
 
-    def _cached_or_fuse(group_name, spec_fps_fn, fuse_fn):
-        if cache_config is not None:
-            fp = _make_fp(cache_config, mesh_shape, group_name, layer_idx, spec_fps_fn())
-            return cache_config.cache.get_or_create(fp, fuse=fuse_fn, device=bdw._device)
-        return fuse_fn()
-
-    def _cached_or_create(tensor_name, create_fn):
-        if cache_config is not None:
-            fp = _make_fp(cache_config, mesh_shape, tensor_name, layer_idx, ())
-            return cache_config.cache.get_or_create_tensor(fp, create=create_fn, device=bdw._device)
-        return create_fn()
-
-    gate_up = _cached_or_fuse("gate_up", _gate_up_spec_fps, fuse_gate_up)
-    shared_down_proj = _cached_or_create("shared_down_proj", create_down)
+    gate_up = _cached_or_fuse(cache_config, mesh, "gate_up", layer_idx, _gate_up_spec_fps, fuse_gate_up, device)
+    shared_down_proj = _cached_or_create(cache_config, mesh, "shared_down_proj", layer_idx, create_down, device)
 
     logger.debug("  shared expert weights done in {:.3f}s", time.perf_counter() - t0)
     return SharedExpertWeights(
@@ -772,7 +1256,7 @@ def prepare_shared_expert_weights(
 
 
 def prepare_routed_expert_weights(
-    bdw: BlitzDecodeWeights,
+    device,
     state_dict: dict[str, torch.Tensor],
     layer_idx: int,
     *,
@@ -784,13 +1268,13 @@ def prepare_routed_expert_weights(
     """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts).
 
     When ``cache_config`` is provided:
-    * **MoE** — each projection list (gate, up, down) is routed through
+    * **MoE** -- each projection list (gate, up, down) is routed through
       :meth:`TensorCache.get_or_create_tensor_list` for atomic, order-preserving
       caching that guarantees contiguous DRAM allocation.
-    * **Dense** — each of the three projections is routed through
+    * **Dense** -- each of the three projections is routed through
       :meth:`TensorCache.get_or_create_tensor`.
     """
-    mesh_shape = (bdw._device.shape[0], bdw._device.shape[1])
+    mesh = _mesh_shape(device)
 
     if is_moe:
 
@@ -813,13 +1297,13 @@ def prepare_routed_expert_weights(
                 down_list.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.down_proj.weight")].T.contiguous())
             load_elapsed = time.perf_counter() - t0
             logger.info("  loaded {} experts from state dict in {:.3f}s", num_routed_experts, load_elapsed)
-            logger.debug("Converting routed experts to device format (blitz)...")
+            logger.debug("Converting routed experts to device format...")
             t0 = time.perf_counter()
             gate_stacked = torch.stack(gate_list, dim=0)
             up_stacked = torch.stack(up_list, dim=0)
             down_stacked = torch.stack(down_list, dim=0)
-            routed_gate, routed_up, routed_down = bdw.get_tt_moe_routed_expert_weights(
-                gate_stacked, up_stacked, down_stacked, move_to_device=move_to_device
+            routed_gate, routed_up, routed_down = _create_moe_routed_experts(
+                device, gate_stacked, up_stacked, down_stacked, move_to_device=move_to_device
             )
             logger.info("  converted routed experts in {:.3f}s", time.perf_counter() - t0)
             return routed_gate, routed_up, routed_down
@@ -839,17 +1323,15 @@ def prepare_routed_expert_weights(
 
                 return _create
 
-            fp_gate = _make_fp(cache_config, mesh_shape, "routed_gate_proj", layer_idx, ())
-            fp_up = _make_fp(cache_config, mesh_shape, "routed_up_proj", layer_idx, ())
-            fp_down = _make_fp(cache_config, mesh_shape, "routed_down_proj", layer_idx, ())
+            fp_gate = _make_fp(cache_config, mesh, "routed_gate_proj", layer_idx, ())
+            fp_up = _make_fp(cache_config, mesh, "routed_up_proj", layer_idx, ())
+            fp_down = _make_fp(cache_config, mesh, "routed_down_proj", layer_idx, ())
             routed_gate_proj = cache_config.cache.get_or_create_tensor_list(
-                fp_gate, create=_create_proj(0), device=bdw._device
+                fp_gate, create=_create_proj(0), device=device
             )
-            routed_up_proj = cache_config.cache.get_or_create_tensor_list(
-                fp_up, create=_create_proj(1), device=bdw._device
-            )
+            routed_up_proj = cache_config.cache.get_or_create_tensor_list(fp_up, create=_create_proj(1), device=device)
             routed_down_proj = cache_config.cache.get_or_create_tensor_list(
-                fp_down, create=_create_proj(2), device=bdw._device
+                fp_down, create=_create_proj(2), device=device
             )
         else:
             routed_gate_proj, routed_up_proj, routed_down_proj = _create_all_experts()
@@ -872,28 +1354,28 @@ def prepare_routed_expert_weights(
 
             def _ensure_dense_converted():
                 if not _dense_cache:
-                    g, u, d = bdw.get_tt_mlp_routed_expert_weights(
-                        mlp_gate, mlp_up, mlp_down, move_to_device=move_to_device
+                    g, u, d = _create_mlp_routed_experts(
+                        device, mlp_gate, mlp_up, mlp_down, move_to_device=move_to_device
                     )
                     _dense_cache["gate"] = g
                     _dense_cache["up"] = u
                     _dense_cache["down"] = d
 
-            def _cached_or_create(tensor_name, key):
-                fp = _make_fp(cache_config, mesh_shape, tensor_name, layer_idx, ())
+            def _cached_or_create_dense(tensor_name, key):
+                fp = _make_fp(cache_config, mesh, tensor_name, layer_idx, ())
 
                 def _create():
                     _ensure_dense_converted()
                     return _dense_cache[key]
 
-                return cache_config.cache.get_or_create_tensor(fp, create=_create, device=bdw._device)
+                return cache_config.cache.get_or_create_tensor(fp, create=_create, device=device)
 
-            routed_gate_proj = _cached_or_create("routed_gate_proj", "gate")
-            routed_up_proj = _cached_or_create("routed_up_proj", "up")
-            routed_down_proj = _cached_or_create("routed_down_proj", "down")
+            routed_gate_proj = _cached_or_create_dense("routed_gate_proj", "gate")
+            routed_up_proj = _cached_or_create_dense("routed_up_proj", "up")
+            routed_down_proj = _cached_or_create_dense("routed_down_proj", "down")
         else:
-            routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_mlp_routed_expert_weights(
-                mlp_gate, mlp_up, mlp_down, move_to_device=move_to_device
+            routed_gate_proj, routed_up_proj, routed_down_proj = _create_mlp_routed_experts(
+                device, mlp_gate, mlp_up, mlp_down, move_to_device=move_to_device
             )
         return DenseRoutedExpertWeights(
             routed_gate_proj=routed_gate_proj,
@@ -903,7 +1385,7 @@ def prepare_routed_expert_weights(
 
 
 def prepare_dense_layer_weights(
-    bdw: BlitzDecodeWeights,
+    device,
     state_dict: dict[str, torch.Tensor],
     layer_idx: int,
     *,
@@ -914,15 +1396,16 @@ def prepare_dense_layer_weights(
     logger.info("Preparing dense layer {}...", layer_idx)
     t0 = time.perf_counter()
     attn = prepare_attention_weights(
-        bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
+        device, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
     )
     shared = prepare_shared_expert_weights(
-        bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
+        device, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
     )
     routed = prepare_routed_expert_weights(
-        bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
+        device, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
     )
     assert isinstance(routed, DenseRoutedExpertWeights)
+    logger.info("  dense layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return DeepSeekV3DenseLayerWeights(
         q_a_proj=attn.q_a_proj,
         q_b_proj=attn.q_b_proj,
@@ -941,11 +1424,10 @@ def prepare_dense_layer_weights(
         routed_up_proj=routed.routed_up_proj,
         routed_down_proj=routed.routed_down_proj,
     )
-    logger.info("  dense layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
 
 
 def prepare_moe_layer_weights(
-    bdw: BlitzDecodeWeights,
+    device,
     state_dict: dict[str, torch.Tensor],
     layer_idx: int,
     *,
@@ -957,13 +1439,13 @@ def prepare_moe_layer_weights(
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
     attn = prepare_attention_weights(
-        bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device, cache_config=cache_config
+        device, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device, cache_config=cache_config
     )
     shared = prepare_shared_expert_weights(
-        bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device, cache_config=cache_config
+        device, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device, cache_config=cache_config
     )
     routed = prepare_routed_expert_weights(
-        bdw,
+        device,
         state_dict,
         layer_idx,
         is_moe=True,
@@ -974,6 +1456,7 @@ def prepare_moe_layer_weights(
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None
     assert isinstance(routed, MoERoutedExpertWeights)
+    logger.info("  MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return DeepSeekV3MoELayerWeights(
         q_a_proj=attn.q_a_proj,
         q_b_proj=attn.q_b_proj,
@@ -994,11 +1477,10 @@ def prepare_moe_layer_weights(
         routed_up_proj=routed.routed_up_proj,
         routed_down_proj=routed.routed_down_proj,
     )
-    logger.info("  MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
 
 
 def _to_tt_embedding(embedding_torch: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
-    """Convert a torch embedding tensor to TT (DRAM, ROW_MAJOR, ReplicateTensorToMesh). Shared by prepare and synthetic."""
+    """Convert a torch embedding tensor to TT (DRAM, ROW_MAJOR, ReplicateTensorToMesh)."""
     return ttnn.from_torch(
         embedding_torch.contiguous(),
         dtype=ttnn.bfloat16,
@@ -1025,17 +1507,15 @@ def prepare_embedding_weights(
         return _to_tt_embedding(w, device, move_to_device=move_to_device)
 
     if cache_config is not None:
-        mesh_shape = (device.shape[0], device.shape[1])
-        fp = _make_fp(cache_config, mesh_shape, "embedding", 0, ())
+        mesh = _mesh_shape(device)
+        fp = _make_fp(cache_config, mesh, "embedding", 0, ())
         embedding_tt = cache_config.cache.get_or_create_tensor(fp, create=create, device=device)
     else:
         embedding_tt = create()
     return DeepSeekV3EmbeddingLayerWeights(embedding=embedding_tt)
 
 
-# LM head: HF keeps full vocab (129280, 7168). Prepare shards vocab (N) across the mesh (TP=mesh size)
-# and uses the same per-device L1 WIDTH_SHARDED layout as test_lm_head_sampling (101 matmul cores).
-
+# LM head constants
 _LM_HEAD_K = 7168
 _LM_HEAD_VOCAB_SIZE = 129280
 _LM_HEAD_NUM_MATMUL_CORES = 101
@@ -1055,7 +1535,7 @@ _LM_HEAD_MCAST_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_LM_HEAD_MCAST_CORE
 def _to_tt_lm_head_matrix(
     lm_head_torch: torch.Tensor, device, *, mesh_mapper, move_to_device: bool = False
 ) -> ttnn.Tensor:
-    """Convert (K, N) lm_head torch tensor to TT (WIDTH_SHARDED 101 cores, L1). Shared by prepare and synthetic."""
+    """Convert (K, N) lm_head torch tensor to TT (WIDTH_SHARDED 101 cores, L1)."""
     lm_head_shard_shape = (_LM_HEAD_K, _LM_HEAD_N_PER_CORE)
     lm_head_shard_spec = ttnn.ShardSpec(
         _LM_HEAD_MATMUL_CORE_GRID,
@@ -1079,7 +1559,7 @@ def _to_tt_lm_head_matrix(
 
 
 def _to_tt_lm_head_final_norm(norm_torch: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
-    """Convert (1, K) final norm torch tensor to TT (HEIGHT_SHARDED on mcast core). Shared by prepare and synthetic."""
+    """Convert (1, K) final norm torch tensor to TT (HEIGHT_SHARDED on mcast core)."""
     norm_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
@@ -1103,12 +1583,7 @@ def prepare_lm_head_weights(
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
 ) -> DeepSeekV3LMHeadWeights:
-    """Prepare LM head and final norm weights from state dict.
-
-    device must be the mesh device (e.g. 4x2 submesh). The LM head weight matrix is sharded
-    along the vocabulary dimension (TP = mesh size). Per-device layout matches the LM head
-    sampling op: WIDTH_SHARDED in L1 across 101 matmul cores with shard shape (7168, N_per_core).
-    """
+    """Prepare LM head and final norm weights from state dict."""
     logger.info("Preparing LM head weights...")
     lm_w = state_dict["lm_head.weight"]
     assert lm_w.shape == (
@@ -1129,10 +1604,10 @@ def prepare_lm_head_weights(
         return _to_tt_lm_head_final_norm(norm_w.unsqueeze(0), device, move_to_device=move_to_device)
 
     if cache_config is not None:
-        mesh_shape = (device.shape[0], device.shape[1])
-        fp_lm = _make_fp(cache_config, mesh_shape, "lm_head", 0, ())
+        mesh = _mesh_shape(device)
+        fp_lm = _make_fp(cache_config, mesh, "lm_head", 0, ())
         lm_head_tt = cache_config.cache.get_or_create_tensor(fp_lm, create=create_lm_head, device=device)
-        fp_norm = _make_fp(cache_config, mesh_shape, "final_norm", 0, ())
+        fp_norm = _make_fp(cache_config, mesh, "final_norm", 0, ())
         final_norm_tt = cache_config.cache.get_or_create_tensor(fp_norm, create=create_final_norm, device=device)
     else:
         lm_head_tt = create_lm_head()

@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     CACHE_TYPE_OVERLAPPED,
     CACHE_TYPE_TENSOR,
     CACHE_TYPE_TENSOR_LIST,
+    NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
@@ -318,18 +319,12 @@ class SyntheticWeightProvider:
         )
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
-        bdw = BlitzDecodeWeights(device)
-        return prepare_moe_layer_weights(bdw, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
+        return prepare_moe_layer_weights(device, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
         sd = _build_synthetic_dense_state_dict(layer_id)
-        bdw = BlitzDecodeWeights(device)
-        return prepare_dense_layer_weights(bdw, sd, layer_id, move_to_device=True)
+        return prepare_dense_layer_weights(device, sd, layer_id, move_to_device=True)
 
 
 class StateDictWeightProvider:
@@ -348,11 +343,8 @@ class StateDictWeightProvider:
         return prepare_lm_head_weights(self._state_dict, device, move_to_device=True)
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
-        bdw = BlitzDecodeWeights(device)
         return prepare_moe_layer_weights(
-            bdw,
+            device,
             self._state_dict,
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
@@ -360,7 +352,4 @@ class StateDictWeightProvider:
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
-        bdw = BlitzDecodeWeights(device)
-        return prepare_dense_layer_weights(bdw, self._state_dict, layer_id, move_to_device=True)
+        return prepare_dense_layer_weights(device, self._state_dict, layer_id, move_to_device=True)

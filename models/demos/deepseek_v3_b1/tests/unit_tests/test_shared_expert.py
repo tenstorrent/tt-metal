@@ -17,9 +17,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_b1.blitz_decode_weights import GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC, BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
+from models.demos.deepseek_v3_b1.overlap_specs import GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
+from models.demos.deepseek_v3_b1.prepare_weights import _create_shared_down_proj, _fuse_gate_up
 
 
 @pytest.mark.parametrize(
@@ -50,7 +51,7 @@ def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
     k_per_core = (K_gate // 32) // k_parallel
     assert k_per_core * k_parallel * 32 == K_gate, "K_gate must be divisible by 32 * k_parallel"
 
-    use_bdw = K_gate == cfg.gate_proj_shape[0] and weights_dtype == ttnn.bfloat4_b
+    use_fused_weights = K_gate == cfg.gate_proj_shape[0] and weights_dtype == ttnn.bfloat4_b
 
     logger.info("=" * 70)
     logger.info("Testing Shared Expert:")
@@ -107,16 +108,12 @@ def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
     # ========================================================================
     # Gate/Up/Down weights
     # ========================================================================
-    # BlitzDecodeWeights hard-codes weights to bfloat4_b; use the old flow to test bfloat8_b weights
-    if use_bdw:
-        bdw = BlitzDecodeWeights(device)
-        gate_ov, _up_ov, ttnn_down_weights = bdw.get_tt_moe_shared_expert_weights(
-            torch_gate_weights,
-            torch_up_weights,
-            torch_down_weights,
-        )
-        ttnn_gate_up_weights = gate_ov.fused_tensor
-        logger.info("Created shared expert weights via BlitzDecodeWeights")
+    # _fuse_gate_up hard-codes weights to bfloat4_b; use the manual flow to test bfloat8_b weights
+    if use_fused_weights:
+        gate_up = _fuse_gate_up(device, torch_gate_weights, torch_up_weights)
+        ttnn_down_weights = _create_shared_down_proj(device, torch_down_weights)
+        ttnn_gate_up_weights = gate_up["gate_proj"].fused_tensor
+        logger.info("Created shared expert weights via fused overlap")
     else:
         a_cores_list, b_cores_list = SharedExpertOp.build_ab_grids()
         compute_cores_list = a_cores_list + b_cores_list
