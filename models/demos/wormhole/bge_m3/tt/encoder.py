@@ -37,12 +37,7 @@ class BgeM3TransformerBlock(LightweightModule):
                 qkv_dtype=dtype,
                 score_dtype=ttnn.bfloat16,
                 output_dtype=dtype,
-                score_prg_config=ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=args.grid_size,
-                    q_chunk_size=128,
-                    k_chunk_size=512,
-                    exp_approx_mode=False,
-                ),
+                score_prg_config=None,
             )
         )
         self.attention_norm = _build_optional_layer_norm(

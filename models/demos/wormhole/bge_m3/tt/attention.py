@@ -251,7 +251,7 @@ class BgeM3Attention(LightweightModule):
                 sdpa_mask = ttnn.to_memory_config(sdpa_mask, score_memcfg)
 
         # Stage 4: encoder SDPA.
-        sdpa_program_config = cfg.score_prg_config or _sdpa_program_config_for_seq_len(seq_len)
+        sdpa_program_config = cfg.score_prg_config if seq_len <= 128 else _sdpa_program_config_for_seq_len(seq_len)
         context = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
