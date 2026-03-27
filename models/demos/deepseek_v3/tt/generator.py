@@ -287,15 +287,19 @@ class DeepseekGenerator(WarmupForwardMixin):
             raise SystemExit("MTP with sampling on device is not supported. Disable MTP or sample on host.")
 
         current_sampling_params = getattr(self, "sampling_params", None)
-        if not self._are_sampling_params_same(sampling_params, current_sampling_params):
-            logger.info("Sampling parameters changed, resetting sampling generator")
+        params_same = (
+            sampling_params is not None
+            and current_sampling_params is not None
+            and self._are_sampling_params_same(sampling_params, current_sampling_params)
+        )
+        if not params_same:
             self.sampling_generator = None
             self.sampling_params = None
 
-        if self.sampling_generator is not None:
-            logger.info(
-                "Sampling generator already initialized and sampling parameters are same, skipping reinitialization"
-            )
+        if not sample_on_device:
+            self.sampling_generator = None
+
+        if getattr(self, "sampling_generator", None) is not None:
             return
 
         self.sample_on_device = sample_on_device
@@ -334,18 +338,14 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
     def _are_sampling_params_same(
-        self, new_sampling_params: SamplingParams | None, current_sampling_params: SamplingParams | None
+        self, new_sampling_params: SamplingParams, current_sampling_params: SamplingParams
     ) -> bool:
         """Return True when both sampling params are equivalent after formatting.
 
         Both inputs are normalized with ``format_sampling_params`` so scalar/list
         representations compare consistently for the configured batch size.
-        If either input is ``None``, this returns ``False``.
+        Caller must ensure neither argument is ``None``.
         """
-
-        if new_sampling_params is None or current_sampling_params is None:
-            return False  # if either is None, we can't compare values so return False
-
         normalized_new = format_sampling_params(new_sampling_params, max_batch_size=self.batch_size)
         normalized_current = format_sampling_params(current_sampling_params, max_batch_size=self.batch_size)
         return normalized_new == normalized_current
@@ -362,25 +362,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         if isinstance(value, (list, tuple)):
             return f"{type(value).__name__}(len={len(value)})"
         return type(value).__name__
-
-    def _log_sampling_params(self, callsite: str, sampling_params: SamplingParams | None, sample_on_device: bool):
-        logger.info("{} sample_on_device={}", callsite, sample_on_device)
-        if sampling_params is None:
-            logger.info("{} sampling_params=None (using defaults)", callsite)
-            return
-
-        for field_name in (
-            "temperature",
-            "top_k",
-            "top_p",
-            "presence_penalty",
-            "frequency_penalty",
-            "repetition_penalty",
-            "seed",
-            "enable_log_probs",
-        ):
-            field_val = getattr(sampling_params, field_name, None)
-            logger.info("{} sampling_params.{}={}", callsite, field_name, self._shape_or_type(field_val))
 
     def _dump_meminfo(self, header: str) -> None:
         if self.enable_mem_profile:
