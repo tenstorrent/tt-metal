@@ -167,8 +167,6 @@ class DecoderStage(StageKind):
             reduce_root_coord=self._state["reduce_root_coord"],
             enable_routing=enable_routing,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
-            bcast_cluster_axis=0,
-            bcast_secondary_cluster_axis=1,
             reduce_cluster_axis=1,
             sdpa_cluster_axis=0,
             num_links=1,

@@ -2715,29 +2715,41 @@ void kernel_main() {
         mcast.init(mcast_args);
     }
 
-    for (uint32_t i = 0; i < num_iterations; i++) {
+    constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
+    constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
+    uint32_t iteration = 0;
+    while (true) {
 #if defined(COMPILE_FOR_BRISC)
-        constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
-        constexpr uint32_t persistent_next_iter_sem_addr =
-            get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
         if constexpr (persistent_mode) {
             constexpr bool is_bcast_root = get_named_compile_time_arg_val("bcast_is_root") == 1;
             if constexpr (is_bcast_root && Core::is_sender_core) {
                 auto next_iter_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_sem_addr);
+                DPRINT << "Bcast sem wait iteration " << iteration << ENDL();
                 noc_semaphore_wait(next_iter_sem, 1);
+                DPRINT << "Bcast sem wait done iteration " << iteration << ENDL();
                 noc_semaphore_set(next_iter_sem, 0);
             }
         }
 #endif
+        // DPRINT << "Reconfig CB interfaces iteration " << iteration << ENDL();
         unified_kernels::reconfig_cb_interfaces(mla_cb_config);
+        // DPRINT << "Setup MLA sharded buffers iteration " << iteration << ENDL();
         setup_mla_sharded_buffers();
+        // DPRINT << "MLA body iteration " << iteration << ENDL();
         mla_body();
+        // DPRINT << "Reconfig MoE CB interfaces iteration " << iteration << ENDL();
         unified_kernels::reconfig_cb_interfaces(moe_cb_config);
 #if defined(COMPILE_FOR_BRISC)
         *pos_ptr += 1;
 #endif
         setup_moe_sharded_buffers();
         moe_body();
+        iteration++;
+        if constexpr (!persistent_mode) {
+            if (iteration >= num_iterations) {
+                break;
+            }
+        }
     }
 
     // ====================================================================
