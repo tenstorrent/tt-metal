@@ -107,6 +107,35 @@ inline uint32_t get_N_dim(const tt::tt_metal::Shape& padded_shape, const std::op
     return padded_shape[-1] / (tile.has_value() ? tile.value().get_width() : 1);
 }
 
+struct In0TransposeStrides {
+    uint32_t stride_w;
+    uint32_t stride_h;
+};
+
+/**
+ * @brief Compute in0 tensor strides for the reader kernel, handling transpose_a with fuse_batch.
+ *
+ * When transpose_a is true and batches are not fused (M == M_per_batch), the tile traversal
+ * order must be transposed: stride_w = M_per_batch, stride_h = 1. When batches are fused
+ * (M != M_per_batch) or transpose_a is false, normal strides apply: stride_w = 1, stride_h = K.
+ *
+ * The caller must ensure that transpose_a + fuse_batch + M_per_batch > 1 is not used; this
+ * unsupported combination is validated in MatmulDeviceOperation::validate_on_program_cache_miss.
+ *
+ * @param M Total M dimension in tiles (possibly fused across batches)
+ * @param M_per_batch M dimension in tiles for a single batch
+ * @param transpose_a Whether the A tensor is logically transposed
+ * @param K K dimension in tiles
+ * @return In0TransposeStrides with stride_w and stride_h
+ */
+inline In0TransposeStrides get_in0_transpose_strides(uint32_t M, uint32_t M_per_batch, bool transpose_a, uint32_t K) {
+    const bool batch_fused = (M != M_per_batch);
+    return {
+        .stride_w = (transpose_a && !batch_fused) ? M_per_batch : 1u,
+        .stride_h = (transpose_a && !batch_fused) ? 1u : K,
+    };
+}
+
 /**
  * @brief Get the padded shape of a tensor, with optional transpose.
  *
