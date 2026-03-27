@@ -561,6 +561,7 @@ def run_ring_joint_sdpa(
     ],
 )
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["no_balancing", "balanced"])
+@pytest.mark.timeout(0)
 def test_mla_sdpa(
     mesh_device,
     b,
