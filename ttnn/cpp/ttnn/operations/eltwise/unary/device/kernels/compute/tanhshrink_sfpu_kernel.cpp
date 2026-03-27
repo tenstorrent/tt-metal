@@ -17,7 +17,10 @@ void kernel_main() {
 
     // tanhshrink(x) = x - tanh(x)
     auto chain = sfpu_chain(
-        Load<cb_input, Dst::D0>{}, Load<cb_input, Dst::D1>{}, Tanh<Dst::D1>{}, SfpuSub<Dst::D0, Dst::D1, Dst::D0>{});
+        Load<cb_input, Dst::D0>{},
+        Load<cb_input, Dst::D1>{},
+        Tanh<Approx::Exact, Dst::D1>{},
+        SfpuSub<Dst::D0, Dst::D1, Dst::D0>{});
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         sfpu_pipeline<SfpuInputPolicy::WaitAndPopPerTile, SfpuOutputPolicy::Bulk>(

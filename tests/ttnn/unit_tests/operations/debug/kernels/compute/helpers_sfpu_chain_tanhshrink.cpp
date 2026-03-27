@@ -19,7 +19,10 @@ void kernel_main() {
     init_sfpu(cb_in, cb_out);
 
     auto chain = sfpu_chain(
-        Load<cb_in, Dst::D0>{}, Load<cb_in, Dst::D1>{}, Tanh<Dst::D1>{}, SfpuSub<Dst::D0, Dst::D1, Dst::D0>{});
+        Load<cb_in, Dst::D0>{},
+        Load<cb_in, Dst::D1>{},
+        Tanh<Approx::Exact, Dst::D1>{},
+        SfpuSub<Dst::D0, Dst::D1, Dst::D0>{});
 
     for (uint32_t block = 0; block < per_core_block_cnt; block++) {
         sfpu_pipeline(cb_out, 0, per_core_block_dim, chain);

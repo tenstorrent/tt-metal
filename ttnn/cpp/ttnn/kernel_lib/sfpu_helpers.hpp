@@ -135,6 +135,27 @@ using namespace ckernel;
 enum class Dst : uint32_t { D0 = 0, D1 = 1, D2 = 2, D3 = 3, D4 = 4, D5 = 5, D6 = 6, D7 = 7 };
 
 // =============================================================================
+// Approximation Mode Enums (self-documenting template params)
+// =============================================================================
+
+/**
+ * @brief Approximation mode for SFPU operations
+ *
+ * Controls precision vs speed tradeoff in operations like exp, log, tanh, sigmoid.
+ * - Exact: Full precision (default for most ops)
+ * - Approx: Reduced precision, faster execution
+ */
+enum class Approx : bool { Exact = false, Fast = true };
+
+/**
+ * @brief Legacy compatibility mode for recip/rsqrt
+ *
+ * - Off: Use new optimized implementation (default for rsqrt)
+ * - On: Use legacy implementation (default for recip)
+ */
+enum class Legacy : bool { Off = false, On = true };
+
+// =============================================================================
 // Tag Types for Compile-Time Dispatch
 // =============================================================================
 
@@ -208,15 +229,17 @@ struct Load : LoadTag {
 
 /**
  * @brief Exponential: DST[Slot] = exp(DST[Slot])
+ * @tparam approx Approximation mode (default: Exact)
+ * @tparam fast Fast+approximate mode (default: Fast)
  * @tparam Slot DEST slot to operate on
- * LLK: exp_tile_init() -> exp_tile(idst)
+ * LLK: exp_tile_init<approx,fast>() -> exp_tile<approx,fast>(idst)
  */
-template <Dst Slot = Dst::D0>
+template <Approx approx = Approx::Exact, Approx fast = Approx::Fast, Dst Slot = Dst::D0>
 struct Exp : ComputeTag {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { exp_tile_init(); }
-    ALWI void exec() const { exp_tile(dst_idx); }
+    ALWI void init() const { exp_tile_init<static_cast<bool>(approx), static_cast<bool>(fast)>(); }
+    ALWI void exec() const { exp_tile<static_cast<bool>(approx), static_cast<bool>(fast)>(dst_idx); }
     ALWI void apply() const {
         init();
         exec();
@@ -225,15 +248,16 @@ struct Exp : ComputeTag {
 
 /**
  * @brief Natural logarithm: DST[Slot] = log(DST[Slot])
+ * @tparam approx Approximation mode (default: Exact)
  * @tparam Slot DEST slot to operate on
- * LLK: log_tile_init() -> log_tile(idst)
+ * LLK: log_tile_init<approx>() -> log_tile<approx>(idst)
  */
-template <Dst Slot = Dst::D0>
+template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
 struct Log : ComputeTag {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { log_tile_init(); }
-    ALWI void exec() const { log_tile(dst_idx); }
+    ALWI void init() const { log_tile_init<static_cast<bool>(approx)>(); }
+    ALWI void exec() const { log_tile<static_cast<bool>(approx)>(dst_idx); }
     ALWI void apply() const {
         init();
         exec();
@@ -261,15 +285,16 @@ struct LogWithBase : ComputeTag {
 
 /**
  * @brief Log(1 + x): DST[Slot] = log1p(DST[Slot])
+ * @tparam fast_and_approx Fast approximation mode (default: false)
  * @tparam Slot DEST slot to operate on
- * LLK: log1p_tile_init() -> log1p_tile(idst)
+ * LLK: log1p_tile_init<fast_and_approx>() -> log1p_tile<fast_and_approx>(idst)
  */
-template <Dst Slot = Dst::D0>
+template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
 struct Log1p : ComputeTag {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { log1p_tile_init(); }
-    ALWI void exec() const { log1p_tile(dst_idx); }
+    ALWI void init() const { log1p_tile_init<static_cast<bool>(approx)>(); }
+    ALWI void exec() const { log1p_tile<static_cast<bool>(approx)>(dst_idx); }
     ALWI void apply() const {
         init();
         exec();
@@ -278,15 +303,16 @@ struct Log1p : ComputeTag {
 
 /**
  * @brief Square root: DST[Slot] = sqrt(DST[Slot])
+ * @tparam fast_approx Fast approximation mode (default: false)
  * @tparam Slot DEST slot to operate on
- * LLK: sqrt_tile_init() -> sqrt_tile(idst)
+ * LLK: sqrt_tile_init() -> sqrt_tile<fast_approx>(idst)
  */
-template <Dst Slot = Dst::D0>
+template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
 struct Sqrt : ComputeTag {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
     ALWI void init() const { sqrt_tile_init(); }
-    ALWI void exec() const { sqrt_tile(dst_idx); }
+    ALWI void exec() const { sqrt_tile<static_cast<bool>(approx)>(dst_idx); }
     ALWI void apply() const {
         init();
         exec();
@@ -295,15 +321,17 @@ struct Sqrt : ComputeTag {
 
 /**
  * @brief Reciprocal square root: DST[Slot] = 1/sqrt(DST[Slot])
+ * @tparam legacy Legacy compatibility mode (default: Off)
+ * @tparam approx Fast approximation mode (default: Exact)
  * @tparam Slot DEST slot to operate on
- * LLK: rsqrt_tile_init() -> rsqrt_tile(idst)
+ * LLK: rsqrt_tile_init<legacy>() -> rsqrt_tile<legacy,approx>(idst)
  */
-template <Dst Slot = Dst::D0>
+template <Legacy legacy = Legacy::Off, Approx approx = Approx::Exact, Dst Slot = Dst::D0>
 struct Rsqrt : ComputeTag {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { rsqrt_tile_init(); }
-    ALWI void exec() const { rsqrt_tile(dst_idx); }
+    ALWI void init() const { rsqrt_tile_init<static_cast<bool>(legacy)>(); }
+    ALWI void exec() const { rsqrt_tile<static_cast<bool>(legacy), static_cast<bool>(approx)>(dst_idx); }
     ALWI void apply() const {
         init();
         exec();
@@ -329,15 +357,16 @@ struct Cbrt : ComputeTag {
 
 /**
  * @brief Reciprocal: DST[Slot] = 1/DST[Slot]
+ * @tparam legacy Legacy compatibility mode (default: On for recip)
  * @tparam Slot DEST slot to operate on
- * LLK: recip_tile_init() -> recip_tile(idst)
+ * LLK: recip_tile_init<legacy>() -> recip_tile<legacy>(idst)
  */
-template <Dst Slot = Dst::D0>
+template <Legacy legacy = Legacy::On, Dst Slot = Dst::D0>
 struct Recip : ComputeTag {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { recip_tile_init(); }
-    ALWI void exec() const { recip_tile(dst_idx); }
+    ALWI void init() const { recip_tile_init<static_cast<bool>(legacy)>(); }
+    ALWI void exec() const { recip_tile<static_cast<bool>(legacy)>(dst_idx); }
     ALWI void apply() const {
         init();
         exec();
@@ -452,12 +481,12 @@ struct Exp2 : ComputeTag {
  * @tparam Slot DEST slot to operate on
  * LLK: expm1_tile_init() -> expm1_tile(idst)
  */
-template <Dst Slot = Dst::D0>
+template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
 struct Expm1 : ComputeTag {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { expm1_tile_init(); }
-    ALWI void exec() const { expm1_tile(dst_idx); }
+    ALWI void init() const { expm1_tile_init<static_cast<bool>(approx)>(); }
+    ALWI void exec() const { expm1_tile<static_cast<bool>(approx)>(dst_idx); }
     ALWI void apply() const {
         init();
         exec();
@@ -533,12 +562,12 @@ struct Rpow : ComputeTag {
  * LLK: sigmoid_tile_init() -> sigmoid_tile(idst)
  * Note: vec_mode fixed to RC (standard mode)
  */
-template <Dst Slot = Dst::D0>
+template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
 struct Sigmoid : ComputeTag {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { sigmoid_tile_init(); }
-    ALWI void exec() const { sigmoid_tile(dst_idx); }
+    ALWI void init() const { sigmoid_tile_init<static_cast<bool>(approx)>(); }
+    ALWI void exec() const { sigmoid_tile<(int)VectorMode::RC, static_cast<bool>(approx)>(dst_idx); }
     ALWI void apply() const {
         init();
         exec();
@@ -547,15 +576,16 @@ struct Sigmoid : ComputeTag {
 
 /**
  * @brief Tanh activation: DST[Slot] = tanh(DST[Slot])
+ * @tparam approx Approximation mode (default: Exact)
  * @tparam Slot DEST slot to operate on
- * LLK: tanh_tile_init() -> tanh_tile(idst)
+ * LLK: tanh_tile_init<approx>() -> tanh_tile<approx>(idst)
  */
-template <Dst Slot = Dst::D0>
+template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
 struct Tanh : ComputeTag {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { tanh_tile_init(); }
-    ALWI void exec() const { tanh_tile(dst_idx); }
+    ALWI void init() const { tanh_tile_init<static_cast<bool>(approx)>(); }
+    ALWI void exec() const { tanh_tile<static_cast<bool>(approx)>(dst_idx); }
     ALWI void apply() const {
         init();
         exec();
@@ -564,16 +594,16 @@ struct Tanh : ComputeTag {
 
 /**
  * @brief GELU activation: DST[Slot] = gelu(DST[Slot])
+ * @tparam approx Approximation mode (default: Fast — unlike most other ops)
  * @tparam Slot DEST slot to operate on
- * LLK: gelu_tile_init() -> gelu_tile(idst)
- * Note: Default fast_and_approx=true (unlike most other ops which default false)
+ * LLK: gelu_tile_init<approx>() -> gelu_tile<approx>(idst)
  */
-template <Dst Slot = Dst::D0>
+template <Approx approx = Approx::Fast, Dst Slot = Dst::D0>
 struct Gelu : ComputeTag {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { gelu_tile_init(); }
-    ALWI void exec() const { gelu_tile(dst_idx); }
+    ALWI void init() const { gelu_tile_init<static_cast<bool>(approx)>(); }
+    ALWI void exec() const { gelu_tile<static_cast<bool>(approx)>(dst_idx); }
     ALWI void apply() const {
         init();
         exec();

@@ -17,9 +17,9 @@ void kernel_main() {
     auto chain = sfpu_chain(
         Load<src_cb_index, Dst::D0>{},         // D0 = x
         Load<ones_cb_index, Dst::D1>{},        // D1 = 1.0
-        Exp<Dst::D0>{},                        // D0 = exp(x)
+        Exp<>{},                               // D0 = exp(x)
         SfpuAdd<Dst::D0, Dst::D1, Dst::D0>{},  // D0 = exp(x) + 1
-        Log<Dst::D0>{});                       // D0 = log(exp(x) + 1)
+        Log<>{});                              // D0 = log(exp(x) + 1)
 
     sfpu_pipeline(result_cb_index, /*pack_slot=*/0, /*num_tiles=*/1, chain);
 }
