@@ -424,16 +424,18 @@ FORCE_INLINE constexpr eth_chan_directions map_compact_index_to_direction(size_t
 
 // Determine which sender channels are "turn" channels (i.e., north/south for east/west routers)
 // Channel 0 is always for local workers, so it's never a turn channel
-// For 2D fabric, channels 1-3 correspond to compact indices 0-2, which map to actual directions
-constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> {
-    std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> turn_statuses = {};  // Initialize to false
+// For 2D fabric, channels 1-N correspond to compact indices 0-(N-1), which map to actual directions.
+// The array must be large enough for both VC0 direct lookups and VC1 mapped lookups
+// (VC1 channel k maps to index k+1).
+constexpr size_t TURN_STATUS_ARRAY_SIZE = (MAX_NUM_SENDER_CHANNELS_VC0 > MAX_NUM_SENDER_CHANNELS_VC1 + 1)
+                                              ? MAX_NUM_SENDER_CHANNELS_VC0
+                                              : MAX_NUM_SENDER_CHANNELS_VC1 + 1;
 
-    // Channel 0 is always for local workers, never a turn channel
-    // Only non-spine routers (EAST/WEST) have turn channels
+constexpr auto get_sender_channel_turn_statuses() -> std::array<bool, TURN_STATUS_ARRAY_SIZE> {
+    std::array<bool, TURN_STATUS_ARRAY_SIZE> turn_statuses = {};
+
     if constexpr (!is_spine_direction(static_cast<eth_chan_directions>(my_direction))) {
-        // Check each sender channel (1-3) to see if it goes to a spine direction (NORTH/SOUTH)
-        // Sender channel i (for i=1,2,3) corresponds to compact index (i-1)
-        for (size_t sender_channel = 1; sender_channel < MAX_NUM_SENDER_CHANNELS_VC0; sender_channel++) {
+        for (size_t sender_channel = 1; sender_channel < TURN_STATUS_ARRAY_SIZE; sender_channel++) {
             size_t compact_index = sender_channel - 1;
             eth_chan_directions actual_direction = map_compact_index_to_direction(compact_index);
             turn_statuses[sender_channel] = is_spine_direction(actual_direction);
@@ -485,7 +487,7 @@ FORCE_INLINE uint16_t hop_cmd_to_sender_channel_mask(uint32_t hop_cmd) {
     return fwd_mask;
 }
 
-static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> sender_channels_turn_status =
+static constexpr std::array<bool, TURN_STATUS_ARRAY_SIZE> sender_channels_turn_status =
     get_sender_channel_turn_statuses();
 
 static constexpr std::array<uint32_t, NUM_ROUTER_CARDINAL_DIRECTIONS> vc_0_free_slots_stream_ids = {
