@@ -9,6 +9,7 @@ import ttnn
 from transformers import UMT5EncoderModel
 
 from models.common.metrics import compute_pcc
+from models.experimental.lingbot_va.tests.mesh_utils import mesh_shape_request_param
 from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder as TTUMT5Encoder
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
@@ -17,13 +18,6 @@ CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints/text_enc
 PCC_THRESHOLD = 0.99
 BATCH_SIZE = 1
 SEQ_LEN = 512
-
-
-@pytest.fixture(scope="module")
-def mesh_device():
-    device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
-    yield device
-    ttnn.close_mesh_device(device)
 
 
 @pytest.fixture(scope="module")
@@ -36,6 +30,11 @@ def hf_model():
     return model
 
 
+@pytest.mark.parametrize(
+    "mesh_device",
+    [mesh_shape_request_param()],
+    indirect=True,
+)
 @pytest.mark.timeout(0)
 def test_umt5_encoder_comparison(mesh_device, hf_model):
     text_weights = {k: v.cpu() for k, v in hf_model.state_dict().items()}

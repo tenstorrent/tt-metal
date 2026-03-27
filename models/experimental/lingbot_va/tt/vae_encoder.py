@@ -4,7 +4,6 @@
 import os
 import ttnn
 import torch
-from models.common.utility_functions import is_blackhole
 from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.models.vae.vae_wan2_1 import (
     WanCausalConv3d,
@@ -31,7 +30,7 @@ def _iter_tt_module_submodules(module: Module):
 
 def patch_wan_causal_conv_wormhole_bf16_parity(mm: WanCausalConv3d, mesh_device) -> None:
     """Use a Wormhole bf16 conv kernel config closer to torch reference numerics."""
-    if mesh_device is None or is_blackhole():
+    if mesh_device is None:
         return
     arch = mesh_device.arch()
     mm.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -96,7 +95,7 @@ class WanVAEEncoder(Module):
                 mesh_device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
-                fp32_dest_acc_en=is_blackhole(),
+                fp32_dest_acc_en=False,
                 packer_l1_acc=False,
             )
 
@@ -231,7 +230,7 @@ class WanVAEEncoder(Module):
         self.num_causal_conv_slots = count_convs(self)
 
     def _patch_wormhole_math_for_encoder_parity(self) -> None:
-        if self.mesh_device is None or is_blackhole():
+        if self.mesh_device is None:
             return
         arch = self.mesh_device.arch()
         for m in _iter_tt_module_submodules(self):

@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 from loguru import logger
 
-from models.experimental.lingbot_va.tests.demo.inference_ttnn import load_message_from_files, run_inference
+from models.experimental.lingbot_va.tests.demo.demo import load_message_from_files, run_inference
 from models.perf.perf_utils import prep_perf_report
 
 

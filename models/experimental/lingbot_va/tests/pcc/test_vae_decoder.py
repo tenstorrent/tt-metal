@@ -3,11 +3,13 @@
 
 """PCC: torch VAE decode vs TTNN WanVAEDecoder (small latents for CPU reference speed)."""
 
+import pytest
 import torch
 import ttnn
 from diffusers import AutoencoderKLWan
 
 from models.common.metrics import compute_pcc
+from models.experimental.lingbot_va.tests.mesh_utils import mesh_shape_request_param
 from models.experimental.lingbot_va.tt.vae_decoder import WanVAEDecoder
 from models.tt_dit.parallel.config import ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
@@ -104,7 +106,12 @@ def decode_ttnn(vae, latents, mesh_device):
     return video_torch.clamp(-1.0, 1.0)
 
 
-def test_decode_one_video_pcc():
+@pytest.mark.parametrize(
+    "mesh_device",
+    [mesh_shape_request_param()],
+    indirect=True,
+)
+def test_decode_one_video_pcc(mesh_device):
     vae = AutoencoderKLWan.from_pretrained(CHECKPOINT_PATH, torch_dtype=torch.bfloat16).to("cpu")
     vae.eval()
 
@@ -113,11 +120,7 @@ def test_decode_one_video_pcc():
 
     torch_out = decode_torch(vae, latents)
 
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
-    try:
-        ttnn_out = decode_ttnn(vae, latents, mesh_device)
-    finally:
-        ttnn.close_mesh_device(mesh_device)
+    ttnn_out = decode_ttnn(vae, latents, mesh_device)
 
     torch_cmp = torch_out.float()
     ttnn_cmp = ttnn_out.float()
