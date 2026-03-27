@@ -13,6 +13,7 @@
 // - BRISC: Gather receiver, wait for output CBs
 // - TRISC: Matmul compute, RMSNorm compute, RoPE compute
 
+#include "api/tensor/tensor_accessor.h"
 #include "../../../../deepseek_v3_b1/unified_kernels/kernel_op_api.hpp"
 #include "../../../../deepseek_v3_b1/unified_kernels/kernel_utils.hpp"
 #include "matmul_wormhole.hpp"
@@ -159,11 +160,7 @@ void kernel_main() {
         cb_reserve_back(dkv_matmul_in0, dkv_matmul_k_num_tiles);
         uint32_t l1_write_addr = get_write_ptr(dkv_matmul_in0);
 
-        const InterleavedAddrGen<true> x_addrgen = {
-            .bank_base_address = x_dram_addr,
-            .page_size = x_total_bytes,
-        };
-        uint64_t x_noc_addr = x_addrgen.get_noc_addr(0);
+        uint64_t x_noc_addr = tensor_accessor::get_dram_bank_base_offset(0, noc_index) + x_dram_addr;
         noc_async_read(x_noc_addr, l1_write_addr, x_total_bytes);
         noc_async_read_barrier();
 
@@ -181,16 +178,13 @@ void kernel_main() {
         uint32_t cos_dram_addr = get_common_arg_val<uint32_t>(5);
         uint32_t sin_dram_addr = get_common_arg_val<uint32_t>(6);
 
+        uint64_t dram_bank0_base = tensor_accessor::get_dram_bank_base_offset(0, noc_index);
+
         // Read cos tile for this core
         cb_reserve_back(cos_cb_id, Wt);
         {
             uint32_t cos_l1_addr = get_write_ptr(cos_cb_id);
-            const InterleavedAddrGen<true> cos_addrgen = {
-                .bank_base_address = cos_dram_addr,
-                .page_size = cos_sin_page_size,
-            };
-            uint64_t cos_noc_addr = cos_addrgen.get_noc_addr(0);
-            cos_noc_addr += tile_offset * TILE_1x32_BYTES;
+            uint64_t cos_noc_addr = dram_bank0_base + cos_dram_addr + tile_offset * TILE_1x32_BYTES;
             noc_async_read(cos_noc_addr, cos_l1_addr, TILE_1x32_BYTES);
         }
 
@@ -198,12 +192,7 @@ void kernel_main() {
         cb_reserve_back(sin_cb_id, Wt);
         {
             uint32_t sin_l1_addr = get_write_ptr(sin_cb_id);
-            const InterleavedAddrGen<true> sin_addrgen = {
-                .bank_base_address = sin_dram_addr,
-                .page_size = cos_sin_page_size,
-            };
-            uint64_t sin_noc_addr = sin_addrgen.get_noc_addr(0);
-            sin_noc_addr += tile_offset * TILE_1x32_BYTES;
+            uint64_t sin_noc_addr = dram_bank0_base + sin_dram_addr + tile_offset * TILE_1x32_BYTES;
             noc_async_read(sin_noc_addr, sin_l1_addr, TILE_1x32_BYTES);
         }
 
@@ -276,15 +265,10 @@ void kernel_main() {
     {
         DeviceZoneScopedN("DRAM_WRITE_OUTPUT");
 
-        constexpr uint32_t kvpe_out_page_size = get_named_compile_time_arg_val("kvpe_out_dram_page_size");
         constexpr uint32_t kvpe_out_nope_bytes = get_named_compile_time_arg_val("kvpe_out_nope_bytes");
         uint32_t kvpe_out_dram_addr = get_common_arg_val<uint32_t>(7);
 
-        const InterleavedAddrGen<true> out_addrgen = {
-            .bank_base_address = kvpe_out_dram_addr,
-            .page_size = kvpe_out_page_size,
-        };
-        uint64_t out_base_noc_addr = out_addrgen.get_noc_addr(0);
+        uint64_t out_base_noc_addr = tensor_accessor::get_dram_bank_base_offset(0, noc_index) + kvpe_out_dram_addr;
 
         // RMSNorm core: write nope (16 tiles) to output offset 0
         if constexpr (Core::is_kv_rmsnorm_core) {
