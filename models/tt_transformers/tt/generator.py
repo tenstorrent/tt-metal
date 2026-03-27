@@ -218,28 +218,21 @@ class Generator(WarmupForwardMixin):
             tt_rot_mats_prefill_local = host_inputs[2]
             host_inputs = (host_inputs[0], host_inputs[3], host_inputs[4])
 
-            with ttnn.trace_allocation_safe_scope(self.model_args[model_id].mesh_device):
-                # Safe because
-                # - There is no trace execution inside
-                # - No allocated buffers escape by side effects
-                # - The return value is ignored
-                device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
-                transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
-                tt_out_trace = self.model[model_id].ttnn_prefill_forward(
-                    x=transformed_inputs[0],
-                    rot_mats_global=tt_rot_mats_prefill_global,
-                    rot_mats_local=tt_rot_mats_prefill_local,
-                    page_table=transformed_inputs[1],
-                    chunk_page_table=transformed_inputs[2],
-                    kv_cache=kv_cache,
-                    batch_size=batch_size,
-                    user_id=user_id,
-                )
-                ttnn.synchronize_device(self.model_args[model_id].mesh_device)
-                logger.info("Done Compiling Model")
-            with ttnn.trace_allocation_safe_scope(self.model_args[model_id].mesh_device):
-                # Safe because we don't rely on its persistence and fill before every execution
-                device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
+            transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
+            tt_out_trace = self.model[model_id].ttnn_prefill_forward(
+                x=transformed_inputs[0],
+                rot_mats_global=tt_rot_mats_prefill_global,
+                rot_mats_local=tt_rot_mats_prefill_local,
+                page_table=transformed_inputs[1],
+                chunk_page_table=transformed_inputs[2],
+                kv_cache=kv_cache,
+                batch_size=batch_size,
+                user_id=user_id,
+            )
+            ttnn.synchronize_device(self.model_args[model_id].mesh_device)
+            logger.info("Done Compiling Model")
+            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.model_args[model_id].mesh_device)
             trace_id = ttnn.begin_trace_capture(self.model_args[model_id].mesh_device, cq_id=0)
             transformed_inputs = self.model[model_id].transform_and_embed_prefill_inputs_device(*device_inputs)
             tt_out_trace = self.model[model_id].ttnn_prefill_forward(
@@ -598,14 +591,11 @@ class Generator(WarmupForwardMixin):
                 # empty_slots uses max_batch_size_per_model (not total_batch) because
                 # the seed manager operates on per-row slots (0..31).  When sampling_dp > 1
                 # the params are already broadcast across all rows by broadcast_sampling_params.
-                # TODO FIXME this has an allocationt that I think isn't safe.
-                # FIXME temporarily marking as safe to move on.
-                with ttnn.trace_allocation_safe_scope(self.model[model_id].mesh_device):
-                    self.model[model_id].sampling.apply_prefill_state(
-                        sampling_params=per_request_params,
-                        prompt_tokens=prefill_ids[:, :seq_len].repeat(total_batch, 1),
-                        empty_slots=[user_id % max_batch_size_per_model],
-                    )
+                self.model[model_id].sampling.apply_prefill_state(
+                    sampling_params=per_request_params,
+                    prompt_tokens=prefill_ids[:, :seq_len].repeat(total_batch, 1),
+                    empty_slots=[user_id % max_batch_size_per_model],
+                )
 
             if enable_trace_current_prompt:
                 logits = self._easy_trace_prefill(
@@ -620,23 +610,17 @@ class Generator(WarmupForwardMixin):
                     **local_kwargs,
                 )
             else:
-                with ttnn.trace_allocation_safe_scope(self.model[model_id].mesh_device):
-                    # Safe because:
-                    # - There is no trace execution inside
-                    # - No allocated buffers escape by side effects
-                    # - The return value is either consumed by sampling
-                    # or moved to host before next trace execution
-                    logits = self.prefill_forward_single_user_text(
-                        prefill_ids,
-                        page_table=page_table_user,
-                        user_id=batch_user_ids if use_batched_prefill else group_user_id,
-                        last_token_idx=last_token_idx,
-                        kv_cache=model_kv_cache,
-                        model_id=model_id,
-                        num_cached_tokens=0 if use_batched_prefill else num_cached_tokens,
-                        batch_size=padded_batch if use_batched_prefill else 1,
+                logits = self.prefill_forward_single_user_text(
+                    prefill_ids,
+                    page_table=page_table_user,
+                    user_id=batch_user_ids if use_batched_prefill else group_user_id,
+                    last_token_idx=last_token_idx,
+                    kv_cache=model_kv_cache,
+                    model_id=model_id,
+                    num_cached_tokens=0 if use_batched_prefill else num_cached_tokens,
+                    batch_size=padded_batch if use_batched_prefill else 1,
                     **local_kwargs,
-                    )
+                )
             if use_batched_prefill:
                 hidden_dim = logits.shape[-1]
                 logits = ttnn.reshape(logits, [padded_batch, 1, prefill_seq_len, hidden_dim])
@@ -734,13 +718,7 @@ class Generator(WarmupForwardMixin):
                     del hidden_states  # They are derived from logits and may become unsafe if we execute a trace
                     continue
                 else:
-                    with ttnn.trace_allocation_safe_scope(self.model[model_id].mesh_device):
-                        # Safe because
-                        # - There is no trace execution inside
-                        # - No allocated buffers escape by side effects
-                        # - The return value is either consumed by sampling
-                        # or moved to host before next trace execution
-                        logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
+                    logits = self.model[model_id].process_logits_after_prefill_trace(logits, last_token_idx)
             else:
                 if return_hidden_states:
                     raise NotImplementedError("return_hidden_states=True requires enable_trace=True")
@@ -774,9 +752,7 @@ class Generator(WarmupForwardMixin):
                 )
                 del logits  # They are unsafe past this point due to trace execution in sampling
             else:
-                with ttnn.trace_allocation_safe_scope(self.model[model_id].mesh_device):
-                    # Safe because it is immediately moved to host before next trace execution
-                    logits = ttnn.untilize(logits, use_multicore=True)
+                logits = ttnn.untilize(logits, use_multicore=True)
                 prefill_results.append(
                     {
                         "idx": idx,
@@ -1102,15 +1078,12 @@ class Generator(WarmupForwardMixin):
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
             model_i = self.model[i]
-            with ttnn.trace_allocation_safe_scope(self.model[i].mesh_device):
-                # Safe because all outputs are consumed by ttnn_decode_forward
-                # and there is no trace execution before then.
-                (
-                    tt_tokens_i,
-                    tt_current_pos_i,
-                    tt_rot_mat_idxs_i,
-                    tt_page_table_i,
-                ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
+            (
+                tt_tokens_i,
+                tt_current_pos_i,
+                tt_rot_mat_idxs_i,
+                tt_page_table_i,
+            ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
             tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
@@ -1125,17 +1098,15 @@ class Generator(WarmupForwardMixin):
             user_kv_cache = kv_cache[i] if kv_cache is not None else None
             # For device sampling, always capture logits only (not tokens) so we can apply bitmask
             capture_logits_only = sampling_on_device and self.model[i].sampling is not None
-            with ttnn.trace_allocation_safe_scope(self.model[i].mesh_device):
-                # Marking safe, but the result here may be corrupted by future trace execution
-                result = self.model[i].ttnn_decode_forward(
-                    tt_tokens[i],
-                    tt_current_pos[i],
-                    rot_mat_idxs=tt_rot_mat_idxs[i],
-                    page_table=tt_page_table[i],
-                    kv_cache=user_kv_cache,
-                    sampling_on_device=sampling_on_device,
-                    capture_sampling_trace=capture_logits_only,
-                )
+            result = self.model[i].ttnn_decode_forward(
+                tt_tokens[i],
+                tt_current_pos[i],
+                rot_mat_idxs=tt_rot_mat_idxs[i],
+                page_table=tt_page_table[i],
+                kv_cache=user_kv_cache,
+                sampling_on_device=sampling_on_device,
+                capture_sampling_trace=capture_logits_only,
+            )
             tt_output.append(result)
 
         # Apply bitmask and sample for device sampling (same as trace path)
@@ -1201,10 +1172,8 @@ class Generator(WarmupForwardMixin):
             host_inputs = self.model[i].prepare_decode_inputs_host(
                 tokens[i], current_pos[i], page_table=user_page_table
             )
-            with ttnn.trace_allocation_safe_scope(self.model[i].mesh_device):
-                # Safe because we always write to this tensor before any trace execution.
-                device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
-                device_inputs.append(device_inputs_i)
+            device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
+            device_inputs.append(device_inputs_i)
 
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)

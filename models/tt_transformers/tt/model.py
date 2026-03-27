@@ -677,16 +677,12 @@ class Transformer(LightweightModule):
         else:
             padded_vocab_dim = ((unpadded_vocab_dim + 31) // 32) * 32
 
-        with ttnn.trace_allocation_safe_scope(self.mesh_device):
-            # Safe because we use this immediately
-            bitmask_unpacked = self.unpack_bitmask(self._active_bitmask, padded_vocab_dim=padded_vocab_dim)
-            # Reshape bitmask from 2D (batch, vocab) to 4D (1, 1, batch, vocab) to match logits shape
-            bitmask_unpacked = ttnn.reshape(
-                bitmask_unpacked, (1, 1, bitmask_unpacked.shape[0], bitmask_unpacked.shape[1])
-            )
-            # Add in-place to preserve the tensor identity for trace compatibility
-            # The inplace add may contain a temporary allocation for broadcasting purposes.
-            ttnn.add_(tt_logits, bitmask_unpacked)
+        bitmask_unpacked = self.unpack_bitmask(self._active_bitmask, padded_vocab_dim=padded_vocab_dim)
+        # Reshape bitmask from 2D (batch, vocab) to 4D (1, 1, batch, vocab) to match logits shape
+        bitmask_unpacked = ttnn.reshape(bitmask_unpacked, (1, 1, bitmask_unpacked.shape[0], bitmask_unpacked.shape[1]))
+        # Add in-place to preserve the tensor identity for trace compatibility
+        # The inplace add may contain a temporary allocation for broadcasting purposes.
+        ttnn.add_(tt_logits, bitmask_unpacked)
         return tt_logits
 
     def ttnn_decode_forward(

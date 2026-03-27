@@ -257,13 +257,10 @@ class SamplingGenerator:
         penalties_on: bool,
         tt_out_tok: Optional[ttnn.Tensor],
     ):
-        # TODO FIXME temporarily marking as safe
-        # Need to verify that all buffers are correctly preallocated before ANY trace execution.
-        with ttnn.trace_allocation_safe_scope(self.mesh_device):
-            if penalties_on:
-                logits = self.tt_penalties.apply(logits)
-            tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
-            return tt_tokens, tt_log_probs
+        if penalties_on:
+            logits = self.tt_penalties.apply(logits)
+        tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
+        return tt_tokens, tt_log_probs
 
     def capture_trace(
         self,
@@ -358,12 +355,10 @@ class SamplingGenerator:
             tt_out = self._execute_trace(key)
 
         if penalties_on and tt_out is not None:
-            # TODO FIXME temporarily marking as safe but I actually think this might be a bug.
-            with ttnn.trace_allocation_safe_scope(self.mesh_device):
-                if isinstance(tt_out, tuple):
-                    self.tt_penalties.update_output_tokens(tt_out[0])
-                else:
-                    self.tt_penalties.update_output_tokens(tt_out)
+            if isinstance(tt_out, tuple):
+                self.tt_penalties.update_output_tokens(tt_out[0])
+            else:
+                self.tt_penalties.update_output_tokens(tt_out)
         return tt_out
 
 
