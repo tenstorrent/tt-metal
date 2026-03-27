@@ -430,7 +430,11 @@ def run_demo_whisper_for_conditional_generation_dataset(
     )
 
     # load data
-    ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    if is_ci_env:
+        ds = load_dataset("/mnt/MLPerf/huggingface/hub/datasets--hf-internal-testing--librispeech_asr_dummy", "clean", split="validation")
+    else:
+        ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
+    
     batch_size = batch_size_per_device * mesh_device.get_num_devices()
     # perform model inference
     total_wer = 0
