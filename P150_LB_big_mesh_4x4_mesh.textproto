@@ -1,0 +1,245 @@
+graph_templates {
+  key: "1x_p150_lb"
+  value {
+    children {
+      name: "node_0"
+      node_ref {
+        node_descriptor: "P150_LB"
+      }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections {
+          port_a {
+            path: "node_0"
+            tray_id: 1
+            port_id: 2
+          }
+          port_b {
+            path: "node_0"
+            tray_id: 5
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "node_0"
+            tray_id: 2
+            port_id: 2
+          }
+          port_b {
+            path: "node_0"
+            tray_id: 6
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "node_0"
+            tray_id: 3
+            port_id: 2
+          }
+          port_b {
+            path: "node_0"
+            tray_id: 7
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "node_0"
+            tray_id: 4
+            port_id: 2
+          }
+          port_b {
+            path: "node_0"
+            tray_id: 8
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "node_0"
+            tray_id: 1
+            port_id: 3
+          }
+          port_b {
+            path: "node_0"
+            tray_id: 2
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "node_0"
+            tray_id: 2
+            port_id: 3
+          }
+          port_b {
+            path: "node_0"
+            tray_id: 3
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "node_0"
+            tray_id: 3
+            port_id: 3
+          }
+          port_b {
+            path: "node_0"
+            tray_id: 4
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "node_0"
+            tray_id: 5
+            port_id: 3
+          }
+          port_b {
+            path: "node_0"
+            tray_id: 6
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "node_0"
+            tray_id: 6
+            port_id: 3
+          }
+          port_b {
+            path: "node_0"
+            tray_id: 7
+            port_id: 4
+          }
+        }
+        connections {
+          port_a {
+            path: "node_0"
+            tray_id: 7
+            port_id: 3
+          }
+          port_b {
+            path: "node_0"
+            tray_id: 8
+            port_id: 4
+          }
+        }
+      }
+    }
+  }
+}
+graph_templates {
+  key: "2x"
+  value {
+    children {
+      name: "1x_p150_lb_0"
+      graph_ref {
+        graph_template: "1x_p150_lb"
+      }
+    }
+    children {
+      name: "1x_p150_lb_1"
+      graph_ref {
+        graph_template: "1x_p150_lb"
+      }
+    }
+    internal_connections {
+      key: "QSFP_DD"
+      value {
+        connections {
+          port_a {
+            path: "1x_p150_lb_0"
+            path: "node_0"
+            tray_id: 5
+            port_id: 2
+          }
+          port_b {
+            path: "1x_p150_lb_1"
+            path: "node_0"
+            tray_id: 1
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "1x_p150_lb_0"
+            path: "node_0"
+            tray_id: 6
+            port_id: 2
+          }
+          port_b {
+            path: "1x_p150_lb_1"
+            path: "node_0"
+            tray_id: 2
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "1x_p150_lb_0"
+            path: "node_0"
+            tray_id: 7
+            port_id: 2
+          }
+          port_b {
+            path: "1x_p150_lb_1"
+            path: "node_0"
+            tray_id: 3
+            port_id: 1
+          }
+        }
+        connections {
+          port_a {
+            path: "1x_p150_lb_0"
+            path: "node_0"
+            tray_id: 8
+            port_id: 2
+          }
+          port_b {
+            path: "1x_p150_lb_1"
+            path: "node_0"
+            tray_id: 4
+            port_id: 1
+          }
+        }
+      }
+    }
+  }
+}
+root_instance {
+  template_name: "2x"
+  child_mappings {
+    key: "1x_p150_lb_0"
+    value {
+      sub_instance {
+        template_name: "1x_p150_lb"
+        child_mappings {
+          key: "node_0"
+          value {
+            host_id: 0
+          }
+        }
+      }
+    }
+  }
+  child_mappings {
+    key: "1x_p150_lb_1"
+    value {
+      sub_instance {
+        template_name: "1x_p150_lb"
+        child_mappings {
+          key: "node_0"
+          value {
+            host_id: 1
+          }
+        }
+      }
+    }
+  }
+}

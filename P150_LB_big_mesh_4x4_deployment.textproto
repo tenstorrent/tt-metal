@@ -1,0 +1,21 @@
+# Deployment descriptor for 2x P150 LoudBox, 4x4 mesh (P150_LB_big_mesh_4x4_mesh.textproto)
+# host_id 0 -> 1x_p150_lb_0 (first LoudBox)
+# host_id 1 -> 1x_p150_lb_1 (second LoudBox)
+# Update hostnames and physical location fields to match your actual machines.
+
+hosts: {
+  hall: "A"
+  aisle: "1"
+  rack: 1
+  shelf_u: 1
+  node_type: "P150_LB"
+  host: "bh-lb-01"
+}
+hosts: {
+  hall: "A"
+  aisle: "1"
+  rack: 1
+  shelf_u: 5
+  node_type: "P150_LB"
+  host: "bh-lb-02"
+}
