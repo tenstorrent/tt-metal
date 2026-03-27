@@ -1136,7 +1136,7 @@ jobs:
       needs.ttnn-generate-sweeps.result == 'success' &&
       (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
       needs.ttnn-compute-module-matrix.result == 'success' &&
-      (github.event.schedule == '30 4 * * 0,1,2,4,5' || github.event.schedule == '0 4 * * 3,6' || github.event.schedule == '0 2 * * *' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)')
+      (github.event.schedule == '30 4 * * 0,1,2,4,5' || github.event.schedule == '0 4 * * 3,6' || github.event.schedule == '0 2 * * *' || github.event.schedule == '0 3 * * *' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)')
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
