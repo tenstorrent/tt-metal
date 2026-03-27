@@ -195,7 +195,7 @@ RotaryEmbeddingLlamaFusedQKProgramFactory::cached_program_t RotaryEmbeddingLlama
     auto rotary_embedding_kernel_id = tt::tt_metal::CreateKernel(
         program,
         compute_kernel_path,
-        all_cores_bb,
+        all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
 
