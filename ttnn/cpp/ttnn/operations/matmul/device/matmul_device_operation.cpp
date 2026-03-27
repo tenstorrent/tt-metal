@@ -247,7 +247,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         // 2. Shape requirements: must be rank-4 tensors (to ensure dim 1 is the batch dimension)
         // 3. Batch dimension requirement: input A must have batch size 1 on dim 1
         // 4. Memory layout requirement: inputs must not be sharded
-        auto can_use_in0_reuse = [&]() {
+        auto in0_reuse = [&]() {
             if (!std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                     chosen_program_config)) {
                 return false;
@@ -271,7 +271,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
         for (auto i = 0; i < a_shape.rank() - 2; i++) {
             TT_FATAL(
-                a_shape[i] == b_shape[i] || (i == 1 && can_use_in0_reuse()),
+                a_shape[i] == b_shape[i] || (i == 1 && in0_reuse()),
                 "bmm (non-bcast matmul) expects input tensors of shapes "
                 "BCMK*BCKN=BCMN or batch dimension {} mismatch: a={} vs b={} (dimension mismatch only allowed on dim 1 "
                 "for rank-4 tensors when a[1]=1 and using MatmulMultiCoreReuseMultiCast1DProgramConfig with "

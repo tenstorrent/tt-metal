@@ -74,6 +74,10 @@ void kernel_main() {
     constexpr bool fuse_op = (bool)get_compile_time_arg_val(26);
 
     constexpr auto in0_args = TensorAccessorArgs<27>();
+
+    // Optimization for when in0 is [1, 1, M, K] and in1 is [1, H, K, N]
+    // In this case we reuse the in0 data in CB for all batches instead of re-reading
+    constexpr bool reuse_in0_in_CB = (in0_B == 1 && in1_B > 1);
     constexpr auto sparsity_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
@@ -384,7 +388,7 @@ void kernel_main() {
         // optimization we just read the tensor slice once into each core's L1 and keep it there for all weight
         // batches since the needed in0 data is already in L1 after batch 0, we can just move read pointer for this
         // CB so compute kernel thinks it has new data
-        if (in0_B == 1 && in1_B > 1) {
+        if (reuse_in0_in_CB) {
             for (uint32_t fake_batch = 0; fake_batch < in1_B - in0_B; ++fake_batch) {
                 for (uint32_t blk = 0; blk < num_blocks_inner_dim; ++blk) {
                     cb_in0.reserve_back(in0_block_num_tiles);
