@@ -347,7 +347,7 @@ uv pip install --extra-index-url "$PYTORCH_INDEX" \
     --no-build-isolation \
     -r "$(pwd)/tt_metal/python_env/requirements-dev.txt"
 
-echo "Installing tt-triage dependiencies"
+echo "Installing tt-triage dependencies"
 uv pip install --index-strategy unsafe-best-match -r "$(pwd)/tools/triage/requirements.txt"
 
 if [[ "$SKIP_COMPAT_CHECK" == "true" ]]; then
