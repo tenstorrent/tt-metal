@@ -35,9 +35,8 @@ inline void calculate_mac(
             TTI_SFP_STOCH_RND(
                 sfpi::SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
         }
-        // ADDR_MOD_6 has dest.incr=2, which auto-advances the dst base each iteration —
-        // no need for an explicit sfpi::dst_reg++.
-        TT_SFPSTORE(p_sfpu::LREG3, mod0, ADDR_MOD_6, dst_index_out * dst_tile_size);
+        TT_SFPSTORE(p_sfpu::LREG3, mod0, ADDR_MOD_7, dst_index_out * dst_tile_size);
+        sfpi::dst_reg++;
     }
 }
 

@@ -24,14 +24,6 @@ inline void llk_math_eltwise_ternary_sfpu_mac(
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_ternary_sfpu_mac_init() {
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::mac>();
-    // Configure ADDR_MOD_6 with dest.incr=2 so SFPSTORE can auto-advance the dst
-    // base register each iteration without an explicit sfpi::dst_reg++.
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 2},
-    }
-        .set(ADDR_MOD_6);
 }
 
 }  // namespace ckernel

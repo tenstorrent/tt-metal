@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "experimental/circular_buffer.h"
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -10,6 +9,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/fill.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     const float scalar1 = get_arg_val<float>(0);  // value1 (multiplier b)
