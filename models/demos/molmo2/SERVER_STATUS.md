@@ -3,7 +3,9 @@
 ## Goal
 Get the vLLM server working with **text, images, and video** using the same server code path.
 
-## Current Status: ALL MODALITIES WORKING (2026-03-26)
+## Current Status: ALL MODALITIES WORKING (2026-03-27)
+
+**Note:** Simple prompts work well, complex descriptive prompts may produce lower quality output.
 
 | Input Type | Demo (paged attn) | vLLM Server | Notes |
 |------------|-------------------|-------------|-------|
@@ -25,6 +27,13 @@ Get the vLLM server working with **text, images, and video** using the same serv
 - Fixed issue where image requests were incorrectly entering video path
 - Problem: `pixel_values_videos = [[None]]` for images, which passes `is not None` check but fails after unwrapping
 - Solution: Unwrap nested lists first, then check if actual data exists before entering video path
+
+**4. Chat Template Placeholder Fix** (`generator_vllm.py` - 2026-03-27):
+- Fixed `<|image|>` placeholder insertion to go inside user message, not before chat template
+- Before: `<|image|><|im_start|>user\n...` - image tokens outside chat structure
+- After: `<|im_start|>user\n<|image|>...` - image tokens inside user message
+- This matches how demo.py constructs prompts via `apply_chat_template()`
+- Result: Simple prompts like "What animal is this?" now return coherent answers ("This animal is a dog")
 
 ### vLLM Test Results (2026-03-26)
 

@@ -596,8 +596,13 @@ class Molmo2ProcessorWrapper:
                 # VIDEO FLOW: Keep <|video|> placeholder, vLLM will replace via _get_prompt_updates
                 # Ensure placeholder exists
                 if "<|video|>" not in text and "<|image|>" not in text:
-                    text = "<|video|>" + text
-                    logger.info(f"    Added <|video|> placeholder")
+                    # If chat template already applied, insert inside user message
+                    if "<|im_start|>user\n" in text:
+                        text = text.replace("<|im_start|>user\n", "<|im_start|>user\n<|video|>", 1)
+                        logger.info(f"    Inserted <|video|> placeholder inside user message")
+                    else:
+                        text = "<|video|>" + text
+                        logger.info(f"    Added <|video|> placeholder at start")
                 elif "<|image|>" in text and "<|video|>" not in text:
                     # Replace first <|image|> with <|video|> for video input
                     text = text.replace("<|image|>", "<|video|>", 1)
@@ -616,17 +621,40 @@ class Molmo2ProcessorWrapper:
 
                 existing_image = text.count("<|image|>")
                 existing_video = text.count("<|video|>")
+                logger.info(f"  IMAGE FLOW: text (first 100 chars) = {repr(text[:100])}")
+                logger.info(
+                    f"  IMAGE FLOW: num_images={num_images}, existing_image={existing_image}, existing_video={existing_video}"
+                )
 
                 if num_images > 0 and existing_image == 0 and existing_video == 0:
                     image_placeholders = "<|image|>" * num_images
-                    text = image_placeholders + text
-                    logger.info(f"  Added {num_images} <|image|> placeholders")
+                    # If chat template already applied, insert inside user message
+                    # vLLM applies chat template before calling processor
+                    if "<|im_start|>user\n" in text:
+                        text = text.replace("<|im_start|>user\n", f"<|im_start|>user\n{image_placeholders}", 1)
+                        logger.info(f"  Inserted {num_images} <|image|> placeholders inside user message")
+                    else:
+                        text = image_placeholders + text
+                        logger.info(f"  Added {num_images} <|image|> placeholders at start")
                 elif num_images > existing_image and existing_video == 0:
                     additional = num_images - existing_image
-                    text = "<|image|>" * additional + text
-                    logger.info(f"  Added {additional} additional <|image|> placeholders")
+                    image_placeholders = "<|image|>" * additional
+                    if "<|im_start|>user\n" in text:
+                        text = text.replace("<|im_start|>user\n", f"<|im_start|>user\n{image_placeholders}", 1)
+                        logger.info(f"  Inserted {additional} additional <|image|> placeholders inside user message")
+                    else:
+                        text = image_placeholders + text
+                        logger.info(f"  Added {additional} additional <|image|> placeholders at start")
 
+                logger.info(f"  IMAGE FLOW: final text (first 150 chars) = {repr(text[:150])}")
                 text_inputs = self.tokenizer(text, return_tensors=return_tensors, **kwargs)
+                if "input_ids" in text_inputs:
+                    ids = text_inputs["input_ids"]
+                    if hasattr(ids, "tolist"):
+                        ids_list = ids.flatten().tolist()
+                    else:
+                        ids_list = list(ids[0]) if len(ids) > 0 else []
+                    logger.info(f"  IMAGE FLOW: tokenized input_ids (first 20) = {ids_list[:20]}")
         else:
             text_inputs = {}
 
