@@ -327,6 +327,15 @@ class Attention(LightweightModule):
 
         self.shard_wo_dims = (2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2)
 
+        def get_wo_mesh_mapper():
+            if self.use_fused_all_gather_matmul or self.TG:
+                return ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(2, 3),
+                    mesh_shape=configuration.cluster_shape,
+                )
+            return ttnn.ShardTensorToMesh(self.mesh_device, dim=2)
+
         if self.prefetcher is not None:
             self.wo_sharded_ring = ttnn.as_tensor(
                 pt_wo,
@@ -334,11 +343,7 @@ class Attention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=self.args.get_sharded_wo_ring_mem_config(),
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device,
-                    dims=self.shard_wo_dims,
-                    mesh_shape=configuration.cluster_shape,
-                ),
+                mesh_mapper=get_wo_mesh_mapper(),
                 cache_file_name=(cache_name("wo_sharded_ring")),
             )
 
@@ -354,11 +359,7 @@ class Attention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=get_wo_memory_config(),
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device,
-                dims=self.shard_wo_dims,
-                mesh_shape=configuration.cluster_shape,
-            ),
+            mesh_mapper=get_wo_mesh_mapper(),
             cache_file_name=(
                 cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
             ),
