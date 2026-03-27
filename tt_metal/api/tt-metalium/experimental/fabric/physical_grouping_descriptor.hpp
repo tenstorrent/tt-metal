@@ -4,9 +4,14 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <map>
+#include <numeric>
 #include <ostream>
+#include <set>
 #include <string>
+#include <utility>
 #include <filesystem>
 #include <memory>
 #include <vector>
@@ -166,6 +171,39 @@ public:
     // Overload that accepts a PhysicalSystemDescriptor reference for validation/filtering
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+
+    // Greedy minimum coverage over disjoint global groups (e.g. one set per host). Returns whether some single group
+    // has enough capacity for all targets, and the union of the largest groups until target count is covered.
+    template <typename TargetNode, typename GlobalNode>
+    static std::pair<bool, std::set<GlobalNode>> find_minimum_coverage_group(
+        const std::set<TargetNode>& all_targets, const std::vector<std::set<GlobalNode>>& global_groups) {
+        std::pair<bool, std::set<GlobalNode>> out{false, {}};
+        if (all_targets.empty() || global_groups.empty()) {
+            return out;
+        }
+        const std::size_t target_count = all_targets.size();
+        for (const auto& g : global_groups) {
+            if (g.size() >= target_count) {
+                out.first = true;
+                break;
+            }
+        }
+        std::vector<std::size_t> group_indices(global_groups.size());
+        std::iota(group_indices.begin(), group_indices.end(), 0);
+        std::sort(group_indices.begin(), group_indices.end(), [&](std::size_t a, std::size_t b) {
+            return global_groups[a].size() > global_groups[b].size();
+        });
+        std::size_t covered = 0;
+        for (std::size_t idx : group_indices) {
+            const auto& g = global_groups[idx];
+            out.second.insert(g.begin(), g.end());
+            covered += g.size();
+            if (covered >= target_count) {
+                break;
+            }
+        }
+        return out;
+    }
 
 private:
     // Data members

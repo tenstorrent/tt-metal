@@ -11,6 +11,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <tuple>
@@ -659,18 +660,122 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
 }
 
 namespace {
+
+static std::optional<std::string> hostname_for_asic_from_hostname_map(
+    tt::tt_metal::AsicID asic_id, const std::map<std::string, std::set<tt::tt_metal::AsicID>>& hostname_to_asics) {
+    for (const auto& [hostname, asics] : hostname_to_asics) {
+        if (asics.contains(asic_id)) {
+            return hostname;
+        }
+    }
+    return std::nullopt;
+}
+
+// Minimal host cover for inter-mesh mapping: partition physical meshes by host, then apply.
+// `rank_bound_logical_to_physical`: logical meshes already fixed by rank bindings → skip those and their physical
+// meshes for host-alignment bias (empty when rank bindings are disabled).
+// TODO: THis can be removed and replaced with cost hieristics when using a SAT solver because preferred constraints
+// aren't very effective here
+// https://github.com/tenstorrent/tt-metal/issues/40640
+static void add_inter_mesh_minimal_host_cover_from_hostname_map(
+    const TopologyMappingConfig& config,
+    const PhysicalMultiMeshGraph& physical_graph,
+    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints,
+    const std::map<MeshId, MeshId>& rank_bound_logical_to_physical) {
+    if (config.hostname_to_asics.empty()) {
+        return;
+    }
+
+    std::set<MeshId> bound_physical_mesh_ids;
+    for (const auto& [_, physical_mesh_id] : rank_bound_logical_to_physical) {
+        bound_physical_mesh_ids.insert(physical_mesh_id);
+    }
+
+    std::set<MeshId> logical_target_set;
+    for (const MeshId& m : mesh_logical_level_graph.get_nodes()) {
+        if (!rank_bound_logical_to_physical.contains(m)) {
+            logical_target_set.insert(m);
+        }
+    }
+    if (logical_target_set.size() <= 1) {
+        return;
+    }
+
+    // Build global_mesh_groups in one pass: one group per host for single-host meshes, singleton for multi-host.
+    std::vector<std::set<MeshId>> global_mesh_groups;
+    std::map<std::string, std::size_t> host_group_index;
+    for (const auto& [phys_mesh_id, adj] : physical_graph.mesh_adjacency_graphs_) {
+        if (bound_physical_mesh_ids.contains(phys_mesh_id)) {
+            continue;
+        }
+        if (adj.get_nodes().empty()) {
+            continue;
+        }
+        std::set<std::string> hosts_for_mesh;
+        for (const auto& asic_id : adj.get_nodes()) {
+            auto hostname = hostname_for_asic_from_hostname_map(asic_id, config.hostname_to_asics);
+            if (hostname.has_value()) {
+                hosts_for_mesh.insert(*hostname);
+            }
+        }
+        if (hosts_for_mesh.size() == 1) {
+            auto [it, inserted] = host_group_index.try_emplace(*hosts_for_mesh.begin(), global_mesh_groups.size());
+            if (inserted) {
+                global_mesh_groups.emplace_back();
+            }
+            global_mesh_groups[it->second].insert(phys_mesh_id);
+        } else {
+            global_mesh_groups.push_back({phys_mesh_id});
+        }
+    }
+    if (global_mesh_groups.empty()) {
+        return;
+    }
+
+    const auto [single_group_fits, preferred_globals] =
+        ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(
+            logical_target_set, global_mesh_groups);
+    if (single_group_fits) {
+        std::vector<std::set<MeshId>> target_groups;
+        target_groups.push_back(logical_target_set);
+        if (inter_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_mesh_groups)) {
+            return;
+        }
+        log_warning(
+            tt::LogFabric,
+            "Inter-mesh host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
+    }
+    if (!preferred_globals.empty()) {
+        if (!single_group_fits) {
+            log_debug(
+                tt::LogFabric,
+                "Inter-mesh host alignment: target count {} exceeds largest single partition; preferring minimal host "
+                "cover ({} preferred globals)",
+                logical_target_set.size(),
+                preferred_globals.size());
+        }
+        for (const MeshId& target : logical_target_set) {
+            inter_mesh_constraints.add_preferred_constraint(target, preferred_globals);
+        }
+    }
+}
+
 // Helper function to build inter-mesh constraints
 // Maps logical meshes to physical meshes based on matching mesh host ranks
 // A logical mesh maps to a physical mesh if the ASICs in that physical mesh have matching ranks
 ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> build_inter_mesh_constraints(
     const TopologyMappingConfig& config,
     const PhysicalMultiMeshGraph& physical_graph,
+    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
 
     // Skip if rank bindings are disabled
     if (config.disable_rank_bindings) {
+        add_inter_mesh_minimal_host_cover_from_hostname_map(
+            config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, {});
         return inter_mesh_constraints;
     }
 
@@ -701,14 +806,18 @@ namespace {
         }
     }
 
-    // Set constraints from the Mesh ID in asic id to mesh rank to the logical mesh id
+    std::map<MeshId, MeshId> rank_bound_logical_to_physical;
     for (const auto& [logical_mesh_id, _] : fabric_node_id_to_mesh_rank) {
-        if (real_mesh_to_physical_mesh_id.contains(logical_mesh_id)) {
-            inter_mesh_constraints.add_required_constraint(
-                logical_mesh_id, real_mesh_to_physical_mesh_id.at(logical_mesh_id));
+        const auto physical_it = real_mesh_to_physical_mesh_id.find(logical_mesh_id);
+        if (physical_it == real_mesh_to_physical_mesh_id.end()) {
+            continue;
         }
+        rank_bound_logical_to_physical.emplace(logical_mesh_id, physical_it->second);
+        inter_mesh_constraints.add_required_constraint(logical_mesh_id, physical_it->second);
     }
 
+    add_inter_mesh_minimal_host_cover_from_hostname_map(
+        config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, rank_bound_logical_to_physical);
     return inter_mesh_constraints;
 }
 
@@ -1311,8 +1420,8 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const auto& mesh_physical_graph = adjacency_map_physical.mesh_level_graph_;
 
     // Build inter-mesh constraints and determine validation mode
-    auto inter_mesh_constraints =
-        build_inter_mesh_constraints(config, adjacency_map_physical, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
+    auto inter_mesh_constraints = build_inter_mesh_constraints(
+        config, adjacency_map_physical, mesh_logical_graph, fabric_node_id_to_mesh_rank, asic_id_to_mesh_rank);
     auto inter_mesh_validation_mode = determine_inter_mesh_validation_mode(config);
 
     // Track statistics for error reporting
