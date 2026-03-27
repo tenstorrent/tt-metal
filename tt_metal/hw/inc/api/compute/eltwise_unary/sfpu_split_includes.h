@@ -140,6 +140,10 @@
 #include "api/compute/eltwise_unary/prelu.h"
 #endif
 
+#if SFPU_OP_RRELU_INCLUDE
+#include "api/compute/eltwise_unary/rrelu.h"
+#endif
+
 #if SFPU_OP_DROPOUT_INCLUDE
 #include "api/compute/eltwise_unary/dropout.h"
 #endif

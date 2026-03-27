@@ -807,6 +807,18 @@ def _golden_function_alt_complex_rotate90(input_tensor_a, *args, **kwargs):
 
 ttnn.attach_golden_function(ttnn.alt_complex_rotate90, golden_function=_golden_function_alt_complex_rotate90)
 
+
+def _golden_function_rrelu(input_tensor_a, *args, lower=0.125, upper=0.3333333333, **kwargs):
+    import torch
+
+    # Eval/inference mode: use fixed slope = (lower + upper) / 2
+    slope = (lower + upper) / 2.0
+    return torch.where(input_tensor_a >= 0, input_tensor_a, input_tensor_a * slope)
+
+
+ttnn.attach_golden_function(ttnn.rrelu, golden_function=_golden_function_rrelu)
+
+
 SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
 
 __all__ = []

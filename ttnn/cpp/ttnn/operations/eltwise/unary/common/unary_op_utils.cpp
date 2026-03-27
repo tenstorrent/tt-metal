@@ -97,6 +97,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
+        case UnaryOpType::RRELU: return "SFPU_OP_RRELU_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -557,6 +558,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "selu_tile_init();",
                 fmt::format(
                     "selu_tile({}, {:#x}u, {:#x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(param1))};
+        }
+        case UnaryOpType::RRELU: {
+            TT_FATAL(params.size() == 2, "Expected rrelu to take 2 parameters");
+            float param1 = params[1];
+            return {
+                "rrelu_tile_init();",
+                fmt::format(
+                    "rrelu_tile({}, {:#x}u, {:#x}u);",
                     idst,
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(param1))};
