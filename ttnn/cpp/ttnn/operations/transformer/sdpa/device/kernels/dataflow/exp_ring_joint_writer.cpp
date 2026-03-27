@@ -658,7 +658,7 @@ void kernel_main() {
                                     if (tiles_in_batch == 0) break;
                                     const uint32_t src_l1_addr = base_k_read_ptr
                                         + (row + col * Sk_chunk_t) * ag_page_size;
-                                    if (tiles_in_batch > 1) {
+                                    if (tiles_in_batch == ag_packet_size_in_pages) {
                                         uint16_t k_cs[3] = {
                                             static_cast<uint16_t>(ag_page_size),
                                             static_cast<uint16_t>(ag_page_size),
@@ -670,15 +670,25 @@ void kernel_main() {
                                             &mux_conn, pkt_scatter_hdr, src_l1_addr,
                                             NocUnicastScatterCommandHeader(k_noc_addrs, k_cs, tiles_in_batch),
                                             ag_page_size * tiles_in_batch);
+                                        noc_async_writes_flushed();
                                     } else {
-                                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                            &mux_conn, pkt_unicast_hdr, src_l1_addr,
-                                            NocUnicastCommandHeader{k_noc_addrs[0]});
+                                        // Partial batch: fall back to per-tile unicast writes to avoid
+                                        // variable chunk_count scatter writes which cause non-determinism.
+                                        // noc_async_writes_flushed() after each send ensures the previous
+                                        // header NOC write completes before pkt_unicast_hdr is modified
+                                        // for the next tile (they share the same L1 header).
+                                        for (uint32_t i = 0; i < tiles_in_batch; i++) {
+                                            fabric_unicast_noc_unicast_write_with_state<
+                                                UnicastWriteUpdateMask::DstAddr>(
+                                                &mux_conn,
+                                                pkt_unicast_hdr,
+                                                src_l1_addr + i * ag_page_size,
+                                                NocUnicastCommandHeader{k_noc_addrs[i]});
+                                            noc_async_writes_flushed();
+                                        }
                                     }
-                                    noc_async_write_barrier();
                                 }
                             }
-                            noc_async_writes_flushed();
                         }
                         }
                         cb_pop_front(cb_k_writer_in, k_chunk_tiles);
@@ -704,7 +714,7 @@ void kernel_main() {
                                     if (tiles_in_batch == 0) break;
                                     const uint32_t src_l1_addr = base_v_read_ptr
                                         + (row * DHt + col) * ag_page_size;
-                                    if (tiles_in_batch > 1) {
+                                    if (tiles_in_batch == ag_packet_size_in_pages) {
                                         uint16_t v_cs[3] = {
                                             static_cast<uint16_t>(ag_page_size),
                                             static_cast<uint16_t>(ag_page_size),
@@ -716,15 +726,25 @@ void kernel_main() {
                                             &mux_conn, pkt_scatter_hdr, src_l1_addr,
                                             NocUnicastScatterCommandHeader(v_noc_addrs, v_cs, tiles_in_batch),
                                             ag_page_size * tiles_in_batch);
+                                        noc_async_writes_flushed();
                                     } else {
-                                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                                            &mux_conn, pkt_unicast_hdr, src_l1_addr,
-                                            NocUnicastCommandHeader{v_noc_addrs[0]});
+                                        // Partial batch: fall back to per-tile unicast writes to avoid
+                                        // variable chunk_count scatter writes which cause non-determinism.
+                                        // noc_async_writes_flushed() after each send ensures the previous
+                                        // header NOC write completes before pkt_unicast_hdr is modified
+                                        // for the next tile (they share the same L1 header).
+                                        for (uint32_t i = 0; i < tiles_in_batch; i++) {
+                                            fabric_unicast_noc_unicast_write_with_state<
+                                                UnicastWriteUpdateMask::DstAddr>(
+                                                &mux_conn,
+                                                pkt_unicast_hdr,
+                                                src_l1_addr + i * ag_page_size,
+                                                NocUnicastCommandHeader{v_noc_addrs[i]});
+                                            noc_async_writes_flushed();
+                                        }
                                     }
-                                    noc_async_write_barrier();
                                 }
                             }
-                            noc_async_writes_flushed();
                         }
                         }
                         cb_pop_front(cb_v_writer_in, v_chunk_tiles);
