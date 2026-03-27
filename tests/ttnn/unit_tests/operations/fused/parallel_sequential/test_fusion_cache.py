@@ -47,7 +47,11 @@ def cores(x1, y1, x2=None, y2=None):
 
 
 def _make_branches(device, seed=42):
-    """Create Q and KV RMS norm branches (DeepSeek V3 style)."""
+    """Create Q and KV RMS norm branches with DeepSeek V3 decode shapes.
+
+    Q: 1x1x32x1536 width-sharded on 4x4 cores (shard [32,96]).
+    KV: 1x1x32x512 width-sharded on 2x8 cores (shard [32,32]).
+    """
     torch.manual_seed(seed)
 
     q_cores = cores(0, 0, 3, 3)
@@ -299,73 +303,12 @@ class TestCacheHitCorrectness:
         assert id(fo1) != id(fo2), "FusedOp wrapper should be fresh each hit"
 
     def test_pcc_across_seeds(self, device):
-        """10 iterations with different seeds, PCC >= 0.98 on every hit."""
+        """10 iterations with different seeds using DeepSeek V3 Q/KV shapes, PCC >= 0.98 on every hit."""
         clear_build_cache()
-
-        q_cores = cores(0, 0, 3, 3)
-        q_shard_w = 96
-        q_total_w = 16 * q_shard_w
-        kv_cores = cores(5, 0, 6, 7)
-        kv_shard_w = 32
-        kv_total_w = 16 * kv_shard_w
-
-        q_shard_spec = ttnn.ShardSpec(q_cores, [32, q_shard_w], ttnn.ShardOrientation.ROW_MAJOR)
-        q_mem = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
-            shard_spec=q_shard_spec,
-        )
-        q_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(4, 4),
-            subblock_w=q_shard_w // 32,
-            block_h=1,
-            block_w=q_shard_w // 32,
-            inplace=False,
-        )
-        kv_shard_spec = ttnn.ShardSpec(kv_cores, [32, kv_shard_w], ttnn.ShardOrientation.ROW_MAJOR)
-        kv_mem = ttnn.MemoryConfig(
-            memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            buffer_type=ttnn.BufferType.L1,
-            shard_spec=kv_shard_spec,
-        )
-        kv_pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
-            compute_with_storage_grid_size=(2, 8),
-            subblock_w=kv_shard_w // 32,
-            block_h=1,
-            block_w=kv_shard_w // 32,
-            inplace=False,
-        )
 
         for i in range(10):
             seed = 1000 + i * 37
-            torch.manual_seed(seed)
-
-            torch_q = torch.rand(1, 1, 32, q_total_w, dtype=torch.bfloat16)
-            torch_qw = torch.rand(1, 1, 1, q_total_w, dtype=torch.bfloat16)
-            torch_kv = torch.rand(1, 1, 32, kv_total_w, dtype=torch.bfloat16)
-            torch_kvw = torch.rand(1, 1, 1, kv_total_w, dtype=torch.bfloat16)
-
-            tt_q = ttnn.from_torch(torch_q, device=device, layout=ttnn.TILE_LAYOUT, memory_config=q_mem)
-            tt_qw = ttnn.from_torch(torch_qw, device=device, layout=ttnn.TILE_LAYOUT)
-            tt_kv = ttnn.from_torch(torch_kv, device=device, layout=ttnn.TILE_LAYOUT, memory_config=kv_mem)
-            tt_kvw = ttnn.from_torch(torch_kvw, device=device, layout=ttnn.TILE_LAYOUT)
-
-            q_b = rms_norm(
-                tt_q,
-                epsilon=1e-5,
-                weight=tt_qw,
-                memory_config=q_mem,
-                core_range_set=q_cores,
-                program_config=q_pc,
-            )
-            kv_b = rms_norm(
-                tt_kv,
-                epsilon=1e-5,
-                weight=tt_kvw,
-                memory_config=kv_mem,
-                core_range_set=kv_cores,
-                program_config=kv_pc,
-            )
+            q_b, kv_b, (torch_q, torch_qw, torch_kv, torch_kvw) = _make_branches(device, seed=seed)
 
             fused = Parallel(q_b, kv_b)
             q_out, kv_out = fused.run(results=[q_b, kv_b])
