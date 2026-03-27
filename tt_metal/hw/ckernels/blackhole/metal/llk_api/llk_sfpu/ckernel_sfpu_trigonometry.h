@@ -390,66 +390,54 @@ sfpi_inline sfpi::vFloat sfpu_asin_range_reduced(sfpi::vFloat val) {
     // Use symmetry + range transform for better accuracy near |x| ~= 1:
     // asin(x) = sign(x) * [pi/2 - 2*asin(sqrt((1-|x|)/2))].
     sfpi::vFloat abs_v = sfpi::abs(val);
-    sfpi::vFloat asin_abs;
+    sfpi::vFloat asin_abs = PI_2;
 
-    v_if(abs_v == sfpi::vConst1) { asin_abs = PI_2; }
+    v_if(abs_v <= 0.625f) { asin_abs = sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE>(abs_v); }
     v_else {
-        v_if(abs_v <= 0.625f) { asin_abs = sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE>(abs_v); }
-        v_else {
-            sfpi::vFloat t = (1.0f - abs_v) * 0.5f;
-            sfpi::vFloat root = sfpu_sqrt_custom<APPROXIMATION_MODE>(t);
-            sfpi::vFloat asin_root = sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE>(root);
-            asin_abs = PI_2 - 2.0f * asin_root;
-        }
-        v_endif;
+        sfpi::vFloat t = (1.0f - abs_v) * 0.5f;
+        sfpi::vFloat root = sfpu_sqrt_custom<APPROXIMATION_MODE>(t);
+        sfpi::vFloat asin_root = sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE>(root);
+        asin_abs -= 2.0f * asin_root;
     }
     v_endif;
 
     return sfpi::setsgn(asin_abs, val);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_asin() {
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool IS_ACOS, int ITERATIONS = 8>
+inline void calculate_asin_acos_impl() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v < sfpi::vConstNeg1 || v > sfpi::vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
-        v_else { sfpi::dst_reg[0] = sfpu_asin_range_reduced<APPROXIMATION_MODE>(v); }
+        sfpi::vFloat result;
+        v_if(v < sfpi::vConstNeg1 || v > sfpi::vConst1) { result = std::numeric_limits<float>::quiet_NaN(); }
+        v_else {
+            sfpi::vFloat a = sfpu_asin_range_reduced<APPROXIMATION_MODE>(v);
+            if constexpr (IS_ACOS) {
+                result = PI_2 - a;
+            } else {
+                result = a;
+            }
+        }
         v_endif;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        }
+
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+inline void calculate_asin() {
+    calculate_asin_acos_impl<APPROXIMATION_MODE, is_fp32_dest_acc_en, false, ITERATIONS>();
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_acos() {
-    // SFPU microcode
-    // Use identities to reduce cancellation near +/-1:
-    //  x >  0.5: acos(x) = 2*asin(sqrt((1-x)/2))
-    //  x < -0.5: acos(x) = pi - 2*asin(sqrt((1+x)/2))
-    //  else    : acos(x) = pi/2 - asin(x)
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];
-        v_if(v < sfpi::vConstNeg1 || v > sfpi::vConst1) { sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN(); }
-        v_else {
-            sfpi::vFloat result;
-            v_if(v > 0.5f) {
-                sfpi::vFloat root = sfpu_sqrt_custom<APPROXIMATION_MODE>((1.0f - v) * 0.5f);
-                result = 2.0f * sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE>(root);
-            }
-            v_else {
-                v_if(v < -0.5f) {
-                    sfpi::vFloat root = sfpu_sqrt_custom<APPROXIMATION_MODE>((1.0f + v) * 0.5f);
-                    result = PI - 2.0f * sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE>(root);
-                }
-                v_else { result = PI_2 - sfpu_asin_range_reduced<APPROXIMATION_MODE>(v); }
-                v_endif;
-            }
-            v_endif;
-            sfpi::dst_reg[0] = result;
-        }
-        v_endif;
-        sfpi::dst_reg++;
-    }
+    calculate_asin_acos_impl<APPROXIMATION_MODE, is_fp32_dest_acc_en, true, ITERATIONS>();
 }
 
 // cosh = (exp(x) + exp(-x)) / 2
