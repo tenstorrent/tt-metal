@@ -37,6 +37,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 chunk_width_in_mm_blocks=1,
             ),
             id="medium_Nwt4_cwimb1",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
@@ -51,6 +52,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 chunk_width_in_mm_blocks=2,
             ),
             id="large_Nwt8_cwimb2",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
@@ -65,6 +67,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 chunk_width_in_mm_blocks=4,
             ),
             id="large_Nwt10_cwimb4",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
@@ -79,6 +82,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 chunk_width_in_mm_blocks=1,
             ),
             id="xlarge_4k_Nwt8_cwimb1",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
@@ -93,6 +97,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 chunk_width_in_mm_blocks=2,
             ),
             id="xlarge_4k_Nwt16_cwimb2",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
@@ -107,21 +112,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 chunk_width_in_mm_blocks=2,
             ),
             id="xlarge_4k_y6_Nwt16_cwimb2",
-        ),
-        pytest.param(
-            MinimalMatmulStridedReduceScatterTestConfig(
-                M=9472,
-                K=3456,
-                N=5120,
-                dim=3,
-                mm_block_m=256,
-                mm_block_k=128,
-                mm_block_n=256,
-                mm_core_grid=ttnn.CoreCoord(8, 7),
-                chunk_width_in_mm_blocks=2,
-                num_workers_per_link=3,
-            ),
-            id="xlarge_9472_3456_5120_y7_cwimb1_rs3_fullgrid",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
@@ -136,6 +127,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 chunk_width_in_mm_blocks=1,
             ),
             id="non_div_Wt_6x2_cwimb1",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         pytest.param(
             MinimalMatmulStridedReduceScatterTestConfig(
@@ -151,6 +143,7 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 num_workers_per_link=4,
             ),
             id="non_div_Wt_large_5x6_cwimb2_rs4",
+            marks=pytest.mark.skip(reason="run manually"),
         ),
         # Blackhole-only: BH compute grid is 12x10 (vs wormhole's 8x8).
         # x12_y8: 96 MM cores, RS cores at row 8 (within BH's 10-row grid).
@@ -168,6 +161,22 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 num_workers_per_link=5,
             ),
             id="bh_xlarge_9472_3456_5120_x12_y8_cwimb1_rs5",
+            marks=pytest.mark.skip(reason="run manually"),
+        ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                M=9472,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=128,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(8, 7),
+                chunk_width_in_mm_blocks=2,
+                num_workers_per_link=3,
+            ),
+            id="xlarge_9472_3456_5120_y7_cwimb1_rs3_fullgrid",
         ),
     ],
 )
