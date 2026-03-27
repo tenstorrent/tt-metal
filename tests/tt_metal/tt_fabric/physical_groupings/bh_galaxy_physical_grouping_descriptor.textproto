@@ -98,7 +98,7 @@ groupings {
 # For triple connection / smaller pipeline stages
 groupings {
   name: "halftray_2x2"
-  custom_type: "HALFTRAY"
+  custom_type: "HALFTRAY1"
   instances: [
     { id: 0 asic_location: ASIC_LOCATION_1 },
     { id: 1 asic_location: ASIC_LOCATION_2 },
@@ -111,7 +111,20 @@ groupings {
 }
 groupings {
   name: "halftray_2x2"
-  custom_type: "HALFTRAY"
+  custom_type: "HALFTRAY2"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_5 },
+    { id: 1 asic_location: ASIC_LOCATION_6 },
+    { id: 2 asic_location: ASIC_LOCATION_1 },
+    { id: 3 asic_location: ASIC_LOCATION_2 }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+groupings {
+  name: "halftray_2x2"
+  custom_type: "HALFTRAY1"
   instances: [
     { id: 0 asic_location: ASIC_LOCATION_3 },
     { id: 1 asic_location: ASIC_LOCATION_4 },
@@ -124,10 +137,32 @@ groupings {
 }
 
 groupings {
+  name: "halftray_2x2"
+  custom_type: "HALFTRAY2"
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_7 },
+    { id: 1 asic_location: ASIC_LOCATION_8 },
+    { id: 2 asic_location: ASIC_LOCATION_3 },
+    { id: 3 asic_location: ASIC_LOCATION_4 }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
   name: "2x2 Mesh"
   preset_type: MESH
   instances: [
-    { id: 0 grouping_ref { custom_type: "HALFTRAY" } }
+    { id: 0 grouping_ref { custom_type: "HALFTRAY1" } }
+  ]
+}
+
+groupings {
+  name: "2x2 Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { custom_type: "HALFTRAY2" } }
   ]
 }
 
@@ -135,11 +170,11 @@ groupings {
   name: "4x2_Mesh"
   preset_type: MESH
   instances: [
-    { id: 0 grouping_ref { custom_type: "HALFTRAY" } },
-    { id: 1 grouping_ref { custom_type: "HALFTRAY" } }
+    { id: 0 grouping_ref { custom_type: "HALFTRAY1" } },
+    { id: 1 grouping_ref { custom_type: "HALFTRAY2" } }
   ]
   row_major_mesh {
-    dims: [1, 2]
+    dims: [2, 1]
   }
 }
 
