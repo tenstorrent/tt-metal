@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#ifdef ARCH_QUASAR
+#include "experimental/dataflow_buffer.h"
+#else
 #include "experimental/circular_buffer.h"
+#endif
 #include "experimental/endpoints.h"
 #include "experimental/noc.h"
 
@@ -17,12 +21,26 @@ void kernel_main() {
 
     experimental::Noc noc;
     experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_src;
-    experimental::CircularBuffer cb(cb_id_in0);
 
+#ifdef ARCH_QUASAR
+    experimental::DataflowBuffer dfb(cb_id_in0);
+    uint32_t ublock_size_bytes = dfb.get_entry_size() * ublock_size_tiles;
+#else
+    experimental::CircularBuffer cb(cb_id_in0);
     uint32_t ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
+#endif
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        uint64_t src_noc_addr = get_noc_addr_from_bank_id<true>(src_dram_bank_id, src_addr);
+#ifdef ARCH_QUASAR
+        if (reader_only == false) {
+            dfb.reserve_back(ublock_size_tiles);
+        }
+        noc.async_read(dram_src, dfb, ublock_size_bytes, {.bank_id = src_dram_bank_id, .addr = src_addr}, {});
+        noc.async_read_barrier();
+        if (reader_only == false) {
+            dfb.push_back(ublock_size_tiles);
+        }
+#else
         if (reader_only == false) {
             cb.reserve_back(ublock_size_tiles);
         }
@@ -31,6 +49,7 @@ void kernel_main() {
         if (reader_only == false) {
             cb.push_back(ublock_size_tiles);
         }
+#endif
         src_addr += ublock_size_bytes;
     }
 }
