@@ -47,7 +47,7 @@ def test_model_full_end_to_end(device, model_artifacts, seq_len, reset_seeds):
         state_dict=state_dict,
         hf_model_name=model_id_or_path,
     )
-
+    torch.manual_seed(42)
     input_ids = torch.randint(low=0, high=model_args.vocab_size, size=(BATCH_SIZE, seq_len), dtype=torch.long)
     non_pad_token_id = (int(model_args.pad_token_id) + 1) % model_args.vocab_size
     input_ids[input_ids == model_args.pad_token_id] = non_pad_token_id
