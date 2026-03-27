@@ -15,13 +15,13 @@
 - name: Llama 3.1-8B unit tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 3000 models/tt_transformers/tests/test_embedding.py
-    pytest --timeout 3000 models/tt_transformers/tests/test_rms_norm.py
-    pytest --timeout 3000 models/tt_transformers/tests/test_mlp.py
-    pytest --timeout 3000 models/tt_transformers/tests/test_attention.py
-    pytest --timeout 3000 models/tt_transformers/tests/test_attention_prefill.py
-    pytest --timeout 3000 models/tt_transformers/tests/test_decoder.py
-    pytest --timeout 3000 models/tt_transformers/tests/test_decoder_prefill.py
+    pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
+    pytest --timeout 300 models/tt_transformers/tests/test_rms_norm.py
+    pytest --timeout 300 models/tt_transformers/tests/test_mlp.py
+    pytest --timeout 300 models/tt_transformers/tests/test_attention.py
+    pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
+    pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py
   model: llama3.1-8b
   skus:
     wh_n150:
