@@ -22,6 +22,7 @@ OPTIONS:
     --bundle-python       Deep-copy the Python interpreter into the venv instead of
                           using symlinks. This makes the venv fully self-contained
                           and portable, at the cost of increased disk space.
+    --skip-compat-check   Skip the package compatibility check (uv pip check).
     --help, -h            Show this help message and exit
 
 ENVIRONMENT VARIABLES:
@@ -61,6 +62,7 @@ ARG_PYTHON_VERSION=""
 ARG_ENV_DIR=""
 FORCE_OVERWRITE="false"
 BUNDLE_PYTHON="false"
+SKIP_COMPAT_CHECK="false"
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -91,6 +93,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --bundle-python)
             BUNDLE_PYTHON="true"
+            shift
+            ;;
+        --skip-compat-check)
+            SKIP_COMPAT_CHECK="true"
             shift
             ;;
         --help|-h)
@@ -344,10 +350,14 @@ uv pip install --extra-index-url "$PYTORCH_INDEX" \
 echo "Installing tt-triage dependiencies"
 uv pip install --index-strategy unsafe-best-match -r "$(pwd)/tools/triage/requirements.txt"
 
-echo "Checking packages are compatible"
-if ! uv pip check; then
-    echo -e "\033[1;31mERROR: Package compatibility check failed. See above for details.\033[0m" >&2
-    exit 1
+if [[ "$SKIP_COMPAT_CHECK" == "true" ]]; then
+    echo "Skipping package compatibility check (--skip-compat-check)"
+else
+    echo "Checking packages are compatible"
+    if ! uv pip check; then
+        echo -e "\033[1;31mERROR: Package compatibility check failed. See above for details.\033[0m" >&2
+        exit 1
+    fi
 fi
 
 echo "Installing tt-metal"
