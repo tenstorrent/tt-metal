@@ -123,7 +123,7 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
             tensor_shards.begin(),
             tensor_shards.end(),
             [&](const auto& shard) { return shard.tensor_spec() == reference_shard.tensor_spec(); }),
-        "All tensor shards must be allocated");
+        "All tensor shards must have the same spec");
 
     // Combine the storages
     std::vector<std::reference_wrapper<const DeviceStorage>> device_storages;

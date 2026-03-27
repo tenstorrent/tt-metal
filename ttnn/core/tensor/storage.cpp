@@ -188,7 +188,7 @@ DeviceStorage DeviceStorage::combine_device_storages(
             storages.begin(),
             storages.end(),
             [&](const auto& storage) { return storage.get().mesh_buffer == model_storage.mesh_buffer; }),
-        "All DeviceStorages must be allocated");
+        "All DeviceStorages must point to the same device memory");
 
     auto num_coords = std::accumulate(storages.begin(), storages.end(), 0, [](size_t sum, const auto& storage) {
         return sum + storage.get().get_coords().size();
