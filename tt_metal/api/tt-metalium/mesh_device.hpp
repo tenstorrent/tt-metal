@@ -158,6 +158,14 @@ public:
     void mark_allocations_safe();
     void mark_allocations_unsafe();
     bool allocations_unsafe() const;
+
+    // Unsafe allocation tracking
+    void suppress_unsafe_allocation_warning();
+    void unsuppress_unsafe_allocation_warning();
+    std::unordered_set<size_t> get_unsafe_tracked_ids() const;
+    void clear_unsafe_tracked_ids();
+    static std::vector<size_t> drain_pending_traceback_ids();
+
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;

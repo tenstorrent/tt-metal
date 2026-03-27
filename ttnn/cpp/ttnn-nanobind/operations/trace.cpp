@@ -10,6 +10,8 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/operators.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/unordered_set.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/trace.hpp"
@@ -79,6 +81,25 @@ void py_module(nb::module_& mod) {
         "allocations_unsafe",
         [](MeshDevice* device) { return ttnn::operations::trace::allocations_unsafe(device); },
         nb::arg("mesh_device"));
+
+    // Unsafe allocation tracking
+    mod.def(
+        "suppress_unsafe_allocation_warning",
+        [](MeshDevice* device) { ttnn::operations::trace::suppress_unsafe_allocation_warning(device); },
+        nb::arg("mesh_device"));
+    mod.def(
+        "unsuppress_unsafe_allocation_warning",
+        [](MeshDevice* device) { ttnn::operations::trace::unsuppress_unsafe_allocation_warning(device); },
+        nb::arg("mesh_device"));
+    mod.def(
+        "get_unsafe_tracked_ids",
+        [](MeshDevice* device) { return ttnn::operations::trace::get_unsafe_tracked_ids(device); },
+        nb::arg("mesh_device"));
+    mod.def(
+        "clear_unsafe_tracked_ids",
+        [](MeshDevice* device) { ttnn::operations::trace::clear_unsafe_tracked_ids(device); },
+        nb::arg("mesh_device"));
+    mod.def("drain_pending_traceback_ids", []() { return ttnn::operations::trace::drain_pending_traceback_ids(); });
 }
 
 } // namespace ttnn::operations::trace

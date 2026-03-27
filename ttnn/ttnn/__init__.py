@@ -140,49 +140,43 @@ from ttnn._ttnn.operations.trace import (
     MeshTraceId,
     begin_trace_capture,
     end_trace_capture,
-    execute_trace,
+    execute_trace as _ttnn_execute_trace,
     release_trace,
-    allocations_unsafe as _trace_allocations_unsafe,
-    mark_allocations_safe as _mark_trace_allocations_safe,
-    mark_allocations_unsafe as _mark_trace_allocations_unsafe,
+    suppress_unsafe_allocation_warning as _suppress_unsafe_allocation_warning,
+    unsuppress_unsafe_allocation_warning as _unsuppress_unsafe_allocation_warning,
 )
 
 from ttnn._ttnn.operations.debug import (
     apply_device_delay,
 )
 
-
-def mark_trace_allocations_safe(mesh_device):
-    """Mark allocator safe for temporary allocations while traces are live."""
-    return _mark_trace_allocations_safe(mesh_device)
-
-
-def mark_trace_allocations_unsafe(mesh_device):
-    """Restore allocator unsafe mode for live-trace protection."""
-    return _mark_trace_allocations_unsafe(mesh_device)
-
-
-def trace_allocations_unsafe(mesh_device):
-    """Return True if allocator is currently in unsafe/live-trace mode."""
-    return _trace_allocations_unsafe(mesh_device)
+_TRACE_ALLOC_TRACKING = (
+    os.environ.get("TT_METAL_TRACE_ALLOC_TRACKING") is not None
+    or os.environ.get("TT_METAL_TRACE_ALLOC_TRACEBACKS") is not None
+)
 
 
 @contextlib.contextmanager
-def trace_allocation_safe_scope(mesh_device):
+def corruptible_allocation_scope(mesh_device):
     """
-    Temporarily allow allocations while traces are live.
-
-    Use this only around allocations you know are safe relative to trace replay.
+    Suppress unsafe-allocation tracking for allocations made in this scope.
+    Use for tensors that intentionally persist across replays (e.g. input buffers
+    for a second trace that are overwritten before use).
     """
-    was_unsafe = trace_allocations_unsafe(mesh_device)
-    mark_trace_allocations_safe(mesh_device)
+    _suppress_unsafe_allocation_warning(mesh_device)
     try:
         yield
     finally:
-        if was_unsafe:
-            mark_trace_allocations_unsafe(mesh_device)
-        else:
-            mark_trace_allocations_safe(mesh_device)
+        _unsuppress_unsafe_allocation_warning(mesh_device)
+
+
+def execute_trace(device, trace_id, *, cq_id=None, blocking=True):
+    """Execute a captured trace, with automatic safety verification when tracking is enabled."""
+    if _TRACE_ALLOC_TRACKING:
+        from ttnn.unsafe_allocation_tracker import UnsafeAllocationTracker
+
+        UnsafeAllocationTracker(device).verify_before_replay()
+    return _ttnn_execute_trace(device, trace_id, cq_id=cq_id, blocking=blocking)
 
 
 from ttnn._ttnn.global_circular_buffer import (
