@@ -67,23 +67,16 @@ void kernel_main() {
     for (uint32_t tiles_read = 0; tiles_read < Wt; tiles_read += block_size) {
         const uint32_t cur_block = (Wt - tiles_read < block_size) ? (Wt - tiles_read) : block_size;
 
-        DPRINT << "tiles read = " << tiles_read << ", current block " << cur_block << ENDL();
-
         // Read input A — always reserve full block_size but only issue cur_block reads
         cb_src_a.reserve_back(block_size);
         uint32_t dst_offset = 0;
         const uint32_t src_a_bytes = 1024 * 2;
         for (uint32_t j = 0; j < cur_block; ++j) {
-            DPRINT << "reading tile " << start_tile + tiles_read + j << ", tile size = " << tile_size_a << ENDL();
-            // BUG: Always writing to the wrong location after 1 tile
             noc.async_read(
                 src_a, cb_src_a, tile_size_a, {.page_id = start_tile + tiles_read + j}, {.offset_bytes = dst_offset});
             dst_offset += tile_size_a;
         }
         noc.async_read_barrier();
-
-        DPRINT << "cb_src_a = " << ENDL();
-        print_tile_cb(cb_src_a, 1024, 4);
 
         cb_src_a.push_back(block_size);
 
@@ -93,15 +86,11 @@ void kernel_main() {
         dst_offset = 0;
         const uint32_t src_b_bytes = 1024 * 2;
         for (uint32_t j = 0; j < cur_block; ++j) {
-            // BUG: Always writing to the wrong location after 1 tile
             noc.async_read(
                 src_b, cb_src_b, tile_size_b, {.page_id = start_tile + tiles_read + j}, {.offset_bytes = dst_offset});
             dst_offset += tile_size_b;
         }
         noc.async_read_barrier();
-
-        DPRINT << "cb_src_b = " << ENDL();
-        print_tile_cb(cb_src_b, 1024, 4);
 
         cb_src_b.push_back(block_size);
 #endif

@@ -87,11 +87,8 @@ void kernel_main() {
         // Write output C block
         cb_out.wait_front(block_size);
 
-        print_tile_cb(cb_out, 1024, 4);
-
         uint32_t src_offset = 0;
         for (uint32_t j = 0; j < cur_block; ++j) {
-            DPRINT << "[writer] writing tile " << start_tile + tiles_done + j << ENDL();
             noc.async_write(
                 cb_out, dst, tile_size_c, {.offset_bytes = src_offset}, {.page_id = start_tile + tiles_done + j});
             src_offset += tile_size_c;

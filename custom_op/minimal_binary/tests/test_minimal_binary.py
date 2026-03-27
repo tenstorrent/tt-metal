@@ -59,6 +59,9 @@ CONFIGS = [
         MinimalBinaryConfig(block_size=4, sub_block_size=2, use_dual_reader=False, use_flushed_writes=True),
         id="block4_sub2_balanced_flushed",
     ),
+    #    pytest.param(
+    #        MinimalBinaryConfig(block_size=8, sub_block_size=8, use_flushed_writes=True), id="block8_sub8_flushed",
+    #    )
 ]
 
 
