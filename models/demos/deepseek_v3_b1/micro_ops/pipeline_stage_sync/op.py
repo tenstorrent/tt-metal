@@ -151,22 +151,22 @@ class PipelineStageSync:
                     per_core_compile_time_descriptors=[
                         PerCoreCompileTimeDescriptor(
                             named_compile_time_arg="run_stalling_logic_on_ncrisc",
-                            core_values=[(stalling_core, run_stalling_logic_on_ncrisc), (signalling_core, 0)],
+                            core_values=[(stalling_core, run_stalling_logic_on_ncrisc)],
                             other_value=0,
                         ),
                         PerCoreCompileTimeDescriptor(
                             named_compile_time_arg="run_stalling_logic_on_brisc",
-                            core_values=[(stalling_core, run_stalling_logic_on_brisc), (signalling_core, 0)],
+                            core_values=[(stalling_core, run_stalling_logic_on_brisc)],
                             other_value=0,
                         ),
                         PerCoreCompileTimeDescriptor(
                             named_compile_time_arg="run_signalling_logic_on_ncrisc",
-                            core_values=[(stalling_core, 0), (signalling_core, run_signalling_logic_on_ncrisc)],
+                            core_values=[(signalling_core, run_signalling_logic_on_ncrisc)],
                             other_value=0,
                         ),
                         PerCoreCompileTimeDescriptor(
                             named_compile_time_arg="run_signalling_logic_on_brisc",
-                            core_values=[(stalling_core, 0), (signalling_core, run_signalling_logic_on_brisc)],
+                            core_values=[(signalling_core, run_signalling_logic_on_brisc)],
                             other_value=0,
                         ),
                     ],

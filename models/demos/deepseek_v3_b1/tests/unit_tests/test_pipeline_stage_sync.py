@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Unit tests for PipelineStageSyncB1 operation.
+Unit tests for PipelineStageSync operation.
 """
 
 import pytest
