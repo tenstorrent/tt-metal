@@ -30,6 +30,7 @@ void bind_fill_cache_for_user_(nb::module_& mod) {
             cache (ttnn.Tensor): the cache tensor to be written to.
             input_tensor (ttnn.Tensor): the input tensor to be written to the cache.
             batch_index (int): the index into the cache tensor.
+            update_idx (int): the starting position along the sequence dimension. Must be a multiple of 32 (tile-aligned). Default = 0.
 
 
         Returns:
@@ -39,7 +40,13 @@ void bind_fill_cache_for_user_(nb::module_& mod) {
         )doc";
 
     ttnn::bind_function<"fill_cache_for_user_", "ttnn.kv_cache.">(
-        mod, doc, &ttnn::fill_cache_for_user_, nb::arg("cache"), nb::arg("input"), nb::arg("batch_index"));
+        mod,
+        doc,
+        &ttnn::fill_cache_for_user_,
+        nb::arg("cache"),
+        nb::arg("input"),
+        nb::arg("batch_index"),
+        nb::arg("update_idx") = 0);
 }
 
 void bind_update_cache_for_token_(nb::module_& mod) {
@@ -105,22 +112,29 @@ void bind_update_cache(nb::module_& mod) {
 
 void bind_fill_cache(nb::module_& mod) {
     const auto* doc = R"doc(
-        Fills the cache tensor in place with the values from input at the specified batch_idx.
+        Fills the cache tensor in place with the values from input at the specified batch_idx, starting at position update_idx along the sequence dimension.
 
         Args:
             * :attr:`cache_tensor` (ttnn.Tensor): The cache tensor to be written to.
             * :attr:`input_tensor` (ttnn.Tensor): The token tensor to be written to the cache.
             * :attr:`batch_idx` (int): The index into the cache tensor.
+            * :attr:`update_idx` (int): The starting position along the sequence dimension. Must be a multiple of 32 (tile-aligned). Default = 0.
 
         Example:
             >>> tensor1 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
             >>> tensor2 = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.update_cache(tensor1, tensor2, batch_idx)
+            >>> output = ttnn.fill_cache(tensor1, tensor2, batch_idx)
 
     )doc";
 
     ttnn::bind_function<"fill_cache">(
-        mod, doc, &ttnn::fill_cache, nb::arg("cache_tensor"), nb::arg("input_tensor"), nb::arg("batch_idx"));
+        mod,
+        doc,
+        &ttnn::fill_cache,
+        nb::arg("cache_tensor"),
+        nb::arg("input_tensor"),
+        nb::arg("batch_idx"),
+        nb::arg("update_idx") = 0);
 }
 
 }  // namespace
