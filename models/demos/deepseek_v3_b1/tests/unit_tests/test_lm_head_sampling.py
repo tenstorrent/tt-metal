@@ -15,6 +15,8 @@ In single-device mode (skip_ccl=True): CCL is skipped and the input is used dire
 """
 
 import os
+import re
+from pathlib import Path
 
 import pytest
 import torch
@@ -54,11 +56,317 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul imp
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
+_LM_HEAD_SAMPLING_REFERENCE_PT_ENV = "DEEPSEEK_V3_LM_HEAD_SAMPLING_REFERENCE_PT"
+
 
 def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
     config.max_packet_payload_size_bytes = max_payload_size
     return config
+
+
+def _resolve_lm_head_sampling_reference_payload_path() -> Path:
+    raw = os.getenv(_LM_HEAD_SAMPLING_REFERENCE_PT_ENV)
+    if not raw or not raw.strip():
+        pytest.skip(f"{_LM_HEAD_SAMPLING_REFERENCE_PT_ENV} is not set; skip golden reference payload tests")
+    path = Path(raw.strip()).resolve()
+    if not path.is_file():
+        pytest.skip(f"Reference payload file not found at {path}")
+    return path
+
+
+@pytest.fixture(scope="session")
+def lm_head_sampling_reference_payload():
+    path = _resolve_lm_head_sampling_reference_payload_path()
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(payload, dict):
+        pytest.fail(f"Expected reference payload to be a dict, got {type(payload)} from {path}")
+
+    required_keys = [
+        "base_hidden_states",
+        "base_output_tokens",
+        "mtp_decoder_inputs",
+        "mtp_decoder_outputs",
+        "mtp_speculation_tokens",
+        "base_hidden_positions",
+        "base_output_positions",
+        "mtp_input_positions",
+        "mtp_speculation_positions",
+        "start_tokens",
+        "metadata",
+    ]
+    missing_keys = [key for key in required_keys if key not in payload]
+    if missing_keys:
+        pytest.fail(f"Reference payload is missing required keys: {missing_keys}")
+    return payload
+
+
+def _payload_tensor(payload: dict, key: str) -> torch.Tensor:
+    value = payload[key]
+    if not isinstance(value, torch.Tensor):
+        value = torch.as_tensor(value)
+    return value.detach().cpu()
+
+
+def _squeeze_trailing_unit_dims(tensor: torch.Tensor) -> torch.Tensor:
+    while tensor.ndim > 0 and tensor.shape[-1] == 1:
+        tensor = tensor.squeeze(-1)
+    return tensor
+
+
+def _flatten_feature_rows(tensor: torch.Tensor) -> torch.Tensor:
+    assert tensor.ndim >= 2, f"Expected feature tensor with ndim>=2, got shape {tuple(tensor.shape)}"
+    return tensor.reshape(-1, tensor.shape[-1])
+
+
+def _flatten_scalar_rows(tensor: torch.Tensor) -> torch.Tensor:
+    return _squeeze_trailing_unit_dims(tensor).reshape(-1)
+
+
+def _reference_row_shape(payload: dict) -> tuple[int, ...]:
+    return tuple(_squeeze_trailing_unit_dims(_payload_tensor(payload, "base_hidden_positions")).shape)
+
+
+def _flat_request_and_step(flat_idx: int, row_shape: tuple[int, ...]) -> tuple[int, tuple[int, ...]]:
+    if len(row_shape) == 0:
+        return 0, ()
+    if len(row_shape) == 1:
+        return 0, (flat_idx,)
+
+    tail_size = 1
+    for dim in row_shape[1:]:
+        tail_size *= dim
+
+    request_idx = flat_idx // tail_size
+    rem = flat_idx % tail_size
+    step_suffix = []
+    for dim in reversed(row_shape[1:]):
+        step_suffix.append(rem % dim)
+        rem //= dim
+    return request_idx, tuple(reversed(step_suffix))
+
+
+def _infer_mtp_layer_idx(hf_state_dict) -> int:
+    pattern = re.compile(r"^model\.layers\.(\d+)\.eh_proj\.weight$")
+    mtp_layer_indices = []
+    for key in hf_state_dict.keys():
+        match = pattern.match(key)
+        if match is not None:
+            mtp_layer_indices.append(int(match.group(1)))
+    unique_indices = sorted(set(mtp_layer_indices))
+    if not unique_indices:
+        pytest.skip("No MTP layer weights found in hf_state_dict")
+    assert len(unique_indices) == 1, f"Expected exactly one MTP layer, found {unique_indices}"
+    return unique_indices[0]
+
+
+def _assert_hf_checkpoint_is_dequantized(hf_state_dict) -> None:
+    quantized_keys = [key for key in hf_state_dict.keys() if key.endswith("_scale_inv")]
+    if quantized_keys:
+        pytest.skip(
+            "Detected quantized HF checkpoint tensors (*_scale_inv). "
+            "LMHeadSampling golden reference tests require an already-dequantized checkpoint."
+        )
+
+    required_float_keys = [
+        "model.norm.weight",
+        "lm_head.weight",
+        "model.embed_tokens.weight",
+    ]
+    for key in required_float_keys:
+        tensor = hf_state_dict[key]
+        if tensor.dtype == torch.float8_e4m3fn:
+            pytest.skip(
+                f"Detected float8 tensor for '{key}'. "
+                "LMHeadSampling golden reference tests require an already-dequantized checkpoint."
+            )
+
+
+def _lm_head_golden_weights(hf_state_dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    _assert_hf_checkpoint_is_dequantized(hf_state_dict)
+    gamma = hf_state_dict["model.norm.weight"].reshape(1, -1)
+    vocab = hf_state_dict["lm_head.weight"].T
+    indices = torch.arange(vocab.shape[-1], dtype=torch.int32).reshape(1, -1)
+    return gamma, vocab, indices
+
+
+def _mtp_golden_weights(hf_state_dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    mtp_layer_idx = _infer_mtp_layer_idx(hf_state_dict)
+    embedding = hf_state_dict["model.embed_tokens.weight"]
+    h_gamma = hf_state_dict[f"model.layers.{mtp_layer_idx}.hnorm.weight"].reshape(1, -1)
+    e_gamma = hf_state_dict[f"model.layers.{mtp_layer_idx}.enorm.weight"].reshape(1, -1)
+    eh_projection = hf_state_dict[f"model.layers.{mtp_layer_idx}.eh_proj.weight"].T
+    return embedding, h_gamma, e_gamma, eh_projection
+
+
+def test_golden_reference_payload_base_sampling(lm_head_sampling_reference_payload, hf_state_dict):
+    """Golden base path: pre-norm base hidden state h[t] -> sampled token t+1."""
+    payload = lm_head_sampling_reference_payload
+    row_shape = _reference_row_shape(payload)
+
+    base_hidden_states = _flatten_feature_rows(_payload_tensor(payload, "base_hidden_states"))
+    base_output_tokens = _flatten_scalar_rows(_payload_tensor(payload, "base_output_tokens")).to(torch.uint32)
+    base_hidden_positions = _flatten_scalar_rows(_payload_tensor(payload, "base_hidden_positions")).to(torch.int64)
+    base_output_positions = _flatten_scalar_rows(_payload_tensor(payload, "base_output_positions")).to(torch.int64)
+
+    assert base_hidden_states.shape[0] == base_output_tokens.numel()
+    assert base_hidden_positions.numel() == base_output_tokens.numel()
+    assert base_output_positions.numel() == base_output_tokens.numel()
+
+    gamma, vocab, indices = _lm_head_golden_weights(hf_state_dict)
+
+    for row_idx in range(base_hidden_states.shape[0]):
+        request_idx, step_idx = _flat_request_and_step(row_idx, row_shape)
+        hidden_pos = int(base_hidden_positions[row_idx].item())
+        output_pos = int(base_output_positions[row_idx].item())
+        assert output_pos == hidden_pos + 1, (
+            f"Reference payload position mismatch for request={request_idx}, step={step_idx}: "
+            f"base_output_position={output_pos}, base_hidden_position={hidden_pos}"
+        )
+
+        expected_token = base_output_tokens[row_idx].reshape(1, 1)
+        got_token, aux = LMHeadSampling.golden(
+            base_hidden_states[row_idx : row_idx + 1].to(dtype=gamma.dtype),
+            gamma,
+            vocab,
+            indices=indices,
+            k=1,
+            p=1.0,
+        )
+        assert aux is None
+        assert torch.equal(got_token.to(torch.uint32), expected_token), (
+            f"Golden base token mismatch for request={request_idx}, step={step_idx}, pos={output_pos}. "
+            f"expected={int(expected_token.item())}, got={int(got_token.item())}"
+        )
+
+
+def test_golden_reference_payload_mtp_fusion(lm_head_sampling_reference_payload, hf_state_dict):
+    """Golden MTP base path: h[t] -> sampled token t+1 plus EH projection input to the MTP decoder."""
+    payload = lm_head_sampling_reference_payload
+    row_shape = _reference_row_shape(payload)
+
+    base_hidden_states = _flatten_feature_rows(_payload_tensor(payload, "base_hidden_states"))
+    base_output_tokens = _flatten_scalar_rows(_payload_tensor(payload, "base_output_tokens")).to(torch.uint32)
+    base_output_positions = _flatten_scalar_rows(_payload_tensor(payload, "base_output_positions")).to(torch.int64)
+    mtp_decoder_inputs = _flatten_feature_rows(_payload_tensor(payload, "mtp_decoder_inputs"))
+    mtp_input_positions = _flatten_scalar_rows(_payload_tensor(payload, "mtp_input_positions")).to(torch.int64)
+
+    assert base_hidden_states.shape[0] == base_output_tokens.numel()
+    assert mtp_decoder_inputs.shape[0] == base_output_tokens.numel()
+    assert mtp_input_positions.numel() == base_output_tokens.numel()
+
+    gamma, vocab, indices = _lm_head_golden_weights(hf_state_dict)
+    embedding, h_gamma, e_gamma, eh_projection = _mtp_golden_weights(hf_state_dict)
+
+    for row_idx in range(base_hidden_states.shape[0]):
+        request_idx, step_idx = _flat_request_and_step(row_idx, row_shape)
+        output_pos = int(base_output_positions[row_idx].item())
+        mtp_input_pos = int(mtp_input_positions[row_idx].item())
+        assert mtp_input_pos == output_pos, (
+            f"Reference payload position mismatch for request={request_idx}, step={step_idx}: "
+            f"mtp_input_position={mtp_input_pos}, base_output_position={output_pos}"
+        )
+
+        expected_token = base_output_tokens[row_idx].reshape(1, 1)
+        expected_mtp_input = mtp_decoder_inputs[row_idx : row_idx + 1].to(torch.float32)
+        got_token, got_mtp_input = LMHeadSampling.golden(
+            base_hidden_states[row_idx : row_idx + 1].to(dtype=gamma.dtype),
+            gamma,
+            vocab,
+            indices=indices,
+            k=1,
+            p=1.0,
+            fuse_mtp=True,
+            embedding_tensor=embedding,
+            h_gamma_tensor=h_gamma,
+            e_gamma_tensor=e_gamma,
+            eh_projection_tensor=eh_projection,
+        )
+        assert torch.equal(got_token.to(torch.uint32), expected_token), (
+            f"Golden MTP base token mismatch for request={request_idx}, step={step_idx}, pos={output_pos}. "
+            f"expected={int(expected_token.item())}, got={int(got_token.item())}"
+        )
+        assert got_mtp_input is not None
+        mtp_passing_pcc, _ = comp_pcc(got_mtp_input.float(), expected_mtp_input, 0.999)
+        assert mtp_passing_pcc, (
+            f"Golden MTP input mismatch for request={request_idx}, step={step_idx}, pos={output_pos}. "
+            f"expected_shape={tuple(expected_mtp_input.shape)}, got_shape={tuple(got_mtp_input.shape)}"
+        )
+
+
+def test_golden_reference_payload_mtp_verification(lm_head_sampling_reference_payload, hf_state_dict):
+    """Golden verification path: MTP decoder output at t+1 -> speculative token t+2, verified against next base token."""
+    payload = lm_head_sampling_reference_payload
+    row_shape = _reference_row_shape(payload)
+
+    mtp_decoder_outputs = _flatten_feature_rows(_payload_tensor(payload, "mtp_decoder_outputs"))
+    mtp_speculation_tokens = _flatten_scalar_rows(_payload_tensor(payload, "mtp_speculation_tokens")).to(torch.uint32)
+    mtp_input_positions = _flatten_scalar_rows(_payload_tensor(payload, "mtp_input_positions")).to(torch.int64)
+    mtp_speculation_positions = _flatten_scalar_rows(_payload_tensor(payload, "mtp_speculation_positions")).to(
+        torch.int64
+    )
+    base_output_tokens = _flatten_scalar_rows(_payload_tensor(payload, "base_output_tokens")).to(torch.uint32)
+    base_output_positions = _flatten_scalar_rows(_payload_tensor(payload, "base_output_positions")).to(torch.int64)
+
+    assert mtp_decoder_outputs.shape[0] == mtp_speculation_tokens.numel()
+    assert mtp_input_positions.numel() == mtp_speculation_tokens.numel()
+    assert mtp_speculation_positions.numel() == mtp_speculation_tokens.numel()
+    assert base_output_positions.numel() == base_output_tokens.numel()
+
+    gamma, vocab, indices = _lm_head_golden_weights(hf_state_dict)
+
+    reference_token_by_request_pos = {}
+    for row_idx in range(base_output_tokens.numel()):
+        request_idx, _ = _flat_request_and_step(row_idx, row_shape)
+        base_pos = int(base_output_positions[row_idx].item())
+        reference_token_by_request_pos[(request_idx, base_pos)] = int(base_output_tokens[row_idx].item())
+
+    verified_rows = 0
+    for row_idx in range(mtp_decoder_outputs.shape[0]):
+        request_idx, step_idx = _flat_request_and_step(row_idx, row_shape)
+        mtp_input_pos = int(mtp_input_positions[row_idx].item())
+        mtp_spec_pos = int(mtp_speculation_positions[row_idx].item())
+        assert mtp_spec_pos == mtp_input_pos + 1, (
+            f"Reference payload position mismatch for request={request_idx}, step={step_idx}: "
+            f"mtp_speculation_position={mtp_spec_pos}, mtp_input_position={mtp_input_pos}"
+        )
+
+        reference_key = (request_idx, mtp_spec_pos)
+        if reference_key not in reference_token_by_request_pos:
+            continue
+
+        verified_rows += 1
+        expected_spec_token = mtp_speculation_tokens[row_idx].reshape(1, 1)
+        reference_token = torch.tensor(
+            [[reference_token_by_request_pos[reference_key]]],
+            dtype=torch.uint32,
+        )
+        expected_match = torch.tensor(
+            [[1 if int(expected_spec_token.item()) == int(reference_token.item()) else 0]],
+            dtype=torch.uint32,
+        )
+
+        got_spec_token, got_match = LMHeadSampling.golden(
+            mtp_decoder_outputs[row_idx : row_idx + 1].to(dtype=gamma.dtype),
+            gamma,
+            vocab,
+            indices=indices,
+            k=1,
+            p=1.0,
+            fuse_mtp_verification=True,
+            reference_token=reference_token,
+        )
+        assert torch.equal(got_spec_token.to(torch.uint32), expected_spec_token), (
+            f"Golden verification speculative token mismatch for request={request_idx}, step={step_idx}, "
+            f"spec_pos={mtp_spec_pos}. expected={int(expected_spec_token.item())}, got={int(got_spec_token.item())}"
+        )
+        assert got_match is not None
+        assert torch.equal(got_match.to(torch.uint32), expected_match), (
+            f"Golden verification match-bit mismatch for request={request_idx}, step={step_idx}, "
+            f"spec_pos={mtp_spec_pos}. expected={int(expected_match.item())}, got={int(got_match.item())}"
+        )
+
+    assert verified_rows > 0, "Reference payload did not contain any verifiable MTP rows"
 
 
 def _create_mcast_working_bufs(
