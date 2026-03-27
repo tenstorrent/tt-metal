@@ -9,7 +9,7 @@ hosts: {
   rack: 1
   shelf_u: 1
   node_type: "P150_LB"
-  host: "bh-lb-01"
+  host: "bh-lb-12"
 }
 hosts: {
   hall: "A"
@@ -17,5 +17,5 @@ hosts: {
   rack: 1
   shelf_u: 5
   node_type: "P150_LB"
-  host: "bh-lb-02"
+  host: "bh-lb-13"
 }
