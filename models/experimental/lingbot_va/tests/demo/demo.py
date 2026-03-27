@@ -1,19 +1,22 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Local Lingbot-VA demo runner.
+"""Lingbot-VA demo: RobotWin-style observations and TTNN inference (VA_Server-compatible).
 
-This script builds observation inputs from camera images and executes the same
-reset/infer flow as the server implementation.
+All PyTorch tensors use CPU; TT workloads run on Tenstorrent mesh via TTNN.
 """
 
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 import sys
 from copy import deepcopy
 from pathlib import Path
+
+# Before Hugging Face tokenizers import (avoids fork warning under multiprocessing).
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import numpy as np
 
@@ -37,10 +40,10 @@ from einops import rearrange
 from PIL import Image
 from tqdm import tqdm
 
-# Reference (PyTorch) utils: config, schedulers, tokenizer, VAE for decode + wrapper when TT VAE is freed
 from reference.utils import (
     VA_CONFIGS,
     FlowMatchScheduler,
+    apply_robotwin_inference_overrides,
     data_seq_to_patch,
     get_mesh_id,
     init_logger,
@@ -50,13 +53,10 @@ from reference.utils import (
     WanVAEStreamingWrapper,
 )
 
-import gc
-
 import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 
-# TTNN components: text encoder, transformer, VAE encoder and decoder wrappers (all inference is TTNN)
 from models.experimental.lingbot_va.tt.transformer_wan import NUM_HEADS as LINGBOT_NUM_HEADS
 from tt.utils import (
     load_text_encoder as load_text_encoder_tt,
@@ -65,13 +65,11 @@ from tt.utils import (
     WanVAEDecoderWrapper as TTWanVAEDecoderWrapper,
 )
 
-# Keys the server uses (va_robotwin_cfg.obs_cam_keys)
 OBS_CAM_HIGH = "observation.images.cam_high"
 OBS_CAM_LEFT_WRIST = "observation.images.cam_left_wrist"
 OBS_CAM_RIGHT_WRIST = "observation.images.cam_right_wrist"
 OBS_STATE = "observation.state"
 
-# Seed for reproducible inference (latents/actions init, etc.).
 REPRODUCIBLE_SEED = 42
 
 
@@ -166,9 +164,6 @@ class _TTTransformerAdapter:
         B = spatial.shape[0]
         device = spatial.device
         ts = timesteps.detach().to(device=device, dtype=torch.float32)
-
-        # Match reference/transformer_wan.py: latent_time_steps = repeat_interleave(
-        #     input_dict["timesteps"], patches_per_frame, dim=1) — always per-frame [B, F] first.
         if ts.dim() == 2:
             timestep_per_frame = ts.clone()
             timestep = timestep_per_frame[:, 0].contiguous()
@@ -267,25 +262,11 @@ def load_message_from_files(
     return build_infer_message(cam_high, cam_left, cam_right, prompt)
 
 
-# -----------------------------------------------------------------------------
-# Inference implementation (logic copied from wan_va_server.VA_Server, no class)
-# -----------------------------------------------------------------------------
-
-
 def _open_lingbot_mesh_device():
-    """
-    Open mesh for inference. If ``MESH_DEVICE`` is set, shape matches tt_transformers / PCC tests
-    (N150 ``(1,1)``, N300 ``(1,2)``, etc.). If unset, demo uses one column per PCIe device when
-    count is 1 or 2 (N150 vs N300); more devices default to ``(1, 1)`` until ``MESH_DEVICE`` is set.
-    Multi-chip opens use tensor / sequence /
-    VAE parallel factors derived from ``mesh_device.shape`` unless
-    ``LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1`` (see ``mesh_utils.inference_work_mesh_from_opened``).
+    """Open TTNN mesh for inference; shape from ``mesh_utils`` / ``MESH_DEVICE``.
 
-    Optional env (used by perf tests, e.g. 2 CQ, no trace buffer):
-
-    - LINGBOT_VA_NUM_COMMAND_QUEUES: default 1 if unset (ttnn default).
-    - LINGBOT_VA_TRACE_REGION_SIZE: if set (e.g. 0 for no trace region), passed to open_mesh_device.
-    - LINGBOT_VA_L1_SMALL_SIZE, LINGBOT_VA_WORKER_L1_SIZE: optional overrides.
+    Env overrides (optional): ``LINGBOT_VA_NUM_COMMAND_QUEUES``, ``LINGBOT_VA_TRACE_REGION_SIZE``,
+    ``LINGBOT_VA_L1_SMALL_SIZE``, ``LINGBOT_VA_WORKER_L1_SIZE``. Submesh: ``LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH``.
     """
     from models.experimental.lingbot_va.tests.mesh_utils import ttnn_mesh_shape_for_inference_demo
 
@@ -346,12 +327,7 @@ def _close_lingbot_mesh_stack(models: dict) -> None:
 
 
 def _load_models_phase1(config, load_text_encoder=True):
-    """
-    Load VAE (PyTorch, once; reused for streaming_vae_half when robotwin_tshape), tokenizer, and open mesh device.
-    Optionally load TTNN text encoder (load_text_encoder=True). No transformer, no TT VAE.
-    Only one TT model on device at a time: phase1 = text encoder (if loaded); phase2 = TT VAE (optional);
-    phase3 = TT transformer.
-    """
+    """Load tokenizer, VAE (CPU), mesh, optional TT text encoder. Transformer and TT VAE load in later phases."""
     init_logger()
     device = torch.device("cpu")
     dtype = config.param_dtype
@@ -400,7 +376,6 @@ def _load_models_phase1(config, load_text_encoder=True):
             max_prompt_length=512,
         )
 
-    # VAE: load once; for robotwin_tshape reuse same instance for streaming_vae and streaming_vae_half.
     vae = load_vae(
         os.path.join(ckpt, "vae"),
         torch_dtype=dtype,
@@ -458,13 +433,8 @@ def _free_tt_model(models: dict, key: str) -> None:
     gc.collect()
 
 
-def _try_load_text_emb_cache(config, prompt, device, dtype):
-    """No-op cache helper: embedding caches are disabled for demo generation."""
-    return None, None
-
-
 def _load_text_encoder_into_models(models: dict, config) -> None:
-    """Load TTNN text encoder into models. Call only when text cache missed."""
+    """Load the TTNN UMT5 text encoder into ``models``."""
     ckpt = config.wan22_pretrained_model_name_or_path
     dtype = models["dtype"]
     logger.info(
@@ -502,9 +472,7 @@ def _load_tt_vae_into_models(models: dict, config) -> None:
         models["ccl_manager"],
         vae_parallel_config,
     )
-    # Default to a single TT wrapper for both high and left/right cameras.
-    # This matches the validated debug path and avoids divergence between two separately
-    # constructed TT wrappers on the same mesh. Keep dual-wrapper mode as explicit opt-in.
+    # One TT wrapper for high + wrist unless LINGBOT_VA_TT_USE_DUAL_ENCODER_WRAPPERS=1.
     use_dual_tt_wrappers = os.environ.get("LINGBOT_VA_TT_USE_DUAL_ENCODER_WRAPPERS", "0") == "1"
     if use_dual_tt_wrappers and config.env_type == "robotwin_tshape" and models.get("vae_half") is not None:
         models["streaming_vae_half"] = TTWanVAEStreamingWrapper(
@@ -811,8 +779,6 @@ def _encode_obs(models, state, obs):
         videos_left_and_right = torch.cat(videos[1:], dim=0) / 255.0 * 2.0 - 1.0
         vae_device = next(streaming_vae.vae.parameters()).device
         enc_out_high = streaming_vae.encode_chunk(videos_high.to(vae_device).to(dtype))
-        # In TT mode we default streaming_vae_half to the same object as streaming_vae.
-        # Preserve compatibility if a separate half wrapper is explicitly configured.
         encode_lr = streaming_vae_half if streaming_vae_half is not None else streaming_vae
         enc_out_left_and_right = encode_lr.encode_chunk(videos_left_and_right.to(vae_device).to(dtype))
         enc_out = torch.cat(
@@ -895,10 +861,7 @@ def _reset_state(models, state, prompt):
         state["_prompt_embeds_prompt"] = None
     else:
         prompt_list = [prompt] if isinstance(prompt, str) else prompt
-        if state.get("_prompt_embeds_prompt") == prompt_list and "prompt_embeds" in state:
-            # Reuse embeddings from initial encode (no second _encode_prompt / cache read).
-            pass
-        else:
+        if state.get("_prompt_embeds_prompt") != prompt_list or "prompt_embeds" not in state:
             prompt_embeds, negative_prompt_embeds = _encode_prompt(
                 models,
                 state,
@@ -909,8 +872,6 @@ def _reset_state(models, state, prompt):
             state["prompt_embeds"] = prompt_embeds
             state["negative_prompt_embeds"] = negative_prompt_embeds
             state["_prompt_embeds_prompt"] = prompt_list
-
-    # No intermediate file dumps; keep runtime state in memory only.
 
 
 def _infer_impl(models, state, obs, frame_st_id=0):
@@ -1101,14 +1062,14 @@ def _infer_entry(models, state, obs):
     compute_kv_cache = obs.get("compute_kv_cache", False)
 
     if reset:
-        logger.info("******************* Reset server ******************")
+        logger.info("Reset server")
         _reset_state(models, state, prompt=prompt)
         return {}
     if compute_kv_cache:
-        logger.info("################# Compute KV Cache #################")
+        logger.info("Compute KV cache")
         _compute_kv_cache(models, state, obs)
         return {}
-    logger.info("################# Infer One Chunk #################")
+    logger.info("Infer one chunk")
     action, _ = _infer_impl(models, state, obs, frame_st_id=state["frame_st_id"])
     return {"action": action}
 
@@ -1159,7 +1120,6 @@ def _decode_one_video(models, latents, output_type="np"):
     )
     latents = latents / latents_std + latents_mean
 
-    # Prefer TTNN VAE decoder when loaded; fall back to PyTorch decode on OOM or when TT decoder not loaded (e.g. run_generate on N150).
     if models.get("vae_decoder_tt") is not None:
         video = models["vae_decoder_tt"].decode(latents)
     else:
@@ -1180,12 +1140,19 @@ def run_inference(
     message: dict,
     checkpoint_path: str | Path,
     save_dir: str | Path | None = None,
+    *,
+    num_inference_steps: int | None = None,
+    action_num_inference_steps: int | None = None,
+    frame_chunk_size: int | None = None,
 ) -> dict:
     """
     Run Lingbot-VA inference on the input dict (same behavior as VA_Server.infer).
 
     Uses config and model loading from wan_va; no VA_Server class. Resets with
     message['prompt'], then runs infer one chunk and returns {'action': ...}.
+
+    Optional keyword overrides set ``config`` fields; when omitted, env
+    ``LINGBOT_VA_*`` inference overrides may apply (see ``apply_robotwin_inference_overrides``).
     """
     checkpoint_path = Path(checkpoint_path).resolve()
     if not checkpoint_path.is_dir():
@@ -1198,14 +1165,12 @@ def run_inference(
     config.local_rank = 0
     config.rank = 0
     config.world_size = 1
-    # Optional perf/debug overrides without changing caller signatures.
-    # Useful for single-pass perf profiling (e.g. steps=1, frame_chunk_size=1).
-    if os.environ.get("LINGBOT_VA_NUM_INFERENCE_STEPS"):
-        config.num_inference_steps = int(os.environ["LINGBOT_VA_NUM_INFERENCE_STEPS"])
-    if os.environ.get("LINGBOT_VA_ACTION_NUM_INFERENCE_STEPS"):
-        config.action_num_inference_steps = int(os.environ["LINGBOT_VA_ACTION_NUM_INFERENCE_STEPS"])
-    if os.environ.get("LINGBOT_VA_FRAME_CHUNK_SIZE"):
-        config.frame_chunk_size = int(os.environ["LINGBOT_VA_FRAME_CHUNK_SIZE"])
+    apply_robotwin_inference_overrides(
+        config,
+        num_inference_steps=num_inference_steps,
+        action_num_inference_steps=action_num_inference_steps,
+        frame_chunk_size=frame_chunk_size,
+    )
     if save_dir is None:
         save_dir = _SCRIPT_DIR
     config.save_root = str(save_dir)
@@ -1309,7 +1274,7 @@ def run_generate(
 
     pred_latent_lst = []
     pred_action_lst = []
-    print(f"Generating {config.num_chunks_to_infer} chunks")
+    logger.info("Generating %s chunks", config.num_chunks_to_infer)
     for chunk_id in range(config.num_chunks_to_infer):
         actions, latents = _infer_impl(models, state, init_obs, frame_st_id=(chunk_id * config.frame_chunk_size))
         actions = torch.from_numpy(actions)
@@ -1318,8 +1283,7 @@ def run_generate(
 
     pred_latent = torch.cat(pred_latent_lst, dim=2)
 
-    # Free all TT sub-modules and close the mesh device so the decoder runs on a fresh device
-    # with full memory (avoids OOM from fragmented/leftover allocations).
+    # Teardown transformer + TT VAE encoders, then reopen mesh so the decoder has a clean device.
     transformer = models.get("transformer")
     if transformer is not None:
         _release_ttnn_runtime_configs(transformer)
@@ -1360,12 +1324,10 @@ def run_generate(
             logger.warning("streaming_vae cleanup failed: %s", e)
         del models["streaming_vae"]
     models.pop("text_encoder", None)
-    gc.collect()
-    gc.collect()
     _release_ttnn_runtime_configs(models)
     gc.collect()
+    gc.collect()
     _close_lingbot_mesh_stack(models)
-    # Reopen a fresh mesh device so the TT decoder is the only user and has full DRAM.
     from models.experimental.lingbot_va.tests.mesh_utils import inference_work_mesh_from_opened
 
     opened_mesh = _open_lingbot_mesh_device()
@@ -1374,8 +1336,7 @@ def run_generate(
     models["mesh_device_parent"] = mesh_parent
     models["ccl_manager"] = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
-    # Run TTNN VAE decoder on the fresh device. Fall back to PyTorch only on OOM (e.g. very small devices).
-    # Set LINGBOT_VA_USE_TT_DECODER=0 to skip TT decoder and use PyTorch decode only.
+    # TT decoder on fresh mesh; PyTorch fallback on OOM. Disable: LINGBOT_VA_USE_TT_DECODER=0.
     use_tt_decoder = os.environ.get("LINGBOT_VA_USE_TT_DECODER", "1").strip().lower() in ("1", "true", "yes")
     decoded_video = None
     if use_tt_decoder:
@@ -1402,20 +1363,6 @@ def run_generate(
     export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=10)
     _close_lingbot_mesh_stack(models)
     return str(Path(save_dir) / "demo.mp4")
-
-
-def _print_dict_shapes(d: dict, prefix: str = "") -> None:
-    """Print dict keys and shapes of numpy arrays (for debugging)."""
-    for k, v in d.items():
-        if isinstance(v, np.ndarray):
-            print(f"  {prefix}{k}: shape {v.shape}, dtype {v.dtype}")
-        elif isinstance(v, dict):
-            print(f"  {prefix}{k}: (dict)")
-            _print_dict_shapes(v, prefix=prefix + "    ")
-        elif isinstance(v, (int, float, str, bool)) or v is None:
-            print(f"  {prefix}{k}: {v!r}")
-        else:
-            print(f"  {prefix}{k}: type {type(v).__name__}")
 
 
 def main() -> None:
@@ -1459,16 +1406,17 @@ def main() -> None:
         "--num-chunks",
         type=int,
         default=2,
-        help="Number of chunks for generate() (only used with --generate). Default: 10.",
+        help="Number of chunks for generate() (only used with --generate). Default: 2.",
     )
     args = parser.parse_args()
+    init_logger()
 
     save_dir = args.save_dir or str(_SCRIPT_DIR)
     images_dir = Path(args.images_dir) if args.images_dir else _REPO_ROOT / "example" / "robotwin"
 
     if args.generate:
         if not args.checkpoint:
-            print("--generate requires --checkpoint (or LINGBOT_VA_CHECKPOINT).")
+            logger.error("--generate requires --checkpoint (or LINGBOT_VA_CHECKPOINT).")
             sys.exit(1)
         for key in (
             "observation.images.cam_high",
@@ -1476,17 +1424,17 @@ def main() -> None:
             "observation.images.cam_right_wrist",
         ):
             if not (images_dir / f"{key}.png").exists():
-                print(f"Missing {images_dir / f'{key}.png'} for generate(). Use --images-dir.")
+                logger.error("Missing %s for generate(). Use --images-dir.", images_dir / f"{key}.png")
                 sys.exit(1)
-        print("=" * 60)
-        print("Running generate() (no infer): multi-chunk → decode → demo.mp4")
-        print("=" * 60)
-        print("Checkpoint:", args.checkpoint)
-        print("Images dir:", images_dir)
-        print("Prompt:", repr(args.prompt))
-        print("Num chunks:", args.num_chunks)
-        print("Save dir:", save_dir)
-        print("=" * 60)
+        logger.info("=" * 60)
+        logger.info("Running generate() (no infer): multi-chunk → decode → demo.mp4")
+        logger.info("=" * 60)
+        logger.info("Checkpoint: %s", args.checkpoint)
+        logger.info("Images dir: %s", images_dir)
+        logger.info("Prompt: %r", args.prompt)
+        logger.info("Num chunks: %s", args.num_chunks)
+        logger.info("Save dir: %s", save_dir)
+        logger.info("=" * 60)
         out_path = run_generate(
             args.checkpoint,
             images_dir,
@@ -1494,7 +1442,7 @@ def main() -> None:
             save_dir,
             num_chunks=args.num_chunks,
         )
-        print("Generated video saved to:", out_path)
+        logger.info("Generated video saved to: %s", out_path)
         return
 
     # Infer mode: build message, run reset + infer one chunk
@@ -1503,8 +1451,8 @@ def main() -> None:
     cam_right_path = images_dir / "observation.images.cam_right_wrist.png"
     for p in (cam_high_path, cam_left_path, cam_right_path):
         if not p.exists():
-            print(f"Missing image: {p}")
-            print(f"  Use --images-dir to specify another dir.")
+            logger.error("Missing image: %s", p)
+            logger.error("  Use --images-dir to specify another dir.")
             sys.exit(1)
 
     message = load_message_from_files(
@@ -1514,39 +1462,38 @@ def main() -> None:
         prompt=args.prompt,
     )
 
-    print("=" * 60)
-    print("Input dict (message for model.infer)")
-    print("=" * 60)
-    print("Top-level keys:", list(message.keys()))
-    print("Observation keys (message['obs']):", list(message["obs"].keys()))
-    print("Observation array shapes:")
+    logger.info("=" * 60)
+    logger.info("Input dict (message for model.infer)")
+    logger.info("=" * 60)
+    logger.info("Top-level keys: %s", list(message.keys()))
+    logger.info("Observation keys (message['obs']): %s", list(message["obs"].keys()))
+    logger.info("Observation array shapes:")
     for k in (OBS_CAM_HIGH, OBS_CAM_LEFT_WRIST, OBS_CAM_RIGHT_WRIST):
         arr = message["obs"][k]
-        print(f"  {k}: {arr.shape} {arr.dtype}")
-    print("Prompt:", repr(message["prompt"]))
-    print("=" * 60)
+        logger.info("  %s: %s %s", k, arr.shape, arr.dtype)
+    logger.info("Prompt: %r", message["prompt"])
+    logger.info("=" * 60)
 
     if not args.checkpoint:
-        print("No --checkpoint (or LINGBOT_VA_CHECKPOINT) set. Skipping inference.")
-        print("Set checkpoint path to run inference on the above dict.")
+        logger.warning("No --checkpoint (or LINGBOT_VA_CHECKPOINT) set. Skipping inference.")
+        logger.warning("Set checkpoint path to run inference on the above dict.")
         return
 
-    print("\nRunning inference (reset + infer one chunk)...")
-    print("Output directory:", save_dir)
+    logger.info("Running inference (reset + infer one chunk)...")
+    logger.info("Output directory: %s", save_dir)
     result = run_inference(message, args.checkpoint, save_dir=save_dir)
-    print("=" * 60)
-    print("Inference result")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Inference result")
+    logger.info("=" * 60)
     if "action" in result:
         action = result["action"]
-        print("action shape:", action.shape, "dtype:", action.dtype)
+        logger.info("action shape: %s dtype: %s", action.shape, action.dtype)
         if args.output:
             np.save(args.output, action)
-            print("action saved to:", args.output)
+            logger.info("action saved to: %s", args.output)
     else:
-        print("Keys:", list(result.keys()))
-        _print_dict_shapes(result)
-    print("=" * 60)
+        logger.info("Keys: %s", list(result.keys()))
+    logger.info("=" * 60)
 
 
 if __name__ == "__main__":

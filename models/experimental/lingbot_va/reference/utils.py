@@ -270,6 +270,34 @@ va_robotwin_cfg.norm_stat = {
 VA_CONFIGS = {"robotwin": va_robotwin_cfg}
 
 
+def apply_robotwin_inference_overrides(
+    config,
+    *,
+    num_inference_steps: int | None = None,
+    action_num_inference_steps: int | None = None,
+    frame_chunk_size: int | None = None,
+) -> None:
+    """Set inference fields on ``config`` from kwargs; when ``None``, optional ``LINGBOT_VA_*`` env fallbacks."""
+    if num_inference_steps is not None:
+        config.num_inference_steps = num_inference_steps
+    else:
+        env = os.environ.get("LINGBOT_VA_NUM_INFERENCE_STEPS", "").strip()
+        if env:
+            config.num_inference_steps = int(env)
+    if action_num_inference_steps is not None:
+        config.action_num_inference_steps = action_num_inference_steps
+    else:
+        env = os.environ.get("LINGBOT_VA_ACTION_NUM_INFERENCE_STEPS", "").strip()
+        if env:
+            config.action_num_inference_steps = int(env)
+    if frame_chunk_size is not None:
+        config.frame_chunk_size = frame_chunk_size
+    else:
+        env = os.environ.get("LINGBOT_VA_FRAME_CHUNK_SIZE", "").strip()
+        if env:
+            config.frame_chunk_size = int(env)
+
+
 def _local_path(p):
     """Resolve to absolute path so from_pretrained treats it as local, not a HF repo id."""
     return str(os.path.abspath(os.path.expanduser(p)))
