@@ -74,7 +74,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: bh_galaxy,wh_llmbox,bh_loudbox,bh_qb
+      enabled-skus: bh_galaxy,wh_llmbox_perf,bh_loudbox,bh_llmbox
       model: deepseek_prefill
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[DeepSeek] "
@@ -89,7 +89,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: wh_galaxy_perf,wh_galaxy,wh_llmbox_perf,wh_llmbox
+      enabled-skus: wh_galaxy_perf,wh_llmbox_perf
       model: wan22
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[Wan2.2] "

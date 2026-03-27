@@ -37,10 +37,10 @@
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc" -vvv --tb=short
   model: deepseek_prefill
   skus:
-    wh_llmbox:
+    wh_llmbox_perf:
       timeout: 45
   owner_id: U08E1JCMAJF
-  team: shield
+  team: models
 
 - name: bh_lb_DeepSeek_PREFILL
   cmd: |
@@ -53,7 +53,7 @@
     bh_loudbox:
       timeout: 45
   owner_id: U08E1JCMAJF
-  team: shield
+  team: models
 
 - name: bh_qb_DeepSeek_PREFILL
   cmd: |
@@ -61,10 +61,10 @@
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2' -vvv --tb=short
   model: deepseek_prefill
   skus:
-    bh_qb:
+    bh_llmbox:
       timeout: 40
   owner_id: U08E1JCMAJF
-  team: shield
+  team: models
 
 # ============================================================================
 # Wan 2.2 Tests (Galaxy)
@@ -99,10 +99,10 @@
   cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model wan22
   model: wan22
   skus:
-    wh_galaxy:
+    wh_galaxy_perf:
       timeout: 40
   owner_id: U03FJB5TM5Y
-  team: ttnn
+  team: models
 
 # ============================================================================
 # Wan 2.2 Tests (T3K)
@@ -134,7 +134,7 @@
   cmd: run_t3000_wan22_tests
   model: wan22
   skus:
-    wh_llmbox:
+    wh_llmbox_perf:
       timeout: 45
   owner_id: U03FJB5TM5Y
   team: models
