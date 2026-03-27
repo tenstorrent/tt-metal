@@ -729,7 +729,6 @@ def run_maxpool(device, input_shape, kernel_size, stride, padding, dilation):
     _, out_c, out_h, out_w = torch_output_tensor.shape
     output_tensor = torch.reshape(output_tensor, (batch_size, out_h, out_w, out_c))
     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-    assert_with_pcc(output_tensor, torch_output_tensor)
     assert_numeric_metrics(
         output_tensor,
         torch_output_tensor,
@@ -747,7 +746,6 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.mean(input_tensor, dim=dim)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor)
     assert_numeric_metrics(
         output_tensor,
         torch_output_tensor,
