@@ -1195,7 +1195,7 @@ class DeepseekMinimalAllReduce:
                             brisc_args=[(sender_core, []), (receiver_core, [])],
                             trisc_args=[(receiver_core, [])],
                         ),
-                        # noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+                        noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                     )
                     kernel_result = unified_kernel.get_kernel_descriptors()
                     sender_group = kernel_result.get_group_by_arg("is_allreduce_sender_core", 1)

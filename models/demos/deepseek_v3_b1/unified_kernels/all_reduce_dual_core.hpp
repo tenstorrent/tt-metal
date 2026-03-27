@@ -138,23 +138,10 @@ private:
             return;
         }
 
-        PacketHeaderPool::reset();
-
-        if constexpr (CT::signal_local_ready != 0) {
-            cb_reserve_back(CT::local_data_cb_id, CT::input_num_tiles);
-            cb_push_back(CT::local_data_cb_id, CT::input_num_tiles);
-        }
-        const uint32_t src_addr = get_read_ptr(CT::local_data_cb_id);
-
-        tt::tt_fabric::WorkerToFabricEdmSender connection;
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* header;
-        uint64_t remote_sem_noc;
-
         size_t arg_idx = size_t(a.per_core_rta_start_idx);
         const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t link_sem_bank = get_arg_val<uint32_t>(arg_idx++);
-        remote_sem_noc = safe_get_noc_addr(a.dest_noc_x, a.dest_noc_y, link_sem_bank, 0);
 
         if constexpr (CT::signal_local_ready != 0) {
             const uint32_t lr_dest_x = get_arg_val<uint32_t>(arg_idx++);
@@ -165,43 +152,68 @@ private:
             noc_async_atomic_barrier();
         }
 
-        connection = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
+        auto connection =
+            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
         connection.open_start();
-        header = PacketHeaderPool::allocate_header();
+
+        PacketHeaderPool::reset();
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
         fabric_set_unicast_route(header, dst_chip_id, dst_mesh_id);
-        connection.open_finish();
 
         const uint64_t dst_noc_base = safe_get_noc_addr(a.dest_noc_x, a.dest_noc_y, a.intermediate_buffer_address, 0);
+        const uint64_t remote_sem_noc = safe_get_noc_addr(a.dest_noc_x, a.dest_noc_y, link_sem_bank, 0);
+
+        if constexpr (CT::signal_local_ready != 0) {
+            cb_reserve_back(CT::local_data_cb_id, CT::input_num_tiles);
+            cb_push_back(CT::local_data_cb_id, CT::input_num_tiles);
+        }
+        const uint32_t src_base_addr = get_read_ptr(CT::local_data_cb_id);
+
+        connection.open_finish();
 
         // Byte step between this link's consecutive stripes: chunks [chunk_idx, chunk_idx+num_links) are
         // all strictly before the global tail iff chunk_idx+num_links < num_chunks, so each uses
         // tiles_per_chunk → constant stride (compile-time).
-        static constexpr uint32_t stride_bytes = CT::num_links * CT::tiles_per_chunk * CT::page_size_bytes;
+        constexpr uint32_t stride_bytes = CT::num_links * CT::tiles_per_chunk * CT::page_size_bytes;
         uint32_t offset = CT::link_index * CT::tiles_per_chunk * CT::page_size_bytes;
 
-        for (uint32_t chunk_idx = CT::link_index; chunk_idx < CT::num_chunks; chunk_idx += CT::num_links) {
-            const uint32_t tiles = (chunk_idx < CT::num_chunks - 1) ? CT::tiles_per_chunk : CT::last_chunk_tiles;
-            const uint32_t payload_size = tiles * CT::page_size_bytes;
+        constexpr uint32_t regular_payload_bytes = CT::tiles_per_chunk * CT::page_size_bytes;
+        constexpr uint32_t last_payload_bytes = CT::last_chunk_tiles * CT::page_size_bytes;
 
+        auto send_payload = [&](uint32_t offset, uint32_t payload_bytes) __attribute__((always_inline)) {
             header->to_noc_fused_unicast_write_atomic_inc(
-                {dst_noc_base + offset, remote_sem_noc, 1, false}, payload_size);
+                {dst_noc_base + offset, remote_sem_noc, 1, false}, payload_bytes);
             connection.wait_for_empty_write_slot();
-            connection.send_payload_without_header_non_blocking_from_address(src_addr + offset, payload_size);
+            connection.send_payload_without_header_non_blocking_from_address(src_base_addr + offset, payload_bytes);
             connection.send_payload_flush_non_blocking_from_address(
                 reinterpret_cast<uint32_t>(header), sizeof(PACKET_HEADER_TYPE));
+        };
 
-            noc_async_writes_flushed();
+        // first loop uintil last chunk - 1
+        uint32_t chunk_idx = CT::link_index;
+        for (; chunk_idx < CT::num_chunks - 1; chunk_idx += CT::num_links) {
+            send_payload(offset, regular_payload_bytes);
 
             // Stride add on the final iteration is dead (offset unused); avoids duplicating the for-loop exit test.
             offset += stride_bytes;
+
+            noc_async_writes_flushed();
         }
 
-        connection.close();
+        // handle last chunk
+        if (chunk_idx < CT::num_chunks) {
+            send_payload(offset, last_payload_bytes);
+            // no need to flush, we have a barrier at the end
+        }
+
+        connection.close_start();
 
         // pop local cb? need to confirm if we can do it or not
         if constexpr (CT::signal_local_ready != 0) {
             cb_pop_front(CT::local_data_cb_id, CT::input_num_tiles);
         }
+
+        connection.close_finish();
 
         noc_async_full_barrier();
 #endif
