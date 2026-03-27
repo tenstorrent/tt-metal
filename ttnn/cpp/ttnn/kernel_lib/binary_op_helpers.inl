@@ -101,8 +101,8 @@ ALWI void binary_init(uint32_t icb_a, uint32_t icb_b) {
     constexpr EltwiseBinaryType elt_type = map_to_eltwise_type<op_type>();
     constexpr BroadcastType bcast_type = map_to_broadcast_type<bcast_dim>();
 
-    // MUL uses configured MATH_FIDELITY; ADD/SUB always use LoFi (matches eltwise_binary.h)
-    if constexpr (op_type == BinaryOpType::MUL) {
+    // MUL and SQUARE use configured MATH_FIDELITY; ADD/SUB always use LoFi (matches eltwise_binary.h)
+    if constexpr (op_type == BinaryOpType::MUL || op_type == BinaryOpType::SQUARE) {
         MATH((llk_math_eltwise_binary_init_with_operands<elt_type, bcast_type, MATH_FIDELITY>(icb_a, icb_b)));
     } else {
         MATH((llk_math_eltwise_binary_init_with_operands<elt_type, bcast_type, MathFidelity::LoFi>(icb_a, icb_b)));
@@ -116,7 +116,7 @@ ALWI void binary_exec(uint32_t icb_a, uint32_t icb_b, uint32_t itile_a, uint32_t
     constexpr BroadcastType bcast_type = map_to_broadcast_type<bcast_dim>();
 
     UNPACK((llk_unpack_AB<bcast_type>(icb_a, icb_b, itile_a, itile_b)));
-    if constexpr (op_type == BinaryOpType::MUL) {
+    if constexpr (op_type == BinaryOpType::MUL || op_type == BinaryOpType::SQUARE) {
         MATH((llk_math_eltwise_binary<elt_type, bcast_type, DST_ACCUM_MODE, MATH_FIDELITY,
                                       EltwiseBinaryReuseDestType::NONE>(icb_a, icb_b, idst, true)));
     } else {
