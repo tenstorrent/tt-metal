@@ -429,9 +429,8 @@ inline void calculate_asin_acos_impl() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat result;
-        v_if(v < sfpi::vConstNeg1 || v > sfpi::vConst1) { result = std::numeric_limits<float>::quiet_NaN(); }
-        v_else {
+        sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
+        v_if(sfpi::abs(v) <= sfpi::vConst1) {
             sfpi::vFloat a = sfpu_asin_range_reduced<APPROXIMATION_MODE>(v);
             if constexpr (IS_ACOS) {
                 result = PI_2 - a;
