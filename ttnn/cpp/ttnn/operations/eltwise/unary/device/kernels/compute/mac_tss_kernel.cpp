@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-#include <cstring>
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
@@ -13,10 +11,8 @@
 #include "api/compute/eltwise_unary/fill.h"
 
 void kernel_main() {
-    const uint32_t packed_scalar1 = get_arg_val<uint32_t>(0);  // value1 (multiplier b)
-    const uint32_t packed_scalar2 = get_arg_val<uint32_t>(1);  // value2 (addend c)
-    const auto scalar1_f = reinterpret_cast<const float*>(&packed_scalar1);
-    const auto scalar2_f = reinterpret_cast<const float*>(&packed_scalar2);
+    const float scalar1 = get_arg_val<float>(0);  // value1 (multiplier b)
+    const float scalar2 = get_arg_val<float>(1);  // value2 (addend c)
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
     constexpr auto cb_input = tt::CBIndex::c_0;
@@ -32,8 +28,8 @@ void kernel_main() {
             copy_tile(cb_input, 0, 0);  // a -> dst[0]
 
             fill_tile_init();
-            fill_tile(1, *scalar1_f);  // b (scalar) -> dst[1]
-            fill_tile(2, *scalar2_f);  // c (scalar) -> dst[2]
+            fill_tile(1, scalar1);  // b (scalar) -> dst[1]
+            fill_tile(2, scalar2);  // c (scalar) -> dst[2]
 
             SFPU_OP_CHAIN_0  // expands to mac_tile_init(); mac_tile<DataFormat>(0,1,2,0);
 
