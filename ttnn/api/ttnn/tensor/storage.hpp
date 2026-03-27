@@ -44,6 +44,7 @@ public:
 
     // Returns the host tensor.
     const HostTensor& host_tensor() const;
+    HostTensor& host_tensor();
 
     // Applies a transformation function to each device buffer in parallel, returning a new HostStorage.
     HostStorage transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
