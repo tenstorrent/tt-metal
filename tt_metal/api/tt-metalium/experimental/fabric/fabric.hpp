@@ -81,10 +81,9 @@ enum class FabricApiType : uint8_t {
 std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
     FabricApiType api_type = FabricApiType::Linear);
 
-// Compute fabric connection RT args without any PD mutation.
-// Teardown semaphore is reserved in the L1 connection table — no caller allocation needed.
-// Returns flat vector matching RoutingPlaneConnectionManager::build_from_args() layout.
-std::vector<uint32_t> compute_fabric_connection_rt_args(
+// Resolve fabric ETH channels for the given src→dst routes.
+// Returns one ETH channel ID per destination — the channel index into the L1 connection table.
+std::vector<uint32_t> get_fabric_eth_channels(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices);

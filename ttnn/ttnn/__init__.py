@@ -167,7 +167,7 @@ from ttnn._ttnn.fabric import (
     setup_fabric_connection,
     setup_routing_plane_connection,
     get_fabric_kernel_defines,
-    compute_fabric_connection_rt_args,
+    get_fabric_eth_channels,
 )
 
 # Import cluster functions and types

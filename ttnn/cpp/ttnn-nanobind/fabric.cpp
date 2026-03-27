@@ -237,14 +237,13 @@ void bind_fabric_api(nb::module_& mod) {
         )");
 
     mod.def(
-        "compute_fabric_connection_rt_args",
-        &tt::tt_fabric::compute_fabric_connection_rt_args,
+        "get_fabric_eth_channels",
+        &tt::tt_fabric::get_fabric_eth_channels,
         nb::arg("src_fabric_node_id"),
         nb::arg("dst_nodes"),
         nb::arg("connection_link_indices"),
         R"(
-            Compute fabric connection RT args without any PD mutation.
-            Teardown semaphore is reserved in the L1 connection table — no caller allocation needed.
+            Resolve fabric ETH channels for the given src→dst routes.
 
             Args:
                 src_fabric_node_id: FabricNodeId of the source chip
@@ -252,7 +251,7 @@ void bind_fabric_api(nb::module_& mod) {
                 connection_link_indices: List of link indices (empty for auto-select)
 
             Returns:
-                List of runtime args for RoutingPlaneConnectionManager::build_from_args().
+                List of ETH channel IDs (one per destination), indexing into the L1 connection table.
         )");
 
     mod.def(

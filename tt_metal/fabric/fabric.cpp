@@ -356,11 +356,9 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(Fabri
     return defines;
 }
 
-// Compute fabric connection RT args without any PD mutation.
-// Produces per-sender RT args: [eth_channel, buffer_idx_dummy] × N.
-// Consumed directly by WorkerToFabricEdmSender::build_from_args() on the device.
-// No direction tags, no 2D metadata — kernel uses senders directly without RoutingPlaneConnectionManager.
-std::vector<uint32_t> compute_fabric_connection_rt_args(
+// Resolve fabric ETH channels for the given src→dst routes.
+// Returns one ETH channel ID per destination — the channel index into the L1 connection table.
+std::vector<uint32_t> get_fabric_eth_channels(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices) {
@@ -371,12 +369,11 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
-    std::vector<uint32_t> worker_args;
+    std::vector<uint32_t> eth_channels;
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
 
-        // ETH channel
         uint32_t link_idx = 0;
         if (!connection_link_indices.empty()) {
             link_idx = (connection_link_indices.size() == 1) ? connection_link_indices[0] : connection_link_indices[i];
@@ -390,16 +387,10 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
         const auto candidate_eth_chans =
             control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
         TT_FATAL(link_idx < candidate_eth_chans.size(), "Link index {} out of bounds", link_idx);
-        const auto fabric_router_channel = candidate_eth_chans[link_idx];
-
-        // Per-sender RT args: [eth_channel, buffer_idx_sem(dummy)]
-        // Teardown semaphore is reserved in the L1 connection table.
-        // buffer_index_sem is dead code (device reads and discards) — kept for RT arg compat.
-        worker_args.push_back(fabric_router_channel);
-        worker_args.push_back(0);  // dummy buffer_index_sem — cleanup in follow-up PR
+        eth_channels.push_back(candidate_eth_chans[link_idx]);
     }
 
-    return worker_args;
+    return eth_channels;
 }
 
 // Core implementation of routing plane connection setup.
