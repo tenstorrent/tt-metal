@@ -416,7 +416,6 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             // batch args
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B,      // batch
-            (std::uint32_t)B,      // batch
 
             // sparsity args
             (std::uint32_t)0,      // batchB
