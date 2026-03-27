@@ -248,7 +248,6 @@ class FlashMLAProgramConfig:
     device_chunk_size: int = None
     exp_approx_mode: bool = True
     grid: type = FlashMLAOptimalGridNOC0  # Grid layout class (NOC0 optimized by default)
-    device_chunk_size: int = None
     max_seq_len: int = 128 * 1024
     max_kv_cache_slots: int = 64
     sp_dim: int = 4
