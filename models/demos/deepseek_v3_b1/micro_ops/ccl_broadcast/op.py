@@ -123,7 +123,9 @@ class BroadcastConfig:
                 f"Shard shape {shard_spec.shape} must be tile-aligned to tile shape ({tile_height}, {tile_width})"
             )
         self.num_pages_to_read = (shard_height // tile_height) * (shard_width // tile_width)
+        print(f"[BroadcastConfig] num_pages_to_read={self.num_pages_to_read}", flush=True)
         self.tensor_size_bytes = self.tensor0_page_size * self.num_pages_to_read
+        print(f"[BroadcastConfig] tensor_size_bytes={self.tensor_size_bytes}", flush=True)
         if self.tensor_size_bytes <= 0:
             raise ValueError("tensor_size_bytes must be greater than zero")
         if self.socket is not None:

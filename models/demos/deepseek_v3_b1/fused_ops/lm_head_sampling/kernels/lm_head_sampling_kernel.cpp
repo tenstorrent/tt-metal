@@ -73,8 +73,6 @@ struct Core {
     static constexpr bool skip_ccl = get_named_compile_time_arg_val("skip_ccl") == 1;
     static constexpr bool persistent_mode = get_named_compile_time_arg_val("persistent_mode") == 1;
     static constexpr bool enable_argmax = get_named_compile_time_arg_val("enable_argmax") == 1;
-    static constexpr uint32_t mesh_row = get_named_compile_time_arg_val("mesh_row");
-    static constexpr uint32_t mesh_col = get_named_compile_time_arg_val("mesh_col");
 
     // ── Per-core role flags (1 on assigned cores, 0 elsewhere) ──────
     static constexpr bool is_input_core = get_named_compile_time_arg_val("is_input_core") == 1;
@@ -114,11 +112,10 @@ struct Core {
 
     // ── Verify stage metadata transfer ───────────────────────────────
     static constexpr bool is_exit_device = get_named_compile_time_arg_val("is_exit_device") == 1;
-    static constexpr uint32_t bcast_activation_size_bytes =
-        get_named_compile_time_arg_val("bcast_activation_size_bytes");
 };
 
 void kernel_main() {
+    DPRINT << "kernel_main enter" << ENDL();
 #if defined(COMPILE_FOR_NCRISC)
     // ========================================================================
     // NCRISC — CCL broadcast writer, mcast receiver, argmax reader,
@@ -245,7 +242,6 @@ void kernel_main() {
     uint32_t mtp_input_core_noc_y = 0;
     uint32_t mtp_argmax_output_addr = 0;
     if constexpr (Core::is_base_stage && Core::enable_mtp) {
-        DPRINT << "mtp enabled" << ENDL();
         mtp_embedding_base = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
         mtp_token_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
         mtp_input_core_noc_x = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
@@ -254,10 +250,8 @@ void kernel_main() {
     }
 
     uint32_t verify_output_staging_addr = 0;
-    uint32_t verify_bcast_buffer_addr = 0;
     if constexpr (Core::is_spec_stage) {
         verify_output_staging_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
-        verify_bcast_buffer_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
     }
 
     // ── Sharded buffer setup (registers tensor-backed CBs before main loop) ──
@@ -369,31 +363,6 @@ void kernel_main() {
     using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
 
-    // ── Mcast sender (input_core) ───────────────────────────────────
-    using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
-        get_named_compile_time_arg_val("mcast_num_cores"),
-        get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid") == 1,
-        false>;
-
-    constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
-    constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
-    constexpr uint32_t mcast_dst_override_idx = Core::is_spec_stage ? 14 : 13;
-    const uint32_t mcast_dst_addr_override = get_common_arg_val<uint32_t>(mcast_dst_override_idx);
-
-    deepseek_b1_ops::Mcast::SenderArgs mcast_args{
-        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
-        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
-        get_named_compile_time_arg_val("mcast_data_size_bytes"),
-        mcast_src_cb,
-        get_named_compile_time_arg_val("mcast_src_num_pages"),
-        Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
-        mcast_dst_addr_override != 0 ? mcast_dst_addr_override : get_write_ptr(mcast_dst_cb),
-    };
-
     // ── Argmax writer (matmul cores, argmax_final_core) ─────────────
     using ArgmaxCTArgs = deepseek_b1_ops::Sampling::WriterCTArgs<
         get_named_compile_time_arg_val("argmax_winner_page_bytes"),
@@ -417,11 +386,38 @@ void kernel_main() {
     };
     const uint32_t persistent_next_iter_global_sem_addr = sampling_args.persistent_dst_sem_addr;
 
+    DPRINT << "persistent_next_iter_global_sem_addr=" << persistent_next_iter_global_sem_addr << ENDL();
+
     // ── Verify stage runtime arg (BRISC, for reading base token metadata)
     uint32_t brisc_verify_output_staging_addr = 0;
     if constexpr (Core::is_spec_stage) {
-        brisc_verify_output_staging_addr = get_common_arg_val<uint32_t>(13);
+        brisc_verify_output_staging_addr = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++);
     }
+
+    // ── Mcast sender (input_core) ───────────────────────────────────
+    using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
+        get_named_compile_time_arg_val("mcast_num_cores"),
+        get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid") == 1,
+        false>;
+
+    constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
+    constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
+    // mcast dst CB addr (needed since this CB not allocated on sender)
+    uint32_t mcast_dst_addr_override = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++);
+
+    deepseek_b1_ops::Mcast::SenderArgs mcast_args{
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_sender_semaphore")),
+        get_semaphore(get_named_compile_time_arg_val("mcast_data_receiver_semaphore")),
+        get_named_compile_time_arg_val("mcast_data_size_bytes"),
+        mcast_src_cb,
+        get_named_compile_time_arg_val("mcast_src_num_pages"),
+        Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
+        mcast_dst_addr_override != 0 ? mcast_dst_addr_override : get_write_ptr(mcast_dst_cb),
+    };
 
     // ── MTP: EH mcast sender (input_core, enable_mtp) ──────────────
     using McastEhCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
@@ -430,7 +426,11 @@ void kernel_main() {
         false>;
     constexpr uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("mcast_eh_src_cb");
     constexpr uint32_t mcast_eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
-    const uint32_t mcast_eh_dst_addr_override = get_common_arg_val<uint32_t>(Core::is_spec_stage ? 15 : 14);
+    uint32_t mcast_eh_dst_addr_override = 0;
+    if constexpr (Core::is_spec_stage && Core::enable_mtp) {
+        mcast_eh_dst_addr_override = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++);
+    }
+
     deepseek_b1_ops::Mcast::SenderArgs mcast_eh_args{
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_x"),
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_y"),
@@ -593,8 +593,10 @@ void kernel_main() {
         if constexpr (Core::persistent_mode && is_root && Core::is_input_core) {
             auto next_iteration_semaphore =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
+            DPRINT << ">next_iteration_sem" << ENDL();
             noc_semaphore_wait(next_iteration_semaphore, 1);
             noc_semaphore_set(next_iteration_semaphore, 0);
+            DPRINT << "next_iteration_sem" << ENDL();
         }
 #endif
 
@@ -603,8 +605,10 @@ void kernel_main() {
         if constexpr (Core::is_input_core && !Core::skip_ccl) {
             auto* bcast_turn_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(Core::fabric_gate_bcast_turn_semaphore_id));
+            DPRINT << ">bcast_turn_sem" << ENDL();
             noc_semaphore_wait(bcast_turn_sem, 1);
             noc_semaphore_set(bcast_turn_sem, 0);
+            DPRINT << "bcast_turn_sem<" << ENDL();
         }
 #endif
 
@@ -614,10 +618,8 @@ void kernel_main() {
         if constexpr (!Core::skip_ccl || Core::bcast_use_socket_input) {
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
             {
-                DPRINT << ">bc" << ENDL();
                 DeviceZoneScopedN("CCL_BROADCAST");
                 bcast(bcast_args);
-                DPRINT << "bc<" << ENDL();
             }
         }
 #endif
@@ -658,27 +660,24 @@ void kernel_main() {
                 constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
                 cb_wait_front(rmsnorm_input_cb, rmsnorm_num_tiles);
             }
+            constexpr uint32_t bcast_input_cb = get_named_compile_time_arg_val("bcast_data_cb_id");
             constexpr uint32_t argmax_noc_x = get_named_compile_time_arg_val("argmax_core_noc_x");
             constexpr uint32_t argmax_noc_y = get_named_compile_time_arg_val("argmax_core_noc_y");
             constexpr uint32_t metadata_size = 64;
-            uint32_t metadata_src = verify_bcast_buffer_addr + Core::bcast_activation_size_bytes;
-            uint64_t dst = get_noc_addr(argmax_noc_x, argmax_noc_y, verify_output_staging_addr);
-            invalidate_l1_cache();
-            auto vm_meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_src);
-            DPRINT << "vm nt=" << vm_meta[0] << " t0=" << vm_meta[1] << " src=" << metadata_src
-                   << " dst=" << verify_output_staging_addr << ENDL();
-            noc_async_write(metadata_src, dst, metadata_size);
+            constexpr uint32_t activation_size_bytes = 14336;
+            uint32_t bcast_buffer_addr = get_read_ptr(bcast_input_cb);
+            uint32_t metadata_src = bcast_buffer_addr + activation_size_bytes;
+            uint64_t metadata_dst = get_noc_addr(argmax_noc_x, argmax_noc_y, verify_output_staging_addr);
+            noc_async_write(metadata_src, metadata_dst, metadata_size);
             noc_async_write_barrier();
             DPRINT << "vm<" << ENDL();
         }
 #endif
 
         {
-            DPRINT << ">rn" << ENDL();
             DeviceZoneScopedN("RMSNORM");
             deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, !Core::enable_mtp> rmsnorm;
             rmsnorm(rmsnorm_args);
-            DPRINT << "rn<" << ENDL();
         }
 
         {
@@ -731,12 +730,10 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_input_core) {
-            // DPRINT << ">tw" << ENDL();
             volatile tt_l1_ptr uint32_t* mtp_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
             noc_semaphore_wait(mtp_ready_sem, 1);
             noc_semaphore_set(mtp_ready_sem, 0);
-            // DPRINT << "tw<" << ENDL();
         }
 #endif
 
@@ -850,23 +847,17 @@ void kernel_main() {
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (
             Core::is_argmax_final_core && ArgmaxCTArgs::defer_socket_output && ArgmaxCTArgs::socket_mode != 0) {
-            DPRINT << ">us" << ENDL();
             constexpr uint32_t argmax_socket_cb = ArgmaxCTArgs::socket_cb_id;
-
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t speculative_token =
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
-            DPRINT << "us st=" << speculative_token << ENDL();
             invalidate_l1_cache();
             auto meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_verify_output_staging_addr);
             uint32_t base_token = meta[1];
-            DPRINT << "uB=" << base_token << " uS=" << speculative_token << " @" << brisc_verify_output_staging_addr
-                   << ENDL();
             cb_pop_front(argmax_socket_cb, 1);
             DeviceZoneScopedN("MTP_VERIFY_SEND");
             write_token_metadata_to_socket_cb(
                 argmax_socket_cb, 1, base_token, TOKEN_TYPE_BASE, 0, speculative_token, TOKEN_TYPE_SPEC, 1);
-            DPRINT << "us<" << ENDL();
         }
 #endif
     };
@@ -879,22 +870,22 @@ void kernel_main() {
 
         // Base Stage: run LM head sampling and MTP ops
         if constexpr (Core::is_base_stage) {
-            DPRINT << ">BS" << ENDL();
+            // DPRINT << ">BS" << ENDL();
             lm_head_sampling();
             if constexpr (Core::enable_mtp) {
-                DPRINT << ">MP" << ENDL();
+                // DPRINT << ">MP" << ENDL();
                 mtp();
-                DPRINT << "MP<" << ENDL();
+                // DPRINT << "MP<" << ENDL();
             }
-            DPRINT << "BS<" << ENDL();
+            // DPRINT << "BS<" << ENDL();
         }
 
         // Spec Stage: run LM head sampling and update speculative state
         if constexpr (Core::is_spec_stage) {
-            DPRINT << ">SP" << ENDL();
+            // DPRINT << ">SP" << ENDL();
             lm_head_sampling();
             update_speculative_state();
-            DPRINT << "SP<" << ENDL();
+            // DPRINT << "SP<" << ENDL();
         }
 
         // ====================================================================

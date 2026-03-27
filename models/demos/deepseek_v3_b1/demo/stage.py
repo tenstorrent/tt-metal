@@ -248,7 +248,9 @@ class SpecLMHeadStage(StageKind):
         mesh_device = ctx.mesh_device
         my_mesh_id = ctx.my_mesh_id
         pipeline_config = ctx.pipeline_config
-        torch_a = torch.zeros((SpecLMHeadStage.M, SpecLMHeadStage.K), dtype=torch.bfloat16)
+
+        # +32 for metadata (32 * 2 bytes = 64 bytes of metadata)
+        torch_a = torch.zeros((SpecLMHeadStage.M, SpecLMHeadStage.K + 32), dtype=torch.bfloat16)
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
         sender_coord = pipeline_config[my_mesh_id].entry_node_coord
@@ -293,7 +295,7 @@ class SpecLMHeadStage(StageKind):
             mesh_cols=mesh_cols,
             sender_coord=ttnn.MeshCoordinate(sender_coord[0], sender_coord[1]),
             output_shape=torch_a.shape,
-            input_shard_shape=(SpecLMHeadStage.M, SpecLMHeadStage.K),
+            input_shard_shape=(SpecLMHeadStage.M, SpecLMHeadStage.K + 32),
             tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             layout=ttnn.TILE_LAYOUT,
             input_dtype=ttnn.bfloat16,
@@ -306,7 +308,7 @@ class SpecLMHeadStage(StageKind):
         )
         input_tensor_mesh = bcast_inputs.input_tensor_mesh
         intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
-        
+
         torch_indices_flat = torch.arange(LogicalModelDimensions.VOCAB_SIZE, dtype=torch.int32).reshape(
             1, LogicalModelDimensions.VOCAB_SIZE
         )
@@ -371,31 +373,6 @@ class SpecLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
-        element_size = 2  # bfloat16
-        bcast_page_size_bytes = 32 * 32 * element_size
-        bcast_num_pages = cls.M * cls.K * element_size // bcast_page_size_bytes
-        verify_bcast_total_pages = bcast_num_pages + 1  # 8 tiles
-        verify_bcast_total_bytes = verify_bcast_total_pages * bcast_page_size_bytes
-        verify_bcast_num_elements = verify_bcast_total_bytes // element_size
-        verify_bcast_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                mcast_core_grid,
-                (1, verify_bcast_num_elements),
-                ttnn.ShardOrientation.ROW_MAJOR,
-            ),
-        )
-        # bcast buffer
-        verify_bcast_buffer = ttnn.from_torch(
-            torch.zeros((num_devices, verify_bcast_num_elements), dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=mesh_device,
-            memory_config=verify_bcast_mem_config,
-            mesh_mapper=mesh_mapper,
-        )
-
         device_grid_size = mesh_device.compute_with_storage_grid_size()
         worker_crs = ttnn.CoreRangeSet(
             {
@@ -416,12 +393,9 @@ class SpecLMHeadStage(StageKind):
             "ttnn_output_index": ttnn_output_index,
             "scratch_buffer": scratch_buffer,
             "base_token_tensor": base_token_tensor,
-            "verify_bcast_buffer": verify_bcast_buffer,
             "lmhead_input_socket": pipeline_block.get_downstream_socket(),
             "lmhead_output_socket": pipeline_block.get_upstream_socket(),
-            "out_ready_semaphore": ttnn.create_global_semaphore(mesh_device, worker_crs, 0),
-            "barrier_semaphore": ttnn.create_global_semaphore(mesh_device, worker_crs, 0),
-            "secondary_sync_semaphore": ttnn.create_global_semaphore(mesh_device, worker_crs, 0),
+            "bcast_semaphores": bcast_inputs.semaphores,
             "global_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
             "global_stage2_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
         }
@@ -451,11 +425,7 @@ class SpecLMHeadStage(StageKind):
             output_index_tensor=d["ttnn_output_index"],
             argmax_final_core_coord=SpecLMHeadStage.ARGMAX_FINAL_CORE,
             argmax_final_mesh_coord=pipeline_config[my_mesh_id].exit_node_coord,
-            semaphores=[
-                d["out_ready_semaphore"],
-                d["barrier_semaphore"],
-                d["secondary_sync_semaphore"],
-            ],
+            bcast_semaphores=d["bcast_semaphores"],
             global_semaphore=d["global_semaphore"],
             global_stage2_semaphore=d["global_stage2_semaphore"],
             fabric_scratch_tensor=d["scratch_buffer"],
@@ -468,7 +438,6 @@ class SpecLMHeadStage(StageKind):
             is_mtp_base_stage=False,
             is_mtp_verify_stage=True,
             base_token_tensor=d["base_token_tensor"],
-            verify_bcast_buffer_tensor=d["verify_bcast_buffer"],
         )
         print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.launch_compute done", flush=True)
 
@@ -603,7 +572,7 @@ class BaseLMHeadStage(StageKind):
             input_tensor_torch=torch_a,
             create_output_tensor_mesh=True,
             create_semaphores=True,
-            tile=LMHeadStage.A_TILE,
+            tile=BaseLMHeadStage.A_TILE,
             output_mesh_mapper="shard_dim0",
         )
         input_tensor_mesh = bcast_inputs.input_tensor_mesh
@@ -824,7 +793,6 @@ class BaseLMHeadStage(StageKind):
             persistent_mode=self._persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
             is_mtp_base_stage=True,
-            eh_subblock_k=d.get("eh_subblock_k"),
             eh_gather_output_buf_tensor=d.get("eh_gather_output_buf"),
         )
         print(f"[STAGE P{ctx.my_mesh_id}] BaseLMHeadStage.launch_compute done", flush=True)

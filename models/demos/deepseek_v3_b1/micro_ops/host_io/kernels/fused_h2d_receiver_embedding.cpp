@@ -28,7 +28,7 @@ constexpr auto embedding_args = TensorAccessorArgs<14>();
 FORCE_INLINE bool socket_wait_for_pages_with_termination(
     const SocketReceiverInterface& socket, uint32_t num_pages, volatile tt_l1_ptr uint32_t* termination_semaphore) {
     constexpr uint32_t termination_value = 1;
-    DPRINT << ">swfpt enter" << ENDL();
+    // DPRINT << ">swfpt enter" << ENDL();
     while (!socket_wait_for_pages(socket, num_pages, 1000)) {
         invalidate_l1_cache();
         if (termination_semaphore[0] == termination_value) {
@@ -198,12 +198,12 @@ void kernel_main() {
 
     while (true) {
         // Wait for pages in H2D socket
-        DPRINT << ">wspwt" << ENDL();
+        // DPRINT << ">wspwt" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
         if constexpr (pull_from_host) {
-            DPRINT << ">rw" << ENDL();
+            // DPRINT << ">rw" << ENDL();
             // Pages available in H2D socket - read over PCIe
             noc_async_wide_read_any_len_with_state(
                 NOC_INDEX,
@@ -213,7 +213,7 @@ void kernel_main() {
                 receiver_socket.read_ptr,
                 token_page_size);
             noc_async_read_barrier();
-            DPRINT << "<rw" << ENDL();
+            // DPRINT << "<rw" << ENDL();
         }
 
         // TODO: Add and assert that token id is within vocab size
@@ -227,7 +227,7 @@ void kernel_main() {
         noc_async_read_barrier();
 
         if constexpr (loopback_mode) {
-            DPRINT << ">lw" << ENDL();
+            // DPRINT << ">lw" << ENDL();
             cb_reserve_back(downstream_interface_index, 1);
             noc_async_write(
                 get_noc_addr(get_read_ptr(embedding_cb_index)),
@@ -235,9 +235,9 @@ void kernel_main() {
                 embedding_page_size);
             noc_async_write_barrier();
             cb_push_back(downstream_interface_index, 1);
-            DPRINT << "<lw" << ENDL();
+            // DPRINT << "<lw" << ENDL();
         } else {
-            DPRINT << ">sops" << ENDL();
+            // DPRINT << ">sops" << ENDL();
             auto l1_read_addr = get_read_ptr(embedding_cb_index);
             uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;
 
@@ -251,31 +251,31 @@ void kernel_main() {
                 downstream_bytes_sent_noc_addr,
                 l1_read_addr,
                 dst_addr);
-            DPRINT << "<sops" << ENDL();
+            // DPRINT << "<sops" << ENDL();
         }
         socket_pop_pages(receiver_socket, 1);
         // Notify Host that pages were popped from H2D socket
-        DPRINT << ">ns" << ENDL();
+        // DPRINT << ">ns" << ENDL();
         socket_notify_sender(receiver_socket);
-        DPRINT << "<ns" << ENDL();
+        // DPRINT << "<n s" << ENDL();
         invalidate_l1_cache();
     }
 
     update_socket_config(receiver_socket);
-    DPRINT << ">uc" << ENDL();
+    // DPRINT << ">uc" << ENDL();
     if constexpr (!loopback_mode) {
         socket_barrier(sender_socket);
     }
 
-    DPRINT << ">wrb" << ENDL();
+    // DPRINT << ">wrb" << ENDL();
     noc_async_write_barrier();
-    DPRINT << ">rrb" << ENDL();
+    // DPRINT << ">rrb" << ENDL();
     noc_async_read_barrier();
 
     if constexpr (use_fabric) {
-        DPRINT << ">cf" << ENDL();
+        // DPRINT << ">cf" << ENDL();
         downstream_fabric_connection.close();
         downstream_fabric_connection_2.close();
-        DPRINT << ">cf<" << ENDL();
+        // DPRINT << ">cf<" << ENDL();
     }
 }

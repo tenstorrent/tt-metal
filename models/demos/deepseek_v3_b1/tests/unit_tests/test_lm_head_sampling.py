@@ -41,25 +41,19 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import StateDictWeightProv
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
-<<<<<<< HEAD
-from models.demos.deepseek_v3_b1.prepare_weights import prepare_embedding_weights, prepare_lm_head_weights
-from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
-    build_broadcast_test_inputs,
-    create_fabric_router_config,
-)
-=======
 from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3MTPWeights,
     prepare_embedding_weights,
     prepare_lm_head_weights,
 )
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    build_broadcast_test_inputs,
+    create_fabric_router_config,
+)
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_dram_streaming_matmul import shuffle_tensor_tiles
->>>>>>> 6ffd11b80d (mtp 2 wip)
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
-<<<<<<< HEAD
-=======
 
 def create_fabric_router_config(max_payload_size):
     config = ttnn._ttnn.fabric.FabricRouterConfig()
@@ -133,7 +127,6 @@ def _create_mcast_working_bufs(
     return mcast_dst_buf, mcast_eh_dst_buf
 
 
->>>>>>> 6ffd11b80d (mtp 2 wip)
 # Synthetic weight provider: same layout as prepare_* (state dict + move_to_device); used for pipeline tests.
 _VOCAB_SIZE = 129280
 _EMBED_HIDDEN = 7168
@@ -560,10 +553,7 @@ def _is_persistent_mode_enabled():
     ],
     indirect=True,
 )
-<<<<<<< HEAD
-def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters, device_params):
-=======
-def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters, enable_mtp):
+def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters, device_params, enable_mtp):
     """Performance test for LM-head sampling with optional MTP fusion.
 
     When enable_mtp=True, also runs:
@@ -572,7 +562,6 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
     - Concat [h_norm|e_norm]
     - EH projection DRAM streaming matmul
     """
->>>>>>> 6ffd11b80d (mtp 2 wip)
     mesh_rows, mesh_cols = 4, 2
     num_devices = mesh_rows * mesh_cols
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -888,11 +877,8 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         fabric_scratch_tensor=ttnn_fabric_scratch,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,
-<<<<<<< HEAD
         fabric_config=device_params["fabric_config"],
-=======
         enable_mtp=enable_mtp,
->>>>>>> 6ffd11b80d (mtp 2 wip)
     )
     ttnn.synchronize_device(submesh)
 
@@ -922,11 +908,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             fabric_scratch_tensor=ttnn_fabric_scratch,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
-<<<<<<< HEAD
-            fabric_config=device_params["fabric_config"],
-=======
             enable_mtp=enable_mtp,
->>>>>>> 6ffd11b80d (mtp 2 wip)
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -957,11 +939,7 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             fabric_scratch_tensor=ttnn_fabric_scratch,
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
-<<<<<<< HEAD
-            fabric_config=device_params["fabric_config"],
-=======
             enable_mtp=enable_mtp,
->>>>>>> 6ffd11b80d (mtp 2 wip)
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -3129,18 +3107,6 @@ def test_4stage_galaxy_1_iteration(
     input_tensor_mesh = bcast_inputs.input_tensor_mesh
     intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
     mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-<<<<<<< HEAD
-=======
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_input,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
->>>>>>> 6ffd11b80d (mtp 2 wip)
     ttnn_gamma = ttnn.from_torch(
         torch_gamma,
         dtype=ttnn.bfloat16,

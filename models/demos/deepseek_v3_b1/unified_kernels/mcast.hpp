@@ -100,9 +100,7 @@ FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_lo
         loopback ? mcast_num_cores : (is_part_of_receiver_grid ? mcast_num_cores - 1 : mcast_num_cores);
 
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-        uint32_t num_packets = (len_bytes > NOC_MAX_BURST_SIZE)
-                                   ? (len_bytes / NOC_MAX_BURST_SIZE + ((len_bytes % NOC_MAX_BURST_SIZE) ? 1 : 0))
-                                   : 1;
+        uint32_t num_packets = (len_bytes + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE;
         if constexpr (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, num_packets);
         } else {
@@ -112,42 +110,30 @@ FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_lo
     }
 
     if constexpr (noc_mode == DM_DEDICATED_NOC) {
-        uint32_t num_pkts = (len_bytes > NOC_MAX_BURST_SIZE)
-                                ? (len_bytes / NOC_MAX_BURST_SIZE + ((len_bytes % NOC_MAX_BURST_SIZE) ? 1 : 0))
-                                : 1;
+        uint32_t num_packets = (len_bytes + NOC_MAX_BURST_SIZE - 1) / NOC_MAX_BURST_SIZE;
+
         if constexpr (posted) {
-            noc_posted_writes_num_issued[noc] += num_pkts;
+            noc_posted_writes_num_issued[noc] += num_packets;
         } else {
-            noc_nonposted_writes_num_issued[noc] += num_pkts;
-            noc_nonposted_writes_acked[noc] += num_dests * num_pkts;
+            noc_nonposted_writes_num_issued[noc] += num_packets;
+            noc_nonposted_writes_acked[noc] += num_dests * num_packets;
         }
     }
-
-    // if constexpr (set_size && set_addresses) {
-    //     if (len_bytes > NOC_MAX_BURST_SIZE) {
-    //         while (!noc_cmd_buf_ready(noc, cmd_buf));
-    //         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
-    //         while (len_bytes > NOC_MAX_BURST_SIZE) {
-    //             while (!noc_cmd_buf_ready(noc, cmd_buf));
-    //             NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
-    //             NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
-    //             NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-    //             src_local_addr += NOC_MAX_BURST_SIZE;
-    //             dst_local_addr += NOC_MAX_BURST_SIZE;
-    //             len_bytes -= NOC_MAX_BURST_SIZE;
-    //         }
-    //     }
-    // }
-
-    while (!noc_cmd_buf_ready(noc, cmd_buf));
-    if constexpr (set_size) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    if constexpr (set_size && set_addresses) {
+        if (len_bytes > NOC_MAX_BURST_SIZE) {
+            while (!noc_cmd_buf_ready(noc, cmd_buf));
+            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
+            while (len_bytes > NOC_MAX_BURST_SIZE) {
+                while (!noc_cmd_buf_ready(noc, cmd_buf));
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
+                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+                src_local_addr += NOC_MAX_BURST_SIZE;
+                dst_local_addr += NOC_MAX_BURST_SIZE;
+                len_bytes -= NOC_MAX_BURST_SIZE;
+            }
+        }
     }
-    if constexpr (set_addresses) {
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
-        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
-    }
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
 }
 
 template <uint32_t mcast_num_cores, bool loopback, bool is_part_of_receiver_grid, bool linked, bool posted>
