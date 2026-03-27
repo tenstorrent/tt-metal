@@ -101,7 +101,7 @@ Tensor batch_norm(
 
     Tensor batch_mean, batch_var;
     if (training) {
-        // TODO: These generic TTNN ops use the compute_kernel_config as-is. In mixed precision,
+        // Note: These generic TTNN ops use the compute_kernel_config as-is. In mixed precision,
         // the highest-precision accumulation is only enforced inside the batch_norm and
         // running_statistics prims (via any_float32). If required in the future, we may need to
         // propagate the precision requirement here so that the output `batch_mean`/`batch_var` are in

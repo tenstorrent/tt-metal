@@ -29,6 +29,7 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<3>();
     constexpr bool fill_momentum_fp32 = get_compile_time_arg_val(src_args.next_compile_time_args_offset()) == 1;
     constexpr uint32_t onetile = 1;
+    constexpr uint32_t k_tile_face_elems = 1024;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
@@ -59,7 +60,7 @@ void kernel_main() {
     if constexpr (fill_momentum_fp32) {
         float momentum_f = 0;
         std::memcpy(&momentum_f, &momentum, sizeof(float));  // Alternative for std::bit_cast
-        fill_with_val<1024, float>(cb_id_momentum, momentum_f);
+        fill_with_val<k_tile_face_elems, float>(cb_id_momentum, momentum_f);
     } else {
         fill_with_val_bfloat16(cb_id_momentum, momentum);
     }

@@ -428,6 +428,7 @@ def test_batch_norm_output_Default(input_shapes, device):
 @pytest.mark.parametrize(
     "input_shapes",
     [
+        # Training mode PCC ordering is unreliable. Keep `input_shapes[1] >= 14` to avoid this test failure.
         torch.Size([3, 17, 47, 32]),
     ],
 )
@@ -445,12 +446,6 @@ def test_batch_norm_output_Default(input_shapes, device):
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_dtype, param_dtype, device):
     N, H, W, C = input_shapes
-    if (
-        training and input_shapes[1] < 14
-    ):  # experimentally determined as PCC unreliable for small tensors ([1, C, 1, 1] in this case)
-        pytest.fail(
-            "Training mode PCC ordering is unreliable. Keep `input_shapes[1] >= 14` to avoid this test failure. Also see training modeTODO in batch_norm.cpp"
-        )
     torch.manual_seed(0)
 
     # Generate the inputs
@@ -561,9 +556,10 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
         (True, True, False),
         (True, False, True),
         (True, False, False),
-        # (False, False, False),  # xfail case
-        # (False, True, False),  # xfail case
-        # (False, False, True),  # xfail case
+        # running_mean and running_var must be defined in evaluation mode:
+        # (False, False, False),
+        # (False, True, False),
+        # (False, False, True),
         (False, True, True),
     ],
 )
@@ -587,10 +583,6 @@ def test_batch_norm_mixed_precision(
     testing_dtype,
     testing_dtype2,
 ):
-    # Skip certain configurations that we don't want to test or support
-    if (not training) and ((not check_mean) or (not check_var)):
-        pytest.xfail("running_mean and running_var must be defined in evaluation mode")
-
     in_data, input_tensor = data_gen_with_range_batch_norm(
         input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
     )
