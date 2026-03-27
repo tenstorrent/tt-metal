@@ -305,7 +305,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.sample_on_device = sample_on_device
         # sampling params of all users are assumed to be the same default values if not provided.
         self.sampling_params = (
-            sampling_params
+            self._to_local_sampling_params(sampling_params)
             if sampling_params is not None
             else SamplingParams(
                 temperature=[DEFAULT_SAMPLING_TEMPERATURE] * self.batch_size,
@@ -337,17 +337,32 @@ class DeepseekGenerator(WarmupForwardMixin):
             + f"top_k={self._get_sampling_value(self.sampling_params.top_k, 0)}"
         )
 
-    def _are_sampling_params_same(
-        self, new_sampling_params: SamplingParams, current_sampling_params: SamplingParams
-    ) -> bool:
+    def _to_local_sampling_params(self, params_obj) -> SamplingParams:
+        """Project duck-typed sampling params to local SamplingParams fields."""
+        return SamplingParams(
+            temperature=getattr(params_obj, "temperature"),
+            top_k=getattr(params_obj, "top_k"),
+            top_p=getattr(params_obj, "top_p"),
+            presence_penalty=getattr(params_obj, "presence_penalty", 0.0),
+            frequency_penalty=getattr(params_obj, "frequency_penalty", 0.0),
+            repetition_penalty=getattr(params_obj, "repetition_penalty", 1.0),
+            seed=getattr(params_obj, "seed", None),
+            enable_log_probs=getattr(params_obj, "enable_log_probs", False),
+        )
+
+    def _are_sampling_params_same(self, new_sampling_params, current_sampling_params) -> bool:
         """Return True when both sampling params are equivalent after formatting.
 
-        Both inputs are normalized with ``format_sampling_params`` so scalar/list
-        representations compare consistently for the configured batch size.
-        Caller must ensure neither argument is ``None``.
+        Inputs may be local ``SamplingParams`` or vLLM duck-typed sampling params.
+        We first project each object to the local ``SamplingParams`` fields and then
+        normalize with ``format_sampling_params`` for an apples-to-apples comparison.
         """
-        normalized_new = format_sampling_params(new_sampling_params, max_batch_size=self.batch_size)
-        normalized_current = format_sampling_params(current_sampling_params, max_batch_size=self.batch_size)
+        normalized_new = format_sampling_params(
+            self._to_local_sampling_params(new_sampling_params), max_batch_size=self.batch_size
+        )
+        normalized_current = format_sampling_params(
+            self._to_local_sampling_params(current_sampling_params), max_batch_size=self.batch_size
+        )
         return normalized_new == normalized_current
 
     @staticmethod
@@ -2337,6 +2352,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             ttnn.deallocate(logits_tt)
         if return_last_hidden:
             return logits, last_hidden
+
         return logits
 
     def _slice_last_token_logits(
