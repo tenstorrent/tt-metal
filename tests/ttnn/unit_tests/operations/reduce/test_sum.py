@@ -61,35 +61,29 @@ def test_sum_global(device, batch_size, h, w, dtype):
     output_tensor = ttnn.to_torch(output_tensor)
 
     if dtype == ttnn.float32:
-        # test for equivalance
-        assert_numeric_metrics(
-            torch_output_tensor,
-            output_tensor,
-            pcc_threshold=0.999,
-            rtol=0.012,
-            atol=32.640,
-            frobenius_threshold=0.02,
-        )
+        pcc_threshold = 0.999
+        rtol = 0.012
+        atol = 32.640
+        frobenius_threshold = 0.02
     elif dtype == ttnn.bfloat16:
-        # test for equivalance
-        assert_numeric_metrics(
-            torch_output_tensor,
-            output_tensor,
-            pcc_threshold=0.999,
-            rtol=0.009,
-            atol=65.280,
-            frobenius_threshold=0.009,
-        )
+        pcc_threshold = 0.999
+        rtol = 0.009
+        atol = 65.280
+        frobenius_threshold = 0.009
     else:
-        # test for equivalance
-        assert_numeric_metrics(
-            torch_output_tensor,
-            output_tensor,
-            pcc_threshold=0.999,
-            rtol=0.062,
-            atol=228.480,
-            frobenius_threshold=0.062,
-        )
+        pcc_threshold = 0.999
+        rtol = 0.062
+        atol = 228.480
+        frobenius_threshold = 0.062
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize("n", [1, 9])
@@ -188,22 +182,21 @@ def test_sum_subcores(device, sub_core_grids, dtype, shape):
     output_tensor = ttnn.to_torch(output_tensor)
 
     if dtype == ttnn.bfloat16:
-        # test for equivalance
-        assert_numeric_metrics(
-            torch_output_tensor,
-            output_tensor,
-            pcc_threshold=0.999,
-            rtol=1e-06,
-            atol=1e-06,
-            frobenius_threshold=1e-09,
-        )
+        pcc_threshold = 0.999
+        rtol = 1e-06
+        atol = 1e-06
+        frobenius_threshold = 1e-09
     else:
-        # test for equivalance
-        assert_numeric_metrics(
-            torch_output_tensor,
-            output_tensor,
-            pcc_threshold=0.999,
-            rtol=0.015,
-            atol=4177.920,
-            frobenius_threshold=0.015,
-        )
+        pcc_threshold = 0.999
+        rtol = 0.015
+        atol = 4177.920
+        frobenius_threshold = 0.015
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )

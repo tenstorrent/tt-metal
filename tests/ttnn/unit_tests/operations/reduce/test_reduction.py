@@ -8,7 +8,7 @@ import torch
 import ttnn
 import sys
 
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import is_blackhole, torch_random
 
 
@@ -340,25 +340,24 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     if dtype == ttnn.bfloat16:
-        # test for equivalance
-        assert_numeric_metrics(
-            pyt_topk_values,
-            ttnn_torch_values,
-            pcc_threshold=0.9999,
-            rtol=1e-6,
-            atol=1e-6,
-            frobenius_threshold=1e-9,
-        )
+        pcc_threshold = 0.9999
+        rtol = 1e-6
+        atol = 1e-6
+        frobenius_threshold = 1e-9
     else:
-        # test for equivalance
-        assert_numeric_metrics(
-            pyt_topk_values,
-            ttnn_torch_values,
-            pcc_threshold=0.996,
-            rtol=0.044,
-            atol=0.016,
-            frobenius_threshold=0.007,
-        )
+        pcc_threshold = 0.996
+        rtol = 0.044
+        atol = 0.016
+        frobenius_threshold = 0.007
+    # test for equivalance
+    assert_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize("dim1", [1])
@@ -467,25 +466,24 @@ def test_5d_topk(device, dim1, dim2, dim3, dim4, dim5, dim, k, largest, dtype):
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     if dtype == ttnn.bfloat16:
-        # test for equivalance
-        assert_numeric_metrics(
-            pyt_topk_values,
-            ttnn_torch_values,
-            pcc_threshold=0.9999,
-            rtol=1e-6,
-            atol=1e-6,
-            frobenius_threshold=1e-9,
-        )
+        pcc_threshold = 0.9999
+        rtol = 1e-6
+        atol = 1e-6
+        frobenius_threshold = 1e-9
     else:
-        # test for equivalance
-        assert_numeric_metrics(
-            pyt_topk_values,
-            ttnn_torch_values,
-            pcc_threshold=0.999,
-            rtol=2.933,
-            atol=0.026,
-            frobenius_threshold=0.010,
-        )
+        pcc_threshold = 0.999
+        rtol = 2.933
+        atol = 0.026
+        frobenius_threshold = 0.010
+    # test for equivalance
+    assert_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 # returns larger padded tensor instead of desired shape
@@ -520,11 +518,6 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
     ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
     ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices).to(torch.int64)
 
-    if dtype == ttnn.bfloat8_b:
-        pcc_values = 0.99
-    else:
-        pcc_values = 1.0
-
     # pcc is not a good measure for the raw indices
     # if index 49 and index 8 are tied, the order of the indices can be different
     # but the values associated with the indices should be the same
@@ -540,25 +533,24 @@ def test_6d_topk(device, dim1, dim2, dim3, dim4, dim5, dim6, dim, k, largest, dt
         ttnn_torch_cosine > 0.99
     ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
     if dtype == ttnn.bfloat16:
-        # test for equivalance
-        assert_numeric_metrics(
-            pyt_topk_values,
-            ttnn_torch_values,
-            pcc_threshold=0.9999,
-            rtol=1e-6,
-            atol=1e-6,
-            frobenius_threshold=1e-9,
-        )
+        pcc_threshold = 0.9999
+        rtol = 1e-6
+        atol = 1e-6
+        frobenius_threshold = 1e-9
     else:
-        # test for equivalance
-        assert_numeric_metrics(
-            pyt_topk_values,
-            ttnn_torch_values,
-            pcc_threshold=0.999,
-            rtol=2.997,
-            atol=0.026,
-            frobenius_threshold=0.011,
-        )
+        pcc_threshold = 0.999
+        rtol = 2.997
+        atol = 0.026
+        frobenius_threshold = 0.011
+    # test for equivalance
+    assert_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 @pytest.mark.parametrize("c", [3])
