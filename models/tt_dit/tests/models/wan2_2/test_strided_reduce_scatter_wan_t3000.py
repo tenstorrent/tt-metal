@@ -210,28 +210,39 @@ def _run_optional_feature_test(mesh_device, topology, cluster_axis, feature):
         extra_kwargs = {"bias": bias_mesh}
 
     elif feature == "addcmul":
-        # The reader reads only the first N/num_devices columns from each tensor (b=0 in the kernel
-        # batch loop). ternary_a must be full [M, N] and ternary_b must be [1, N] to pass validation
-        # in minimal_matmul_device_operation.cpp (N is derived from the weight shape). Replicate the
-        # full tensors; every device reads the same first-N/num_devices slice from its local copy.
+        # Each device holds its own [M, N/num_devices] slice of addcmul_a and a
+        # [1, N/num_devices] slice of addcmul_b.  The op validates ternary shapes
+        # against the RS output shape [M, N/ring_size], not the full matmul N.
+        # The kernel reads from offset 0 of each device's local copy, so sharding
+        # along N naturally gives every device the correct per-device residual slice.
         scalar = 0.5
+        slice_n = cfg.N // num_devices
         torch_addcmul_a = torch.randn([1, 1, cfg.M, cfg.N])
         torch_addcmul_b = torch.randn([1, 1, 1, cfg.N])
+
+        # Build per-device tensors stacked along dim 0 for ShardTensor2dMesh.
+        addcmul_a_stacked = torch.cat(
+            [torch_addcmul_a[..., d * slice_n : (d + 1) * slice_n] for d in range(num_devices)], dim=0
+        )  # [num_devices, 1, M, N/num_devices]
+        addcmul_b_stacked = torch.cat(
+            [torch_addcmul_b[..., d * slice_n : (d + 1) * slice_n] for d in range(num_devices)], dim=0
+        )  # [num_devices, 1, 1, N/num_devices]
+
         addcmul_a_mesh = ttnn.from_torch(
-            torch_addcmul_a,
+            addcmul_a_stacked,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=mem_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
         )
         addcmul_b_mesh = ttnn.from_torch(
-            torch_addcmul_b,
+            addcmul_b_stacked,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
             memory_config=mem_config,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=shard_dims, mesh_shape=tuple(mesh_device.shape)),
         )
         extra_kwargs = {
             "fused_ternary_scalar": scalar,
@@ -243,11 +254,12 @@ def _run_optional_feature_test(mesh_device, topology, cluster_axis, feature):
     torch_rs_reduced = torch.sum(torch.stack(rs_input_per_device), dim=0)
     torch_rs_scattered = list(torch.chunk(torch_rs_reduced, num_devices, dim=cfg.dim))
     if feature == "addcmul":
-        # Each device reads the first N/num_devices columns of the replicated tensors.
-        slice_n = cfg.N // num_devices
-        addcmul_a_slice = torch_addcmul_a[..., :slice_n]  # [1, 1, M, N/num_devices]
-        addcmul_b_slice = torch_addcmul_b[..., :slice_n]  # [1, 1, 1, N/num_devices] broadcast
-        torch_rs_scattered = [addcmul_a_slice + scalar * chunk * addcmul_b_slice for chunk in torch_rs_scattered]
+        # Each device applies its own per-device slice of addcmul_a and addcmul_b.
+        torch_rs_scattered = [
+            torch_addcmul_a[..., d * slice_n : (d + 1) * slice_n]
+            + scalar * chunk * torch_addcmul_b[..., d * slice_n : (d + 1) * slice_n]
+            for d, chunk in enumerate(torch_rs_scattered)
+        ]
 
     # Run the op
     mm_out, rs_out = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
