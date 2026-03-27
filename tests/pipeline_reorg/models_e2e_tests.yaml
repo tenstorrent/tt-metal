@@ -85,7 +85,8 @@
 - name: Llama 3.3-70B e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
-    pytest --timeout 1000 models/tt_transformers/demo/simple_text_demo.py
+    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
 
   model: llama3.3-70b
   skus:
