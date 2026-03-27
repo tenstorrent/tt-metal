@@ -7,6 +7,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/eltwise/unary_ng/unary_ng.hpp"
 
 namespace ttnn {
 namespace operations::unary {
@@ -93,58 +94,6 @@ Tensor unary_impl(
             parameter);                                                                                           \
     }
 
-// -----------------------------------------------------------------------------
-// Functions defined with macros
-// -----------------------------------------------------------------------------
-
-REGISTER_UNARY_OPERATION(acos, ACOS)
-REGISTER_UNARY_OPERATION(asin, ASIN)
-REGISTER_UNARY_OPERATION(asinh, ASINH)
-REGISTER_UNARY_OPERATION(atan, ATAN)
-REGISTER_UNARY_OPERATION(atanh, ATANH)
-REGISTER_UNARY_OPERATION(cos, COS)
-REGISTER_UNARY_OPERATION(acosh, ACOSH)
-REGISTER_UNARY_OPERATION(cosh, COSH)
-REGISTER_UNARY_OPERATION(sinh, SINH)
-REGISTER_UNARY_OPERATION(erfinv, ERFINV)
-REGISTER_UNARY_OPERATION(exp2, EXP2)
-REGISTER_UNARY_OPERATION(expm1, EXPM1)
-REGISTER_UNARY_OPERATION(gez, GEZ)
-REGISTER_UNARY_OPERATION(gtz, GTZ)
-REGISTER_UNARY_OPERATION(i0, I0)
-REGISTER_UNARY_OPERATION(i1, I1)
-REGISTER_UNARY_OPERATION(isfinite, ISFINITE)
-REGISTER_UNARY_OPERATION(isinf, ISINF)
-REGISTER_UNARY_OPERATION(isnan, ISNAN)
-REGISTER_UNARY_OPERATION(isneginf, ISNEGINF)
-REGISTER_UNARY_OPERATION(isposinf, ISPOSINF)
-REGISTER_UNARY_OPERATION(lez, LEZ)
-REGISTER_UNARY_OPERATION(logical_not, LOGICAL_NOT_UNARY)
-REGISTER_UNARY_OPERATION(ltz, LTZ)
-REGISTER_UNARY_OPERATION(neg, NEG)
-REGISTER_UNARY_OPERATION(nez, NEZ)
-REGISTER_UNARY_OPERATION(reciprocal, RECIP)
-REGISTER_UNARY_OPERATION(relu, RELU)
-REGISTER_UNARY_OPERATION(relu6, RELU6)
-REGISTER_UNARY_OPERATION(sign, SIGN)
-REGISTER_UNARY_OPERATION(signbit, SIGNBIT)
-REGISTER_UNARY_OPERATION(silu, SILU)
-REGISTER_UNARY_OPERATION(sin, SIN)
-REGISTER_UNARY_OPERATION(square, SQUARE)
-REGISTER_UNARY_OPERATION(tan, TAN)
-REGISTER_UNARY_OPERATION(tiled_prod, TILED_PROD)
-REGISTER_UNARY_OPERATION(bitwise_not, BITWISE_NOT)
-REGISTER_UNARY_OPERATION(alt_complex_rotate90, ALT_COMPLEX_ROTATE90)
-REGISTER_UNARY_OPERATION(floor, FLOOR)
-REGISTER_UNARY_OPERATION(ceil, CEIL)
-REGISTER_UNARY_OPERATION(trunc, TRUNC)
-REGISTER_UNARY_OPERATION(frac, FRAC)
-REGISTER_UNARY_OPERATION(hardsigmoid, HARDSIGMOID)
-REGISTER_UNARY_OPERATION(hardswish, HARDSWISH)
-REGISTER_UNARY_OPERATION(softsign, SOFTSIGN)
-REGISTER_UNARY_OPERATION(cbrt, CBRT)
-REGISTER_UNARY_OPERATION(lgamma, LGAMMA)
-
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP)
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF)
@@ -212,13 +161,6 @@ Tensor identity(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-Tensor abs(
-    const Tensor& input_tensor,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-Tensor abs(const ComplexTensor& input_tensor, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 Tensor eqz(
     const Tensor& input_tensor,
