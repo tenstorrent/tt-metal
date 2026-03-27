@@ -91,7 +91,7 @@ def test_ling_mini_2_0(mesh_device):
     messages = [
         {
             "role": "user",
-            "content": "What is your favorite condiment?",
+            "content": "What is your favorite condiment? There are so many condiments to choose from, each bringing its unique flavor and texture to enhance different dishes. Do you prefer the classic taste of ketchup, the creamy richness of mayonnaise, the spicy kick of mustard, or perhaps something more exotic like sriracha or hoisin sauce? Maybe you enjoy the tangy zest of salsa or the smooth and savory taste of aioli. Share what your favorite condiment is and why you love it. Does it remind you of a specific dish or meal?",
         },
     ]
     inputs = tokenizer.apply_chat_template(

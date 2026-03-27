@@ -1140,18 +1140,18 @@ class TTNNExperts(TTNNModule):
         self._gate_up_program_config = _make_sparse_matmul_program_config(
             device=self.device,
             out_features=int(self.intermediate_size),
-            in0_block_w=min(4, hidden_tiles),
+            in0_block_w=min(8, hidden_tiles),
             per_core_M=1,
         )
         self._down_program_config = _make_sparse_matmul_program_config(
             device=self.device,
             out_features=int(self.hidden_size),
-            in0_block_w=min(4, intermediate_tiles),
+            in0_block_w=min(8, intermediate_tiles),
             per_core_M=1,
         )
         self._expert_compute_cfg = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
