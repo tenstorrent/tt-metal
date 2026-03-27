@@ -119,14 +119,28 @@ struct TileLoader {
     }
 };
 
-/** @brief Functor that reconfigures input data format on the first Load's CB only */
+/**
+ * @brief Functor that reconfigures input data format for the chain's Load CBs
+ *
+ * For the first CB: unconditional reconfig (no previous format known).
+ * For subsequent different CBs: conditional reconfig using (old_cb, new_cb)
+ * variant which skips if formats already match.
+ */
 struct InputReconfigFunctor {
-    bool done;
+    uint32_t last_cb;
+    bool initialized;
     template <typename LoadOp>
     ALWI void operator()(const LoadOp&) {
-        if (!done) {
-            reconfig_data_format_srca(LoadOp::cb);
-            done = true;
+        constexpr uint32_t cb = LoadOp::cb;
+        if (!initialized) {
+            // First CB: unconditional reconfig
+            reconfig_data_format_srca(cb);
+            last_cb = cb;
+            initialized = true;
+        } else if (cb != last_cb) {
+            // Subsequent CB: conditional reconfig (skips if formats match)
+            reconfig_data_format_srca(last_cb, cb);
+            last_cb = cb;
         }
     }
 };
@@ -163,7 +177,7 @@ ALWI void sfpu_pipeline(
 
     // Data format reconfiguration (once before the tile loop)
     if constexpr (detail::sfpu_reconfig_input(reconfig)) {
-        detail::InputReconfigFunctor reconfig_fn{false};
+        detail::InputReconfigFunctor reconfig_fn{0, false};
         chain.for_each_load(reconfig_fn);
     }
     if constexpr (detail::sfpu_reconfig_output(reconfig)) {
