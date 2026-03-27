@@ -1,0 +1,7 @@
+Run Name: baseline_32k
+Date: Wed Mar 18 09:42:15 PM UTC 2026
+Prompt Lengths: 32k
+Parse Only: false
+USE_FUSED_AG_MM=0
+TT_LLAMA_USE_FUSED_MM_RS=0
+LLAMA_DIR=/home/tvardhineni/llama-weights/Meta-Llama-3.3-70B-Instruct/original

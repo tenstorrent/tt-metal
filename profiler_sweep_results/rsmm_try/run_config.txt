@@ -1,0 +1,7 @@
+Run Name: rsmm_try
+Date: Thu Mar 19 06:39:45 PM UTC 2026
+Prompt Lengths: 32k
+Parse Only: false
+USE_FUSED_AG_MM=1
+TT_LLAMA_USE_FUSED_MM_RS=1
+LLAMA_DIR=
