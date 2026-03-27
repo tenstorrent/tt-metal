@@ -21,10 +21,7 @@ class TtUpsample2D(LightweightModule):
         debug_mode=False,
     ):
         super().__init__()
-
         self.device = device
-        self.module_path = module_path
-
         self.stride = stride
         self.padding = padding
         self.dilation = dilation

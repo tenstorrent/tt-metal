@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 from loguru import logger
 
 import ttnn
@@ -208,8 +210,6 @@ class TtDecoder(LightweightModule):
         # Move output to [1, 1, C, N*H*W]
         compute_grid_size = self.device.compute_with_storage_grid_size()
         if is_blackhole():
-            import math
-
             total_num_cores = compute_grid_size.x * compute_grid_size.y
             _, _, height, width = hidden_states.padded_shape
             height_padded = math.ceil(height / (total_num_cores * 32)) * (total_num_cores * 32)

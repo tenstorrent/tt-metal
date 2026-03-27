@@ -371,7 +371,6 @@ def run_unet_inference(
         (512, 512),
     ],
 )
-@pytest.mark.parametrize("device_params", [{}], indirect=True)
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a green horse"),),

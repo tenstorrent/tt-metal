@@ -35,11 +35,6 @@ def _run_forward_pass(tt_sdxl, pipeline, prompt, negative_prompt, batch_size):
 
 
 @pytest.mark.parametrize(
-    "device_params",
-    [{}],
-    indirect=["device_params"],
-)
-@pytest.mark.parametrize(
     "prompt, negative_prompt, lora_prompt",
     [
         (
