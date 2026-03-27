@@ -564,73 +564,6 @@ Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::
 //                               .to_device() details
 // ======================================================================================
 
-namespace {
-
-DeviceStorage replicate_to_mesh_buffer(
-    const HostBuffer& buffer,
-    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
-    const TensorSpec& tensor_spec,
-    std::optional<tt::tt_metal::QueueId> cq_id) {
-    auto* mesh_device = mesh_buffer->device();
-    auto data_to_write = buffer.view_bytes();
-    const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
-    const auto input_size_bytes = data_to_write.size();
-    TT_FATAL(
-        input_size_bytes == expected_packed_buffer_size_bytes,
-        "Host data with total size {}B does not match expected size {}B of device buffer!",
-        input_size_bytes,
-        expected_packed_buffer_size_bytes);
-
-    std::optional<uint8_t> cq_id_int = cq_id.has_value() ? std::make_optional(cq_id.value().get()) : std::nullopt;
-    mesh_device->mesh_command_queue(cq_id_int).enqueue_write_mesh_buffer(
-        mesh_buffer, data_to_write.data(), /*blocking=*/false);
-
-    return DeviceStorage(mesh_buffer);
-}
-
-DeviceStorage write_to_mesh_buffer(
-    const DistributedHostBuffer& distributed_host_buffer,
-    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
-    std::optional<tt::tt_metal::QueueId> cq_id) {
-    std::optional<uint8_t> cq_id_int = cq_id.has_value() ? std::make_optional(cq_id.value().get()) : std::nullopt;
-    mesh_buffer->device()->mesh_command_queue(cq_id_int).enqueue_write(
-        mesh_buffer, distributed_host_buffer, /*blocking=*/false);
-    // DistributedHostBuffer may not cover the entire MeshDevice, must preserve coords here.
-    std::vector<distributed::MeshCoordinate> coords;
-    coords.reserve(distributed_host_buffer.shard_coords().size());
-    std::copy(
-        distributed_host_buffer.shard_coords().begin(),
-        distributed_host_buffer.shard_coords().end(),
-        std::back_inserter(coords));
-    return DeviceStorage(mesh_buffer, std::move(coords));
-}
-
-}  // namespace
-
-std::pair<DeviceStorage, TensorTopology> to_device_mesh_buffer(
-    const HostStorage& host_storage,
-    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer,
-    const TensorSpec& tensor_spec,
-    const TensorTopology& tensor_topology,
-    std::optional<tt::tt_metal::QueueId> cq_id) {
-    const auto& host_storage_shape = host_storage.buffer().shape();
-    const auto& mesh_device_shape = mesh_buffer->device()->shape();
-    if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
-        host_storage_shape == distributed::MeshShape(1, 1)) {
-        // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
-        const auto device_buffer = host_storage.buffer().get_shard(distributed::MeshCoordinate(0, 0));
-        return {
-            replicate_to_mesh_buffer(*device_buffer, mesh_buffer, tensor_spec, cq_id),
-            TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape)};
-    }
-    TT_FATAL(
-        host_storage_shape == mesh_device_shape,
-        "Distributed host buffer has different shape {} than the mesh device {}",
-        host_storage_shape,
-        mesh_device_shape);
-    return {write_to_mesh_buffer(host_storage.buffer(), mesh_buffer, cq_id), tensor_topology};
-}
-
 Tensor to_device(
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
@@ -650,10 +583,12 @@ Tensor to_device(
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &tensor.tensor_spec();
+
     auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
-    auto [mesh_storage, topology] =
-        to_device_mesh_buffer(tensor.host_storage(), mesh_buffer, *tensor_spec, tensor.tensor_topology(), cq_id);
-    return Tensor(std::move(mesh_storage), *tensor_spec, topology);
+    // Tensor topology will be overwritten in copy_to_device, an empty constructed one is sufficient.
+    auto result = Tensor(DeviceStorage(mesh_buffer), *tensor_spec, TensorTopology{});
+    tt::tt_metal::tensor_impl::copy_to_device(tensor, result, cq_id);
+    return result;
 }
 
 void copy_to_host(
@@ -726,6 +661,52 @@ void copy_to_host(
         shard_data_transfers, device_tensor.device_storage().get_mesh_buffer_leak_ownership(), blocking);
 }
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+Tensor copy_as_replicate_tensor_on_1x1_mesh(
+    const Tensor& host_tensor, const Tensor& device_tensor, distributed::MeshCommandQueue& command_queue) {
+    const auto host_buffer = host_tensor.host_storage().buffer().get_shard(distributed::MeshCoordinate(0, 0));
+    auto data_to_write = host_buffer->view_bytes();
+    const auto expected_packed_buffer_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
+    const auto input_size_bytes = data_to_write.size();
+    TT_FATAL(
+        input_size_bytes == expected_packed_buffer_size_bytes,
+        "Host data with total size {}B does not match expected size {}B of device buffer!",
+        input_size_bytes,
+        expected_packed_buffer_size_bytes);
+
+    auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
+    command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
+
+    const auto& mesh_device_shape = mesh_buffer->device()->shape();
+    auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
+    return Tensor(
+        DeviceStorage(mesh_buffer),
+        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
+        topology);
+}
+
+Tensor copy_as_distributed_tensor(
+    const Tensor& host_tensor, const Tensor& device_tensor, distributed::MeshCommandQueue& command_queue) {
+    auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
+    command_queue.enqueue_write(mesh_buffer, host_tensor.host_storage().buffer(), /*blocking=*/false);
+    // DistributedHostBuffer may not cover the entire MeshDevice, must preserve coords here.
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(host_tensor.host_storage().buffer().shard_coords().size());
+    std::copy(
+        host_tensor.host_storage().buffer().shard_coords().begin(),
+        host_tensor.host_storage().buffer().shard_coords().end(),
+        std::back_inserter(coords));
+    return Tensor(
+        DeviceStorage(mesh_buffer, std::move(coords)),
+        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
+        host_tensor.tensor_topology());
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
     TT_FATAL(host_tensor.storage_type() == StorageType::HOST, "Source tensor is not on host.");
     TT_FATAL(device_tensor.storage_type() == StorageType::DEVICE, "Destination tensor is not on device.");
@@ -738,11 +719,26 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         "Host tensor has different page config");
 
     auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
+    const auto& host_storage_shape = host_tensor.host_storage().buffer().shape();
+    const auto& mesh_device_shape = mesh_buffer->device()->shape();
 
-    auto [mesh_storage, topology] = to_device_mesh_buffer(
-        host_tensor.host_storage(), mesh_buffer, device_tensor.tensor_spec(), host_tensor.tensor_topology(), cq_id);
-    device_tensor = Tensor(
-        std::move(mesh_storage), host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()), topology);
+    auto& command_queue = mesh_buffer->device()->mesh_command_queue(raw_optional(cq_id));
+
+    // Special case of replicating tensors on 1x1 mesh across the entire mesh device.
+    if (host_storage_shape.mesh_size() < mesh_device_shape.mesh_size() &&
+        host_storage_shape == distributed::MeshShape(1, 1)) {
+        device_tensor =
+            CMAKE_UNIQUE_NAMESPACE::copy_as_replicate_tensor_on_1x1_mesh(host_tensor, device_tensor, command_queue);
+        return;
+    }
+
+    TT_FATAL(
+        host_storage_shape == mesh_device_shape,
+        "Distributed host buffer has different shape {} than the mesh device {}",
+        host_storage_shape,
+        mesh_device_shape);
+
+    device_tensor = CMAKE_UNIQUE_NAMESPACE::copy_as_distributed_tensor(host_tensor, device_tensor, command_queue);
 }
 
 void copy_to_device(
