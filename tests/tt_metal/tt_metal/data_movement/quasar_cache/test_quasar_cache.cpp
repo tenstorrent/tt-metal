@@ -159,12 +159,12 @@ bool run_l1_dcache_test(
 }  // namespace unit_tests::dm::quasar_cache
 
 // =============================================================================
-// Test Suite: L2 Cache Flush Operations
+// Test Suite: L2 Cache Operations
 // =============================================================================
 
-class QuasarL2CacheFlush : public MeshDeviceSingleCardFixture {};
+class QuasarL2CacheOps : public MeshDeviceSingleCardFixture {};
 
-TEST_F(QuasarL2CacheFlush, FlushLine) {
+TEST_F(QuasarL2CacheOps, FlushLine) {
     if (unit_tests::dm::quasar_cache::should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
@@ -178,7 +178,7 @@ TEST_F(QuasarL2CacheFlush, FlushLine) {
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
 }
 
-TEST_F(QuasarL2CacheFlush, FlushRange) {
+TEST_F(QuasarL2CacheOps, FlushRange) {
     if (unit_tests::dm::quasar_cache::should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
@@ -192,7 +192,7 @@ TEST_F(QuasarL2CacheFlush, FlushRange) {
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
 }
 
-TEST_F(QuasarL2CacheFlush, FlushFull) {
+TEST_F(QuasarL2CacheOps, FlushFull) {
     if (unit_tests::dm::quasar_cache::should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
@@ -206,7 +206,7 @@ TEST_F(QuasarL2CacheFlush, FlushFull) {
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
 }
 
-TEST_F(QuasarL2CacheFlush, InvalidateLine) {
+TEST_F(QuasarL2CacheOps, InvalidateLine) {
     if (unit_tests::dm::quasar_cache::should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
@@ -221,7 +221,7 @@ TEST_F(QuasarL2CacheFlush, InvalidateLine) {
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
 }
 
-TEST_F(QuasarL2CacheFlush, InvalidateFreshRead) {
+TEST_F(QuasarL2CacheOps, InvalidateFreshRead) {
     if (unit_tests::dm::quasar_cache::should_skip_test()) {
         GTEST_SKIP() << "Test requires Quasar simulator";
     }
