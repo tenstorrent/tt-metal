@@ -22,7 +22,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.nightly.t3000.ccl.test_all_to_all_dispatch import gen_tensors, get_mesh_mapper, tt_to_torch_dtype
+from tests.nightly.t3000.ccl.test_all_to_all_dispatch import get_mesh_mapper, tt_to_torch_dtype
 from tests.nightly.tg.ccl.moe.test_moe_compute_6U import gen_expert_mapping
 
 
@@ -44,24 +44,48 @@ def gen_tensors_for_metadata_op(
     experts_per_cluster = experts // num_replicated_devices
     experts_per_device = experts // devices
 
-    input_tokens, expert_indices, expert_mapping_old, sparse_output_orig, metadata_orig = gen_tensors(
-        batch, experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme=scheme, dtype=dtype
-    )
+    # Generate input tokens
+    input_tokens = torch.rand(batch, 1, seq_len, hidden_size, dtype=dtype) - 0.5
 
+    # Generate expert indices (ensure no repeats within a token)
+    expert_indices = torch.zeros(batch, 1, seq_len, selected_experts_k, dtype=torch.int16)
+    for b in range(batch):
+        for s in range(seq_len):
+            # Randomly sample selected_experts_k unique experts
+            selected = torch.randperm(experts)[:selected_experts_k].to(torch.int16)
+            expert_indices[b, 0, s, :] = selected
+
+    # Generate new format expert mapping
     expert_mapping_new = gen_expert_mapping(
         devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
     )
 
+    # Generate golden output and metadata tensors using the new expert mapping
     total_tokens = batch * seq_len
-    sparse_output_token_tensor = sparse_output_orig.reshape(devices, total_tokens, hidden_size)
-    metadata_tensor = metadata_orig.reshape(devices, total_tokens, selected_experts_k)
 
+    # Metadata golden: expert_indices replicated across all devices
+    # Shape: [batch, 1, seq_len, k] -> [1, total_tokens, k] -> [devices, total_tokens, k]
+    expert_indices_flat = expert_indices.reshape(1, total_tokens, selected_experts_k)
+    metadata_tensor = expert_indices_flat.repeat(devices, 1, 1)
+
+    # Scores golden: same as metadata, normalized expert scores replicated across all devices
     expert_scores = torch.rand(expert_indices.shape, dtype=torch.float32).to(dtype)
     expert_scores = expert_scores / expert_scores.sum(dim=-1, keepdim=True)
-
-    scores_reshaped = expert_scores.permute(1, 0, 2, 3)
-    scores_golden = scores_reshaped.repeat(devices, 1, 1, 1)
+    scores_reshaped = expert_scores.permute(1, 0, 2, 3)  # [1, batch, seq_len, k]
+    scores_golden = scores_reshaped.repeat(devices, 1, 1, 1)  # [devices, batch, seq_len, k]
     scores_tensor = scores_golden.reshape(devices, total_tokens, selected_experts_k)
+
+    # Output tensor golden: route tokens to devices based on expert ownership
+    sparse_output_token_tensor = torch.rand(devices, total_tokens, hidden_size, dtype=dtype)
+    for b in range(batch):
+        for s in range(seq_len):
+            t = b * seq_len + s  # Token index in total_tokens
+            for k in range(selected_experts_k):
+                expert_id = expert_indices[b, 0, s, k].item()
+                # Look up which device owns this expert (use device 0's view of the mapping)
+                target_device = expert_mapping_new[0, expert_id].item()
+                # Copy token to that device's output
+                sparse_output_token_tensor[target_device, t, :] = input_tokens[b, 0, s, :]
 
     return (
         input_tokens,
@@ -115,7 +139,8 @@ def run_all_to_all_dispatch_metadata_test(
         shard_dims = (shard_dim, None)
 
     total_tokens = batch * seq_len
-    tokens_per_device = batch // devices
+    num_dispatch_devices = mesh_shape[cluster_axis]
+    tokens_per_device = batch // num_dispatch_devices
 
     num_cores_y = min(8, tokens_per_device)
     num_cores_x = (tokens_per_device + num_cores_y - 1) // num_cores_y
@@ -291,6 +316,14 @@ def run_all_to_all_dispatch_metadata_test(
             passed = False
 
         # Verify output tokens
+        if tensor_index == 0:
+            logger.info(f"Output tensor shape: {tt_torch_tensor.shape}")
+            logger.info(f"Golden tensor shape: {output_tensor_goldens_list[tensor_index].shape}")
+            logger.info(f"Metadata tensor shape: {tt_metadata_tensor.shape}")
+            logger.info(
+                f"devices={devices}, total_tokens_out={total_tokens_out}, selected_experts_k={selected_experts_k}"
+            )
+
         tokens_per_src_device = total_tokens_out // devices
         for t in range(total_tokens_out):
             src_device = t // tokens_per_src_device
@@ -302,7 +335,22 @@ def run_all_to_all_dispatch_metadata_test(
                     output_tensor_goldens_list[tensor_index][target_device, t, :],
                 )
                 if not is_all_equal:
-                    logger.warning(f"FAILED output tensor validation at iteration {tensor_index}, token {t}")
+                    if tensor_index == 0 and t == 0:
+                        logger.warning(
+                            f"FAILED at iteration {tensor_index}, token {t}, expert_id {expert_id}, "
+                            f"src_device {src_device}, target_device {target_device}"
+                        )
+                        failed_indices = torch.where(
+                            tt_torch_tensor[target_device, t, :]
+                            != output_tensor_goldens_list[tensor_index][target_device, t, :]
+                        )
+                        logger.warning(f"First 10 failing indices: {failed_indices[0][:10]}")
+                        logger.warning(
+                            f"TT output (first 10): {tt_torch_tensor[target_device, t, failed_indices[0][:10]]}"
+                        )
+                        logger.warning(
+                            f"Golden (first 10): {output_tensor_goldens_list[tensor_index][target_device, t, failed_indices[0][:10]]}"
+                        )
                     passed = False
                     break
             if not passed:

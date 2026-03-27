@@ -844,6 +844,10 @@ def test_optimized_moe_decode_block_tg(
             cluster_axis=cluster_axis,
         )
 
+        # Get worker cores and convert to list (API expects Sequence[CoreCoord])
+        combine_worker_cores = ttnn.experimental.get_moe_combine_cores(mesh_device)
+        combine_worker_cores_list = list(ttnn.corerange_to_cores(combine_worker_cores))
+
         tt_combine_output = ttnn.experimental.selective_reduce_combine(
             tt_compute_output,
             tt_compute_output_dense_expert_activation,
@@ -859,7 +863,7 @@ def test_optimized_moe_decode_block_tg(
             num_links=4,
             token_parallel_core_dim=combine_token_parallel_core_dim,
             data_parallel_core_dim=combine_data_parallel_core_dim,
-            worker_cores=ttnn.experimental.get_moe_combine_cores(mesh_device),
+            worker_cores=combine_worker_cores_list,
             mux_core_range_set=combine_mux_cores,
             output_tensor=tt_preallocated_combine_output,
             optional_cross_device_semaphore=combine_global_semaphore,
