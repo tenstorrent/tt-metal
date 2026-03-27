@@ -71,6 +71,39 @@ def create_single_galaxy_pipeline_configuration(
     )
 
 
+def create_single_galaxy_pipeline_spec_stage_only_configuration(
+    weight_provider: WeightProvider,
+    *,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+    enable_mtp: bool = False,
+) -> PipelineConfiguration:
+    """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
+    fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return EmbeddingStage(
+            weight_provider.load_embedding(device),
+            d2h_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
+        )
+
+    def stage_1(device: ttnn.MeshDevice) -> StageKind:
+        return SpecLMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+        )
+
+    return PipelineConfiguration(
+        {
+            0: stage_0,
+            1: lambda d: PassthroughStage(fwd_payload),
+            2: lambda d: PassthroughStage(fwd_payload),
+            3: stage_1,
+        }
+    )
+
+
 def create_single_galaxy_spec_decode_pipeline_configuration(
     weight_provider: WeightProvider,
     *,

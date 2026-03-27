@@ -117,14 +117,18 @@ struct Broadcast {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
+                        DPRINT << ">br sz=" << args.socket_page_size << ENDL();
                         socket_wait_for_pages(recv, args.socket_num_pages);
+                        DPRINT << ">br1 np=" << CTArgs::num_pages_to_read << ENDL();
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                        DPRINT << "<br" << ENDL();
                         invalidate_l1_cache();
                         noc_async_read(
                             get_noc_addr(recv.read_ptr),
-                            get_write_ptr(CTArgs::cb0_id),
+                            get_write_ptr(CTArgs::cb0_id),  //
                             args.socket_page_size,
                             1 - noc_index);
+                        DPRINT << "<br1" << ENDL();
                         noc_async_read_barrier(1 - noc_index);
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         socket_pop_pages(recv, args.socket_num_pages);
@@ -174,6 +178,7 @@ struct Broadcast {
                     sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
                 }
 
+<<<<<<< HEAD
                 auto send_chunk = [&](uint32_t connection_idx,
                                       uint32_t link_idx,
                                       uint32_t src_base_addr,
@@ -190,6 +195,17 @@ struct Broadcast {
                     connections[connection_idx].send_payload_flush_non_blocking_from_address(
                         reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
                 };
+=======
+                DPRINT << ">fc" << ENDL();
+
+                // Configure fused route for payload + semaphore increment
+                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fused_header(0, 0, 1, true);
+                if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
+                        UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
+                        fabric_connection, fused_route_id, starts, ranges, fused_header, CTArgs::tensor0_page_size);
+                }
+>>>>>>> 828bc16197 (debug wip)
 
                 std::array<uint32_t, CTArgs::num_links> link_counters = {};
                 auto forward_chunks = [&](uint32_t src_base_addr, auto&& wait_for_link_chunk) {
@@ -199,6 +215,7 @@ struct Broadcast {
                         link_counters[current_link]++;
                         wait_for_link_chunk(current_link, link_counters[current_link]);
 
+<<<<<<< HEAD
                         const uint32_t chunk_size = (chunk_idx < CTArgs::num_chunks - 1)
                                                         ? CTArgs::chunk_size_bytes
                                                         : CTArgs::last_chunk_size_bytes;
@@ -245,14 +262,141 @@ struct Broadcast {
                         if (link_counters[link_idx] > 0) {
                             unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
                         }
+=======
+                if (CTArgs::is_sender) {
+                    DPRINT << ">fc1 np=" << CTArgs::num_pages_to_read << ENDL();
+                    cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                    size_t l1_read_addr = get_read_ptr(CTArgs::cb0_id);
+                    uint64_t dst_noc_addr =
+                        get_noc_addr(CTArgs::core_noc_x, CTArgs::core_noc_y, args.tensor_address0, 0);
+
+                    uint64_t out_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(
+                        args.out_ready_sem_noc0_x, args.out_ready_sem_noc0_y, args.out_ready_sem_bank_addr, 0);
+
+                    // For dual-axis mode: first unicast to secondary sender, then mcast along primary axis
+                    if constexpr (CTArgs::has_secondary_target) {
+                        auto& secondary_slot = fabric_connection.get(secondary_connection_idx);
+                        volatile PACKET_HEADER_TYPE* secondary_header =
+                            PacketHeaderPool::header_table[secondary_route_id].first;
+
+                        // Set up unicast route for 2D fabric
+                        fabric_set_unicast_route(fabric_connection, secondary_header, secondary_connection_idx);
+
+                        // Send data + semaphore increment to secondary sender
+                        fabric_unicast_noc_fused_unicast_with_atomic_inc(
+                            &secondary_slot.sender,
+                            secondary_header,
+                            l1_read_addr,
+                            CTArgs::tensor0_page_size * CTArgs::num_pages_to_read,
+                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                                dst_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
+                            1);  // 1 hop to secondary sender
                     }
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
+                        UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
+                        UnicastFusedAtomicIncUpdateMask::PayloadSize>(
+                        fabric_connection,
+                        fused_route_id,
+                        l1_read_addr,
+                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            dst_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
+                        CTArgs::tensor0_page_size * CTArgs::num_pages_to_read);
+
+                    DPRINT << ">fc1 mc" << ENDL();
+                    noc_async_write(l1_read_addr, dst_noc_addr, CTArgs::tensor0_page_size * CTArgs::num_pages_to_read);
+
+                    // increment locally
+                    uint64_t out_ready_sem_noc_addr = safe_get_noc_addr(
+                        args.out_ready_sem_noc0_x, args.out_ready_sem_noc0_y, args.out_ready_sem_bank_addr);
+                    noc_semaphore_inc(out_ready_sem_noc_addr, 1);
+
+                    // 3. wait for mcast output ready semaphore
+                    // NOTE: We use wait_min instead of wait+reset to handle the case where broadcast
+                    // is async and a fast device increments the semaphore multiple times before a slow
+                    // device observes it. With wait+reset the slow device could miss an increment and
+                    // hang. In a real decoder this shouldn't be a problem because other ops
+                    // between iterations will naturally sync the devices, but wait_min is a
+                    // pragmatic choice to streamline standalone testing.
+                    if (args.wait_output_semaphore) {
+                        volatile tt_l1_ptr uint32_t* sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
+                        noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
+                    }
+
+                    // 4. global semaphore reset
+                    if (args.reset_global_semaphore) {
+                        unified_kernels::semaphore_dec(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
+                    }
+                    DPRINT << ">fc1 fl" << ENDL();
+                    noc_async_writes_flushed();
+                    cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                    noc_async_atomic_barrier();
+                    DPRINT << "<fc1" << ENDL();
+                } else if constexpr (CTArgs::is_secondary_sender) {
+                    DPRINT << ">fc2" << ENDL();
+                    // Secondary sender: wait for data from primary sender, then broadcast along primary axis
+                    // First wait for data to arrive from primary sender
+                    if (args.wait_output_semaphore) {
+                        volatile tt_l1_ptr uint32_t* sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
+                        noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
+                    }
+
+                    // Reset semaphore after receiving data
+                    if (args.reset_global_semaphore) {
+                        unified_kernels::semaphore_dec(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
+                    }
+
+                    // broadcast the received data along the primary axis
+                    uint64_t src_noc_addr =
+                        get_noc_addr(CTArgs::core_noc_x, CTArgs::core_noc_y, args.tensor_address0, 0);
+
+                    // Mcast the data along primary axis
+                    uint64_t out_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(
+                        args.out_ready_sem_noc0_x, args.out_ready_sem_noc0_y, args.out_ready_sem_bank_addr, 0);
+
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state<
+                        UnicastFusedAtomicIncUpdateMask::WriteDstAddr | UnicastFusedAtomicIncUpdateMask::SemaphoreAddr |
+                        UnicastFusedAtomicIncUpdateMask::PayloadSize>(
+                        fabric_connection,
+                        fused_route_id,
+                        static_cast<size_t>(args.tensor_address0),
+                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            src_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
+                        CTArgs::tensor0_page_size * CTArgs::num_pages_to_read);
+                    noc_async_writes_flushed();
+                    DPRINT << "<fc2" << ENDL();
+
+                } else {
+                    DPRINT << ">fc3" << ENDL();
+                    // Receiver: wait for data from broadcaster
+                    if (args.wait_output_semaphore) {
+                        volatile tt_l1_ptr uint32_t* sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
+                        noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
+                    }
+                    DPRINT << ">fc3 mid" << ENDL();
+                    // Reset global semaphore
+                    if (args.reset_global_semaphore) {
+                        unified_kernels::semaphore_dec(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
+>>>>>>> 828bc16197 (debug wip)
+                    }
+                    DPRINT << "<fc3" << ENDL();
                 }
 
                 for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
                     connections[i].close();
                 }
 
+<<<<<<< HEAD
                 noc_async_full_barrier();
+=======
+                DPRINT << "<fc" << ENDL();
+                noc_async_write_barrier();
+>>>>>>> 828bc16197 (debug wip)
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

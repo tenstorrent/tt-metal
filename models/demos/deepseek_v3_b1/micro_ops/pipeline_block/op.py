@@ -18,7 +18,7 @@ There are four distinct stage configurations:
      H2D socket receives tokens from host, looks up embedding in DRAM,
      forwards embedding rows downstream via exit D2D socket.
      If loopback is enabled, also receives results from the last stage
-     via entry D2D socket and sends them back to host via D2H socket.
+    via entry D2D socket and sends them back to host via D2H socket.
 
   2. Middle stage (0 < mesh_id < num_procs - 1):
      Entry D2D socket receives data from previous stage, exit D2D socket

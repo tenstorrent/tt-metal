@@ -189,10 +189,13 @@ void kernel_main() {
     }
 
     while (true) {
+        DPRINT << ">d2d rp" << ENDL();
         socket_reserve_pages(sender_socket, 1);
+        DPRINT << ">d2d wp" << ENDL();
         if (!socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             break;
         }
+        DPRINT << ">d2d dp" << ENDL();
 
         auto l1_read_addr = receiver_socket.read_ptr;
         uint64_t dst_addr = downstream_data_addr + sender_socket.write_ptr;

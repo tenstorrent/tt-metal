@@ -24,6 +24,7 @@ FORCE_INLINE void socket_send_from_cb(
     set_sender_socket_page_size(sender_socket, total_send_bytes);
 
     socket_reserve_pages(sender_socket, 1);
+    DPRINT << ">soc" << ENDL();
     cb_wait_front(cb_id, num_cb_pages);
     const uint32_t read_addr = get_read_ptr(cb_id);
 
@@ -52,11 +53,11 @@ FORCE_INLINE void socket_send_from_cb(
         }
         noc_async_write_barrier();
     }
-
     cb_pop_front(cb_id, num_cb_pages);
     socket_push_pages(sender_socket, 1);
     socket_notify_receiver(sender_socket);
     update_socket_config(sender_socket);
+    DPRINT << "<soc" << ENDL();
     if constexpr (SocketMode == 1) {
         noc_async_write_barrier();
     }
