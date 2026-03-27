@@ -210,6 +210,7 @@ class DispatcherData:
         # Dispatch mode constants
         self._DISPATCH_MODE_DEV = self._brisc_elf.get_enum_value("dispatch_mode::DISPATCH_MODE_DEV")
         self._DISPATCH_MODE_HOST = self._brisc_elf.get_enum_value("dispatch_mode::DISPATCH_MODE_HOST")
+        self._DISPATCH_MODE_NONE = self._brisc_elf.get_enum_value("dispatch_mode::DISPATCH_MODE_NONE")
 
         # Watcher enable constants (not used in firmware elf, so can't be retrieved from elf)
         self._WATCHER_ENABLED = 3
@@ -413,6 +414,8 @@ class DispatcherData:
                 dispatch_mode = "DEV"
             elif mode_val == self._DISPATCH_MODE_HOST:
                 dispatch_mode = "HOST"
+            elif mode_val == self._DISPATCH_MODE_NONE:
+                dispatch_mode = "NONE"
             else:
                 # Unexpected/unknown dispatch mode value; track for debugging but preserve behavior.
                 log_check_location(
