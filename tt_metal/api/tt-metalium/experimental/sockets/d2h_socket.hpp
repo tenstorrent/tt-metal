@@ -148,6 +148,20 @@ public:
     void set_page_size(uint32_t page_size);
 
     /**
+     * @brief Non-blocking check for available data.
+     *
+     * Returns true if at least one page of data is available in the FIFO
+     * without blocking. Useful for poll-based readers that need to check
+     * a shutdown flag between iterations.
+     *
+     * @param num_bytes_to_check Optional number of bytes to check. If not provided, the default page size is used.
+     * @return true if at least the requested number of bytes can be read immediately.
+     *
+     * @throws TT_FATAL if page_size has not been set.
+     */
+    bool has_data(std::optional<uint32_t> num_bytes_to_check = std::nullopt);
+
+    /**
      * @brief Reads data pages from the socket FIFO.
      *
      * Blocks until the requested number of pages are available in the FIFO.
