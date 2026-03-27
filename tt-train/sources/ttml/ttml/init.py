@@ -4,10 +4,27 @@
 
 """Parameter initialization functions for ttml modules.
 
+In-place variants (uniform_, normal_, constant_, zeros_, ones_, xavier_uniform_,
+    xavier_normal_, kaiming_uniform_, kaiming_normal_):
+    Take an existing tensor (or Parameter/Buffer wrapping one) and fill it,
+    returning the same object that was passed in.
+
+    Uniform-based (uniform_, xavier_uniform_, kaiming_uniform_) and constant-based
+    (constant_, zeros_, ones_) variants are truly in-place on device via
+    ttml.ops.rand_ (ttnn::uniform) and ttnn.fill - no temporary allocation.
+
+    Normal-based (normal_, xavier_normal_, kaiming_normal_) variants still
+    allocate a temporary tensor because ttnn has no in-place normal op.
+
+    Usage:
+        ttml.init.uniform_(tensor, 0.1, 0.1)
+        ttml.init.xavier_uniform_(model.fc1.weight, gain=1.0)
+
 Factory variants (uniform, normal, constant, zeros, ones, xavier_uniform,
     xavier_normal, kaiming_uniform, kaiming_normal):
     Each returns an initializer callable that takes a shape tuple and returns
-    a new ttml.autograd.Tensor.
+    a new ttml.autograd.Tensor. Internally allocates a tensor then delegates
+    to the corresponding in-place variant.
 
     Usage:
         layer = LinearLayer(
@@ -15,21 +32,6 @@ Factory variants (uniform, normal, constant, zeros, ones, xavier_uniform,
             weight_init=ttml.init.xavier_uniform(gain=1.0),
             bias_init=ttml.init.constant(0.0),
         )
-
-In-place variants (uniform_, normal_, constant_, zeros_, ones_, xavier_uniform_,
-    xavier_normal_, kaiming_uniform_, kaiming_normal_):
-    Take an existing tensor (or Parameter/Buffer wrapping one) and fill it
-    in-place, returning the same object that was passed in.
-    Mirrors the PyTorch torch.nn.init convention.
-
-    Note: these are not truly in-place at the device level. Each call
-    allocates a temporary tensor with the new values and then copies it
-    into the existing tensor via set_value. The temporary is freed
-    afterwards, but callers should be aware of the transient allocation.
-
-    Usage:
-        ttml.init.uniform_(tensor, a=-0.1, b=0.1)
-        ttml.init.xavier_uniform_(model.fc1.weight, gain=1.0)
 """
 
 from __future__ import annotations
@@ -63,6 +65,18 @@ _FULL_PRECISION = ttml.autograd.PreferredPrecision.FULL
 
 def _get_device():
     return ttml.autograd.AutoContext.get_instance().get_device()
+
+
+def _create_tensor(shape):
+    """Allocate an autograd tensor on device. Values are uninitialized."""
+    device = _get_device()
+    t = ttnn.empty(
+        shape,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.Layout.TILE,
+        device=device,
+    )
+    return ttml.autograd.create_tensor(t)
 
 
 def _calculate_fan_in_and_fan_out(shape) -> tuple[int, int]:
@@ -141,76 +155,181 @@ def calculate_gain(nonlinearity: _NonlinearityType, param: int | float | None = 
         raise ValueError(f"Unsupported nonlinearity {nonlinearity}")
 
 
+def _unwrap_tensor(tensor_or_param):
+    """Return the underlying autograd tensor, unwrapping Parameter/Buffer if needed."""
+    from ttml.modules.parameter import Buffer, Parameter
+
+    if isinstance(tensor_or_param, (Parameter, Buffer)):
+        return tensor_or_param.tensor
+    return tensor_or_param
+
+
 # ---------------------------------------------------------------------------
-# Factory variants (return initializer callables)
+# In-place variants (core implementation, fill existing tensor, return it)
+#
+# Uniform-based and constant-based variants are truly in-place on device via
+# ttml.ops.rand_ (wraps ttnn::uniform) and ttnn.fill.
+#
+# Normal-based variants still allocate a temporary tensor because ttnn has no
+# in-place normal distribution op.
+# ---------------------------------------------------------------------------
+
+
+def uniform_(tensor, a: float = 0.0, b: float = 1.0):
+    """Fill tensor in-place with values from uniform distribution [a, b)."""
+    inner = _unwrap_tensor(tensor)
+    ttml.ops.rand_(inner, a, b)
+    return tensor
+
+
+def normal_(tensor, mean: float = 0.0, std: float = 1.0):
+    """Fill tensor in-place with values from normal (Gaussian) distribution.
+
+    Note: allocates a temporary tensor (no in-place normal distribution op in ttnn).
+    """
+    inner = _unwrap_tensor(tensor)
+    new_tensor = ttml.ops.randn(inner.shape(), mean, std)
+    inner.set_value(new_tensor.get_value(_FULL_PRECISION))
+    return tensor
+
+
+def constant_(tensor, val: float):
+    """Fill tensor in-place with a constant value."""
+    inner = _unwrap_tensor(tensor)
+    t = inner.get_value(_FULL_PRECISION)
+    ttnn.fill(t, val, output_tensor=t)
+    inner.set_value(t)
+    return tensor
+
+
+def zeros_(tensor):
+    """Fill tensor in-place with zeros."""
+    return constant_(tensor, 0.0)
+
+
+def ones_(tensor):
+    """Fill tensor in-place with ones."""
+    return constant_(tensor, 1.0)
+
+
+def xavier_uniform_(tensor, gain: float = 1.0):
+    """Fill tensor in-place using Xavier uniform initialization (Glorot 2010).
+
+    Samples from U(-a, a) where a = gain * sqrt(6 / (fan_in + fan_out)).
+    """
+    inner = _unwrap_tensor(tensor)
+    fan_in, fan_out = _calculate_fan_in_and_fan_out(inner.shape())
+    std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
+    a = math.sqrt(3.0) * std
+    ttml.ops.rand_(inner, -a, a)
+    return tensor
+
+
+def xavier_normal_(tensor, gain: float = 1.0):
+    """Fill tensor in-place using Xavier normal initialization (Glorot 2010).
+
+    Samples from N(0, std^2) where std = gain * sqrt(2 / (fan_in + fan_out)).
+
+    Note: allocates a temporary tensor (no in-place normal distribution op in ttnn).
+    """
+    inner = _unwrap_tensor(tensor)
+    fan_in, fan_out = _calculate_fan_in_and_fan_out(inner.shape())
+    std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
+    return normal_(tensor, 0.0, std)
+
+
+def kaiming_uniform_(
+    tensor,
+    a: float = 0,
+    mode: _FanMode = "fan_in",
+    nonlinearity: _NonlinearityType = "leaky_relu",
+):
+    """Fill tensor in-place using Kaiming uniform initialization (He 2015).
+
+    Samples from U(-bound, bound) where bound = gain * sqrt(3 / fan).
+
+    Args:
+        a: negative slope of the rectifier (only used with leaky_relu).
+        mode: "fan_in" preserves forward-pass variance,
+            "fan_out" preserves backward-pass variance.
+        nonlinearity: nonlinearity function name, recommended "relu" or
+            "leaky_relu".
+    """
+    inner = _unwrap_tensor(tensor)
+    fan = _calculate_correct_fan(inner.shape(), mode)
+    gain = calculate_gain(nonlinearity, a)
+    std = gain / math.sqrt(fan)
+    bound = math.sqrt(3.0) * std
+    ttml.ops.rand_(inner, -bound, bound)
+    return tensor
+
+
+def kaiming_normal_(
+    tensor,
+    a: float = 0,
+    mode: _FanMode = "fan_in",
+    nonlinearity: _NonlinearityType = "leaky_relu",
+):
+    """Fill tensor in-place using Kaiming normal initialization (He 2015).
+
+    Samples from N(0, std^2) where std = gain / sqrt(fan).
+
+    Note: allocates a temporary tensor (no in-place normal distribution op in ttnn).
+
+    Args:
+        a: negative slope of the rectifier (only used with leaky_relu).
+        mode: "fan_in" preserves forward-pass variance,
+            "fan_out" preserves backward-pass variance.
+        nonlinearity: nonlinearity function name, recommended "relu" or
+            "leaky_relu".
+    """
+    inner = _unwrap_tensor(tensor)
+    fan = _calculate_correct_fan(inner.shape(), mode)
+    gain = calculate_gain(nonlinearity, a)
+    std = gain / math.sqrt(fan)
+    return normal_(tensor, 0.0, std)
+
+
+# ---------------------------------------------------------------------------
+# Factory variants (allocate a tensor, delegate to in-place variant)
 # ---------------------------------------------------------------------------
 
 
 def uniform(a: float = 0.0, b: float = 1.0):
     """Uniform distribution over [a, b)."""
 
-    def uniform_init(shape):
-        return ttml.ops.rand(shape, a, b)
+    def _uniform_init(shape):
+        return uniform_(_create_tensor(shape), a, b)
 
-    return uniform_init
+    return _uniform_init
 
 
 def normal(mean: float = 0.0, std: float = 1.0):
     """Normal (Gaussian) distribution."""
 
-    def normal_init(shape):
-        return ttml.ops.randn(shape, mean, std)
+    def _normal_init(shape):
+        return normal_(_create_tensor(shape), mean, std)
 
-    return normal_init
+    return _normal_init
 
 
 def constant(val: float):
     """All elements set to val."""
 
-    def constant_init(shape):
-        device = _get_device()
-        t = ttnn.full(
-            shape,
-            fill_value=val,
-            device=device,
-            dtype=ttnn.DataType.BFLOAT16,
-            layout=ttnn.Layout.TILE,
-        )
-        return ttml.autograd.create_tensor(t)
+    def _constant_init(shape):
+        return constant_(_create_tensor(shape), val)
 
-    return constant_init
+    return _constant_init
 
 
 def zeros():
     """All zeros."""
-
-    def zeros_init(shape):
-        device = _get_device()
-        t = ttnn.zeros(
-            shape,
-            device=device,
-            dtype=ttnn.DataType.BFLOAT16,
-            layout=ttnn.Layout.TILE,
-        )
-        return ttml.autograd.create_tensor(t)
-
-    return zeros_init
+    return constant(0.0)
 
 
 def ones():
     """All ones."""
-
-    def ones_init(shape):
-        device = _get_device()
-        t = ttnn.ones(
-            shape,
-            device=device,
-            dtype=ttnn.DataType.BFLOAT16,
-            layout=ttnn.Layout.TILE,
-        )
-        return ttml.autograd.create_tensor(t)
-
-    return ones_init
+    return constant(1.0)
 
 
 def xavier_uniform(gain: float = 1.0):
@@ -220,13 +339,10 @@ def xavier_uniform(gain: float = 1.0):
     Use ``calculate_gain`` to compute gain for a specific nonlinearity.
     """
 
-    def xavier_uniform_init(shape):
-        fan_in, fan_out = _calculate_fan_in_and_fan_out(shape)
-        std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
-        a = math.sqrt(3.0) * std
-        return uniform(-a, a)(shape)
+    def _xavier_uniform_init(shape):
+        return xavier_uniform_(_create_tensor(shape), gain)
 
-    return xavier_uniform_init
+    return _xavier_uniform_init
 
 
 def xavier_normal(gain: float = 1.0):
@@ -236,12 +352,10 @@ def xavier_normal(gain: float = 1.0):
     Use ``calculate_gain`` to compute gain for a specific nonlinearity.
     """
 
-    def xavier_normal_init(shape):
-        fan_in, fan_out = _calculate_fan_in_and_fan_out(shape)
-        std = gain * math.sqrt(2.0 / float(fan_in + fan_out))
-        return normal(0.0, std)(shape)
+    def _xavier_normal_init(shape):
+        return xavier_normal_(_create_tensor(shape), gain)
 
-    return xavier_normal_init
+    return _xavier_normal_init
 
 
 def kaiming_uniform(
@@ -261,14 +375,10 @@ def kaiming_uniform(
             "leaky_relu".
     """
 
-    def kaiming_uniform_init(shape):
-        fan = _calculate_correct_fan(shape, mode)
-        gain = calculate_gain(nonlinearity, a)
-        std = gain / math.sqrt(fan)
-        bound = math.sqrt(3.0) * std
-        return uniform(-bound, bound)(shape)
+    def _kaiming_uniform_init(shape):
+        return kaiming_uniform_(_create_tensor(shape), a, mode, nonlinearity)
 
-    return kaiming_uniform_init
+    return _kaiming_uniform_init
 
 
 def kaiming_normal(
@@ -288,125 +398,10 @@ def kaiming_normal(
             "leaky_relu".
     """
 
-    def kaiming_normal_init(shape):
-        fan = _calculate_correct_fan(shape, mode)
-        gain = calculate_gain(nonlinearity, a)
-        std = gain / math.sqrt(fan)
-        return normal(0.0, std)(shape)
+    def _kaiming_normal_init(shape):
+        return kaiming_normal_(_create_tensor(shape), a, mode, nonlinearity)
 
-    return kaiming_normal_init
-
-
-# ---------------------------------------------------------------------------
-# In-place variants (fill existing tensor, return it)
-#
-# NOTE: Not truly in-place - each function allocates a new temporary tensor
-# via the corresponding factory variant and copies the values into the
-# existing tensor with set_value(). The temporary is freed after the call.
-# ---------------------------------------------------------------------------
-
-
-def _unwrap_tensor(tensor_or_param):
-    """Return the underlying autograd tensor, unwrapping Parameter/Buffer if needed."""
-    from ttml.modules.parameter import Buffer, Parameter
-
-    if isinstance(tensor_or_param, (Parameter, Buffer)):
-        return tensor_or_param.tensor
-    return tensor_or_param
-
-
-def uniform_(tensor, a: float = 0.0, b: float = 1.0):
-    """Fill tensor in-place with values from uniform distribution [a, b)."""
-    inner = _unwrap_tensor(tensor)
-    reinit_val = uniform(a, b)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
-
-
-def normal_(tensor, mean: float = 0.0, std: float = 1.0):
-    """Fill tensor in-place with values from normal (Gaussian) distribution."""
-    inner = _unwrap_tensor(tensor)
-    reinit_val = normal(mean, std)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
-
-
-def constant_(tensor, val: float):
-    """Fill tensor in-place with a constant value."""
-    inner = _unwrap_tensor(tensor)
-    reinit_val = constant(val)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
-
-
-def zeros_(tensor):
-    """Fill tensor in-place with zeros."""
-    inner = _unwrap_tensor(tensor)
-    reinit_val = zeros()(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
-
-
-def ones_(tensor):
-    """Fill tensor in-place with ones."""
-    inner = _unwrap_tensor(tensor)
-    reinit_val = ones()(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
-
-
-def xavier_uniform_(tensor, gain: float = 1.0):
-    """Fill tensor in-place using Xavier uniform initialization (Glorot 2010).
-
-    See ``xavier_uniform`` for details.
-    """
-    inner = _unwrap_tensor(tensor)
-    reinit_val = xavier_uniform(gain)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
-
-
-def xavier_normal_(tensor, gain: float = 1.0):
-    """Fill tensor in-place using Xavier normal initialization (Glorot 2010).
-
-    See ``xavier_normal`` for details.
-    """
-    inner = _unwrap_tensor(tensor)
-    reinit_val = xavier_normal(gain)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
-
-
-def kaiming_uniform_(
-    tensor,
-    a: float = 0,
-    mode: _FanMode = "fan_in",
-    nonlinearity: _NonlinearityType = "leaky_relu",
-):
-    """Fill tensor in-place using Kaiming uniform initialization (He 2015).
-
-    See ``kaiming_uniform`` for details.
-    """
-    inner = _unwrap_tensor(tensor)
-    reinit_val = kaiming_uniform(a, mode, nonlinearity)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
-
-
-def kaiming_normal_(
-    tensor,
-    a: float = 0,
-    mode: _FanMode = "fan_in",
-    nonlinearity: _NonlinearityType = "leaky_relu",
-):
-    """Fill tensor in-place using Kaiming normal initialization (He 2015).
-
-    See ``kaiming_normal`` for details.
-    """
-    inner = _unwrap_tensor(tensor)
-    reinit_val = kaiming_normal(a, mode, nonlinearity)(inner.shape())
-    inner.set_value(reinit_val.get_value(_FULL_PRECISION))
-    return tensor
+    return _kaiming_normal_init
 
 
 __all__ = [

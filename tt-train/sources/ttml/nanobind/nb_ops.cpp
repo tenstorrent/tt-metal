@@ -377,6 +377,15 @@ void py_module(nb::module_& m) {
         nb::arg("layout") = tt::tt_metal::Layout::TILE);
 
     m.def(
+        "rand_",
+        &ttml::ops::rand_,
+        nb::arg("tensor"),
+        nb::arg("a") = 0.0f,
+        nb::arg("b") = 1.0f,
+        nb::kw_only(),
+        nb::arg("seed") = std::nullopt);
+
+    m.def(
         "randn",
         &ttml::ops::randn,
         nb::arg("shape"),
