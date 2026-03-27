@@ -367,7 +367,7 @@ class RowParallelLinear(Module):
             weight = self.weight.data
 
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        core_grid = get_matmul_core_grid(self.mesh_device)
 
         needs_reshape = len(x.shape) <= 3
         if needs_reshape:
