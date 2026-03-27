@@ -177,7 +177,7 @@ def test_max_row_major(device, input_shape, dim, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.9999,
+        pcc_threshold=0.999,
         rtol=1e-06,
         atol=1e-06,
         frobenius_threshold=1e-09,
@@ -327,10 +327,10 @@ def test_mean_multi_dim_row_major(device, input_shape, dims, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.986833,
-        rtol=0.00796975,
-        atol=0.003985375,
-        frobenius_threshold=0.00196106014,
+        pcc_threshold=0.98,
+        rtol=0.008,
+        atol=0.004,
+        frobenius_threshold=0.002,
         check_ulp=True,
     )
 

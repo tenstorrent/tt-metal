@@ -71,16 +71,16 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
 
     tt_output = tt_npu.cpu().to_torch()
     if kind == "mean":
-        pcc_threshold=0.9999
-        rtol=0.006
-        atol=0.008
-        frobenius_threshold=0.006
+        pcc_threshold = 0.9999
+        rtol = 0.006
+        atol = 0.008
+        frobenius_threshold = 0.006
     else:
-        pcc_threshold=0.999
-        rtol=1e-06
-        atol=1e-06
-        frobenius_threshold=1e-09
-    
+        pcc_threshold = 0.999
+        rtol = 1e-06
+        atol = 1e-06
+        frobenius_threshold = 1e-09
+
     # test for equivalance
     assert_numeric_metrics(
         torch_output,
@@ -89,4 +89,4 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
         rtol=rtol,
         atol=atol,
         frobenius_threshold=frobenius_threshold,
-        )
+    )

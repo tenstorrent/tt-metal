@@ -63,30 +63,30 @@ def test_cumprod_normal(dim, shape, dtypes, device):
 
             ttnn_result_torch = ttnn.to_torch(ttnn_result_tensor)
             if dtypes[0] == torch.float32:
-                # test for equivalance
-                assert_numeric_metrics(
-                    torch_result_tensor,
-                    ttnn_result_torch,
-                    pcc_threshold=0.999,
-                    rtol=0.09,
-                    atol=1.47,
-                    frobenius_threshold=0.02,
-                )
+                pcc_threshold = 0.999
+                rtol = 0.09
+                atol = 1.47
+                frobenius_threshold = 0.02
             else:
-                # test for equivalance
-                assert_numeric_metrics(
-                    torch_result_tensor,
-                    ttnn_result_torch,
-                    pcc_threshold=0.999,
-                    rtol=0.03,
-                    atol=1.04,
-                    frobenius_threshold=0.01,
-                )
+                pcc_threshold = 0.999
+                rtol = 0.03
+                atol = 1.04
+                frobenius_threshold = 0.01
+            # test for equivalance
+            assert_numeric_metrics(
+                torch_result_tensor,
+                ttnn_result_torch,
+                pcc_threshold=pcc_threshold,
+                rtol=rtol,
+                atol=atol,
+                frobenius_threshold=frobenius_threshold,
+            )
         assert device.num_program_cache_entries() >= 1
     else:
         pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
 
 
+# low pcc issue.https://github.com/tenstorrent/tt-metal/issues/40878
 @pytest.mark.parametrize("dim", [0, 2, -1])
 @pytest.mark.parametrize(
     "shape",
@@ -174,24 +174,23 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
 
             ttnn_result_torch = ttnn.to_torch(ttnn_result_tensor)
             ttnn_preallocated_torch = ttnn.to_torch(ttnn_preallocated_tensor)
-            # test for equivalance
-            assert_numeric_metrics(
-                torch_result_tensor,
-                ttnn_result_torch,
-                pcc_threshold=0.999,
-                rtol=0.09,
-                atol=1.47,
-                frobenius_threshold=0.01,
-            )
-            # test for equivalance
-            assert_numeric_metrics(
-                torch_preallocated_tensor,
-                ttnn_preallocated_torch,
-                pcc_threshold=0.999,
-                rtol=0.09,
-                atol=1.47,
-                frobenius_threshold=0.01,
-            )
+            pcc_threshold = 0.999
+            rtol = 0.09
+            atol = 1.47
+            frobenius_threshold = 0.01
+            for expected, actual in (
+                (torch_result_tensor, ttnn_result_torch),
+                (torch_preallocated_tensor, ttnn_preallocated_torch),
+            ):
+                # test for equivalance
+                assert_numeric_metrics(
+                    expected,
+                    actual,
+                    pcc_threshold=pcc_threshold,
+                    rtol=rtol,
+                    atol=atol,
+                    frobenius_threshold=frobenius_threshold,
+                )
     else:
         pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
 

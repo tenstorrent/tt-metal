@@ -53,25 +53,24 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     output_tensor = ttnn_integral_image_cumsum_channel_last(input_tensor)
     ttnn_output_tensor = ttnn.to_torch(output_tensor)
     if dtype == ttnn.bfloat16:
-        # test for equivalance
-        assert_numeric_metrics(
-            torch_output_tensor,
-            ttnn_output_tensor,
-            pcc_threshold=0.998,
-            rtol=0.156,
-            atol=1175.040,
-            frobenius_threshold=0.050,
-        )
+        pcc_threshold = 0.998
+        rtol = 0.156
+        atol = 1175.040
+        frobenius_threshold = 0.050
     else:
-        # test for equivalance
-        assert_numeric_metrics(
-            torch_output_tensor,
-            ttnn_output_tensor,
-            pcc_threshold=0.999,
-            rtol=0.015,
-            atol=65.280,
-            frobenius_threshold=0.004,
-        )
+        pcc_threshold = 0.999
+        rtol = 0.015
+        atol = 65.280
+        frobenius_threshold = 0.004
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_output_tensor,
+        ttnn_output_tensor,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
     # experimental intimg
     input_tensor = ttnn.from_torch(
@@ -80,22 +79,21 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     output_tensor_2 = ttnn_integral_image_channel_last(input_tensor)
     ttnn_output_tensor_2 = ttnn.to_torch(output_tensor_2)
     if dtype == ttnn.bfloat16:
-        # test for equivalance
-        assert_numeric_metrics(
-            torch_output_tensor,
-            ttnn_output_tensor_2,
-            pcc_threshold=0.999,
-            rtol=0.039,
-            atol=130.560,
-            frobenius_threshold=0.011,
-        )
+        pcc_threshold = 0.999
+        rtol = 0.039
+        atol = 130.560
+        frobenius_threshold = 0.011
     else:
-        # test for equivalance
-        assert_numeric_metrics(
-            torch_output_tensor,
-            ttnn_output_tensor_2,
-            pcc_threshold=0.999,
-            rtol=0.012,
-            atol=32.640,
-            frobenius_threshold=0.003,
-        )
+        pcc_threshold = 0.999
+        rtol = 0.012
+        atol = 32.640
+        frobenius_threshold = 0.003
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_output_tensor,
+        ttnn_output_tensor_2,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
