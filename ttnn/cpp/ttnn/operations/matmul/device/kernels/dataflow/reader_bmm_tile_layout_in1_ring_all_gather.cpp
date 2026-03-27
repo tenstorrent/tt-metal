@@ -11,6 +11,7 @@
 #include "api/debug/dprint_tile.h"
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
+#include "experimental/endpoints.h"
 #include "experimental/noc_semaphore.h"
 #include "experimental/tensor.h"
 
@@ -45,7 +46,6 @@ void do_signaling(const experimental::Noc& noc, uint32_t& rt_args_idx) {
     const uint32_t pv_core_x = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t pv_core_y = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t pv_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t pv_semaphore = get_semaphore(pv_semaphore_id);
     experimental::Semaphore<> pv_sem(pv_semaphore_id);
     const bool is_privilaged = get_arg_val<uint32_t>(rt_args_idx++) == 1;
     if (is_privilaged) {
@@ -55,15 +55,16 @@ void do_signaling(const experimental::Noc& noc, uint32_t& rt_args_idx) {
         const uint32_t multicast_end_x = get_arg_val<uint32_t>(rt_args_idx++);
         const uint32_t multicast_end_y = get_arg_val<uint32_t>(rt_args_idx++);
         const uint32_t num_signalling_semaphores = get_arg_val<uint32_t>(rt_args_idx++);
-        const uint32_t signalling_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
-        const uint64_t signalling_semaphore_address =
-            get_noc_multicast_addr(multicast_start_x, multicast_start_y, multicast_end_x, multicast_end_y, 0) |
-            signalling_semaphore;
+        const uint32_t signalling_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+        experimental::Semaphore<> signalling_sem(signalling_semaphore_id);
         pv_sem.wait(target_sem_value);
         pv_sem.set(1);
-        noc_semaphore_set_multicast(pv_semaphore, signalling_semaphore_address, num_signalling_semaphores);
+        signalling_sem.set(1);
+        signalling_sem.set_multicast(
+            noc, multicast_start_x, multicast_start_y, multicast_end_x, multicast_end_y, num_signalling_semaphores);
     } else {
         pv_sem.up(noc, pv_core_x, pv_core_y, 1);
+        noc.async_atomic_barrier();
     }
 }
 
@@ -121,11 +122,11 @@ void kernel_main() {
     experimental::CircularBuffer cb_in1(cb_id_in1);
     experimental::CircularBuffer cb_sync(sync_cb);
     experimental::CircularBuffer cb_sync2(sync_cb2);
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
 
     uint32_t in1_shard_width_offset_bytes = 0;
     uint32_t in1_dram_shard_block_size_bytes = 0;
     uint32_t dram_read_offset_bytes = 0;
-    uint32_t l1_write_addr_in1;
     uint32_t l1_read_addr_in1 = 0;
 
     if constexpr (in1_is_dram_sharded) {
@@ -161,24 +162,29 @@ void kernel_main() {
             }
         } else if constexpr (in1_is_dram_sharded) {  // when in1 is sharded in DRAM, each core reads from its own bank,
                                                      // two cores on the same row share one bank.
+            constexpr uint32_t max_page =
+                in1_block_page_size > in1_block_page_size_last ? in1_block_page_size : in1_block_page_size_last;
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 uint32_t block_idx = (ring_idx + block) % num_blocks;
                 l1_read_addr_in1 = block_idx * in1_dram_shard_block_size_bytes + dram_read_offset_bytes;
                 // Operand 1
                 cb_in1.reserve_back(in1_block_num_tiles);
-                l1_write_addr_in1 = cb_in1.get_write_ptr();
+                uint32_t cb_write_offset = 0;
 
                 for (uint32_t h = 0; h < in1_block_height_in_tiles; ++h) {
                     uint32_t curr_l1_read_addr_in1 = l1_read_addr_in1;
                     for (uint32_t w = 0; w < in1_block_width_num_pages; ++w) {
                         uint32_t curr_page_size =
                             w == in1_block_width_num_pages - 1 ? in1_block_page_size_last : in1_block_page_size;
-                        uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in1_tensor_addr);
-                        noc_async_read_one_packet_set_state<true>(in1_base_addr, curr_page_size, vc);
-                        noc_async_read_one_packet_with_state<true, true>(
-                            in1_base_addr + curr_l1_read_addr_in1, l1_write_addr_in1, vc);
+                        noc.async_read<Noc::TxnIdMode::DISABLED, max_page>(
+                            dram_bank,
+                            cb_in1,
+                            curr_page_size,
+                            {.bank_id = dram_bank_id, .addr = in1_tensor_addr + curr_l1_read_addr_in1},
+                            {.offset_bytes = cb_write_offset},
+                            vc);
                         curr_l1_read_addr_in1 += curr_page_size;
-                        l1_write_addr_in1 += curr_page_size;
+                        cb_write_offset += curr_page_size;
                     }
                     l1_read_addr_in1 += in1_shard_width_offset_bytes;
                 }

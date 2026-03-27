@@ -28,8 +28,8 @@ void kernel_main() {
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(7);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(8);
     // in0 mcast args
-    uint32_t in0_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    constexpr uint32_t in0_mcast_sender_semaphore_id = get_compile_time_arg_val(9);
+    constexpr uint32_t in0_mcast_receiver_semaphore_id = get_compile_time_arg_val(10);
     constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(11);
     constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(12);
     constexpr uint32_t num_x = get_compile_time_arg_val(13);
@@ -72,19 +72,9 @@ void kernel_main() {
     experimental::CircularBuffer cb_in2(cb_id_in2);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
-    experimental::Semaphore<> sender_sem(get_compile_time_arg_val(9));
+    experimental::Semaphore<> sender_sem(in0_mcast_sender_semaphore_id);
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    experimental::Semaphore<> receiver_sem(get_compile_time_arg_val(10));
-
-    // L1 array for valid semaphore value
-    constexpr uint32_t cb_l1_array = get_named_compile_time_arg_val("cb_l1_array");
-    experimental::CircularBuffer cb_l1(cb_l1_array);
-    uint32_t in0_mcast_sender_semaphore_valid_addr = cb_l1.get_write_ptr();
-    volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_valid_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_valid_addr);
-    // Set up local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    in0_mcast_sender_semaphore_valid_addr_ptr[0] =
-        VALID;  // Load const 1 to be used as semaphore valid value sent from sender to receivers
+    experimental::Semaphore<> receiver_sem(in0_mcast_receiver_semaphore_id);
 
     constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
     uint32_t remote_sender_noc_x[num_remote_senders];
@@ -112,13 +102,6 @@ void kernel_main() {
             }
         }
     }
-    uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-        in0_mcast_dest_noc_start_x,
-        in0_mcast_dest_noc_start_y,
-        in0_mcast_dest_noc_end_x,
-        in0_mcast_dest_noc_end_y,
-        in0_mcast_receiver_semaphore_addr);
-
     receiver_sem.set(VALID);
 
     cb_in2.reserve_back(batch * in0_block_num_tiles);
@@ -291,9 +274,13 @@ void kernel_main() {
                                 // Data needs to be written directly in the core.
                                 receiver_sem.set(VALID);
                             } else {
-                                noc_semaphore_set_multicast_loopback_src(
-                                    in0_mcast_sender_semaphore_valid_addr,
-                                    in0_mcast_receiver_semaphore_noc_addr,
+                                receiver_sem.set(VALID);
+                                receiver_sem.set_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                                    noc,
+                                    in0_mcast_dest_noc_start_x,
+                                    in0_mcast_dest_noc_start_y,
+                                    in0_mcast_dest_noc_end_x,
+                                    in0_mcast_dest_noc_end_y,
                                     in0_mcast_num_cores);
                             }
                         } else {
@@ -314,9 +301,13 @@ void kernel_main() {
                                 true);
 
                             // We should also multicast the flag to destinations
-                            noc_semaphore_set_multicast(
-                                in0_mcast_sender_semaphore_valid_addr,
-                                in0_mcast_receiver_semaphore_noc_addr,
+                            receiver_sem.set(VALID);
+                            receiver_sem.set_multicast(
+                                noc,
+                                in0_mcast_dest_noc_start_x,
+                                in0_mcast_dest_noc_start_y,
+                                in0_mcast_dest_noc_end_x,
+                                in0_mcast_dest_noc_end_y,
                                 in0_mcast_num_cores);
                         }
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id and

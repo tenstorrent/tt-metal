@@ -245,7 +245,12 @@ void kernel_main() {
 #endif  // IN1_DRAM_HEIGHT_SHARDED
 
         if constexpr (batchB > 0) {
-            noc_async_read_page(b, s_sparsity, l1_write_addr_sparsity);
+            noc.async_read(
+                s_sparsity,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_sparsity),
+                sparsity_pagesize,
+                {.page_id = b},
+                {});
             noc.async_read_barrier();
         }
 
@@ -290,32 +295,34 @@ void kernel_main() {
                         uint32_t l1_write_addr_in1_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
+                        experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                            uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(
-                                current_dram_bank_id[next_bank_id_and_dram_stride_index], in1_tensor_addr);
-
-                            if (i == 0) {
-                                in1_base_addr += dram_tensor_start_offset;
-                            }
-                            noc_async_read_one_packet_set_state<true>(in1_base_addr, in1_single_tile_size_bytes, vc);
+                            uint32_t shard_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
+                            uint32_t shard_base_offset = (i == 0) ? dram_tensor_start_offset : 0;
 
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
-                            uint32_t l1_write_addr_in1 = cb_in1.get_write_ptr() + l1_write_addr_in1_offset;
+                            uint32_t cb_write_offset_in1 = l1_write_addr_in1_offset;
                             uint32_t in1_block_w_dram =
                                 in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index] /
                                 in1_single_tile_size_bytes;
 
                             for (uint32_t m = 0; m < in1_block_h; ++m) {
                                 uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
-                                uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
+                                uint32_t cb_write_offset_temp = cb_write_offset_in1;
                                 for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
-                                    noc_async_read_one_packet_with_state<true, true>(
-                                        in1_base_addr + l1_read_addr_in1_temp, l1_write_addr_in1_temp, vc);
+                                    noc.async_read<Noc::TxnIdMode::DISABLED, in1_single_tile_size_bytes>(
+                                        dram_bank,
+                                        cb_in1,
+                                        in1_single_tile_size_bytes,
+                                        {.bank_id = shard_bank_id,
+                                         .addr = in1_tensor_addr + shard_base_offset + l1_read_addr_in1_temp},
+                                        {.offset_bytes = cb_write_offset_temp},
+                                        vc);
                                     l1_read_addr_in1_temp += in1_single_tile_size_bytes;
-                                    l1_write_addr_in1_temp += in1_single_tile_size_bytes;
+                                    cb_write_offset_temp += in1_single_tile_size_bytes;
                                 }
                                 l1_read_addr_in1 += in1_block_w_dram_bytes;
-                                l1_write_addr_in1 += in1_block_w_bytes;
+                                cb_write_offset_in1 += in1_block_w_bytes;
                             }
                             l1_write_addr_in1_offset +=
                                 in1_block_w_dram_stride_bytes[next_bank_id_and_dram_stride_index];
@@ -476,21 +483,18 @@ void kernel_main() {
                         uint32_t l1_write_addr_in3_offset = 0;
                         uint32_t next_bank_id_and_dram_stride_index = 0;
 
+                        experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank_bias;
                         for (uint32_t i = 0; i < num_dram_shards_to_read; ++i) {
-                            uint64_t in3_base_addr = get_noc_addr_from_bank_id<true>(
-                                current_dram_bank_id[next_bank_id_and_dram_stride_index], in3_tensor_addr);
-
-                            if (i == 0) {
-                                // dram_tensor_start_offset is in in1 tile bytes; convert to
-                                // bias tile bytes since bias_dtype may differ from in1_dtype.
-                                in3_base_addr += (dram_tensor_start_offset / in1_single_tile_size_bytes) *
-                                                 bias_single_tile_size_bytes;
-                            }
-
-                            noc_async_read_one_packet_set_state<true>(in3_base_addr, bias_single_tile_size_bytes, vc);
+                            uint32_t bias_bank_id = current_dram_bank_id[next_bank_id_and_dram_stride_index];
+                            // dram_tensor_start_offset is in in1 tile bytes; convert to
+                            // bias tile bytes since bias_dtype may differ from in1_dtype.
+                            uint32_t bias_base_offset = (i == 0)
+                                                            ? (dram_tensor_start_offset / in1_single_tile_size_bytes) *
+                                                                  bias_single_tile_size_bytes
+                                                            : 0;
 
                             uint32_t l1_read_addr_in3 = 0;
-                            l1_write_addr_in3 = cb_in3.get_write_ptr() + l1_write_addr_in3_offset;
+                            uint32_t cb_write_offset_in3 = l1_write_addr_in3_offset;
                             // in1_block_w_dram_stride_bytes is in in1 tile bytes, so divide
                             // by in1_single_tile_size_bytes (not bias) to get the tile count.
                             uint32_t in3_block_w_dram =
@@ -498,10 +502,16 @@ void kernel_main() {
                                 in1_single_tile_size_bytes;
 
                             for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
-                                noc_async_read_one_packet_with_state<true, true>(
-                                    in3_base_addr + l1_read_addr_in3, l1_write_addr_in3, vc);
+                                noc.async_read<Noc::TxnIdMode::DISABLED, bias_single_tile_size_bytes>(
+                                    dram_bank_bias,
+                                    cb_in3,
+                                    bias_single_tile_size_bytes,
+                                    {.bank_id = bias_bank_id,
+                                     .addr = in3_tensor_addr + bias_base_offset + l1_read_addr_in3},
+                                    {.offset_bytes = cb_write_offset_in3},
+                                    vc);
                                 l1_read_addr_in3 += bias_single_tile_size_bytes;
-                                l1_write_addr_in3 += bias_single_tile_size_bytes;
+                                cb_write_offset_in3 += bias_single_tile_size_bytes;
                                 in3_block_size_bytes += bias_single_tile_size_bytes;
                             }
                             // Advance L1 offset in bias tile bytes, not in1 stride bytes.

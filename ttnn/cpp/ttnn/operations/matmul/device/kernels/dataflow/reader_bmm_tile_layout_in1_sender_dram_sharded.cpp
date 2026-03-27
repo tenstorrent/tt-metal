@@ -68,23 +68,29 @@ void kernel_main() {
 #endif
 
     //  READER
-    uint32_t l1_write_addr_in1;
     uint32_t l1_read_addr_in1 = 0;
     constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
-
-    uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in1_tensor_addr);
-    noc_async_read_one_packet_set_state<true>(in1_base_addr, in1_page_size, vc);
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
 
 #ifdef ARCH_GRAYSKULL
+    noc.set_async_read_state<Noc::VcSelection::CUSTOM, in1_page_size>(
+        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, vc);
+
     for (uint32_t block = 0; block < num_blocks; ++block) {
         // Operand 1
         cb_in1.reserve_back(in1_block_num_tiles);
-        l1_write_addr_in1 = cb_in1.get_write_ptr();
+        uint32_t cb_write_offset = 0;
 
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc_async_read_one_packet_with_state<true, true>(in1_base_addr + l1_read_addr_in1, l1_write_addr_in1, vc);
+            noc.async_read_with_state<Noc::VcSelection::CUSTOM, in1_page_size>(
+                dram_bank,
+                cb_in1,
+                in1_page_size,
+                {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
+                {.offset_bytes = cb_write_offset},
+                vc);
             l1_read_addr_in1 += in1_page_size;
-            l1_write_addr_in1 += in1_page_size;
+            cb_write_offset += in1_page_size;
         }
 
         noc.async_read_barrier();
@@ -100,19 +106,23 @@ void kernel_main() {
     cb_in1.reserve_back(in1_block_num_tiles);
     uint32_t l1_write_addr_in1_offset = 0;
     uint32_t l1_write_addr_in1_start = cb_in1.get_write_ptr();
-    l1_write_addr_in1 = l1_write_addr_in1_start;
+    uint32_t l1_write_addr_in1 = l1_write_addr_in1_start;
     for (uint32_t block = 0; block < num_blocks; ++block) {
-        noc_async_read_set_trid(curr_block_trid);
-
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc_async_read_one_packet_with_state_with_trid(
-                in1_base_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
+            noc.async_read<Noc::TxnIdMode::ENABLED, in1_page_size>(
+                dram_bank,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                in1_page_size,
+                {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
+                {},
+                vc,
+                curr_block_trid);
             l1_read_addr_in1 += in1_page_size;
             l1_write_addr_in1 += in1_page_size;
         }
 
         if (num_free_blocks_in_buffer == 2) {
-            noc_async_read_barrier_with_trid(block_trid_to_wait);
+            noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
             cb_in1.push_back(in1_block_num_tiles);
             // wait for next block trid
             block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
@@ -132,23 +142,26 @@ void kernel_main() {
         l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
     }
     // last block to wait
-    noc_async_read_barrier_with_trid(block_trid_to_wait);
+    noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
     cb_in1.push_back(in1_block_num_tiles);
 #endif
 
 #ifdef FUSE_BIAS
     // Operand 1
     cb_in3.reserve_back(in1_block_w);
-    uint32_t l1_write_addr_in3 = cb_in3.get_write_ptr();
     uint32_t l1_read_addr_in3 = 0;
-
-    uint64_t in3_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in3_tensor_addr);
-    noc_async_read_one_packet_set_state<true>(in3_base_addr, in3_page_size, vc);
+    uint32_t cb_write_offset_in3 = 0;
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
-        noc_async_read_one_packet_with_state<true, true>(in3_base_addr + l1_read_addr_in3, l1_write_addr_in3, vc);
+        noc.async_read<Noc::TxnIdMode::DISABLED, in3_page_size>(
+            dram_bank,
+            cb_in3,
+            in3_page_size,
+            {.bank_id = dram_bank_id, .addr = in3_tensor_addr + l1_read_addr_in3},
+            {.offset_bytes = cb_write_offset_in3},
+            vc);
         l1_read_addr_in3 += in3_page_size;
-        l1_write_addr_in3 += in3_page_size;
+        cb_write_offset_in3 += in3_page_size;
     }
 
     // Barrier! make sure the reads are done

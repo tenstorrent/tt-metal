@@ -21,7 +21,7 @@ void kernel_main() {
     constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(2);
     constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(3);
     // in0 mcast args
-    uint32_t in0_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(5));
+    constexpr uint32_t in0_mcast_receiver_semaphore_id = get_compile_time_arg_val(5);
     constexpr uint32_t in0_mcast_num_dests = get_compile_time_arg_val(6);
     constexpr uint32_t in0_mcast_num_cores = get_compile_time_arg_val(7);
     // block args
@@ -32,7 +32,7 @@ void kernel_main() {
     constexpr uint32_t in0_mcast_dest_noc_end_x = get_compile_time_arg_val(11);
     constexpr uint32_t in0_mcast_dest_noc_end_y = get_compile_time_arg_val(12);
     // in0 semaphore always valid
-    uint32_t in0_mcast_sender_valid_semaphore = get_semaphore(get_compile_time_arg_val(13));
+    constexpr uint32_t in0_mcast_sender_valid_semaphore_id = get_compile_time_arg_val(13);
 
     constexpr uint32_t num_blocks_per_shard = get_compile_time_arg_val(14);
     constexpr uint32_t num_storage_cores = num_blocks / num_blocks_per_shard;
@@ -61,7 +61,7 @@ void kernel_main() {
     experimental::CircularBuffer cb_in0(cb_id_in0);
     experimental::CircularBuffer cb_in2(cb_id_in2);
     experimental::Semaphore<> sender_sem(get_compile_time_arg_val(4));
-    experimental::Semaphore<> receiver_sem(get_compile_time_arg_val(5));
+    experimental::Semaphore<> receiver_sem(in0_mcast_receiver_semaphore_id);
 
     uint32_t l1_write_addr_in0;
 
@@ -69,13 +69,6 @@ void kernel_main() {
     receiver_sem.set(VALID);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
-
-    const uint64_t in0_mcast_receiver_semaphore_noc_addr = get_noc_multicast_addr(
-        in0_mcast_dest_noc_start_x,
-        in0_mcast_dest_noc_start_y,
-        in0_mcast_dest_noc_end_x,
-        in0_mcast_dest_noc_end_y,
-        in0_mcast_receiver_semaphore_addr);
 
     uint32_t local_read_addr = cb_in2.get_read_ptr();
 
@@ -185,8 +178,14 @@ void kernel_main() {
                      .addr = l1_write_addr_in0},
                     true);
 #endif
-                noc_semaphore_set_multicast_loopback_src(
-                    in0_mcast_sender_valid_semaphore, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
+                receiver_sem.set(VALID);
+                receiver_sem.set_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                    noc,
+                    in0_mcast_dest_noc_start_x,
+                    in0_mcast_dest_noc_start_y,
+                    in0_mcast_dest_noc_end_x,
+                    in0_mcast_dest_noc_end_y,
+                    in0_mcast_num_cores);
 
                 local_read_addr += in0_block_size_bytes;
 
