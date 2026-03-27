@@ -187,6 +187,8 @@ class LTXPipeline:
         self.text_encoder: GemmaTokenizerEncoderPair | None = None
         self.gemma_encoder = None  # TTNN Gemma encoder (device)
         self.gemma_tokenizer = None
+        self.video_connector = None  # EmbeddingsConnector for video
+        self.audio_connector = None  # EmbeddingsConnector for audio
         self.vae_decoder = None  # LTXVideoDecoder or LTXVideoDecoderTorch
 
         # Cached device tensors (computed once, reused across steps)
@@ -283,7 +285,7 @@ class LTXPipeline:
         self,
         checkpoint: str = "google/gemma-3-12b-it",
         *,
-        sequence_length: int = 256,
+        sequence_length: int = 1024,
         hidden_layer_index: int = -1,
     ) -> None:
         """Load Gemma text encoder (torch-only). Fallback when reference encode_prompts is not available."""
@@ -301,7 +303,7 @@ class LTXPipeline:
         *,
         num_layers: int = 48,
         hidden_layer_index: int = -1,
-        sequence_length: int = 256,
+        sequence_length: int = 1024,
     ) -> None:
         """Load TTNN Gemma-3 text encoder on device. 13x faster than CPU torch.
 
@@ -349,21 +351,186 @@ class LTXPipeline:
         logger.info(f"Loaded TTNN Gemma encoder ({num_layers}L) in {__import__('time').time()-t0:.0f}s")
 
         self.gemma_tokenizer = AutoTokenizer.from_pretrained(gemma_path)
+        # Use left-padding matching the reference FeatureExtractorV2 pipeline.
+        # Left-padding: [PAD, ..., PAD, BOS, real tokens]. With causal SDPA,
+        # real tokens at the end attend to everything including padding positions.
+        # The reference handles this the same way (padding hidden states are zeroed
+        # out after encoding via attention_mask).
         self._gemma_hidden_layer_index = hidden_layer_index
         self._gemma_sequence_length = sequence_length
 
-    def encode_prompts_device(self, prompts: list[str]) -> tuple[torch.Tensor, ...]:
-        """Encode prompts using the TTNN Gemma encoder on device.
+    def load_embeddings_connectors(
+        self,
+        checkpoint_state: dict[str, torch.Tensor],
+        *,
+        gemma_hidden_size: int = 3840,
+        gemma_num_layers: int = 49,  # embedding layer + 48 decoder layers
+        video_num_blocks: int = 8,
+        audio_num_blocks: int = 2,
+        video_dim: int = 4096,
+        audio_dim: int = 2048,
+        num_heads: int = 32,
+    ) -> None:
+        """Load video and audio embeddings connectors from the LTX-2 checkpoint.
 
-        Returns tuple of (video_embeds, audio_embeds) for each prompt.
-        For LTX-2, video_embeds shape is (1, seq_len, 4096) and
-        audio_embeds is (1, seq_len, 2048) — extracted from Gemma hidden states.
-
-        Note: The LTX-2 reference pipeline uses a separate embeddings_connector
-        to project Gemma hidden states to video/audio dims. This method returns
-        the raw hidden states which need connector projection.
+        Checkpoint keys:
+        - text_embedding_projection.video_aggregate_embed.{weight,bias} → video connector aggregate_embed
+        - text_embedding_projection.audio_aggregate_embed.{weight,bias} → audio connector aggregate_embed
+        - model.diffusion_model.video_embeddings_connector.* → video connector blocks + norm
+        - model.diffusion_model.audio_embeddings_connector.* → audio connector blocks + norm
         """
+        from ...encoders.gemma.embeddings_connector import EmbeddingsConnector
+        from ...parallel.config import EncoderParallelConfig
 
+        input_dim = gemma_hidden_size * gemma_num_layers
+
+        # Use same TP as DiT transformer
+        tp_factor = self.parallel_config.tensor_parallel.factor
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        enc_parallel = EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis))
+        enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
+
+        # --- Video connector ---
+        self.video_connector = EmbeddingsConnector(
+            input_dim=input_dim,
+            output_dim=video_dim,
+            num_blocks=video_num_blocks,
+            num_heads=num_heads,
+            mesh_device=self.mesh_device,
+            ccl_manager=enc_ccl,
+            parallel_config=enc_parallel,
+        )
+
+        # Build state dict for video connector
+        video_sd = {}
+        # aggregate_embed from text_embedding_projection prefix
+        agg_prefix = "text_embedding_projection.video_aggregate_embed."
+        for k, v in checkpoint_state.items():
+            if k.startswith(agg_prefix):
+                video_sd["aggregate_embed." + k[len(agg_prefix) :]] = v
+
+        # Connector blocks from model.diffusion_model prefix
+        conn_prefix = "model.diffusion_model.video_embeddings_connector."
+        for k, v in checkpoint_state.items():
+            if k.startswith(conn_prefix):
+                video_sd[k[len(conn_prefix) :]] = v
+
+        result = self.video_connector.load_torch_state_dict(video_sd, strict=False)
+        if result.missing_keys:
+            logger.warning(f"Video connector missing keys: {result.missing_keys}")
+        if result.unexpected_keys:
+            logger.warning(f"Video connector unexpected keys: {result.unexpected_keys}")
+        logger.info(f"Loaded video embeddings connector ({video_num_blocks} blocks, dim={video_dim})")
+
+        # --- Audio connector ---
+        if self.mode == "av":
+            self.audio_connector = EmbeddingsConnector(
+                input_dim=input_dim,
+                output_dim=audio_dim,
+                num_blocks=audio_num_blocks,
+                num_heads=num_heads,
+                mesh_device=self.mesh_device,
+                ccl_manager=enc_ccl,
+                parallel_config=enc_parallel,
+            )
+
+            audio_sd = {}
+            agg_prefix = "text_embedding_projection.audio_aggregate_embed."
+            for k, v in checkpoint_state.items():
+                if k.startswith(agg_prefix):
+                    audio_sd["aggregate_embed." + k[len(agg_prefix) :]] = v
+
+            conn_prefix = "model.diffusion_model.audio_embeddings_connector."
+            for k, v in checkpoint_state.items():
+                if k.startswith(conn_prefix):
+                    sub = k[len(conn_prefix) :]
+                    # Filter out blocks beyond audio_num_blocks
+                    if sub.startswith("transformer_1d_blocks."):
+                        block_idx = int(sub.split(".")[1])
+                        if block_idx >= audio_num_blocks:
+                            continue
+                    audio_sd[sub] = v
+
+            result = self.audio_connector.load_torch_state_dict(audio_sd, strict=False)
+            if result.missing_keys:
+                logger.warning(f"Audio connector missing keys: {result.missing_keys}")
+            if result.unexpected_keys:
+                logger.warning(f"Audio connector unexpected keys: {result.unexpected_keys}")
+            logger.info(f"Loaded audio embeddings connector ({audio_num_blocks} blocks, dim={audio_dim})")
+
+    @staticmethod
+    def _norm_and_concat_per_token_rms(
+        hidden_states: list[torch.Tensor],
+        attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Per-token RMS normalization matching FeatureExtractorV2.
+
+        Args:
+            hidden_states: List of L tensors, each (B, T, D)
+            attention_mask: (B, T) binary mask
+
+        Returns:
+            (B, T, D*L) normalized and flattened tensor with padding zeroed.
+        """
+        # Stack: [B, T, D, L]
+        encoded = torch.stack(hidden_states, dim=-1)
+        B, T, D, L = encoded.shape
+        # Per-token RMS norm over D dimension per layer
+        variance = torch.mean(encoded**2, dim=2, keepdim=True)  # [B,T,1,L]
+        normed = encoded * torch.rsqrt(variance + 1e-6)
+        normed = normed.reshape(B, T, D * L)
+        # Zero out padding positions
+        mask_3d = attention_mask.bool().unsqueeze(-1)  # [B, T, 1]
+        return torch.where(mask_3d, normed, torch.zeros_like(normed))
+
+    @staticmethod
+    def _replace_padded_with_registers(
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor,
+        learnable_registers: torch.Tensor,
+        num_registers: int,
+    ) -> torch.Tensor:
+        """Replace padded tokens with tiled learnable registers.
+
+        Matching reference Embeddings1DConnector._replace_padded_with_learnable_registers:
+        - Non-padded tokens are kept and left-packed
+        - Remaining positions filled with tiled learnable registers
+        """
+        seq_len = hidden_states.shape[1]
+        num_duplications = seq_len // num_registers
+        registers = learnable_registers.repeat(num_duplications, 1)  # (seq_len, dim)
+
+        # Binary mask: 1 = real token, 0 = padding
+        mask_binary = attention_mask.bool()  # (B, T)
+
+        result = hidden_states.clone()
+        for b in range(hidden_states.shape[0]):
+            real_tokens = hidden_states[b, mask_binary[b], :]  # (n_real, dim)
+            n_real = real_tokens.shape[0]
+            pad_length = seq_len - n_real
+            # Pack real tokens first, then registers
+            padded = torch.nn.functional.pad(real_tokens, (0, 0, 0, pad_length))
+            # Flip: registers at the beginning (where attention_mask was 0 = left-padded)
+            flipped_mask = torch.flip(mask_binary[b : b + 1], dims=[1]).squeeze(0).unsqueeze(-1).int()
+            result[b] = flipped_mask.float() * padded + (1 - flipped_mask.float()) * registers.to(padded)
+
+        return result
+
+    @staticmethod
+    def _rescale_norm(x: torch.Tensor, target_dim: int, source_dim: int) -> torch.Tensor:
+        """Rescale normalization: x * sqrt(target_dim / source_dim)."""
+        return x * math.sqrt(target_dim / source_dim)
+
+    def encode_prompts_device(self, prompts: list[str]) -> list[tuple[torch.Tensor, torch.Tensor | None]]:
+        """Encode prompts using TTNN Gemma encoder + embeddings connectors.
+
+        Matches the reference FeatureExtractorV2 pipeline:
+        1. Gemma forward → collect all 49 hidden states
+        2. Stack as [B, T, D, L] → per-token RMS norm → flatten to [B, T, D*L]
+        3. Rescale → aggregate_embed → connector blocks → final norm
+
+        Returns list of (video_embeds, audio_embeds) tuples per prompt.
+        """
         assert self.gemma_encoder is not None, "Call load_gemma_encoder() first"
 
         results = []
@@ -383,16 +550,121 @@ class LTXPipeline:
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
 
-            hidden_states = self.gemma_encoder(tt_ids)
-            # Extract the desired layer's hidden states
-            hs = hidden_states[self._gemma_hidden_layer_index]
-            hs_torch = ttnn.to_torch(ttnn.get_device_tensors(hs)[0]).float()
+            all_hidden_states = self.gemma_encoder(tt_ids, attention_mask=tokens.attention_mask)
 
-            # Apply attention mask (zero out padding tokens)
-            mask = tokens.attention_mask.unsqueeze(-1).float()
-            hs_torch = hs_torch * mask
+            if self.video_connector is not None:
+                # Collect 49 hidden states (embedding + 48 layers, skip final norm)
+                # Concat on device to avoid 49 separate D2H transfers
+                hs_list = all_hidden_states[:-1]
+                tt_stacked = ttnn.concat(hs_list, dim=-1)  # (B, seq, D*L) on device
+                stacked_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_stacked)[0]).float()
+                # Free device memory
+                for hs in all_hidden_states:
+                    ttnn.deallocate(hs)
+                ttnn.deallocate(tt_stacked)
 
-            results.append(hs_torch)
+                # FeatureExtractorV2: per-token RMS norm + flatten
+                # Reshape to [B, T, D, L] for per-token per-layer normalization
+                B_enc, T_enc = stacked_torch.shape[0], stacked_torch.shape[1]
+                D_gemma = 3840  # Gemma hidden size
+                L_layers = len(hs_list)  # 49
+                encoded = stacked_torch.reshape(B_enc, T_enc, D_gemma, L_layers)
+                variance = torch.mean(encoded**2, dim=2, keepdim=True)
+                normed = encoded * torch.rsqrt(variance + 1e-6)
+                normed = normed.reshape(B_enc, T_enc, D_gemma * L_layers)
+                mask_3d = tokens.attention_mask.bool().unsqueeze(-1)
+                normed = torch.where(mask_3d, normed, torch.zeros_like(normed)).bfloat16()
+
+                # Rescale and run through connectors
+                # Reference FeatureExtractorV2 uses Gemma hidden_size (3840) as embedding_dim
+                embedding_dim = D_gemma  # 3840 (NOT D*L=188160)
+
+                def _run_connector(connector, normed_features, attn_mask):
+                    """Run rescale → aggregate_embed → register replacement → RoPE blocks → norm."""
+                    dim = connector.output_dim
+                    rescaled = self._rescale_norm(normed_features.float(), dim, embedding_dim).bfloat16()
+
+                    # Run aggregate_embed on device
+                    tt_input = ttnn.from_torch(
+                        rescaled,
+                        device=self.mesh_device,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ttnn.bfloat16,
+                    )
+                    tt_projected = connector.aggregate_embed(tt_input)
+                    projected = ttnn.to_torch(ttnn.get_device_tensors(tt_projected)[0])
+
+                    # Replace padded tokens with learnable registers (on host, matching reference)
+                    if connector.num_learnable_registers > 0:
+                        registers = ttnn.to_torch(ttnn.get_device_tensors(connector.learnable_registers.data)[0])
+                        projected = self._replace_padded_with_registers(
+                            projected,
+                            attn_mask,
+                            registers,
+                            connector.num_learnable_registers,
+                        )
+
+                    # Compute 1D RoPE for connector blocks (matching reference Embeddings1DConnector).
+                    # Uses reference precompute_freqs_cis directly since 1D grid format differs from
+                    # our video/audio 4D grid convention.
+                    import sys
+
+                    sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+                    from ltx_core.model.transformer.rope import LTXRopeType as RefRopeType
+                    from ltx_core.model.transformer.rope import generate_freq_grid_pytorch
+                    from ltx_core.model.transformer.rope import precompute_freqs_cis as ref_precompute
+
+                    seq_len = projected.shape[1]
+                    num_heads = connector.transformer_1d_blocks[0].num_heads
+                    indices_grid = torch.arange(seq_len, dtype=torch.float32)[None, None, :]
+                    rope_cos, rope_sin = ref_precompute(
+                        indices_grid,
+                        dim=dim,
+                        out_dtype=torch.bfloat16,
+                        theta=10000.0,
+                        max_pos=[1],
+                        num_attention_heads=num_heads,
+                        rope_type=RefRopeType.INTERLEAVED,
+                        freq_grid_generator=generate_freq_grid_pytorch,
+                    )  # INTERLEAVED: (1, seq_len, dim) — applied to flat Q/K before head split
+
+                    # Push back to device and run transformer blocks with RoPE
+                    tt_x = ttnn.from_torch(
+                        projected.bfloat16(),
+                        device=self.mesh_device,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ttnn.bfloat16,
+                    )
+                    for block in connector.transformer_1d_blocks:
+                        tt_x = block(tt_x, rope_cos=rope_cos, rope_sin=rope_sin)
+
+                    # Final parameter-free RMS norm
+                    from ...encoders.gemma.embeddings_connector import _rms_norm
+
+                    tt_x = _rms_norm(tt_x)
+                    result = ttnn.to_torch(ttnn.get_device_tensors(tt_x)[0]).float()
+
+                    # NOTE: Do NOT zero out register positions here. The reference
+                    # FeatureExtractorV2 replaces padding with learnable registers
+                    # and then sets attention_mask to all-zeros (= no masking), so
+                    # all 1024 tokens (real + register) carry information after the
+                    # connector blocks.
+                    return result
+
+                video_embeds = _run_connector(self.video_connector, normed, tokens.attention_mask)
+
+                audio_embeds = None
+                if self.audio_connector is not None:
+                    audio_embeds = _run_connector(self.audio_connector, normed, tokens.attention_mask)
+
+                results.append((video_embeds, audio_embeds))
+            else:
+                # Fallback: return raw hidden states from specified layer
+                hs = all_hidden_states[self._gemma_hidden_layer_index]
+                hs_torch = ttnn.to_torch(ttnn.get_device_tensors(hs)[0]).float()
+                mask = tokens.attention_mask.unsqueeze(-1).float()
+                hs_torch = hs_torch * mask
+                results.append((hs_torch, None))
 
         return results
 
@@ -525,6 +797,17 @@ class LTXPipeline:
                 vae_state[k[len("vae.decoder.") :]] = v
             elif k.startswith("vae.per_channel_statistics."):
                 vae_state[k[len("vae.") :]] = v
+
+        # Embeddings connector keys (for lazy loading alongside Gemma encoder)
+        has_connectors = any(
+            k.startswith("text_embedding_projection.")
+            or k.startswith("model.diffusion_model.video_embeddings_connector.")
+            for k in raw
+        )
+        if has_connectors:
+            self._connector_checkpoint_path = checkpoint_path
+            logger.info("Embeddings connector weights detected in checkpoint (saved for lazy loading)")
+
         del raw
 
         # Store VAE config for lazy loading (avoids exceeding DRAM when both
@@ -560,6 +843,17 @@ class LTXPipeline:
         )
         self.vae_decoder.load_torch_state_dict(vae_state)
         logger.info(f"Loaded TTNN VAE decoder ({len(self._vae_decoder_blocks)} blocks)")
+
+    def load_connectors_from_checkpoint(self) -> None:
+        """Load embeddings connectors from saved checkpoint. Call after Gemma encoder is loaded."""
+        if not hasattr(self, "_connector_checkpoint_path"):
+            logger.warning("No connector checkpoint path saved — skipping connector loading")
+            return
+        from safetensors.torch import load_file
+
+        raw = load_file(self._connector_checkpoint_path)
+        self.load_embeddings_connectors(raw)
+        del raw
 
     def decode_latents(self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int) -> torch.Tensor:
         """Decode latent tensor to video pixels.
@@ -1054,33 +1348,85 @@ class LTXPipeline:
     def export_video(self, video_pixels: torch.Tensor, output_path: str, fps: int = 24, audio=None) -> None:
         """Export decoded video (and optionally audio) to MP4.
 
-        Matches reference encode_video: correct [-1,1] → uint8 conversion.
+        Matches reference ltx_pipelines.utils.media_io.encode_video exactly:
+        - H.264 video with yuv420p pixel format
+        - AAC audio stream (if audio provided)
+        - Correct [-1,1] → uint8 conversion
 
         Args:
             video_pixels: (B, C, F, H, W) from decode_latents(), range [-1, 1]
             output_path: output .mp4 path
             fps: frame rate
-            audio: Audio object from decode_audio_reference(), or None
+            audio: object with .waveform (torch.Tensor) and .sampling_rate (int), or None
         """
-        try:
-            import sys
+        from fractions import Fraction
 
-            sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-            from ltx_pipelines.utils.media_io import encode_video
+        import av
 
-            # Convert to reference format: (F, H, W, C) uint8
-            frames = (((video_pixels[0] + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
-            frames = frames.permute(1, 2, 3, 0)  # (F, H, W, C)
+        # Convert to (F, H, W, C) uint8
+        frames = (((video_pixels[0] + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
+        frames = frames.permute(1, 2, 3, 0).cpu().numpy()  # (F, H, W, C)
 
-            encode_video(video=frames, fps=fps, audio=audio, output_path=output_path, video_chunks_number=1)
-            logger.info(f"Saved: {output_path} ({frames.shape[0]}f @ {fps}fps)")
-        except ImportError:
-            import imageio
+        _, height, width, _ = frames.shape
 
-            frames = (((video_pixels[0] + 1.0) / 2.0).clamp(0.0, 1.0) * 255.0).to(torch.uint8)
-            frames = frames.permute(1, 2, 3, 0).numpy()
-            writer = imageio.get_writer(output_path, fps=fps)
-            for f in frames:
-                writer.append_data(f)
-            writer.close()
-            logger.info(f"Saved (no audio): {output_path} ({frames.shape[0]}f @ {fps}fps)")
+        container = av.open(output_path, mode="w")
+        stream = container.add_stream("libx264", rate=int(fps))
+        stream.width = width
+        stream.height = height
+        stream.pix_fmt = "yuv420p"
+
+        # Prepare audio stream if provided
+        audio_stream = None
+        if audio is not None:
+            audio_stream = container.add_stream("aac", rate=audio.sampling_rate)
+            audio_stream.codec_context.sample_rate = audio.sampling_rate
+            audio_stream.codec_context.layout = "stereo"
+            audio_stream.codec_context.time_base = Fraction(1, audio.sampling_rate)
+
+        # Write video frames
+        for frame_array in frames:
+            frame = av.VideoFrame.from_ndarray(frame_array, format="rgb24")
+            for packet in stream.encode(frame):
+                container.mux(packet)
+
+        # Flush video encoder
+        for packet in stream.encode():
+            container.mux(packet)
+
+        # Write audio if provided
+        if audio is not None and audio_stream is not None:
+            samples = audio.waveform
+            if samples.ndim == 1:
+                samples = samples[:, None]
+            if samples.shape[1] != 2 and samples.shape[0] == 2:
+                samples = samples.T
+            if samples.shape[1] != 2:
+                logger.warning(f"Audio has {samples.shape[1]} channels, expected 2 — duplicating mono")
+                samples = samples[:, :1].repeat(1, 2)
+
+            if samples.dtype != torch.int16:
+                samples = torch.clip(samples, -1.0, 1.0)
+                samples = (samples * 32767.0).to(torch.int16)
+
+            frame_in = av.AudioFrame.from_ndarray(
+                samples.contiguous().reshape(1, -1).cpu().numpy(),
+                format="s16",
+                layout="stereo",
+            )
+            frame_in.sample_rate = audio.sampling_rate
+
+            # Resample to encoder format and write
+            cc = audio_stream.codec_context
+            resampler = av.audio.resampler.AudioResampler(
+                format=cc.format or "fltp",
+                layout=cc.layout or "stereo",
+                rate=cc.sample_rate or audio.sampling_rate,
+            )
+            for resampled in resampler.resample(frame_in):
+                for packet in audio_stream.encode(resampled):
+                    container.mux(packet)
+            for packet in audio_stream.encode():
+                container.mux(packet)
+
+        container.close()
+        logger.info(f"Saved: {output_path} ({frames.shape[0]}f @ {fps}fps)")
