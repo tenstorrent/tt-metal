@@ -24,7 +24,8 @@ import torch
 import ttnn
 
 
-from models.common.utility_functions import comp_pcc, skip_with_llk_assert
+from models.common.utility_functions import skip_with_llk_assert
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 # ---------------------------------------------------------------------------
@@ -66,10 +67,16 @@ def cores(x1, y1, x2=None, y2=None):
 
 
 def check_pcc(golden, tt_tensor, pcc=0.98, label=""):
-    """to_torch + comp_pcc + assert."""
+    """to_torch + assert_numeric_metrics."""
     result = ttnn.to_torch(tt_tensor)
-    passing, actual_pcc = comp_pcc(golden, result, pcc=pcc)
-    assert passing, f"{label} PCC: {actual_pcc}"
+    assert_numeric_metrics(
+        golden,
+        result,
+        pcc_threshold=pcc,
+        rtol=0.08,
+        atol=0.08,
+        frobenius_threshold=0.08,
+    )
 
 
 def tt(t, device):

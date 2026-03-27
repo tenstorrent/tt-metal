@@ -11,7 +11,7 @@ import ttnn
 from models.common.utility_functions import tt2torch_tensor
 
 from loguru import logger
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
@@ -123,10 +123,14 @@ def run_distributed_layernorm(
     # reference impl
     out_torch = reference_layernorm(canon_inp, gamma, beta, epsilon, is_rmsnorm)
 
-    passing, output_str = comp_allclose(tt_output_host, out_torch, rtol=1e-1, atol=1e-01)
-    logger.debug(f"torch vs tt distributed layernorm = {output_str}")
-
-    assert passing
+    assert_numeric_metrics(
+        out_torch,
+        tt_output_host,
+        rtol=0.1,
+        atol=0.1,
+        frobenius_threshold=0.15,
+        pcc_threshold=0.999,
+    )
 
 
 inp_shapes = [

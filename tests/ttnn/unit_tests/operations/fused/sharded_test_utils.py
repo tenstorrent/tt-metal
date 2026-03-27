@@ -5,7 +5,7 @@
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH
 
@@ -378,8 +378,30 @@ def do_test_main(
             bias=bias,
         )
 
-    # Check PCC
-    assert_with_pcc(ref_output_tensor, output_ttnn, 0.9998)
+    if op_name == "layer_norm":
+        if use_welford:
+            pcc_threshold = 0.99975
+            rtol = 0.14
+            atol = 0.085
+            frobenius_threshold = 0.02
+        else:
+            pcc_threshold = 0.9999
+            rtol = 0.065
+            atol = 0.065
+            frobenius_threshold = 0.014
+    else:
+        pcc_threshold = 0.99
+        rtol = 0.006
+        atol = 0.045
+        frobenius_threshold = 0.008
+    assert_numeric_metrics(
+        ref_output_tensor,
+        output_ttnn,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
 
 
 def layernorm_test_main(

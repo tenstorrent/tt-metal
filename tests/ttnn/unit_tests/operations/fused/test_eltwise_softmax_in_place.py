@@ -7,7 +7,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 
 
@@ -34,10 +34,14 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
     )
 
     # compare tt and golden outputs
-    success, pcc_value = comp_pcc(ref_value, tt_result)
-    logger.debug(pcc_value)
-
-    assert success
+    assert_numeric_metrics(
+        ref_value,
+        tt_result,
+        pcc_threshold=0.999,
+        rtol=0.03,
+        atol=0.02,
+        frobenius_threshold=0.02,
+    )
 
 
 test_sweep_args = [

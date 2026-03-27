@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 import math
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import skip_if_not_blackhole_20_cores
 from models.common.utility_functions import is_blackhole, is_watcher_enabled, run_for_blackhole
 
@@ -106,7 +106,24 @@ def run_group_norm_DRAM(
     if not perf_test_mode:
         output_tensor = ttnn.from_device(output_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
+        if use_welford:
+            pcc_threshold = 0.9996
+            rtol = 0.14
+            atol = 0.085
+            frobenius_threshold = 0.02
+        else:
+            pcc_threshold = 0.9997
+            rtol = 0.065
+            atol = 0.065
+            frobenius_threshold = 0.014
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=pcc_threshold,
+            rtol=rtol,
+            atol=atol,
+            frobenius_threshold=frobenius_threshold,
+        )
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -309,7 +326,14 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        tt_output_tensor,
+        pcc_threshold=0.9997,
+        rtol=0.065,
+        atol=0.065,
+        frobenius_threshold=0.014,
+    )
 
 
 def _nearest_32_per_core(x, core):
@@ -398,4 +422,11 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor[:, :, : H * W, :C], 0.9994)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor[:, :, : H * W, :C],
+        pcc_threshold=0.9994,
+        rtol=0.09,
+        atol=0.09,
+        frobenius_threshold=0.03,
+    )

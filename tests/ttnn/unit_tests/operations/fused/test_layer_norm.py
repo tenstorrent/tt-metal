@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose, assert_relative_frobenius
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_allclose, assert_relative_frobenius
 from dataclasses import dataclass
 
 pytestmark = pytest.mark.use_module_device
@@ -344,9 +344,15 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # Non-fp32 accumulation is inaccurate, so we'll just compare pcc
-    # to make sure it captures the general trend
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
+    # Non-fp32 accumulation is inaccurate; keep PCC and relax element-wise norms.
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.97,
+        rtol=0.2,
+        atol=0.2,
+        frobenius_threshold=0.15,
+    )
 
 
 @pytest.mark.parametrize(
@@ -447,7 +453,14 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
     if dtype == ttnn.bfloat16:
         assert_output_accuracy(torch_output, tt_output_torch)
     elif dtype == ttnn.bfloat8_b:
-        assert_with_pcc(torch_output, tt_output_torch, pcc=0.987)
+        assert_numeric_metrics(
+            torch_output,
+            tt_output_torch,
+            pcc_threshold=0.987,
+            rtol=0.15,
+            atol=0.15,
+            frobenius_threshold=0.12,
+        )
 
 
 @pytest.mark.parametrize("h", [32, 2999, 32 * 64 + 18])

@@ -9,10 +9,8 @@ from loguru import logger
 
 from models.common.utility_functions import (
     skip_for_wormhole_b0,
-    comp_allclose_and_pcc,
-    comp_pcc,
-    comp_allclose,
 )
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 from models.common.utility_functions import tt2torch_tensor
 
@@ -237,39 +235,47 @@ def run_pre_allgather_layernorm(
             tt_pre_allgather_torch = ttnn.to_torch(tt_pre_allgather_output).to(torch.bfloat16)
             if fuse_residual:
                 tt_residual_add_output = ttnn.to_torch(tt_input_tensor).to(torch.bfloat16)
-                does_pass, pcc_residual_add = comp_pcc(
-                    torch_input_chunks[d], tt_residual_add_output, pcc=min_pcc_residual_add
+                assert_numeric_metrics(
+                    torch_input_chunks[d],
+                    tt_residual_add_output,
+                    pcc_threshold=min_pcc_residual_add,
+                    rtol=0.05,
+                    atol=0.05,
+                    frobenius_threshold=0.05,
                 )
-                assert (
-                    does_pass
-                ), f"PCC of residual add test failed: {pcc_residual_add} (threshold : {min_pcc_residual_add})"
 
             if is_rmsnorm:
                 tt_ex2 = tt_pre_allgather_torch[..., :1]
                 torch_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
-                _, pcc_ex2 = comp_pcc(tt_ex2, torch_ex2, pcc=min_pcc_ex2)
-                atol_delta_ex2 = torch.max(torch.abs(torch_ex2 - tt_ex2)).item()
-                assert pcc_ex2 >= min_pcc_ex2, f"PCC of E(x^2) test failed: {pcc_ex2} (threshold: {min_pcc_ex2})"
-                assert torch.allclose(
-                    tt_ex2, torch_ex2, atol=max_atol_ex2
-                ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
+                assert_numeric_metrics(
+                    torch_ex2,
+                    tt_ex2,
+                    pcc_threshold=min_pcc_ex2,
+                    rtol=0.05,
+                    atol=max_atol_ex2,
+                    frobenius_threshold=0.15,
+                )
             else:
                 tt_ex = tt_pre_allgather_torch[..., :1]
                 tt_ex2 = tt_pre_allgather_torch[..., 32:33]
                 torch_ex = torch.mean(torch_input_chunks[d], dim=-1, keepdim=True)
                 torch_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
-                _, pcc_ex = comp_pcc(tt_ex, torch_ex, pcc=min_pcc_ex)
-                _, pcc_ex2 = comp_pcc(tt_ex2, torch_ex2, pcc=min_pcc_ex2)
-                atol_delta_ex = torch.max(torch.abs(torch_ex - tt_ex)).item()
-                atol_delta_ex2 = torch.max(torch.abs(torch_ex2 - tt_ex2)).item()
-                assert pcc_ex >= min_pcc_ex, f"PCC of E(x) test failed: {pcc_ex} (threshold: {min_pcc_ex})"
-                assert pcc_ex2 >= min_pcc_ex2, f"PCC of E(x^2) test failed: {pcc_ex2} (threshold: {min_pcc_ex2})"
-                assert torch.allclose(
-                    tt_ex, torch_ex, atol=max_atol_ex
-                ), f"E(x) mismatch for device {d} (atol: {atol_delta_ex})"
-                assert torch.allclose(
-                    tt_ex2, torch_ex2, atol=max_atol_ex2
-                ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
+                assert_numeric_metrics(
+                    torch_ex,
+                    tt_ex,
+                    pcc_threshold=min_pcc_ex,
+                    rtol=0.05,
+                    atol=max_atol_ex,
+                    frobenius_threshold=0.15,
+                )
+                assert_numeric_metrics(
+                    torch_ex2,
+                    tt_ex2,
+                    pcc_threshold=min_pcc_ex2,
+                    rtol=0.05,
+                    atol=max_atol_ex2,
+                    frobenius_threshold=0.15,
+                )
 
     assert device.cache_entries_counter.total == 2, "Program cache not working as expected"
     logger.info("Pre-allgather layernorm test passed for all devices")
@@ -441,11 +447,14 @@ def test_post_allgather_layernorm(
         )
         tt_output_torch = ttnn.to_torch(tt_output_tensor).to(torch.bfloat16)
 
-        _, pcc_out = comp_pcc(torch_output_chunks[d], tt_output_torch, pcc=min_pcc)
-        atol_delta = torch.max(torch.abs(torch_output_chunks[d] - tt_output_torch)).item()
-
-        assert pcc_out >= min_pcc, f"PCC test failed for device {d}: {pcc_out} (threshold: {min_pcc})"
-        assert atol_delta <= max_atol, f"Max Atol exceeded for device {d}: {atol_delta} (allowed: {max_atol})"
+        assert_numeric_metrics(
+            torch_output_chunks[d],
+            tt_output_torch,
+            pcc_threshold=min_pcc,
+            rtol=0.05,
+            atol=max_atol,
+            frobenius_threshold=0.15,
+        )
 
     logger.info("Post-allgather layernorm test passed for all devices")
 
@@ -550,9 +559,11 @@ def test_simulated_distributed_layernorm(
     tt_output_torch = torch.cat(tt_output_chunks, dim=-1)
 
     # Compare results
-    _, pcc_out = comp_pcc(torch_output_tensor, tt_output_torch, pcc=min_pcc)
-    all_close_passing = torch.allclose(torch_output_tensor, tt_output_torch, atol=max_atol, equal_nan=False)
-    atol_delta = torch.max(torch.abs(torch_output_tensor - tt_output_torch)).item()
-
-    assert pcc_out >= min_pcc, f"PCC test failed: {pcc_out} (threshold: {min_pcc})"
-    assert atol_delta <= max_atol, f"Max Atol exceeded: {atol_delta} (allowed: {max_atol})"
+    assert_numeric_metrics(
+        torch_output_tensor,
+        tt_output_torch,
+        pcc_threshold=min_pcc,
+        rtol=0.05,
+        atol=max_atol,
+        frobenius_threshold=0.15,
+    )

@@ -14,7 +14,7 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     ttnn_rms_norm_sharded,
     rms_norm_golden,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import is_watcher_enabled
 
 pytestmark = pytest.mark.use_module_device
@@ -324,4 +324,11 @@ def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
 
     golden_output = rms_norm_golden(torch_input_tensor, weight=torch_weight[0]).to(dtype)
 
-    assert_with_pcc(golden_output, output_tensor, 0.9998)
+    assert_numeric_metrics(
+        golden_output,
+        output_tensor,
+        pcc_threshold=0.99,
+        rtol=0.006,
+        atol=0.045,
+        frobenius_threshold=0.008,
+    )

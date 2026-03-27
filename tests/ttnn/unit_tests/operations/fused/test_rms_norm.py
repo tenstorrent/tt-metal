@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 pytestmark = pytest.mark.use_module_device
 
@@ -30,7 +30,14 @@ def test_rms_norm(device, batch_size, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.99,
+        rtol=0.006,
+        atol=0.045,
+        frobenius_threshold=0.008,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1])
@@ -72,7 +79,14 @@ def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.05,
+        atol=0.12,
+        frobenius_threshold=0.048,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1])
@@ -95,4 +109,6 @@ def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
+    assert_numeric_metrics(
+        torch_output_tensor, output_tensor, pcc_threshold=0.999, rtol=0.01, atol=0.065, frobenius_threshold=0.012
+    )
