@@ -61,6 +61,7 @@ void kernel_main() {
     {
         uint32_t pos_addr = get_common_arg_val<uint32_t>(1);
         volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pos_addr);
+        invalidate_l1_cache();
         op.set_local_cur_pos(args, pos_ptr[0]);
     }
 #endif
