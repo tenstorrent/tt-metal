@@ -250,6 +250,24 @@ def _build_ttnn_modules(
     return ttnn_encoder, ttnn_decoder, ttnn_postnet, decoder_config
 
 
+def _open_ttnn_device(
+    device_id: int,
+    l1_small_size: int,
+    trace_region_size: int,
+    num_command_queues: int,
+    enable_program_cache: bool,
+):
+    device = ttnn.open_device(
+        device_id=device_id,
+        l1_small_size=l1_small_size,
+        trace_region_size=trace_region_size,
+        num_command_queues=num_command_queues,
+    )
+    if enable_program_cache:
+        device.enable_program_cache()
+    return device
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="SpeechT5-VC Stage-1 cloud validation")
     parser.add_argument("--input_wavs", nargs="+", required=True, help="Input source wav files (mono 16 kHz)")
@@ -265,6 +283,34 @@ def parse_args():
     parser.add_argument("--report_json", default="./vc_stage1_report.json", help="Output report JSON path")
 
     parser.add_argument("--device_id", type=int, default=0, help="TT device id")
+    parser.add_argument(
+        "--l1_small_size",
+        type=int,
+        default=24576,
+        help="L1 small allocation bytes (lower default helps avoid L1 clashes on multi-chip runs)",
+    )
+    parser.add_argument(
+        "--trace_region_size",
+        type=int,
+        default=15000000,
+        help="Trace region size in bytes",
+    )
+    parser.add_argument(
+        "--num_command_queues",
+        type=int,
+        default=2,
+        help="Number of command queues",
+    )
+    parser.add_argument(
+        "--disable_program_cache",
+        action="store_true",
+        help="Disable TT program cache (useful for debugging memory/program-cache issues)",
+    )
+    parser.add_argument(
+        "--retry_on_l1_clash",
+        action="store_true",
+        help="If L1 clash occurs, reopen device with smaller l1_small_size and retry once",
+    )
     parser.add_argument("--max_steps", type=int, default=800)
     parser.add_argument("--stop_threshold", type=float, default=0.5)
     parser.add_argument("--min_steps", type=int, default=10)
@@ -322,13 +368,14 @@ def main():
         print(f"Loading speaker model: {args.speaker_model_id}")
         speaker_extractor, speaker_model = _build_speaker_embedder(args.speaker_model_id)
 
-    device = ttnn.open_device(
+    current_l1_small_size = int(args.l1_small_size)
+    device = _open_ttnn_device(
         device_id=args.device_id,
-        l1_small_size=300000,
-        trace_region_size=15000000,
-        num_command_queues=1,
+        l1_small_size=current_l1_small_size,
+        trace_region_size=args.trace_region_size,
+        num_command_queues=args.num_command_queues,
+        enable_program_cache=not args.disable_program_cache,
     )
-    device.enable_program_cache()
 
     try:
         ttnn_encoder, ttnn_decoder, ttnn_postnet, decoder_config = _build_ttnn_modules(
@@ -348,19 +395,60 @@ def main():
             attention_mask = inputs.get("attention_mask", None)
 
             # TTNN path
-            tt_mel, tt_stats = generate_mel_with_ttnn(
-                input_values=input_values,
-                attention_mask=attention_mask,
-                hf_model=hf_model,
-                ttnn_encoder=ttnn_encoder,
-                ttnn_decoder=ttnn_decoder,
-                ttnn_postnet=ttnn_postnet,
-                decoder_config=decoder_config,
-                device=device,
-                max_steps=args.max_steps,
-                stop_threshold=args.stop_threshold,
-                min_steps=args.min_steps,
-            )
+            run_error = None
+            tt_mel = None
+            tt_stats = None
+            for attempt in range(2):
+                try:
+                    tt_mel, tt_stats = generate_mel_with_ttnn(
+                        input_values=input_values,
+                        attention_mask=attention_mask,
+                        hf_model=hf_model,
+                        ttnn_encoder=ttnn_encoder,
+                        ttnn_decoder=ttnn_decoder,
+                        ttnn_postnet=ttnn_postnet,
+                        decoder_config=decoder_config,
+                        device=device,
+                        max_steps=args.max_steps,
+                        stop_threshold=args.stop_threshold,
+                        min_steps=args.min_steps,
+                    )
+                    run_error = None
+                    break
+                except RuntimeError as err:
+                    run_error = err
+                    err_text = str(err)
+                    l1_clash = "clash with L1 buffers" in err_text
+                    can_retry = attempt == 0 and args.retry_on_l1_clash and l1_clash and current_l1_small_size > 8192
+                    if not can_retry:
+                        break
+
+                    next_l1_small_size = max(8192, current_l1_small_size // 2)
+                    if next_l1_small_size == current_l1_small_size:
+                        break
+
+                    print(
+                        f"L1 clash detected. Retrying sample with smaller l1_small_size: "
+                        f"{current_l1_small_size} -> {next_l1_small_size}"
+                    )
+                    ttnn.close_device(device)
+                    current_l1_small_size = next_l1_small_size
+                    device = _open_ttnn_device(
+                        device_id=args.device_id,
+                        l1_small_size=current_l1_small_size,
+                        trace_region_size=args.trace_region_size,
+                        num_command_queues=args.num_command_queues,
+                        enable_program_cache=not args.disable_program_cache,
+                    )
+                    ttnn_encoder, ttnn_decoder, ttnn_postnet, decoder_config = _build_ttnn_modules(
+                        hf_model=hf_model,
+                        speaker_embeddings=speaker_embeddings,
+                        device=device,
+                        max_steps=args.max_steps,
+                    )
+
+            if run_error is not None:
+                raise run_error
 
             vocoder_start = time.time()
             with torch.no_grad():
@@ -505,6 +593,11 @@ def main():
                 "input_wavs": args.input_wavs,
                 "speaker_embedding": args.speaker_embedding,
                 "speaker_index": args.speaker_index,
+                "device_id": args.device_id,
+                "l1_small_size": current_l1_small_size,
+                "trace_region_size": args.trace_region_size,
+                "num_command_queues": args.num_command_queues,
+                "program_cache_enabled": not args.disable_program_cache,
                 "asr_model_id": None if args.skip_wer else args.asr_model_id,
                 "speaker_model_id": None if args.skip_speaker_similarity else args.speaker_model_id,
                 "token_cosine_threshold": args.token_cosine_threshold,

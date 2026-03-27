@@ -172,7 +172,8 @@ def generate_mel_with_ttnn(
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        # Keep large encoder inputs in DRAM to reduce L1 pressure on long utterances.
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     encoder_start = time.time()
@@ -247,21 +248,14 @@ def generate_mel_with_ttnn(
         all_mel_outputs.append(mel_output_torch)
 
         if step >= min_steps:
-            sigmoid_logits = ttnn.sigmoid(stop_logits, memory_config=ttnn.L1_MEMORY_CONFIG)
-            sum_prob = ttnn.sum(sigmoid_logits, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-            should_stop = ttnn.ge(sum_prob, stop_threshold, memory_config=ttnn.L1_MEMORY_CONFIG)
-            if ttnn.to_torch(ttnn.sum(should_stop)).item() > 0:
+            # Stop check on CPU avoids extra TT kernels in the hot loop and improves throughput.
+            stop_probs = torch.sigmoid(ttnn.to_torch(stop_logits))
+            if torch.any(torch.sum(stop_probs, dim=-1) >= stop_threshold).item():
                 break
 
         # Feed last generated frame back into the decoder.
-        current_mel_ttnn = ttnn.slice(
-            mel_output_ttnn,
-            [decoder_config.reduction_factor - 1, 0],
-            [decoder_config.reduction_factor, decoder_config.num_mel_bins],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        decoder_input_ttnn = ttnn.unsqueeze(current_mel_ttnn, 0)
-        decoder_input = ttnn.to_torch(decoder_input_ttnn)
+        # Keep this on CPU to avoid additional TT tensor ops every decode step.
+        decoder_input = mel_output_torch[-1:, :].unsqueeze(0).to(torch.float32)
 
     mel_spectrogram = torch.cat(all_mel_outputs, dim=0).unsqueeze(0)
 
@@ -291,6 +285,9 @@ def convert_voice(
     stop_threshold: float,
     min_steps: int,
     perf_report_path: Optional[str],
+    l1_small_size: int,
+    trace_region_size: int,
+    num_command_queues: int,
 ):
     """Run end-to-end SpeechT5 voice conversion."""
     print("Loading HuggingFace SpeechT5-VC models...")
@@ -310,9 +307,9 @@ def convert_voice(
     print("Initializing TTNN device...")
     device = ttnn.open_device(
         device_id=device_id,
-        l1_small_size=300000,
-        trace_region_size=15000000,
-        num_command_queues=1,
+        l1_small_size=l1_small_size,
+        trace_region_size=trace_region_size,
+        num_command_queues=num_command_queues,
     )
     device.enable_program_cache()
 
@@ -424,6 +421,24 @@ def parse_args():
         help="Path to target speaker x-vector (.npy or .pt). If omitted, CMU Arctic default is used.",
     )
     parser.add_argument("--device_id", type=int, default=0, help="TT device id")
+    parser.add_argument(
+        "--l1_small_size",
+        type=int,
+        default=24576,
+        help="L1 small allocation bytes (lower default helps avoid L1 clashes on multi-chip runs)",
+    )
+    parser.add_argument(
+        "--trace_region_size",
+        type=int,
+        default=15000000,
+        help="Trace region size in bytes",
+    )
+    parser.add_argument(
+        "--num_command_queues",
+        type=int,
+        default=2,
+        help="Number of command queues",
+    )
     parser.add_argument("--max_steps", type=int, default=800, help="Maximum decoder steps")
     parser.add_argument("--stop_threshold", type=float, default=0.5, help="Stop token sigmoid threshold")
     parser.add_argument("--min_steps", type=int, default=10, help="Minimum generation steps before stop check")
@@ -446,6 +461,9 @@ def main():
         stop_threshold=args.stop_threshold,
         min_steps=args.min_steps,
         perf_report_path=args.perf_report,
+        l1_small_size=args.l1_small_size,
+        trace_region_size=args.trace_region_size,
+        num_command_queues=args.num_command_queues,
     )
 
 
