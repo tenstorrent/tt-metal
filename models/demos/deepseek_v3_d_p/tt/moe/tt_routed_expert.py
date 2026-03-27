@@ -245,23 +245,20 @@ class TtRoutedExpert(LightweightModule):
         return tt_weight
 
     def _expert_ffn(
-        self,
-        x: ttnn.Tensor,
-        gate_proj: ttnn.Tensor,
-        up_proj: ttnn.Tensor,
-        down_proj: ttnn.Tensor,
+        self, x: ttnn.Tensor, gate_proj: ttnn.Tensor, up_proj: ttnn.Tensor, down_proj: ttnn.Tensor, out: ttnn.Tensor
     ) -> ttnn.Tensor:
         """
         Single expert FFN computation.
 
         Args:
-            x: Input tensor (batch, tokens, emb_dim)
+            x: Input tensor (1, tokens, emb_dim)
             gate_proj: Gate projection weight (emb_dim, hidden_dim)
             up_proj: Up projection weight (emb_dim, hidden_dim)
             down_proj: Down projection weight (hidden_dim, emb_dim)
+            out: Output tensor for matmul result (1, tokens, emb_dim)
 
         Returns:
-            Output tensor (batch, tokens, emb_dim)
+            Output tensor (1, tokens, emb_dim)
         """
         # gate_out = x @ gate_proj
         gate_out = ttnn.matmul(
@@ -282,6 +279,7 @@ class TtRoutedExpert(LightweightModule):
             down_proj,
             program_config=self.down_program_config,
             compute_kernel_config=self.compute_kernel_config,
+            optional_output_tensor=out,
         )
 
         return output
@@ -315,13 +313,14 @@ class TtRoutedExpert(LightweightModule):
         # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
         # We process expert by expert and reassemble
 
-        expert_outputs_list = []
+        # expert_outputs = ttnn.empty_like(dispatched_buffer)
+        expert_outputs = ttnn.clone(dispatched_buffer)
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
 
             # Extract tokens for this expert
             # Shape: (max_tokens, emb_dim)
-            tokens = dispatched_buffer[local_expert, :, :]
+            tokens = ttnn.narrow(dispatched_buffer, dim=0, start=local_expert, length=1)
             logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
             # Run FFN
@@ -330,17 +329,11 @@ class TtRoutedExpert(LightweightModule):
                 self.gate_projs[local_expert],
                 self.up_projs[local_expert],
                 self.down_projs[local_expert],
+                out=ttnn.narrow(expert_outputs, dim=0, start=local_expert, length=1),
             )
             logger.debug(f"Expert {local_expert}: output shape {output.shape}")
 
-            # Add expert dimension back
-            # Shape: (1, max_tokens, emb_dim)
-            output = ttnn.unsqueeze(output, dim=0)
-            expert_outputs_list.append(output)
-
-        # Concatenate along expert dimension
         # Shape: (experts_per_chip, max_tokens, emb_dim)
-        expert_outputs = ttnn.concat(expert_outputs_list, dim=0)
         logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
 
         return expert_outputs
