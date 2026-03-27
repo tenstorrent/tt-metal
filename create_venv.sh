@@ -341,6 +341,15 @@ uv pip install --extra-index-url "$PYTORCH_INDEX" \
     --no-build-isolation \
     -r "$(pwd)/tt_metal/python_env/requirements-dev.txt"
 
+echo "Installing tt-triage dependiencies"
+uv pip install --index-strategy unsafe-best-match -r "$(pwd)/tools/triage/requirements.txt"
+
+echo "Checking packages are compatible"
+if ! uv pip check; then
+    echo -e "\033[1;31mERROR: Package compatibility check failed. See above for details.\033[0m" >&2
+    exit 1
+fi
+
 echo "Installing tt-metal"
 uv pip install -e .
 
