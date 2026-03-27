@@ -76,6 +76,8 @@ class Qwen35Model:
 
         self.vocab_size = args.vocab_size
         self._use_paged_cache = False
+        self._paged_kv_caches = None
+        self._attention_layer_indices = [i for i in range(args.n_layers) if args.is_full_attention_layer(i)]
 
     @classmethod
     def from_pretrained(cls, device, checkpoint_dir, max_batch_size=1, max_seq_len=2048):
@@ -554,6 +556,120 @@ class Qwen35Model:
                 layer.attention.reset_cache()
             else:
                 layer.attention.reset_state(batch_size)
+
+    def set_paged_kv_caches(self, kv_caches):
+        """Attach paged KV caches to the 8 attention layers."""
+        self._paged_kv_caches = kv_caches
+        for cache_idx, layer_idx in enumerate(self._attention_layer_indices):
+            k_cache, v_cache = kv_caches[cache_idx]
+            self.layers[layer_idx].attention.set_paged_kv_cache(k_cache, v_cache)
+
+    def _fill_paged_cache_from_prefill(self, page_table):
+        """Transfer concat-based K/V into paged cache after prefill.
+
+        Processes one layer at a time to avoid holding all 8 layers' concat K/V
+        simultaneously (~1GB at 64K tokens).
+        """
+        for cache_idx, layer_idx in enumerate(self._attention_layer_indices):
+            attn = self.layers[layer_idx].attention
+            if attn.past_key is not None:
+                k_cache, v_cache = self._paged_kv_caches[cache_idx]
+                ttnn.experimental.paged_fill_cache(k_cache, attn.past_key, page_table, batch_idx=0)
+                ttnn.experimental.paged_fill_cache(v_cache, attn.past_value, page_table, batch_idx=0)
+                ttnn.deallocate(attn.past_key)
+                ttnn.deallocate(attn.past_value)
+                attn.past_key = None
+                attn.past_value = None
+
+    def prefill_paged(self, token_ids, page_table):
+        """Prefill using existing concat-based attention, then fill paged cache.
+
+        Args:
+            token_ids: torch.Tensor [B, T] token IDs
+            page_table: ttnn.Tensor [B, max_blocks_per_seq] int32 on device
+        Returns:
+            logits: ttnn.Tensor [B, 1, vocab_size]
+        """
+        B, T = token_ids.shape
+        self.reset_state(batch_size=B)
+
+        # Use existing prefill (concat-based K/V for SDPA)
+        if T > 1024:
+            logits = self.prefill_layer_chunked(token_ids, chunk_size=1024)
+        else:
+            token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
+            x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
+            ttnn.deallocate(token_ids_ttnn)
+
+            position_ids = torch.arange(T).unsqueeze(0).expand(B, -1)
+            cos, sin = self.rope.get_rot_mats(position_ids)
+
+            for layer in self.layers:
+                x = layer.forward(x, cos=cos, sin=sin, mode="prefill")
+
+            x = rms_norm_ttnn(x, self.norm_weight, eps=self.norm_eps)
+            x_last = x[:, -1:, :]
+            logits = ttnn.linear(x_last, self.lm_head_weight)
+            ttnn.deallocate(x)
+
+        # Fill paged cache from accumulated concat K/V
+        self._fill_paged_cache_from_prefill(page_table)
+
+        # Prepare DeltaNet for decode (fuse conv states)
+        for layer in self.layers:
+            if not layer.is_full_attention:
+                dn = layer.attention
+                if dn.fused_conv_state is None and dn.conv_state_q is not None:
+                    dn.fused_conv_state = ttnn.concat([dn.conv_state_q, dn.conv_state_k, dn.conv_state_v], dim=2)
+                    dn.fused_conv_state = ttnn.to_layout(dn.fused_conv_state, ttnn.TILE_LAYOUT)
+
+        return logits
+
+    def decode_paged(self, token_ids, current_pos, page_table):
+        """Single-token decode using paged KV cache.
+
+        Args:
+            token_ids: torch.Tensor [B, 1] token IDs
+            current_pos: int -- current position in the sequence
+            page_table: ttnn.Tensor [B, max_blocks_per_seq] int32 on device
+        Returns:
+            logits: ttnn.Tensor [B, 1, vocab_size]
+        """
+        B = token_ids.shape[0]
+
+        token_ids_ttnn = ttnn.from_torch(token_ids, dtype=ttnn.uint32, device=self.device)
+        x = ttnn.embedding(token_ids_ttnn, self.tok_embeddings, layout=ttnn.TILE_LAYOUT)
+        ttnn.deallocate(token_ids_ttnn)
+
+        position_ids = torch.full((B, 1), current_pos, dtype=torch.long)
+        cos, sin = self.rope.get_rot_mats(position_ids)
+
+        # cur_pos_tensor shape [B] for paged ops (NOT [B*n_kv] like the non-paged path)
+        cur_pos_tensor = ttnn.from_torch(
+            torch.full((B,), current_pos, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+        )
+
+        for layer in self.layers:
+            if layer.is_full_attention:
+                x = layer.forward(
+                    x,
+                    cos=cos,
+                    sin=sin,
+                    mode="decode",
+                    position_tensor=cur_pos_tensor,
+                    page_table=page_table,
+                )
+            else:
+                x = layer.forward(x, cos=cos, sin=sin, mode="decode")
+
+        x = rms_norm_ttnn(x, self.norm_weight, eps=self.norm_eps)
+        logits = ttnn.linear(x, self.lm_head_weight)
+        ttnn.deallocate(x)
+
+        return logits
 
     def _save_deltanet_states(self):
         """Save DeltaNet recurrent + conv states to CPU for restoration after trace capture."""
