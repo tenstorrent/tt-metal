@@ -135,6 +135,9 @@ def flat_map_bypass(func, data):
     elif isinstance(data, list):
         return [flat_map_bypass(func, x) for x in data]
     return func(data)
+def safe_permute(tensor, dims):
+    """Thin wrapper around ``ttnn.permute`` for symbiote modules (single import site)."""
+    return ttnn.permute(tensor, tuple(dims))
 
 
 def optimized_tree_map_with_only_dict_list(*args, **kwargs):
