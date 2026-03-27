@@ -1,4 +1,4 @@
-name: "(Demo) Model Status for Deploy"
+name: "(Demo) Model Status for Console Deployment"
 
 on:
   workflow_dispatch:
