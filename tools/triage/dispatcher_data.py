@@ -78,9 +78,14 @@ def create_l1_mem_access(location: OnChipCoordinate) -> MemoryAccess:
     with private_address set, so private_address being None signals the DRAM case.
     """
     l1 = location.noc_block.noc_memory_map.find_by_name("l1")
-    if l1 is not None and l1.memory_block.address.noc_address is not None and l1.memory_block.address.private_address is None:
+    if (
+        l1 is not None
+        and l1.memory_block.address.noc_address is not None
+        and l1.memory_block.address.private_address is None
+    ):
         return _DramL1MemoryAccess(location)
     return MemoryAccess.create_l1(location)
+
 
 script_config = ScriptConfig(
     data_provider=True,
@@ -171,6 +176,11 @@ class DispatcherData:
             device_unique_id = run_checks.devices[0].unique_id
 
             build_env = self._build_env_cache[device_unique_id]
+            # Cache DRAM RISC enable flag if provided by Inspector (optional field for forward/backward compat)
+            try:
+                self._drisc_enabled_flag: bool | None = bool(build_env.dramProgrammableCoresEnabled)
+            except Exception:
+                self._drisc_enabled_flag = None
             # Use build_env for initial firmware paths
             brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
             idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
@@ -318,9 +328,16 @@ class DispatcherData:
             self.use_rpc_kernel_find = False
             return self.kernels[watcher_kernel_id]
         raise TTTriageError(f"Kernel {watcher_kernel_id} not found in inspector data.")
-    
+
     def drisc_enabled(self) -> bool:
-        return self._drisc_elf is not None
+        if hasattr(self, "_drisc_enabled_flag") and self._drisc_enabled_flag is not None:
+            return self._drisc_enabled_flag
+        return False
+
+    def risc_enabled(self, risc_name: str) -> bool:
+        if risc_name == "drisc":
+            return self.drisc_enabled()
+        return True
 
     def get_cached_core_data(self, location: OnChipCoordinate, risc_name: str) -> DispatcherCoreData:
         key = (location, risc_name)
@@ -376,7 +393,7 @@ class DispatcherData:
                 programmable_core_type = self._ProgrammableCoreTypes_ACTIVE_ETH
                 enum_values = self._enum_values_eth
             case "dram":
-                if self._drisc_elf is None or not self._enum_values_dram:
+                if self._drisc_elf is None or not self._enum_values_dram or not self._drisc_enabled_flag:
                     raise TTTriageError("DRISC ELF not available for DRAM block type (Blackhole only)")
                 programmable_core_type = self._ProgrammableCoreTypes_DRAM
                 enum_values = self._enum_values_dram

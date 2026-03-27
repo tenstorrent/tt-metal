@@ -94,12 +94,11 @@ def try_read_magic_with_dispatcher_data(
     except TimeoutDeviceRegisterError:
         raise
     except Exception as e:
-        if risc_name != "drisc":
-            log_check_location(
-                location,
-                False,
-                f"{risc_name}: Failed to read core_magic_number from mailbox: {e}",
-            )
+        log_check_location(
+            location,
+            False,
+            f"{risc_name}: Failed to read core_magic_number from mailbox: {e}",
+        )
         return None
 
 
@@ -125,6 +124,9 @@ def check_core_magic(
     Check if the core_magic_number matches the expected firmware type.
     If mismatch, try other firmware types to identify what's actually present.
     """
+    if not dispatcher_data.risc_enabled(risc_name):
+        return
+
     expected_magic, expected_type = get_expected_magic_for_location(location, magic_values, run_checks)
 
     # Read the magic number from the expected mailbox location

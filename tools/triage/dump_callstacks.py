@@ -41,10 +41,10 @@ def dump_callstacks(
     show_all_cores: bool = False,
 ) -> CallstacksData | None:
     try:
+        if not callstack_provider.dispatcher_data.risc_enabled(risc_name):
+            return None
         # Skip DONE cores unless --all-cores is specified
         if not show_all_cores:
-            if risc_name == "drisc" and not callstack_provider.dispatcher_data.drisc_enabled():
-                return None
             dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
             if dispatcher_core_data.go_message == "DONE":
                 return None
