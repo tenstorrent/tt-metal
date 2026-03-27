@@ -1,0 +1,141 @@
+ Block-Sharded RMS Norm — Design Plan
+
+  Math
+
+  For each row vector x of length W:
+  y = x * rsqrt(sum(x²) / W + ε)
+
+  Block Sharding & The Cross-Core Problem
+
+           Core(0,0)       Core(0,1)       Core(0,2)
+          ┌───────────┬───────────┬───────────┐
+  Row 0   │ shard_W   │ shard_W   │ shard_W   │  ← same tensor rows, W split across 3 cores
+          │ tiles     │ tiles     │ tiles     │
+          ├───────────┼───────────┼───────────┤
+  Row 1   │           │           │           │  ← different tensor rows (independent)
+          └───────────┴───────────┴───────────┘
+
+  - Core grid: R rows × C columns
+  - Each core's shard: [shard_H_tiles, shard_W_tiles]
+  - Cores in the same grid row hold adjacent W-slices of the same tensor rows → they must communicate to compute the full-row sum of squares
+  - Grid rows are independent — no communication needed between them
+
+  Algorithm (per tile-row of the shard)
+
+  ┌───────┬─────────────────────────────────────────────────────────────────────────────┬───────────────────────────────┬────────────────────────┐
+  │ Phase │                                    What                                     │             Where             │     Communication      │
+  ├───────┼─────────────────────────────────────────────────────────────────────────────┼───────────────────────────────┼────────────────────────┤
+  │ 1     │ Read shard_W_tiles input tiles from local shard                             │ Reader → cb_input             │ None                   │
+  ├───────┼─────────────────────────────────────────────────────────────────────────────┼───────────────────────────────┼────────────────────────┤
+  │ 2     │ Square each tile, reduce_row → 1 partial-sum tile                           │ Compute                       │ None                   │
+  ├───────┼─────────────────────────────────────────────────────────────────────────────┼───────────────────────────────┼────────────────────────┤
+  │ 3     │ All-gather: each core multicasts its partial to all C peers in the grid row │ Writer (send) / Reader (recv) │ Multicast + semaphores │
+  ├───────┼─────────────────────────────────────────────────────────────────────────────┼───────────────────────────────┼────────────────────────┤
+  │ 4     │ Sum C partials → multiply by 1/W → add ε → rsqrt → inv_rms (column vector)  │ Compute                       │ None                   │
+  ├───────┼─────────────────────────────────────────────────────────────────────────────┼───────────────────────────────┼────────────────────────┤
+  │ 5     │ Re-read input tiles, multiply each by inv_rms → output                      │ Reader + Compute              │ None                   │
+  ├───────┼─────────────────────────────────────────────────────────────────────────────┼───────────────────────────────┼────────────────────────┤
+  │ 6     │ Write output tiles to output shard                                          │ Writer                        │ None                   │
+  └───────┴─────────────────────────────────────────────────────────────────────────────┴───────────────────────────────┴────────────────────────┘
+
+  Multicast Strategy (Phase 3)
+
+  All-to-all within each grid row:
+
+  1. Each core writes its partial-sum tile to a unique slot (offset core_col * tile_size) in cb_remote_partials on every peer core using noc_async_write_multicast
+  2. After writing, each core does noc_semaphore_inc on every peer to signal arrival
+  3. Each core waits for semaphore == C-1 (all peers have written)
+  4. Write own partial to its own slot locally (no NoC needed)
+  5. Compute sums all C slots
+
+  This allows all cores to multicast simultaneously — no sequential round-robin.
+
+  Circular Buffer Layout
+
+  ┌────────────────────┬───────┬────────────────────────────────────┬────────────────────────────┬─────────────────────┬─────────────────────┐
+  │         CB         │ Index │              Purpose               │        Size (tiles)        │      Producer       │      Consumer       │
+  ├────────────────────┼───────┼────────────────────────────────────┼────────────────────────────┼─────────────────────┼─────────────────────┤
+  │ cb_input           │ 0     │ Input tiles (read twice)           │ 2 (double-buf)             │ Reader              │ Compute             │
+  ├────────────────────┼───────┼────────────────────────────────────┼────────────────────────────┼─────────────────────┼─────────────────────┤
+  │ cb_output          │ 16    │ Normalized output tiles            │ 2 (double-buf)             │ Compute             │ Writer              │
+  ├────────────────────┼───────┼────────────────────────────────────┼────────────────────────────┼─────────────────────┼─────────────────────┤
+  │ cb_sq              │ 24    │ Squared tiles before reduce        │ shard_W_tiles (full block) │ Compute P1          │ Compute P1          │
+  ├────────────────────┼───────┼────────────────────────────────────┼────────────────────────────┼─────────────────────┼─────────────────────┤
+  │ cb_partial         │ 25    │ Local partial sum (1 tile)         │ 1                          │ Compute             │ Writer (mcast send) │
+  ├────────────────────┼───────┼────────────────────────────────────┼────────────────────────────┼─────────────────────┼─────────────────────┤
+  │ cb_remote_partials │ 26    │ Gathered partials from all C cores │ C                          │ Reader (mcast recv) │ Compute P3          │
+  ├────────────────────┼───────┼────────────────────────────────────┼────────────────────────────┼─────────────────────┼─────────────────────┤
+  │ cb_scaler          │ 27    │ 1/W scaler tile                    │ 1                          │ Reader (once)       │ Compute P3          │
+  ├────────────────────┼───────┼────────────────────────────────────┼────────────────────────────┼─────────────────────┼─────────────────────┤
+  │ cb_inv_rms         │ 28    │ rsqrt(mean + ε) column vector      │ 1                          │ Compute P3          │ Compute P4          │
+  └────────────────────┴───────┴────────────────────────────────────┴────────────────────────────┴─────────────────────┴─────────────────────┘
+
+  Critical sizing: cb_sq must hold shard_W_tiles because square and reduce_row are sequential compute helpers — the reduce can't start consuming until all squares are produced.
+
+  Kernel Roles
+
+  Reader (BRISC, NoC0):
+  - Pre-loads 1/W scaler tile into cb_scaler
+  - Per tile-row: reads shard_W_tiles from local shard → cb_input
+  - Receives multicast partials from peers (semaphore wait)
+  - Re-reads input tiles for Phase 5
+
+  Compute (TRISC):
+  - Phase 1: mul_tiles (square) → cb_sq, then reduce<SUM, ROW> → cb_partial
+  - Phase 3: Sum C partials from cb_remote_partials, multiply by scaler, add ε, rsqrt_tile → cb_inv_rms
+  - Phase 4: mul_tiles_bcast_cols(cb_input, cb_inv_rms) → cb_output
+
+  Writer (T6, NoC1):
+  - Per tile-row: waits for cb_partial, multicasts to all peers in grid row
+  - Increments semaphore on peers after multicast
+  - Writes cb_output tiles to output shard
+
+  Runtime Arguments Per Core
+
+  ┌──────────────────────────────────────────────────┬───────────────────────────────────────────────────────────────┐
+  │                       Arg                        │                            Purpose                            │
+  ├──────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+  │ core_row, core_col                               │ Position in grid                                              │
+  ├──────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+  │ num_cores_in_row (C)                             │ For multicast and partial count                               │
+  ├──────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+  │ shard_H_tiles, shard_W_tiles                     │ Shard dimensions                                              │
+  ├──────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+  │ total_W                                          │ For scaler computation                                        │
+  ├──────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+  │ mcast_dest_noc_start_x/y, mcast_dest_noc_end_x/y │ Grid row multicast endpoints (excluding self)                 │
+  ├──────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+  │ noc_coords_table[C]                              │ Physical (x,y) for each core in the row (for targeted writes) │
+  ├──────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+  │ shard_addr_in, shard_addr_out                    │ L1 shard base addresses                                       │
+  ├──────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────┤
+  │ semaphore_addr                                   │ L1 semaphore for multicast sync                               │
+  └──────────────────────────────────────────────────┴───────────────────────────────────────────────────────────────┘
+
+  Testing Milestones
+
+  ┌─────┬───────────────────────────────────────────┬────────────────────────────────────────────────┬────────────────────────────────────────────────────────┬──────────────────────┐
+  │  #  │                   Name                    │                  What's added                  │                       Reference                        │      Tolerance       │
+  ├─────┼───────────────────────────────────────────┼────────────────────────────────────────────────┼────────────────────────────────────────────────────────┼──────────────────────┤
+  │ 1   │ Data pipeline                             │ Reader → Writer passthrough (no compute)       │ output == input                                        │ Exact                │
+  ├─────┼───────────────────────────────────────────┼────────────────────────────────────────────────┼────────────────────────────────────────────────────────┼──────────────────────┤
+  │ 2   │ Square + local reduce                     │ Compute square + reduce_row, write partial sum │ torch.sum(shard**2, dim=-1)                            │ rtol=1e-2            │
+  ├─────┼───────────────────────────────────────────┼────────────────────────────────────────────────┼────────────────────────────────────────────────────────┼──────────────────────┤
+  │ 3   │ Full RMS Norm (single core column)        │ Full norm, C=1, no multicast needed            │ x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + eps) │ rtol=1e-2, atol=1e-3 │
+  ├─────┼───────────────────────────────────────────┼────────────────────────────────────────────────┼────────────────────────────────────────────────────────┼──────────────────────┤
+  │ 4   │ Full RMS Norm (multi-core, block sharded) │ Add multicast exchange, C>1                    │ Same as above                                          │ rtol=1e-2, atol=1e-3 │
+  └─────┴───────────────────────────────────────────┴────────────────────────────────────────────────┴────────────────────────────────────────────────────────┴──────────────────────┘
+
+  Key Risks & Gotchas
+
+  1. cb_sq must hold full block — sequential helpers (square, reduce_row) cannot pipeline since both own all 3 TRISCs. The intermediate CB must hold all shard_W_tiles tiles.
+  2. Scaler packing format — The 1/W scaler for reduce<SUM, ROW> needs to be a tile with the value packed in specific positions. Use generate_bcast_unpad_scalar or equivalent packing utility.
+  3. Column-vector broadcast — inv_rms is a column vector (one value per tile-row). The final multiply must use bcast_col semantics (mul_tiles_bcast<BcastType::COL>), not element-wise mul.
+  4. Multicast when C=1 — Skip the entire all-gather phase. Guard with if (num_cores_in_row > 1).
+  5. Input read twice — Block-sharded data lives in L1, so re-reading is cheap (L1→L1). No DRAM round-trip.
+  6. Deadlock risk — All cores in a row multicast simultaneously. The receive CB (cb_remote_partials) must be pre-allocated with enough space for all C tiles before any core starts writing. Semaphore must be initialized to 0 before the loop.
+  7. noc_async_write_multicast vs _loopback_src — A core should NOT include itself in the multicast destination range. Write its own partial locally instead, or use _loopback_src if self is in the range.
+  8. Epsilon addition — After computing mean(x²), add ε before rsqrt, not after. Common mistake.
+
+  ---
+  Want me to proceed with producing a formal op_design.md, or refine any aspect of this plan first?
