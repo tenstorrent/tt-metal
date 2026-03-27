@@ -118,7 +118,9 @@ class TT_CCL:
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
             # 256 and 512 added to support short prompts (128-256, 257-512 tokens) so they don't pad
             # all the way to 1024, which fills the KV cache with 847 EOS tokens and causes incoherence.
-            self.support_seqlens = [8192, 4096, 2048, 1024, 512, 256, 128]
+            # OLMo: 8K removed - async CCL deadlocks even with pre-allocated buffers.
+            # 8K will run in eager mode with sync CCL like 16K+.
+            self.support_seqlens = [4096, 2048, 1024, 512, 256, 128]
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
@@ -1240,7 +1242,7 @@ class TT_CCL:
                 cluster_axis=cluster_axis,
                 memory_config=memory_config,
                 topology=ttnn.Topology.Ring,
-                num_links=num_links,
+                num_links=1,  # Force num_links=1 for sync CCL (multi-link can deadlock)
                 subdevice_id=None,
             )
         else:
@@ -1375,7 +1377,7 @@ class TT_CCL:
                 dim,
                 cluster_axis=cluster_axis,
                 topology=ttnn.Topology.Ring,
-                num_links=num_links,
+                num_links=1,  # Force num_links=1 for sync CCL (multi-link can deadlock)
                 memory_config=memory_config,
             )
         else:

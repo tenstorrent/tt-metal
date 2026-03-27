@@ -793,6 +793,42 @@ TT_FATAL: Out of Memory: Not enough space to allocate 226492416 B DRAM buffer
 
 ---
 
+### 2026-03-25 — ISL Sweep Re-verification (Session 16)
+
+**Status**: 8K ISL PASS, 16K ISL OOM during trace capture.
+
+**8K ISL (traced prefill)**:
+- TTFT: 2364 ms
+- Decode: 16.32 tok/s/user
+- 0 TSU failures
+- Output: Coherent chain-of-thought reasoning (OLMo-Think model)
+
+**16K ISL (FAILING)**:
+- OOMs during `ttnn.begin_trace_capture()` with error:
+  `TT_FATAL: Out of Memory: Not enough space to allocate 335544320 B DRAM buffer`
+- After prefill warmup (compile) succeeds, the trace capture requires ~320 MB additional memory
+- With 844 MB already allocated, only 42 MB free — trace capture fails
+
+**Root Cause**:
+OLMo uses bfloat16 activations throughout prefill (vs bfloat8_b for Llama/Qwen). This 2× memory
+usage fills DRAM during prefill warmup, leaving insufficient memory for trace capture at 16K ISL.
+
+**Fix Applied**:
+- `demo_olmo_decode.py`: `MAX_TRACE_SEQLEN = 8192 if model_args.is_olmo else max(support_seqlens)`
+- OLMo 16K now uses eager mode instead of traced prefill
+- Eager mode avoids trace capture OOM but is significantly slower (~30+ min for 16K prefill)
+
+**Supported ISLs (OLMo batch=1)**:
+| ISL | Mode | Status | Notes |
+|-----|------|--------|-------|
+| ≤8K | Traced | PASS | Fast (~2.4s TTFT at 8K) |
+| 16K | Eager | SLOW | Functional but ~30+ min |
+| 32K/64K | Eager | SLOW | Functional but impractical |
+
+**Block Hash**: pending
+
+---
+
 ### 2026-03-10–12
 - Full bring-up from reference through TTNN. All components implemented.
 - Fixed: MLP garbage (wrong weight variant), reduce_scatter Inf (padding garbage), vocab PCC 0.13 (tile alignment), post-norm architecture, slice aliasing.
