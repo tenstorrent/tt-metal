@@ -4,7 +4,6 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include <tools/profiler/kernel_profiler.hpp>
 
 // Pre-zero CB pages via NOC DMA from MEM_ZEROS so tile-alignment padding is zero.
 // Uses MEM_ZEROS_SIZE-aligned transactions (same pattern as zero_out_tiles in conv_reader_common.hpp).
@@ -212,7 +211,6 @@ void kernel_main() {
                                         // Gather shard rows needed for this output h (incremental)
                                         const uint32_t h_needed = h_base + kH;
                                         if (h_needed > h_rows_gathered) {
-                                            DeviceZoneScopedN("reader-dram-gather");
                                             for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
                                                 const int32_t t_in = t_shard_start + static_cast<int32_t>(t_local);
                                                 const bool t_outside = (t_in < 0 || t_in >= static_cast<int32_t>(T_in));
@@ -280,7 +278,6 @@ void kernel_main() {
 
                                         // Vol2col for this (t, h) across all w
                                         {
-                                            DeviceZoneScopedN("reader-vol2col");
                                             noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
                                             for (uint32_t w = w_block; w < w_block_end; w++) {
                                                 const uint32_t w_base = (w - w_block) * stride_w;

@@ -11,16 +11,25 @@ Find optimal conv3d blockings (C_in_block, C_out_block, T_out_block, H_out_block
 | Skip W=13, W=52 in spatial candidates | These cause device hangs on BH p150b (kernel never returns) | Timeout approach: signal.alarm can't interrupt C++ kernel |
 | Dedup layers with same (C_in_padded, C_out, kernel, H, W) | Same shape = same optimal blocking regardless of position in model | Sweep every layer instance: redundant work |
 | fp32_dest_acc_en=True for all sweeps | Branch adds fp32 intermediate CB; blockings should be optimal with it enabled | Sweeping with fp32 off: not representative of branch behavior |
+| H-row interleaved DRAM gather in reader | Start vol2col as soon as kH shard rows are gathered, not all H_shard rows. 7-15% speedup on top layers. | Gather all → barrier → vol2col (original): simpler but higher startup latency |
+| Fused tilize+matmul per M tile-row | Process one tile-row at a time: tilize 32 patches, matmul immediately, pop. Shrinks cb_vol2col_tiled from M_t*K_t to K_t tiles, saving 324 KB L1. | Tilize all → matmul all (original): needs M_t*K_t tiles in L1 |
+| Reduced cb_vol2col_rm from 2*TILE_HEIGHT to TILE_HEIGHT pages | Fused loop only needs one tile-row of RM patches at a time. Saves 162 KB L1 for large blockings. | Double-buffered RM CB: needed when tilize consumes all M rows at once |
 
 ## Constraints & Workarounds
 - **Hardware:** BH Loud Box, 8x p150b (130 cores, 13x10 grid per device)
-- **Device hangs:** W=13 and W=52 cause kernel hangs. After hang: `kill -9`, `tt-smi -r 0,1,2,3,4,5,6,7`
+- **Device hangs:** Non-power-of-2 H or W block sizes cause kernel hangs (W=13, W=52, H=23, H=46 confirmed). Only power-of-2 spatial blocks are safe.
 - **L1 limit:** 1,572,864 bytes per core. Large spatial blocks + large C_out_block → L1 OOM (caught as TT_THROW)
 - **matmul_N_t subblock:** C_out=192 with certain spatial blocks fails with "matmul_N_t must be divisible by out_subblock_w"
-- **Missing from blocking table:** (384, 768, (3,1,1)) and (192, 384, (3,1,1)) time convs have no tuned blocking
+- **L1 prefetch budget:** Shard must fit in remaining L1 after CBs. Fused tilize+matmul frees ~486 KB, enabling larger blockings (e.g. W=16, H=32) that previously OOM'd.
+- **Weight preparation:** `prepare_conv3d_weights` must be called with matching `C_in_block` — manual weight reshaping produces wrong results for multi-C_in-block configs.
+
+## Surprises & Discoveries
+- Compute (tilize+matmul) is fully hidden behind reader pipeline with optimal (32,8) blocking — commenting out all compute changes wall time by <1%.
+- The reader DRAM gather is the true bottleneck; larger blocks reduce total gather iterations and give linear speedup.
+- Non-power-of-2 spatial blocks hang even when they exactly divide the output dims (e.g. H=23 divides H_out=184 exactly but hangs).
 
 ## Open Questions
-- [ ] Why do W=13 and W=52 cause hangs? Is it a core assignment bug?
+- [ ] Why do non-power-of-2 H/W block sizes cause hangs? Is it a core assignment or NOC addressing bug?
 - [ ] Should the blocking table be mesh-specific (keyed on mesh shape) or universal?
 - [ ] How much do 720p optimal blockings differ from 480p for the same (C_in, C_out, kernel)?
 
@@ -35,13 +44,47 @@ Find optimal conv3d blockings (C_in_block, C_out_block, T_out_block, H_out_block
 - [x] Updated get_conv3d_config() to accept h_factor/w_factor from parallel_config
 - [x] Added missing time conv entries (384→768 (3,1,1) and 192→384 (3,1,1)) — 19-635x speedup
 - [x] VAE decoder end-to-end on bh_2x4: **2.09x faster** (45.6s → 21.8s)
+- [x] H-row interleaved reader: 7-15% speedup on top 3 bottleneck layers
+- [x] Fused tilize+matmul: bit-identical, saves 324 KB L1, enables larger blockings
+- [x] Reduced cb_vol2col_rm: saves 162 KB L1
+- [x] Tracy device profiling: identified reader DRAM gather as true bottleneck (compute fully overlapped at optimal blocking)
+- [x] Brute-force re-sweep with fused kernel: found (32,8) = 5515 us for up3_res (32% vs baseline)
 - [ ] **Validate bh_4x8 blockings on actual BH Galaxy** (swept on simulated 1x1 dims)
 - [ ] **Validate bh_4x32 blockings on actual BH Galaxy 6U** (swept on simulated 1x1 dims)
 - [ ] **Sweep wh_4x8 on actual WH hardware** (BH 130 cores vs WH 64 cores)
 - [ ] bh_2x2 sweep
 - [ ] Run full Wan pipeline (transformer + VAE) end-to-end with new blockings
+- [ ] Investigate non-power-of-2 spatial block hangs
 
 ## Key Measurements
+
+### up3_res optimization progression (96x96 k333, bh_4x32 720p, 1x1 mesh 12x10 grid)
+
+| Change | Blocking | Per-call (us) | vs baseline |
+|--------|----------|---------------|-------------|
+| Baseline (original main) | (96,96,1,8,8) | 8,135 | — |
+| + h-row interleaved reader | (96,96,1,8,8) | 7,276 | 11% |
+| + fused tilize+matmul | (96,96,1,8,8) | 7,201 | 11% |
+| + reduced cb_vol2col_rm | (96,96,1,8,8) | 6,519 | 20% |
+| + optimal blocking | (96,96,1,8,16) | 5,956 | 27% |
+| + best blocking | **(96,96,1,32,8)** | **5,515** | **32%** |
+
+Decoder total for up3_res (6x calls): 48,810 us → 33,090 us = **32% faster**
+
+### up2_res sweep results (192x192 k333, bh_4x32 720p)
+
+Best blocking with fused kernel: **(96,96,1,32,4) = 6,220 us** (vs 7,629 us baseline = 18% faster)
+
+### Tilize/matmul ablation (up3_res, blocking (96,96,1,8,16))
+
+| Config | Per-call (us) | Delta from full |
+|--------|---------------|-----------------|
+| Full (tilize + matmul) | 5,924 | — |
+| Matmul only (no tilize) | 6,723 | +799 |
+| Tilize only (no matmul) | 6,215 | +291 |
+| No compute (reader+writer) | 5,991 | +67 |
+
+Compute is fully hidden behind the reader pipeline. The op is reader-bound.
 
 ### bh_4x8 480p (h_factor=4, w_factor=8, per-device H/W = global/factor)
 
