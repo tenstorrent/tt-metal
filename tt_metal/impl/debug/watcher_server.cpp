@@ -385,9 +385,10 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
         }
 
         // Initialize debug asserts to not tripped.
-        data.assert_status().pc()      = DEBUG_SANITIZE_SENTINEL_OK_32;
+        data.assert_status().line_num() = DEBUG_SANITIZE_SENTINEL_OK_16;
+        data.assert_status().file_id() = DEBUG_SANITIZE_SENTINEL_OK_16;
         data.assert_status().tripped() = dev_msgs::DebugAssertOK;
-        data.assert_status().which()   = DEBUG_SANITIZE_SENTINEL_OK_8;
+        data.assert_status().which() = DEBUG_SANITIZE_SENTINEL_OK_8;
 
         // Initialize debug ring buffer to a known init val, we'll check against this to see if any
         // data has been written.

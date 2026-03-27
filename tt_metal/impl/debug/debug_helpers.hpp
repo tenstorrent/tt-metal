@@ -5,12 +5,12 @@
 #pragma once
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
-#include <regex>
 #include <set>
+#include <string>
 #include <vector>
-#include <cctype>
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 
@@ -100,8 +100,7 @@ inline std::string_view get_core_type_name(CoreType ct) {
     }
 }
 
-// Host-side copy of debug_file_hash for resolving file hashes.
-// Must match the device-side constexpr version in dev_msgs.h.
+// Host-side FNV-1a hash — mirrors device-side constexpr debug_file_hash in dev_msgs.h.
 inline uint16_t host_debug_file_hash(const char* str) {
     uint32_t hash = 2166136261u;
     while (*str) {
@@ -111,19 +110,8 @@ inline uint16_t host_debug_file_hash(const char* str) {
     return static_cast<uint16_t>((hash >> 16) ^ (hash & 0xFFFF));
 }
 
-// Host-side copy of debug_msg_hash for resolving message hashes.
-// Must match the device-side constexpr version in dev_msgs.h.
-inline uint16_t host_debug_msg_hash(const char* str) {
-    uint32_t hash = 2166136261u;
-    while (*str) {
-        hash ^= static_cast<uint32_t>(*str++);
-        hash *= 16777619u;
-    }
-    return static_cast<uint16_t>((hash >> 16) ^ (hash & 0xFFFF));
-}
-
-// Resolve a message hash back to the original string by scanning source files for ASSERT_MSG calls.
-inline std::string resolve_msg_from_hash(uint16_t msg_hash) {
+// Scan source directories to resolve a file_id hash back to a filename.
+inline std::string resolve_file_from_hash(uint16_t file_id) {
     static const std::vector<std::string> search_dirs = {
         "tt_metal/hw/inc/",
         "tt_metal/hw/inc/api/debug/",
@@ -134,10 +122,8 @@ inline std::string resolve_msg_from_hash(uint16_t msg_hash) {
         "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/",
         "tt_metal/hw/inc/hostdev/",
         "tt_metal/hw/ckernels/",
+        "ttnn/cpp/",
     };
-
-    // Match ASSERT_MSG(..., "message") or LLK_ASSERT(..., "message") patterns.
-    std::regex pattern(R"RE((?:ASSERT_MSG|LLK_ASSERT)\s*\([^,]+,\s*"([^"]*)")RE");
     for (const auto& dir : search_dirs) {
         if (!std::filesystem::exists(dir)) {
             continue;
@@ -152,64 +138,13 @@ inline std::string resolve_msg_from_hash(uint16_t msg_hash) {
                 if (ext != ".h" && ext != ".hpp" && ext != ".cpp") {
                     continue;
                 }
-                std::ifstream file(entry.path());
-                std::string line;
-                while (std::getline(file, line)) {
-                    std::smatch match;
-                    if (std::regex_search(line, match, pattern)) {
-                        std::string msg = match[1].str();
-                        if (host_debug_msg_hash(msg.c_str()) == msg_hash) {
-                            return msg;
-                        }
-                    }
+                std::string p = entry.path().string();
+                if (host_debug_file_hash(p.c_str()) == file_id) {
+                    return p;
                 }
-            }
-        } catch (const std::filesystem::filesystem_error&) {
-            continue;
-        }
-    }
-    return fmt::format("unknown message (hash=0x{:04x})", msg_hash);
-}
-
-// Resolve a file_id hash back to a filename by scanning known source directories.
-// Searches kernel source files and well-known LLK include paths for a matching hash.
-inline std::string resolve_file_from_hash(uint16_t file_id) {
-    // Well-known include paths to search for source files that could contain asserts.
-    static const std::vector<std::string> search_dirs = {
-        "tt_metal/hw/inc/",
-        "tt_metal/hw/inc/api/debug/",
-        "tt_metal/hw/inc/internal/debug/",
-        "tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/",
-        "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/",
-        "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/",
-        "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/",
-        "tt_metal/hw/inc/hostdev/",
-        "tt_metal/hw/ckernels/",
-    };
-
-    for (const auto& dir : search_dirs) {
-        if (!std::filesystem::exists(dir)) {
-            continue;
-        }
-        try {
-            for (const auto& entry : std::filesystem::recursive_directory_iterator(
-                     dir, std::filesystem::directory_options::skip_permission_denied)) {
-                if (!entry.is_regular_file()) {
-                    continue;
-                }
-                const auto& path = entry.path();
-                auto ext = path.extension().string();
-                if (ext != ".h" && ext != ".hpp" && ext != ".cpp") {
-                    continue;
-                }
-                // Hash both absolute and relative paths to match however __FILE__ was expanded.
-                std::string rel_path_str = path.string();
-                if (host_debug_file_hash(rel_path_str.c_str()) == file_id) {
-                    return rel_path_str;
-                }
-                std::string abs_path_str = std::filesystem::absolute(path).string();
-                if (abs_path_str != rel_path_str && host_debug_file_hash(abs_path_str.c_str()) == file_id) {
-                    return rel_path_str;  // Return the shorter relative path for display
+                std::string abs_p = std::filesystem::absolute(entry.path()).string();
+                if (abs_p != p && host_debug_file_hash(abs_p.c_str()) == file_id) {
+                    return p;
                 }
             }
         } catch (const std::filesystem::filesystem_error&) {
@@ -220,14 +155,14 @@ inline std::string resolve_file_from_hash(uint16_t file_id) {
 }
 
 // Returns the assert message portion for a given assert type.
-// For DebugAssertTripped, the PC is reported — triage resolves it to file/line/function via DWARF.
-// For DebugAssertHwFault, pc holds mepc and hw_fault_info holds mtval<<32|mcause.
 // Returns empty string for unknown types (callers must handle this).
 inline std::string get_debug_assert_message(
-    dev_msgs::debug_assert_type_t type, uint32_t pc = 0, uint64_t hw_fault_info = 0) {
+    dev_msgs::debug_assert_type_t type, uint16_t line_num = 0, uint16_t file_id = 0, uint64_t hw_fault_info = 0) {
     switch (type) {
-        case dev_msgs::DebugAssertTripped:
-            return fmt::format("tripped an assert at PC 0x{:08x} (run triage for file/line/callstack).", pc);
+        case dev_msgs::DebugAssertTripped: {
+            std::string file_str = (file_id != 0) ? resolve_file_from_hash(file_id) : "unknown file";
+            return fmt::format("tripped an assert in {} on line {}.", file_str, line_num);
+        }
         case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped:
             return "detected an inter-kernel data race due to kernel completing with pending NOC "
                    "transactions (missing NOC reads flushed barrier).";
@@ -243,9 +178,10 @@ inline std::string get_debug_assert_message(
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:
+            // line_num holds mepc (faulting instruction address) for hardware faults
             return fmt::format(
                 "hardware fault occurred at PC 0x{:x}. Cause: 0x{:x}, faulting address or instruction: 0x{:08x}",
-                pc,
+                line_num,
                 hw_fault_info & 0xffffffff,
                 (hw_fault_info >> 32) & 0xffffffff);
         default: return "";

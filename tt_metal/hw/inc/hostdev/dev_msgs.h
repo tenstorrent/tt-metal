@@ -259,7 +259,8 @@ enum debug_sanitize_noc_return_code_enum {
 };
 
 struct debug_assert_msg_t {
-    volatile uint32_t pc;             // return address from __builtin_return_address(0); for DebugAssertHwFault: mepc
+    volatile uint16_t line_num;  // __LINE__ at call site
+    volatile uint16_t file_id;   // debug_file_hash(__FILE__)
     volatile uint8_t tripped;
     volatile uint8_t which;
     volatile uint64_t hw_fault_info;  // Quasar only: mtval << 32 | mcause (DebugAssertHwFault)
@@ -344,19 +345,9 @@ struct dprint_buf_msg_t {
     static_assert(sizeof(data) == sizeof(shared_data));
 };
 
-// FNV-1a hash functions for assert file/message identification.
-// Used by device-side ASSERT/LLK_ASSERT macros and host-side watcher to resolve assert locations.
+// FNV-1a hash for assert file identification — must match device-side constexpr debug_file_hash.
 // Must be in #ifndef CODEGEN because codegen cannot handle constexpr functions.
 constexpr uint16_t debug_file_hash(const char* str) {
-    uint32_t hash = 2166136261u;
-    while (*str) {
-        hash ^= static_cast<uint32_t>(*str++);
-        hash *= 16777619u;
-    }
-    return static_cast<uint16_t>((hash >> 16) ^ (hash & 0xFFFF));
-}
-
-constexpr uint16_t debug_msg_hash(const char* str) {
     uint32_t hash = 2166136261u;
     while (*str) {
         hash ^= static_cast<uint32_t>(*str++);

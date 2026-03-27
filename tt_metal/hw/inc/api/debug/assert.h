@@ -13,12 +13,9 @@
 
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT) && !defined(FORCE_WATCHER_OFF)
 
-// assert_and_hang captures its return address (the call site inside the ASSERT macro) via
-// __builtin_return_address(0) and stores it in the mailbox pc field.  The host resolves
-// file, line, function, and message from that PC using DWARF — no file hash needed.
 // For Quasar, multiple DMs share assert_status; CAS is used for thread safety; address is
 // remapped from uncached to cached L1 (LR/SC requires cache coherence), then flushed to host.
-inline void assert_and_hang(debug_assert_type_t assert_type = DebugAssertTripped) {
+inline void assert_and_hang(uint32_t line_num, uint16_t file_id, debug_assert_type_t assert_type = DebugAssertTripped) {
     debug_assert_msg_t tt_l1_ptr* v = GET_MAILBOX_ADDRESS_DEV(watcher.assert_status);
 #if defined(ARCH_QUASAR)
     // TODO: Remove this check once mailbox is accessed via cached memory (see dm.cc UNCACHED_MEM_MAILBOX_BASE)
@@ -33,7 +30,8 @@ inline void assert_and_hang(debug_assert_type_t assert_type = DebugAssertTripped
     if (v->tripped == DebugAssertOK)
 #endif
     {
-        v->pc = (uint32_t)__builtin_return_address(0);
+        v->line_num = line_num;
+        v->file_id = file_id;
         v->which = internal_::get_hw_thread_idx();
         if (assert_type == DebugAssertHwFault) {  // only valid on Quasar
             uint64_t mcause;
@@ -42,7 +40,7 @@ inline void assert_and_hang(debug_assert_type_t assert_type = DebugAssertTripped
             asm volatile("csrr %0, mepc" : "=r"(mepc));
             asm volatile("csrr %0, mcause" : "=r"(mcause));
             asm volatile("csrr %0, mtval" : "=r"(mtval));
-            v->pc = (uint32_t)mepc;  // mepc is the instruction address that caused the fault
+            v->line_num = mepc;  // mepc is the faulting instruction address
             v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);
         }
         v->tripped = assert_type;
@@ -57,14 +55,9 @@ inline void assert_and_hang(debug_assert_type_t assert_type = DebugAssertTripped
 
     // Hang, or in the case of erisc, early exit.
 #if defined(COMPILE_FOR_ERISC)
-    // Update launch msg to show that we've exited. This is required so that the next run doesn't think there's a kernel
-    // still running and try to make it exit.
     volatile tt_l1_ptr go_msg_t* go_message_ptr = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
     go_message_ptr->signal = RUN_MSG_DONE;
-
-    // This exits to base FW
     internal_::disable_erisc_app();
-    // Subordinates do not have an erisc exit
 #if (defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)) || !defined(ARCH_BLACKHOLE)
     erisc_exit();
 #endif
@@ -75,19 +68,21 @@ inline void assert_and_hang(debug_assert_type_t assert_type = DebugAssertTripped
     }
 }
 
-// Overload for ASSERT(condition, "message") — the string is developer documentation only;
-// the host reads it from source at the resolved file:line, nothing needs to be stored.
-inline void assert_and_hang(const char*) {
-    assert_and_hang();
+// Backward-compatible overload — existing callers that only pass assert_type get file_id=0.
+inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped) {
+    assert_and_hang(line_num, 0, assert_type);
 }
+
+// Overload for ASSERT(condition, "message") — message is developer documentation only; store file:line.
+inline void assert_and_hang(uint32_t line_num, uint16_t file_id, const char*) { assert_and_hang(line_num, file_id); }
 
 // The do...while(0) allows flexible use in if-else without braces.
 // Optional second argument: enum assert type (e.g. DebugAssertRtaOutOfBounds)
 //                        or string message (developer documentation, ignored at runtime).
-#define ASSERT(condition, ...) \
-    do { \
-        if (not(condition)) \
-            assert_and_hang(##__VA_ARGS__); \
+#define ASSERT(condition, ...)                                                   \
+    do {                                                                         \
+        if (not(condition))                                                      \
+            assert_and_hang(__LINE__, debug_file_hash(__FILE__), ##__VA_ARGS__); \
     } while (0)
 
 #define ASSERT_ENABLED 1
