@@ -28,12 +28,13 @@
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "llrt/tt_cluster.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal::experimental::tt_fabric {
 namespace {
 
 // BH Galaxy half-pod pairing: all ASICs in a mesh subgraph must sit on trays 1&3 only, or trays 2&4 only.
-static std::string format_uint_set(const std::set<uint32_t>& values) {
+std::string format_uint_set(const std::set<uint32_t>& values) {
     std::string out;
     for (uint32_t v : values) {
         if (!out.empty()) {
@@ -44,7 +45,40 @@ static std::string format_uint_set(const std::set<uint32_t>& values) {
     return out;
 }
 
-static void expect_bh_halfpod_tray_pairing_for_graph_nodes(
+// Match TopologyMapper debug printing (control-plane parity for tests).
+void print_logical_multi_mesh_adjacency_graph(const LogicalMultiMeshGraph& multi_mesh_graph) {
+    log_info(tt::LogFabric, "Logical Multi-Mesh Adjacency Map:");
+    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Logical Mesh-Level Graph", true);
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        graph.print_adjacency_map(
+            std::string("Logical Mesh ") + std::to_string(mesh_id.get()) + " Internal Graph", true);
+    }
+}
+
+void print_physical_multi_mesh_adjacency_graph(
+    const PhysicalMultiMeshGraph& multi_mesh_graph, const tt::tt_metal::PhysicalSystemDescriptor& psd) {
+    log_info(tt::LogFabric, "Physical Multi-Mesh Adjacency Map:");
+    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Physical Mesh-Level Graph", true);
+    for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
+        std::set<std::string> hosts;
+        for (const auto& asic_id : graph.get_nodes()) {
+            hosts.insert(psd.get_host_name_for_asic(asic_id));
+        }
+        std::string hosts_list;
+        for (const auto& host : hosts) {
+            if (!hosts_list.empty()) {
+                hosts_list += ", ";
+            }
+            hosts_list += host;
+        }
+        log_info(tt::LogFabric, "Physical Mesh {} — {} distinct host(s): {}", mesh_id.get(), hosts.size(), hosts_list);
+
+        graph.print_adjacency_map(
+            std::string("Physical Mesh ") + std::to_string(mesh_id.get()) + " Internal Graph", true);
+    }
+}
+
+void expect_bh_halfpod_tray_pairing_for_graph_nodes(
     const std::string& context,
     const tt::tt_metal::PhysicalSystemDescriptor& psd,
     const AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_graph) {
@@ -4447,5 +4481,249 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     const auto mapping_result = map_multi_mesh_to_physical(logical_multi_mesh_graph, physical_multi_mesh_graph, config);
     ASSERT_TRUE(mapping_result.success) << mapping_result.error_message;
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SP5Psd_BlitzDecodeSuperpod) {
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    const std::filesystem::path psd_path = std::filesystem::path(tt_metal_home) / "sp5-psd.textproto";
+    ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
+    tt::tt_metal::PhysicalSystemDescriptor psd(psd_path.string());
+
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    const std::filesystem::path mgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "models/demos/deepseek_v3_b1/scaleout_configs/blitz_decode_mesh_graph_descriptor_superpod.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // sp5-psd: 20 hosts × 32 ASICs = 640 ASICs; M0 is 4×2 (8 ASICs) per mesh → 80 physical meshes.
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 80u);
+
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), 8u);
+
+        expect_bh_halfpod_tray_pairing_for_graph_nodes(
+            std::string("[SP5_BlitzDecodeSuperpod] mesh_id=") + std::to_string(*mesh_id), psd, adjacency_graph);
+
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 2 channels per direction
+            EXPECT_LE(
+                adjacency_graph.get_neighbors(node).size(), 4u * 2u);  // num directions * 2 channels per direction
+        }
+    }
+
+    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, mgd_path.string());
+
+    const auto logical_multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
+
+    print_logical_multi_mesh_adjacency_graph(logical_multi_mesh_graph);
+    print_physical_multi_mesh_adjacency_graph(physical_multi_mesh_graph, psd);
+
+    TopologyMappingConfig config;
+    config.strict_mode = true;
+    config.disable_rank_bindings = false;
+
+    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
+        config.hostname_to_asics[desc.host_name].insert(asic_id);
+    }
+
+    const auto& pinnings = mgd.get_pinnings();
+    for (const auto& [pos, fabric_node] : pinnings) {
+        config.pinnings.emplace_back(pos, fabric_node);
+    }
+
+    if (!config.pinnings.empty()) {
+        for (const auto& [asic_id, _] : psd.get_asic_descriptors()) {
+            auto tray_id = psd.get_tray_id(asic_id);
+            auto asic_location = psd.get_asic_location(asic_id);
+            config.asic_positions[asic_id] = std::make_pair(tray_id, asic_location);
+        }
+    }
+
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        config.mesh_validation_modes[mesh_id] = mesh_graph.is_intra_mesh_policy_relaxed(mesh_id)
+                                                    ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
+                                                    : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+    }
+
+    config.inter_mesh_validation_mode = mesh_graph.is_inter_mesh_policy_relaxed()
+                                            ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
+                                            : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+    if (config.inter_mesh_validation_mode.value() == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+        log_info(tt::LogFabric, "Inter-mesh validation mode: RELAXED");
+    } else {
+        log_info(tt::LogFabric, "Inter-mesh validation mode: STRICT");
+    }
+
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        const auto& chip_ids = mesh_graph.get_chip_ids(mesh_id);
+        for (const auto& [coord, chip_id] : chip_ids) {
+            (void)coord;
+            FabricNodeId fabric_node_id(mesh_id, chip_id);
+            auto mesh_host_rank = mesh_graph.get_host_rank_for_chip(mesh_id, chip_id);
+            if (mesh_host_rank.has_value()) {
+                fabric_node_id_to_mesh_rank[mesh_id][fabric_node_id] = mesh_host_rank.value();
+            }
+        }
+    }
+
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+
+    const auto mapping_result = map_multi_mesh_to_physical(
+        logical_multi_mesh_graph, physical_multi_mesh_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+    ASSERT_TRUE(mapping_result.success) << mapping_result.error_message;
+
+    std::set<std::string> mapped_hosts;
+    for (const auto& [fabric_node, asic] : mapping_result.fabric_node_to_asic) {
+        (void)fabric_node;
+        mapped_hosts.insert(psd.get_host_name_for_asic(asic));
+    }
+
+    constexpr size_t kExpectedMappedFabricNodes = 64u * 8u;
+    EXPECT_EQ(mapping_result.fabric_node_to_asic.size(), kExpectedMappedFabricNodes);
+
+    constexpr size_t kAsicsPerBhGalaxyHost = 32u;
+    constexpr size_t kMinPossibleHosts =
+        (kExpectedMappedFabricNodes + kAsicsPerBhGalaxyHost - 1u) / kAsicsPerBhGalaxyHost;
+    EXPECT_GE(mapped_hosts.size(), kMinPossibleHosts);
+    EXPECT_LE(mapped_hosts.size(), psd.get_all_hostnames().size());
+}
+
+TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SP5Psd_32x4QuadBhGalaxyTorusXy) {
+    using namespace ::tt::tt_fabric;
+
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+
+    const std::filesystem::path psd_path = std::filesystem::path(tt_metal_home) / "sp5-psd.textproto";
+    ASSERT_TRUE(std::filesystem::exists(psd_path)) << "PSD file not found: " << psd_path;
+    tt::tt_metal::PhysicalSystemDescriptor psd(psd_path.string());
+
+    const std::filesystem::path pgd_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
+    PhysicalGroupingDescriptor pgd{pgd_path};
+
+    const std::filesystem::path mgd_path = std::filesystem::path(tt_metal_home) /
+                                           "tt_metal/fabric/mesh_graph_descriptors/"
+                                           "single_bh_galaxy_mesh_graph_descriptor.textproto";
+    ASSERT_TRUE(std::filesystem::exists(mgd_path)) << "MGD file not found: " << mgd_path;
+    MeshGraphDescriptor mgd{mgd_path};
+
+    const auto physical_multi_mesh_graph = build_physical_multi_mesh_adjacency_graph(psd, pgd, mgd);
+
+    // PGD match for M0 (32×4 = 128 ASICs) tiles the PSD; sp5-psd has 640 ASICs → 5 disjoint placements / "matches".
+    constexpr size_t kExpectedPhysicalMeshMatches = 5u;
+    EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), kExpectedPhysicalMeshMatches);
+
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_TRUE(physical_multi_mesh_graph.mesh_exit_node_graphs_.contains(mesh_id));
+        EXPECT_GT(physical_multi_mesh_graph.mesh_exit_node_graphs_.at(mesh_id).get_nodes().size(), 0);
+    }
+
+    constexpr size_t kDevicesPerLogicalMesh = 32u * 4u;
+    for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
+        EXPECT_EQ(adjacency_graph.get_nodes().size(), kDevicesPerLogicalMesh);
+
+        for (const auto& node : adjacency_graph.get_nodes()) {
+            EXPECT_GE(
+                adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * min channels per direction
+            EXPECT_LE(adjacency_graph.get_neighbors(node).size(), 4u * 2u);  // torus: up to 4 directions × channels
+        }
+    }
+
+    MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, mgd_path.string());
+
+    const auto logical_multi_mesh_graph = build_logical_multi_mesh_adjacency_graph(mesh_graph);
+
+    print_logical_multi_mesh_adjacency_graph(logical_multi_mesh_graph);
+    print_physical_multi_mesh_adjacency_graph(physical_multi_mesh_graph, psd);
+
+    TopologyMappingConfig config;
+    config.strict_mode = true;
+    config.disable_rank_bindings = false;
+
+    for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
+        config.hostname_to_asics[desc.host_name].insert(asic_id);
+    }
+
+    const auto& pinnings = mgd.get_pinnings();
+    for (const auto& [pos, fabric_node] : pinnings) {
+        config.pinnings.emplace_back(pos, fabric_node);
+    }
+
+    if (!config.pinnings.empty()) {
+        for (const auto& [asic_id, _] : psd.get_asic_descriptors()) {
+            auto tray_id = psd.get_tray_id(asic_id);
+            auto asic_location = psd.get_asic_location(asic_id);
+            config.asic_positions[asic_id] = std::make_pair(tray_id, asic_location);
+        }
+    }
+
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        config.mesh_validation_modes[mesh_id] = mesh_graph.is_intra_mesh_policy_relaxed(mesh_id)
+                                                    ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
+                                                    : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+    }
+
+    config.inter_mesh_validation_mode = mesh_graph.is_inter_mesh_policy_relaxed()
+                                            ? ::tt::tt_fabric::ConnectionValidationMode::RELAXED
+                                            : ::tt::tt_fabric::ConnectionValidationMode::STRICT;
+    if (config.inter_mesh_validation_mode.value() == ::tt::tt_fabric::ConnectionValidationMode::RELAXED) {
+        log_info(tt::LogFabric, "Inter-mesh validation mode: RELAXED");
+    } else {
+        log_info(tt::LogFabric, "Inter-mesh validation mode: STRICT");
+    }
+
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        const auto& chip_ids = mesh_graph.get_chip_ids(mesh_id);
+        for (const auto& [coord, chip_id] : chip_ids) {
+            (void)coord;
+            FabricNodeId fabric_node_id(mesh_id, chip_id);
+            auto mesh_host_rank = mesh_graph.get_host_rank_for_chip(mesh_id, chip_id);
+            if (mesh_host_rank.has_value()) {
+                fabric_node_id_to_mesh_rank[mesh_id][fabric_node_id] = mesh_host_rank.value();
+            }
+        }
+    }
+
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+
+    const auto mapping_result = map_multi_mesh_to_physical(
+        logical_multi_mesh_graph, physical_multi_mesh_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+    ASSERT_TRUE(mapping_result.success) << mapping_result.error_message;
+
+    std::set<std::string> mapped_hosts;
+    for (const auto& [fabric_node, asic] : mapping_result.fabric_node_to_asic) {
+        (void)fabric_node;
+        mapped_hosts.insert(psd.get_host_name_for_asic(asic));
+    }
+
+    EXPECT_EQ(mapping_result.fabric_node_to_asic.size(), kDevicesPerLogicalMesh);
+
+    constexpr size_t kAsicsPerBhGalaxyHost = 32u;
+    constexpr size_t kMinPossibleHosts = (kDevicesPerLogicalMesh + kAsicsPerBhGalaxyHost - 1u) / kAsicsPerBhGalaxyHost;
+    EXPECT_GE(mapped_hosts.size(), kMinPossibleHosts);
+    EXPECT_LE(mapped_hosts.size(), psd.get_all_hostnames().size());
 }
 }  // namespace tt::tt_metal::experimental::tt_fabric

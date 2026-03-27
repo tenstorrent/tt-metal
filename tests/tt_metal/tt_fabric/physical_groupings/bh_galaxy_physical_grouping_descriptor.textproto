@@ -294,3 +294,28 @@ groupings {
     dims: [1, 4]
   }
 }
+
+
+groupings {
+  name: "4x96_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: HOSTS } },
+    { id: 1 grouping_ref { preset_type: HOSTS } },
+    { id: 2 grouping_ref { preset_type: HOSTS } },
+    { id: 3 grouping_ref { preset_type: HOSTS } },
+    { id: 4 grouping_ref { preset_type: HOSTS } },
+    { id: 5 grouping_ref { preset_type: HOSTS } },
+    { id: 6 grouping_ref { preset_type: HOSTS } },
+    { id: 7 grouping_ref { preset_type: HOSTS } },
+    { id: 8 grouping_ref { preset_type: HOSTS } },
+    { id: 9 grouping_ref { preset_type: HOSTS } },
+    { id: 10 grouping_ref { preset_type: HOSTS } },
+    { id: 11 grouping_ref { preset_type: HOSTS } },
+    { id: 12 grouping_ref { preset_type: HOSTS } }
+
+  ]
+  row_major_mesh {
+    dims: [1, 13]
+  }
+}
