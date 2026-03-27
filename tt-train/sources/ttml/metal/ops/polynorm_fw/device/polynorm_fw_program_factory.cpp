@@ -26,22 +26,17 @@ constexpr uint32_t kWriterOutputBufferIdx = 0U;
 // CBs with input data / scalar parameters
 constexpr auto kInputPass1CbIndex = tt::CBIndex::c_0;
 constexpr auto kInputPass2CbIndex = tt::CBIndex::c_1;
-constexpr auto kInputPass3CbIndex = tt::CBIndex::c_2;
-constexpr auto kScalerCbIndex = tt::CBIndex::c_3;
-constexpr auto kEpsCbIndex = tt::CBIndex::c_4;
-constexpr auto kW0CbIndex = tt::CBIndex::c_5;
-constexpr auto kW1CbIndex = tt::CBIndex::c_6;
-constexpr auto kW2CbIndex = tt::CBIndex::c_7;
-constexpr auto kBiasCbIndex = tt::CBIndex::c_8;
+constexpr auto kScalerCbIndex = tt::CBIndex::c_2;
+constexpr auto kEpsCbIndex = tt::CBIndex::c_3;
+constexpr auto kW0CbIndex = tt::CBIndex::c_4;
+constexpr auto kW1CbIndex = tt::CBIndex::c_5;
+constexpr auto kW2CbIndex = tt::CBIndex::c_6;
+constexpr auto kBiasCbIndex = tt::CBIndex::c_7;
 // CBs with intermediate computations
-constexpr auto kSumX2CbIndex = tt::CBIndex::c_9;
-constexpr auto kSumX4CbIndex = tt::CBIndex::c_10;
-constexpr auto kSumX6CbIndex = tt::CBIndex::c_11;
-constexpr auto kInvRmsXCbIndex = tt::CBIndex::c_12;
-constexpr auto kInvRmsX2CbIndex = tt::CBIndex::c_13;
-constexpr auto kInvRmsX3CbIndex = tt::CBIndex::c_14;
+constexpr auto kSumPowsCbIndex = tt::CBIndex::c_8;
+constexpr auto kInvRmsCbIndex = tt::CBIndex::c_9;
 // CBs with output data
-constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
+constexpr auto kOutputCbIndex = tt::CBIndex::c_10;
 
 constexpr uint32_t kNumOneTile = 1U;
 
@@ -135,8 +130,6 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
         create_circular_buffer(program, all_cores, kInputPass1CbIndex, data_format, bfloat16_tile_size, block_size);
     [[maybe_unused]] auto cb_input_pass_2 =
         create_circular_buffer(program, all_cores, kInputPass2CbIndex, data_format, bfloat16_tile_size, block_size);
-    [[maybe_unused]] auto cb_input_pass_3 =
-        create_circular_buffer(program, all_cores, kInputPass3CbIndex, data_format, bfloat16_tile_size, block_size);
     [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_eps = create_circular_buffer(
@@ -149,18 +142,10 @@ PolyNorm3ForwardProgramFactory::cached_program_t PolyNorm3ForwardProgramFactory:
         create_circular_buffer(program, all_cores, kW2CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
     [[maybe_unused]] auto cb_bias =
         create_circular_buffer(program, all_cores, kBiasCbIndex, data_format, bfloat16_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_sum_x2 = create_circular_buffer(
-        program, all_cores, kSumX2CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_sum_x4 = create_circular_buffer(
-        program, all_cores, kSumX4CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_sum_x6 = create_circular_buffer(
-        program, all_cores, kSumX6CbIndex, tt::DataFormat::Float32, float32_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_inv_rms_x =
-        create_circular_buffer(program, all_cores, kInvRmsXCbIndex, data_format, bfloat16_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_inv_rms_x2 =
-        create_circular_buffer(program, all_cores, kInvRmsX2CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
-    [[maybe_unused]] auto cb_inv_rms_x3 =
-        create_circular_buffer(program, all_cores, kInvRmsX3CbIndex, data_format, bfloat16_tile_size, kNumOneTile);
+    [[maybe_unused]] auto cb_sum_pows = create_circular_buffer(
+        program, all_cores, kSumPowsCbIndex, tt::DataFormat::Float32, float32_tile_size, /*num_tiles=*/3U);
+    [[maybe_unused]] auto cb_inv_rms =
+        create_circular_buffer(program, all_cores, kInvRmsCbIndex, data_format, bfloat16_tile_size, /*num_tiles=*/3U);
     [[maybe_unused]] auto cb_output =
         create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_tile_size, block_size);
     auto* input_buffer = input.buffer();

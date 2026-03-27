@@ -13,7 +13,7 @@ void kernel_main() {
     const uint32_t start_row = get_arg_val<uint32_t>(arg_idx++);
 
     // CB with output data
-    constexpr auto cb_output = tt::CBIndex::c_15;
+    constexpr auto cb_output = tt::CBIndex::c_10;
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
