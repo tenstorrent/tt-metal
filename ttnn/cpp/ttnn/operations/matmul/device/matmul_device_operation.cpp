@@ -392,11 +392,13 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         "Matmul with fused batch requires input tensors of shapes BCMK*11KN=BCMN "
                         "or equivalent. Please change the second input tensor or adjust the program config.");
                     if (attributes.transpose_a) {
+                        uint32_t batch_size_a = get_batch_size(a_shape_padded);
                         uint32_t M_per_batch = a_shape_padded[-2] / in0_tile.get_height();
                         TT_FATAL(
-                            M_per_batch <= 1,
-                            "transpose_a with fuse_batch is not supported when M_per_batch > 1 "
-                            "(M_per_batch={}, a_shape_padded={})",
+                            batch_size_a == 1 || M_per_batch == 1,
+                            "transpose_a with fuse_batch is not supported when batch dimensions "
+                            "exist and M_per_batch > 1 (batch_size={}, M_per_batch={}, a_shape_padded={})",
+                            batch_size_a,
                             M_per_batch,
                             a_shape_padded);
                     }
