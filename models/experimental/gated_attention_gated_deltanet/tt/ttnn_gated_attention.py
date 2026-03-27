@@ -138,6 +138,13 @@ def gated_attention_forward_ttnn(
     trace_staging_pos=None,
     # Decode-optimized SDPA: pass cur_pos_tensor to use sdpa_decode (skips mask management)
     cur_pos_tensor=None,
+    # Pre-allocated sharded buffers for paged_update_cache (avoids allocation during trace)
+    paged_k_buf=None,
+    paged_v_buf=None,
+    # Paged attention with page_table (for vLLM integration)
+    page_table=None,
+    paged_kv_cache_key=None,  # DRAM paged cache [num_blocks, num_kv_heads, block_size, head_dim]
+    paged_kv_cache_value=None,  # DRAM paged cache [num_blocks, num_kv_heads, block_size, head_dim]
 ):
     """
     TTNN forward pass for Gated Attention with KV cache support.
@@ -210,33 +217,81 @@ def gated_attention_forward_ttnn(
 
     # KV cache handling
     _use_sdpa_decode = False
-    if cur_pos_tensor is not None and kv_cache_key is not None and T == 1:
+    _paged_sdpa_done = False
+    if page_table is not None and paged_kv_cache_key is not None and T == 1:
+        # Paged attention decode: write K/V via page_table, attend via paged SDPA.
+        # paged_update_cache with page_table expects input [1, B, num_kv_heads, head_dim],
+        # where page_table.shape[0] == input.shape[1] == B.
+        # This is different from the non-paged path which uses [1, B*num_kv_heads, T, head_dim].
+        k_for_paged = ttnn.reshape(key_states, [1, B, num_key_value_heads, head_dim])
+        v_for_paged = ttnn.reshape(value_states, [1, B, num_key_value_heads, head_dim])
+        # Shard to L1 (HEIGHT_SHARDED on B cores) for paged_update_cache
+        _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(B - 1, 0))})
+        _shard_spec = ttnn.ShardSpec(_shard_grid, [32, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+        _sharded_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec)
+        k_sharded = ttnn.to_memory_config(k_for_paged, _sharded_mc)
+        v_sharded = ttnn.to_memory_config(v_for_paged, _sharded_mc)
+        # Write K/V into paged cache via page_table
+        ttnn.experimental.paged_update_cache(
+            paged_kv_cache_key, k_sharded, update_idxs_tensor=cur_pos_tensor, page_table=page_table
+        )
+        ttnn.experimental.paged_update_cache(
+            paged_kv_cache_value, v_sharded, update_idxs_tensor=cur_pos_tensor, page_table=page_table
+        )
+        # Paged SDPA decode
+        q_decode = ttnn.transpose(query_states, 1, 2)  # [B, H_q, 1, D] -> [B, 1, H_q, D] = [1, B, H_q, D] for B=1
+        attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q_decode,
+            paged_kv_cache_key,
+            paged_kv_cache_value,
+            page_table,
+            is_causal=True,
+            cur_pos_tensor=cur_pos_tensor,
+            scale=scaling,
+            program_config=_get_sdpa_program_config(
+                device, paged_kv_cache_key.shape[0] * paged_kv_cache_key.shape[2], q_seq_len=T
+            ),
+            compute_kernel_config=_get_sdpa_compute_kernel_config(),
+        )
+        attn_output = ttnn.transpose(attn_output, 1, 2)  # back to [B, H_q, 1, D]
+        new_key = paged_kv_cache_key
+        new_value = paged_kv_cache_value
+        _paged_sdpa_done = True  # Skip the bottom SDPA section (attn_output already computed)
+        S_total = paged_kv_cache_key.shape[0] * paged_kv_cache_key.shape[2]
+        is_causal = False
+        segmented_attn_mask = None
+    elif cur_pos_tensor is not None and kv_cache_key is not None and T == 1:
         # Trace-compatible SDPA decode: write K/V at dynamic position, attend up to cur_pos.
         # Uses paged_update_cache (takes device tensor for index, trace-compatible) +
         # sdpa_decode (reads cache[:, :, :cur_pos+1, :], no mask needed).
-        # Eliminates staging position, mask updates, and post-trace cache copies.
         #
-        # paged_update_cache expects: input [1, N, seq, D], cache [N, 1, max_seq, D]
-        # where N = batch * num_kv_heads. Reshape cache view for the write, SDPA reads
-        # from the original [B, H_kv, max_seq, D] layout (same underlying data).
+        # paged_update_cache expects: input [1, N, seq, D] HEIGHT_SHARDED, cache [N, 1, max_seq, D].
+        # N = batch * num_kv_heads. Pre-allocated sharded buffers (paged_k_buf, paged_v_buf)
+        # are provided by the caller to avoid allocating during trace capture.
         N = B * num_key_value_heads
         max_seq = kv_cache_key.shape[2]
         k_for_cache = ttnn.reshape(key_states, [1, N, T, head_dim])
         v_for_cache = ttnn.reshape(value_states, [1, N, T, head_dim])
-        # paged_update_cache requires HEIGHT_SHARDED input.
-        # [1, N, 1, head_dim] in TILE_LAYOUT → 2D: height=N*32, width=head_dim.
-        # Need N cores with shard [32, head_dim] each (one tile-row per core).
-        _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(N - 1, 0))})
-        _shard_spec = ttnn.ShardSpec(_shard_grid, [32, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
-        _sharded_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec)
-        k_for_cache = ttnn.to_memory_config(k_for_cache, _sharded_mc)
-        v_for_cache = ttnn.to_memory_config(v_for_cache, _sharded_mc)
+        # Convert to sharded for paged_update_cache. Use pre-allocated sharded buffers
+        # when available (trace path) to avoid allocation during trace capture.
+        if paged_k_buf is not None:
+            k_sharded = ttnn.interleaved_to_sharded(
+                k_for_cache, paged_k_buf.memory_config(), preallocated_output=paged_k_buf
+            )
+            v_sharded = ttnn.interleaved_to_sharded(
+                v_for_cache, paged_v_buf.memory_config(), preallocated_output=paged_v_buf
+            )
+        else:
+            # Eager path: allocate on the fly (not inside trace)
+            _shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(N - 1, 0))})
+            _shard_spec = ttnn.ShardSpec(_shard_grid, [32, head_dim], ttnn.ShardOrientation.ROW_MAJOR)
+            _sharded_mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, _shard_spec)
+            k_sharded = ttnn.to_memory_config(k_for_cache, _sharded_mc)
+            v_sharded = ttnn.to_memory_config(v_for_cache, _sharded_mc)
         kv_cache_key_reshaped = ttnn.reshape(kv_cache_key, [N, 1, max_seq, head_dim])
         kv_cache_value_reshaped = ttnn.reshape(kv_cache_value, [N, 1, max_seq, head_dim])
-        # paged_update_cache expects one index per "batch" element (N = B * H_kv).
-        # cur_pos_tensor must have N elements — all the same position, pre-allocated by caller.
-        ttnn.experimental.paged_update_cache(kv_cache_key_reshaped, k_for_cache, update_idxs_tensor=cur_pos_tensor)
-        ttnn.experimental.paged_update_cache(kv_cache_value_reshaped, v_for_cache, update_idxs_tensor=cur_pos_tensor)
+        ttnn.experimental.paged_update_cache(kv_cache_key_reshaped, k_sharded, update_idxs_tensor=cur_pos_tensor)
+        ttnn.experimental.paged_update_cache(kv_cache_value_reshaped, v_sharded, update_idxs_tensor=cur_pos_tensor)
         new_key = kv_cache_key
         new_value = kv_cache_value
         _use_sdpa_decode = True
@@ -337,8 +392,10 @@ def gated_attention_forward_ttnn(
         is_causal = True
         segmented_attn_mask = None
 
-    # Fused scaled dot-product attention
-    if _use_sdpa_decode:
+    # Fused scaled dot-product attention (skipped if paged SDPA already computed above)
+    if _paged_sdpa_done:
+        pass  # attn_output already set by paged SDPA decode path
+    elif _use_sdpa_decode:
         # Decode-optimized SDPA: reads cache[:, :, :cur_pos+1, :] internally.
         # sdpa_decode expects Q as [1, B, H, D] (not [B, H, 1, D] like regular SDPA).
         # Transpose from [B=1, H, T=1, D] → [T=1, B=1, H, D].
