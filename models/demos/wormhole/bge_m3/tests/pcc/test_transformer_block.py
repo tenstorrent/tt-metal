@@ -60,6 +60,7 @@ def first_layer_artifacts(model_location_generator):
 def test_transformer_block_vs_hf_first_layer(device, first_layer_artifacts, seq_len):
     require_single_device(device)
     hf_layer, state_dict, args = first_layer_artifacts
+    args.grid_size = device.compute_with_storage_grid_size()
 
     torch.manual_seed(42)
     hidden_states = torch.randn((BATCH_SIZE, seq_len, HIDDEN_SIZE), dtype=torch.bfloat16)
