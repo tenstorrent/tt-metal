@@ -24,6 +24,15 @@ inline void llk_math_eltwise_ternary_sfpu_mac(
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_ternary_sfpu_mac_init() {
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::mac>();
+    // eltwise_ternary_sfpu_configure_addrmod only sets ADDR_MOD_6 (dest.incr=2)
+    // for SfpuType::where.  mac's replay sequence uses ADDR_MOD_6 on SFPSTORE
+    // (physical slot 6, direct on Blackhole since there is no addr_mod_base
+    // offset), so we must configure it explicitly here.
+    addr_mod_t{
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 2},
+    }.set(ADDR_MOD_6);
 }
 
 }  // namespace ckernel
