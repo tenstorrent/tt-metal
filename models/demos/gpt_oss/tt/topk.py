@@ -156,7 +156,7 @@ class TopKRouter:
         hidden_states = ttnn.reshape(hidden_states, (-1, self.hidden_dim))
 
         # Fused op only supports decode mode (B=32, seq_len=1 → shape [32, hidden_dim])
-        if self.use_fused_op and actual_tokens == 32:
+        if self.use_fused_op and actual_tokens == 32 and use_throughput_experts:
             return self._fused_call(hidden_states, use_throughput_experts)
 
         # Output to L1 instead of DRAM (saves DRAM write+read round-trip)

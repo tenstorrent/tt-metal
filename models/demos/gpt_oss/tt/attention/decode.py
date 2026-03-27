@@ -4,7 +4,7 @@
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
-from .operations import apply_allreduce, apply_rope
+from .operations import apply_rope
 from .weights import AttentionWeights
 
 
@@ -162,7 +162,6 @@ def decode_forward(
     tt_out = ttnn.typecast(tt_out, ttnn.bfloat8_b)
 
     # Calculate padded hidden size for tile-aligned CCL operations.
-    # o_proj weights may be padded so local_hidden becomes tile-aligned.
     local_hidden = hidden_size // mesh_config.tp
     padded_local_hidden = ((local_hidden + 31) // 32) * 32
     padded_hidden = padded_local_hidden * mesh_config.tp if mesh_config.tp > 1 else hidden_size
@@ -172,10 +171,25 @@ def decode_forward(
         (1, 1, batch_size, padded_hidden),
         (1, 1, 32, padded_hidden),
     )
-    # tt_out = ttnn.unsqueeze(tt_out, 0)
 
-    # Tensor parallel allreduce
-    # TODO: This will need to be a reduce scatter so outputs are [1, 1, global_batch//num_rows, hidden_size//num_columns
-    tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
+    # Slice padding AFTER bias: [1,1,B,3072] -> [1,1,B,2880].
+    # Bias already applied on padded tensor; padding columns are zeros.
+    if padded_hidden != hidden_size and mesh_config.tp > 1:
+        tt_out = ttnn.slice(
+            tt_out,
+            starts=[0, 0, 0, 0],
+            ends=[1, 1, batch_size, hidden_size],
+            steps=[1, 1, 1, 1],
+        )
+
+    # Tensor parallel all-reduce (AllBroadcast, ~80μs vs RS+AG ~138μs).
+    if mesh_config.tp > 1:
+        tt_out = ttnn.all_reduce(
+            tt_out,
+            num_links=4,
+            topology=ttnn.Topology.Ring,
+            cluster_axis=mesh_config.tp_axis,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
     return tt_out
