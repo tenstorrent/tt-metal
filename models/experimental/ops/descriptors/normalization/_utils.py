@@ -80,8 +80,7 @@ def _create_layernorm_op_descriptor(
     operation_params.program_config = program_config
     operation_params.compute_kernel_config = compute_kernel_config
 
-    tensor_args = ttnn.LayerNormInputs()
-    tensor_args.input = input_tensor
+    tensor_args = ttnn.LayerNormInputs(input_tensor)
     if residual_input_tensor is not None:
         tensor_args.residual_input_tensor = residual_input_tensor
     if weight is not None:

@@ -236,10 +236,11 @@ void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {
     nb::class_<ttnn::prim::LayerNormInputs>(mod, "LayerNormInputs")
         .def(
             "__init__",
-            [](ttnn::prim::LayerNormInputs* t) {
+            [](ttnn::prim::LayerNormInputs* t, const ttnn::Tensor& input) {
                 new (t) ttnn::prim::LayerNormInputs{
-                    ttnn::Tensor(), std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt};
-            })
+                    input, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt};
+            },
+            nb::arg("input"))
         .def_rw("input", &ttnn::prim::LayerNormInputs::input)
         .def_rw("residual_input_tensor", &ttnn::prim::LayerNormInputs::residual_input_tensor)
         .def_rw("weight", &ttnn::prim::LayerNormInputs::weight)

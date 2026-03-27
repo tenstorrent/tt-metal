@@ -492,23 +492,9 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
     assert_output_accuracy(golden_output, output_ttnn)
 
 
-def test_layer_norm_compute_program_hash_default_constructed_input_tensor(device):
-    """`LayerNormInputs()` leaves `input` as a default `Tensor` (null `tensor_attributes`).
+def test_layer_norm_inputs_requires_input_tensor():
+    """``LayerNormInputs()`` without an input tensor must raise."""
+    import pytest
 
-    Default `compute_program_hash` hashes `tensor_args`; `Tensor::to_hash` must not dereference null (#40745).
-    """
-    arch = device.arch()
-    operation_params = ttnn.LayerNormParams()
-    operation_params.norm_type = ttnn.LayerNormType.LAYERNORM
-    operation_params.distributed_norm_stage = ttnn.DistributedLayerNormStage.NOT_DISTRIBUTED
-    operation_params.eps = 1e-12
-    operation_params.output_mem_config = ttnn.MemoryConfig(
-        memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.DRAM
-    )
-    operation_params.program_config = ttnn.create_layernorm_program_config(None)
-    operation_params.compute_kernel_config = ttnn.layernorm_default_compute_config(arch)
-
-    tensor_args = ttnn.LayerNormInputs()
-
-    h = ttnn.LayerNormDeviceOperation.compute_program_hash(operation_params, tensor_args)
-    assert isinstance(h, int)
+    with pytest.raises(TypeError):
+        ttnn.LayerNormInputs()
