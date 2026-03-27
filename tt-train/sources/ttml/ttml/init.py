@@ -17,7 +17,7 @@ In-place variants (uniform_, normal_, constant_, zeros_, ones_, xavier_uniform_,
     allocate a temporary tensor because ttnn has no in-place normal op.
 
     Usage:
-        ttml.init.uniform_(tensor, 0.1, 0.1)
+        ttml.init.uniform_(tensor, -0.1, 0.1)
         ttml.init.xavier_uniform_(model.fc1.weight, gain=1.0)
 
 Factory variants (uniform, normal, constant, zeros, ones, xavier_uniform,
