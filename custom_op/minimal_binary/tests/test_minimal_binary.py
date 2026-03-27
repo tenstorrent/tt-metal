@@ -88,8 +88,8 @@ def test_minimal_binary(device, shape, dtype, op_type, config):
     a_torch = torch.rand(shape, dtype=torch_dtype)
     b_torch = torch.rand(shape, dtype=torch_dtype)
 
-    a_torch = torch.full(shape, fill_value=3.0, dtype=torch_dtype)
-    b_torch = torch.full(shape, fill_value=4.0, dtype=torch_dtype)
+    # a_torch = torch.full(shape, fill_value=3.0, dtype=torch_dtype)
+    # b_torch = torch.full(shape, fill_value=4.0, dtype=torch_dtype)
 
     # Avoid near-zero values for mul (to keep ULP errors small)
     # if op_type == "mul":

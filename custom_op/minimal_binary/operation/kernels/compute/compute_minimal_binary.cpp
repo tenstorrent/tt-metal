@@ -48,33 +48,33 @@ void kernel_main() {
 #endif
     PROCESS_OP_INIT;
 
-    UNPACK(DPRINT << "block size = " << block_size << ENDL(););
+    // UNPACK(DPRINT << "block size = " << block_size << ENDL(););
     uint32_t tiles_done = 0;
     while (tiles_done < Wt) {
-        UNPACK(DPRINT << "tiles dones - " << tiles_done << ENDL(););
+        // UNPACK(DPRINT << "tiles dones - " << tiles_done << ENDL(););
 #if IS_FP32
 
-        UNPACK(DPRINT << "FP32 path" << ENDL(););
-        // SFPU path: batch block_size tiles; process sub_block_size per DST acquire/release.
-        // copy_tile with explicit tile indices works correctly here.
+        // UNPACK(DPRINT << "FP32 path" << ENDL(););
+        //  SFPU path: batch block_size tiles; process sub_block_size per DST acquire/release.
+        //  copy_tile with explicit tile indices works correctly here.
         cb_wait_front(c_a, block_size);
         cb_wait_front(c_b, block_size);
         cb_reserve_back(c_out, block_size);
         for (uint32_t sb = 0; sb < block_size; sb += sub_block_size) {
-            UNPACK(DPRINT << "sb = " << sb << ENDL(););
+            // UNPACK(DPRINT << "sb = " << sb << ENDL(););
             tile_regs_acquire();
             copy_tile_to_dst_init_short(c_a);
             for (uint32_t k = 0; k < sub_block_size; ++k) {
-                UNPACK(DPRINT << "copy a from " << sb + k << " to " << k * 2 << ENDL(););
+                // UNPACK(DPRINT << "copy a from " << sb + k << " to " << k * 2 << ENDL(););
                 copy_tile(c_a, sb + k, k * 2);  // A tile → DST[k*2]
             }
             copy_tile_to_dst_init_short(c_b);
             for (uint32_t k = 0; k < sub_block_size; ++k) {
-                UNPACK(DPRINT << "copy b from " << sb + k << " to " << k * 2 + 1 << ENDL(););
+                // UNPACK(DPRINT << "copy b from " << sb + k << " to " << k * 2 + 1 << ENDL(););
                 copy_tile(c_b, sb + k, k * 2 + 1);  // B tile → DST[k*2+1]
-                fill_tile_init();
-                // fill_tile(k * 2, 3.f);
-                fill_tile(k * 2 + 1, 4.f);
+                // fill_tile_init();
+                //  fill_tile(k * 2, 3.f);
+                // fill_tile(k * 2 + 1, 4.f);
                 PROCESS_OP(k * 2, k * 2 + 1, k * 2);  // op(DST[k*2], DST[k*2+1]) → DST[k*2]
                                                       // fill_tile_init();
                 // fill_tile(k * 2, 12.f);
