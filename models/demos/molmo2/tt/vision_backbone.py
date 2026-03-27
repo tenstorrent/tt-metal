@@ -60,7 +60,7 @@ class VisionBackbone(LightweightModule):
         # Common config
         layer_norm_eps: float = 1e-6,
         weight_cache_path=None,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,  # Changed from bfloat8_b for better vision precision
     ):
         """
         Initialize VisionBackbone.
@@ -138,6 +138,9 @@ class VisionBackbone(LightweightModule):
             dtype=dtype,
         )
 
+    # Class-level request counter for debugging
+    _encode_image_request_count = 0
+
     def encode_image(
         self,
         images_embedded: ttnn.Tensor,
@@ -154,20 +157,50 @@ class VisionBackbone(LightweightModule):
         Returns:
             Concatenated multi-scale features [B, T*N, pool_input_dim]
         """
+        from loguru import logger
+
+        # Track request count for debugging
+        VisionBackbone._encode_image_request_count += 1
+        request_num = VisionBackbone._encode_image_request_count
+        logger.info(f"encode_image REQUEST #{request_num}: Starting ViT forward...")
+        logger.info(f"  images_embedded shape: {list(images_embedded.shape)}")
+
         # Run through ViT and collect all hidden states
         hidden_states = self.image_vit.forward(
             images_embedded,
             return_all_hidden_states=True,
         )
 
+        logger.info(
+            f"encode_image REQUEST #{request_num}: ViT forward complete, got {len(hidden_states)} hidden states"
+        )
+
         # Extract features from specified layers and concat
         features = []
+        used_indices = set(self.feature_layers)
         for layer_idx in self.feature_layers:
             features.append(hidden_states[layer_idx])
+            logger.info(f"  Using layer {layer_idx}, shape: {list(hidden_states[layer_idx].shape)}")
+
+        # CRITICAL: Deallocate unused hidden states to prevent memory leak
+        # For video with 8 frames, each hidden state is ~27MB, 25 layers = ~670MB total
+        # Only using 2 layers means 23 layers (~620MB) would be leaked per request!
+        deallocated_count = 0
+        for i, hs in enumerate(hidden_states):
+            if i not in used_indices:
+                ttnn.deallocate(hs)
+                deallocated_count += 1
+        logger.info(f"encode_image REQUEST #{request_num}: Deallocated {deallocated_count} unused hidden states")
 
         # Concatenate on hidden dimension
         # Each feature is [1, 1, B*T*N, hidden_dim]
         image_features = ttnn.concat(features, dim=-1)
+
+        # NOTE: Do NOT deallocate features here - ttnn.concat may return a view that references inputs
+        # The deallocation of unused hidden states above is sufficient for memory management
+        logger.info(f"encode_image REQUEST #{request_num}: Concat complete (keeping feature tensors)")
+
+        logger.info(f"encode_image REQUEST #{request_num}: Complete, output shape: {list(image_features.shape)}")
 
         return image_features
 
@@ -322,7 +355,7 @@ class VisionBackbone(LightweightModule):
             attn_mask_ttnn = None
 
         # 6. Cross-attention pooling
-        pooled_features = self.image_pooling_2d(
+        pooled_features_raw = self.image_pooling_2d(
             query=query_ttnn,
             key_value=to_pool_ttnn,
             attn_mask=attn_mask_ttnn,
@@ -334,10 +367,12 @@ class VisionBackbone(LightweightModule):
             ttnn.deallocate(attn_mask_ttnn)
 
         # Reshape: [1, B*N_out, 1, hidden_dim] -> [1, 1, B*N_out, hidden_dim]
-        pooled_features = ttnn.reshape(pooled_features, [1, 1, batch_size * n_out, -1])
+        pooled_features = ttnn.reshape(pooled_features_raw, [1, 1, batch_size * n_out, -1])
+        # NOTE: Do NOT deallocate pooled_features_raw - reshape may return a view
 
         # 7. Project to language model dimension
         visual_embeddings = self.image_projector(pooled_features)
+        # NOTE: Do NOT deallocate pooled_features - projection may use views internally
 
         # 8. Filter by valid tokens (return only valid embeddings)
         # Convert to torch for filtering
@@ -347,6 +382,9 @@ class VisionBackbone(LightweightModule):
             )[0]
         else:
             visual_embeddings_torch = ttnn.to_torch(visual_embeddings)
+
+        # CRITICAL: Deallocate TTNN tensor after converting to torch
+        ttnn.deallocate(visual_embeddings)
 
         visual_embeddings_torch = visual_embeddings_torch.squeeze(0).squeeze(0)  # [B*N_out, output_dim]
 
@@ -447,6 +485,7 @@ class VisionBackbone(LightweightModule):
         # to_pool (key/value): [1, B*N_out, K_pool, pool_dim]
         # attn_mask is skipped here: dynamic masking breaks TTNN trace capture.
         # The non-traced forward() path passes the mask correctly.
+
         pooled_features = self.image_pooling_2d(
             query=query,
             key_value=to_pool,
@@ -463,5 +502,6 @@ class VisionBackbone(LightweightModule):
 
         # 6. Project to language model dimension
         visual_embeddings = self.image_projector(pooled_features)
+        ttnn.deallocate(pooled_features)
 
         return visual_embeddings

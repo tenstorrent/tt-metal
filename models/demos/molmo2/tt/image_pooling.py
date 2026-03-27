@@ -46,7 +46,7 @@ class ImagePooling(LightweightModule):
         head_dim: int = 72,
         weight_cache_path=None,
         state_dict_prefix: str = "model.vision_backbone.image_pooling_2d",
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,  # Changed from bfloat8_b for better precision
     ):
         """
         Initialize ImagePooling.
@@ -300,39 +300,50 @@ class ImagePooling(LightweightModule):
 
         q = ttnn.reshape(q, [batch_seq, num_queries, self.num_heads, self.padded_head_dim])
         q = ttnn.permute(q, (0, 2, 1, 3))
-        q = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
+        q = ttnn.typecast(q, dtype=ttnn.bfloat16)  # Changed from bfloat8_b
 
         k = ttnn.reshape(k, [batch_seq, pool_size, self.num_heads, self.padded_head_dim])
         k = ttnn.permute(k, (0, 2, 1, 3))
-        k = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
+        k = ttnn.typecast(k, dtype=ttnn.bfloat16)  # Changed from bfloat8_b
 
         v = ttnn.reshape(v, [batch_seq, pool_size, self.num_heads, self.padded_head_dim])
         v = ttnn.permute(v, (0, 2, 1, 3))
-        v = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
+        v = ttnn.typecast(v, dtype=ttnn.bfloat16)  # Changed from bfloat8_b
 
-        sdpa_mask = attn_mask
-        if attn_mask is not None:
-            mask_shape = list(attn_mask.shape)
-            if len(mask_shape) == 4 and mask_shape[2] == 1 and num_queries > 1:
-                sdpa_mask = ttnn.repeat(
-                    attn_mask,
-                    (1, 1, num_queries, 1),
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
+        # Use manual attention computation to handle mask correctly
+        # (TTNN SDPA has issues with additive masks in cross-attention)
 
-        # Scaled dot-product attention
-        attn_output = ttnn.transformer.scaled_dot_product_attention(
+        # Q @ K^T -> [batch_seq, num_heads, num_queries, pool_size]
+        k_t = ttnn.permute(k, (0, 1, 3, 2))  # [batch_seq, num_heads, head_dim, pool_size]
+        attn_weights = ttnn.matmul(
             q,
-            k,
-            v,
-            is_causal=False,
-            scale=self.scale,
-            attn_mask=sdpa_mask,
+            k_t,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
         )
+        ttnn.deallocate(k_t)
 
-        if sdpa_mask is not attn_mask and sdpa_mask is not None:
-            ttnn.deallocate(sdpa_mask)
+        # Scale
+        attn_weights = ttnn.mul(attn_weights, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Apply attention mask (additive mask: 0 for valid, -inf for invalid)
+        if attn_mask is not None:
+            # Expand mask from [batch_seq, 1, 1, pool_size] to [batch_seq, num_heads, num_queries, pool_size]
+            # Broadcasting should handle this automatically
+            attn_weights = ttnn.add(attn_weights, attn_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        # Softmax
+        attn_probs = ttnn.softmax(attn_weights, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(attn_weights)
+
+        # Attention output: attn_probs @ V -> [batch_seq, num_heads, num_queries, head_dim]
+        attn_output = ttnn.matmul(
+            attn_probs,
+            v,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config_hifi4,
+        )
+        ttnn.deallocate(attn_probs)
 
         ttnn.deallocate(q)
         ttnn.deallocate(k)
