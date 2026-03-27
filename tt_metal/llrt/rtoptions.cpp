@@ -105,6 +105,7 @@ enum class EnvVarID {
     TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
     TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
+    TT_METAL_DRAM_BACKED_CQ,                   // Store command queues in device DRAM
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -687,6 +688,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: 0 (use SFPLOADMACRO instructions)
         // Usage: export TT_METAL_DISABLE_SFPLOADMACRO=1
         case EnvVarID::TT_METAL_DISABLE_SFPLOADMACRO: this->disable_sfploadmacro = is_env_enabled(value); break;
+
+        // TT_METAL_DRAM_BACKED_CQ
+        // Store command queues in device DRAM.
+        // Default: false (use hugepages)
+        // Usage: export TT_METAL_DRAM_BACKED_CQ=1
+        case EnvVarID::TT_METAL_DRAM_BACKED_CQ: this->dram_backed_cq = is_env_enabled(value); break;
 
         // ========================================
         // PROFILING & PERFORMANCE

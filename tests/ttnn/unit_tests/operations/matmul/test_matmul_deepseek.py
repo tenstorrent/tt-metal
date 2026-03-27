@@ -1116,6 +1116,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
 )
 @pytest.mark.parametrize("seq_len", [128])  # Longer sequence lengths are 1024, 4096, 8192, 32768, 131072
 @skip_for_blackhole("Deepseek tests target Wormhole")
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
     """
     Tests the MLA prefill matmuls with in0 DRAM interleaved and in1 DRAM sharded.
