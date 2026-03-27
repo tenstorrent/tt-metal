@@ -503,13 +503,13 @@ def run_ring_joint_sdpa(
 
                 assert passing
     else:
-        logger.debug("  Distributed synchronization started")
-        ttnn.distributed_context_barrier()
-        logger.debug("✓ Distributed synchronization completed")
-
         logger.info("Starting synchronize call")
         ttnn.synchronize_device(submesh)
         logger.info("Synchronize call ended")
+
+        logger.debug("  Distributed synchronization started")
+        ttnn.distributed_context_barrier()
+        logger.debug("✓ Distributed synchronization completed")
 
 
 #  Note: seq_len and nhq_v will be scaled down to the hw test runs on, inputs are for 32x4 devices configuration
@@ -520,6 +520,7 @@ def run_ring_joint_sdpa(
         (128 * 1024, 256, 128),
         (100 * 1024, 320, 64),
     ],
+    ids=["seq128k", "seq100k"],
 )
 @pytest.mark.parametrize(
     "b, nhq_v, nhk, head_dim_q_k, head_dim_v",
