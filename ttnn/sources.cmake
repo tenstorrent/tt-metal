@@ -186,8 +186,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/dropout/dropout_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/inbound_socket_service_sync/inbound_socket_service_sync_nanobind.cpp
     cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
-    cpp/ttnn/operations/experimental/fused_persistent_moe_decode/fused_persistent_moe_decode_nanobind.cpp
-    cpp/ttnn/operations/experimental/fused_paged_update_and_mla/fused_paged_update_and_mla_nanobind.cpp
     cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.cpp
     cpp/ttnn/operations/experimental/experimental_nanobind.cpp
     cpp/ttnn/operations/experimental/quasar/quasar_nanobind.cpp
