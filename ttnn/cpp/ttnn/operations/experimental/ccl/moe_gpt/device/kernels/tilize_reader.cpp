@@ -279,7 +279,6 @@ void kernel_main() {
     const auto indices_tensor_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
     const auto scores_tensor_addr_gen = TensorAccessor(scores_args, scores_tensor_address, scores_page_size);
     const auto mapping_tensor_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
-#ifndef TILIZE_TO_DRAM
     const auto per_expert_total_tokens_output_tensor_addr_gen = TensorAccessor(
         per_expert_total_tokens_output_args,
         per_expert_total_tokens_output_tensor_address,
@@ -650,7 +649,6 @@ void kernel_main() {
             reinterpret_cast<uint32_t*>(expert_activation_base + num_activated_tokens * aligned_activation_row_bytes);
         sentinel_row_ptr[0] = static_cast<uint32_t>(-1);  // token_id = -1 indicates end
 
-#ifndef TILIZE_TO_DRAM
         // Write activated rows + sentinel = (num_activated_tokens + 1) rows
         // Skip if address is 0 (fused mode: no output tensors allocated)
         if (expert_activation_output_address != 0) {
@@ -718,19 +716,11 @@ void kernel_main() {
             noc_async_writes_flushed();
         }
 
-#ifndef TILIZE_TO_DRAM
         /*
          * Send metadata to MM cores (repeat for both bounding boxes):
          * 1) Encode number of tokens per expert into the semaphore (plus a valid bit)
          * 2) Signal the metadata via semaphore to MM cores
          *
-         * Skipped in TILIZE_TO_DRAM mode: matmul cores run independently and
-         * don't consume tilize metadata.  More importantly, the multicast goes
-         * out on the same NOC (NOC_1) that the writer uses for DRAM page
-         * writes.  Because BRISC and NCRISC share the NOC interface, the
-         * writer's noc_async_write_barrier would stall waiting for this
-         * multicast to be acknowledged -- which may never happen when matmul
-         * cores aren't expecting it.
          */
 
         // == 1 == Write per-expert token counts to individual semaphores
@@ -779,7 +769,6 @@ void kernel_main() {
 
         noc_semaphore_set_multicast(
             metadata_ready_semaphore_addr, matmul_metadata_ready_semaphore_mcast_addr, matmul_bounding_box_num_cores);
-#endif  // !TILIZE_TO_DRAM
     }  // End of is_drain_tilize_core block
     else {
         // ========== NON-DRAIN tilize CORE: Step 4 - Send counts to drain ==========
@@ -874,7 +863,6 @@ void kernel_main() {
         }
     }
 
-#ifndef TILIZE_TO_DRAM
     // write out e_t_output_tensor
     // Skip if address is 0 (fused mode: no output tensors allocated)
     if (is_drain_tilize_core && e_t_output_address != 0) {

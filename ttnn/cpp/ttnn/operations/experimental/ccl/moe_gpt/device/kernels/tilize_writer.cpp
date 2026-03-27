@@ -375,21 +375,6 @@ void kernel_main() {
     [[maybe_unused]] uint32_t total_chunks =
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(total_chunks_cb_id));
 
-#ifdef TILIZE_TO_DRAM
-    // --- Phase 1: Write tilized output to DRAM for verification ---
-    constexpr uint32_t tiles_per_row = hidden_size / TILE_WIDTH;
-    constexpr uint32_t max_chunks_per_expert = tokens / tokens_per_chunk;
-
-    // DRAM output address is the last runtime arg (after NOC coords)
-    uint32_t dram_output_addr = get_arg_val<uint32_t>(18 + 2 * num_tilize_cores);
-
-    const InterleavedAddrGen<true> dram_output_addr_gen = {
-        .bank_base_address = dram_output_addr,
-        .page_size = tilize_output_page_size,
-    };
-
-    uint32_t num_chunks_sent = 0;
-#else
     /************************************************************************/
     /* Synchronization setup for signalling between tilize and matmul cores */
     /************************************************************************/
@@ -450,38 +435,6 @@ void kernel_main() {
     uint32_t normal_iteration_bytes_to_mcast = tiles_per_global_chunk * tilize_output_page_size;
 #endif
 
-#ifdef TILIZE_TO_DRAM
-    // --- Phase 1 DRAM write path ---
-    // Each core independently writes its local sub-chunk tiles to the DRAM output tensor.
-    // Tile layout in DRAM: [E * max_chunks_per_expert tile rows, tiles_per_row tile cols]
-    // Expert e, chunk c -> tile_row = e * max_chunks_per_expert + c
-    // This core's tiles start at column = global_tile_offset
-    for (uint32_t e = 0; e < experts_per_device; e++) {
-        uint32_t num_expert_tokens = num_tokens_per_expert[e];
-        uint32_t num_expert_chunks = (num_expert_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
-
-        for (uint32_t chunk = 0; chunk < num_expert_chunks; chunk++) {
-            cb_wait_front(tilize_output_cb_id, shared_cb_num_pages);
-            uint32_t l1_read_addr = get_read_ptr(tilize_output_cb_id);
-
-            uint32_t tile_row = e * max_chunks_per_expert + chunk;
-            uint32_t base_tile_id = tile_row * tiles_per_row + global_tile_offset;
-
-            for (uint32_t t = 0; t < tiles_per_local_chunk; t++) {
-                noc_async_write_page(base_tile_id + t, dram_output_addr_gen, l1_read_addr);
-                l1_read_addr += tilize_output_page_size;
-            }
-
-            noc_async_write_barrier(noc_index);
-
-            cb_pop_front(tilize_output_cb_id, shared_cb_num_pages);
-            num_chunks_sent++;
-
-            noc_semaphore_set(
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(previous_chunk_sent_semaphore_addr), num_chunks_sent);
-        }
-    }
-#else
     /* start loop iterations */
 
     // Process each expert's chunks
@@ -646,7 +599,6 @@ void kernel_main() {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(previous_chunk_sent_semaphore_addr), num_chunks_sent);
         }
     }
-#endif  // TILIZE_TO_DRAM
 
     // Pop the per-expert counts and total_chunks (cleanup)
     cb_pop_front(per_expert_total_tokens_cb_id, one_page);
