@@ -455,6 +455,8 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
  *       inter-mesh pairings. If all attempts fail, result.success will be false
  * @note If config.disable_rank_bindings is true, rank constraints are ignored and any valid connectivity
  *       mapping is allowed
+ * @note When config.hostname_to_asics is non-empty, inter-mesh solving applies the same minimal host-cover bias as PGD
+ *       (same-rank / preferred globals) so mesh-to-mesh mapping tends to use fewer hosts when possible.
  */
 TopologyMappingResult map_multi_mesh_to_physical(
     const LogicalMultiMeshGraph& adjacency_map_logical,

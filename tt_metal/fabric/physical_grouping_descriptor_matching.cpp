@@ -877,50 +877,6 @@ void configure_pgd_psd_host_alignment_constraints(
         return;
     }
 
-    // Check if some host can hold the mesh
-    const size_t mesh_target_count = all_targets.size();
-    bool some_host_can_hold_mesh = false;
-    for (const auto& [_, asics] : host_to_asics) {
-        if (asics.size() >= mesh_target_count) {
-            some_host_can_hold_mesh = true;
-            break;
-        }
-    }
-
-    // Greedy minimal host cover algo to find the smallest set of hosts that can hold the mesh
-    std::set<AsicID> preferred_asics_minimal_host_cover;
-    if (!some_host_can_hold_mesh) {
-        std::vector<std::string> hostnames_by_size;
-        hostnames_by_size.reserve(host_to_asics.size());
-        for (const auto& [hn, asics] : host_to_asics) {
-            if (!asics.empty()) {
-                hostnames_by_size.push_back(hn);
-            }
-        }
-        // Sort hosts by size descending, then alphabetically ascending
-        std::sort(hostnames_by_size.begin(), hostnames_by_size.end(), [&](const std::string& a, const std::string& b) {
-            size_t sa = host_to_asics.at(a).size();
-            size_t sb = host_to_asics.at(b).size();
-            if (sa != sb) {
-                return sa > sb;
-            }
-            return a < b;
-        });
-        size_t covered = 0;
-        for (const std::string& hn : hostnames_by_size) {
-            const auto& asics = host_to_asics.at(hn);
-            preferred_asics_minimal_host_cover.insert(asics.begin(), asics.end());
-            covered += asics.size();
-            if (covered >= mesh_target_count) {
-                break;
-            }
-        }
-    }
-
-    std::vector<std::set<uint32_t>> target_groups;
-    target_groups.push_back(std::move(all_targets));
-
-    // Find groups that can hold the mesh
     std::vector<std::set<AsicID>> global_groups;
     global_groups.reserve(host_to_asics.size());
     for (auto& [_, asics] : host_to_asics) {
@@ -929,33 +885,29 @@ void configure_pgd_psd_host_alignment_constraints(
         }
     }
 
-    if (global_groups.empty()) {
-        return;
-    }
-
-    // Set same-rank groups constraint if some host can hold the mesh
-    if (some_host_can_hold_mesh) {
-        bool success = constraints.set_same_rank_groups_constraint(target_groups, global_groups);
-        if (!success) {
-            log_warning(
-                tt::LogFabric,
-                "PGD host alignment: failed to set same-rank groups constraint; groupings might cross host boundaries");
+    const auto [single_group_fits, preferred_globals] =
+        ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(all_targets, global_groups);
+    if (single_group_fits) {
+        std::vector<std::set<uint32_t>> target_groups;
+        target_groups.push_back(all_targets);
+        if (constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
             return;
         }
-        return;
+        log_warning(
+            tt::LogFabric,
+            "PGD host alignment: failed to set same-rank groups constraint; falling back to preferred globals");
     }
-
-    // If the rank groups constraint fails because they are constrained to too small a group of hosts, set a preferred
-    // constraint to the minimal host cover and allow the solver to choose the best one.
-    log_debug(
-        tt::LogFabric,
-        "PGD host alignment: mesh size {} exceeds every host's ASIC count; preferring minimal host cover ({} ASICs)",
-        mesh_target_count,
-        preferred_asics_minimal_host_cover.size());
-
-    if (!preferred_asics_minimal_host_cover.empty()) {
-        for (uint32_t target : target_groups.front()) {
-            constraints.add_preferred_constraint(target, preferred_asics_minimal_host_cover);
+    if (!preferred_globals.empty()) {
+        if (!single_group_fits) {
+            log_debug(
+                tt::LogFabric,
+                "PGD host alignment: target count {} exceeds largest single partition; preferring minimal host cover "
+                "({} preferred globals)",
+                all_targets.size(),
+                preferred_globals.size());
+        }
+        for (const uint32_t& target : all_targets) {
+            constraints.add_preferred_constraint(target, preferred_globals);
         }
     }
 }
