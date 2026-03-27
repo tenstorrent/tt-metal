@@ -4767,8 +4767,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
         // Check that each node should have neighbors (1D topology, so 1-2 neighbors)
         for (const auto& node : adjacency_graph.get_nodes()) {
-            EXPECT_GE(
-                adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 4 channels per direction
+            EXPECT_GE(adjacency_graph.get_neighbors(node).size(), 2u * 2u);
             EXPECT_LE(
                 adjacency_graph.get_neighbors(node).size(), 3u * 2u);  // num directions * 2 channels per direction
         }
