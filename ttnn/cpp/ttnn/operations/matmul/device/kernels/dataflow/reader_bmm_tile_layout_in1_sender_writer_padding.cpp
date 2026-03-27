@@ -310,7 +310,7 @@ void kernel_main() {
                                 uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
                                 uint32_t cb_write_offset_temp = cb_write_offset_in1;
                                 for (uint32_t w = 0; w < in1_block_w_dram; ++w) {
-                                    noc.async_read<Noc::TxnIdMode::DISABLED, in1_single_tile_size_bytes>(
+                                    noc.async_read<experimental::Noc::TxnIdMode::DISABLED, in1_single_tile_size_bytes>(
                                         dram_bank,
                                         cb_in1,
                                         in1_single_tile_size_bytes,
@@ -502,7 +502,7 @@ void kernel_main() {
                                 in1_single_tile_size_bytes;
 
                             for (uint32_t w = 0; w < in3_block_w_dram; ++w) {
-                                noc.async_read<Noc::TxnIdMode::DISABLED, bias_single_tile_size_bytes>(
+                                noc.async_read<experimental::Noc::TxnIdMode::DISABLED, bias_single_tile_size_bytes>(
                                     dram_bank_bias,
                                     cb_in3,
                                     bias_single_tile_size_bytes,

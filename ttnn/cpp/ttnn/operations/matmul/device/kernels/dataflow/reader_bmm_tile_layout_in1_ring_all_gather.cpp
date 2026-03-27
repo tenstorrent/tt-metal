@@ -176,7 +176,7 @@ void kernel_main() {
                     for (uint32_t w = 0; w < in1_block_width_num_pages; ++w) {
                         uint32_t curr_page_size =
                             w == in1_block_width_num_pages - 1 ? in1_block_page_size_last : in1_block_page_size;
-                        noc.async_read<Noc::TxnIdMode::DISABLED, max_page>(
+                        noc.async_read<experimental::Noc::TxnIdMode::DISABLED, max_page>(
                             dram_bank,
                             cb_in1,
                             curr_page_size,

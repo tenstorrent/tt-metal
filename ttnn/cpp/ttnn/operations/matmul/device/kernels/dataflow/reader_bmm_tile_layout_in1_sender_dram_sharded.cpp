@@ -73,7 +73,7 @@ void kernel_main() {
     experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
 
 #ifdef ARCH_GRAYSKULL
-    noc.set_async_read_state<Noc::VcSelection::CUSTOM, in1_page_size>(
+    noc.set_async_read_state<experimental::Noc::VcSelection::CUSTOM, in1_page_size>(
         dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, vc);
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -82,7 +82,7 @@ void kernel_main() {
         uint32_t cb_write_offset = 0;
 
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc.async_read_with_state<Noc::VcSelection::CUSTOM, in1_page_size>(
+            noc.async_read_with_state<experimental::Noc::VcSelection::CUSTOM, in1_page_size>(
                 dram_bank,
                 cb_in1,
                 in1_page_size,
@@ -109,7 +109,7 @@ void kernel_main() {
     uint32_t l1_write_addr_in1 = l1_write_addr_in1_start;
     for (uint32_t block = 0; block < num_blocks; ++block) {
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc.async_read<Noc::TxnIdMode::ENABLED, in1_page_size>(
+            noc.async_read<experimental::Noc::TxnIdMode::ENABLED, in1_page_size>(
                 dram_bank,
                 experimental::CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 in1_page_size,
@@ -122,7 +122,7 @@ void kernel_main() {
         }
 
         if (num_free_blocks_in_buffer == 2) {
-            noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
+            noc.async_read_barrier<experimental::Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
             cb_in1.push_back(in1_block_num_tiles);
             // wait for next block trid
             block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
@@ -142,7 +142,7 @@ void kernel_main() {
         l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
     }
     // last block to wait
-    noc.async_read_barrier<Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
+    noc.async_read_barrier<experimental::Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
     cb_in1.push_back(in1_block_num_tiles);
 #endif
 
@@ -153,7 +153,7 @@ void kernel_main() {
     uint32_t cb_write_offset_in3 = 0;
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
-        noc.async_read<Noc::TxnIdMode::DISABLED, in3_page_size>(
+        noc.async_read<experimental::Noc::TxnIdMode::DISABLED, in3_page_size>(
             dram_bank,
             cb_in3,
             in3_page_size,
