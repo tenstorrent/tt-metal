@@ -1453,8 +1453,11 @@ TEST(PhysicalGroupingDescriptorSP4Tests, ValidatePreformedGroups_Sp4BhGalaxyQuad
 
         auto asic_ids = pgd.find_all_in_psd(mesh_groupings, psd, errors);
 
-        EXPECT_EQ(asic_ids.size(), 24u) << "Expected validation to pass: 2x 4x4_Mesh BH groupings should map to mock "
-                                           "cluster PSD (12 mappings each)";
+        // SP4 GLX mock + bh_galaxy_sp4 rank bindings: 4 meshes × 4 hosts = 16 hosts in the merged PSD. Each 4x4_Mesh BH
+        // variant (TRAY_3/1 vs TRAY_4/2) maps once per host, so 16 + 16 = 32 placements (not 24 for a 12-host / 3×4
+        // mesh).
+        EXPECT_EQ(asic_ids.size(), 32u)
+            << "Expected validation to pass: 2x 4x4_Mesh BH groupings should map to mock cluster PSD (16 per variant)";
     }
 }
 
