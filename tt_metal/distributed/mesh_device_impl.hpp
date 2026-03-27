@@ -154,6 +154,7 @@ private:
         uint64_t first_timestamp = 0;                   // First device timestamp (for normalization)
         int64_t sync_host_start = 0;                    // Host time when sync started
         double sync_frequency = 0.0;                    // Device clock frequency in GHz
+        uint32_t realtime_profiler_base_addr = 0;       // Base address of realtime_profiler_msg_t in L1
         uint32_t sync_request_addr = 0;                 // Mailbox address for sync request
         uint32_t sync_host_ts_addr = 0;                 // Mailbox address for sync host timestamp
         std::atomic<bool> sync_response_received{true};  // false = sync pending, true = no pending sync
@@ -170,6 +171,7 @@ private:
             first_timestamp(o.first_timestamp),
             sync_host_start(o.sync_host_start),
             sync_frequency(o.sync_frequency),
+            realtime_profiler_base_addr(o.realtime_profiler_base_addr),
             sync_request_addr(o.sync_request_addr),
             sync_host_ts_addr(o.sync_host_ts_addr),
             sync_response_received(o.sync_response_received.load(std::memory_order_relaxed)),
