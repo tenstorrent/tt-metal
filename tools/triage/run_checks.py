@@ -63,6 +63,7 @@ BLOCK_TYPES = [
     "active_eth",
     "tensix",
     "eth",
+    "dram",
 ]
 
 # We need to map triage block types to inspector block types since we cannot use _ in capnp struct names
@@ -81,6 +82,7 @@ CORE_TYPES = {
     "erisc",
     "erisc0",
     "erisc1",
+    "drisc",
 }
 
 BlockType: TypeAlias = Literal[BLOCK_TYPES]
@@ -193,9 +195,12 @@ def get_block_locations(
                         device, getattr(chip_blocks_list[i].blocks, INSPECTOR_BLOCK_TYPES[block_type]), block_type
                     )
                 else:
-                    block_locations[device][block_type] = device.get_block_locations(
-                        "functional_workers" if block_type == "tensix" else block_type
-                    )
+                    if block_type == "dram" and not device.is_blackhole():
+                        block_locations[device][block_type] = []
+                    else:
+                        block_locations[device][block_type] = device.get_block_locations(
+                            "functional_workers" if block_type == "tensix" else block_type
+                        )
 
     return block_locations
 

@@ -43,6 +43,8 @@ def dump_callstacks(
     try:
         # Skip DONE cores unless --all-cores is specified
         if not show_all_cores:
+            if risc_name == "drisc" and not callstack_provider.dispatcher_data.drisc_enabled():
+                return None
             dispatcher_core_data = callstack_provider.dispatcher_data.get_cached_core_data(location, risc_name)
             if dispatcher_core_data.go_message == "DONE":
                 return None
@@ -61,7 +63,7 @@ def dump_callstacks(
 
 def run(args, context: Context):
     show_all_cores: bool = args["--all-cores"]
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
     run_checks = get_run_checks(args, context)
     callstack_provider = get_callstack_provider(args, context)
     return run_checks.run_per_core_check(

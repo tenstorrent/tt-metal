@@ -697,6 +697,7 @@ static int pgm_dispatch(T& state, TestInfo info) {
         }
         mesh_device = MeshDevice::create_unit_mesh(
             device_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, DispatchCoreConfig{dispatch_core_type});
+        sleep(10000);
         auto& mesh_cq = mesh_device->mesh_command_queue(cq_id);
 
         auto grid_size = mesh_device->compute_with_storage_grid_size();
