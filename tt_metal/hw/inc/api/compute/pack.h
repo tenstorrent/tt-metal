@@ -271,4 +271,4 @@ ALWI void pack_rows_uninit() {
  }
  #endif
 
- }  // namespace ckernel
+}  // namespace ckernel
