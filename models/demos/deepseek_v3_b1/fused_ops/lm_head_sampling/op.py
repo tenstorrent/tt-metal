@@ -330,6 +330,8 @@ class LMHeadSampling:
         mcast_data_receiver_semaphore_id = 1
         argmax_receiver_semaphore_id = 2
         argmax_local_ready_semaphore_id = 3
+        fabric_gate_bcast_turn_semaphore_id = 4
+        fabric_gate_argmax_turn_semaphore_id = 5
         bcast_config = DeepseekMinimalBroadcast.configure(
             mesh_device=mesh_device,
             input_tensor_mesh=input_tensor_mesh,
@@ -365,6 +367,7 @@ class LMHeadSampling:
 
                 # Broadcast worker core from config (root/non-root consistent).
                 worker_core = bcast_config.get_worker_core(coord)
+                bcast_worker_core_phys = device.worker_core_from_logical_core(worker_core)
 
                 # ================================================================
                 # Core grid configuration (per-device)
@@ -558,6 +561,7 @@ class LMHeadSampling:
                             )
 
                     argmax_socket_mode = socket_mode_selected if emit_socket_on_this_device else socket_mode_none
+                    final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
 
                 # Determine if sender is part of the mcast rectangle
                 is_part_of_receiver_grid = mcast_grid.contains(mcast_sender_core)
@@ -624,6 +628,12 @@ class LMHeadSampling:
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
+                    ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
+                    ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
+                    ("fabric_gate_bcast_noc_y", int(bcast_worker_core_phys.y)),
+                    ("fabric_gate_argmax_noc_x", int(final_core_phys.x)),
+                    ("fabric_gate_argmax_noc_y", int(final_core_phys.y)),
                     ("mesh_row", row),
                     ("mesh_col", col),
                 ]
@@ -657,6 +667,12 @@ class LMHeadSampling:
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
+                    ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
+                    ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
+                    ("fabric_gate_bcast_noc_y", int(bcast_worker_core_phys.y)),
+                    ("fabric_gate_argmax_noc_x", int(final_core_phys.x)),
+                    ("fabric_gate_argmax_noc_y", int(final_core_phys.y)),
                     ("mesh_row", row),
                     ("mesh_col", col),
                 ]
@@ -681,6 +697,12 @@ class LMHeadSampling:
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
+                    ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
+                    ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
+                    ("fabric_gate_bcast_noc_y", int(bcast_worker_core_phys.y)),
+                    ("fabric_gate_argmax_noc_x", int(final_core_phys.x)),
+                    ("fabric_gate_argmax_noc_y", int(final_core_phys.y)),
                     ("mesh_row", row),
                     ("mesh_col", col),
                 ]
@@ -688,7 +710,6 @@ class LMHeadSampling:
                 # ================================================================
                 # CCL Broadcast common runtime args
                 # ================================================================
-                final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
                 argmax_scratch_addr = (
                     int(scratch_tensors_per_device[device_idx].buffer_address()) if not skip_ccl else 0
                 )
@@ -858,6 +879,16 @@ class LMHeadSampling:
                             ttnn.SemaphoreDescriptor(
                                 id=argmax_local_ready_semaphore_id,
                                 core_ranges=argmax_core_grid,
+                                initial_value=0,
+                            ),
+                            ttnn.SemaphoreDescriptor(
+                                id=fabric_gate_bcast_turn_semaphore_id,
+                                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)]),
+                                initial_value=1,
+                            ),
+                            ttnn.SemaphoreDescriptor(
+                                id=fabric_gate_argmax_turn_semaphore_id,
+                                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(argmax_final_core, argmax_final_core)]),
                                 initial_value=0,
                             ),
                         ]

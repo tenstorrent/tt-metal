@@ -818,7 +818,7 @@ class PreSDPA:
         nope_tiles = 8  # [8, 256] / [8, 32] = 8 tiles per NOPE phase
         rope_tiles = 2  # [8, 64] / [8, 32] = 2 tiles for ROPE phase
 
-        # NCRISC sender compile-time args (QNOPE/QROPE -> SDPA Input) - matching gather pattern: NCRISC sender, BRISC receiver
+        # NCRISC compile-time args: all CreateQHeads data movement (sender + receiver) on NCRISC
         # 3-phase synchronization: senders write to intermediate CB, TRISC tilizes to output
         # Pack NOC coordinates for each row's target SDPA Input core (x in lower 16 bits, y in upper 16 bits)
         create_q_heads_ncrisc_named_compile_time_args = [
@@ -844,18 +844,9 @@ class PreSDPA:
             ("cqh_qrope_src_num_pages", matmul2_out_w),  # 4 tiles of 1x32 (2 heads × 2 tiles)
             ("cqh_qnope_cols", QNOPE_COLS),
             ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB for row-major data
-        ]
-
-        # BRISC receiver compile-time args (SDPA Input cores) - matching gather pattern: NCRISC sender, BRISC receiver
-        # 3-phase receiver: waits for each phase's semaphore, then marks pages in intermediate CB
-        # Prefixed with "cqh_" to avoid name collisions with other BRISC args
-        create_q_heads_brisc_named_compile_time_args = [
-            ("cqh_nope_phase1_semaphore_addr", nope_phase1_semaphore_addr),
-            ("cqh_nope_phase2_semaphore_addr", nope_phase2_semaphore_addr),
-            ("cqh_rope_semaphore_addr", rope_semaphore_addr),
+            # Receiver args (also on NCRISC, for sdpa input cores)
             ("cqh_num_nope_senders", QNOPE_COLS),  # 8 QNOPE senders per receiver
             ("cqh_num_rope_senders", QROPE_COLS),  # 4 QROPE senders per receiver
-            ("cqh_receiver_in_cb", create_q_heads_receiver_in_cb),  # Intermediate CB
             ("cqh_out_cb", create_q_heads_out_cb),  # Output CB (backed by output tensor)
             ("cqh_nope_tiles", nope_tiles),  # 8 tiles per NOPE phase
             ("cqh_rope_tiles", rope_tiles),  # 2 tiles for ROPE phase
@@ -1081,14 +1072,12 @@ class PreSDPA:
             ("krope_Ht", krope_Ht),
         ]
 
-        # KVCacheUpdate CB indices and krope_Wt passed as runtime args (ReaderArgs/WriterArgs/ComputeArgs)
+        # KVCacheUpdate compile-time args split across NCRISC (patch + writeback) and BRISC (DRAM read)
         flash_mla_program_config = FlashMLADecode.ProgramConfig()
         device_chunk_size = flash_mla_program_config.device_chunk_size
-        kv_cache_brisc_named_compile_time_args = [
-            ("krope_output_cb", krope_output_cb),
-            ("kv_cache_output_cb", kv_cache_output_cb),
-            ("kv_cache_input_cb", kv_cache_input_cb),
+        kv_cache_ncrisc_named_compile_time_args = [
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
             ("full_grid_mcast_start_x", mcast_dest_noc_start_core.x),
             ("full_grid_mcast_start_y", mcast_dest_noc_start_core.y),
@@ -1096,6 +1085,10 @@ class PreSDPA:
             ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
             ("full_grid_mcast_num_dests", mcast_num_cores - 1),
             ("kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
+        ]
+        kv_cache_brisc_named_compile_time_args = [
+            ("kv_cache_input_cb", kv_cache_input_cb),
+            ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
         ]
         kv_cache_trisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
@@ -1211,7 +1204,7 @@ class PreSDPA:
         # Since all S blocks have 8 cores, num_mcast_dests is the same for all (7 = 8-1)
         num_mcast_dests = cores_per_s_block - 1  # 7 receivers per S block
 
-        mla_brisc_named_compile_time_args = [
+        mla_ncrisc_named_compile_time_args = [
             ("vDHt", vDHt),
             ("Sk_chunk_t", Sk_chunk_t),
             ("num_cores_per_head", num_cores_per_head),
@@ -1240,7 +1233,7 @@ class PreSDPA:
             ("mla_out_o_cb", mla_out_o_cb),
             ("mla_out_ms_cb", mla_out_ms_cb),
         ]
-        mla_ncrisc_named_compile_time_args = [
+        mla_brisc_named_compile_time_args = [
             ("St", St),
             ("DHt", DHt),
             ("Sk_chunk_t", Sk_chunk_t),
@@ -1972,8 +1965,8 @@ class PreSDPA:
                         output_core_physical_ys[cur_batch] if cur_batch < len(output_core_physical_ys) else 0
                     )
 
-                    # NCRISC per-core runtime args (common args: k_addr, pos_addr)
-                    mla_ncrisc_per_core_args.append(
+                    # BRISC per-core runtime args (common args: k_addr, pos_addr)
+                    mla_brisc_per_core_args.append(
                         (
                             core,
                             [
@@ -1992,8 +1985,8 @@ class PreSDPA:
                         device, s_block_idx, cur_batch
                     )
 
-                    # BRISC per-core runtime args (common args: pos_addr)
-                    mla_brisc_args = [
+                    # NCRISC per-core runtime args (common args: pos_addr)
+                    mla_ncrisc_args = [
                         cur_batch,
                         core_num_in_reduce,
                         is_output_core,
@@ -2006,8 +1999,8 @@ class PreSDPA:
                         mcast_end_y,
                     ]
                     for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
-                        mla_brisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
-                    mla_brisc_per_core_args.append((core, mla_brisc_args))
+                        mla_ncrisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
+                    mla_ncrisc_per_core_args.append((core, mla_ncrisc_args))
 
                     is_sender_after_reduce = (
                         1 if (do_reduce and optimized_mla_grid.is_tree_reduction_sender(s_block_idx)) else 0
@@ -2093,6 +2086,7 @@ class PreSDPA:
                     + dkv_gather_sender_named_compile_time_args
                     + krope_ncrisc_named_compile_time_args
                     + krope_ncrisc_addr_args
+                    + kv_cache_ncrisc_named_compile_time_args
                     + kv_cache_sp_named_compile_time_args
                     + mla_ncrisc_named_compile_time_args
                 )
@@ -2110,7 +2104,6 @@ class PreSDPA:
                     + mcast2_brisc_named_compile_time_args
                     + matmul3_brisc_named_compile_time_args
                     + qrope_brisc_named_compile_time_args
-                    + create_q_heads_brisc_named_compile_time_args
                     + dkv_gather_receiver_named_compile_time_args
                     + kv_rmsnorm_brisc_named_compile_time_args
                     + kv_cache_brisc_named_compile_time_args
