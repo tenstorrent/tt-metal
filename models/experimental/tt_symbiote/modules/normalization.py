@@ -117,7 +117,7 @@ class TTNNDistributedRMSNorm(TTNNModule):
         """Move weights to TTNN device."""
         dim = self.torch_layer.weight.shape[0]
         self.weight_distributed = ttnn.as_tensor(
-            self.torch_layer.weight.unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // 32, 32]),
+            self.torch_layer.weight.unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // 32, 32]).to(torch.bfloat16),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=(ttnn.ShardTensor2dMesh(self.device, dims=(None, 2), mesh_shape=list(self.device.shape))),
         )

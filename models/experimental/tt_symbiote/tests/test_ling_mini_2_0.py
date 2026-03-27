@@ -21,12 +21,11 @@ from models.experimental.tt_symbiote.modules.linear import (
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 from models.experimental.tt_symbiote.core.run_config import TracedRun
-from models.experimental.tt_symbiote.modules.moe import TTNNBailingMoE
 from models.experimental.tt_symbiote.modules.attention import (
     PagedAttentionConfig,
-    TTNNBailingMoEAttention,
     TTNNPagedAttentionKVCache,
 )
+from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayer
 
 
 def create_paged_kv_cache(model_config, device, batch_size=1):
@@ -83,8 +82,7 @@ def test_ling_mini_2_0(mesh_device):
     tokenizer = AutoTokenizer.from_pretrained("inclusionAI/Ling-mini-2.0", trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained("inclusionAI/Ling-mini-2.0", trust_remote_code=True)
     nn_to_ttnn = {
-        model.model.layers[1].mlp.__class__: TTNNBailingMoE,
-        model.model.layers[0].attention.__class__: TTNNBailingMoEAttention,
+        model.model.layers[0].__class__: TTNNBailingMoEDecoderLayer,
     }
     nn_to_ttnn2 = {
         nn.Linear: TTNNLinearIColShardedWRowSharded,
