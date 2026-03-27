@@ -27,6 +27,7 @@ from ._ttml import NamedParameters
 
 # --- Python subpackages ---
 from . import autograd
+from . import init
 from . import models
 from . import modules
 

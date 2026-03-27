@@ -24,6 +24,7 @@ from models.common.sampling import (
     chunk_sampling_params,
     format_sampling_params,
 )
+from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
 from models.common.warmup import WarmupForwardMixin
 from models.tt_transformers.tt.common import (
     Mode,
@@ -455,7 +456,7 @@ class Generator(WarmupForwardMixin):
             # Each model expected to run the same model, safe to use 1st vocab size
             output_tensor = torch.zeros(batch_size, 1, self.model_args[0].vocab_size)
             output_tokens = torch.zeros(batch_size, 1, dtype=torch.int64)
-            output_log_probs = torch.ones(batch_size, 1, dtype=torch.float32)
+            output_log_probs = [None] * batch_size
         sampling_executed = False
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch_size)
 
@@ -774,13 +775,14 @@ class Generator(WarmupForwardMixin):
                             last_token_idx % 32
                         )  # TODO: Check if here should be used last_token_idx_relative instead of last_token_idx
                     ]
-                    log_probs_host = (
-                        ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)[
+                    if isinstance(tt_log_probs, LogProbsResult):
+                        log_probs_host = tt_log_probs.extract_user(last_token_idx % 32)
+                    elif tt_log_probs is not None:
+                        log_probs_host = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0]).reshape(-1)[
                             (last_token_idx % 32)
                         ]  # TODO: Check if here should be used last_token_idx_relative instead of last_token_idx
-                        if tt_log_probs is not None
-                        else None
-                    )
+                    else:
+                        log_probs_host = None
                     output_tokens[idx] = tokens_host
                     if log_probs_host is not None:
                         output_log_probs[idx] = log_probs_host
@@ -791,7 +793,7 @@ class Generator(WarmupForwardMixin):
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         if sampling_executed:
-            return output_tokens, output_log_probs
+            return output_tokens, reformat_logprobs(output_log_probs, batch_size)
         else:
             return output_tensor
 
@@ -1508,15 +1510,17 @@ class Generator(WarmupForwardMixin):
     def read_decode_output(self, tt_out, async_read=False):
         """
         Input tt_out is list of tuples of (tt_out_tok, tt_log_probs)
-
+        tt_log_probs can be: ttnn.Tensor (old path), LogProbsResult (new path), or None.
         """
+
+        def _read_logprobs(lp, blocking: bool = True):
+            if lp is None:
+                return None
+            return lp.cpu(blocking=blocking)
+
         if not async_read:
-            # output is a tuple of (tt_out_tok, tt_log_probs)
             if isinstance(tt_out[0], tuple):
-                return [
-                    (out[0].cpu(), out[1].cpu() if out[1] is not None else None)  # logits should never be None
-                    for out in tt_out
-                ]
+                return [(out[0].cpu(), _read_logprobs(out[1])) for out in tt_out]
             elif isinstance(tt_out[0], ttnn.Tensor):
                 return [out.cpu() for out in tt_out]
 
@@ -1526,8 +1530,8 @@ class Generator(WarmupForwardMixin):
             if isinstance(tt_out[i], tuple):
                 outputs = (
                     tt_out[i][0].cpu(blocking=False),
-                    tt_out[i][1].cpu(blocking=False) if tt_out[i][1] is not None else None,
-                )  # logits  # log-probs
+                    _read_logprobs(tt_out[i][1], blocking=False),
+                )
                 host_outputs.append(outputs)
             elif isinstance(tt_out[i], ttnn.Tensor):
                 outputs = tt_out[i].cpu(blocking=False)
@@ -1540,9 +1544,21 @@ class Generator(WarmupForwardMixin):
     # Note: This function is called by vLLM
     def process_decode_output_host(self, tt_out, is_tokens=False):
         """
-        Converts the input ttnn host tensors to a torch tensor.
+        Converts the input ttnn host tensors to torch tensors.
         The input can be logits (if is_tokens=False) or tokens (if is_tokens=True).
+        When the decode output includes logprobs:
+           * Old path: a single logprobs tensor is converted to a torch tensor.
+           * New path (LogProbsResult): the LogProbsResult is converted into a
+            tuple of torch tensors (topk_lp, topk_idx), where each has shape [batch, top_k].
+         Returns:
+           * If using the old path: (logits, log_probs) where both are torch tensors
+             concatenated across data-parallel ranks.
+           * If any rank uses the new path: (logits, (topk_lp, topk_idx)), where
+             logits, topk_lp, and topk_idx are torch tensors concatenated across
+             data-parallel ranks.
         """
+        from models.common.sampling.tt_log_probs import LogProbsResult
+
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
         logits = []
@@ -1552,24 +1568,91 @@ class Generator(WarmupForwardMixin):
                 logits_i = self.model[i].process_output_decode(
                     tt_out[i][0], max_batch_size_per_model, S=1, is_tokens=is_tokens
                 )
-                log_probs_i = (
-                    self.model[i].process_output_decode(
-                        tt_out[i][1], max_batch_size_per_model, S=1, is_tokens=is_tokens, is_log_probs=True
+                lp = tt_out[i][1]
+                if isinstance(lp, LogProbsResult):
+                    # New path: convert LogProbsResult to torch (topk_lp, topk_idx) tuple.
+                    #
+                    # LogProbsResult contains device tensors of shape (1,1,32,32) — 32 users
+                    # × 32 top-k logprobs — replicated across all devices in the mesh.
+                    # However, for row-sharded sampling (sampling_dp > 1), each mesh row
+                    # independently computes logprobs for its own 32 users, so the content
+                    # differs per row even though the tensor is "replicated."
+                    #
+                    # We cannot use a mesh composer (ConcatMesh2dToTensor) because it would
+                    # concatenate all 32 devices including 8 column replicas per row, giving
+                    # 8× duplicated data. Instead:
+                    #   - Row-sharded (sampling_dp > 1): pick one device per row (first in
+                    #     each row), read its [32, 32] tensor, concatenate rows → [128, 32].
+                    #   - Non-row-sharded (sampling_dp == 1): read from a single device.
+                    lp_tensor = lp.topk_logprobs_host if lp.topk_logprobs_host is not None else lp.topk_logprobs
+                    idx_tensor = lp.topk_indices_host if lp.topk_indices_host is not None else lp.topk_indices
+                    sampling_dp = getattr(self.model[i], "sampling_dp", 1)
+                    if sampling_dp > 1:
+                        # Row-sharded: read one device per row and concatenate
+                        rows, cols = self.mesh_device.shape
+                        device_tensors_lp = ttnn.get_device_tensors(lp_tensor)
+                        device_tensors_idx = ttnn.get_device_tensors(idx_tensor)
+                        row_lps = []
+                        row_idxs = []
+                        for row in range(rows):
+                            dev_idx = row * cols  # first device in this row
+                            row_lp = ttnn.to_torch(device_tensors_lp[dev_idx])
+                            row_lps.append(row_lp.reshape(-1, row_lp.shape[-1])[:max_batch_size_per_model])
+                            row_idx = ttnn.to_torch(device_tensors_idx[dev_idx])
+                            row_idxs.append(row_idx.reshape(-1, row_idx.shape[-1])[:max_batch_size_per_model])
+                        topk_lp = torch.cat(row_lps, dim=0).float()
+                        topk_idx = torch.cat(row_idxs, dim=0).to(torch.int32)
+                    else:
+                        # Non-row-sharded: read from first device only
+                        device_tensors_lp = ttnn.get_device_tensors(lp_tensor)
+                        device_tensors_idx = ttnn.get_device_tensors(idx_tensor)
+                        topk_lp = (
+                            ttnn.to_torch(device_tensors_lp[0])
+                            .reshape(-1, device_tensors_lp[0].shape[-1])[:max_batch_size_per_model]
+                            .float()
+                        )
+                        topk_idx = (
+                            ttnn.to_torch(device_tensors_idx[0])
+                            .reshape(-1, device_tensors_idx[0].shape[-1])[:max_batch_size_per_model]
+                            .to(torch.int32)
+                        )
+                    logits.append(logits_i)
+                    log_probs.append((topk_lp, topk_idx))
+                elif lp is not None:
+                    # Old path: single logprob tensor
+                    log_probs_i = self.model[i].process_output_decode(
+                        lp, max_batch_size_per_model, S=1, is_tokens=is_tokens, is_log_probs=True
                     )
-                    if tt_out[i][1] is not None
-                    else torch.ones(logits_i.shape)
-                )
-                logits.append(logits_i)
-                log_probs.append(log_probs_i)
+                    logits.append(logits_i)
+                    log_probs.append(log_probs_i)
+                else:
+                    logits.append(logits_i)
+                    log_probs.append(torch.ones(logits_i.shape))
             elif isinstance(tt_out[i], ttnn.Tensor):
                 logits_i = self.model[i].process_output_decode(
                     tt_out[i], max_batch_size_per_model, S=1, is_tokens=is_tokens
                 )
                 logits.append(logits_i)
-                # add dummy tensor for log_probs
                 log_probs.append(torch.ones(logits_i.shape))
             else:
                 raise ValueError(f"Invalid type of tt_out: {type(tt_out[i])}")
+
+        # Check if any DP rank returned new-path tuples (topk_lp, topk_idx)
+        has_topk = any(isinstance(lp, tuple) for lp in log_probs)
+        if has_topk:
+            # New path: all DP ranks should have tuples. For ranks that
+            # returned a dummy tensor (e.g. sz=0), create matching dummy tuples.
+            normalized = []
+            for lp in log_probs:
+                if isinstance(lp, tuple):
+                    normalized.append(lp)
+                else:
+                    # Dummy: shape [B, 32] zeros to match tuple format
+                    B = lp.shape[0]
+                    normalized.append((torch.zeros(B, 32, dtype=torch.float32), torch.zeros(B, 32, dtype=torch.int32)))
+            all_lp = torch.cat([lp[0] for lp in normalized], 0)
+            all_idx = torch.cat([lp[1] for lp in normalized], 0)
+            return (torch.cat(logits, 0), (all_lp, all_idx))
         return (torch.cat(logits, 0), torch.cat(log_probs, 0))
 
     def _decode_forward_no_trace(

@@ -23,12 +23,20 @@ from ....utils.test import line_params, ring_params
 def t2v_metrics(mesh_device, height):
     expected_metrics = {}
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
-        expected_metrics = {
-            "encoder": 0.1,
-            "denoising": 800.0,
-            "vae": 9.0,
-            "total": 850.0,
-        }
+        if is_blackhole():
+            expected_metrics = {
+                "encoder": 0.08,
+                "denoising": 240.0,
+                "vae": 5.0,
+                "total": 255.0,
+            }
+        else:
+            expected_metrics = {
+                "encoder": 0.1,
+                "denoising": 800.0,
+                "vae": 9.0,
+                "total": 850.0,
+            }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
             "encoder": 0.1,
@@ -60,13 +68,14 @@ def t2v_metrics(mesh_device, height):
             "vae": 60.0,
             "total": 760.0,
         }
-    elif tuple(mesh_device.shape) == (1, 8) and height == 480:
-        assert is_blackhole(), "1x8 is only supported for blackhole"
+    elif tuple(mesh_device.shape) == (4, 32):
+        assert is_blackhole(), "4x32 is only supported for blackhole"
+        assert height == 720, "4x32 is only supported for 720p"
         expected_metrics = {
-            "encoder": 0.08,
-            "denoising": 426.6,
-            "vae": 10.0,
-            "total": 449.3,
+            "encoder": 0.5,
+            "denoising": 75.0,
+            "vae": 5.0,
+            "total": 80.5,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
@@ -86,7 +95,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
     else:
         pipeline_cls = WanPipelineI2V
         expected_metrics = i2v_metrics(mesh_device, height)
-        image_prompt = Image.fromarray(np.random.randint(0, 256, (height, width, 3)), "RGB")
+        image_prompt = Image.fromarray(np.random.randint(0, 256, (height, width, 3), dtype=np.uint8), "RGB")
 
     return pipeline_cls, image_prompt, expected_metrics
 
@@ -97,18 +106,21 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         # FSDP is needed for 2x2 with encoder now on device
         [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
-        [(1, 8), (1, 8), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
         "2x4sp0tp1",
-        "1x8sp0tp1",
+        "bh_2x4sp1tp0",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
+        "bh_4x32sp1tp0",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -219,6 +231,9 @@ def test_pipeline_performance(
     logger.info("Running performance measurement iterations...")
     num_perf_runs = 1  # For now use 1 prompt to minimize test time.
 
+    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
+
     for i in range(num_perf_runs):
         logger.info(f"Performance run {i+1}/{num_perf_runs}...")
 
@@ -235,6 +250,7 @@ def test_pipeline_performance(
                     num_inference_steps=num_inference_steps,
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
+                    seed=42,
                 )
 
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
@@ -259,8 +275,11 @@ def test_pipeline_performance(
     frames = frames[0]
     try:
         if not is_ci_env:
-            export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
-            print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
+            if int(ttnn.distributed_context_get_rank()) == 0:
+                export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
+                print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
+            else:
+                print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
     except AttributeError as e:
         logger.info(f"AttributeError: {e}")
 
@@ -323,8 +342,7 @@ def test_pipeline_performance(
                 )
         device_name_map = {
             (2, 2): "BH_QB",
-            (2, 4): "WH_T3K",
-            (1, 8): "BH_LB",
+            (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
         benchmark_data.save_partial_run_json(

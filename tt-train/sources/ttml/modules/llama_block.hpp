@@ -4,8 +4,9 @@
 
 #pragma once
 
+#include <optional>
+
 #include "autograd/tensor.hpp"
-#include "modules/dropout_module.hpp"
 #include "modules/grouped_query_attention.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/rms_norm_module.hpp"
@@ -18,7 +19,7 @@ private:
     std::shared_ptr<LinearLayer> m_w1;
     std::shared_ptr<LinearLayer> m_w3;
     std::shared_ptr<LinearLayer> m_w2;
-    std::shared_ptr<DropoutLayer> m_dropout;
+    float m_dropout_prob = 0.0F;
 
 public:
     LlamaMLP(uint32_t embedding_size, std::optional<uint32_t> intermediate_dim, float dropout_prob = 0.0F);
@@ -42,7 +43,8 @@ public:
         float dropout_prob = 0.0F,
         std::optional<uint32_t> intermediate_dim = std::nullopt);
 
-    autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask) override;
+    autograd::TensorPtr operator()(
+        const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) override;
 
     // Forward with KV cache for inference
     autograd::TensorPtr operator()(

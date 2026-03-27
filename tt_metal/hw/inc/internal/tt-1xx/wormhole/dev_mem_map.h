@@ -43,9 +43,9 @@
 #define MEM_NCRISC_LOCAL_SIZE (4 * 1024)
 #define MEM_TRISC_LOCAL_SIZE (2 * 1024)
 
-// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be at least 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
 #define MEM_BANK_TO_NOC_XY_SIZE 1024
-// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS +
+// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be at least 4 * (NUM_DRAM_BANKS +
 // NUM_L1_BANKS)
 #define MEM_BANK_OFFSET_SIZE 1024
 
@@ -86,7 +86,7 @@
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12896
+#define MEM_MAILBOX_SIZE 12912
 // These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
 #define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 4)
 #define MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS (MEM_MAILBOX_BASE + 8)

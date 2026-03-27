@@ -55,12 +55,9 @@ jobs:
     steps:
       - name: Parse comment and get PR info
         id: parse
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
         run: |
-          # Properly escape comment body to handle quotes
-          COMMENT_BODY=$(cat <<'COMMENT_EOF'
-          ${{ github.event.comment.body }}
-          COMMENT_EOF
-          )
           PR_NUMBER="${{ github.event.issue.number }}"
           COMMENT_AUTHOR="${{ github.event.comment.user.login }}"
 
@@ -69,7 +66,7 @@ jobs:
           echo "Comment author: $COMMENT_AUTHOR"
 
           # Check if comment contains our trigger commands
-          if echo "$COMMENT_BODY" | grep -E "^/(codeowners?|ping)(\s|$)" > /dev/null; then
+          if printf '%s\n' "$COMMENT_BODY" | grep -E "^/(codeowners?|ping)(\s|$)" > /dev/null; then
             # Add reaction to acknowledge we saw the command
             curl -s -X POST \
               -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
@@ -2389,48 +2386,12 @@ jobs:
 
             PING_MESSAGE="$PING_MESSAGE, this PR **[""$PR_TITLE""](${{ github.server_url }}/${{ github.repository }}/pull/$PR_NUMBER)** by $PR_AUTHOR_FULL_NAME (@$PR_AUTHOR_LOGIN) needs your approval/review to merge this."
 
-            if [ "$PING_OWNERS" = "true" ]; then
-              # Create new ping comment
-              echo "Creating ping comment..."
-
-              # Create temporary file to avoid shell interpretation of JSON
-              TEMP_JSON_FILE=$(mktemp)
-              if jq -n --arg body "$PING_MESSAGE" '{"body": $body}' > "$TEMP_JSON_FILE"; then
-                echo "JSON file created successfully"
-              else
-                echo "Failed to create JSON file"
-                exit 1
-              fi
-              RESPONSE=$(curl -s -w "HTTPSTATUS:%{http_code};" -X POST \
-                -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" \
-                -H "Accept: application/vnd.github.v3+json" \
-                -H "Content-Type: application/json" \
-                --data-binary @"$TEMP_JSON_FILE" \
-                "$COMMENTS_API")
-              # Clean up temp file
-              rm -f "$TEMP_JSON_FILE"
-
-              # Extract HTTP status code
-              HTTP_STATUS=$(echo "$RESPONSE" | tr -d '\n' | sed -e 's/.*HTTPSTATUS://' | sed 's/;//')
-              RESPONSE_BODY=$(echo "$RESPONSE" | sed -e 's/HTTPSTATUS:.*//')
-
-              if [ "$HTTP_STATUS" = "201" ]; then
-                echo "✅ Ping comment created successfully for PR #$PR_NUMBER"
-                echo "📋 Pinged users: $SELECTED_OWNERS"
-              else
-                echo "❌ ERROR: Failed to create ping comment (HTTP $HTTP_STATUS)"
-                echo "Response body: $RESPONSE_BODY"
-                echo "Full response: $RESPONSE"
-                exit 1
-              fi
+            # Log the ping message (comment posting to PR is disabled)
+            echo "Ping message (comment posting disabled, Slack-only):"
+            if [ ${#PING_MESSAGE} -gt 2000 ]; then
+              echo "${PING_MESSAGE:0:2000}... (truncated)"
             else
-              # Just output the ping message to workflow logs (truncated for large messages)
-              echo "Ping message (not sent):"
-              if [ ${#PING_MESSAGE} -gt 2000 ]; then
-                echo "${PING_MESSAGE:0:2000}... (truncated)"
-              else
-                echo "$PING_MESSAGE"
-              fi
+              echo "$PING_MESSAGE"
             fi
           else
             echo "No pending owners to ping"

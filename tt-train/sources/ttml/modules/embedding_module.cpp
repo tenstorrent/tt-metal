@@ -4,7 +4,6 @@
 
 #include "embedding_module.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <stdexcept>
 
 #include "autograd/auto_context.hpp"

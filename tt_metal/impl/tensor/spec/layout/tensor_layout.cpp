@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
 
 #include <tt-metalium/allocator.hpp>
@@ -200,6 +200,21 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const tt::tt_metal
         const std::array<uint32_t, 2> tensor2d_shape_in_pages{
             static_cast<uint32_t>(height_in_pages), static_cast<uint32_t>(width_in_pages)};
         shard_spec_buffer = ShardSpecBuffer(*shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
+        auto padded_shape = compute_padded_shape(shape);
+        if (padded_shape.rank() < 2) {  // Edge Case: For 1-D tensors and scalars, we need to make its shape 2D to
+                                        // construct the buffer distribution spec, since the tensor rank cannot be less
+                                        // than the shard rank (always 2 for 2D sharding).
+            padded_shape = Shape({1, padded_shape[0]});
+        }
+        distribution_spec = BufferDistributionSpec::from_shard_spec(
+            padded_shape,
+            Shape(shard_spec->shape),
+            page_shape,
+            shard_spec->grid,
+            shard_spec->orientation,
+            memory_config_.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
+                ? ShardDistributionStrategy::GRID_2D
+                : ShardDistributionStrategy::ROUND_ROBIN_1D);
     }
 
     if (const auto& nd_shard_spec = memory_config_.nd_shard_spec()) {

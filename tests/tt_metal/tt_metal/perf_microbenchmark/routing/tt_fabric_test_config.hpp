@@ -243,6 +243,7 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
     merged.num_packets = specific.num_packets.has_value() ? specific.num_packets : base.num_packets;
     merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
     merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
+    merged.vc_id = specific.vc_id.has_value() ? specific.vc_id : base.vc_id;
 
     // Special handling for nested destination
     if (specific.destination.has_value()) {
@@ -461,8 +462,6 @@ private:
     uint32_t calculate_dest_core_sweep_iterations(const std::vector<ParsedSenderConfig>& senders, uint32_t total_cores);
 
     uint32_t calculate_core_sweep_iterations(const ParsedTestConfig& p_config, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations);
-
-    void parametrize_core_sweep_test_name(ParsedTestConfig& iteration_test, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t sender_core_idx, uint32_t dest_core_idx, const std::vector<tt::tt_metal::CoreCoord>& all_cores, uint32_t iteration_num);
 
     std::vector<ParsedTestConfig> expand_parametrizations(const ParsedTestConfig& raw_config);
 

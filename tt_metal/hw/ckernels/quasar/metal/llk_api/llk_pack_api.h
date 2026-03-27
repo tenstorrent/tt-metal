@@ -51,7 +51,7 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
 template <bool out_of_order_output, bool untilize>
 inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t output_tile_index) {
     std::uint32_t l1_tile_index;
-    experimental::LocalDFBInterface& local_dfb_interface = g_dfb_interface[output_id];
+    LocalDFBInterface& local_dfb_interface = g_dfb_interface[output_id];
     if constexpr (out_of_order_output) {
         // Use the write tile index to track position within DFB
         l1_tile_index = local_dfb_interface.wr_entry_idx + output_tile_index;
@@ -161,4 +161,16 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_dest_section_done() {
     _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
+}
+
+/**
+ * @brief Configure packer ReLU at runtime from a packed uint32.
+ * @param config Packed uint32: bits [1:0] = ReluType, bits [31:16] = threshold.
+ */
+TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
+    _llk_pack_relu_config_<p_pacr::PACK0, false>(ckernel::ReluConfig::from_packed(config));
+}
+
+TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
+    _llk_pack_relu_config_<p_pacr::PACK0, false>(relu_config);
 }

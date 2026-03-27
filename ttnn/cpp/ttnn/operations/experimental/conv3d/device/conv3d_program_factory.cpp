@@ -52,6 +52,10 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     bool use_bias = bias_tensor.has_value();
 
+    // Extract compute kernel config early (needed for CB format decisions)
+    [[maybe_unused]] auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), compute_kernel_config);
+
     /* Shapes/sizes needed in the kernel
         Reader does volume2column to convert some `T_block x H_block x W_block` of activation
         to `T_block x H_block x W_block, kD x kH x kW x C_in` patches.
@@ -76,6 +80,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     uint32_t patch_size = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
                           operation_attributes.kernel_size[2] * C_in_block;
+    uint32_t padded_patch_size = tt::round_up(patch_size, tt::constants::TILE_WIDTH);
     uint32_t num_patches = config.T_out_block * config.H_out_block * config.W_out_block;
 
     uint32_t C_in_num_blocks = tt::div_up(C_in, C_in_block);
@@ -88,27 +93,15 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         C_out_num_blocks,
         C_out_block);
 
-    // Both the reader (vol2col row layout) and writer (weight tile offsets) assume patch_size
-    // is tile-aligned. The reader writes patches contiguously but tilize_block expects rows at
-    // page_size stride; the writer indexes weight tiles at c_in_block * matmul_K_t assuming
-    // blocks don't share tile rows. Both break when patch_size % TILE_WIDTH != 0.
-    TT_FATAL(
-        patch_size % tt::constants::TILE_WIDTH == 0,
-        "patch_size (kD*kH*kW*C_in_block = {}*{}*{}*{} = {}) must be a multiple of TILE_WIDTH ({})",
-        operation_attributes.kernel_size[0],
-        operation_attributes.kernel_size[1],
-        operation_attributes.kernel_size[2],
-        C_in_block,
-        patch_size,
-        tt::constants::TILE_WIDTH);
-
     uint32_t matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
     uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
     uint32_t matmul_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
 
     uint32_t num_patches_tile_padded = tt::round_up(num_patches, tt::constants::TILE_HEIGHT);
 
-    uint32_t patch_size_bytes = patch_size * dtype_bytes;    // bytes per patch row (tile-aligned by assert above)
+    uint32_t patch_size_bytes = patch_size * dtype_bytes;                // bytes of actual data per patch row
+    uint32_t padded_patch_size_bytes = padded_patch_size * dtype_bytes;  // bytes per CB page (tile-aligned)
+    uint32_t patch_pad_bytes = padded_patch_size_bytes - patch_size_bytes;
     uint32_t C_out_block_bytes = C_out_block * dtype_bytes;  // bytes per output channel row
     uint32_t C_in_block_bytes = C_in_block * dtype_bytes;    // bytes per input channel row
 
@@ -133,7 +126,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // that many patches. The reader pushes in matching chunks.
     uint32_t vol2col_rm_pages = std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
     uint32_t cb_vol2col_rm_id = next_cb_index++;
-    tt::tt_metal::create_cb(cb_vol2col_rm_id, program, core_grid, patch_size_bytes, vol2col_rm_pages, data_format);
+    tt::tt_metal::create_cb(
+        cb_vol2col_rm_id, program, core_grid, padded_patch_size_bytes, vol2col_rm_pages, data_format);
 
     uint32_t cb_vol2col_tiled_id = next_cb_index++;
     tt::tt_metal::create_cb(cb_vol2col_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_K_t, data_format);
@@ -141,9 +135,15 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     uint32_t cb_weight_tiled_id = next_cb_index++;
     tt::tt_metal::create_cb(cb_weight_tiled_id, program, core_grid, tile_size, matmul_K_t * matmul_N_t, data_format);
 
+    // Use fp32 partials whenever we have multiple C_in blocks and fp32 dest is enabled.
+    // This eliminates bf16 truncation between C_in block partial sums.
+    bool use_fp32_partials = fp32_dest_acc_en && C_in_num_blocks > 1;
+    auto partial_data_format = use_fp32_partials ? tt::DataFormat::Float32 : data_format;
+    auto partial_tile_size = tt::tile_size(partial_data_format);
+
     uint32_t cb_matmul_interm_tiled_id = next_cb_index++;
     tt::tt_metal::create_cb(
-        cb_matmul_interm_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_N_t, data_format);
+        cb_matmul_interm_tiled_id, program, core_grid, partial_tile_size, matmul_M_t * matmul_N_t, partial_data_format);
 
     // NOTE: Most kernels create RM CB with tile_size pages and num_tile number of pages.
     // Using stick pages led to PCC issues.
@@ -156,15 +156,24 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         matmul_M_t * matmul_N_t,  // untilize will write padded rows, so this must be sized to avoid overflowing CB
         data_format);
 
+    // Zero-filled CB for FPU accumulate: add_tiles does DST += A + B, so we use B=0
+    // to effectively do DST += A for fp32 reduction accumulation.
+    uint32_t cb_zero_tiled_id = 32;
+    if (use_fp32_partials) {
+        cb_zero_tiled_id = next_cb_index++;
+        tt::tt_metal::create_cb(cb_zero_tiled_id, program, core_grid, tile_size, 1, data_format);
+    }
+
     uint32_t cb_reduction_tiled_id =
         32;  // Invalid value for cb index since there is only 32 of them and the indices go from 0 to 31
     uint32_t cb_worker_ack_back_id =
         32;  // Invalid value for cb index since there is only 32 of them and the indices go from 0 to 31
     if (C_in_num_blocks > 1) {
-        // Implies reduction step
+        // Multi-core reduction step: each core computes a partial sum, then they reduce
+        // Use same format as partials CB so reduction adds matching formats
         cb_reduction_tiled_id = next_cb_index++;
         tt::tt_metal::create_cb(
-            cb_reduction_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_N_t, data_format);
+            cb_reduction_tiled_id, program, core_grid, partial_tile_size, matmul_M_t * matmul_N_t, partial_data_format);
 
         cb_worker_ack_back_id = next_cb_index++;
         tt::tt_metal::create_cb(cb_worker_ack_back_id, program, core_grid, tile_size, 1, data_format);
@@ -177,7 +186,12 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         tt::tt_metal::create_cb(cb_bias_tiled_id, program, core_grid, tile_size, matmul_N_t, data_format);
     }
 
-    log_debug(tt::LogOp, "CB vol2col_rm: page_size={} bytes, num_pages={}", patch_size_bytes, vol2col_rm_pages);
+    log_debug(
+        tt::LogOp,
+        "CB vol2col_rm: page_size={} bytes (padded from {}), num_pages={}",
+        padded_patch_size_bytes,
+        patch_size_bytes,
+        vol2col_rm_pages);
     log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_K_t);
     log_debug(tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
     log_debug(
@@ -195,14 +209,17 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     constexpr uint32_t L1_PREFETCH_HARD_CAP = 500 * 1024;
     const uint32_t l1_usable_for_cbs = tt::tt_metal::hal::get_max_worker_l1_unreserved_size() - L1_KERNEL_CODE_RESERVE;
 
-    uint32_t other_cbs_bytes = (patch_size_bytes * vol2col_rm_pages) +  // vol2col_rm
-                               (tile_size * matmul_M_t * matmul_K_t) +  // vol2col_tiled
-                               (tile_size * matmul_K_t * matmul_N_t) +  // weight_tiled
-                               (tile_size * matmul_M_t * matmul_N_t) +  // matmul_interm
-                               (tile_size * matmul_M_t * matmul_N_t);   // matmul_result_rm
+    uint32_t other_cbs_bytes = (padded_patch_size_bytes * vol2col_rm_pages) +   // vol2col_rm
+                               (tile_size * matmul_M_t * matmul_K_t) +          // vol2col_tiled
+                               (tile_size * matmul_K_t * matmul_N_t) +          // weight_tiled
+                               (partial_tile_size * matmul_M_t * matmul_N_t) +  // matmul_interm (may be fp32)
+                               (tile_size * matmul_M_t * matmul_N_t);           // matmul_result_rm
     if (C_in_num_blocks > 1) {
-        other_cbs_bytes += tile_size * matmul_M_t * matmul_N_t;  // reduction
-        other_cbs_bytes += tile_size;                            // worker_ack
+        other_cbs_bytes += partial_tile_size * matmul_M_t * matmul_N_t;  // reduction (same format as partials)
+        other_cbs_bytes += tile_size;                                    // worker_ack
+    }
+    if (use_fp32_partials) {
+        other_cbs_bytes += tile_size;  // zero tile for FPU accumulate reduction
     }
     if (use_bias) {
         other_cbs_bytes += tile_size * matmul_N_t;  // bias
@@ -336,7 +353,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         cb_input_shard_id,
         T_shard_max,
         H_shard_max,
-        W_shard_max};
+        W_shard_max,
+        patch_pad_bytes};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
@@ -346,10 +364,6 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Matmul parameters
-    auto* device = input_tensor.device();
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
-
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
     const uint32_t in0_block_w = matmul_K_t;
 
@@ -401,7 +415,9 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         in0_block_w,
         out_subblock_h,
         out_subblock_w,
-        semaphore_id};
+        semaphore_id,
+        (uint32_t)use_fp32_partials,
+        cb_zero_tiled_id};
 
     auto compute_kernels_id = CreateKernel(
         program,
@@ -435,7 +451,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         out_row_size_bytes,
         C_out_block_bytes,
         (uint32_t)use_bias,
-        semaphore_id};
+        semaphore_id,
+        cb_zero_tiled_id};
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
@@ -540,6 +557,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     std::vector<std::vector<uint32_t>> worker_core_physical_ys(total_output_parallel);
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
+    auto* device = input_tensor.device();
 
     for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
         CoreCoord core = cores.at(core_id);
@@ -720,26 +738,25 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         // Get is_reducer value from the stored arguments
         [[maybe_unused]] bool is_reducer = (writer_args[13] == 1);
 
-        // Add reducer core coordinates
-        if (reducer_core_ids[reduction_group_id] != UINT32_MAX) {
-            writer_args.push_back(reducer_core_physical_xs[reduction_group_id]);
-            writer_args.push_back(reducer_core_physical_ys[reduction_group_id]);
-        }
-
-        // Add worker cores count
+        // Add worker cores count first so the kernel can use it to conditionally read reduction args
         uint32_t num_workers = worker_core_ids[reduction_group_id].size();
         compute_args.push_back(num_workers);
         writer_args.push_back(num_workers);
 
-        // Add all worker core coordinates to runtime args
-        writer_args.insert(
-            writer_args.end(),
-            worker_core_physical_xs[reduction_group_id].begin(),
-            worker_core_physical_xs[reduction_group_id].end());
-        writer_args.insert(
-            writer_args.end(),
-            worker_core_physical_ys[reduction_group_id].begin(),
-            worker_core_physical_ys[reduction_group_id].end());
+        // Add reducer core coordinates and worker core coordinates only when there are workers
+        if (num_workers > 0) {
+            writer_args.push_back(reducer_core_physical_xs[reduction_group_id]);
+            writer_args.push_back(reducer_core_physical_ys[reduction_group_id]);
+
+            writer_args.insert(
+                writer_args.end(),
+                worker_core_physical_xs[reduction_group_id].begin(),
+                worker_core_physical_xs[reduction_group_id].end());
+            writer_args.insert(
+                writer_args.end(),
+                worker_core_physical_ys[reduction_group_id].begin(),
+                worker_core_physical_ys[reduction_group_id].end());
+        }
 
         // Prepare worker cores string for logging
         std::string worker_cores_str;

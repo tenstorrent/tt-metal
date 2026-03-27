@@ -11,16 +11,15 @@
 #include <nanobind/stl/optional.h>
 
 #include "dit_minimal_matmul_addcmul_fused.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
 void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
-    bind_registered_operation(
+    ttnn::bind_function<"dit_minimal_matmul_addcmul_fused", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::dit_minimal_matmul_addcmul_fused,
         R"doc(
         dit_minimal_matmul_addcmul_fused(matmul_input_tensor, matmul_weight_tensor, scalar, addcmul_input_tensor1, addcmul_input_tensor2, bias_tensor=None, *, config=None, memory_config=None, dtype=None, compute_kernel_config=None)
 
@@ -147,41 +146,18 @@ void bind_dit_minimal_matmul_addcmul_fused(nb::module_& mod) {
         - addcmul is computed inline in minimal_matmul kernels (no intermediate matmul tensor write/read).
         - Performance and memory footprint are sensitive to block sizes and subblock shapes.
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const decltype(ttnn::experimental::dit_minimal_matmul_addcmul_fused)& self,
-               const ttnn::Tensor& matmul_input_tensor,
-               const ttnn::Tensor& matmul_weight_tensor,
-               float scalar,
-               const ttnn::Tensor& addcmul_input_tensor1,
-               const ttnn::Tensor& addcmul_input_tensor2,
-               const std::optional<ttnn::Tensor>& bias_tensor,
-               const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<const DataType> dtype,
-               std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-                return self(
-                    matmul_input_tensor,
-                    matmul_weight_tensor,
-                    scalar,
-                    addcmul_input_tensor1,
-                    addcmul_input_tensor2,
-                    bias_tensor,
-                    config,
-                    memory_config,
-                    dtype,
-                    compute_kernel_config);
-            },
-            nb::arg("matmul_input_tensor"),
-            nb::arg("matmul_weight_tensor"),
-            nb::arg("scalar"),
-            nb::arg("addcmul_input_tensor1"),
-            nb::arg("addcmul_input_tensor2"),
-            nb::arg("bias_tensor") = nb::none(),
-            nb::kw_only(),
-            nb::arg("config") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        &ttnn::experimental::dit_minimal_matmul_addcmul_fused,
+        nb::arg("matmul_input_tensor"),
+        nb::arg("matmul_weight_tensor"),
+        nb::arg("scalar"),
+        nb::arg("addcmul_input_tensor1"),
+        nb::arg("addcmul_input_tensor2"),
+        nb::arg("bias_tensor") = nb::none(),
+        nb::kw_only(),
+        nb::arg("config") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::transformer

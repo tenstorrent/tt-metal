@@ -4,28 +4,29 @@
 
 from __future__ import annotations
 
+import contextlib
+from typing import Generator
+
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_size_bytes, to_padded_input
 
 
+@contextlib.contextmanager
 def create_model(
     mesh_device: ttnn.MeshDevice,
     *,
     batch_size: int = 1,
-    loopback_mode: bool = True,
-) -> DeepSeekV3:
+) -> Generator[DeepSeekV3, None, None]:
+    """
+    Context manager that creates sockets and HostInterface (loopback mode), runs it,
+    yields a DeepSeekV3 wired to write_fn/read_fn, then terminates HostInterface on exit.
+    """
     fifo_size = page_size_bytes(batch_size)
     socket_core = ttnn.MeshCoreCoord(ttnn.MeshCoordinate(0, 0), ttnn.CoreCoord(0, 0))
-    h2d_socket_prefill = ttnn.H2DSocket(
-        mesh_device,
-        socket_core,
-        ttnn.BufferType.L1,
-        fifo_size,
-        ttnn.H2DMode.DEVICE_PULL,
-    )
-    h2d_socket_decode = ttnn.H2DSocket(
+    h2d_socket = ttnn.H2DSocket(
         mesh_device,
         socket_core,
         ttnn.BufferType.L1,
@@ -33,13 +34,24 @@ def create_model(
         ttnn.H2DMode.HOST_PUSH,
     )
     d2h_socket = ttnn.D2HSocket(mesh_device, socket_core, fifo_size)
-    return DeepSeekV3(
-        h2d_socket_prefill=h2d_socket_prefill,
-        h2d_socket_decode=h2d_socket_decode,
-        d2h_socket=d2h_socket,
-        batch_size=batch_size,
-        loopback_mode=loopback_mode,
+    host_io = HostInterface(
+        h2d_socket,
+        d2h_socket,
+        fifo_size,
+        fifo_size,
+        core_to_core_socket_buffer_size=fifo_size,
+        loopback_mode=True,
     )
+    host_io.run()
+    try:
+        model = DeepSeekV3(
+            write_fn=h2d_socket.write_tensor,
+            read_fn=d2h_socket.read_tensor,
+            batch_size=batch_size,
+        )
+        yield model
+    finally:
+        host_io.terminate(sync_devices=True)
 
 
 class TokenCodec:

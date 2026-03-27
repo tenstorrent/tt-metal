@@ -118,9 +118,17 @@ public:
         get_reads_dispatch_cores_(get_reads_dispatch_cores) {
         bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
         dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-            CoreType::WORKER, descriptor.num_cqs(), descriptor.hal(), is_galaxy_cluster);
+            CoreType::WORKER,
+            descriptor.num_cqs(),
+            descriptor.hal(),
+            is_galaxy_cluster,
+            descriptor.rtoptions().get_dram_backed_cq());
         dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<tt::tt_metal::DispatchMemMap>(
-            CoreType::ETH, descriptor.num_cqs(), descriptor.hal(), is_galaxy_cluster);
+            CoreType::ETH,
+            descriptor.num_cqs(),
+            descriptor.hal(),
+            is_galaxy_cluster,
+            descriptor.rtoptions().get_dram_backed_cq());
     }
     virtual ~FDKernel() = default;
 
@@ -139,7 +147,7 @@ public:
     // Use all configs and add this kernel to its Program. Called after GenerateStaticConfigs/GenerateDependentConfigs.
     virtual void CreateKernel() = 0;
 
-    // Override for specific kernels that need host-side configureation (special values written to l1, etc.). Is called
+    // Override for specific kernels that need host-side configuration (special values written to l1, etc.). Is called
     // after above functions and before FD kernels are launched.
     virtual void ConfigureCore() {}
 

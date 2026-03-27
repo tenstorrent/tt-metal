@@ -56,9 +56,9 @@
 // No BASE FW
 #define MEM_SUBORDINATE_AERISC_LOCAL_BASE MEM_LOCAL_BASE
 
-// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be at least 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
 #define MEM_BANK_TO_NOC_XY_SIZE 1024
-// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS +
+// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be at least 4 * (NUM_DRAM_BANKS +
 // NUM_L1_BANKS)
 #define MEM_BANK_OFFSET_SIZE 1024
 
@@ -98,7 +98,7 @@
 #define MEM_L1_ARC_FW_SCRATCH_SIZE 16
 
 // On Blackhole issuing inline writes and atomics requires all 4 memory ports to accept the transaction at the same
-// time. If one port on the receipient has no back-pressure then the transaction will hang because there is no mechanism
+// time. If one port on the recipient has no back-pressure then the transaction will hang because there is no mechanism
 // to allow one memory port to move ahead of another. To workaround this hang, we emulate inline writes on Blackhole by
 // writing the value to be written to local L1 first and then issue a noc async write.
 // Each noc has 16B to store value written out by inline writes.
@@ -110,7 +110,7 @@
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12896
+#define MEM_MAILBOX_SIZE 12912
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 

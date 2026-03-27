@@ -150,8 +150,12 @@ class Model:
         self.sin_matrix = self.rope_setup.sin_matrix
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
 
-        embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
-        embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
+        if state_dict:
+            embedding_weight = substate(state_dict, "model.embed_tokens")["weight"]
+            embedding_weight = embedding_weight.unsqueeze(0).unsqueeze(0)
+        else:
+            embedding_weight = None
+
         self.embedding_weight = ttnn.as_tensor(
             embedding_weight,
             dtype=ttnn.bfloat16,
@@ -197,11 +201,14 @@ class Model:
         sampling_splits = mesh_device.shape[1]
         per_device_padded = compute_per_device_vocab(self.vocab_size, sampling_splits)
         padded_vocab_size = per_device_padded * sampling_splits
-        lm_head_weight = substate(state_dict, "lm_head")["weight"].transpose(0, 1)  # [hidden, vocab]
-        if lm_head_weight.shape[1] < padded_vocab_size:
-            lm_head_weight = torch.nn.functional.pad(
-                lm_head_weight, (0, padded_vocab_size - lm_head_weight.shape[1]), "constant", 0
-            )
+        if state_dict:
+            lm_head_weight = substate(state_dict, "lm_head")["weight"].transpose(0, 1)  # [hidden, vocab]
+            if lm_head_weight.shape[1] < padded_vocab_size:
+                lm_head_weight = torch.nn.functional.pad(
+                    lm_head_weight, (0, padded_vocab_size - lm_head_weight.shape[1]), "constant", 0
+                )
+        else:
+            lm_head_weight = None
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_weight,
             device=mesh_device,
@@ -229,8 +236,8 @@ class Model:
             # before prefill forward; tells _forward_layers_and_head to skip TP all-gather
             _orig_reset = self.sampling.reset_sampling_params
 
-            def _reset_with_flag(params, _orig=_orig_reset):
-                _orig(params)
+            def _reset_with_flag(params, _orig=_orig_reset, **kwargs):
+                _orig(params, **kwargs)
                 self._prefill_sampling_active = True
 
             self.sampling.reset_sampling_params = _reset_with_flag
@@ -257,6 +264,7 @@ class Model:
         # sampling_dp: number of independent sampling groups (one per mesh row)
         # Only use row-sharded sampling when users_row_sharded is active
         args.sampling_dp = self.sampling_dp
+        args.use_topk_logprobs = True
         return args
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
@@ -348,7 +356,6 @@ class Model:
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
-
             hidden_states = decoder_layer(
                 hidden_states,
                 position_embeddings=rope_mats,
@@ -619,6 +626,8 @@ class Model:
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
+        batch_size=1,
+        user_id=0,
         batched_prefill=False,
     ):
         """Prepare inputs for prefill mode

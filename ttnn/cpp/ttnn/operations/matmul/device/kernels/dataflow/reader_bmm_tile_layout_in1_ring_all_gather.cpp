@@ -9,12 +9,17 @@
 #include "api/remote_circular_buffer.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_tile.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc_semaphore.h"
+#include "experimental/tensor.h"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
 template <typename TensorAccessorType>
 void read_block_from_dram(
-    uint32_t cb_id,
+    const experimental::Noc& noc,
+    experimental::CircularBuffer& cb,
     const TensorAccessorType& s1,
     uint32_t tensor_width_in_tiles,
     uint32_t block_w_idx,
@@ -22,25 +27,26 @@ void read_block_from_dram(
     uint32_t block_w_t,
     uint32_t block_h_t,
     uint32_t tile_size_bytes) {
-    uint32_t l1_write_addr = get_write_ptr(cb_id);
+    uint32_t write_offset = 0;
 
     // Horizontal idx + vertical idx * width = row major index
     uint32_t block_tile_id = block_w_idx * block_w_t + (block_h_idx * block_h_t) * tensor_width_in_tiles;
     for (uint32_t h = 0; h < block_h_t; ++h) {
         uint32_t tile_id = block_tile_id + h * tensor_width_in_tiles;
         for (uint32_t w = 0; w < block_w_t; ++w) {
-            noc_async_read_tile(tile_id + w, s1, l1_write_addr);
-            l1_write_addr += tile_size_bytes;
+            noc.async_read(s1, cb, tile_size_bytes, {.page_id = tile_id + w}, {.offset_bytes = write_offset});
+            write_offset += tile_size_bytes;
         }
     }
-    noc_async_read_barrier();
+    noc.async_read_barrier();
 }
 
-void do_signaling(uint32_t& rt_args_idx) {
+void do_signaling(const experimental::Noc& noc, uint32_t& rt_args_idx) {
     const uint32_t pv_core_x = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t pv_core_y = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t pv_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
-    volatile tt_l1_ptr uint32_t* pv_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pv_semaphore);
+    const uint32_t pv_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t pv_semaphore = get_semaphore(pv_semaphore_id);
+    experimental::Semaphore<> pv_sem(pv_semaphore_id);
     const bool is_privilaged = get_arg_val<uint32_t>(rt_args_idx++) == 1;
     if (is_privilaged) {
         const uint32_t target_sem_value = get_arg_val<uint32_t>(rt_args_idx++);
@@ -53,12 +59,11 @@ void do_signaling(uint32_t& rt_args_idx) {
         const uint64_t signalling_semaphore_address =
             get_noc_multicast_addr(multicast_start_x, multicast_start_y, multicast_end_x, multicast_end_y, 0) |
             signalling_semaphore;
-        noc_semaphore_wait(pv_semaphore_ptr, target_sem_value);
-        noc_semaphore_set(pv_semaphore_ptr, 1);
+        pv_sem.wait(target_sem_value);
+        pv_sem.set(1);
         noc_semaphore_set_multicast(pv_semaphore, signalling_semaphore_address, num_signalling_semaphores);
     } else {
-        const uint64_t sem_addr = get_noc_addr(pv_core_x, pv_core_y, pv_semaphore);
-        noc_semaphore_inc(sem_addr, 1);
+        pv_sem.up(noc, pv_core_x, pv_core_y, 1);
     }
 }
 
@@ -81,8 +86,9 @@ void kernel_main() {
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         if constexpr (needs_signaler) {
-            do_signaling(rt_args_idx);
-            noc_async_write_barrier();
+            experimental::Noc early_noc;
+            do_signaling(early_noc, rt_args_idx);
+            early_noc.async_write_barrier();
         }
         return;
     }
@@ -92,7 +98,7 @@ void kernel_main() {
     uint32_t vc = 0;
     uint32_t dram_read_offset = 0;
 
-    if constexpr (in1_is_dram_interleaved || in1_is_dram_sharded) {
+    if constexpr (in1_is_dram_sharded) {
         dram_bank_id = get_arg_val<uint32_t>(rt_args_idx++);
         vc = get_arg_val<uint32_t>(rt_args_idx++);
         dram_read_offset = get_arg_val<uint32_t>(rt_args_idx++);
@@ -111,6 +117,11 @@ void kernel_main() {
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+    experimental::CircularBuffer cb_sync(sync_cb);
+    experimental::CircularBuffer cb_sync2(sync_cb2);
+
     uint32_t in1_shard_width_offset_bytes = 0;
     uint32_t in1_dram_shard_block_size_bytes = 0;
     uint32_t dram_read_offset_bytes = 0;
@@ -124,20 +135,21 @@ void kernel_main() {
     }
 
     for (uint32_t b = 0; b < batch; ++b) {
-        cb_reserve_back(sync_cb2, 1);
+        cb_sync2.reserve_back(1);
 #ifdef ENABLE_GLOBAL_CB
         experimental::remote_cb_wait_front(remote_cb_id, num_blocks);
 #endif
 
-        cb_push_back(sync_cb2, 1);
+        cb_sync2.push_back(1);
 
         if constexpr (in1_is_dram_interleaved) {
             for (uint32_t block = 0; block < num_blocks; ++block) {
                 uint32_t block_idx = (ring_idx + block) % num_blocks;
 
-                cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                cb_in1.reserve_back(in1_block_num_tiles);
                 read_block_from_dram(
-                    cb_id_in1,
+                    noc,
+                    cb_in1,
                     s1,
                     in1_tensor_width_in_tiles,
                     ring_idx,
@@ -145,7 +157,7 @@ void kernel_main() {
                     in1_block_width_in_tiles,
                     in1_block_height_in_tiles,
                     in1_single_tile_size_bytes);
-                cb_push_back(cb_id_in1, in1_block_num_tiles);
+                cb_in1.push_back(in1_block_num_tiles);
             }
         } else if constexpr (in1_is_dram_sharded) {  // when in1 is sharded in DRAM, each core reads from its own bank,
                                                      // two cores on the same row share one bank.
@@ -153,8 +165,8 @@ void kernel_main() {
                 uint32_t block_idx = (ring_idx + block) % num_blocks;
                 l1_read_addr_in1 = block_idx * in1_dram_shard_block_size_bytes + dram_read_offset_bytes;
                 // Operand 1
-                cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-                l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+                cb_in1.reserve_back(in1_block_num_tiles);
+                l1_write_addr_in1 = cb_in1.get_write_ptr();
 
                 for (uint32_t h = 0; h < in1_block_height_in_tiles; ++h) {
                     uint32_t curr_l1_read_addr_in1 = l1_read_addr_in1;
@@ -171,27 +183,27 @@ void kernel_main() {
                     l1_read_addr_in1 += in1_shard_width_offset_bytes;
                 }
 
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in1, in1_block_num_tiles);
+                noc.async_read_barrier();
+                cb_in1.push_back(in1_block_num_tiles);
             }
         }
 
 #ifdef ENABLE_GLOBAL_CB
-        cb_wait_front(sync_cb, 1);
+        cb_sync.wait_front(1);
         experimental::remote_cb_pop_front(remote_cb_id, num_blocks);
-        cb_pop_front(sync_cb, 1);
+        cb_sync.pop_front(1);
 #endif
         // Signal Here
         if constexpr (needs_signaler) {
             if (b == 0) {
-                do_signaling(rt_args_idx);
+                do_signaling(noc, rt_args_idx);
             }
         }
     }
 
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
-    noc_async_atomic_barrier();
+    noc.async_atomic_barrier();
 #endif
-    noc_async_write_barrier();
+    noc.async_write_barrier();
 }

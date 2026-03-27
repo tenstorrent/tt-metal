@@ -9,96 +9,60 @@ import contextlib
 import os
 import sys
 from pathlib import Path
-from typing import TextIO
+from typing import Literal
 
 from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
 from conftest import bh_2d_mesh_device_context
-from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.demo.runner import GenerationResult, run_generation
-from models.demos.deepseek_v3_b1.demo.runtime import TokenCodec, create_model
-from models.demos.deepseek_v3_b1.prepare_weights import (
-    DeepSeekV3DenseLayerWeights,
-    DeepSeekV3EmbeddingLayerWeights,
-    DeepSeekV3LMHeadWeights,
-    DeepSeekV3MoELayerWeights,
-    load_dense_decoder_layer,
-    load_embedding_weights,
-    load_lm_head_weights,
-    load_moe_decoder_layer,
-    load_moe_routed_experts,
-)
+from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
+from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
 
-DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-V3"
-FIRST_K_DENSE_REPLACE = 3
+DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
 
-EXPECTED_PIPELINE_STAGE_MESH_SHAPE = (4, 2)
+
+def _fabric_config_for_num_procs(num_procs: int):
+    """Infer fabric config from process count: 4 → FABRIC_2D, 16 → FABRIC_2D_TORUS_Y."""
+    if num_procs == 4:
+        return ttnn.FabricConfig.FABRIC_2D
+    if num_procs == 16:
+        return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
+    if num_procs == 64:
+        return ttnn.FabricConfig.FABRIC_2D_TORUS_Y
+    raise ValueError(f"Unsupported num_procs for fabric config: {num_procs} (expected 4, 16, or 64)")
 
 
 @contextlib.contextmanager
 def open_mesh_device():
-    """Open mesh device using bh_2d_mesh_device_context."""
+    """Open mesh device using bh_2d_mesh_device_context (pod pipeline settings)."""
     if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
         os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
-    device_params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
+    num_procs = int(ttnn.distributed_context_get_size())
+    device_params = {
+        "fabric_config": _fabric_config_for_num_procs(num_procs),
+        "fabric_router_config": create_fabric_router_config(15232),
+        "trace_region_size": 573440,
+    }
     logger.info("Opening mesh device...")
     with bh_2d_mesh_device_context(device_params) as mesh_device:
-        mesh_shape = (mesh_device.shape[0], mesh_device.shape[1])
-        assert (
-            mesh_shape == EXPECTED_PIPELINE_STAGE_MESH_SHAPE
-        ), f"Demo requires a {EXPECTED_PIPELINE_STAGE_MESH_SHAPE[0]}x{EXPECTED_PIPELINE_STAGE_MESH_SHAPE[1]} mesh; got {mesh_shape[0]}x{mesh_shape[1]}"
-        logger.info(f"Mesh device opened (id={mesh_device.get_system_mesh_id()}, shape={mesh_device.shape})")
+        logger.info(
+            "Mesh device opened (id={}, shape={})",
+            mesh_device.get_system_mesh_id(),
+            mesh_device.shape,
+        )
         yield mesh_device
 
 
-def decoder_layer_id_from_mesh_id(mesh_id: int) -> int:
-    """
-    Layer ID is the index of the layer in the original model (i.e. layer 0-3 are dense layers, layer 4-60 are MoE layers)
-    The mesh ID is the pipeline stage index (0 is embedding, 1-3 are dense layers, 4-61 are MoE, and 62 is LM head + sampling)
-    """
-    assert mesh_id > 0 and mesh_id <= 61, f"Cannot get layer ID from mesh ID: {mesh_id}"
-    return mesh_id - 1
-
-
-SYSTEM_MESH_ID_EMBEDDING = 0
-SYSTEM_MESH_ID_LM_HEAD = 62
-
-
-def load_weights_from_cache(
-    cache_path: Path,
-    mesh_device: ttnn.MeshDevice,
-    layer_offset: int,
-) -> (
-    DeepSeekV3EmbeddingLayerWeights | DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights | DeepSeekV3LMHeadWeights
-):
-    """Load weights from cache (embedding, decoder layer, or lm_head)."""
-    mesh_id = mesh_device.get_system_mesh_id() + layer_offset
-    assert (
-        mesh_id >= SYSTEM_MESH_ID_EMBEDDING and mesh_id <= SYSTEM_MESH_ID_LM_HEAD
-    ), f"Mesh ID must be between {SYSTEM_MESH_ID_EMBEDDING} and {SYSTEM_MESH_ID_LM_HEAD} but got {mesh_id}"
-    if mesh_id == SYSTEM_MESH_ID_EMBEDDING:
-        logger.info("Loading embedding weights from cache")
-        return load_embedding_weights(cache_path, mesh_device)
-    elif mesh_id == SYSTEM_MESH_ID_LM_HEAD:
-        logger.info("Loading LM head weights from cache")
-        return load_lm_head_weights(cache_path, mesh_device)
-    else:
-        layer_id = decoder_layer_id_from_mesh_id(mesh_id)
-        is_moe = layer_id >= FIRST_K_DENSE_REPLACE
-        logger.info(f"Loading {'moe' if is_moe else 'dense'} layer weights from cache")
-        if is_moe:
-            with ttnn.device.setup_fast_dispatch(mesh_device):
-                preloaded_experts = load_moe_routed_experts(cache_path, mesh_device, layer_id)
-            return load_moe_decoder_layer(cache_path, mesh_device, layer_id, preloaded_routed_experts=preloaded_experts)
-        return load_dense_decoder_layer(cache_path, mesh_device, layer_id)
-
-
 def create_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser("DeepSeek-V3-B1 Demo on TT-NN")
-    parser.add_argument("--prompt", type=str, default="", help="Prompt text")
-    parser.add_argument("--max-new-tokens", type=int, default=128, help="Number of decode steps to run")
+    parser = argparse.ArgumentParser("DeepSeek-V3-B1 Demo on TT-NN (pod pipeline)")
+    parser.add_argument("--prompt", type=str, default="Hello, world!", help="Prompt text (for future real decode loop)")
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=128,
+        help="Number of pipeline token iterations",
+    )
     parser.add_argument(
         "--tokenizer",
         type=str,
@@ -106,22 +70,49 @@ def create_parser() -> argparse.ArgumentParser:
         help="HF tokenizer id or local tokenizer path",
     )
     parser.add_argument(
-        "--loopback-mode",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use HostInterface loopback path (recommended for current B1 bring-up)",
-    )
-    parser.add_argument(
         "--cache-path",
         type=Path,
-        required=True,
-        help="Path to the weight cache directory (contains layer_NNN/ subdirs)",
+        default=None,
+        help="Path to the weight cache directory (required for --weights real)",
     )
     parser.add_argument(
-        "--layer-id-offset",
+        "--model-path",
+        type=Path,
+        default=None,
+        help="Local HuggingFace model dir with model.safetensors.index.json (required for --weights state_dict)",
+    )
+    parser.add_argument(
+        "--weights",
+        type=str,
+        choices=("synthetic", "real", "state_dict"),
+        default="real",
+        help="synthetic: random prepare path; real: load tensorbin cache; state_dict: HF safetensors + prepare path",
+    )
+    parser.add_argument(
+        "--fp32",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use FP32 destination accumulator for LMHead sampling",
+    )
+    parser.add_argument(
+        "--persistent-mode",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use persistent mode for LMHead sampling kernel",
+    )
+    parser.add_argument(
+        "--dense-layer-id-override",
         type=int,
-        default=0,
-        help="Layer ID offset (default 0)",
+        default=None,
+        metavar="ID",
+        help="Force all dense stages to use this layer id (e.g. 0); default: use 0,1,2",
+    )
+    parser.add_argument(
+        "--moe-layer-id-override",
+        type=int,
+        default=None,
+        metavar="ID",
+        help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
     return parser
 
@@ -135,73 +126,87 @@ def run_demo(
     prompt: str,
     max_new_tokens: int,
     tokenizer_name_or_path: str,
-    loopback_mode: bool,
-    cache_path: Path,
-    layer_id_offset: int = 0,
-    output_stream: TextIO,
-) -> GenerationResult:
-    logger.info(
-        "Starting DeepSeek V3 B1 demo (max_new_tokens={}, loopback_mode={}, layer_id_offset={})",
-        max_new_tokens,
-        loopback_mode,
-        layer_id_offset,
-    )
-    if not is_slow_dispatch():
-        raise RuntimeError(
-            "DeepSeek V3 B1 demo requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun."
-        )
-
-    logger.info("Loading tokenizer: {}", tokenizer_name_or_path)
-    tokenizer = load_tokenizer(tokenizer_name_or_path)
-    token_codec = TokenCodec(batch_size=1)
-    is_first_decode_chunk = True
-
-    def write_text(text: str) -> None:
-        nonlocal is_first_decode_chunk
-        if is_first_decode_chunk:
-            if prompt:
-                output_stream.write(prompt)
-            is_first_decode_chunk = False
-        output_stream.write(text)
-        output_stream.flush()
+    weights_mode: Literal["synthetic", "real", "state_dict"] = "real",
+    cache_path: Path | None = None,
+    model_path: Path | None = None,
+    lm_head_fp32_dest_acc_en: bool = True,
+    lm_head_persistent_mode: bool = True,
+    dense_layer_id_override: int | None = None,
+    moe_layer_id_override: int | None = None,
+) -> None:
+    """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
+    iterations = max_new_tokens
+    logger.info(f"Starting DeepSeek V3 B1 demo (iterations={iterations})")
 
     with open_mesh_device() as mesh_device:
-        weights = load_weights_from_cache(cache_path, mesh_device, layer_id_offset)
-        logger.info("Weights loaded!")
-        return None
+        # Initialize model pipeline
+        model_pipeline = ModelPipeline(
+            mesh_device=mesh_device,
+            weights_mode=weights_mode,
+            cache_path=cache_path,
+            model_path=model_path,
+            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            lm_head_persistent_mode=lm_head_persistent_mode,
+            dense_layer_id_override=dense_layer_id_override,
+            moe_layer_id_override=moe_layer_id_override,
+        )
 
-        logger.info("Creating DeepSeekV3 model")
-        model = create_model(mesh_device=mesh_device, batch_size=1, loopback_mode=loopback_mode)
-        logger.info("Running prefill + decode")
-        result = run_generation(
-            model=model,
-            tokenizer=tokenizer,
-            prompt=prompt,
-            max_new_tokens=max_new_tokens,
-            make_input_tensor=token_codec.make_input,
-            extract_token_id=token_codec.extract_token_id,
-            write_text=write_text,
-        )
-        logger.info(
-            "Generation complete (prompt_tokens={}, generated_tokens={})",
-            len(result.prompt_token_ids),
-            len(result.generated_token_ids),
-        )
-        return result
+        my_mesh_id = mesh_device.get_system_mesh_id()
+        if my_mesh_id == 0:
+            tokenizer = load_tokenizer(tokenizer_name_or_path)
+            messages = [{"role": "user", "content": prompt}]
+            prompt = tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            logger.debug("Prompt with chat template: {}", prompt)
+
+            prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+            if not prompt_ids:
+                raise RuntimeError("Chat template produced an empty prompt")
+            logger.debug(f"Encoded prompt: {prompt_ids}")
+
+            logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
+            generated_tokens = model_pipeline.run_inference(
+                prompt_token_ids=prompt_ids,
+                max_new_tokens=iterations,
+                eos_token_id=tokenizer.eos_token_id,
+                return_generated_tokens=True,
+            )
+            assert generated_tokens is not None
+            generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
+
+        model_pipeline.barrier()
+    logger.info("Pod pipeline complete")
 
 
 def main(argv: list[str] | None = None) -> int:
+    ttnn.init_distributed_context()
     parser = create_parser()
     args = parser.parse_args(argv)
+
+    if args.weights == "real" and args.cache_path is None:
+        parser.error("--cache-path is required when --weights real")
+    if args.weights == "state_dict":
+        if args.model_path is None:
+            parser.error("--model-path is required when --weights state_dict")
+        index_path = args.model_path / "model.safetensors.index.json"
+        if not index_path.is_file():
+            parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
 
     run_demo(
         prompt=args.prompt,
         max_new_tokens=args.max_new_tokens,
         tokenizer_name_or_path=args.tokenizer,
-        loopback_mode=args.loopback_mode,
+        weights_mode=args.weights,
         cache_path=args.cache_path,
-        layer_id_offset=args.layer_id_offset,
-        output_stream=sys.stdout,
+        model_path=args.model_path,
+        lm_head_fp32_dest_acc_en=args.fp32,
+        lm_head_persistent_mode=args.persistent_mode,
+        dense_layer_id_override=args.dense_layer_id_override,
+        moe_layer_id_override=args.moe_layer_id_override,
     )
     print(file=sys.stdout, flush=True)
     return 0

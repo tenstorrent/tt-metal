@@ -1776,22 +1776,6 @@ def test_binary_sharded_bcast_w_size(a_shape, b_shape, a_shard_size, b_shard_siz
             [32, 33],
             ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
         ],
-        # for row major layout, width sharding is not supported
-        [
-            torch.Size([64, 4 * 32]),
-            torch.Size([64, 4 * 32]),
-            ttnn.ShardStrategy.WIDTH,
-            [64, 4 * 32],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
-        ],
-        # for row major layout, block sharding is not supported
-        [
-            torch.Size([64, 4 * 32]),
-            torch.Size([64, 4 * 32]),
-            ttnn.ShardStrategy.BLOCK,
-            [32, 4 * 32],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
-        ],
     ),
 )
 def test_binary_sharded_invalid_row_major_layout(

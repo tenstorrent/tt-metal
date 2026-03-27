@@ -32,7 +32,7 @@ struct bfloat8_b {};
 
 template <typename T>
 std::vector<T> convert_layout_tile_to_row_major(
-    const Shape2D& shape, const Tile& tile, tt::stl::Span<const T> data_to_convert) {
+    const Shape2D& shape, const Tile& tile, ttsl::Span<const T> data_to_convert) {
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
     auto transpose_within_face = tile.get_transpose_within_face();
@@ -62,7 +62,7 @@ std::vector<T> convert_layout_tile_to_row_major(
 //     ** For the last shard, we only align to nearest page instead of full shard size for partial shards
 //   * After conversion, size of physical data will match 2D physical size indicated by tensor_spec.physical_shape()
 template <typename T>
-std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value = 0);
+std::vector<T> encode_tensor_data(ttsl::Span<const T> logical_data, const TensorSpec& tensor_spec, T pad_value = 0);
 
 // Converts physical data into logical data based on tensor spec (see encode_tensor_data for details)
 // - Physical data: Flat container of physical data corresponding to tensor spec
@@ -72,7 +72,7 @@ std::vector<T> encode_tensor_data(tt::stl::Span<const T> logical_data, const Ten
 //   * To get logical data, perform the exact inverse process of encode_tensor_data
 //   * Resulting data is safe to be converted to python tensors or general consumption with just a ND logical shape
 template <typename T>
-std::vector<T> decode_tensor_data(tt::stl::Span<const T> physical_data, const TensorSpec& tensor_spec);
+std::vector<T> decode_tensor_data(ttsl::Span<const T> physical_data, const TensorSpec& tensor_spec);
 
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -125,8 +125,6 @@ void copy_to_device(
 // ======================================================================================
 
 Tensor to_layout(const Tensor& tensor, Layout target_layout);
-
-Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 
 // ======================================================================================
 //                                  .pad() and .unpad()

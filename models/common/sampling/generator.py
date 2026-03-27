@@ -16,6 +16,8 @@ from ._utils import clamp, is_default_value, split_list
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
 
+MAX_UINT32 = 2**32 - 1
+
 
 @dataclass(frozen=True)
 class SamplingParams:
@@ -35,6 +37,7 @@ class SamplingParams:
     repetition_penalty: float | list[float] = 1.0
     seed: int | list[int] | None = None
     enable_log_probs: bool | list[bool] = False
+    num_logprobs: int | list[int] = 0
 
 
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
@@ -104,10 +107,16 @@ class SamplingGenerator:
         Drop any cached trace metadata for both penalties/no-penalties and log-probs/no-log-probs paths.
         """
         for key, slot in self._trace_states.items():
-            if slot["id"] is not None:
-                logger.debug(
-                    f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
-                )
+            if slot["id"] is None:
+                continue
+            logger.debug(
+                f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
+            )
+            try:
+                ttnn.release_trace(self.mesh_device, slot["id"])
+            except Exception as e:
+                logger.warning(f"Failed to release trace {slot['id']} : {e}")
+                continue
         self._trace_states.clear()
 
     def reset_prompt_tokens(self, prompt_tokens):
@@ -134,9 +143,11 @@ class SamplingGenerator:
 
         Resets params, seeds, prompt tokens, and output state in the correct order.
         """
-        self.reset_sampling_params(sampling_params)
-        if getattr(sampling_params, "seed", None) is not None:
-            self.seed_manager.reset_seed(sampling_params.seed, empty_slots)
+        self.reset_sampling_params(sampling_params, empty_slots=empty_slots)
+        seed = getattr(sampling_params, "seed", None)
+        # assert on condition that seed is not None
+        assert seed is not None, "sampling_params must be formatted (seed should be a list, not None)"
+        self.seed_manager.reset_seed(seed, empty_slots)
         self.seed_manager.get_new_values(empty_slots, replicate_seeds=True)
         if prompt_tokens is not None:
             self.reset_prompt_tokens(prompt_tokens)
@@ -191,13 +202,16 @@ class SamplingGenerator:
     # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------
-    def reset_sampling_params(self, sampling_params):
+    def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
         old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
+        num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
             p=sampling_params.top_p,
             temp=sampling_params.temperature,
             enable_log_probs=sampling_params.enable_log_probs,
+            num_logprobs=num_logprobs,
+            empty_slots=empty_slots,
         )
         if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
             self.reset_trace()
@@ -376,7 +390,9 @@ def format_sampling_params(sampling_params, max_batch_size):
         "presence_penalty": 0.0,
         "frequency_penalty": 0.0,
         "repetition_penalty": 1.0,
-        "seed": random.randint(0, 1000000),
+        "seed": None,
+        "num_logprobs": 0,
+        "enable_log_probs": False,
     }
 
     def _pad(lst, name):
@@ -385,12 +401,28 @@ def format_sampling_params(sampling_params, max_batch_size):
             return list(lst)
         return list(lst) + [defaults[name]] * (target_len - len(lst))
 
-    # Pad core sampling fields
+    # Pad core sampling fields (scalar→list already done above)
     temperature = _pad(sampling_params.temperature, "temperature")
     top_p = _pad(sampling_params.top_p, "top_p")
     top_k = _pad(sampling_params.top_k, "top_k")
 
-    # Normalise and pad penalty / seed fields
+    # enable_log_probs / num_logprobs: scalar → broadcast to all users.
+    # Multi-element list → pad with default (False/0) for inactive slots.
+    # Single-element list (from scalar→list conversion) → broadcast to all.
+    def _broadcast_pad(lst, name):
+        if not isinstance(lst, list):
+            return [lst] * target_len
+        if len(lst) == 1:
+            return lst * target_len
+        return _pad(lst, name)
+
+    enable_log_probs = _broadcast_pad(sampling_params.enable_log_probs, "enable_log_probs")
+    if getattr(sampling_params, "num_logprobs", None) is not None:
+        num_logprobs = _broadcast_pad(sampling_params.num_logprobs, "num_logprobs")
+    else:
+        num_logprobs = None
+
+    # Normalise and pad penalty / seed fields (may still be None/scalar)
     def _normalise_and_pad(name):
         value = getattr(sampling_params, name, None)
         if value is None:
@@ -438,6 +470,8 @@ def format_sampling_params(sampling_params, max_batch_size):
         frequency_penalty=frequency_penalty,
         repetition_penalty=repetition_penalty,
         seed=seed,
+        num_logprobs=num_logprobs,
+        enable_log_probs=enable_log_probs,
     )
 
 
@@ -501,11 +535,27 @@ def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:
 
 
 class SeedManager:
+    """Manages per-user RNG seeds for on-device sampling.
+
+    Tracks which users have explicit seeds set (``_seed_active``) and avoids
+    unnecessary host-to-device copies during decode when no seeds are active.
+    On the first call after a reset with no active seeds, pushes MAX_UINT32
+    (SKIP) values so the device skips ``rand_tile_init``, then skips all
+    subsequent decode pushes until the next ``reset_seed``.
+    """
+
     def __init__(self, tt_sampling, max_batch_size=32):
         self.max_batch_size = max_batch_size
-        self.seeds = [secrets.randbits(64) for _ in range(max_batch_size)]
-        self.rngs = [random.Random(seed) for seed in self.seeds]
+        self.seeds = [None for _ in range(max_batch_size)]
+        # Pre-allocate RNG objects; actual seeds are set via reset_seed().
+        self.rngs = [random.Random(secrets.randbits(64)) for _ in range(max_batch_size)]
         self.tt_sampling = tt_sampling
+        # True when at least one user slot has a non-None seed.
+        self._seed_active = False
+        # Set to True by reset_seed() so the next get_new_values() knows it
+        # must push seeds (or SKIP values) to the device at least once after a
+        # prefill. Cleared after the first push.
+        self._reseted = False
         # Mesh mapper for sharding seeds across rows when sampling_dp > 1
         if tt_sampling._sampling_dp > 1:
             self._seed_mapper = ttnn.ShardTensor2dMesh(
@@ -515,21 +565,52 @@ class SeedManager:
             self._seed_mapper = None
 
     def reset_seed(self, seeds, user_ids):
+        """Update RNG state for the given user slots after a prefill.
+
+        Args:
+            seeds: List of seed values (int or None) for each user in ``user_ids``.
+            user_ids: Batch slot indices being prefilled.
+        """
         for i, user in enumerate(user_ids):
-            self.rngs[user].seed(seeds[i])
             self.seeds[user] = seeds[i]
+            # Re-seed the RNG; use random seed as fallback when no explicit seed is given.
+            self.rngs[user].seed(seeds[i] if seeds[i] is not None else secrets.randbits(64))
+        # Mark seeds active only when at least one slot has an explicit seed.
+        self._seed_active = any(s is not None for s in self.seeds)
+        self._reseted = True
 
     def get_new_values(self, empty_slots=None, replicate_seeds=False):
+        """Generate and push new seed values to the device.
+
+        When no seeds are active (``_seed_active=False``):
+          - On the first call after reset (``_reseted=True``), pushes SKIP
+            values (MAX_UINT32) so the device's ``rand_tile_init`` is skipped.
+          - On subsequent decode calls (``_reseted=False``), returns early
+            without any device copy — this is the main optimisation.
+
+        When seeds are active, advances each user's RNG and copies the new
+        seed tensor to the device as before.
+        """
         if empty_slots is None:
             empty_slots = range(self.max_batch_size)
-        # get new seeds for each user in empty_slots otherwise 0
-        new_seeds = [rng.randint(0, 1000000) if i in empty_slots else 0 for i, rng in enumerate(self.rngs)]
 
-        if replicate_seeds:
-            assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
-            new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
-        # send new seeds to sampling module
+        if not self._seed_active:
+            if not self._reseted:
+                # No active seeds and already pushed SKIP values — nothing to do.
+                return
+            # First call after reset with no active seeds: push SKIP (MAX_UINT32)
+            # so the device skips rand_tile_init. All following decode steps will
+            # early-return above until the next reset_seed().
+            new_seeds = [MAX_UINT32] * self.max_batch_size
+        else:
+            # Advance RNG for each user in empty_slots; non-active slots get MAX_UINT32.
+            new_seeds = [rng.randint(0, 1000000) if i in empty_slots else MAX_UINT32 for i, rng in enumerate(self.rngs)]
+            if replicate_seeds:
+                assert len(empty_slots) == 1, "Cannot replicate seeds if empty_slots is not length 1"
+                new_seeds = self.max_batch_size * [new_seeds[empty_slots[0]]]
+
         new_seed_tt = ttnn.from_torch(
             torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
         )
         ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
+        self._reseted = False

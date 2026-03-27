@@ -40,7 +40,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/layer_norm_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/linear_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/lora_linear_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_layer_perceptron.cpp
@@ -51,6 +50,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/embedding_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/layernorm_op.cpp
@@ -60,20 +61,31 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/newton_schulz_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/newton_schulz_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/rand_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/randn_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_composite.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/muon_composite.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/muon_composite.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_composite.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_full_precision.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/no_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_fused.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_registry.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/lambda_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/linear_scheduler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/schedulers/scheduler_base.cpp
@@ -133,24 +145,34 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/silu_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
+    # SwiGLU Elemwise Backward (fused eltwise backward)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_program_factory.cpp
     # SDPA Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
+    # Ring SDPA Forward (for ring attention / context parallelism)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/ring_sdpa_fw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_program_factory.cpp
+    # Ring SDPA Backward (for ring attention / context parallelism)
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/ring_sdpa_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_program_factory.cpp
     # SDPA Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.cpp
-    # SGD Fused Optimizer
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/sgd_fused.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd_fused/device/sgd_fused_program_factory.cpp
-    # SwiGLU Forward
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/swiglu_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_fw/device/swiglu_fw_program_factory.cpp
+    # SGD Optimizer
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/sgd.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/device/sgd_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/device/sgd_program_factory.cpp
     # AdamW Optimizer (consolidated: supports both half and full precision)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/adamw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/adamw/device/adamw_device_operation.cpp
@@ -159,113 +181,13 @@ set(METAL_OPS_FILES
 
 list(APPEND SOURCES ${METAL_OPS_FILES})
 
-# Check if TT::Metalium target exists
-# If it does not exist, assume that we are building with tt-train as top level project
+# TT::Metalium must be available (provided by tt-metal parent build)
 if(NOT TARGET TT::Metalium)
-    find_package(TT-NN)
-
-    if(NOT TT-NN_FOUND)
-        # Try to get TT_METAL_HOME from environment, otherwise infer from directory structure
-        if(DEFINED ENV{TT_METAL_HOME})
-            set(TT_METAL_HOME "$ENV{TT_METAL_HOME}")
-            message(STATUS "Using TT_METAL_HOME from environment: ${TT_METAL_HOME}")
-        else()
-            # Infer tt-metal repository layout from directory structure (tt-metal/tt-train)
-            # From tt-train/, go up ONE level to reach the repository root
-            set(TT_METAL_HOME "${CMAKE_SOURCE_DIR}/..")
-            if(EXISTS "${TT_METAL_HOME}/tt_metal/CMakeLists.txt")
-                message(STATUS "Inferred tt-metal location: ${TT_METAL_HOME}")
-            else()
-                message(FATAL_ERROR "Failed to infer tt-metal location from ${TT_METAL_HOME}")
-            endif()
-        endif()
-
-        set(METALIUM_INCLUDE_DIRS
-            # Metalium
-            "${TT_METAL_HOME}"
-            "${TT_METAL_HOME}/tt_metal"
-            "${TT_METAL_HOME}/tt_metal/third_party/umd"
-            "${TT_METAL_HOME}/tt_metal/third_party/tracy/public"
-            "${TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole"
-            "${TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines"
-            "${TT_METAL_HOME}/tt_metal/hw/inc/internal/tt-1xx/blackhole"
-            "${TT_METAL_HOME}/tt_metal/api/"
-            "${TT_METAL_HOME}/tt_metal/third_party/umd/device/api"
-            "${TT_METAL_HOME}/tt_metal/hostdevcommon/api"
-            "${TT_METAL_HOME}/tt_metal/hw/inc"
-            "${TT_METAL_HOME}/tt_stl"
-            # TTNN
-            "${TT_METAL_HOME}/ttnn"
-            "${TT_METAL_HOME}/ttnn/api"
-            "${TT_METAL_HOME}/ttnn/cpp"
-            "${reflect_SOURCE_DIR}"
-        )
-
-        message(STATUS "Metalium not found, attempting to locate")
-
-        # Define the path to look for the library
-        set(METALIUM_LIB_PATH "${TT_METAL_HOME}/build/lib")
-
-        # Try to find the library
-        find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-        find_library(TTNNCPP_LIBRARY NAMES "_ttnncpp.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-        find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-        find_library(TT_STL_LIBRARY NAMES "libtt_stl.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
-
-        if(TT_STL_LIBRARY)
-            add_library(Metalium::TT_STL SHARED IMPORTED)
-            set_target_properties(
-                Metalium::TT_STL
-                PROPERTIES
-                    IMPORTED_LOCATION
-                        "${TT_STL_LIBRARY}"
-                    INTERFACE_INCLUDE_DIRECTORIES
-                        "${TT_METAL_HOME}/tt_stl"
-            )
-            message(STATUS "Successfully found libtt_stl.so at ${TT_STL_LIBRARY}")
-        else()
-            message(FATAL_ERROR "libtt_stl.so not found in ${METALIUM_LIB_PATH}")
-        endif()
-
-        if(TT_METAL_LIBRARY)
-            add_library(TT::Metalium SHARED IMPORTED)
-            set_target_properties(
-                TT::Metalium
-                PROPERTIES
-                    IMPORTED_LOCATION
-                        "${TT_METAL_LIBRARY}"
-                    INTERFACE_INCLUDE_DIRECTORIES
-                        "${METALIUM_INCLUDE_DIRS}"
-            )
-            target_link_libraries(
-                TT::Metalium
-                INTERFACE
-                    ${DEVICE_LIBRARY}
-                    Metalium::TT_STL
-                    nlohmann_json::nlohmann_json
-            )
-            message(STATUS "Successfully found libtt_metal.so at ${TT_METAL_LIBRARY}")
-        else()
-            message(FATAL_ERROR "libtt_metal.so not found in ${METALIUM_LIB_PATH}")
-        endif()
-        if(TTNNCPP_LIBRARY)
-            add_library(TTNN::TTNN SHARED IMPORTED)
-            set_target_properties(
-                TTNN::TTNN
-                PROPERTIES
-                    IMPORTED_LOCATION
-                        "${TTNNCPP_LIBRARY}"
-                    INTERFACE_INCLUDE_DIRECTORIES
-                        "${METALIUM_INCLUDE_DIRS}"
-            )
-            target_link_libraries(TTNN::TTNN INTERFACE TT::Metalium)
-            message(STATUS "Successfully found _ttnncpp.so at ${TTNNCPP_LIBRARY}")
-        else()
-            message(FATAL_ERROR "_ttnncpp.so not found in ${METALIUM_LIB_PATH}")
-        endif()
-    endif()
-else()
-    message(STATUS "Metalium targets already exists")
+    message(
+        FATAL_ERROR
+        "TT::Metalium target not found. "
+        "tt-train must be built as part of tt-metal using: ./build_metal.sh --build-tt-train"
+    )
 endif()
 
 # Include helper functions for flatbuffer generation
@@ -291,6 +213,15 @@ endforeach()
 # Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
 target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
+# Define TTML_ROOT for config path resolution
+# This is used by ttml::utils::get_tt_train_root() as a fallback
+# when TT_TRAIN_ROOT/TT_METAL_HOME environment variables are not set
+target_compile_definitions(
+    ttml
+    PRIVATE
+        TTML_ROOT="${CMAKE_SOURCE_DIR}/tt-train"
+        TTML_DATA_ROOT="${CMAKE_SOURCE_DIR}/data"
+)
 # Re-enable deprecation warnings for this target (overrides parent -Wno-deprecated-declarations when built as subproject).
 # Deprecations are warnings only so the build does not fail on deprecated usage in included dependencies.
 target_compile_options(
@@ -364,13 +295,19 @@ message(STATUS "cli11_SOURCE_DIR: ${CLI11_SOURCE_DIR}")
 target_include_directories(ttml PUBLIC ${CLI11_SOURCE_DIR}/include)
 
 ##################################################
-# Precompiled headers for ttml
-# The ttml library includes massive TTNN/Metalium headers across 100+ source files.
-# Precompiling them once dramatically reduces compile time.
+# Dedicated PCH provider for ttml
+# A tiny static library whose only job is to compile the precompiled header.
+# ttml (and ttml_tests) REUSE_FROM this target.
+# ccache is disabled only for this target so the .pch is always built fresh
+# while all real source files still benefit from ccache.
 ##################################################
 
+add_library(ttml_pch STATIC)
+file(GENERATE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ttml_pch.cpp CONTENT "/*dummy ttml pch file*/\n")
+target_sources(ttml_pch PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/ttml_pch.cpp)
+
 target_precompile_headers(
-    ttml
+    ttml_pch
     PRIVATE
         # Standard library headers (widely used across tt-train)
         <algorithm>
@@ -396,6 +333,37 @@ target_precompile_headers(
         "core/ttnn_all_includes.hpp"
         "metal/ttnn_all_includes.hpp"
 )
+
+# Mirror ttml's link libraries so the PCH and consuming TUs see identical
+# include paths.  Mismatched -I / -isystem ordering causes ODR violations
+# (e.g. tt-logger fetched locally vs system metalium copy).
+target_link_libraries(
+    ttml_pch
+    PRIVATE
+        TT::Metalium
+        TTNN::TTNN
+        Python3::Python
+        fmt::fmt-header-only
+        nlohmann_json::nlohmann_json
+        enchantum::enchantum
+        yaml-cpp::yaml-cpp
+        xtensor
+        xtensor-blas
+        xtl
+        Boost::core
+        Boost::container
+        tt-logger
+        simde::simde
+        FlatBuffers::FlatBuffers
+)
+
+target_include_directories(ttml_pch PRIVATE ${PROJECT_SOURCE_DIR})
+
+if(COMMAND tt_disable_ccache_for_pch)
+    tt_disable_ccache_for_pch(ttml_pch)
+endif()
+
+target_precompile_headers(ttml REUSE_FROM ttml_pch)
 
 if(ENABLE_LIBCXX)
     target_link_libraries(

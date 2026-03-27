@@ -12,9 +12,11 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -129,20 +131,6 @@ void JitBuildEnv::init(
         TT_THROW("sfpi not found at {} or {}", sfpi_roots[0], sfpi_roots[1]);
     }
 
-    // Read the sfpi version file tracked in the repo.  This captures the
-    // toolchain version (e.g. "sfpi_version='7.25.0'", "sfpi_build='252'")
-    // so that upgrading sfpi invalidates the build cache.
-    std::string sfpi_version_contents;
-    {
-        std::string sfpi_version_path = this->root_ + "tt_metal/sfpi-version";
-        std::ifstream ifs(sfpi_version_path);
-        if (ifs.is_open()) {
-            std::ostringstream oss;
-            oss << ifs.rdbuf();
-            sfpi_version_contents = oss.str();
-        }
-    }
-
     // Flags
     string common_flags = "-std=c++17 -flto=auto -ffast-math -fno-exceptions ";
 
@@ -218,6 +206,9 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         this->defines_ += "-DDEBUG_PRINT_ENABLED ";
+        if (rtoptions.get_use_device_print()) {
+            this->defines_ += "-DUSE_DEVICE_PRINT ";
+        }
     }
 
     if (rtoptions.get_record_noc_transfers()) {
@@ -260,6 +251,11 @@ void JitBuildEnv::init(
         this->defines_ += "-DENABLE_LLK_ASSERT ";
     }
 
+    if (!rtoptions.get_watcher_enabled() && !rtoptions.get_lightweight_kernel_asserts() &&
+        rtoptions.get_llk_asserts()) {
+        this->defines_ += "-DENV_LLK_INFRA ";
+    }
+
     if (rtoptions.get_disable_sfploadmacro()) {
         this->defines_ += "-DDISABLE_SFPLOADMACRO ";
     }
@@ -294,7 +290,21 @@ void JitBuildEnv::init(
     hasher.update(cflags_);
     hasher.update(lflags_);
     hasher.update(defines_);
-    hasher.update(sfpi_version_contents);
+
+    // Read the sfpi compiler version directly from the compiler
+    // we're using.  Compiler changes invalidate the cache.
+    if (FILE* pipe = popen(fmt::format("exec {} --version", this->gpp_).c_str(), "r")) {
+        // First line is typically about 55 chars on main
+        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.32.0[333]) 15.1.0
+        // + branch name suffix on a branch
+        // riscv-tt-elf-g++ (tenstorrent/sfpi:7.32.0-checking-36930[340]) 15.1.0
+        char buf[100];
+        if (fgets(buf, sizeof(buf), pipe)) {
+            hasher.update(buf, buf + std::strlen(buf));
+        }
+        pclose(pipe);
+    }
+
     build_key_ = hasher.digest();
 
     this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
@@ -535,7 +545,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
     fs::remove(log_file.path());
-    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
+    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
     jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
@@ -615,7 +625,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     }
     jit_build::utils::FileRenamer log_file(elf_name + ".log");
     fs::remove(log_file.path());
-    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), false)) {
+    if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "link", cmd, log_file.path());
     }
     jit_build::utils::FileRenamer dephash_file(elf_name + ".dephash");
@@ -631,7 +641,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
 // Given this elf (A) and a later elf (B):
 // weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of the
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
-// strong so to propogate link addresses
+// strong so to propagate link addresses
 void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
@@ -651,7 +661,12 @@ void JitBuildState::weaken(const string& out_dir) const {
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
     // ZoneScoped;
     static std::atomic<bool> new_log = true;
+    // Mutex to serialize concurrent writes to the shared zone src locations log file.
+    // Multiple kernels are compiled in parallel; without serialization their grep outputs
+    // interleave in the file, producing corrupted lines that fail to parse.
+    static std::mutex zone_log_mutex;
     if (env_.get_rtoptions().get_profiler_enabled()) {
+        std::lock_guard<std::mutex> lk(zone_log_mutex);
         if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
             std::remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
         }
@@ -661,7 +676,8 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
         }
 
         auto cmd = fmt::format("grep KERNEL_PROFILER {}*.o.log", out_dir);
-        tt::jit_build::utils::run_command(cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, false);
+        tt::jit_build::utils::run_command(
+            cmd, tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, env_.get_rtoptions().get_dump_build_commands());
     }
 }
 

@@ -266,6 +266,7 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         0,      //(uint32_t)sliding_window_size,
+        0,      // arg 20: lightweight mask (unused in ring distributed)
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
@@ -299,8 +300,10 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
         false,  //(std::uint32_t)use_padded_mask,
         true,   //(uint32_t)is_chunked,
         scale_union.u,
-        0,  //(uint32_t)sliding_window_size,
-        0,  //(std::uint32_t)use_attention_sink,
+        0,          //(uint32_t)sliding_window_size,
+        0,          //(std::uint32_t)use_attention_sink,
+        0,          //(std::uint32_t)use_streaming_compute — always false for ring distributed (causal)
+        valid_Skt,  // arg 31: unpadded K tiles for streaming padded_k_tiles
     };
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
@@ -351,6 +354,9 @@ RingDistributedSdpaMeshWorkloadFactory::cached_program_t RingDistributedSdpaMesh
     tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
                                                        // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
+    // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
+    // both must share the same data format for the unpack config to be correct.
+    TT_ASSERT(im_df == stats_df, "SDPA fused SALAD correction requires out and sum CBs to share data format");
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);

@@ -140,7 +140,7 @@ Tensor WindowedScaledDotProductAttentionDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
 }
 
-tt::stl::hash::hash_t WindowedScaledDotProductAttentionDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t WindowedScaledDotProductAttentionDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     operation::Hash hash = operation::hash_operation<WindowedScaledDotProductAttentionDeviceOperation>(
         attrs.scale,

@@ -91,8 +91,6 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
             input_tensor.dtype() == DataType::UINT16,
         "Can only tilize bfloat16/float32 or int32/uint32/uint16 tensors");
 
-    TT_FATAL(input_shape.rank() >= 1, "Input tensor must be of rank >= 1, but its shape is {}", input_shape);
-
     if (input_shape.rank() == 1) {
         // Special case: if input tensor is 1D row-major, output tiled tensor will have 1D logical shape
         // but 2D padded shape
@@ -124,13 +122,24 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
         TILE_WIDTH,
         TILE_HEIGHT);
 
-    if (input_tensor.memory_config().is_sharded()) {
+    const uint32_t alignment_requirement = hal::get_l1_alignment();
+    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED) {
+        uint32_t l1_address_increment_size =
+            operation_attributes.output_padded_shape[-1] *
+            input_tensor.element_size();  // For height-sharded and interleaved tensors, the l1 address in the reader
+                                          // kernel gets incremented by the output padded width size.
+        TT_FATAL(
+            l1_address_increment_size % alignment_requirement == 0,
+            "Output padded width size {} must be aligned to {} bytes for HEIGHT_SHARDED or INTERLEAVED tensors",
+            l1_address_increment_size,
+            alignment_requirement);
+    } else if (input_tensor.memory_config().is_sharded()) {
         uint32_t shard_width = input_tensor.shard_spec().has_value()
                                    ? input_tensor.shard_spec().value().shape[1]
                                    : input_tensor.nd_shard_spec().value().shard_shape[-1];
 
         const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
-        const uint32_t alignment_requirement = hal::get_l1_alignment();
         TT_FATAL(
             page_size_bytes == input_tensor.buffer()->aligned_page_size(),
             "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import collections
+import hashlib
 from itertools import repeat
 
 import torch
@@ -29,6 +30,8 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, gri
     else:
         config_to_blocking = {
             # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
+            # Keep the old padded conv_out tuning for the new unpadded C_out=3 path.
+            (96, 3, (3, 3, 3)): (96, 32, 1, 16, 8),
             (96, 32, (3, 3, 3)): (96, 32, 1, 16, 8),
             (192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),
             (96, 96, (3, 3, 3)): (96, 96, 1, 8, 8),
@@ -60,25 +63,34 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, gri
     )
 
 
-def count_convs(module: Module) -> int:
-    """
-    Recursively count the total number of WanCausalConv3d instances in a class and its attributes.
-
-    Args:
-        module: The `Module` to search through
-
-    Returns:
-        int: Total count of WanCausalConv3d instances found
-    """
-    count = 1 if module.__class__.__name__ == "WanCausalConv3d" else 0
+def _walk_conv3d_modules(module: Module):
+    """Yield every child module that has a conv_config (i.e. conv3d layers)."""
+    if hasattr(module, "conv_config"):
+        yield module
     for _, child in module.named_children():
-        count += count_convs(child)
-    return count
+        yield from _walk_conv3d_modules(child)
+
+
+def conv3d_blocking_hash(module: Module) -> str:
+    """Build a cache key suffix from C_in_block values of all conv3d layers.
+
+    prepare_conv3d_weights reshapes weights by C_in_block, so cached weights
+    are only valid for the same blocking configuration.
+    """
+    cin_blocks = [str(m.conv_config.C_in_block) for m in _walk_conv3d_modules(module)]
+    if not cin_blocks:
+        return ""
+    return "cin" + hashlib.sha256("_".join(cin_blocks).encode()).hexdigest()[:8]
+
+
+def count_convs(module: Module) -> int:
+    """Count the total number of conv3d modules in a module tree."""
+    return sum(1 for _ in _walk_conv3d_modules(module))
 
 
 def conv_pad_height(tensor_BTHWC, h_factor):
     """
-    For Wan2.2, in some parallism schemes height can't be fractured by the factor.
+    For Wan2.2, in some parallelism schemes height can't be fractured by the factor.
     This function pads the height to the next multiple of the factor.
     """
     B, T, H, W, C = tensor_BTHWC.shape
@@ -116,29 +128,3 @@ def aligned_channels(channels):
     if channels % ALIGNMENT != 0:
         channels = channels + ALIGN_PAD
     return channels
-
-
-def prepare_conv3d_weights(weight, bias, conv_config):
-    """Prepare weights and bias for TTNN."""
-    C_in = weight.shape[1]
-    w = weight.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
-    padded_C_in = aligned_channels(C_in)
-    if padded_C_in != C_in:
-        w = torch.nn.functional.pad(w, (0, 0, 0, padded_C_in - C_in))
-
-    # Reshape weights so that num_C_in_blocks is the first dimension
-    kD, kH, kW, C_in_aligned, out_channels = w.shape
-
-    C_in_block = conv_config.C_in_block
-    C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
-    num_C_in_blocks = C_in_aligned // C_in_block
-    assert (
-        num_C_in_blocks * C_in_block == C_in_aligned
-    ), f"num_C_in_blocks * C_in_block == C_in_aligned, got {num_C_in_blocks} * {C_in_block} != {C_in_aligned}"
-
-    # Kernel expects num_C_in_blocks to be the first dimension to stride over it
-    w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
-    w = w.permute(3, 0, 1, 2, 4, 5)
-    w = w.reshape(-1, out_channels)
-
-    return w, bias.reshape(1, -1)

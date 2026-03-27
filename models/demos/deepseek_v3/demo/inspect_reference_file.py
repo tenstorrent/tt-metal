@@ -6,6 +6,7 @@ Simple script to inspect the contents of the teacher forcing reference file.
 Run this to debug what tokens are stored in the reference file.
 """
 
+import argparse
 import os
 from pathlib import Path
 
@@ -18,7 +19,7 @@ try:
     MODEL_PATH = Path(
         os.getenv(
             "DEEPSEEK_V3_HF_MODEL",
-            "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528",
+            "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized",
         )
     )
     tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, trust_remote_code=True)
@@ -151,10 +152,74 @@ def inspect_reference_file(reference_file: Path = REFERENCE_FILE):
                     print(f"                  -> {decoded}")
         print()
 
+    # --- Teacher-mass candidates ---
+    if "teacher_mass_candidates" in payload:
+        teacher_mass = payload["teacher_mass_candidates"]
+        counts = teacher_mass.get("counts")
+        token_ids = teacher_mass.get("token_ids")
+        logprobs = teacher_mass.get("logprobs")
+        coverage = teacher_mass.get("coverage")
+        generated_prefix_len = teacher_mass.get("generated_prefix_len")
+
+        print("teacher_mass_candidates:")
+        print(f"  coverage: {coverage}")
+        print(f"  generated_prefix_len: {generated_prefix_len}")
+        if isinstance(counts, torch.Tensor):
+            print(f"  counts shape: {tuple(counts.shape)}, dtype: {counts.dtype}")
+            if counts.numel() > 0:
+                counts_i64 = counts.to(torch.int64)
+                print(
+                    "  count stats: "
+                    f"min={int(counts_i64.min().item())}, "
+                    f"max={int(counts_i64.max().item())}, "
+                    f"mean={float(counts_i64.to(torch.float32).mean().item()):.1f}"
+                )
+                preview = counts_i64[: min(16, counts_i64.numel())].tolist()
+                print(f"  first counts: {preview}")
+        if isinstance(token_ids, torch.Tensor):
+            print(f"  token_ids shape: {tuple(token_ids.shape)}, dtype: {token_ids.dtype}")
+        if isinstance(logprobs, torch.Tensor):
+            print(f"  logprobs shape: {tuple(logprobs.shape)}, dtype: {logprobs.dtype}")
+        print()
+
+    # --- Fixed top-k candidates ---
+    if "topk_candidates" in payload:
+        topk_candidates = payload["topk_candidates"]
+        token_ids = topk_candidates.get("token_ids")
+        probs = topk_candidates.get("probs")
+        k = topk_candidates.get("k")
+        generated_prefix_len = topk_candidates.get("generated_prefix_len")
+
+        print("topk_candidates:")
+        print(f"  k: {k}")
+        print(f"  generated_prefix_len: {generated_prefix_len}")
+        if isinstance(token_ids, torch.Tensor):
+            print(f"  token_ids shape: {tuple(token_ids.shape)}, dtype: {token_ids.dtype}")
+        if isinstance(probs, torch.Tensor):
+            print(f"  probs shape: {tuple(probs.shape)}, dtype: {probs.dtype}")
+            if probs.numel() > 0:
+                tail_probs = probs[:, -1]
+                print(
+                    "  tail prob stats: "
+                    f"min={float(tail_probs.min().item()):.6g}, "
+                    f"max={float(tail_probs.max().item()):.6g}, "
+                    f"mean={float(tail_probs.mean().item()):.6g}"
+                )
+        print()
+
     print(f"{'='*70}")
     print("Inspection complete")
     print(f"{'='*70}\n")
 
 
 if __name__ == "__main__":
-    inspect_reference_file()
+    parser = argparse.ArgumentParser(description="Inspect a DeepSeek teacher-forcing reference file.")
+    parser.add_argument(
+        "reference_file",
+        nargs="?",
+        type=Path,
+        default=REFERENCE_FILE,
+        help="Path to the .refpt file to inspect.",
+    )
+    args = parser.parse_args()
+    inspect_reference_file(args.reference_file)
