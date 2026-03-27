@@ -800,57 +800,40 @@ class HfRotarySetup(LightweightModule):
     def get_rot_mats(
         self, position_idxs: Union[torch.Tensor, ttnn.Tensor], return_rot_idxs: bool = False
     ) -> List[ttnn.Tensor]:
-        """Get rotation matrices (cos/sin) for HF-style RoPE, sliced by position.
+        """Get rotation matrices (cos/sin) for HF-style RoPE, one row per batch slot.
 
-        This method pre-slices the cos/sin cache at the given position index, returning
-        matrices with shape [1, 1, 1, head_dim]. This enables trace-compatible usage with
-        ttnn.experimental.rotary_embedding by using token_idx=0 (a compile-time constant).
-
-        The workaround for tracing:
-        1. Pre-slice cos/sin cache at position_idx: cache[:, :, position_idx:position_idx+1, :]
-        2. Return sliced cache with shape [1, 1, 1, head_dim] (position values at index 0)
-        3. Caller uses ttnn.experimental.rotary_embedding with token_idx=0
+        Decode attention slices ``cos[:, :, b:b+1, :]`` / ``sin`` to ``[1, 1, 1, head_dim]`` and
+        calls ``ttnn.experimental.rotary_embedding(..., token_idx=0)`` per batch index (trace-safe
+        fixed loop). Prefill uses full-sequence cos/sin from separate tensors.
 
         Args:
-            position_idxs: Position index as a scalar torch.Tensor or ttnn.Tensor.
-                          For decode mode, this should be a single position value (or batch of
-                          identical values). Only the first value is used for slicing.
-            return_rot_idxs: If True, also return the position indices unchanged.
+            position_idxs: Per-batch positions. Device ``ttnn.Tensor`` ``[1, batch_padded]`` (``uint32``,
+                same padding as ``get_rot_idxs``) for trace, or 1D / ``[1, batch]`` ``torch.Tensor``
+                (processed via ``get_rot_idxs``). Each batch slot must appear explicitly in the index
+                tensor; there is no special case for a single position replicated across
+                ``batch_size`` or for a Python ``int``.
+            return_rot_idxs: If True, also return ``position_idxs`` unchanged.
 
         Returns:
-            List of [cos, sin] tensors with shape [1, 1, 1, head_dim], sliced at position_idx.
-            If return_rot_idxs=True, returns ([cos, sin], position_idxs).
+            ``[cos, sin]`` with shape ``[1, 1, batch_padded, head_dim]``.
         """
         if isinstance(position_idxs, ttnn.Tensor):
-            # Use ttnn.embedding for on-device index lookup (trace-compatible)
-            # This avoids any host-device data transfer
-            # position_idxs shape: [1, batch] or similar - we use first element
-            # cos/sin_matrix_2d shape: [max_seq_len, head_dim]
-            # Output from embedding: [1, 1, head_dim] (using first position only)
-
-            # Slice to get just the first position index: [1, 1]
-            rot_idx = position_idxs[:, :1] if len(position_idxs.shape) == 2 else position_idxs[:1]
-
-            # Embedding lookup: [1, 1] indices into [max_seq_len, head_dim] -> [1, 1, head_dim]
+            rot_idx = position_idxs
+            if len(rot_idx.shape) == 1:
+                rot_idx = ttnn.unsqueeze(rot_idx, 0)
             cos_emb = ttnn.embedding(rot_idx, self.cos_matrix_2d, layout=ttnn.TILE_LAYOUT)
             sin_emb = ttnn.embedding(rot_idx, self.sin_matrix_2d, layout=ttnn.TILE_LAYOUT)
-
-            # Reshape to [1, 1, 1, head_dim] for compatibility with rotary_embedding
-            cos_sliced = ttnn.unsqueeze_to_4D(cos_emb)  # [1, 1, 1, head_dim]
-            sin_sliced = ttnn.unsqueeze_to_4D(sin_emb)  # [1, 1, 1, head_dim]
+            cos_sliced = ttnn.unsqueeze_to_4D(cos_emb)
+            sin_sliced = ttnn.unsqueeze_to_4D(sin_emb)
+        elif isinstance(position_idxs, torch.Tensor):
+            idx_1d = position_idxs.reshape(-1)
+            rot_idx = self.get_rot_idxs(idx_1d)
+            cos_emb = ttnn.embedding(rot_idx, self.cos_matrix_2d, layout=ttnn.TILE_LAYOUT)
+            sin_emb = ttnn.embedding(rot_idx, self.sin_matrix_2d, layout=ttnn.TILE_LAYOUT)
+            cos_sliced = ttnn.unsqueeze_to_4D(cos_emb)
+            sin_sliced = ttnn.unsqueeze_to_4D(sin_emb)
         else:
-            # For torch.Tensor or int, extract position and use Python slicing
-            if isinstance(position_idxs, torch.Tensor):
-                if position_idxs.numel() == 1:
-                    position_idx = int(position_idxs.item())
-                else:
-                    position_idx = int(position_idxs[0].item())
-            else:
-                position_idx = int(position_idxs)
-
-            # Slice cos/sin at position_idx: [1, 1, max_seq_len, head_dim] -> [1, 1, 1, head_dim]
-            cos_sliced = self.cos_matrix[:, :, position_idx : position_idx + 1, :]
-            sin_sliced = self.sin_matrix[:, :, position_idx : position_idx + 1, :]
+            raise TypeError(f"position_idxs must be torch.Tensor or ttnn.Tensor, got {type(position_idxs)}")
 
         if return_rot_idxs:
             return [cos_sliced, sin_sliced], position_idxs
