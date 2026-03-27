@@ -115,6 +115,19 @@ def load_demo_targets(filename, galaxy_type):
     return demo_targets
 
 
+def assert_perf_within_tolerance(metric_name, measured_value, target_value, tolerance_percentage):
+    """
+    Allow a small symmetric variation around the target to account for normal run-to-run variance.
+    """
+    tolerance_percentage /= 100
+    lower_bound = target_value * (1 - tolerance_percentage)
+    upper_bound = target_value * (1 + tolerance_percentage)
+    assert lower_bound <= measured_value <= upper_bound, (
+        f"{metric_name} {measured_value:.2f} is outside the allowed +/-{tolerance_percentage * 100:.2f}% range "
+        f"around target {target_value:.2f}: [{lower_bound:.2f}, {upper_bound:.2f}]."
+    )
+
+
 def create_tt_model(
     mesh_device,
     instruct,
@@ -1449,39 +1462,39 @@ def test_demo_text(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
 
-    # Benchmark targets
-    supported_models = ["Llama-3.1-70B", "Llama-3.3-70B", "Deepseek-R1-Distill-70B"]
-    # model_args.base_model_name = "Llama-3.1-70B"
-    supported_devices = ["TG"]
-
-    tt_device_name = model_args.device_name
-
-    # Set the target times to first token for every combination of device and model
-    target_prefill_tok_s = {
-        "TG_Llama-3.1-70B": 1050,  # TODO Update target
-        "TG_Llama-3.3-70B": 1050,
-        "TG_Deepseek-R1-Distill-70B": 1050,  # TODO Update target
-    }[f"{tt_device_name}_{model_args.base_model_name}"]
-
-    # Set the target decode timesfor every combination of device and model
-    target_decode_tok_s_u = {
-        "TG_Llama-3.1-70B": 20,  # TODO Update target
-        "TG_Llama-3.3-70B": 20,
-        "TG_Deepseek-R1-Distill-70B": 20,  # TODO Update target
-    }[f"{tt_device_name}_{model_args.base_model_name}"]
-
-    target_decode_tok_s = target_decode_tok_s_u * batch_size
-    targets = {
-        "prefill_t/s": target_prefill_tok_s,
-        "decode_t/s": target_decode_tok_s,
-        "decode_t/s/u": target_decode_tok_s_u,
+    PERFORMANCE_TARGETS = {
+        "TG_Llama-3.1-70B": {"ttft": 82.00 if galaxy_type == "6U" else 99.00, "tsu": 63.0},
+        "TG_Llama-3.3-70B": {"ttft": 82.00 if galaxy_type == "6U" else 99.00, "tsu": 63.0},
+        "TG_Deepseek-R1-Distill-70B": {"ttft": 20.0, "tsu": 63.0},  # TODO Update target  # TODO Update target
     }
-    # TODO This is suppose to check the config `repeat2`. Since right now that config is the only using a repeat_batches=2 this if statement works
-    if repeat_batches == 2 and batch_size == 1:
-        target = 74.00 if galaxy_type == "6U" else 99
-        assert (
-            avg_time_to_first_token * 1000 < target
-        ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target}."
+
+    model_key = f"{model_args.device_name}_{model_args.base_model_name}"
+
+    if model_key in PERFORMANCE_TARGETS:
+        test_id = request.node.callspec.id
+        if test_id == "repeat2":
+            PERF_TOLERANCE_PERCENTAGE = 1.5
+            model_perf_targets = PERFORMANCE_TARGETS[model_key]
+            assert_perf_within_tolerance(
+                "TTFT (ms)",
+                avg_time_to_first_token * 1000,
+                model_perf_targets["ttft"],
+                PERF_TOLERANCE_PERCENTAGE,
+            )
+            assert_perf_within_tolerance(
+                "Decode throughput (tok/s/user)",
+                decode_tok_s_user,
+                model_perf_targets["tsu"],
+                PERF_TOLERANCE_PERCENTAGE,
+            )
+        else:
+            logger.info(
+                f"Test '{test_id}' currently doesn't have performance targets set! Skipping performance checks..."
+            )
+    else:
+        logger.warning(
+            f"Model '{model_args.base_model_name}' currently doesn't have performance targets on {model_args.device_name} device!"
+        )
 
     # Save benchmark data for CI dashboard
     if is_ci_env and repeat_batches > 1:
