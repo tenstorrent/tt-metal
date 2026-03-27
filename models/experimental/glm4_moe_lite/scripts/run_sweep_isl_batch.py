@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 #!/usr/bin/env python3
 """
 Sweep ISL (input sequence length) × batch size for GLM-4.7-Flash on TT.
