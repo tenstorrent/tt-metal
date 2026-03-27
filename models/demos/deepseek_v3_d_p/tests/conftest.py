@@ -60,12 +60,20 @@ def pytest_collection_modifyitems(config, items):
         elif is_blackhole():
             # BH: only supports all available devices configs
             if devices_needed != num_devices:
-                skip_reason = f"Blackhole only supports {num_devices}-device mesh configs (requested {devices_needed})"
+                skip_reason = f"{ttnn.cluster.get_cluster_type()} only supports {num_devices}-device mesh configs (requested {devices_needed})"
 
         elif is_wormhole_b0():
             # WH: ring topology only works with 8 devices
             if is_ring and devices_needed != 8:
-                skip_reason = f"Wormhole ring topology only works with 8 devices (requested ring-{devices_needed})"
+                skip_reason = f"{ttnn.cluster.get_cluster_type()} ring topology only works with 8 devices (requested ring-{devices_needed})"
 
         if skip_reason:
             item.add_marker(pytest.mark.skip(reason=skip_reason))
+
+
+def is_galaxy():
+    """Helper function to check if we're running on Galaxy architecture."""
+    return (
+        ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY
+        or ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+    )

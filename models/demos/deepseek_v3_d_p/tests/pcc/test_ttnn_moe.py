@@ -15,10 +15,10 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from conftest import is_galaxy
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
+from models.demos.deepseek_v3_d_p.tests.conftest import is_galaxy
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -110,9 +110,9 @@ def create_shared_expert_weights(
         # fmt: off
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, False), # skip PCC validation
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, True),  # run PCC validation
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, True, marks=pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")),
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, False, id='mesh-8x4-1600_no_pcc'),
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, False, id="mesh-8x4-3200_no_pcc"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, True, marks=pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy"), id='mesh-8x4-3200_pcc'),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, False, marks=pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy"), id='mesh-8x4-1600_no_pcc'),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, False, marks=pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy"), id="mesh-8x4-3200_no_pcc"),
         # fmt: on
     ],
 )
@@ -205,7 +205,6 @@ def test_ttnn_moe(
     logger.debug(f"{'='*60}")
     logger.debug(f"mesh_shape={mesh_device.shape}, num_devices={num_devices}")
     logger.debug(f"dispatch_group_size={dispatch_group_size}, num_dispatch_groups={num_dispatch_groups}")
-
 
     # Compute configuration constants
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(

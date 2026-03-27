@@ -94,6 +94,7 @@ fabric:
 shield:
   e2e:
     wh_llmbox: 25
+    bh_galaxy: 30
 
 scaleout:
   e2e:

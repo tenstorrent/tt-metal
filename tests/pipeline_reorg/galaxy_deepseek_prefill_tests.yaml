@@ -12,10 +12,30 @@
 
 # Blackhole Galaxy DeepSeek Prefill tests
 - name: "(Galaxy) DeepSeek Prefill module tests"
-  cmd: export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG && uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt && pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
+  cmd: |
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    export MESH_DEVICE=TG
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py -k mesh-8x4-3200_pcc
   test_type: module
   skus:
     bh_galaxy:
-      timeout: 30
-  owner_id: U08RL15T4N8
-  team: models
+      timeout: 15
+  owner_id: U08RL15T4N8 # Danilo Djekic
+  team: shield
+
+- name: "(Galaxy) DeepSeek Prefill perf tests"
+  cmd: |
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+    export DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+    export MESH_DEVICE=TG
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    pytest --noconftest models/demos/deepseek_v3_d_p/tests/perf/ -v
+  test_type: perf
+  skus:
+    bh_galaxy:
+      timeout: 15
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: shield
