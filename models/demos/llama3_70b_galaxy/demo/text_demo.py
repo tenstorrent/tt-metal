@@ -1464,8 +1464,8 @@ def test_demo_text(
     )
 
     PERFORMANCE_TARGETS = {
-        "TG_Llama-3.1-70B": {"ttft": 82.00 if galaxy_type == "6U" else 99.00, "tsu": 63.0},
-        "TG_Llama-3.3-70B": {"ttft": 82.00 if galaxy_type == "6U" else 99.00, "tsu": 63.0},
+        "TG_Llama-3.1-70B": {"ttft": 73.00 if galaxy_type == "6U" else 99.00, "tsu": 72.0},
+        "TG_Llama-3.3-70B": {"ttft": 73.00 if galaxy_type == "6U" else 99.00, "tsu": 72.0},
         "TG_Deepseek-R1-Distill-70B": {"ttft": 20.0, "tsu": 63.0},  # TODO Update target  # TODO Update target
     }
 
