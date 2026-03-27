@@ -115,11 +115,11 @@ bool nodes_contains(
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& superset,
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& subset);
 
-// Phase 1: Collection & Validation
+// Phase 1: Validate ProgramSpec and collect derived data
 CollectedSpecData CollectSpecData(const ProgramSpec& spec);
 void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& collected);
 
-// Phase 2: Processor Assignment
+// Phase 2: Processor assignment
 template <uint8_t NUM_CORES>
 ProcessorMask<NUM_CORES> CreateMask(uint8_t mask);
 template <uint8_t NUM_CORES>
@@ -127,7 +127,7 @@ std::optional<ProcessorMask<NUM_CORES>> ReserveProcessors(uint8_t n, const Proce
 std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssignments(
     const ProgramSpec& spec, const CollectedSpecData& collected);
 
-// Phase 3: Program Building
+// Phase 3: Program building
 experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
@@ -677,7 +677,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
 }
 
 // ============================================================================
-// IMPLEMENTATION: Processor Assignment
+// IMPLEMENTATION: Processor assignment helpers
 // ============================================================================
 
 // ProcessorMask factory functions
@@ -798,7 +798,7 @@ std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssign
 }
 
 // ============================================================================
-// IMPLEMENTATION: Program Building
+// IMPLEMENTATION: Program building helpers
 // ============================================================================
 
 // Create a DataflowBufferConfig from a DataflowBufferSpec and endpoint info.
