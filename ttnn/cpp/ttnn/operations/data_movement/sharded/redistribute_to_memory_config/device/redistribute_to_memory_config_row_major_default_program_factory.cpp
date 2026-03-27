@@ -27,6 +27,7 @@ RedistributeToMemoryConfigRowMajorDefaultProgramFactory::create(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
+    std::cout << "default program factory" << std::endl;
     const auto& input = tensor_args.input_tensor;
     const auto& output = output_tensor;
     tt::tt_metal::Program program{};
@@ -59,19 +60,37 @@ RedistributeToMemoryConfigRowMajorDefaultProgramFactory::create(
     // Computation of core_grid
     auto* device = input.device();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size =
+        device->compute_with_storage_grid_size();  // This can be replaced with get_worker_cores in subdevices
 
     const uint32_t total_logical_rows = input.logical_volume() / input.logical_shape()[-1];
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_logical_rows);
     std::vector<CoreCoord> ordered_cores = corerange_to_cores(all_cores, num_cores, true);
 
-    constexpr uint32_t MAX_SUBBLOCK_SIZE_BYTES = 65536;  // Chosen empirically to prevent large row OOM CB error
-    const auto input_page_size = std::min(static_cast<uint32_t>(input.buffer()->page_size()), MAX_SUBBLOCK_SIZE_BYTES);
-    const auto aligned_output_page_size = std::min(
-        static_cast<uint32_t>(output.buffer()->aligned_page_size()),
-        MAX_SUBBLOCK_SIZE_BYTES);  // Since we are double buffering, the output page_size must be aligned so
-                                   // the noc_write reads from an aligned address in the CB
+    constexpr uint32_t MAX_SUBBLOCK_SIZE_BYTES = 65536 * 4;  // Chosen empirically to prevent large row OOM CB error
+    uint32_t input_page_size = input.buffer()->page_size();
+    uint32_t aligned_output_page_size =
+        output.buffer()->aligned_page_size();  // Since we are double buffering, the output page_size must be aligned so
+                                               // the noc_write reads from an aligned address in the CB
+    uint32_t input_subblock_size_bytes =
+        elements_per_input_page *
+        bytes_per_element;  // If the input/output row size is not too large, we can just set the subblock to be the
+                            // page and reduce the number of NoC reads/writes from/to pages.
+    uint32_t output_subblock_size_bytes = elements_per_output_page * bytes_per_element;
+
+    if (input_page_size >
+        MAX_SUBBLOCK_SIZE_BYTES) {  // If the input/output row size is too large, the page size will be too large for
+                                    // the CB, so we process data in subblock units of MAX_SUBBLOCK_SIZE_BYTES instead
+        input_page_size = MAX_SUBBLOCK_SIZE_BYTES;
+        input_subblock_size_bytes = MAX_SUBBLOCK_SIZE_BYTES;
+        std::cout << "Inpur is using subblock limit" << std::endl;
+    }
+    if (aligned_output_page_size > MAX_SUBBLOCK_SIZE_BYTES) {
+        aligned_output_page_size = MAX_SUBBLOCK_SIZE_BYTES;
+        output_subblock_size_bytes = MAX_SUBBLOCK_SIZE_BYTES;
+        std::cout << "Output is using subblock limit" << std::endl;
+    }
 
     // Configuring the CB that store input pages
     const auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
@@ -80,7 +99,8 @@ RedistributeToMemoryConfigRowMajorDefaultProgramFactory::create(
             .set_page_size(input_pages_cb_index, input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, input_pages_cb_config);
 
-    // Configuring the CB that stores output pages
+    // Configuring the CB that stores output pages. This one is double buffered, since it is shred between the reader
+    // and writer kernels.
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::tt_metal::CircularBufferConfig output_pages_cb_config =
         tt::tt_metal::CircularBufferConfig(
@@ -88,9 +108,6 @@ RedistributeToMemoryConfigRowMajorDefaultProgramFactory::create(
             .set_page_size(output_page_cb_index, aligned_output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, output_pages_cb_config);
 
-    uint32_t input_subblock_size_bytes = std::min(elements_per_input_page * bytes_per_element, MAX_SUBBLOCK_SIZE_BYTES);
-    uint32_t output_subblock_size_bytes =
-        std::min(elements_per_output_page * bytes_per_element, MAX_SUBBLOCK_SIZE_BYTES);
     // Reader kernel config with compile-time args
     std::vector<uint32_t> reader_compile_time_args = {
         static_cast<uint32_t>(input_pages_cb_index),
@@ -137,14 +154,14 @@ RedistributeToMemoryConfigRowMajorDefaultProgramFactory::create(
     uint32_t start_row_id = 0;
     for (const auto& core : ordered_cores) {
         // Reader run-time args
-        uint32_t num_rows_to_process = num_pages_per_core_group_1;
+        uint32_t num_rows_to_process = num_rows_per_core_group_1;
         if (core_group_2.contains(core)) {
-            num_rows_to_process = num_pages_per_core_group_2;
+            num_rows_to_process = num_rows_per_core_group_2;
         }
         std::vector<uint32_t> reader_run_time_args = {input.buffer()->address(), start_row_id, num_rows_to_process};
         std::vector<uint32_t> writer_run_time_args = {output.buffer()->address(), start_row_id, num_rows_to_process};
 
-        start_row_id++;
+        start_row_id += num_rows_to_process;
         // Set run-time arg
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_run_time_args);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_run_time_args);

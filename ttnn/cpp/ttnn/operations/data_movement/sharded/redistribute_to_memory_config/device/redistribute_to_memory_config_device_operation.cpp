@@ -19,9 +19,9 @@ RedistributeToMemoryConfigDeviceOperation::select_program_factory(
         if (input_tensor.layout() == Layout::TILE) {
             return RedistributeToMemoryConfigTilizedShardedProgramFactory{};
         }
-        return RedistributeToMemoryConfigRowMajorShardedProgramFactory{};
+        // return RedistributeToMemoryConfigRowMajorShardedProgramFactory{};
     }
-    return RedistributeToMemoryConfigRowMajorShardedProgramFactory{};  // TODO: will implement to interleaved program
+    return RedistributeToMemoryConfigRowMajorDefaultProgramFactory{};  // TODO: will implement to interleaved program
                                                                        // factories in follow up PR!
 }
 
@@ -46,9 +46,9 @@ void RedistributeToMemoryConfigDeviceOperation::validate_on_program_cache_miss(
             "Output tensor needs to be on the same device as the input tensor!");
     }
 
-    TT_FATAL(
-        output_mem_config.is_sharded(),
-        "Output memory config must be sharded");  // TODO: Add path to support interleaved output in subsequent PR
+    // TT_FATAL(
+    //     output_mem_config.is_sharded(),
+    //     "Output memory config must be sharded");  // TODO: Add path to support interleaved output in subsequent PR
 
     if (input_tensor.dtype() != output_dtype) {
         TT_FATAL(
