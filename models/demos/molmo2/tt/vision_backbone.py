@@ -159,7 +159,6 @@ class VisionBackbone(LightweightModule):
         hidden_states = self.image_vit.forward(
             images_embedded,
             return_all_hidden_states=True,
-            matmul_output_memory_config=matmul_output_memory_config,
         )
 
         # Extract features from specified layers and concat
@@ -438,7 +437,6 @@ class VisionBackbone(LightweightModule):
         # 1. Encode image through ViT
         image_features = self.encode_image(
             images_embedded,
-            matmul_output_memory_config=vit_matmul_config,
         )
         # image_features: [1, 1, B*T*N, pool_dim]
 

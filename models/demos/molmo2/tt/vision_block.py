@@ -133,7 +133,7 @@ class VisionBlock(LightweightModule):
         # Pre-norm attention with residual
         # Note: We don't deallocate input x - caller manages lifetime
         attn_out = self.attention_norm(x)
-        attn_out = self.attention(attn_out, matmul_output_memory_config=matmul_output_memory_config)
+        attn_out = self.attention(attn_out)
         res = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(attn_out)
 
