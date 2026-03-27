@@ -18,7 +18,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ....layers.linear import ColParallelLinear, Linear
+from ....layers.linear import ColParallelLinear
 from ....layers.module import Module
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
@@ -124,13 +124,13 @@ class LTXAttention(Module):
             ccl_manager=ccl_manager,
         )
 
-        # Per-head gate: linear(x) → 2*sigmoid → per-head scaling of SDPA output.
-        # Runs on device with HiFi4 for precision.
-        self.to_gate_logits = (
-            Linear(query_input_dim or dim, num_heads, bias=True, mesh_device=mesh_device)
-            if apply_gated_attention
-            else None
-        )
+        # Per-head gate weights stored on host for exact fp32 gate computation.
+        # Gate logits are small (32 outputs), so host F.linear is fast and avoids
+        # bf16 matmul precision issues on the K=4096 reduction that compound over
+        # 48 layers × 40 denoising steps.
+        self.apply_gated_attention = apply_gated_attention
+        self._gate_weight_host = None  # (num_heads, query_input_dim)
+        self._gate_bias_host = None  # (num_heads,)
 
         self.dummy_joint_input = bf16_tensor(torch.zeros((1, self.n_local_heads, 0, self.head_dim)), device=mesh_device)
 
@@ -190,8 +190,13 @@ class LTXAttention(Module):
         rename_substate(state, "q_norm", "norm_q")
         rename_substate(state, "k_norm", "norm_k")
 
-        # Gate logits weights stay in state dict for device-side Linear loading.
-        # If no gate weights in checkpoint, to_gate_logits module is unused.
+        # Extract gate weights to host and remove from device loading.
+        # Gate logits are computed on host (tiny matmul: N×32 vs N×4096 for QKV)
+        # to get exact fp32 precision.
+        gate_state = pop_substate(state, "to_gate_logits")
+        if gate_state:
+            self._gate_weight_host = gate_state["weight"].float()  # (num_heads, query_input_dim)
+            self._gate_bias_host = gate_state.get("bias", torch.zeros(self.num_heads)).float()
 
         def _interleave_heads(tensors: list[torch.Tensor]):
             n_dev = self.parallel_config.tensor_parallel.factor
@@ -257,27 +262,46 @@ class LTXAttention(Module):
         return output
 
     def _compute_gate(self, spatial_1BND: ttnn.Tensor) -> ttnn.Tensor | None:
-        """Compute per-head gate on device: 2 * sigmoid(linear(x)).
+        """Compute per-head gate on host for exact fp32 precision.
 
-        Returns gate tensor with shape (1, B, N, H) → reshaped to (B, H_local, N, 1) for BHNE multiply.
-        Returns None if no gate module.
+        Gate logits = linear(x, W_gate, b_gate) → 2*sigmoid(logits)
+        Returns gate tensor on device with shape (B, H_local, N, 1) for BHNE broadcast multiply.
+        Returns None if no gate weights are loaded.
         """
-        if self.to_gate_logits is None:
+        if self._gate_weight_host is None:
             return None
 
-        # spatial_1BND is already TP-gathered at this point (by forward() line 403-406)
-        gate_logits = self.to_gate_logits(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
-        # gate_logits: (1, B, N, H_total). Apply 2*sigmoid.
-        gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
+        # Read spatial from device for host-side gate computation
+        spatial_host = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0]).float()
+        gate_logits = torch.nn.functional.linear(spatial_host, self._gate_weight_host, self._gate_bias_host)
+        gate_values = 2.0 * torch.sigmoid(gate_logits)  # (1, B, N, H_total) in fp32
 
-        # Reshape (1, B, N, H) → (B, H, N, 1) for BHNE broadcast
-        gate = ttnn.permute(gate, (1, 3, 2, 0))
+        # Permute to BHNE format: (B, H_total, N, 1)
+        gate_bhne = gate_values.permute(1, 3, 2, 0).contiguous().bfloat16()
 
-        # TP-shard on head dim if needed
-        if self.parallel_config.tensor_parallel.factor > 1:
-            gate = ttnn.mesh_partition(gate, dim=1, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis)
-
-        return gate
+        # Shard across TP devices if needed
+        tp_factor = self.parallel_config.tensor_parallel.factor
+        if tp_factor > 1:
+            tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+            mapper = ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                mesh_shape=tuple(self.mesh_device.shape),
+                dims=[None if i != tp_axis else 1 for i in range(2)],
+            )
+            return ttnn.from_torch(
+                gate_bhne,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                mesh_mapper=mapper,
+            )
+        else:
+            return ttnn.from_torch(
+                gate_bhne,
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+            )
 
     @staticmethod
     def _apply_split_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, d_half: int) -> ttnn.Tensor:

@@ -141,10 +141,18 @@ class GemmaAttention(Module):
 
         self.input_layernorm = GemmaRMSNorm(config, mesh_device)
 
+        # Gemma-3 QK normalization (RMSNorm per head, shape [head_dim])
+        self.q_norm = RMSNorm(
+            embedding_dim=self.head_dim, norm_eps=config.rms_norm_eps, bias=False, mesh_device=mesh_device
+        )
+        self.k_norm = RMSNorm(
+            embedding_dim=self.head_dim, norm_eps=config.rms_norm_eps, bias=False, mesh_device=mesh_device
+        )
+
         self.sdpa_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
-            q_chunk_size=256,
-            k_chunk_size=256,
+            q_chunk_size=128,
+            k_chunk_size=128,
             exp_approx_mode=False,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
@@ -160,6 +168,8 @@ class GemmaAttention(Module):
         rename_substate(state, "self_attn.k_proj", "k_proj")
         rename_substate(state, "self_attn.v_proj", "v_proj")
         rename_substate(state, "self_attn.o_proj", "o_proj")
+        rename_substate(state, "self_attn.q_norm", "q_norm")
+        rename_substate(state, "self_attn.k_norm", "k_norm")
 
     def _apply_rope(self, x, cos, sin):
         """Apply rotary embedding: split x into halves, rotate."""
@@ -170,7 +180,7 @@ class GemmaAttention(Module):
         out2 = ttnn.add(ttnn.multiply(x2, cos), ttnn.multiply(x1, sin))
         return ttnn.concat([out1, out2], dim=-1)
 
-    def forward(self, hidden_states, cos, sin):
+    def forward(self, hidden_states, cos, sin, attn_mask=None):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
@@ -188,6 +198,10 @@ class GemmaAttention(Module):
         v = ttnn.reshape(v, (B, seq_len, self.num_local_kv_heads, self.head_dim))
         v = ttnn.permute(v, (0, 2, 1, 3))
 
+        # QK normalization (Gemma-3): RMSNorm per head before RoPE
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+
         # Apply RoPE
         q = self._apply_rope(q, cos, sin)
         k = self._apply_rope(k, cos, sin)
@@ -203,12 +217,14 @@ class GemmaAttention(Module):
         k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
         v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
 
-        # SDPA
+        # SDPA — use is_causal when no mask, or explicit mask when padding present.
+        # TTNN SDPA doesn't support both is_causal and attn_mask simultaneously.
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
-            is_causal=False,  # Encoder mode: attend to all tokens
+            is_causal=(attn_mask is None),
+            attn_mask=attn_mask,
             program_config=self.sdpa_config,
             compute_kernel_config=self.compute_config,
         )
@@ -323,14 +339,13 @@ class GemmaEncoderLayer(Module):
         rename_substate(state, "mlp.gate_proj", "ff.gate_proj")
         rename_substate(state, "mlp.up_proj", "ff.up_proj")
         rename_substate(state, "mlp.down_proj", "ff.down_proj")
-        # Gemma3-specific: extra norms we don't use (pre/post FF norms, QK norms)
+        # QK norms are now handled by GemmaAttention._prepare_torch_state
+        # Gemma3 sandwich norms around FFN — not used in our simplified architecture
         pop_substate(state, "pre_feedforward_layernorm")
         pop_substate(state, "post_feedforward_layernorm")
-        pop_substate(state, "self_attn.q_norm")
-        pop_substate(state, "self_attn.k_norm")
 
-    def forward(self, hidden_states, cos, sin):
-        hidden_states = self.self_attn(hidden_states, cos, sin)
+    def forward(self, hidden_states, cos, sin, attn_mask=None):
+        hidden_states = self.self_attn(hidden_states, cos, sin, attn_mask=attn_mask)
         hidden_states = self.ff(hidden_states)
         return hidden_states
 
@@ -395,7 +410,9 @@ class GemmaEncoder(Module):
 
         Args:
             token_ids: (B, seq_len) int32 token IDs on device
-            attention_mask: (B, seq_len) float mask on device (1=attend, 0=pad)
+            attention_mask: (B, seq_len) float mask on device (1=attend, 0=pad).
+                           If provided, creates a combined causal+padding mask so that
+                           no position attends to padding tokens.
 
         Returns:
             List of hidden states tensors, one per layer + final norm.
@@ -410,10 +427,38 @@ class GemmaEncoder(Module):
         seq_len = token_ids.shape[-1]
         cos, sin = self.rotary_emb.get_cos_sin(seq_len, self.mesh_device)
 
+        # Create combined causal + padding mask for SDPA.
+        # TTNN SDPA doesn't support is_causal + attn_mask simultaneously, so we
+        # build a full (B, 1, seq, seq) mask combining both.
+        tt_attn_mask = None
+        if attention_mask is not None:
+            import torch
+
+            mask_host = (
+                attention_mask
+                if isinstance(attention_mask, torch.Tensor)
+                else ttnn.to_torch(ttnn.get_device_tensors(attention_mask)[0])
+            )
+            B_mask = mask_host.shape[0]
+            # Causal mask: (1, 1, seq, seq), upper triangle = -inf
+            causal = torch.triu(torch.full((seq_len, seq_len), float("-inf")), diagonal=1)
+            causal = causal[None, None, :, :]  # (1, 1, seq, seq)
+            # Padding mask: (B, 1, 1, seq) — -inf for padding columns
+            pad_mask = torch.where(mask_host[:, None, None, :].bool(), 0.0, float("-inf"))
+            # Combined: both masks added (either -inf dominates)
+            combined = causal + pad_mask  # broadcasts to (B, 1, seq, seq)
+            tt_attn_mask = ttnn.from_torch(
+                combined.bfloat16(),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         # Run through all layers
         all_hidden_states = [hidden_states]
         for layer in self.layers:
-            hidden_states = layer(hidden_states, cos, sin)
+            hidden_states = layer(hidden_states, cos, sin, attn_mask=tt_attn_mask)
             all_hidden_states.append(hidden_states)
 
         # Final norm
