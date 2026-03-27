@@ -355,3 +355,269 @@ python -m vllm.entrypoints.openai.api_server --model allenai/Molmo2-8B \
 1. Make `text_attention.py` support dynamic batch sizes
 2. Capture separate prefill traces for vision inputs during warmup
 3. Or implement vision-aware trace capture that handles both modalities
+
+---
+
+### 2026-03-26 — Visual Embedding Scaling Investigation
+
+**Status:** In progress. Image requests produce garbage output - visual embedding scale mismatch identified.
+
+**Root Cause Analysis:**
+
+The TTNN vision pipeline produces visual embeddings with very different statistics than expected:
+
+| Stage | Range | Std |
+|-------|-------|-----|
+| ViT encoder output | [-60, 1460] | ~N/A |
+| Image pooling output | [-43, 49] | ~13 |
+| Projector output (raw) | [-27k, 44k] | ~500 |
+| Text embeddings | [-0.58, 0.51] | ~0.15 |
+
+The projector amplifies the pooled features enormously. Individual component PCC tests pass:
+- Projector PCC: 0.9998 (with random input std=0.5)
+- Pooling PCC: 0.9996
+
+**Scaling Attempts:**
+
+| Scale Factor | Projector Input | Projector Output | Result |
+|--------------|-----------------|------------------|--------|
+| None (raw) | [-43, 49] | [-27k, 44k], std=500 | Overflow |
+| 0.05 (pre-proj) | [-2.2, 2.5] | [-13, 22] | Garbage |
+| 0.03 (pre-proj) | [-1.3, 1.5] | [-18, 30], std=0.33 | Garbage |
+| 0.01 (pre-proj) | [-0.43, 0.49] | [-1.6, 2.7], std=0.03 | Garbage |
+| 0.0003 (post-proj) | [-43, 49] | [-8.4, 13.4], std=0.15 | Garbage |
+| 0.00003 (post-proj) | [-43, 49] | [-0.84, 1.34], std=0.015 | Garbage |
+
+**Current Configuration:**
+- Post-projector scale: 0.0003
+- Visual embeddings: std=0.153 (matches text embedding std)
+- Range: [-8.4, 13.4] (larger than text range [-0.58, 0.51])
+
+**Observations:**
+1. Text-only generation works correctly ("The capital of France is Paris")
+2. Visual embedding std can match text embedding std with proper scaling
+3. But the range/distribution is fundamentally different (outliers)
+4. Model produces garbage even when std matches
+
+**Hypothesis:**
+The TTNN vision pipeline components (ViT encoder, pooling, projector) may each be numerically correct individually, but their combined output has a different distribution than the PyTorch reference. This distribution mismatch causes the language model to produce garbage.
+
+**Recommended Next Steps:**
+1. Run full vision backbone PCC test against PyTorch reference
+2. Compare intermediate feature distributions at each stage
+3. Check if there's normalization missing (e.g., final LayerNorm)
+4. Consider using PyTorch for vision embedding (like Qwen VL) if TTNN precision issues cannot be resolved
+
+**Files Modified:**
+- `models/demos/molmo2/tt/vision_backbone.py` - Added post-projector scaling with debug logging
+
+---
+
+### 2026-03-26 — vLLM Server Image/Video Investigation (Ongoing)
+
+**Status:** In progress. See [models/demos/molmo2/SERVER_STATUS.md](models/demos/molmo2/SERVER_STATUS.md) for detailed analysis.
+
+**Goal:** Get vLLM server working with text, images, AND video using the same code path.
+
+**Current Status:**
+
+| Input Type | Status | Notes |
+|------------|--------|-------|
+| Text-only | Working | Uses traces, fast response |
+| Images | NOT WORKING | `use_trace=False` causes timeout or crash |
+| Video | NOT WORKING | Same issue as images |
+
+**Key Finding:**
+
+The demo works with images + traces because it uses `use_paged_attention=False` by default.
+The vLLM server ALWAYS uses paged attention.
+
+| Feature | Demo | vLLM |
+|---------|------|------|
+| Paged Attention | OFF (default) | Always ON |
+| Prefill Traces | Work with images | Disabled for images |
+| Image/Video | Works | Fails |
+
+**The Problem (line 1660 in generator_vllm.py):**
+```python
+use_trace=False,  # DISABLED: text-only traces incompatible with vision input
+```
+
+**Hypothesis:**
+The combination of paged attention + traces + vision is the issue, not traces + vision alone.
+
+**Errors Observed:**
+- With `use_trace=True`: Device timeout waiting for physical cores
+- With `use_trace=False`: Memory manager crash in text_attention.py reshape
+
+**Next Steps:**
+1. Test demo with `--paged-attention` + images to confirm hypothesis
+2. Debug non-traced path crash in text_attention.py line 319
+3. Investigate vision-aware trace capture during warmup
+
+**Documentation:**
+- Created [models/demos/molmo2/SERVER_STATUS.md](models/demos/molmo2/SERVER_STATUS.md)
+- Created [models/demos/molmo2/CLAUDE.md](models/demos/molmo2/CLAUDE.md)
+
+---
+
+### 2026-03-27 — ImagePooling SDPA Fix and Demo Trace Cleanup
+
+**Status:** Completed. Image demo now working with coherent output.
+
+**Problem:** Image requests produced gibberish output due to incorrect attention mask handling in ImagePooling cross-attention.
+
+**Root Cause:** TTNN SDPA was not correctly handling additive attention masks in cross-attention, causing a 7.76x scale reduction in pooling output.
+
+**Fix Applied:**
+| File | Change |
+|------|--------|
+| `tt/image_pooling.py` | Replaced TTNN SDPA with manual attention computation (Q@K^T, scale, add mask, softmax, @V) |
+| `tt/image_pooling.py` | Removed debug logging (`ttnn.to_torch` calls) that broke trace capture |
+| `tt/image_projector.py` | Removed debug logging |
+| `tt/vision_backbone.py` | Removed debug logging |
+| `demo/demo.py` | Added `use_prefill_trace` flag to optionally skip trace capture during warmup |
+
+**Before Fix:**
+- Pooling output: std=0.51 (7.76x smaller than reference)
+- Output: Gibberish
+
+**After Fix:**
+- Pooling output: std=0.70 (matches reference std=0.72)
+- Output: "This image features a small, adorable puppy with a mix of a brown and white and black and white coat..."
+
+**PCC Results:**
+| Test | PCC | Status |
+|------|-----|--------|
+| Full Vision Backbone | 0.999249 | PASS |
+
+**Known Issue:**
+- Prefill trace capture fails with "Writes are not supported during trace capture" error
+- Caused by `ttnn.fill_cache` operations during trace capture
+- Workaround: Run demo without `--use-trace` flag (traces now disabled by default)
+
+---
+
+### 2026-03-27 — Full Verification: Demo + vLLM Server Working
+
+**Status:** Complete. All modalities working on both demo and vLLM server.
+
+**Test Matrix:**
+| Input Type | Demo | vLLM Server |
+|------------|------|-------------|
+| Text | ✅ Working | ✅ Working |
+| Image | ✅ Working | ✅ Working |
+| Video | ✅ Working | ✅ Working |
+
+**Demo Test Results:**
+- Image: "This image features a small, adorable puppy with a mix of brown and white coat..."
+- Video: "a man sitting at a white table with several items on it"
+
+**vLLM Server Test Results:**
+- Image: "A light brown golden retriever sits on its hind legs in a stone patio holding flowers in its mouth."
+- Image 2: "The animal in this image is a dog."
+- Video: Correctly identified park/forest/trees scene (output repetitive but semantically correct)
+
+**vLLM Server Configuration:**
+```bash
+python run.py --model Molmo2-8B --workflow server --tt-device t3k --local-server
+```
+
+**Key Findings:**
+1. ImagePooling SDPA fix resolved the core vision pipeline issue
+2. vLLM server uses traced execution for all modalities (text, image, video)
+3. Response times: ~15-25s for image/video requests (includes trace execution)
+4. Video output is somewhat repetitive but semantically correct
+
+**Known Limitation:** Video multi-request fails (see entry below).
+
+---
+
+### 2026-03-27 — Video Multi-Request SDPA Bug Investigation
+
+**Status:** Blocked on TTNN kernel bug. Single video request works, repeated requests timeout.
+
+**Problem:** Second video request causes device timeout in `vision_attention.py` SDPA.
+
+**Root Cause:** `ttnn.transformer.scaled_dot_product_attention` has a resource leak or corruption when called repeatedly with large tensors.
+
+**Video tensor sizes:**
+- 8 frames × 577 patches = 4616 tokens
+- Attention matrix: 4616 × 4616 × 16 heads
+- SDPA called 25 times per request (25 ViT layers)
+
+**Architecture Issue:**
+- Vision backbone runs on **single device** (12 DRAM banks)
+- Uses `ReplicateTensorToMesh` (weights copied, compute on 1 device)
+- Text model uses tensor parallelism across 8 devices
+
+**Fixes Attempted:**
+
+| Approach | Result |
+|----------|--------|
+| Manual matmuls in vision_attention.py | OOM - 1GB attention matrix doesn't fit on single device |
+| SDPAProgramConfig with chunk_size=512 | L1 overflow (1.87MB > 1.5MB L1 limit) |
+| SDPAProgramConfig with chunk_size=128 | 1st request ✅, 2nd request ❌ timeout |
+
+**Code Changes Made:**
+- `vision_attention.py`: Added `_get_sdpa_program_config()` with chunking
+- `vision_attention.py`: Set `max_chunk_size=128` to fit L1
+
+**To Fix This Issue:**
+1. **TTNN kernel fix** - File bug with TT kernel team for repeated large-tensor SDPA
+2. **Shard vision across 8 devices** - Would have 8× memory, manual matmuls would work
+3. **Move vision to CPU** - Like Qwen VL (sidesteps TTNN entirely)
+
+**Current Status:**
+| Input | First Request | Repeated Requests |
+|-------|---------------|-------------------|
+| Text | ✅ | ✅ |
+| Image | ✅ | ✅ |
+| Video | ✅ | ❌ TTNN SDPA bug |
+
+---
+
+### 2026-03-27 — Memory Leak Fixes for Video Processing (Continued Investigation)
+
+**Status:** Memory leaks fixed, but core TTNN issue remains.
+
+**Problem:** Second video request fails with device timeout at `ttnn.from_torch()` in `prepare_inputs_for_multimodal` (line 385 in molmo2_model.py). Device sync succeeds but subsequent tensor creation fails.
+
+**Memory Leak Fixes Applied:**
+
+| File | Change |
+|------|--------|
+| `vision_backbone.py` | Added `ttnn.deallocate(pooled_features_raw)` after reshape |
+| `vision_backbone.py` | Added `ttnn.deallocate(pooled_features)` after projection |
+| `vision_backbone.py` | Added `ttnn.deallocate(visual_embeddings)` after to_torch conversion |
+| `molmo2_model.py` | Added `ttnn.deallocate(visual_for_gather)` after embedding call |
+| `molmo2_model.py` | Added `ttnn.deallocate(valid_visual_gathered)` after reshape |
+| `generator_vllm.py` | Added device sync before vision processing |
+| `generator_vllm.py` | Added device sync after video request completion |
+
+**Test Results After Fixes:**
+- First video request: ✅ SUCCESS (~32s)
+- Second video request: ❌ TIMEOUT at `ttnn.from_torch()`
+- Demo with 3 consecutive videos: ✅ SUCCESS (uses `use_paged_attention=False`)
+
+**Key Finding:** The issue is specific to the vLLM paged attention path, not the memory leaks. Demo works because it uses `use_paged_attention=False`.
+
+**Error Location After Fixes:**
+```
+molmo2_model.py:385 - ttnn.from_torch(selector.unsqueeze(0).unsqueeze(0), ...)
+RuntimeError: TIMEOUT: device timeout in fetch queue wait, potential hang detected
+```
+
+**Nanobind Leaks Observed:**
+- 1797 leaked instances
+- 758 leaked keep_alive records
+- 724 leaked types
+- This is symptomatic of the device crash, not the root cause
+
+**Root Cause Hypothesis:**
+The TTNN paged attention path (`paged_fill_cache`, `paged_update_cache`) has state that persists after the first video request and interferes with subsequent requests. The device becomes unrecoverable after processing one large video.
+
+**Recommended Actions:**
+1. File TTNN kernel bug for video-sized paged attention operations
+2. Consider device reset between video requests (workaround)
+3. Investigate moving vision processing to CPU like Qwen VL
