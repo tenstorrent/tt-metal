@@ -1136,7 +1136,7 @@ jobs:
       needs.ttnn-generate-sweeps.result == 'success' &&
       (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
       needs.ttnn-compute-module-matrix.result == 'success' &&
-      (github.event.schedule == '30 4 * * 0,1,2,4,5' || github.event.schedule == '0 4 * * 3,6' || github.event.schedule == '0 2 * * *' || github.event.schedule == '0 3 * * *' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)')
+      (github.event.schedule == '30 4 * * 0,1,2,4,5' || github.event.schedule == '0 4 * * 3,6' || github.event.schedule == '0 2 * * *' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)')
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -1302,12 +1302,285 @@ jobs:
           name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
+  # ---------------------------------------------------------------------------
+  # Model-traced hardware parent jobs
+  # Each job fans out over one hardware's include list produced by
+  # compute_model_traced_matrix().  A separate named job per hardware gives
+  # a clear parent/child grouping in the GitHub Actions UI.
+  # ---------------------------------------------------------------------------
+  ttnn-model-traced-n300:
+    name: Run model-traced sweep (N300, ${{ matrix.batch_display }})
+    needs:
+      - ttnn-generate-sweeps
+      - ttnn-generate-sweeps-ccl
+      - build-artifact
+      - ttnn-compute-module-matrix
+    if: |
+      always() &&
+      needs.ttnn-generate-sweeps.result == 'success' &&
+      (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).n300_count > 0 &&
+      ((github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') || github.event.schedule == '0 3 * * *')
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).n300_include }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.arch }}
+        RUNNER_LABEL: ${{ matrix.runner_label }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
+        TRACY_NO_INVARIANT_CHECK: 1
+        TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+        MESH_DEVICE_SHAPE: ${{ matrix.mesh_shapes_filter || '' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: 60
+    runs-on: ${{ matrix.runs_on }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Download sweep vectors
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          pattern: sweeps-vectors-*
+          path: /work/tests/sweep_framework/vectors_export
+          merge-multiple: true
+      - name: Run ttnn sweeps (batch)
+        env:
+          MESH_DEVICE_SHAPE: ${{ matrix.mesh_shapes_filter }}
+        run: |
+          MODULE_SELECTOR="${{ matrix.module_selector }}"
+          SUITE_NAME="${{ matrix.suite_name }}"
+          CMD=(python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_SELECTOR" --vector-source vectors_export --result-dest results_export --tag ci-main --summary)
+          [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.skip_on_timeout }}" == "true" ]] && CMD+=(--skip-on-timeout)
+          [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.measure_device_perf }}" == "true" ]] && CMD+=(--device-perf)
+          [[ "${{ github.event.inputs.measure_e2e_perf }}" == "true" ]] && CMD+=(--perf-with-cache)
+          [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.measure_memory }}" == "true" ]] && CMD+=(--measure-memory)
+          [[ -n "$SUITE_NAME" ]] && CMD+=(--suite-name "$SUITE_NAME")
+          "${CMD[@]}"
+      - name: Compute artifact suffix
+        shell: bash
+        run: echo "BATCH_SUFFIX=$(echo -n "${{ matrix.test_group_name }}|${{ matrix.batch_display }}" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
+      - name: Upload sweep results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 1
+
+  ttnn-model-traced-t3k:
+    name: Run model-traced sweep (T3K, ${{ matrix.batch_display }})
+    needs:
+      - ttnn-generate-sweeps
+      - ttnn-generate-sweeps-ccl
+      - build-artifact
+      - ttnn-compute-module-matrix
+    if: |
+      always() &&
+      needs.ttnn-generate-sweeps.result == 'success' &&
+      (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).t3k_count > 0 &&
+      ((github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') || github.event.schedule == '0 3 * * *')
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        include: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).t3k_include }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.arch }}
+        RUNNER_LABEL: ${{ matrix.runner_label }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
+        TRACY_NO_INVARIANT_CHECK: 1
+        TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+        MESH_DEVICE_SHAPE: ${{ matrix.mesh_shapes_filter || '' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: 60
+    runs-on: ${{ matrix.runs_on }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Download sweep vectors
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          pattern: sweeps-vectors-*
+          path: /work/tests/sweep_framework/vectors_export
+          merge-multiple: true
+      - name: Run ttnn sweeps (batch)
+        env:
+          MESH_DEVICE_SHAPE: ${{ matrix.mesh_shapes_filter }}
+        run: |
+          MODULE_SELECTOR="${{ matrix.module_selector }}"
+          SUITE_NAME="${{ matrix.suite_name }}"
+          CMD=(python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_SELECTOR" --vector-source vectors_export --result-dest results_export --tag ci-main --summary)
+          [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.skip_on_timeout }}" == "true" ]] && CMD+=(--skip-on-timeout)
+          [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.measure_device_perf }}" == "true" ]] && CMD+=(--device-perf)
+          [[ "${{ github.event.inputs.measure_e2e_perf }}" == "true" ]] && CMD+=(--perf-with-cache)
+          [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.measure_memory }}" == "true" ]] && CMD+=(--measure-memory)
+          [[ -n "$SUITE_NAME" ]] && CMD+=(--suite-name "$SUITE_NAME")
+          "${CMD[@]}"
+      - name: Compute artifact suffix
+        shell: bash
+        run: echo "BATCH_SUFFIX=$(echo -n "${{ matrix.test_group_name }}|${{ matrix.batch_display }}" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
+      - name: Upload sweep results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 1
+
+  ttnn-model-traced-p150b:
+    name: Run model-traced sweep (P150b, ${{ matrix.batch_display }})
+    needs:
+      - ttnn-generate-sweeps
+      - ttnn-generate-sweeps-ccl
+      - build-artifact
+      - ttnn-compute-module-matrix
+    if: |
+      always() &&
+      needs.ttnn-generate-sweeps.result == 'success' &&
+      (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
+      needs.ttnn-compute-module-matrix.result == 'success' &&
+      fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).p150b_count > 0 &&
+      ((github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') || github.event.schedule == '0 3 * * *')
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        include: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).p150b_include }}
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.arch }}
+        RUNNER_LABEL: ${{ matrix.runner_label }}
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+        TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
+        TRACY_NO_INVARIANT_CHECK: 1
+        TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+        MESH_DEVICE_SHAPE: ${{ matrix.mesh_shapes_filter || '' }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    timeout-minutes: 60
+    runs-on: ${{ matrix.runs_on }}
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Download sweep vectors
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          pattern: sweeps-vectors-*
+          path: /work/tests/sweep_framework/vectors_export
+          merge-multiple: true
+      - name: Run ttnn sweeps (batch)
+        env:
+          MESH_DEVICE_SHAPE: ${{ matrix.mesh_shapes_filter }}
+        run: |
+          MODULE_SELECTOR="${{ matrix.module_selector }}"
+          SUITE_NAME="${{ matrix.suite_name }}"
+          CMD=(python3 tests/sweep_framework/sweeps_runner.py --module-name "$MODULE_SELECTOR" --vector-source vectors_export --result-dest results_export --tag ci-main --summary)
+          [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.skip_on_timeout }}" == "true" ]] && CMD+=(--skip-on-timeout)
+          [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.measure_device_perf }}" == "true" ]] && CMD+=(--device-perf)
+          [[ "${{ github.event.inputs.measure_e2e_perf }}" == "true" ]] && CMD+=(--perf-with-cache)
+          [[ "${{ github.event_name }}" == "schedule" || "${{ github.event.inputs.measure_memory }}" == "true" ]] && CMD+=(--measure-memory)
+          [[ -n "$SUITE_NAME" ]] && CMD+=(--suite-name "$SUITE_NAME")
+          "${CMD[@]}"
+      - name: Compute artifact suffix
+        shell: bash
+        run: echo "BATCH_SUFFIX=$(echo -n "${{ matrix.test_group_name }}|${{ matrix.batch_display }}" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
+      - name: Upload sweep results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 1
+
   ttnn-homogenize-run-result:
     name: Homogenize run result
     needs:
       - build-artifact
       - ttnn-run-sweeps-parallel
-    if: ${{ !cancelled() && needs.ttnn-run-sweeps-parallel.result != 'skipped' }}
+      - ttnn-model-traced-n300
+      - ttnn-model-traced-t3k
+      - ttnn-model-traced-p150b
+    if: |
+      !cancelled() && (
+        needs.ttnn-run-sweeps-parallel.result != 'skipped' ||
+        needs.ttnn-model-traced-n300.result != 'skipped' ||
+        needs.ttnn-model-traced-t3k.result != 'skipped' ||
+        needs.ttnn-model-traced-p150b.result != 'skipped'
+      )
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:

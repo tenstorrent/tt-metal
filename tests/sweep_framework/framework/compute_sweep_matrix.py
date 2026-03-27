@@ -219,7 +219,11 @@ def compute_model_traced_matrix(modules, batch_size):
         else:
             legacy_modules.append(module)
 
+    # include_entries: combined list for the flat ttnn-run-sweeps-parallel job (fallback)
+    # per_hw_includes: per-hardware lists for named parent jobs in the YAML
+    #   Keys: "n300_include", "t3k_include", "p150b_include", "default_include"
     include_entries = []
+    per_hw_includes = defaultdict(list)
     batches = []
 
     for hw_id, mesh_str in sorted(hw_mesh_modules.keys()):
@@ -241,22 +245,23 @@ def compute_model_traced_matrix(modules, batch_size):
         shape_batches = chunk_modules(base_modules, effective_batch)
         batches.extend(shape_batches)
 
+        hw_key = f"{hw_id}_include"
         for batch in shape_batches:
-            include_entries.append(
-                {
-                    "test_group_name": f"model-traced-{hw_id}",
-                    "arch": runner["arch"],
-                    "runs_on": runner["runs_on"],
-                    "runner_label": runner["runner_label"],
-                    "tt_smi_cmd": runner["tt_smi_cmd"],
-                    "module_selector": batch,
-                    "batch_display": f"{mesh_str}:{batch}",
-                    "suite_name": "model_traced",
-                    # Passed as MESH_DEVICE_SHAPE env var: VectorExportSource filters
-                    # to only the vectors for this specific mesh shape / hardware.
-                    "mesh_shapes_filter": mesh_str,
-                }
-            )
+            entry = {
+                "test_group_name": f"model-traced-{hw_id}",
+                "arch": runner["arch"],
+                "runs_on": runner["runs_on"],
+                "runner_label": runner["runner_label"],
+                "tt_smi_cmd": runner["tt_smi_cmd"],
+                "module_selector": batch,
+                "batch_display": f"{mesh_str}:{batch}",
+                "suite_name": "model_traced",
+                # Passed as MESH_DEVICE_SHAPE env var: VectorExportSource filters
+                # to only the vectors for this specific mesh shape / hardware.
+                "mesh_shapes_filter": mesh_str,
+            }
+            include_entries.append(entry)
+            per_hw_includes[hw_key].append(entry)
 
     # Legacy vectors (no __hw_ suffix): fall back to N150, no mesh filtering.
     if legacy_modules:
@@ -270,19 +275,19 @@ def compute_model_traced_matrix(modules, batch_size):
         legacy_batches = chunk_modules(base_legacy, batch_size)
         batches.extend(legacy_batches)
         for batch in legacy_batches:
-            include_entries.append(
-                {
-                    "test_group_name": "model-traced-default",
-                    "arch": "wormhole_b0",
-                    "runs_on": "tt-ubuntu-2204-n150-stable",
-                    "runner_label": "N150",
-                    "tt_smi_cmd": "tt-smi -r",
-                    "module_selector": batch,
-                    "batch_display": batch,
-                    "suite_name": "model_traced",
-                    "mesh_shapes_filter": "",
-                }
-            )
+            entry = {
+                "test_group_name": "model-traced-default",
+                "arch": "wormhole_b0",
+                "runs_on": "tt-ubuntu-2204-n150-stable",
+                "runner_label": "N150",
+                "tt_smi_cmd": "tt-smi -r",
+                "module_selector": batch,
+                "batch_display": batch,
+                "suite_name": "model_traced",
+                "mesh_shapes_filter": "",
+            }
+            include_entries.append(entry)
+            per_hw_includes["default_include"].append(entry)
 
     total_base = len(set(strip_mesh_suffix(m) for m in modules))
     print(
@@ -294,7 +299,7 @@ def compute_model_traced_matrix(modules, batch_size):
         unique_base = len(set(strip_mesh_suffix(m) for m in mods))
         print(f"  hw={hw_id} mesh={mesh_str}: {len(mods)} vectors ({unique_base} unique modules)", file=sys.stderr)
 
-    return include_entries, batches, []
+    return include_entries, batches, [], dict(per_hw_includes)
 
 
 def compute_standard_matrix(modules, batch_size, suite_name):
@@ -413,13 +418,16 @@ def main():
     else:
         batch_size = 10
 
+    per_hw_includes = {}
     if is_lead_models:
         include_entries, batches, ccl_batches = compute_lead_models_matrix(modules, batch_size)
     elif is_model_traced:
         # Route each job to the exact hardware the vectors were traced on.
         # sweeps_parameter_generator embeds __mesh_<r>x<c>__hw_<id> in filenames;
         # compute_model_traced_matrix reads those suffixes and assigns the right runner.
-        include_entries, batches, ccl_batches = compute_model_traced_matrix(modules, batch_size)
+        # per_hw_includes contains per-hardware include lists consumed by the
+        # named ttnn-model-traced-<hw> parent jobs in the YAML.
+        include_entries, batches, ccl_batches, per_hw_includes = compute_model_traced_matrix(modules, batch_size)
     else:
         suite_name = None if is_comprehensive else "nightly"
         include_entries, batches, ccl_batches = compute_standard_matrix(modules, batch_size, suite_name)
@@ -440,6 +448,13 @@ def main():
         "batches": batches,
         "ccl_batches": ccl_batches,
         "include": include_entries,
+        # Per-hardware include lists for named parent jobs (model-traced only).
+        # n300_include, t3k_include, p150b_include, default_include.
+        **per_hw_includes,
+        # Counts used in YAML job conditions to skip empty matrices.
+        "n300_count": len(per_hw_includes.get("n300_include", [])),
+        "t3k_count": len(per_hw_includes.get("t3k_include", [])),
+        "p150b_count": len(per_hw_includes.get("p150b_include", [])),
     }
 
     print(json.dumps(result))
