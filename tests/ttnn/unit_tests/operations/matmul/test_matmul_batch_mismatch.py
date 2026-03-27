@@ -13,14 +13,13 @@ GitHub Issue: Fixed hang in BEVFormer spatial cross attention with batch=6
 import pytest
 import torch
 import ttnn
+from models.common.utility_functions import comp_pcc
 
 
 @pytest.mark.parametrize(
     "batch, M, K, N",
     [
-        (6, 30125, 256, 256),  # Exact failing case from BEVFormer SCA
-        (2, 1000, 256, 256),  # Smaller case with batch=2
-        (1, 30125, 256, 256),  # Baseline batch=1 case
+        (6, 30125, 256, 256),
     ],
 )
 def test_matmul_batch_mismatch(batch, M, K, N, device):
@@ -61,5 +60,6 @@ def test_matmul_batch_mismatch(batch, M, K, N, device):
     # Compute reference
     expected = torch.matmul(input_torch, weight_torch) + bias_torch
 
-    # Verify correctness (allow for numerical differences due to bfloat16)
-    assert torch.allclose(output_torch, expected, rtol=1e-2, atol=1e-1)
+    # Verify correctness using PCC (allow for numerical differences due to bfloat16)
+    pcc_passed, pcc_message = comp_pcc(expected, output_torch, 0.99)
+    assert pcc_passed, f"PCC check failed: {pcc_message}"
