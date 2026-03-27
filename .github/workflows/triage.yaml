@@ -35,11 +35,6 @@ on:
         description: 'Run hang report generation test (intentionally hangs a card)'
         default: false
         type: boolean
-      force_e2e_failure_after_triage:
-        description: 'After hang triage (run-hang-report-test) and artifact upload, fail the job for auto-triage E2E. No effect unless run-hang-report-test is true.'
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   triage-tests:
@@ -93,10 +88,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - name: Post-triage validation
-        run: |
-          echo "::error::Post-triage validation step failed."
-          exit 1
       - name: Generate test annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}

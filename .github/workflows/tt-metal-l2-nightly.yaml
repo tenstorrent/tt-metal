@@ -99,11 +99,6 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-      fail_after_hang_triage_for_e2e:
-        description: "workflow_dispatch only: after the hang report triage test + uploads, fail that triage job so auto-triage sees a hang-adjacent failure (requires triage-tests with run-hang-report-test, as in this workflow)"
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   build-artifact:
@@ -502,7 +497,6 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       run-hang-report-test: true
-      force_e2e_failure_after_triage: ${{ github.event_name == 'workflow_dispatch' && inputs.fail_after_hang_triage_for_e2e }}
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
