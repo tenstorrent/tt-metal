@@ -790,6 +790,16 @@ def shard_and_save(
                 not remove_dim or tensor.shape[shard_dim] == mesh_dim
             ), f"The removed dim {shard_dim} must be fully sharded"
 
+    cache_path = (
+        path if path.name.endswith(TENSOR_CACHE_EXTENSION) else path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+    )
+    if cache_path.exists():
+        logger.info(f"Cache file already exists, skipping shard_and_save: {cache_path}")
+        relative_cache_path = _get_relative_cache_path(cache_path)
+        if relative_cache_path is None:
+            raise ValueError(f"Expected path under a 'mesh_<rows>x<cols>' cache directory: {cache_path}")
+        return SavedWeight(Path(relative_cache_path), memory_config)
+
     if _torch_impl:
         ttnn_tensor = _shard_torch_impl(
             path=path,
@@ -819,8 +829,6 @@ def shard_and_save(
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if path.exists():
-        logger.warning(f"Overwriting existing cache file: {path}")
     record = {
         "event": "deepseek_v3.cache_tensor_spec",
         "pid": os.getpid(),
