@@ -350,6 +350,9 @@ uv pip install --extra-index-url "$PYTORCH_INDEX" \
 echo "Installing tt-triage dependencies"
 uv pip install --index-strategy unsafe-best-match -r "$(pwd)/tools/triage/requirements.txt"
 
+echo "Installing tt-metal"
+uv pip install -e .
+
 if [[ "$SKIP_COMPAT_CHECK" == "true" ]]; then
     echo "Skipping package compatibility check (--skip-compat-check)"
 else
@@ -359,9 +362,6 @@ else
         exit 1
     fi
 fi
-
-echo "Installing tt-metal"
-uv pip install -e .
 
 # Create .pth files for ttml
 # This allows using pre-built ttml from build_metal.sh --build-tt-train
