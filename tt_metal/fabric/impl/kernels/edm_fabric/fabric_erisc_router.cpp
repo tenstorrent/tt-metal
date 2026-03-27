@@ -507,6 +507,23 @@ enum PacketLocalForwardType : uint8_t {
     PACKET_FORWARD_LOCAL_AND_REMOTE = 0x3
 };
 
+
+#if defined(ENABLE_FABRIC_FEFEFEFE_CHECK) || defined(ENABLE_FABRIC_FLOW_CONTROL_DEBUG_CHECK)
+bool hung = false;
+#endif
+#if defined(ENABLE_FABRIC_FLOW_CONTROL_DEBUG_CHECK)
+// Debug counters for flow-control sanity checking.
+// All are cumulative totals over the lifetime of the router.
+uint32_t dbg_sent_total = 0;
+// uint32_t dbg_sent_per_channel[MAX_NUM_SENDER_CHANNELS] = {};
+uint32_t dbg_received_total = 0;
+uint32_t dbg_acks_sent_total = 0;
+uint32_t dbg_completions_sent_total = 0;
+uint32_t dbg_first_level_acks_total = 0;
+// uint32_t dbg_first_level_acks_per_channel[MAX_NUM_SENDER_CHANNELS] = {};
+uint32_t dbg_completions_total = 0;
+#endif
+
 // tracks if the main loop made any progress. If many loop iterations were completed without
 // did_something=true (i.e. no progress was made), then we allow for context switch in case
 // the link is down
@@ -1636,6 +1653,13 @@ FORCE_INLINE
         SenderChannelFromReceiverCredits& sender_channel_from_receiver_credits,
         PerfTelemetryRecorder& perf_telemetry_recorder,
         LocalTelemetryT& local_fabric_telemetry) {
+
+#if defined(ENABLE_FABRIC_FLOW_CONTROL_DEBUG_CHECK)
+if (hung) {
+    return true;
+}
+#endif
+
     bool progress = false;
     // If the receiver has space, and we have one or more packets unsent from producer, then send one
     // TODO: convert to loop to send multiple packets back to back (or support sending multiple packets in one shot)
@@ -1666,6 +1690,10 @@ FORCE_INLINE
         did_something = true;
         progress = true;
 
+#if defined(ENABLE_FABRIC_FLOW_CONTROL_DEBUG_CHECK)
+        dbg_sent_total++;
+#endif
+
         auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
             local_sender_channel.get_cached_next_buffer_slot_addr());
         if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
@@ -1676,6 +1704,11 @@ FORCE_INLINE
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
             perf_telemetry_recorder);
+#if defined(ENABLE_FABRIC_FLOW_CONTROL_DEBUG_CHECK)
+        if (hung) {
+            return true;
+        }
+#endif
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
@@ -1687,6 +1720,9 @@ FORCE_INLINE
     int32_t completions_since_last_check =
         sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
+#if defined(ENABLE_FABRIC_FLOW_CONTROL_DEBUG_CHECK)
+        dbg_completions_total += completions_since_last_check;
+#endif
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
 
@@ -1705,6 +1741,9 @@ FORCE_INLINE
     if constexpr (enable_first_level_ack) {
         auto acks_since_last_check = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
         if (acks_since_last_check > 0) {
+#if defined(ENABLE_FABRIC_FLOW_CONTROL_DEBUG_CHECK)
+            dbg_first_level_acks_total += acks_since_last_check;
+#endif
             sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
             send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
                 local_sender_channel_worker_interface, acks_since_last_check, channel_connection_established);
@@ -1792,6 +1831,13 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
+
+#if defined(ENABLE_FABRIC_FEFEFEFE_CHECK)
+    if (hung) {
+        return true;
+    }
+#endif
+
     bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
@@ -1847,6 +1893,24 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
         cached_routing_fields = packet_header->routing_fields;
 #endif
+
+#if defined(ENABLE_FABRIC_FEFEFEFE_CHECK)
+        auto payload_size_bytes = packet_header->payload_size_bytes;
+        auto misc_val_in_packet = *reinterpret_cast<uint32_t*>(
+            uint32_t(packet_header) + ((payload_size_bytes >> 1) + (payload_size_bytes >> 2)));
+        auto misc_val_in_packet2 = *reinterpret_cast<uint32_t*>(uint32_t(packet_header) + (payload_size_bytes >> 1));
+        auto misc_val_in_packet3 = *reinterpret_cast<uint32_t*>(uint32_t(packet_header) + (payload_size_bytes >> 2));
+        if (misc_val_in_packet == 0xfefefefe || misc_val_in_packet2 == 0xfefefefe ||
+            misc_val_in_packet3 == 0xfefefefe) {
+            // detected corruption
+            hung = true;
+            WATCHER_RING_BUFFER_PUSH(0xBAD06666);
+            WATCHER_RING_BUFFER_PUSH(uint32_t(packet_header));
+            asm volatile ("ebreak");
+            return true;
+        }
+#endif
+
         if constexpr (!skip_src_ch_id_update && !enable_first_level_ack) {
             receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
         }
@@ -1914,6 +1978,9 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             }
             wr_sent_counter.increment();
             // decrement the to_receiver_pkts_sent_id stream register by 1 since current packet has been processed.
+#if defined(ENABLE_FABRIC_FLOW_CONTROL_DEBUG_CHECK)
+            dbg_received_total++;
+#endif
             if constexpr (!enable_first_level_ack) {
                 increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
             }
@@ -1967,6 +2034,12 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             } else {
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
+
+
+#if defined(ENABLE_FABRIC_FLOW_CONTROL_DEBUG_CHECK)
+            dbg_acks_sent_total++;
+#endif
+
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                 receiver_channel_response_credit_sender, src_ch_id);
             receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
@@ -2168,6 +2241,10 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif  // FABRIC_2D_VC2_SERVICED
     std::array<uint8_t, num_eth_ports>& port_direction_table,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
+#if defined(ENABLE_FABRIC_FLOW_CONTROL_DEBUG_CHECK)
+    size_t dbg_counter_interval_count = 0;
+#endif
+
     size_t did_nothing_count = 0;
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
@@ -2570,6 +2647,19 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif  // FABRIC_2D_VC2_SERVICED
                 }
             }
+
+
+#if defined(ENABLE_FABRIC_FLOW_CONTROL_DEBUG_CHECK)
+            if (dbg_counter_interval_count++ > 2) {
+                dbg_counter_interval_count = 0;
+            
+                bool acks_raced_ahead_of_sends = dbg_first_level_acks_total > dbg_sent_total;
+                bool completions_raced_ahead_of_sends = dbg_completions_total > dbg_sent_total;
+                if (acks_raced_ahead_of_sends || completions_raced_ahead_of_acks) {
+                    asm volatile ("ebreak");
+                }
+            }
+#endif
 
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 uint64_t loop_end_cycles = get_timestamp();
