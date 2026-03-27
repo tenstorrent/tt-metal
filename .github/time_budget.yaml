@@ -102,6 +102,11 @@ scaleout:
     bh_galaxy: 60
     bh_sp1: 90
 
+runtime:
+  unit:
+    wh_n150_civ2: 92
+    bh_p150b_civ2: 92
+
 models:
   sanity:
     wh_galaxy_perf: 10
