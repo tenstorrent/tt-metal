@@ -365,23 +365,25 @@ class TTNNSpeechT5Attention:
             rel_pos_bias = ttnn.matmul(
                 reshape_q,
                 position_bias_t,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                # Keep this large intermediate in DRAM to reduce L1 circular-buffer pressure
+                # on long utterances / multi-chip runs.
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 core_grid=self.core_grid,
                 compute_kernel_config=self.attn_compute_config,
             )
 
             # Op 11: Transpose back
             # [seq, batch*heads, seq] -> [batch*heads, seq, seq]
-            rel_pos_bias = ttnn.permute(rel_pos_bias, [1, 0, 2], memory_config=ttnn.L1_MEMORY_CONFIG)
+            rel_pos_bias = ttnn.permute(rel_pos_bias, [1, 0, 2], memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             # Op 12: Add to attention weights
-            attn_weights = ttnn.add(attn_weights, rel_pos_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
+            attn_weights = ttnn.add(attn_weights, rel_pos_bias, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Apply encoder self-attention mask to prevent pad tokens from corrupting
         # real token representations. Mask shape [1, 1, seq_len] broadcasts over
         # [batch*heads, seq_len, seq_len], zeroing out attention to pad key positions.
         if attention_mask is not None:
-            attn_weights = ttnn.add(attn_weights, attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
+            attn_weights = ttnn.add(attn_weights, attention_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         # Op 13: Softmax
         attn_weights = ttnn.softmax(attn_weights, dim=-1)

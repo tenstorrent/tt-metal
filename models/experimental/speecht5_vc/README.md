@@ -63,6 +63,8 @@ Input audio must be mono 16 kHz WAV.
 MESH_DEVICE=N150 python models/experimental/speecht5_vc/demo_ttnn.py \
   --input_wav /path/to/source_16khz_mono.wav \
   --output converted.wav \
+  --l1_small_size 24576 \
+  --num_command_queues 2 \
   --max_steps 800 \
   --perf_report speecht5_vc_perf.json
 ```
@@ -92,6 +94,9 @@ Example:
 MESH_DEVICE=N150 python models/experimental/speecht5_vc/validate_stage1.py \
   --input_wavs /path/a.wav /path/b.wav \
   --output_dir ./vc_stage1_outputs \
+  --l1_small_size 24576 \
+  --num_command_queues 2 \
+  --retry_on_l1_clash \
   --report_json ./vc_stage1_report.json
 ```
 
@@ -112,6 +117,12 @@ Report includes:
 - speaker similarity (`speaker_cosine`)
 - content preservation (`wer_percent`)
 - threshold checks + overall pass flag
+
+Useful stability flags on cloud:
+
+- `--l1_small_size 24576` (default): lower L1 reservation to reduce circular-buffer clashes.
+- `--retry_on_l1_clash`: automatically retries once with smaller L1 size if a clash is detected.
+- `--disable_program_cache`: useful for debugging cache-related runtime issues.
 
 ## Output
 
