@@ -78,6 +78,7 @@ from models.demos.deepseek_v3_b1.micro_ops.pipeline_stage_sync.op import Pipelin
     ],
 )
 @pytest.mark.parametrize("num_iterations", [50])
+@pytest.mark.parametrize("num_devices", [8])
 @pytest.mark.parametrize(
     "device_params",
     [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
@@ -92,8 +93,13 @@ def test_pipeline_stage_sync_2d(
     signalling_core,
     run_signalling_kernel_on_brisc,
     num_iterations,
+    num_devices,
 ):
     """Test pipeline_stage_sync with 2D fabric."""
+    # Validate mesh size
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
+
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
 
     logger.info(f"\n=== Testing pipeline_stage_sync (num_iterations={num_iterations}) ===")
