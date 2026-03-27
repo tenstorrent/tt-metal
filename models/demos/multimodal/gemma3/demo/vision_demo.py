@@ -4,22 +4,23 @@
 
 from io import BytesIO
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Optional
 
+import llama_models.llama3.reference_impl.generation as llama_reference_generation
 import requests
+from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
 from loguru import logger
 from PIL import Image as PIL_Image
-from pydantic import BaseModel
+from pkg_resources import resource_filename
 
-from models.common.llama_models import sample_top_p
-from models.tt_transformers.tt.common import ImageMedia, InterleavedTextMedia, Role
 from models.tt_transformers.tt.generator import create_submeshes
 
-IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
+IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
 import os
 import time
 
+import numpy as np
 import pytest
 import torch
 
@@ -31,17 +32,11 @@ from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import DecodersPrecision
 
 
-class UserMessage(BaseModel):
-    role: Literal[Role.user.value] = Role.user.value
-    content: InterleavedTextMedia
-    context: Optional[InterleavedTextMedia] = None
-
-
 def get_batch_sampler(temperature, top_p, tokenizer):
     def sample(logits):
         if temperature > 0:
             probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
-            next_token = sample_top_p(probs, top_p)
+            next_token = llama_reference_generation.sample_top_p(probs, top_p)
         else:
             next_token = torch.argmax(logits[:, -1], dim=-1)
 
@@ -50,6 +45,13 @@ def get_batch_sampler(temperature, top_p, tokenizer):
         return next_tokens, texts
 
     return sample
+
+
+def create_random_image(width, height):
+    """Create a random RGB image of specified dimensions."""
+    # Generate random RGB values
+    random_array = np.random.randint(0, 256, (height, width, 3), dtype=np.uint8)
+    return PIL_Image.fromarray(random_array, "RGB")
 
 
 def create_multimodal_model(
@@ -240,21 +242,20 @@ def test_multimodal_demo_text(
 
     generator = Generator(model, model_args, mesh_device)
 
-    # Warmup prefill (decode warmup skipped - no paged attention in vision demo)
-    logger.info("Warming up model...")
-    generator.warmup_model_prefill(
-        kv_cache=None,
-        enable_trace=enable_trace,
-        can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
-    )
-    logger.info("Warmup complete")
+    xattn_caches = [None for i, model in enumerate(generator.model)]
+
+    # Create random images for trace capture with specific dimensions
+
+    trace_img_1120x560 = create_random_image(1120, 560)
 
     with open(IMG_PATH / "ocr_image.jpeg", "rb") as f:
         ocr_image = PIL_Image.open(f).convert("RGB")
 
+    with open(IMG_PATH / "clutter.jpeg", "rb") as f:
+        clutter = PIL_Image.open(f).convert("RGB")
+
     with open(IMG_PATH / "dog.jpg", "rb") as f:
-        dog_img = PIL_Image.open(f).convert("RGB")
+        img = PIL_Image.open(f).convert("RGB")
 
     if multi_image:
         handwriting_dataset_base_url = (
@@ -276,7 +277,8 @@ def test_multimodal_demo_text(
         ]
         num_handwritten_images = len(handwriting_dataset_images)
 
-        dialogs = [
+        # Trace capture dialogs with random images
+        multi_image_dialogs = [
             [
                 UserMessage(
                     content=[ImageMedia(image=handwriting_dataset_images[i]) for i in range(num_handwritten_images)]
@@ -284,16 +286,47 @@ def test_multimodal_demo_text(
                 )
             ],
         ]
-    elif include_text_only_prompts:
+
+    # Trace capture dialogs with random images
+    trace_dialogs = [
+        [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+    ]
+
+    if multi_image:
+        trace_dialogs = multi_image_dialogs
+
+    if len(trace_dialogs) < max_batch_size:
+        trace_dialogs *= max_batch_size // len(trace_dialogs)
+
+    num_trace_batches = len(trace_dialogs) // max_batch_size
+
+    if not include_text_only_prompts:
+        with open(IMG_PATH / "dog.jpg", "rb") as f:
+            img = PIL_Image.open(f).convert("RGB")
+        logger.info(f"Dog image dimensions: {img.size} (width x height)")
+
+        with open(IMG_PATH / "pasta.jpeg", "rb") as f:
+            img2 = PIL_Image.open(f).convert("RGB")
+        logger.info(f"Pasta image dimensions: {img2.size} (width x height)")
+
+        # Regular testing dialogs with original images
         dialogs = [
-            [UserMessage(content=["Write a haiku."])],
+            [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
+            [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
             [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+            [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
         ]
     else:
         dialogs = [
-            [UserMessage(content=[ImageMedia(image=dog_img), "Write a haiku for this image."])],
+            # image understanding + text-only prompts
+            [UserMessage(content=["Write a haiku."])],
+            [UserMessage(content=["What is for dinner?"])],
             [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
+            [UserMessage(content=[ImageMedia(image=clutter), "What objects are in this image?"])],
         ]
+
+    if multi_image:
+        dialogs = multi_image_dialogs + dialogs
 
     if len(dialogs) < max_batch_size:
         dialogs *= max_batch_size // len(dialogs)
@@ -310,8 +343,9 @@ def test_multimodal_demo_text(
 
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
+        current_dialogs = trace_dialogs + dialogs
         for batch_idx in range(num_batches):
-            batch_dialogs = dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
+            batch_dialogs = current_dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
             for dialog in batch_dialogs:
                 for msg in dialog:
                     print(f"{msg.role.capitalize()}: {msg.content}\n")
@@ -344,12 +378,36 @@ def test_multimodal_demo_text(
                 tokens[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
 
             prefill_start = time.perf_counter()
+            if batch_idx < num_trace_batches:  # Get compile time for first batch
+                with profiler("compile_prefill", iteration=batch_idx):
+                    (
+                        batch_logits,
+                        prefill_batch_xattn_masks,
+                        prefill_batch_text_masks,
+                        decode_batch_xattn_masks,
+                        decode_batch_text_masks,
+                    ) = generator.prefill_forward(
+                        vision_images,
+                        vision_mask,
+                        tokens,
+                        xattn_caches,
+                        total_lens,
+                        prefill_lens,
+                    )
+
+            # Get cached prefill time
             with profiler("inference_prefill", iteration=batch_idx):
-                batch_logits, *_ = generator.prefill_forward(
+                (
+                    batch_logits,
+                    prefill_batch_xattn_masks,
+                    prefill_batch_text_masks,
+                    decode_batch_xattn_masks,
+                    decode_batch_text_masks,
+                ) = generator.prefill_forward(
                     vision_images,
                     vision_mask,
                     tokens,
-                    None,  # xattn_caches not used for Gemma3
+                    xattn_caches,
                     total_lens,
                     prefill_lens,
                 )
@@ -364,13 +422,21 @@ def test_multimodal_demo_text(
 
             with profiler(f"inference_decode", iteration=batch_idx):
                 for gen_idx in range(max_gen_len - 1):
+                    if batch_idx == 0 and gen_idx == 0:  # First decode accounts for compile time
+                        profiler.start(f"compile_decode", iteration=batch_idx)
+
                     decode_start = time.perf_counter()
                     position_id = prefill_lens + gen_idx
                     next_token_tensor = next_tokens.reshape(max_batch_size, 1)
 
-                    logits, _ = generator.decode_forward(
-                        next_token_tensor,
+                    logits = generator.decode_forward(
                         position_id,
+                        next_token_tensor,
+                        prefill_batch_xattn_masks,
+                        prefill_batch_text_masks,
+                        decode_batch_xattn_masks,
+                        decode_batch_text_masks,
+                        xattn_caches,
                         enable_trace=enable_trace,
                     )
 
@@ -379,7 +445,10 @@ def test_multimodal_demo_text(
                     tokens[torch.arange(max_batch_size), position_id + 1] = next_tokens
                     decode_end = time.perf_counter()
                     decode_times.append(decode_end - decode_start)
+                    if batch_idx == 0 and gen_idx == 0:
+                        profiler.end(f"compile_decode", iteration=batch_idx)
 
+                    # Disable checking for eot until I have more robust code for batch > 1
                     if any([t in stop_tokens for t in next_tokens]):
                         break
                 _num_decode_tokens += (
@@ -410,14 +479,19 @@ def test_multimodal_demo_text(
     profiler.end("run")
 
     # Calculate measurements
+    compile_prefill_time = profiler.get_duration("compile_prefill")
+    compile_decode_time = profiler.get_duration("compile_decode")
     total_inference_prefill_time = profiler.get_duration_sum("inference_prefill")
-    total_inference_decode_time = profiler.get_duration_sum("inference_decode", start_iteration=0)
+    total_inference_decode_time = profiler.get_duration_sum("inference_decode", start_iteration=0) - compile_decode_time
     avg_ttft = total_inference_prefill_time / num_batches  # One first token per batch
     avg_prefill_t_s = _num_prefill_tokens / total_inference_prefill_time
     avg_decode_t_s = _num_decode_tokens / total_inference_decode_time
     avg_decode_t_s_u = _num_decode_tokens / total_inference_decode_time / max_batch_size
 
     measurements = {
+        # Required measurements
+        "compile_prefill": compile_prefill_time,
+        "compile_decode": compile_decode_time,
         "inference_prefill": total_inference_prefill_time,
         "inference_decode": total_inference_decode_time,
         "prefill_time_to_token": avg_ttft,
@@ -428,13 +502,15 @@ def test_multimodal_demo_text(
 
     # Print performance metrics
     logger.info("")
-    logger.info(f"Performance metrics")
+    logger.info(f"Performance metrics for batch 0")
+    logger.info(f"Prefill compile time: {round(measurements['compile_prefill'], 4)}s")
+    logger.info(f"Decode compile time: {round(measurements['compile_decode'], 4)}s")
     logger.info(f"Prefill inference time per user: {round(avg_ttft, 4)}s")
     logger.info(
         f"Total Decode inference time ({max_gen_len} iterations): {round(measurements['inference_decode'], 4)}s"
     )
     logger.info("")
-    logger.info(f"Time to first token: {round(measurements['prefill_time_to_token'] * 1000, 2)}ms")
+    logger.info(f"Time to first token: {round(measurements['prefill_time_to_token']* 1000, 2)}ms")
     logger.info(f"Prefill t/s: {round(measurements['prefill_t/s'], 2)} tok/s")
     logger.info(
         f"Average speed: {round(1/avg_decode_t_s_u * 1000, 2)}ms @ {round(avg_decode_t_s_u, 2)} tok/s/user ({round(avg_decode_t_s, 2)} tok/s throughput)"
