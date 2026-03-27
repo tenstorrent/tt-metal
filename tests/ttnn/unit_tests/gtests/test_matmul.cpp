@@ -11,7 +11,7 @@
 #include <tt-metalium/shape.hpp>
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
