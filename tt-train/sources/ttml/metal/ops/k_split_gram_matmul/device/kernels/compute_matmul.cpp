@@ -4,13 +4,9 @@
 //
 // Matmul compute kernel with M_block x N_block streaming for Mpc×Mpc gram matmul.
 // in0: M_block rows per K-block, in1: N_block rows per K-block.
-//
-// Block streaming output:
+// Output streamed per (m_sub, n_sub) block:
 //   Non-accumulator: matmul → c_2, pack c_2 → c_5 (row-major), DM sends c_5
 //   REDUCE_ACCUMULATOR: matmul → c_2, add c_2(FP32) + c_5(BF16) → c_6
-//
-// Per-msb path (original):
-//   Loop: for m_sub: reserve c_3; for n_sub: matmul → c_2, copy_subblock → c_3; push c_3; reduction.
 
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
@@ -157,7 +153,7 @@ void add_reduce_block(uint32_t own_cb, uint32_t recv_cb, uint32_t out_cb, uint32
 #ifdef MIRROR_OUTPUT
 // Add own_cb + recv_cb, transpose via c_7 staging, pack to mirror_cb (col by col).
 // Produces N_cols columns of M_rows tiles each (matching DM mirror write pattern).
-// src_stride: column stride in source CBs (= Mpc for column-major c_3, or M_block for per-nsb c_2).
+// src_stride: column stride in source CBs (= M_block for row-major c_2).
 // Note: transpose_wh_dest() is buggy on Blackhole (PCC≈0.2), so we stage through c_7 BF16 CB.
 void add_transpose_block(
     uint32_t own_cb, uint32_t recv_cb, uint32_t mirror_cb, uint32_t M_rows, uint32_t N_cols, uint32_t src_stride) {
