@@ -485,6 +485,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     auto compute_cfg = [&](std::map<std::string, std::string> defines = {}) {
         defines["BLOCK_STREAMING"] = "1";
         return ComputeConfig{
+            .math_fidelity = attrs.math_fidelity,
             .fp32_dest_acc_en = true,
             .compile_args = {K_half, K_block_tiles, Mpc, subblock_w, M_block, subblock_h, N_block, num_n_blocks},
             .defines = defines};
