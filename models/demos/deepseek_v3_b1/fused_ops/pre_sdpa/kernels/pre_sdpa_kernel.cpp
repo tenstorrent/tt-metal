@@ -1038,6 +1038,6 @@ if constexpr (!Core::skip_ccl) {
     // ====================================================================
     {
         DeviceZoneScopedN("MCAST_TEARDOWN");
-        mcast.teardown();
+        mcast.teardown(mcast_args);
     }
 }

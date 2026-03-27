@@ -1347,7 +1347,7 @@ void kernel_main() {
     }
 
     // Teardown (one teardown since all mcasts reuse the same semaphores)
-    residual_mcast.teardown();
+    residual_mcast.teardown(moe.routed.residual_mcast_args);
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     noc_async_write_barrier();

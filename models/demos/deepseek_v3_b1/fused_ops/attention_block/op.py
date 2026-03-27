@@ -181,9 +181,9 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores(num_links=1):
-        # 15 from pre/post-SDPA pipeline internals (includes ccl_sync),
+        # 16 from pre/post-SDPA pipeline internals (includes ccl_sync),
         # plus broadcast semaphores.
-        non_bcast_num_semaphores = 15
+        non_bcast_num_semaphores = 16
         bcast_num_semaphores = DeepseekMinimalBroadcast.get_num_semaphores(num_links=num_links)
         return non_bcast_num_semaphores + bcast_num_semaphores
 
@@ -770,7 +770,8 @@ class AttentionBlock:
         # Phase 1: QNOPE first halves, Phase 2: QNOPE second halves, Phase 3: QROPE
         nope_phase1_semaphore_addr = gather_noc0_receiver_semaphore_addr  # ID 2
         nope_phase2_semaphore_addr = gather_noc1_receiver_semaphore_addr  # ID 3
-        rope_semaphore_addr = mcast_data_sender_semaphore_addr  # ID 0 (mcast completed before CreateQHeads)
+        rope_semaphore_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
 
         # Semaphore IDs for MLA
         mla_reducer_semaphore_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
