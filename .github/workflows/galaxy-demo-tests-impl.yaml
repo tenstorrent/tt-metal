@@ -12,9 +12,6 @@ on:
       build-artifact-name:
         required: true
         type: string
-      enabled-skus:
-        required: true
-        type: string
       model:
         required: false
         type: string
@@ -48,12 +45,12 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
             "demo"
-      - name: Build unified test matrix based on enabled SKUs
+      - name: Build test matrix (all SKUs listed in tests YAML)
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            ALL_SKUS_IN_TESTS \
             ./.github/sku_config.yaml
       - name: Apply model filter
         id: apply-model-filter
@@ -119,11 +116,6 @@ jobs:
         run: |
           echo "${{ matrix.test-group.cmd }}"
           ${{ matrix.test-group.cmd }}
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() }}

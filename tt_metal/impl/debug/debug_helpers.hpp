@@ -13,6 +13,7 @@
 
 #include <fmt/format.h>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include "context/metal_env_accessor.hpp"
 #include "llrt/core_descriptor.hpp"
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
@@ -36,22 +37,20 @@ struct CoreDescriptorComparator {
 using CoreDescriptorSet = std::set<umd::CoreDescriptor, CoreDescriptorComparator>;
 
 // Helper function to get CoreDescriptors for all debug-relevant cores on device.
-inline static CoreDescriptorSet GetAllCores(ChipId device_id) {
+inline static CoreDescriptorSet GetAllCores(
+    tt::Cluster& cluster, tt::tt_fabric::ControlPlane& control_plane, ChipId device_id) {
     CoreDescriptorSet all_cores;
     // The set of all printable cores is Tensix + Eth cores
-    CoreCoord logical_grid_size =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
+    CoreCoord logical_grid_size = cluster.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t x = 0; x < logical_grid_size.x; x++) {
         for (uint32_t y = 0; y < logical_grid_size.y; y++) {
             all_cores.insert({{x, y}, CoreType::WORKER});
         }
     }
-    for (const auto& logical_core :
-         tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id)) {
+    for (const auto& logical_core : control_plane.get_active_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
-    for (const auto& logical_core :
-         tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(device_id)) {
+    for (const auto& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
         all_cores.insert({logical_core, CoreType::ETH});
     }
 
@@ -60,14 +59,12 @@ inline static CoreDescriptorSet GetAllCores(ChipId device_id) {
 
 // Helper function to get CoreDescriptors for all cores that are used for dispatch. Should be a subset of
 // GetAllCores().
-[[maybe_unused]] static CoreDescriptorSet GetDispatchCores(ChipId device_id) {
+[[maybe_unused]] static CoreDescriptorSet GetDispatchCores(
+    MetalEnvImpl& env, ChipId device_id, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     CoreDescriptorSet dispatch_cores;
-    unsigned num_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
-    const auto& dispatch_core_config =
-        tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     log_debug(tt::LogAlways, "Dispatch Core Type = {}", dispatch_core_type);
-    for (auto logical_core : tt::get_logical_dispatch_cores(device_id, num_cqs, dispatch_core_config)) {
+    for (auto logical_core : tt::get_logical_dispatch_cores(env, device_id, num_hw_cqs, dispatch_core_config)) {
         dispatch_cores.insert({logical_core, dispatch_core_type});
     }
     return dispatch_cores;
@@ -77,6 +74,11 @@ inline uint64_t GetDprintBufAddr(ChipId device_id, const CoreCoord& virtual_core
     uint64_t addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
     return addr + (sizeof(DebugPrintMemLayout) * risc_id);
+}
+
+inline uint64_t GetDevicePrintBufAddr(ChipId device_id, const CoreCoord& virtual_core) {
+    return tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        llrt::get_core_type(device_id, virtual_core), tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
 }
 
 inline std::string_view get_core_type_name(CoreType ct) {
@@ -98,7 +100,8 @@ inline std::string_view get_core_type_name(CoreType ct) {
 // Returns the assert message portion for a given assert type
 // Returns empty string for unknown types (callers must handle this)
 // For DebugAssertTripped, line_num is used in the message
-inline std::string get_debug_assert_message(dev_msgs::debug_assert_type_t type, uint16_t line_num = 0) {
+inline std::string get_debug_assert_message(
+    dev_msgs::debug_assert_type_t type, uint16_t line_num = 0, uint64_t hw_fault_info = 0) {
     switch (type) {
         case dev_msgs::DebugAssertTripped:
             return fmt::format(
@@ -119,6 +122,12 @@ inline std::string get_debug_assert_message(dev_msgs::debug_assert_type_t type, 
                    "transactions (missing NOC posted writes sent barrier).";
         case dev_msgs::DebugAssertRtaOutOfBounds: return "accessed unique runtime arg index out of bounds.";
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
+        case dev_msgs::DebugAssertHwFault:
+            return fmt::format(
+                "hardware fault occurred at PC 0x{:x}. Cause: 0x{:x}, faulting address or instruction: 0x{:08x}",
+                line_num,
+                hw_fault_info & 0xffffffff,
+                (hw_fault_info >> 32) & 0xffffffff);
         default: return "";
     }
 }

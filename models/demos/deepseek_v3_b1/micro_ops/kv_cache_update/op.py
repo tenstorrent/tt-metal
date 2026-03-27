@@ -72,17 +72,12 @@ class KVCacheUpdate:
         full_grid_mcast_end_core = device.worker_core_from_logical_core(full_device_grid.end)
         full_grid_mcast_num_dests = full_device_grid.grid_size().x * full_device_grid.grid_size().y
 
-        # CB indices and krope_Wt passed as named compile-time args; kernel uses get_named_compile_time_arg_val
+        # CB indices passed as named compile-time args; kernel uses get_named_compile_time_arg_val
         ncrisc_named = [
             ("kv_rmsnorm_output_cb", KV_RMSNORM_OUTPUT_CB),
             ("krope_output_cb", KROPE_OUTPUT_CB),
-        ]
-        brisc_named = [
-            ("kv_cache_input_cb", KV_CACHE_INPUT_CB),
-            ("kv_cache_output_cb", KV_CACHE_OUTPUT_CB),
             ("kv_cache_intermed_cb", KV_CACHE_INTERMED_CB),
-            ("kv_rmsnorm_output_cb", KV_RMSNORM_OUTPUT_CB),
-            ("krope_output_cb", KROPE_OUTPUT_CB),
+            ("kv_cache_output_cb", KV_CACHE_OUTPUT_CB),
             ("kv_cache_grid_start_y", list(rope_core_grid.ranges())[0].start.y),
             ("full_grid_mcast_start_x", full_grid_mcast_start_core.x),
             ("full_grid_mcast_start_y", full_grid_mcast_start_core.y),
@@ -90,6 +85,10 @@ class KVCacheUpdate:
             ("full_grid_mcast_end_y", full_grid_mcast_end_core.y),
             ("full_grid_mcast_num_dests", full_grid_mcast_num_dests - 1),
             ("kv_cache_cur_pos_ready_semaphore_id", 0),
+        ]
+        brisc_named = [
+            ("kv_cache_input_cb", KV_CACHE_INPUT_CB),
+            ("kv_cache_grid_start_y", list(rope_core_grid.ranges())[0].start.y),
         ]
         trisc_named = [
             ("kv_cache_input_cb", KV_CACHE_INPUT_CB),
@@ -152,7 +151,7 @@ class KVCacheUpdate:
             initial_value=0,
         )
         pos_addr = position_ids_tensor.buffer_address()
-        ncrisc_common_runtime_args = [full_kv_cache_tensor.buffer_address()]
+        ncrisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), pos_addr]
         brisc_common_runtime_args = [full_kv_cache_tensor.buffer_address(), pos_addr]
 
         kernel_desc = UnifiedKernelDescriptor(

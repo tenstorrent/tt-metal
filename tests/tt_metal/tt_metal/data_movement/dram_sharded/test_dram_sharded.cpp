@@ -11,6 +11,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
@@ -101,15 +102,27 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     }
     kernel_path += ".cpp";
 
-    // Kernels
-    auto reader_kernel = CreateKernel(
-        program,
-        kernel_path,
-        test_config.cores,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
-            .compile_args = reader_compile_args});
+    // Create kernel on reader cores - branch by architecture
+    KernelHandle reader_kernel;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar path: Use experimental API
+        reader_kernel = experimental::quasar::CreateKernel(
+            program,
+            kernel_path,
+            test_config.cores,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = reader_compile_args});
+    } else {
+        // WH/BH path: Use legacy API
+        reader_kernel = CreateKernel(
+            program,
+            kernel_path,
+            test_config.cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = reader_compile_args});
+    }
 
     uint32_t l1_addr = get_l1_address_and_size(mesh_device, corerange_to_cores(test_config.cores)[0]).base_address;
     std::vector<uint32_t> reader_run_time_args = {input_buffer_address, l1_addr};

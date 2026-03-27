@@ -111,9 +111,10 @@ void LevelizedGraph::populate_vertices(const nlohmann::json& trace, std::size_t 
         // Extract tensor_id and shape from params
         if (node.contains(kParams)) {
             if (node[kParams].contains(kTensorId)) {
-                // override tensor name to include tensor_id:
-                vertex.name =
-                    std::string(kNodeTensor) + "[" + node[kParams][kTensorId].template get<std::string>() + "]";
+                const auto& tid = node[kParams][kTensorId];
+                std::string tid_str =
+                    tid.is_string() ? tid.template get<std::string>() : std::to_string(tid.template get<int64_t>());
+                vertex.name = std::string(kNodeTensor) + "[" + tid_str + "]";
             }
             if (node[kParams].contains(kShape)) {
                 vertex.output_shape.push_back(node[kParams][kShape].template get<std::string>());

@@ -28,11 +28,16 @@ import sys
 import os
 import subprocess
 import json
+import copy
 import hashlib
+import re
 from tqdm import tqdm
 import argparse
 from datetime import datetime
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def get_base_dir():
@@ -75,68 +80,92 @@ def get_base_dir():
 BASE_DIR = get_base_dir()
 
 
+def _infer_board_type_from_arch(arch_str):
+    """Map a tt-smi ``arch`` string (e.g. ``"wormhole_b0"``) to a board type."""
+    if not arch_str:
+        return None
+    lower = arch_str.lower()
+    if "wormhole" in lower:
+        return "Wormhole"
+    if "blackhole" in lower:
+        return "Blackhole"
+    return None
+
+
 def get_machine_info():
-    """Get machine info (board type, device series, card count, and device count) using tt-smi command."""
+    """Get machine info (board type, device series, card count, and device count).
+
+    Tries the pyluwen Python API first (authoritative PCI-level arch
+    detection), then falls back to ``tt-smi -s --snapshot_no_tty``
+    (structured JSON) so that machine metadata is available even when
+    pyluwen is not installed.
+    """
+    board_type = None
+    pyluwen_device_count = None
+
+    # --- Step 1: attempt arch detection via pyluwen --------------------------
     try:
-        result = subprocess.run(["tt-smi", "-ls"], capture_output=True, text=True, timeout=10)
-        if result.returncode != 0 or not result.stdout.strip():
-            return None
+        from pyluwen import PciChip, pci_scan
 
-        # Parse "All available boards" section for total device count
-        all_devices = []
-        in_all_boards = False
-
-        # Parse "Boards that can be reset" section for card count
-        in_reset_table = False
-        machines = {}
-
-        for line in result.stdout.split("\n"):
-            # Track when we enter "All available boards" section
-            if "All available boards on host" in line:
-                in_all_boards = True
-                in_reset_table = False
-                continue
-
-            # Track when we enter "Boards that can be reset" section
-            if "Boards that can be reset" in line:
-                in_all_boards = False
-                in_reset_table = True
-                continue
-
-            # Parse device rows in "All available boards" section
-            if in_all_boards and line.strip().startswith("│"):
-                parts = [p.strip() for p in line.split("│") if p.strip()]
-                if len(parts) >= 3:
-                    pci_dev_id = parts[0]
-                    board_type = parts[1]
-                    device_series = parts[2].rstrip("LR").strip()  # Remove L/R suffix
-                    if board_type and device_series and board_type != "Board Type" and pci_dev_id != "PCI Dev ID":
-                        all_devices.append((board_type, device_series))
-
-            # Count cards from "Boards that can be reset" section
-            if in_reset_table and line.strip().startswith("│"):
-                parts = [p.strip() for p in line.split("│") if p.strip()]
-                if len(parts) >= 3:
-                    board_type = parts[1]
-                    device_series = parts[2].rstrip("LR").strip()
-                    if board_type and device_series and board_type != "Board Type":
-                        key = (board_type, device_series)
-                        machines[key] = machines.get(key, 0) + 1
-
-        if machines and all_devices:
-            (board_type, device_series), card_count = max(machines.items(), key=lambda x: x[1])
-            # Count total devices from "All available boards" section
-            device_count = len(all_devices)
-
-            return {
-                "board_type": board_type,
-                "device_series": device_series,
-                "card_count": card_count,
-                "device_count": device_count,
-            }
-        return None
+        pci_interfaces = pci_scan()
+        if pci_interfaces:
+            chip = PciChip(pci_interface=pci_interfaces[0])
+            if chip.as_wh() is not None:
+                board_type = "Wormhole"
+            elif chip.as_bh() is not None:
+                board_type = "Blackhole"
+            # Chip arch not recognised — leave board_type as None so
+            # downstream callers treat machine info as unavailable.
+            pyluwen_device_count = len(pci_interfaces)
     except Exception:
-        return None
+        # pyluwen is an optional dependency; on any failure we fall back to tt-smi below.
+        logger.debug("pyluwen-based arch detection failed; falling back to tt-smi.", exc_info=True)
+
+    # --- Step 2: device series & card count via tt-smi JSON snapshot ---------
+    try:
+        from collections import Counter
+
+        result = subprocess.run(
+            ["tt-smi", "-s", "--snapshot_no_tty"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout)
+            devices = data.get("device_info", [])
+
+            if board_type is None and devices:
+                board_type = _infer_board_type_from_arch(devices[0].get("arch", ""))
+
+            device_count = pyluwen_device_count or len(devices)
+
+            series_counts = Counter()
+            for d in devices:
+                bt = d.get("board_info", {}).get("board_type", "")
+                if bt:
+                    series_counts[bt] += 1
+
+            if series_counts:
+                board_series_raw, card_count = series_counts.most_common(1)[0]
+                device_series = board_series_raw.rstrip(" LR").strip()
+
+                return {
+                    "board_type": board_type,
+                    "device_series": device_series,
+                    "card_count": card_count,
+                    "device_count": device_count,
+                }
+            # series_counts is empty — card_count cannot be determined.
+            # Fall through rather than returning a partial dict.
+    except Exception:
+        logger.debug("tt-smi JSON snapshot failed; falling back to pyluwen-only.", exc_info=True)
+
+    # --- Step 3: pyluwen-only fallback (tt-smi unavailable) ------------------
+    # If tt-smi is unavailable and we cannot reliably determine card_count,
+    # avoid returning a partially-populated machine_info. Callers rely on
+    # card_count being non-None for correct filtering, so we return None.
+    return None
 
 
 def load_valid_operations():
@@ -171,6 +200,18 @@ def normalize_op_name(op_name: str) -> str:
     Converts C++ style (ttnn::op) to Python style (ttnn.op) for consistent comparison.
     """
     return op_name.replace("::", ".")
+
+
+def get_excluded_arg_keys():
+    """Argument keys to strip from trace output.
+
+    These are runtime-specific handles (e.g. device semaphores) that vary
+    between runs and should not affect configuration identity or hashing.
+    """
+    return {
+        "multi_device_global_semaphore",
+        "barrier_semaphore",
+    }
 
 
 def get_excluded_operations():
@@ -327,8 +368,11 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
                     arguments[arg_key] = arg_value
 
         # Add kwargs as named arguments (they come after positional args)
+        excluded_arg_keys = get_excluded_arg_keys()
         kwargs = data.get("kwargs", {})
         for key, value in kwargs.items():
+            if key in excluded_arg_keys:
+                continue
             # Also check kwargs for mesh_device info
             if isinstance(value, dict) and "mesh_device" in value:
                 mesh_data = value["mesh_device"]
@@ -393,6 +437,10 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
         # Note: tensor_placements are now stored per-tensor in the arguments
         # instead of globally in machine_info, to avoid ambiguity
 
+        # Strip Python object memory addresses (e.g. global_semaphore at 0x...)
+        # from argument values so they don't pollute deduplication or storage
+        _sanitize_object_addresses(arguments)
+
         return {
             "operation": operation_name,
             "arguments": arguments,
@@ -402,6 +450,69 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
     except Exception as e:
         print(f"⚠️ Error processing {json_file}: {e}")
         return None
+
+
+def _sanitize_object_addresses(obj):
+    """Recursively strip Python object memory addresses from all string values."""
+    if isinstance(obj, dict):
+        for k in list(obj.keys()):
+            v = obj[k]
+            if isinstance(v, str):
+                obj[k] = _strip_object_addresses(v)
+            elif isinstance(v, (dict, list)):
+                _sanitize_object_addresses(v)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if isinstance(item, str):
+                obj[i] = _strip_object_addresses(item)
+            elif isinstance(item, (dict, list)):
+                _sanitize_object_addresses(item)
+
+
+_OBJECT_ADDR_RE = re.compile(r" at 0x[0-9a-fA-F]+")
+
+
+def _strip_object_addresses(value):
+    """Strip Python object memory addresses from a string value.
+
+    Converts e.g. '<ttnn._ttnn.global_semaphore.global_semaphore object at 0x782ac28d15f0>'
+    to '<ttnn._ttnn.global_semaphore.global_semaphore object>' so that
+    runtime pointer values don't affect deduplication or hashing.
+    """
+    if isinstance(value, str):
+        return _OBJECT_ADDR_RE.sub("", value)
+    return value
+
+
+def _normalize_for_hash(obj):
+    """
+    Normalize arguments in-place for stable config_hash computation.
+
+    Strips device-specific fields and canonicalizes representations so
+    that the same logical configuration always produces the same hash,
+    regardless of capture environment or serialization quirks.
+    """
+    if isinstance(obj, dict):
+        # memory_config.hash is a device-specific pointer — remove it
+        if "hash" in obj and isinstance(obj["hash"], int):
+            del obj["hash"]
+
+        # shard_spec: canonicalize None/null → string "None"
+        if "shard_spec" in obj and obj["shard_spec"] is None:
+            obj["shard_spec"] = "None"
+
+        for k in list(obj.keys()):
+            v = obj[k]
+            if isinstance(v, str):
+                obj[k] = _strip_object_addresses(v)
+            else:
+                _normalize_for_hash(v)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if isinstance(item, str):
+                obj[i] = _strip_object_addresses(item)
+            else:
+                _normalize_for_hash(item)
 
 
 def update_master_file(master_file_path, operations, test_source):
@@ -502,8 +613,10 @@ def update_master_file(master_file_path, operations, test_source):
                         except:
                             pass
 
-            # Compute SHA-256 hash
-            normalized = {"operation": op_name, "arguments": op_args, "hardware": hardware, "mesh": mesh_config}
+            # Compute SHA-256 hash (normalize a copy so stored arguments are untouched)
+            hash_args = copy.deepcopy(op_args)
+            _normalize_for_hash(hash_args)
+            normalized = {"operation": op_name, "arguments": hash_args, "hardware": hardware, "mesh": mesh_config}
             config_hash = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
 
             config_entry = {
@@ -893,7 +1006,10 @@ def fix_memory_config_recursive(obj, fixed_count_ref):
     if isinstance(obj, dict):
         # Check if this dict is a memory_config with shard_spec
         if "shard_spec" in obj and isinstance(obj["shard_spec"], str):
-            if obj["shard_spec"].startswith("ShardSpec{"):
+            if obj["shard_spec"] == "None":
+                obj["shard_spec"] = None
+                fixed_count_ref[0] += 1
+            elif obj["shard_spec"].startswith("ShardSpec{"):
                 parsed = parse_shard_spec_string(obj["shard_spec"])
                 if isinstance(parsed, dict):
                     obj["shard_spec"] = parsed
@@ -986,6 +1102,82 @@ def fix_memory_config_in_json(json_file):
 
         traceback.print_exc()
         return 0
+
+
+def recompute_config_hashes(json_file):
+    """
+    Recompute config_hash for every configuration in a master JSON file
+    using _normalize_for_hash to strip device-specific fields and
+    canonicalize shard_spec before hashing.
+    """
+    import hashlib
+    import re as _re
+
+    print(f"🔄 Recomputing config hashes in {os.path.basename(json_file)}...")
+
+    with open(json_file, "r") as f:
+        data = json.load(f)
+
+    updated = 0
+    for op_name, op_data in data.get("operations", {}).items():
+        for config in op_data.get("configurations", []):
+            old_hash = config.get("config_hash")
+            op_args = config.get("arguments", {})
+
+            machine_info = None
+            executions = config.get("executions", [])
+            if executions and isinstance(executions[0], dict):
+                machine_info = executions[0].get("machine_info")
+
+            hardware = None
+            if machine_info:
+                board_type = machine_info.get("board_type")
+                if board_type:
+                    device_series = machine_info.get("device_series")
+                    if isinstance(device_series, list):
+                        device_series = device_series[0] if device_series else None
+                    hardware = (board_type, device_series, machine_info.get("card_count", 1))
+
+            mesh_config = None
+            if machine_info and "tensor_placements" in machine_info:
+                placements = machine_info.get("tensor_placements", [])
+                if placements:
+                    p = placements[0]
+                    mesh_shape_str = p.get("mesh_device_shape")
+                    if mesh_shape_str:
+                        try:
+                            mesh_shape = (
+                                json.loads(mesh_shape_str) if isinstance(mesh_shape_str, str) else mesh_shape_str
+                            )
+                            if mesh_shape:
+                                placement_str = p.get("placement", "")
+                                shard_dim = None
+                                if "PlacementShard" in placement_str:
+                                    match = _re.search(r"PlacementShard\((\d+)\)", placement_str)
+                                    if match:
+                                        shard_dim = int(match.group(1))
+                                mesh_config = {
+                                    "mesh_shape": mesh_shape,
+                                    "placement_type": "shard" if shard_dim is not None else "replicate",
+                                    "shard_dim": shard_dim,
+                                }
+                        except Exception:
+                            pass
+
+            hash_args = copy.deepcopy(op_args)
+            _normalize_for_hash(hash_args)
+            normalized = {"operation": op_name, "arguments": hash_args, "hardware": hardware, "mesh": mesh_config}
+            new_hash = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+
+            if new_hash != old_hash:
+                config["config_hash"] = new_hash
+                updated += 1
+
+    with open(json_file, "w") as f:
+        json.dump(data, f, indent=2)
+
+    print(f"✅ Recomputed hashes: {updated} changed")
+    return updated
 
 
 def main():

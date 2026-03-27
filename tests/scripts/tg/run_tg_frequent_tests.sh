@@ -39,12 +39,10 @@ run_tg_tests() {
 
   elif [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running unit/distributed run_tg_frequent_tests"
-    ## Force IRAM enabled because these tests mixes fabric and non-fabric ccl tests. The IRAM setting must be consistent
-    ## due to the erisc kernel wrapper being affected, and that kernel being persistent through the workload.
-    ## The jit build also has different behaviour for IRAM enabled/disabled so we enable it globally.
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
+    ## ERISC IRAM is always on for WH; these tests mix fabric and non-fabric CCL and rely on consistent jit/build behavior.
+    pytest tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
+    pytest tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
+    pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
 
   elif [[ "$1" == "sd35" ]]; then
     echo "LOG_METAL: running stable diffusion 3.5 Large run_tg_frequent_tests"
@@ -69,7 +67,7 @@ run_tg_tests() {
     pytest models/tt_dit/tests/models/wan2_2/test_rope.py -k "wh_4x8sp1tp0"; fail+=$?
     pytest models/tt_dit/tests/models/wan2_2/test_attention_wan.py -k "wh_4x8sp1tp0"; fail+=$?
     pytest models/tt_dit/tests/models/wan2_2/test_transformer_wan.py -k "transformer_block and wh_4x8sp1tp0 or short_seq-wh_4x8sp1tp0 and not yes_load_cache and not model_caching"; fail+=$?
-    pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "(test_wan_decoder or test_wan_encoder) and 4x8 and real_weights and check_output and _1f"; fail+=$?
+    pytest models/tt_dit/tests/models/wan2_2/test_vae_wan2_1.py -k "(test_wan_encoder or test_wan_decoder) and 4x8 and real_weights and check_output and _1f and not no_cache_full_T"; fail+=$?
     pytest models/tt_dit/tests/encoders/umt5/test_umt5.py -k "wh_glx" ; fail+=$?
     pytest models/tt_dit/tests/unit/test_embeddings.py::test_wan_time_text_image_embedding  -k "wh_glx" ; fail+=$?
 

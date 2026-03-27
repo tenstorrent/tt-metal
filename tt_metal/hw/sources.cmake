@@ -7,6 +7,7 @@ set(HW_JIT_API_HEADERS
     inc/api/debug/assert.h
     inc/api/debug/dprint.h
     inc/api/debug/timing_perturbation.h
+    inc/api/debug/device_print.h
     inc/api/debug/dprint_pages.h
     inc/api/debug/dprint_tensix.h
     inc/api/debug/dprint_tile.h
@@ -94,6 +95,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/where.h
     inc/api/compute/ema.h
     inc/api/compute/experimental/mul_reduce_scalar.h
+    inc/api/compute/experimental/semaphore.h
     inc/api/compute/binary_fmod.h
     inc/api/compute/gcd.h
     inc/api/compute/layernorm.h
@@ -132,6 +134,8 @@ set(HW_JIT_API_HEADERS
     inc/experimental/core_local_mem.h
     inc/experimental/tensor.h
     inc/hostdev/dev_msgs.h
+    inc/hostdev/device_print_common.h
+    inc/hostdev/device_print_structures.h
     inc/hostdev/fabric_telemetry_msgs.h
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
@@ -140,8 +144,6 @@ set(HW_JIT_API_HEADERS
     inc/internal/bit_utils.h
     inc/internal/circular_buffer_interface.h
     inc/internal/circular_buffer_init.h
-    inc/internal/dataflow_buffer_interface.h
-    inc/internal/dataflow_buffer_init.h
     inc/internal/firmware_common.h
     inc/internal/mod_div_lib.h
     inc/internal/risc_attribs.h
@@ -180,6 +182,10 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-1xx/blackhole/tdma_xmov.h
     inc/internal/tt-1xx/blackhole/tensix.h
     inc/internal/tt-1xx/blackhole/tensix_types.h
+    inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h
+    inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h
+    inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h
+    inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_isr.h
     inc/internal/tt-2xx/quasar/c_tensix_core.h
     inc/internal/tt-2xx/quasar/cfg_defines.h
     inc/internal/tt-2xx/quasar/core_config.h

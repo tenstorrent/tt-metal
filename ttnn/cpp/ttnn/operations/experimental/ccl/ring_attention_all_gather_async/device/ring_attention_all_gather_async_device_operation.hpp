@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <tuple>
+#include <vector>
+
 #include "ring_attention_all_gather_async_device_operation_types.hpp"
 #include "ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::experimental::prim {
 
@@ -32,26 +34,37 @@ struct RingAttentionAllGatherAsyncDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& persistent_output_buffer,
-        int32_t dim,
-        const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-        uint32_t cluster_axis,
-        const MeshDevice& mesh_device,
-        ttnn::ccl::Topology topology,
-        uint32_t num_links,
-        const std::optional<MemoryConfig>& memory_config,
-        std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 };
+
+std::tuple<RingAttentionAllGatherAsyncParams, RingAttentionAllGatherAsyncInputs>
+ring_attention_all_gather_async_build_operation_args(
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& persistent_output_buffer,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
 
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-constexpr auto ring_attention_all_gather_async = ttnn::register_operation<
-    "ttnn::prim::ring_attention_all_gather_async",
-    ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation>();
+
+std::vector<Tensor> ring_attention_all_gather_async(
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& persistent_output_buffer,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id);
+
 }  // namespace ttnn::prim

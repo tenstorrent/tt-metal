@@ -121,6 +121,7 @@ def mesh_device(request, device_params):
             return system_name_to_mesh_shape(system_name.upper())
 
     mesh_shape = get_mesh_shape(requested_system_name)
+    device_params.setdefault("dispatch_core_axis", ttnn.DispatchCoreAxis.COL)
     updated_device_params = get_updated_device_params(device_params)
 
     fabric_config = updated_device_params.pop("fabric_config", None)
@@ -204,7 +205,7 @@ def hf_config_short(request, hf_config):
     if max_seq_len_override is not None:
         hf_config_out.max_seq_len = int(max_seq_len_override)
     else:
-        hf_config_out.max_seq_len = 128
+        hf_config_out.max_seq_len = 512
     return hf_config_out
 
 

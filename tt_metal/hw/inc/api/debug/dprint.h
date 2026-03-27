@@ -38,7 +38,7 @@
 #include "internal/debug/dprint_buffer.h"
 #include "waypoint.h"
 
-#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && !defined(USE_DEVICE_PRINT)
 #define DPRINT DebugPrinter()
 #else
 #define DPRINT \
@@ -317,7 +317,7 @@ const uint8_t* DebugPrintTypeAddr<char*>(char** val) {
 
 struct DebugPrinter {
     DebugPrinter() {
-#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && !defined(USE_DEVICE_PRINT)
         volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer = get_debug_print_buffer();
         if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC) {
             // Host debug print server writes this value
@@ -434,7 +434,7 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
 
 template <typename T>
 __attribute__((__noinline__)) DebugPrinter operator<<(DebugPrinter dp, T val) {
-#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && !defined(PROFILE_KERNEL)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && !defined(USE_DEVICE_PRINT) && !defined(PROFILE_KERNEL)
     DebugPrintData data{
         .sz = DebugPrintTypeToSize<T>(val),  // includes terminating 0 for char*
         .data_ptr = DebugPrintTypeAddr<T>(&val),
@@ -468,6 +468,11 @@ template DebugPrinter operator<< <BF16>(DebugPrinter, BF16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);
 
+// bool has no DebugPrintTypeToId specialization; cast to uint8_t (0 or 1) and reuse that path.
+inline DebugPrinter operator<<(DebugPrinter dp, bool val) {
+    return dp << static_cast<uint8_t>(val);
+}
+
 // This allows printing of any (non char) pointer types as uint32_t
 template <typename T, typename = std::enable_if_t<!std::is_same_v<std::remove_cv_t<T>, char>>>
 DebugPrinter operator<<(DebugPrinter dp, T* val) {
@@ -480,4 +485,8 @@ DebugPrinter operator<<(DebugPrinter dp, T* val) {
 // Tile printing only supported in kernels
 #if defined(KERNEL_BUILD)
 #include "dprint_tile.h"
+#endif
+
+#if defined(USE_DEVICE_PRINT)
+#include "device_print.h"
 #endif

@@ -193,8 +193,16 @@ def test_autoencoder_kl_wan():
     ],
 )
 @pytest.mark.parametrize("mean, std", [(0, 1), (2, 3), (-2, -3)])
-def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
+@pytest.mark.parametrize(
+    "fused_activation", [None, (ttnn.UnaryOpType.SILU, torch.nn.functional.silu)], ids=["none", "silu"]
+)
+def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std, fused_activation):
     from diffusers.models.autoencoders.autoencoder_kl_wan import WanRMS_norm
+
+    torch_activation = None
+    ttnn_activation = None
+    if fused_activation is not None:
+        (ttnn_activation, torch_activation) = fused_activation
 
     torch_dtype = torch.float32
     bias = False
@@ -207,6 +215,7 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
         norm_elementwise_affine=True,
         bias=bias,
         mesh_device=device,
+        fused_activation=ttnn_activation,
     )
     state_dict = torch_model.state_dict()
     state_dict["weight"] = state_dict["gamma"].squeeze()  # remove broadcasting dimensions
@@ -223,6 +232,9 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
 
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor)
+        if torch_activation is not None:
+            torch_output = torch_activation(torch_output)
+
     tt_output = tt_model(tt_input_tensor)
 
     tt_output_torch = ttnn.to_torch(tt_output)
@@ -238,11 +250,19 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
     ("B, C, T, H, W"),
     [
         (1, 384, 1, 90, 160),  # decoder.mid_block.resnets.0.norm1
+        (1, 384, 3, 90, 160),
+        (1, 384, 8, 90, 160),
         (1, 384, 1, 60, 104),  # decoder.mid_block.resnets.0.norm1
+        (1, 384, 3, 60, 104),
+        (1, 384, 8, 60, 104),
     ],
     ids=[
-        "720p",
-        "480p",
+        "Tdim1-720p",
+        "Tdim3-720p",
+        "Tdim8-720p",
+        "Tdim1-480p",
+        "Tdim3-480p",
+        "Tdim8-480p",
     ],
 )
 @pytest.mark.parametrize("mean, std", [(0, 1)])
@@ -1257,10 +1277,6 @@ def test_wan_decoder3d(
         )
         tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
         tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
-        # Trim padding on output channels
-        # DEBUG: REMOVING
-        logger.info(f"trimming output channels from {tt_output_torch.shape} to {out_channels}")
-        tt_output_torch = tt_output_torch[:, :out_channels]
 
         logger.info(f"checking output")
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
@@ -1341,6 +1357,7 @@ def test_wan_decoder3d(
 @pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize("real_weights", [True, False], ids=["real_weights", "fake_weights"])
 @pytest.mark.parametrize("skip_check", [True, False], ids=["skip_check", "check_output"])
+@pytest.mark.parametrize("use_cache", [True, False], ids=["cached", "no_cache_full_T"])
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
@@ -1375,7 +1392,23 @@ def test_wan_decoder3d(
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_decoder(
-    mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, real_weights, skip_check, dtype, MIN_PCC, MAX_RMSE
+    mesh_device,
+    B,
+    C,
+    T,
+    H,
+    W,
+    mean,
+    std,
+    h_axis,
+    w_axis,
+    num_links,
+    real_weights,
+    skip_check,
+    use_cache,
+    dtype,
+    MIN_PCC,
+    MAX_RMSE,
 ):
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
@@ -1444,12 +1477,9 @@ def test_wan_decoder(
         dtype=tt_input_dtype,
     )
 
-    logger.info(f"running tt model")
+    logger.info(f"running tt model (use_cache={use_cache})")
     start = time.time()
-    tt_output, new_logical_h = tt_model(
-        tt_input_tensor,
-        logical_h,
-    )
+    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, use_cache=use_cache)
 
     concat_dims = [None, None]
     concat_dims[h_axis] = 3
@@ -1465,10 +1495,7 @@ def test_wan_decoder(
         logger.info(f"running torch model")
         start = time.time()
         with torch.no_grad():
-            torch_output = torch_model.decode(
-                torch_input_tensor,
-                return_dict=False,
-            )[0]
+            torch_output = torch_model.decode(torch_input_tensor, return_dict=False)[0]
         logger.info(f"torch time taken: {time.time() - start}")
         logger.info(f"torch output shape: {torch_output.shape}")
 
@@ -1612,10 +1639,6 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         )
         tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
         tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
-
-        # Trim padding on output channels
-        logger.info(f"trimming output channels from {tt_output_torch.shape} to {out_channels}")
-        tt_output_torch = tt_output_torch[:, :out_channels]
 
         logger.info(f"checking output")
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)

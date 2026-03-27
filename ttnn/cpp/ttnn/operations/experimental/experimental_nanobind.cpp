@@ -53,13 +53,18 @@
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
-#include "ttnn/operations/experimental/where/where_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
+#include "ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -116,6 +121,8 @@ void py_module(nb::module_& mod) {
     matmul::detail::bind_attn_matmul(mod);
     matmul::detail::bind_attn_matmul_from_cache(mod);
     matmul::detail::bind_group_attn_matmul(mod);
+    deepseek_prefill::masked_bincount::detail::bind_experimental_masked_bincount_operation(mod);
+    deepseek_prefill::offset_cumsum::detail::bind_experimental_offset_cumsum_operation(mod);
 
     plusone::detail::bind_experimental_plusone_operation(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
@@ -131,13 +138,19 @@ void py_module(nb::module_& mod) {
 
     broadcast_to::detail::bind_broadcast_to(mod);
 
-    operations::experimental::ternary::detail::bind_where(mod);
     minimal_matmul::detail::bind_minimal_matmul(mod);
     minimal_matmul::detail::bind_minimal_matmul_split(mod);
 
     isin::detail::bind_isin_operation(mod);
     deepseek::moe::detail::bind_moe_gate_mm(mod);
+    topk_router_gpt::detail::bind_topk_router_gpt(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
+
+    // DeepSeek prefill MoE operations
+    deepseek_prefill::detail::bind_dispatch(mod);
+    deepseek_prefill::detail::bind_combine(mod);
+
+    deepseek_moe_post_combine_tilize::detail::bind_deepseek_moe_post_combine_tilize(mod);
 }
 
 }  // namespace ttnn::operations::experimental
