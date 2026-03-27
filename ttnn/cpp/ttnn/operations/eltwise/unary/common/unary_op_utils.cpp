@@ -563,15 +563,32 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(param1))};
         }
         case UnaryOpType::RRELU: {
-            TT_FATAL(params.size() == 2, "Expected rrelu to take 2 parameters");
-            float param1 = params[1];
-            return {
-                "rrelu_tile_init();",
-                fmt::format(
-                    "rrelu_tile({}, {:#x}u, {:#x}u);",
-                    idst,
-                    std::bit_cast<uint32_t>(param0),
-                    std::bit_cast<uint32_t>(param1))};
+            TT_FATAL(
+                params.size() == 2 || params.size() == 3,
+                "Expected rrelu to take 2 parameters (eval) or 3 parameters (training)");
+            if (params.size() == 3) {
+                // Training mode: params = [lower, range, seed_as_float]
+                float range = params[1];
+                float seed_f = params[2];
+                uint32_t seed = std::bit_cast<uint32_t>(seed_f);
+                return {
+                    fmt::format("rrelu_tile_training_init({:#x}u);", seed),
+                    fmt::format(
+                        "rrelu_tile_training({}, {:#x}u, {:#x}u);",
+                        idst,
+                        std::bit_cast<uint32_t>(param0),
+                        std::bit_cast<uint32_t>(range))};
+            } else {
+                // Eval mode: params = [lower, upper]
+                float param1 = params[1];
+                return {
+                    "rrelu_tile_init();",
+                    fmt::format(
+                        "rrelu_tile({}, {:#x}u, {:#x}u);",
+                        idst,
+                        std::bit_cast<uint32_t>(param0),
+                        std::bit_cast<uint32_t>(param1))};
+            }
         }
         case UnaryOpType::HARDMISH: {
             return {

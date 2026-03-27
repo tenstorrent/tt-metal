@@ -66,6 +66,16 @@ Tensor unary_composite_3param_to_4param_wrapper(
     return Func(input_tensor, parameter_a, parameter_b, memory_config, std::nullopt);
 }
 
+// Wrapper for rrelu: two floats + bool training + memory_config
+Tensor rrelu_nanobind_wrapper(
+    const Tensor& input_tensor,
+    float lower,
+    float upper,
+    bool training,
+    const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::rrelu(input_tensor, lower, upper, training, memory_config, std::nullopt);
+}
+
 void bind_unary_clamp(nb::module_& mod) {
     const char* doc = R"doc(
         Applies clamp to :attr:`input_tensor` element-wise.
@@ -2220,15 +2230,40 @@ void py_module(nb::module_& mod) {
     bind_unary_clamp(mod);
     bind_unary_composite_floats_with_default<"selu", &ttnn::selu>(
         mod, "scale", "Scale value", 1.0507, "alpha", "Alpha value", 1.67326);
-    bind_unary_composite_floats_with_default<"rrelu", &ttnn::rrelu>(
+    ttnn::bind_function<"rrelu">(
         mod,
-        "lower",
-        "Lower bound of the uniform distribution for the negative slope",
-        0.125f,
-        "upper",
-        "Upper bound of the uniform distribution for the negative slope",
-        0.3333333333f,
-        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+        R"doc(
+        Performs RReLU (Randomized Leaky ReLU) on :attr:`input_tensor`.
+
+        RReLU(x) = x if x >= 0
+        RReLU(x) = a * x if x < 0
+
+        In eval mode (training=False): a = (lower + upper) / 2 (fixed slope).
+        In training mode (training=True): a ~ Uniform(lower, upper) per element (random slope).
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword args:
+            lower (float, optional): Lower bound of the uniform distribution. Defaults to `0.125`.
+            upper (float, optional): Upper bound of the uniform distribution. Defaults to `0.3333333333`.
+            training (bool, optional): If True, use random per-element slopes. Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes: FLOAT32, BFLOAT16, BFLOAT8_B
+        )doc",
+        ttnn::overload_t{
+            &rrelu_nanobind_wrapper,
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("lower") = 0.125f,
+            nb::arg("upper") = 0.3333333333f,
+            nb::arg("training") = false,
+            nb::arg("memory_config") = nb::none()});
     bind_unary_composite_floats_with_default<"hardtanh", &ttnn::hardtanh>(
         mod, "min_val", "min value", -1.0f, "max_val", "max value", 1.0f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_threshold<"threshold", &ttnn::threshold>(

@@ -329,6 +329,7 @@ Tensor rrelu(
     const Tensor& input_tensor,
     float lower = 0.125f,
     float upper = 0.3333333333f,
+    bool training = false,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 

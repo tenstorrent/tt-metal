@@ -4,6 +4,9 @@
 
 #include "unary.hpp"
 
+#include <bit>
+#include <chrono>
+
 #include "common/unary_op_types.hpp"
 #include "device/unary_device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -387,10 +390,28 @@ Tensor rrelu(
     const Tensor& input_tensor,
     float lower,
     float upper,
+    bool training,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    return ttnn::detail::unary_impl(
-        input_tensor, {UnaryWithParam{UnaryOpType::RRELU, {lower, upper}}}, memory_config, optional_output_tensor);
+    if (training) {
+        // Training mode: generate random seed and pass [lower, range, seed_as_float]
+        float range = upper - lower;
+        // Generate a non-zero seed from a simple hash of the current time
+        uint32_t seed = static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count() & 0xFFFFFFFF);
+        if (seed == 0) {
+            seed = 1;  // Ensure non-zero seed for PRNG
+        }
+        float seed_f = std::bit_cast<float>(seed);
+        return ttnn::detail::unary_impl(
+            input_tensor,
+            {UnaryWithParam{UnaryOpType::RRELU, {lower, range, seed_f}}},
+            memory_config,
+            optional_output_tensor);
+    } else {
+        // Eval mode: pass [lower, upper], kernel computes slope = (lower + upper) / 2
+        return ttnn::detail::unary_impl(
+            input_tensor, {UnaryWithParam{UnaryOpType::RRELU, {lower, upper}}}, memory_config, optional_output_tensor);
+    }
 }
 
 Tensor swish(
