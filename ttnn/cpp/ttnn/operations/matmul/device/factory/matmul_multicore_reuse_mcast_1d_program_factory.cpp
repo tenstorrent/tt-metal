@@ -295,14 +295,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
 
     const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
     const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
-    const bool batch_fused = (M != M_per_batch);
-    TT_FATAL(
-        !(transpose_a && batch_fused && M_per_batch > 1),
-        "transpose_a with fuse_batch is not supported when M_per_batch > 1 (M_per_batch={}, M={})",
-        M_per_batch,
-        M);
-    const auto in0_tensor_stride_w = (transpose_a && !batch_fused) ? M_per_batch : 1;
-    const auto in0_tensor_stride_h = (transpose_a && !batch_fused) ? 1 : K;
+    const auto [in0_tensor_stride_w, in0_tensor_stride_h] =
+        operations::matmul::utilities::get_in0_transpose_strides(M, M_per_batch, transpose_a, K);
     const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
     const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
     const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
@@ -1233,14 +1227,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
     const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
-    const bool batch_fused = (M != M_per_batch);
-    TT_FATAL(
-        !(transpose_a && batch_fused && M_per_batch > 1),
-        "transpose_a with fuse_batch is not supported when M_per_batch > 1 (M_per_batch={}, M={})",
-        M_per_batch,
-        M);
-    const auto in0_tensor_stride_w = (transpose_a && !batch_fused) ? M_per_batch : 1;
-    const auto in0_tensor_stride_h = (transpose_a && !batch_fused) ? 1 : K;
+    const auto [in0_tensor_stride_w, in0_tensor_stride_h] =
+        operations::matmul::utilities::get_in0_transpose_strides(M, M_per_batch, transpose_a, K);
     const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
     const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
     const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
