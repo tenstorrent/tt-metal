@@ -719,6 +719,7 @@ struct FlashMLADecode {
             }
             cb_push_back(sdpa_output_cb, out_chunk_tiles);
             tile_regs_commit();
+            tile_regs_wait();
             tile_regs_release();
             sdpa_custom_mm_block_uninit();
             MATH(t6_semaphore_wait_on_max<p_stall::STALL_SFPU>(semaphore::FPU_SFPU));

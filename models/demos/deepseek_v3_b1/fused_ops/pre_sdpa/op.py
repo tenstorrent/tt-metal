@@ -162,8 +162,8 @@ class PreSDPA:
     @staticmethod
     def get_num_semaphores(skip_ccl=False, num_links=1):
         if skip_ccl:
-            return 10
-        return 10 + DeepseekMinimalBroadcast.get_num_semaphores(num_links)
+            return 11
+        return 11 + DeepseekMinimalBroadcast.get_num_semaphores(num_links)
 
     @staticmethod
     def create_semaphores(mesh_device, skip_ccl=False, num_links=1):
@@ -495,7 +495,8 @@ class PreSDPA:
         # Phase 1: QNOPE first halves, Phase 2: QNOPE second halves, Phase 3: QROPE
         nope_phase1_semaphore_addr = gather_noc0_receiver_semaphore_addr  # ID 2
         nope_phase2_semaphore_addr = gather_noc1_receiver_semaphore_addr  # ID 3
-        rope_semaphore_addr = mcast_data_sender_semaphore_addr  # ID 0 (mcast completed before CreateQHeads)
+        rope_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
+        semaphore_index += 1
 
         # Semaphore IDs for MLA
         mla_reducer_semaphore_addr = ttnn.get_global_semaphore_address(semaphores[semaphore_index])
