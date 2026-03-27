@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <random>
 #include <unordered_set>
+#include <string>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -30,6 +31,39 @@
 
 namespace tt::tt_metal::experimental::tt_fabric {
 namespace {
+
+// BH Galaxy half-pod pairing: all ASICs in a mesh subgraph must sit on trays 1&3 only, or trays 2&4 only.
+static std::string format_uint_set(const std::set<uint32_t>& values) {
+    std::string out;
+    for (uint32_t v : values) {
+        if (!out.empty()) {
+            out += ',';
+        }
+        out += std::to_string(v);
+    }
+    return out;
+}
+
+static void expect_bh_halfpod_tray_pairing_for_graph_nodes(
+    const std::string& context,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd,
+    const AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_graph) {
+    std::set<uint32_t> trays;
+    std::vector<tt::tt_metal::AsicID> sorted_nodes(
+        adjacency_graph.get_nodes().begin(), adjacency_graph.get_nodes().end());
+    std::sort(sorted_nodes.begin(), sorted_nodes.end(), [](const auto& a, const auto& b) { return *a < *b; });
+    for (const auto& node : sorted_nodes) {
+        const uint32_t tray = *psd.get_tray_id(node);
+        trays.insert(tray);
+        EXPECT_GE(tray, 1u) << context << " asic_id=" << *node;
+        EXPECT_LE(tray, 4u) << context << " asic_id=" << *node;
+    }
+    const bool only_13 = std::all_of(trays.begin(), trays.end(), [](uint32_t t) { return t == 1u || t == 3u; });
+    const bool only_24 = std::all_of(trays.begin(), trays.end(), [](uint32_t t) { return t == 2u || t == 4u; });
+    EXPECT_TRUE(only_13 || only_24)
+        << context << " — BH Galaxy nodes must use only tray pair {1,3} or only {2,4}; distinct trays=["
+        << format_uint_set(trays) << "]";
+}
 
 // =============================================================================
 // Test Fixture with Helper Methods
@@ -3998,6 +4032,9 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_ThreeP
         // Check that there should be 32 nodes in the graph
         EXPECT_EQ(adjacency_graph.get_nodes().size(), 8u);
 
+        expect_bh_halfpod_tray_pairing_for_graph_nodes(
+            std::string("[ThreePod16x8_Blitz2x4] mesh_id=") + std::to_string(*mesh_id), psd, adjacency_graph);
+
         // Check that each node should have 2 - 3 neighbors
         for (const auto& node : adjacency_graph.get_nodes()) {
             EXPECT_GE(
@@ -4386,6 +4423,9 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     for (const auto& [mesh_id, adjacency_graph] : physical_multi_mesh_graph.mesh_adjacency_graphs_) {
         // Check that there should be 8 nodes in the graph (2x4)
         EXPECT_EQ(adjacency_graph.get_nodes().size(), 8u);
+
+        expect_bh_halfpod_tray_pairing_for_graph_nodes(
+            std::string("[SingleBHGalaxy_2x4Pipeline] mesh_id=") + std::to_string(*mesh_id), psd, adjacency_graph);
 
         // Check that each node should have neighbors (1D topology, so 1-2 neighbors)
         for (const auto& node : adjacency_graph.get_nodes()) {
