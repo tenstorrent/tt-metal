@@ -126,6 +126,11 @@ def ensure_tile_layout(tensor: ttnn.Tensor) -> ttnn.Tensor:
     return tensor
 
 
+def safe_permute(tensor, dims):
+    """Thin wrapper around ``ttnn.permute`` for symbiote modules (single import site)."""
+    return ttnn.permute(tensor, tuple(dims))
+
+
 def optimized_tree_map_with_only_dict_list(*args, **kwargs):
     # don't use pytorch
     from collections.abc import Mapping, Sequence
