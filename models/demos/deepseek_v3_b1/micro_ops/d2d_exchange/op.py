@@ -323,9 +323,6 @@ class SocketInterface:
         assert my_downstream_socket.get_active_cores()[0] == my_core_coord
 
         num_upstream = len(my_upstream_sockets)
-        assert num_upstream == 8, "Multi-upstream kernel requires exactly 8 upstream sockets"
-        assert num_upstream % 2 == 0
-
         num_sockets_per_risc = num_upstream // 2
         brisc_sockets = my_upstream_sockets[:num_sockets_per_risc]
         ncrisc_sockets = my_upstream_sockets[num_sockets_per_risc:]
@@ -391,7 +388,7 @@ class SocketInterface:
         def _build_ct_args(socket_addrs, socket_start_idx, pkt_hdr_slot_start):
             ct_args = [
                 downstream_socket_config_addr,  # 0: sender_socket_config_addr
-                num_sockets_per_risc,  # 1: num_upstream_sockets_per_risc
+                len(socket_addrs),  # 1: num_sockets_this_risc
                 self.upstream_page_size,  # 2: upstream_page_size
                 ttnn.get_global_semaphore_address(self.termination_semaphore),  # 3
                 self.page_size,  # 4: page_size (total sender page)
@@ -406,7 +403,7 @@ class SocketInterface:
                 socket_start_idx,  # 13
                 pkt_hdr_slot_start,  # 14
             ]
-            ct_args.extend(socket_addrs)  # 15-18
+            ct_args.extend(socket_addrs)  # 15..15+len(socket_addrs)-1
             return ct_args
 
         core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(my_core_coord.core_coord, my_core_coord.core_coord)])

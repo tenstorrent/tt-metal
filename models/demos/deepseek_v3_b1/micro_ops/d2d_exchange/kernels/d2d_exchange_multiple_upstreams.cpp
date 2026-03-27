@@ -13,6 +13,7 @@
 //   ncrisc_done_sem – NCRISC -> BRISC: NCRISC finished its sockets
 //
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -35,18 +36,29 @@ constexpr uint32_t ncrisc_done_sem_addr = get_compile_time_arg_val(12);
 constexpr uint32_t socket_start_idx = get_compile_time_arg_val(13);
 constexpr uint32_t packet_header_slot_start = get_compile_time_arg_val(14);
 
-// Up to 4 upstream receiver sockets per RISC (hardcoded to 8 total and split evenly)
-constexpr uint32_t receiver_socket_config_addr_0 = get_compile_time_arg_val(15);
-constexpr uint32_t receiver_socket_config_addr_1 = get_compile_time_arg_val(16);
-constexpr uint32_t receiver_socket_config_addr_2 = get_compile_time_arg_val(17);
-constexpr uint32_t receiver_socket_config_addr_3 = get_compile_time_arg_val(18);
+constexpr uint32_t receiver_socket_addrs_start_idx = 15;
 
-constexpr uint32_t receiver_socket_config_addrs[4] = {
-    receiver_socket_config_addr_0,
-    receiver_socket_config_addr_1,
-    receiver_socket_config_addr_2,
-    receiver_socket_config_addr_3,
+template <size_t START_IDX, size_t COUNT, size_t I = 0>
+struct CTAArrayFiller {
+    static constexpr void fill(std::array<uint32_t, COUNT>& arr) {
+        arr[I] = get_compile_time_arg_val(START_IDX + I);
+        if constexpr (I + 1 < COUNT) {
+            CTAArrayFiller<START_IDX, COUNT, I + 1>::fill(arr);
+        }
+    }
 };
+
+template <size_t START_IDX, size_t COUNT>
+constexpr std::array<uint32_t, COUNT> fill_ct_args_array() {
+    std::array<uint32_t, COUNT> arr{};
+    if constexpr (COUNT > 0) {
+        CTAArrayFiller<START_IDX, COUNT>::fill(arr);
+    }
+    return arr;
+}
+
+constexpr auto receiver_socket_config_addrs =
+    fill_ct_args_array<receiver_socket_addrs_start_idx, num_sockets_this_risc>();
 
 FORCE_INLINE void write_data_to_local_core_with_ack(uint32_t l1_read_addr, uint64_t dst_addr, uint32_t size) {
     noc_async_write(l1_read_addr, dst_addr, size);
