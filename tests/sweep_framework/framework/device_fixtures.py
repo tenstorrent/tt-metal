@@ -10,7 +10,7 @@ def default_device():
     """
     import ttnn
 
-    device = ttnn.open_device(device_id=0, l1_small_size=79104)
+    device = ttnn.open_device(device_id=0)
     device_name = ttnn.get_arch_name()
 
     yield (device, device_name)
