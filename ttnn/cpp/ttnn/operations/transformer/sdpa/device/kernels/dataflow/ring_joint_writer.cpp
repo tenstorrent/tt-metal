@@ -489,8 +489,8 @@ void kernel_main() {
                 return TRID_INNER;
             };
 
-            for (uint32_t q_iter = 0; q_iter + global_q_start < global_q_end; ++q_iter) {
-                uint32_t global_q_chunk = remap_q_index(global_q_start + q_iter, num_q_chunks, use_zigzag_balancing);
+            for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
+                uint32_t global_q_chunk = remap_q_index(global_q_start + q_index, num_q_chunks, use_zigzag_balancing);
 
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
