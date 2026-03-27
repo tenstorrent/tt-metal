@@ -313,8 +313,7 @@ class TtRoutedExpert(LightweightModule):
         # dispatched_buffer: (experts_per_chip, max_tokens, emb_dim)
         # We process expert by expert and reassemble
 
-        # expert_outputs = ttnn.empty_like(dispatched_buffer)
-        expert_outputs = ttnn.clone(dispatched_buffer)
+        expert_outputs = ttnn.empty_like(dispatched_buffer)
         for local_expert in range(self.experts_per_chip):
             signpost(f"Expert {local_expert+1}/{self.experts_per_chip}")
 
