@@ -163,11 +163,11 @@ def test_post_sdpa(
     torch_kv_b1_proj_dummy = torch.zeros(
         (kv_b12_cfg.kv_b1_proj_shape[0] * num_tp, kv_b12_cfg.kv_b1_proj_shape[1]), dtype=torch.bfloat16
     )
-    torch_gate_mm_dummy = torch.zeros(o_proj_cfg.gate_mm_shape, dtype=torch.bfloat16)
-    torch_attn_norm_dummy = torch.zeros(o_proj_cfg.attn_norm_shape, dtype=torch.bfloat16)
-    torch_q_norm_dummy = torch.zeros(o_proj_cfg.q_norm_shape, dtype=torch.bfloat16)
-    torch_kv_norm_dummy = torch.zeros(o_proj_cfg.kv_norm_shape, dtype=torch.bfloat16)
-    torch_ffn_norm_dummy = torch.zeros(o_proj_cfg.ffn_norm_shape, dtype=torch.bfloat16)
+    torch_gate_mm_dummy = torch.zeros(o_proj_cfg.gate_mm.raw_tensor_shape, dtype=torch.bfloat16)
+    torch_attn_norm_dummy = torch.zeros(o_proj_cfg.attn_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    torch_q_norm_dummy = torch.zeros(o_proj_cfg.q_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    torch_kv_norm_dummy = torch.zeros(o_proj_cfg.kv_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    torch_ffn_norm_dummy = torch.zeros(o_proj_cfg.ffn_norm.raw_tensor_shape, dtype=torch.bfloat16)
 
     # One input per mesh row: [num_matmul1_cores * num_tp, K1] covers all TP columns in the row
     device_inputs = []
@@ -623,11 +623,11 @@ def test_post_sdpa_with_sdpa_phase(
     torch_kv_b1_proj_dummy = torch.zeros(
         (kv_b12_cfg.kv_b1_proj_shape[0] * num_tp, kv_b12_cfg.kv_b1_proj_shape[1]), dtype=torch.bfloat16
     )
-    torch_gate_mm_dummy = torch.zeros(o_proj_cfg.gate_mm_shape, dtype=torch.bfloat16)
-    torch_attn_norm_dummy = torch.zeros(o_proj_cfg.attn_norm_shape, dtype=torch.bfloat16)
-    torch_q_norm_dummy = torch.zeros(o_proj_cfg.q_norm_shape, dtype=torch.bfloat16)
-    torch_kv_norm_dummy = torch.zeros(o_proj_cfg.kv_norm_shape, dtype=torch.bfloat16)
-    torch_ffn_norm_dummy = torch.zeros(o_proj_cfg.ffn_norm_shape, dtype=torch.bfloat16)
+    torch_gate_mm_dummy = torch.zeros(o_proj_cfg.gate_mm.raw_tensor_shape, dtype=torch.bfloat16)
+    torch_attn_norm_dummy = torch.zeros(o_proj_cfg.attn_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    torch_q_norm_dummy = torch.zeros(o_proj_cfg.q_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    torch_kv_norm_dummy = torch.zeros(o_proj_cfg.kv_norm.raw_tensor_shape, dtype=torch.bfloat16)
+    torch_ffn_norm_dummy = torch.zeros(o_proj_cfg.ffn_norm.raw_tensor_shape, dtype=torch.bfloat16)
 
     # SDPA input tensors per device: L [8, 4096], MS [8, 256]
     # MS tensor layout: for each worker core c (0..7), within columns [c*32, (c+1)*32]:
