@@ -22,22 +22,21 @@ void bind_moreh_group_norm_backward_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_group_norm_backward">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::moreh_group_norm_backward,
-            nb::arg("output_grad"),
-            nb::arg("input"),
-            nb::arg("mean"),
-            nb::arg("rstd"),
-            nb::arg("num_groups"),
-            nb::kw_only(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, false, false},
-            nb::arg("gamma") = nb::none(),
-            nb::arg("input_grad") = nb::none(),
-            nb::arg("gamma_grad") = nb::none(),
-            nb::arg("beta_grad") = nb::none(),
-            nb::arg("input_grad_memory_config") = nb::none(),
-            nb::arg("gamma_grad_memory_config") = nb::none(),
-            nb::arg("beta_grad_memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_group_norm_backward,
+        nb::arg("output_grad"),
+        nb::arg("input"),
+        nb::arg("mean"),
+        nb::arg("rstd"),
+        nb::arg("num_groups"),
+        nb::kw_only(),
+        nb::arg("are_required_outputs") = std::vector<bool>{true, false, false},
+        nb::arg("gamma") = nb::none(),
+        nb::arg("input_grad") = nb::none(),
+        nb::arg("gamma_grad") = nb::none(),
+        nb::arg("beta_grad") = nb::none(),
+        nb::arg("input_grad_memory_config") = nb::none(),
+        nb::arg("gamma_grad_memory_config") = nb::none(),
+        nb::arg("beta_grad_memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::moreh::moreh_group_norm_backward

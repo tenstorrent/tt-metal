@@ -34,8 +34,10 @@ void bind_move(nb::module_& mod) {
     ttnn::bind_function<"move">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::move, nb::arg("input_tensor").noconvert(), nb::kw_only(), nb::arg("memory_config") = nb::none()));
+        &ttnn::move,
+        nb::arg("input_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

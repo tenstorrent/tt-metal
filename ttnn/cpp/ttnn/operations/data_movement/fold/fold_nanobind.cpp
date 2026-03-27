@@ -35,16 +35,15 @@ void bind_fold_operation(nb::module_& mod) {
     ttnn::bind_function<"fold">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::fold,
-            nb::arg("input"),
-            nb::arg("stride_h"),
-            nb::arg("stride_w"),
-            nb::arg("use_transpose_as_fold") = false,
-            nb::arg("output_shape") = nb::none(),
-            nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
-            nb::arg("grid_size") = nb::none(),
-            nb::arg("override_memory_config") = nb::none()));
+        &ttnn::fold,
+        nb::arg("input"),
+        nb::arg("stride_h"),
+        nb::arg("stride_w"),
+        nb::arg("use_transpose_as_fold") = false,
+        nb::arg("output_shape") = nb::none(),
+        nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
+        nb::arg("grid_size") = nb::none(),
+        nb::arg("override_memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement

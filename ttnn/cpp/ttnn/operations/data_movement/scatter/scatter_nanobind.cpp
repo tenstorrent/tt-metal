@@ -46,16 +46,15 @@ void bind_scatter(nb::module_& mod) {
     ttnn::bind_function<"scatter">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::scatter,
-            nb::arg("input").noconvert(),
-            nb::arg("dim"),
-            nb::arg("index").noconvert(),
-            nb::arg("src").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("reduce") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::scatter,
+        nb::arg("input").noconvert(),
+        nb::arg("dim"),
+        nb::arg("index").noconvert(),
+        nb::arg("src").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("reduce") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 void bind_scatter_add(nb::module_& mod) {
@@ -83,15 +82,14 @@ void bind_scatter_add(nb::module_& mod) {
     ttnn::bind_function<"scatter_add">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::scatter_add,
-            nb::arg("input").noconvert(),
-            nb::arg("dim"),
-            nb::arg("index").noconvert(),
-            nb::arg("src").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::scatter_add,
+        nb::arg("input").noconvert(),
+        nb::arg("dim"),
+        nb::arg("index").noconvert(),
+        nb::arg("src").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

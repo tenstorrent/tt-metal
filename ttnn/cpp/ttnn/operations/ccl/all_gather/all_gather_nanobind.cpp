@@ -59,21 +59,20 @@ void bind_all_gather(nb::module_& mod) {
     ttnn::bind_function<"all_gather">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::all_gather,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("topology") = nb::none(),
-            nb::arg("chunks_per_sync") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::all_gather,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("topology") = nb::none(),
+        nb::arg("chunks_per_sync") = nb::none(),
+        nb::arg("num_workers_per_link") = nb::none(),
+        nb::arg("num_buffers_per_channel") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 }  // namespace ttnn::operations::ccl

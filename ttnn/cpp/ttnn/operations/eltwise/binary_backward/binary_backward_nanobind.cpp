@@ -73,13 +73,12 @@ void bind_binary_backward_ops(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            func,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        func,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 template <ttnn::unique_string Name>
@@ -137,17 +136,16 @@ void bind_binary_backward_concat(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::concat_bw,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::arg(parameter_name.c_str()) = parameter_value,
-            nb::kw_only(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_a_grad") = nb::none(),
-            nb::arg("input_b_grad") = nb::none()));
+        &ttnn::concat_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::arg(parameter_name.c_str()) = parameter_value,
+        nb::kw_only(),
+        nb::arg("are_required_outputs") = std::vector<bool>{true, true},
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_a_grad") = nb::none(),
+        nb::arg("input_b_grad") = nb::none());
 }
 
 template <ttnn::unique_string Name>
@@ -207,17 +205,16 @@ void bind_binary_backward_addalpha(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::addalpha_bw,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::arg(parameter_name.c_str()) = parameter_value,
-            nb::kw_only(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_a_grad") = nb::none(),
-            nb::arg("input_b_grad") = nb::none()));
+        &ttnn::addalpha_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::arg(parameter_name.c_str()) = parameter_value,
+        nb::kw_only(),
+        nb::arg("are_required_outputs") = std::vector<bool>{true, true},
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_a_grad") = nb::none(),
+        nb::arg("input_b_grad") = nb::none());
 }
 
 template <ttnn::unique_string Name>
@@ -354,17 +351,16 @@ void bind_binary_backward_sub_alpha(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::subalpha_bw,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::arg(parameter_name.c_str()) = parameter_value,
-            nb::kw_only(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none(),
-            nb::arg("other_grad") = nb::none()));
+        &ttnn::subalpha_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::arg(parameter_name.c_str()) = parameter_value,
+        nb::kw_only(),
+        nb::arg("are_required_outputs") = std::vector<bool>{true, true},
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_grad") = nb::none(),
+        nb::arg("other_grad") = nb::none());
 }
 
 template <ttnn::unique_string Name>
@@ -407,16 +403,15 @@ void bind_binary_backward_rsub(
     ttnn::bind_function<Name>(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::rsub_bw,
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("input_grad") = nb::none(),
-            nb::arg("other_grad") = nb::none()));
+        &ttnn::rsub_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("are_required_outputs") = std::vector<bool>{true, true},
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("input_grad") = nb::none(),
+        nb::arg("other_grad") = nb::none());
 }
 
 template <ttnn::unique_string Name>

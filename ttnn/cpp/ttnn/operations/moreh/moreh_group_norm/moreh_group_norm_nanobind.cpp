@@ -19,21 +19,20 @@ void bind_moreh_group_norm_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_group_norm">(
         mod,
         "Moreh Group Norm Operation",
-        ttnn::overload_t(
-            &ttnn::moreh_group_norm,
-            nb::arg("input"),
-            nb::arg("num_groups"),
-            nb::arg("eps") = 1e-5f,
-            nb::arg("gamma") = nb::none(),
-            nb::arg("beta") = nb::none(),
-            nb::kw_only(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, false, false},
-            nb::arg("output") = nb::none(),
-            nb::arg("mean") = nb::none(),
-            nb::arg("rstd") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("mean_memory_config") = nb::none(),
-            nb::arg("rstd_memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_group_norm,
+        nb::arg("input"),
+        nb::arg("num_groups"),
+        nb::arg("eps") = 1e-5f,
+        nb::arg("gamma") = nb::none(),
+        nb::arg("beta") = nb::none(),
+        nb::kw_only(),
+        nb::arg("are_required_outputs") = std::vector<bool>{true, false, false},
+        nb::arg("output") = nb::none(),
+        nb::arg("mean") = nb::none(),
+        nb::arg("rstd") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("mean_memory_config") = nb::none(),
+        nb::arg("rstd_memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::moreh::moreh_group_norm

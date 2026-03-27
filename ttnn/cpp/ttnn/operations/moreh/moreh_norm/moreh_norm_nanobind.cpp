@@ -38,16 +38,15 @@ void bind_moreh_norm_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_norm">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::moreh_norm,
-            nb::arg("input"),
-            nb::arg("p"),
-            nb::kw_only(),
-            nb::arg("dim") = nb::none(),
-            nb::arg("keepdim") = false,
-            nb::arg("output") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_norm,
+        nb::arg("input"),
+        nb::arg("p"),
+        nb::kw_only(),
+        nb::arg("dim") = nb::none(),
+        nb::arg("keepdim") = false,
+        nb::arg("output") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::moreh::moreh_norm

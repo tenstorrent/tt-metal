@@ -28,8 +28,7 @@ void bind_chunk(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"chunk">(
-        mod, doc, ttnn::overload_t(&ttnn::chunk, nb::arg("input_tensor"), nb::arg("chunks"), nb::arg("dim")));
+    ttnn::bind_function<"chunk">(mod, doc, &ttnn::chunk, nb::arg("input_tensor"), nb::arg("chunks"), nb::arg("dim"));
 }
 
 }  // namespace ttnn::operations::data_movement

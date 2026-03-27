@@ -53,13 +53,12 @@ void bind_tosa_scatter(nb::module_& mod) {
     ttnn::bind_function<"tosa_scatter">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::tosa_scatter,
-            nb::arg("input").noconvert(),
-            nb::arg("index").noconvert(),
-            nb::arg("src").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::tosa_scatter,
+        nb::arg("input").noconvert(),
+        nb::arg("index").noconvert(),
+        nb::arg("src").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail

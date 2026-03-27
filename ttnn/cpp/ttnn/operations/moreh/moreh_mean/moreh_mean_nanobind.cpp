@@ -19,15 +19,14 @@ void bind_moreh_mean_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_mean">(
         mod,
         "Moreh Mean Operation",
-        ttnn::overload_t(
-            &ttnn::moreh_mean,
-            nb::arg("input"),
-            nb::kw_only(),
-            nb::arg("dim") = nb::none(),
-            nb::arg("keepdim") = false,
-            nb::arg("divisor") = nb::none(),
-            nb::arg("output") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_mean,
+        nb::arg("input"),
+        nb::kw_only(),
+        nb::arg("dim") = nb::none(),
+        nb::arg("keepdim") = false,
+        nb::arg("divisor") = nb::none(),
+        nb::arg("output") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::moreh::moreh_mean

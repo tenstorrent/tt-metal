@@ -73,16 +73,15 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
     ttnn::bind_function<"argmax">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::argmax,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("dim") = nb::none(),
-            nb::arg("keepdim") = false,
-            nb::kw_only(),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("use_multicore") = false,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()));
+        &ttnn::argmax,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dim") = nb::none(),
+        nb::arg("keepdim") = false,
+        nb::kw_only(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("use_multicore") = false,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::detail

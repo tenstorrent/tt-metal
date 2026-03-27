@@ -75,19 +75,18 @@ void bind_batch_norm_operation(nb::module_& mod) {
     ttnn::bind_function<"batch_norm">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::batch_norm,
-            nb::arg("input"),
-            nb::kw_only(),
-            nb::arg("running_mean") = nb::none(),
-            nb::arg("running_var") = nb::none(),
-            nb::arg("training") = false,
-            nb::arg("eps") = 1e-05,
-            nb::arg("momentum") = 0.1,
-            nb::arg("weight") = nb::none(),
-            nb::arg("bias") = nb::none(),
-            nb::arg("output") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::batch_norm,
+        nb::arg("input"),
+        nb::kw_only(),
+        nb::arg("running_mean") = nb::none(),
+        nb::arg("running_var") = nb::none(),
+        nb::arg("training") = false,
+        nb::arg("eps") = 1e-05,
+        nb::arg("momentum") = 0.1,
+        nb::arg("weight") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("output") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::normalization::detail

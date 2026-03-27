@@ -966,14 +966,13 @@ void bind_xielu(nb::module_& mod) {
     ttnn::bind_function<"xielu">(
         mod,
         doc.c_str(),
-        ttnn::overload_t(
-            &ttnn::xielu,
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("alpha_p") = 0.8f,
-            nb::arg("alpha_n") = 0.8f,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()));
+        &ttnn::xielu,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("alpha_p") = 0.8f,
+        nb::arg("alpha_n") = 0.8f,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 template <ttnn::unique_string OpName, auto Func>

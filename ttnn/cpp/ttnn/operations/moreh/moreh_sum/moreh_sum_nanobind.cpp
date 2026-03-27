@@ -19,14 +19,13 @@ void bind_moreh_sum_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_sum">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::moreh_sum,
-            nb::arg("input"),
-            nb::arg("dim") = nb::none(),
-            nb::kw_only(),
-            nb::arg("keepdim") = false,
-            nb::arg("output") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_sum,
+        nb::arg("input"),
+        nb::arg("dim") = nb::none(),
+        nb::kw_only(),
+        nb::arg("keepdim") = false,
+        nb::arg("output") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::moreh::moreh_sum

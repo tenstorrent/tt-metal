@@ -47,11 +47,10 @@ void bind_squeeze(nb::module_& mod) {
             * :attr:`input_tensor`: Input Tensor.
             * :attr:`dim`: Dim where we want to squeeze
         )doc",
-        ttnn::overload_t(
-            &squeeze_wrapper,
-            nb::arg("input_tensor"),
-            nb::arg("dim") = nb::none()  // Default value is None
-            ));
+        &squeeze_wrapper,
+        nb::arg("input_tensor"),
+        nb::arg("dim") = nb::none()  // Default value is None
+    );
 }
 
 }  // namespace ttnn::operations::data_movement

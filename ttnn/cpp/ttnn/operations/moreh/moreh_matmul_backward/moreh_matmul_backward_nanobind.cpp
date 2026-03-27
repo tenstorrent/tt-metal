@@ -19,16 +19,15 @@ void bind_moreh_matmul_backward_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_matmul_backward">(
         mod,
         "Moreh Matmul Backward Operation",
-        ttnn::overload_t(
-            &ttnn::moreh_matmul_backward,
-            nb::arg("output_grad"),
-            nb::arg("input_a"),
-            nb::arg("input_b"),
-            nb::kw_only(),
-            nb::arg("are_required_outputs") = std::vector<bool>{true, true},
-            nb::arg("input_a_grad") = nb::none(),
-            nb::arg("input_b_grad") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::moreh_matmul_backward,
+        nb::arg("output_grad"),
+        nb::arg("input_a"),
+        nb::arg("input_b"),
+        nb::kw_only(),
+        nb::arg("are_required_outputs") = std::vector<bool>{true, true},
+        nb::arg("input_a_grad") = nb::none(),
+        nb::arg("input_b_grad") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 }  // namespace ttnn::operations::moreh::moreh_matmul_backward

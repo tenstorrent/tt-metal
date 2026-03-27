@@ -57,22 +57,21 @@ void bind_combine(nb::module_& mod) {
                     num_experts_per_tok=4,
                     seq_len_per_chip=512)
         )doc",
-        ttnn::overload_t(
-            &combine,
-            nb::arg("dispatched_buffer").noconvert(),
-            nb::arg("dispatched_metadata").noconvert(),
-            nb::arg("expert_token_counts").noconvert(),
-            nb::kw_only(),
-            nb::arg("dispatch_group_size"),
-            nb::arg("experts_per_chip"),
-            nb::arg("num_experts_per_tok"),
-            nb::arg("seq_len_per_chip"),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("num_links") = 1,
-            nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
-            nb::arg("init_zeros") = true));
+        &combine,
+        nb::arg("dispatched_buffer").noconvert(),
+        nb::arg("dispatched_metadata").noconvert(),
+        nb::arg("expert_token_counts").noconvert(),
+        nb::kw_only(),
+        nb::arg("dispatch_group_size"),
+        nb::arg("experts_per_chip"),
+        nb::arg("num_experts_per_tok"),
+        nb::arg("seq_len_per_chip"),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("num_links") = 1,
+        nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
+        nb::arg("init_zeros") = true);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail

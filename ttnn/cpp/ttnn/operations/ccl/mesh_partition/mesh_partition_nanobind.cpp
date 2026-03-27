@@ -42,13 +42,12 @@ void bind_mesh_partition(nb::module_& mod) {
     ttnn::bind_function<"mesh_partition">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::mesh_partition,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("dim"),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::mesh_partition,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("dim"),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::ccl

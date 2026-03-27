@@ -53,15 +53,14 @@ void bind_all_reduce(nb::module_& mod) {
     ttnn::bind_function<"all_reduce">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::all_reduce,
-            nb::arg("input_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("topology") = nb::none()));
+        &ttnn::all_reduce,
+        nb::arg("input_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("topology") = nb::none());
 }
 
 }  // namespace ttnn::operations::ccl

@@ -32,21 +32,20 @@ void bind_all_gather_concat(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the output tensor.
         )doc",
-        ttnn::overload_t(
-            &ttnn::experimental::all_gather_concat,
-            nb::arg("input_tensor"),
-            nb::arg("buffer_tensor"),
-            nb::arg("dim"),
-            nb::arg("cluster_axis"),
-            nb::arg("mesh_device"),
-            nb::arg("multi_device_global_semaphore"),
-            nb::arg("num_heads").noconvert(),
-            nb::arg("memory_config"),
-            nb::kw_only(),
-            nb::arg("use_noc1_only") = false,
-            nb::arg("num_links") = 1,
-            nb::arg("topology") = ttnn::ccl::Topology::Linear,
-            nb::arg("subdevice_id") = nb::none()));
+        &ttnn::experimental::all_gather_concat,
+        nb::arg("input_tensor"),
+        nb::arg("buffer_tensor"),
+        nb::arg("dim"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("num_heads").noconvert(),
+        nb::arg("memory_config"),
+        nb::kw_only(),
+        nb::arg("use_noc1_only") = false,
+        nb::arg("num_links") = 1,
+        nb::arg("topology") = ttnn::ccl::Topology::Linear,
+        nb::arg("subdevice_id") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl
