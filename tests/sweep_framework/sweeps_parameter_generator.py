@@ -143,7 +143,7 @@ def generate_vectors(module_name, model_traced, suite_name=None):
             v["sweep_name"] = module_name
 
         invalidate_vectors(test_module, suite_vectors)
-        export_suite_vectors_json(module_name, suite, suite_vectors)
+        export_suite_vectors_json(module_name, suite, suite_vectors, skip_legacy=(model_traced is not None))
 
 
 # Perform any post-gen validation to the resulting vectors.
@@ -279,7 +279,7 @@ def validate_exported_vectors(export_path, module_name, suite_name):
         return False
 
 
-def export_suite_vectors_json(module_name, suite_name, vectors):
+def export_suite_vectors_json(module_name, suite_name, vectors, skip_legacy=False):
     """Export test vectors to JSON files grouped by mesh shape and hardware.
 
     Vectors are grouped by (mesh_device_shape, hardware_name) and written
@@ -297,6 +297,10 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
         module_name: Name of the test module
         suite_name: Name of the test suite
         vectors: List of vector dictionaries to export
+        skip_legacy: If True, skip vectors with no mesh/hw info (old traces
+                     without traced_machine_info). Used for model-traced runs
+                     where every vector must have a hardware identifier so the
+                     CI matrix can route it to the correct runner.
     """
     # Group vectors by (mesh_shape, hardware)
     grouped_vectors = group_vectors_by_mesh_and_hardware(vectors)
@@ -304,6 +308,17 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
     # Export each group to a separate file
     for (mesh_shape, hardware_name), group_vectors in grouped_vectors.items():
         if not group_vectors:
+            continue
+
+        # Skip legacy vectors (no mesh/hw) when running model-traced export.
+        # These are old-format traces that predate hardware identification in
+        # traced_machine_info; without a hardware suffix the CI matrix cannot
+        # route them to the correct runner.
+        if skip_legacy and mesh_shape is None and hardware_name is None:
+            logger.warning(
+                f"Skipping {len(group_vectors)} legacy vectors for {module_name}/{suite_name} "
+                f"(no traced_machine_info.device_series — cannot determine target runner)"
+            )
             continue
 
         # Generate filename suffix from mesh shape + hardware.
