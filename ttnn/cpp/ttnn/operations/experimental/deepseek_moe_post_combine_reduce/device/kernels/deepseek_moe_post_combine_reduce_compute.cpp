@@ -3,124 +3,147 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/tilize.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
 
 /**
- * Fused post-combine reduce compute kernel.
+ * Optimized post-combine reduce compute kernel (Approach 1).
  *
- * This kernel performs the following operations in a single pass:
- * 1. Read ROW_MAJOR combine output (no padding!)
- * 2. Read weights and broadcast across embedding dimension
- * 3. Multiply expert outputs by weights
- * 4. Reduce (sum) across expert dimension
- * 5. Output tiled result ready for reduce_scatter
+ * Key optimizations:
+ * 1. NO TILIZE: Treats ROW_MAJOR input as "fake tiles" directly
+ * 2. DST BATCHING: Process all 7 embedding tiles in parallel using DST[0..6]
+ * 3. SCALAR BROADCAST: Each weight multiplies all 7 embedding tiles for one expert
+ * 4. ACCUMULATION: Reduce across 8 experts using binary_dest_reuse_tiles
  *
- * Input CBs:
- * - CB_combine_input: ROW_MAJOR combine output [seq_len, num_experts, emb_dim]
- * - CB_weights: Gate weights [seq_len, num_experts]
+ * Input:
+ * - cb_combine_input (c_0): ROW_MAJOR expert outputs [seq_len, num_experts, emb_dim] as "fake tiles"
+ * - cb_weights (c_1): Single weight scalar per expert (loaded one at a time)
  *
- * Output CB:
- * - CB_output: TILE_LAYOUT reduced result [seq_len, emb_dim]
+ * Output:
+ * - cb_output (c_16): TILE_LAYOUT reduced result [seq_len, emb_dim]
+ *
+ * Performance:
+ * - Processes 7 tiles/batch (1 batch per expert, perfect DST utilization!)
+ * - Single tile_regs_acquire/commit/release per expert (9 total: 1 init + 8 experts)
+ * - No intermediate CBs for tilization
+ * - Minimal sync overhead
  */
 
-// Compile-time constants
-constexpr uint32_t CB_combine_input = tt::CBIndex::c_0;
-constexpr uint32_t CB_weights = tt::CBIndex::c_1;
-constexpr uint32_t CB_temp_tiled = tt::CBIndex::c_2;      // Temporary tiled data
-constexpr uint32_t CB_temp_weighted = tt::CBIndex::c_3;   // After multiply
-constexpr uint32_t CB_output = tt::CBIndex::c_4;
+// Circular buffer indices
+constexpr uint32_t cb_combine_input = tt::CBIndex::c_0;  // Expert outputs (fake tiles)
+constexpr uint32_t cb_weights = tt::CBIndex::c_1;        // Weight scalar per expert
+constexpr uint32_t cb_output = tt::CBIndex::c_16;        // Final output
 
-// Runtime arguments
+// Compile-time arguments
 constexpr uint32_t num_tokens = get_compile_time_arg_val(0);
 constexpr uint32_t num_experts = get_compile_time_arg_val(1);
-constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(2);  // emb_dim / 32
+constexpr uint32_t emb_dim_tiles = get_compile_time_arg_val(2);  // 7 for 7168/1024
+
+// DST register batch size (hardware max)
+constexpr uint32_t DST_BATCH_SIZE = 8;
 
 void kernel_main() {
     uint32_t tokens_per_core = get_arg_val<uint32_t>(0);
     uint32_t token_start_idx = get_arg_val<uint32_t>(1);
 
-    // Initialize compute operations
-    tilize_init_short(CB_combine_input, CB_temp_tiled);
-    mul_tiles_init(CB_temp_tiled, CB_weights, CB_temp_weighted);
-    reduce_init<PoolType::SUM, ReduceDim::REDUCE_COL>(CB_temp_weighted, CB_output);
+    // Initialize binary operations
+    binary_op_init_common(cb_combine_input, cb_weights, cb_output);
 
-    // Process tokens assigned to this core
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Process each token assigned to this core
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     for (uint32_t token_idx = 0; token_idx < tokens_per_core; ++token_idx) {
+        // Reserve output space (7 tiles - the final reduced result for this token)
+        cb_reserve_back(cb_output, emb_dim_tiles);
 
-        // Initialize accumulator for this token
-        cb_reserve_back(CB_output, emb_dim_tiles);
+        // ──────────────────────────────────────────────────────────────────────
+        // Step 1: Initialize accumulator to ZERO (all 7 tiles in one batch)
+        // ──────────────────────────────────────────────────────────────────────
+        tile_regs_acquire();
 
-        // Initialize output tiles to zero
-        for (uint32_t emb_tile = 0; emb_tile < emb_dim_tiles; ++emb_tile) {
-            tile_regs_acquire();
-            // Zero out destination register
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(emb_tile, CB_output);
-            tile_regs_release();
+        zero_tile_init_short();
+        for (uint32_t j = 0; j < emb_dim_tiles; j++) {
+            zero_tile(j);  // Zero DST[0..6]
         }
 
-        // Process each expert for this token
+        tile_regs_commit();
+        tile_regs_wait();
+
+        // Pack zeros to output (so we can accumulate into them)
+        for (uint32_t j = 0; j < emb_dim_tiles; j++) {
+            pack_tile(j, cb_output, j);
+        }
+
+        tile_regs_release();
+
+        // ──────────────────────────────────────────────────────────────────────
+        // Step 2: For each expert, multiply by weight and accumulate
+        // ──────────────────────────────────────────────────────────────────────
         for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
+            // Wait for this expert's weight (loaded by reader)
+            cb_wait_front(cb_weights, 1);
 
-            // 1. Read and tilize expert output for this token
-            cb_wait_front(CB_combine_input, emb_dim_tiles);
-            cb_reserve_back(CB_temp_tiled, emb_dim_tiles);
+            // Wait for this expert's output tiles (7 tiles)
+            cb_wait_front(cb_combine_input, emb_dim_tiles);
 
-            // Tilize expert output: ROW_MAJOR → TILE_LAYOUT
-            for (uint32_t emb_tile = 0; emb_tile < emb_dim_tiles; ++emb_tile) {
-                tilize_block(CB_combine_input, emb_tile, CB_temp_tiled, emb_tile);
+            // ──────────────────────────────────────────────────────────────────
+            // Process all 7 tiles in a single batch (fits perfectly in DST[0..6])
+            // ──────────────────────────────────────────────────────────────────
+            tile_regs_acquire();
+
+            // ─────────────────────────────────────────────────────────────────
+            // Multiply: expert_output[0..6] × weight → DST[0..6]
+            // ─────────────────────────────────────────────────────────────────
+            mul_tiles_bcast_scalar_init_short(cb_combine_input, cb_weights);
+
+            for (uint32_t j = 0; j < emb_dim_tiles; j++) {
+                // input[j] × weight → DST[j]
+                mul_tiles_bcast<BroadcastType::SCALAR>(
+                    cb_combine_input,
+                    cb_weights,
+                    j,  // Source tile index (0-6)
+                    0,  // Weight tile (always 0)
+                    j   // DST register (0-6)
+                );
             }
-            cb_push_back(CB_temp_tiled, emb_dim_tiles);
-            cb_pop_front(CB_combine_input, emb_dim_tiles);
 
-            // 2. Read weight for this (token, expert) pair
-            cb_wait_front(CB_weights, 1);  // Single weight value
+            // ─────────────────────────────────────────────────────────────────
+            // Accumulate: DST[j] = cb_output[j] + DST[j]
+            // (Add current accumulator value to the weighted expert output)
+            // ─────────────────────────────────────────────────────────────────
+            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_output);
 
-            // 3. Broadcast multiply: expert_output * weight
-            cb_wait_front(CB_temp_tiled, emb_dim_tiles);
-            cb_reserve_back(CB_temp_weighted, emb_dim_tiles);
-
-            for (uint32_t emb_tile = 0; emb_tile < emb_dim_tiles; ++emb_tile) {
-                tile_regs_acquire();
-
-                // Broadcast multiply: one weight tile broadcasts to emb_dim_tiles
-                mul_tiles(CB_temp_tiled, CB_weights, emb_tile, 0, 0);
-
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(0, CB_temp_weighted, emb_tile);
-                tile_regs_release();
+            for (uint32_t j = 0; j < emb_dim_tiles; j++) {
+                // cb_output[j] + DST[j] → DST[j]
+                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    cb_output,
+                    j,  // Accumulator tile index (0-6)
+                    j   // DST register (has weighted output)
+                );
             }
-            cb_push_back(CB_temp_weighted, emb_dim_tiles);
-            cb_pop_front(CB_temp_tiled, emb_dim_tiles);
-            cb_pop_front(CB_weights, 1);
 
-            // 4. Accumulate into output (reduce across experts)
-            cb_wait_front(CB_temp_weighted, emb_dim_tiles);
+            tile_regs_commit();  // ⚡ Execute all 7 ops in parallel!
+            tile_regs_wait();
 
-            for (uint32_t emb_tile = 0; emb_tile < emb_dim_tiles; ++emb_tile) {
-                tile_regs_acquire();
-
-                // Load current accumulator value
-                unpack_regs_acquire();
-                unpack_tile(CB_output, emb_tile);
-                unpack_regs_commit();
-
-                // Add weighted expert contribution
-                add_tiles(CB_output, CB_temp_weighted, emb_tile, emb_tile, 0);
-
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(0, CB_output, emb_tile);  // Update accumulator
-                tile_regs_release();
+            // ─────────────────────────────────────────────────────────────────
+            // Pack updated accumulator back to cb_output
+            // ─────────────────────────────────────────────────────────────────
+            for (uint32_t j = 0; j < emb_dim_tiles; j++) {
+                pack_tile(j, cb_output, j);
             }
-            cb_pop_front(CB_temp_weighted, emb_dim_tiles);
+
+            tile_regs_release();
+
+            // Done with this expert's data
+            cb_pop_front(cb_combine_input, emb_dim_tiles);
+            cb_pop_front(cb_weights, 1);
         }
 
-        // Output final result for this token
-        cb_push_back(CB_output, emb_dim_tiles);
+        // ──────────────────────────────────────────────────────────────────────
+        // Step 3: Output final accumulated result
+        // ──────────────────────────────────────────────────────────────────────
+        cb_push_back(cb_output, emb_dim_tiles);
     }
 }
