@@ -9,11 +9,8 @@
 #include "api/compute/transpose_wh.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "ttnn/operations/normalization/kernel_util/compute/memory.h"
-#include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
-#include "experimental/circular_buffer.h"
 
-namespace generic = norm::kernel_util::generic;
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     // Runtime args:
@@ -58,10 +55,6 @@ void kernel_main() {
     // to the DST register, but transpose_wh_tile is an unpack operation, so
     // it expects data in a CB. Thus, this CB is used to hold the scaled input tile.
     constexpr auto cb_scaled = tt::CBIndex::c_20;
-    // Circular buffer holding a pre-computed 1/n look-up table (one entry
-    // per column index 1..W) that Welford's online algorithm uses to avoid
-    // runtime division.
-    //    constexpr auto cb_reciprocals = tt::CBIndex::c_25;
 
     // The CB that the transpose step reads from: cb_scaled when scaling,
     // cb_in directly when not.
@@ -90,11 +83,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_in, cb_out);
     pack_reconfig_data_format(cb_out);
-
-    // Get pointer to the reciprocal LUT
-    //    using recip_lut_t = std::array<uint32_t, W>;
-    //    auto p_reciprocals = norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(cb_reciprocals,
-    //    0);
 
     if constexpr (do_scale) {
         // Scalar tile stays resident across all rows
@@ -155,7 +143,6 @@ void kernel_main() {
                 tile_regs_release();
             } else {
                 // Last tile: finalize and keep DST acquired for variance packing
-                //        welford_update_rows<W>(input_dst, start_N, 0, last_tile_rows, *p_reciprocals);
                 welford_update_rows<0>(input_dst, start_N, 0, last_tile_rows, {});
                 // Store the mean and variance to the destination registers.
                 // scale_idx controls the divisor for M2 -> variance conversion:

@@ -65,13 +65,16 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     //   Each row of tiles is a contiguous block of Wt tiles along the W dimension (the compute kernel
     //   reduces each row of tiles to one output tile).
     // - Example: 4D tensor with shape (N=2, C=1, H=64, W=128) and assuming 32x32 tile size.
-    //     Wt = 4, Ht = 2
+    //     Wt = 4, Ht = 2, so there are in total 2 * 1 * 4 * 2 = 16 tiles.
+    //     Tiles are stored in memory in row-major order: tile 0, tile 1, tile 2,..., tile 15.
+    //     tile 0 corresponds to N = 0, C = 0, Ht = 0, Wt = 0, which is simply denoted as (0, 0, 0, 0).
+    //     tile 1 corresponds to (0, 0, 0, 1), and so on.
     //     Tile grid for each (N,C) slice (2 rows, 4 tiles per row):
     //
-    //          W (tile index)
-    //          0    1    2    3
-    //     H 0 [0]  [1]  [2]  [3]   ← row 0 of the tile grid (4 tiles → reduce to 1)
-    //       1 [4]  [5]  [6]  [7]   ← row 1 of the tile grid (4 tiles → reduce to 1)
+    //           Wt (tile index)
+    //           0    1    2    3
+    //     Ht 0 [0]  [1]  [2]  [3]   ← row 0 of the tile grid (4 tiles → reduce to 1)
+    //        1 [4]  [5]  [6]  [7]   ← row 1 of the tile grid (4 tiles → reduce to 1)
     //
     //     The minimum any core will process is Wt = 4 tiles (i.e. one row of the tile grid).
     //     There are Ht = 2 rows of tiles for each (N,C) slice. Since there are N*C = 2 slices,
@@ -81,8 +84,33 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     //   the tile grid (NC * Wt work units).
     //   Each core processes one or more complete columns of Ht tiles → 1 output tile per column.
     //
-    // - HW-reduce: Work is split by output elements (NC / reduce_batch_size work units).
-    //   Each core processes one or more groups of reduce_batch_size NC slices → 1 output tile per group.
+    // - HW-reduce: Work is split by output elements.
+    //   An "output element" is a single output tile, which contains one scalar value that is the result
+    //   of reducing all dimensions that were requested to be reduced (other tile elements are padding).
+    //   Each core produces one or more output elements.
+    // - Example: 5D tensor (3, 4, 8, 64, 128), 32×32 tiles, reducing dims {2, 3, 4}.
+    //     The host dispatch (generic_reductions.cpp) permutes all reduction dims to the end;
+    //     here the permutation is identity since dims 2,3,4 are already trailing.
+    //     The last two reduction dims (3,4) become H and W.  The extra reduction dim 2
+    //     (size 8) folds into the NC batch → NC = 3 × 4 × 8 = 96, reduce_batch_size = 8.
+    //
+    //     NC slices are laid out in row-major order of the non-H/W dims:
+    //       slice  0: (0,0,0)   slice  1: (0,0,1)  ...  slice  7: (0,0,7)
+    //       slice  8: (0,1,0)   slice  9: (0,1,1)  ...  slice 15: (0,1,7)
+    //       ...
+    //       slice 88: (2,3,0)   slice 89: (2,3,1)  ...  slice 95: (2,3,7)
+    //
+    //     reduce_batch_size must equal 8 (the product of extra reduction dims) because
+    //     each output element must fully reduce dim 2.  Slices 0–7 are the 8 values along
+    //     dim 2 for (dim0=0, dim1=0); the writer Welford-combines all 8 and writes a final
+    //     variance scalar.  A smaller reduce_batch_size (e.g. 2) would only combine 2 of
+    //     the 8 slices, producing a partial result.  The writer finalises the variance
+    //     (Bessel's correction, optional sqrt), so the intermediate Welford state
+    //     (mean, M2, count) is lost — there is no way to recombine those final scalars
+    //     afterwards.
+    //
+    //     Total work units = NC / reduce_batch_size = 96 / 8 = 12
+    //     (one per (dim0, dim1) pair: 3 × 4 = 12).
 
     const uint32_t reduce_batch_size = operation_attributes.reduce_batch_size;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
