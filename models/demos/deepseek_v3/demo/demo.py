@@ -47,13 +47,22 @@ def _build_output_data(
         "model_params": model_params,
     }
     for i, gen_result in enumerate(generations):
-        output_data["generations"].append(
-            {
-                "index": i + 1,
-                "prompt": _prompt_text_for_index(prompts, random_weights, i),
-                "text": gen_result.get("text"),
-            }
-        )
+        generation_record = {
+            "index": i + 1,
+            "prompt": _prompt_text_for_index(prompts, random_weights, i),
+            "text": gen_result.get("text"),
+        }
+        for key in (
+            "accuracy_top1",
+            "accuracy_top5",
+            "garbage_token_count",
+            "garbage_tokens_checked",
+            "garbage_token_topk",
+            "garbage_token_debug",
+        ):
+            if key in gen_result:
+                generation_record[key] = gen_result[key]
+        output_data["generations"].append(generation_record)
     return output_data
 
 
@@ -461,6 +470,8 @@ def run_demo(
     fabric_config = get_fabric_config()
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
     ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
+    dispatch_core_config = ttnn.DispatchCoreConfig(type=ttnn.DispatchCoreType.WORKER, axis=ttnn.DispatchCoreAxis.COL)
+    logger.info("Setting dispatch core axis to ttnn.DispatchCoreAxis.COL")
 
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
@@ -480,9 +491,11 @@ def run_demo(
         if enable_mtp:
             trace_region_size = max(trace_region_size, 134_217_728)
         logger.info(f"Trace region size set to {trace_region_size}")
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=mesh_shape, trace_region_size=trace_region_size, dispatch_core_config=dispatch_core_config
+        )
     else:
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, dispatch_core_config=dispatch_core_config)
 
     # Load tokenizer only for full-model mode; in random-weights mode we synthesize token ids
     tokenizer = None
@@ -689,11 +702,28 @@ def run_demo(
                     result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
                 if token_acc is not None and i == 0:  # Only compute accuracy for first generation
                     acc = token_acc.compute_accuracy()
+                    garbage_token_debug = token_acc.format_garbage_token_details(gen.tokenizer)
+                    garbage_token_count = len(garbage_token_debug)
+                    garbage_tokens_checked = token_acc.num_garbage_check_tokens()
+                    garbage_token_topk = token_acc.topk_candidate_k if token_acc.has_garbage_check() else None
+                    if garbage_token_topk is not None:
+                        logger.info(
+                            "Teacher-forcing garbage tokens: {}/{} checked against teacher top-{}",
+                            garbage_token_count,
+                            garbage_tokens_checked,
+                            garbage_token_topk,
+                        )
+                        for line in garbage_token_debug:
+                            logger.warning(line)
                     result.update(
                         {
                             "accuracy_top1": acc.get("top1"),
                             "accuracy_top5": acc.get("top5"),
-                            "predicted_tokens": token_acc._pred_tokens,
+                            "predicted_tokens": list(token_acc._pred_tokens),
+                            "garbage_token_count": garbage_token_count,
+                            "garbage_tokens_checked": garbage_tokens_checked,
+                            "garbage_token_topk": garbage_token_topk,
+                            "garbage_token_debug": garbage_token_debug,
                         }
                     )
                 results.append(result)
@@ -807,6 +837,20 @@ def main() -> None:
             else:
                 print("[random-weights mode] token IDs:")
                 print(gen_result["tokens"])  # type: ignore
+            if "accuracy_top1" in gen_result or "garbage_token_count" in gen_result:
+                accuracy_top1 = gen_result.get("accuracy_top1")
+                accuracy_top5 = gen_result.get("accuracy_top5")
+                garbage_count = int(gen_result.get("garbage_token_count", 0) or 0)
+                garbage_checked = int(gen_result.get("garbage_tokens_checked", 0) or 0)
+                garbage_topk = gen_result.get("garbage_token_topk")
+                if accuracy_top1 is not None and accuracy_top5 is not None:
+                    print(f"Accuracy: top1={100 * float(accuracy_top1):.1f}% top5={100 * float(accuracy_top5):.1f}%")
+                if garbage_topk is not None:
+                    print(
+                        f"Garbage tokens: {garbage_count}/{garbage_checked} checked against teacher top-{garbage_topk}"
+                    )
+                for line in gen_result.get("garbage_token_debug", []) or []:
+                    print(f"  {line}")
             print("-" * 30)
 
         print("=====================\n")

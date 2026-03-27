@@ -84,7 +84,7 @@ jobs:
       - arch-wormhole_b0
       - ${{ inputs.topology }}
       - bare-metal
-      - pipeline-functional
+      - pipeline-perf
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image }}
@@ -175,7 +175,7 @@ jobs:
           pytest models/demos/deepseek_v3/tests -x \
             --ignore=models/demos/deepseek_v3/tests/unit \
             --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
-            --ignore=models/demos/deepseek_v3/tests/t3k_compat \
+            -m "not t3k_compat" \
             --timeout 600 --durations=0
       - name: Run DeepSeek op unit tests (Device Performance)
         if: ${{ matrix.test-group.test-type == 'final-op-unit' }}

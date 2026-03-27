@@ -101,19 +101,27 @@ Tensor::Tensor(
 }
 
 Tensor::Tensor(HostBuffer buffer, TensorSpec tensor_spec) :
-    Tensor(HostStorage(std::move(buffer)), std::move(tensor_spec), TensorTopology{}) {}
+    Tensor(HostTensor(std::move(buffer), std::move(tensor_spec), TensorTopology{})) {}
 
 Tensor::Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(
         std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
 
+Tensor::Tensor(HostTensor tensor) :
+    tensor_id(Tensor::next_tensor_id()),
+    tensor_attributes(std::make_shared<TensorAttributes>(HostStorage(std::move(tensor)))) {}
+
 Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(
         std::make_shared<TensorAttributes>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    if (device_storage().is_allocated()) {
-        mesh_device_ = device_storage().get_device();
+    // Workaround for https://github.com/tenstorrent/tt-metal/issues/40716:
+    // Use get_device_bypass_deallocate_check() to preserve mesh_device_ even when the
+    // buffer is deallocated. This prevents nullptr device propagation when operations
+    // like reshape create new tensors from existing DeviceStorage.
+    if (auto* device = device_storage().get_device_bypass_deallocate_check()) {
+        mesh_device_ = device;
     }
 }
 
@@ -622,6 +630,12 @@ const HostStorage& Tensor::host_storage() const& {
     const auto* host_storage = std::get_if<HostStorage>(&this->storage());
     TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
     return *host_storage;
+}
+
+const HostTensor& Tensor::host_tensor() const& {
+    const auto* host_storage = std::get_if<HostStorage>(&this->storage());
+    TT_FATAL(host_storage != nullptr, "Expected Tensor with HostStorage, got {}", this->storage_type());
+    return host_storage->host_tensor();
 }
 
 distributed::MeshDevice* Tensor::device() const {

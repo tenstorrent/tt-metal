@@ -162,3 +162,15 @@ template <bool is_fp32_dest_acc_en>
 inline void llk_pack_dest_section_done() {
     _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
+
+/**
+ * @brief Configure packer ReLU at runtime from a packed uint32.
+ * @param config Packed uint32: bits [1:0] = ReluType, bits [31:16] = threshold.
+ */
+TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
+    _llk_pack_relu_config_<p_pacr::PACK0, false>(ckernel::ReluConfig::from_packed(config));
+}
+
+TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
+    _llk_pack_relu_config_<p_pacr::PACK0, false>(relu_config);
+}

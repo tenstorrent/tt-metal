@@ -59,7 +59,7 @@ concept HasInvoke = requires {
 };
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
-struct registered_operation_t {
+struct [[deprecated("Use bind function syntax instead")]] registered_operation_t {
     // Get "add" from "ttnn::add"
     std::string base_name() const { return detail::base_name(std::string{cpp_fully_qualified_name}); }
 
@@ -106,22 +106,23 @@ private:
 };
 
 template <reflect::fixed_string cpp_fully_qualified_name>
-struct operation_name_key_t {
+struct [[deprecated("Use bind function syntax instead")]] operation_name_key_t {
     friend consteval auto get(operation_name_key_t<cpp_fully_qualified_name>);
 };
 
 template <typename operation_t>
-struct operation_key_t {
+struct [[deprecated("Use bind function syntax instead")]] operation_key_t {
     friend consteval auto get(operation_key_t<operation_t>);
 };
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, auto operation>
-struct set_operation_t : std::true_type {
+struct [[deprecated("Use bind function syntax instead")]] set_operation_t : std::true_type {
     friend consteval auto get(operation_key_t<operation_t>) { return operation; }
     friend consteval auto get(operation_name_key_t<cpp_fully_qualified_name>) { return operation; }
 };
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
+[[deprecated("Use bind function syntax instead")]]
 constexpr auto register_operation_impl() {
     constexpr auto operation = registered_operation_t<cpp_fully_qualified_name, operation_t>{};
     static_assert(
@@ -135,6 +136,7 @@ constexpr auto register_operation_impl() {
 }
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
+[[deprecated("Use bind function syntax instead")]]
 constexpr auto register_operation() {
     return register_operation_impl<cpp_fully_qualified_name, operation_t>();
 }
