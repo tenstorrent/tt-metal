@@ -244,7 +244,7 @@ void kernel_main() {
     uint32_t mtp_input_core_noc_x = 0;
     uint32_t mtp_input_core_noc_y = 0;
     uint32_t mtp_argmax_output_addr = 0;
-    if constexpr (Core::enable_mtp) {
+    if constexpr (Core::is_base_stage && Core::enable_mtp) {
         DPRINT << "mtp enabled" << ENDL();
         mtp_embedding_base = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
         mtp_token_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);

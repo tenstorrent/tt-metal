@@ -388,11 +388,11 @@ struct Sampling {
                 // Phase 3: mesh-only inter-device reductions (stage-1 then stage-2).
                 if constexpr (CTArgs::mesh_mode) {
                     if constexpr (CTArgs::stage1_receiver) {
-                        auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
                         DPRINT << ">s1 num slots=" << CTArgs::stage1_num_slots << ENDL();
                         DPRINT << ">s1 ws" << ENDL();
                         write_winner_slot(
                             args.scratch_addr + CTArgs::stage1_local_slot_offset, global_best_score, global_best_index);
+                        auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
                         wait_and_reset_semaphore(global_sem_ptr, CTArgs::stage1_expected_remote_incs);
                         DPRINT << ">s1 wsrt" << ENDL();
                         invalidate_l1_cache();

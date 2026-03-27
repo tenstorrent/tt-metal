@@ -287,7 +287,6 @@ struct DRAMStreamingMatmul {
                     // Per-tile pipelining with SFPU overlap
                     for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
                         tile_regs_acquire();
-                        custom_mm_block_zero_dest();
 
                         // Intermediate subblocks: finalize=false (partial accumulation)
                         for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k - 1; sb_k++) {
@@ -332,7 +331,6 @@ struct DRAMStreamingMatmul {
                 } else {
                     // Batch processing
                     tile_regs_acquire();
-                    custom_mm_block_zero_dest();
 
                     for (uint32_t w = 0; w < CTArgs::subblock_w; w++) {
                         // Intermediate subblocks: finalize=false (partial accumulation)

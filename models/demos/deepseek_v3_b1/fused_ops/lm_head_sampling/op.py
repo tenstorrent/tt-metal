@@ -202,7 +202,6 @@ class LMHeadSampling:
         h_gamma_tensor=None,
         e_gamma_tensor=None,
         eh_projection_tensor=None,
-        mcast_eh_dst_working_buf_tensor=None,
         indices_tensor=None,
         output_index_tensor=None,
         argmax_final_core_coord=None,
@@ -2053,8 +2052,6 @@ class LMHeadSampling:
             io_tensors.extend(
                 [output_mtp_tensor, embedding_tensor, h_gamma_tensor, e_gamma_tensor, eh_projection_tensor]
             )
-            if mcast_eh_dst_working_buf_tensor is not None:
-                io_tensors.append(mcast_eh_dst_working_buf_tensor)
             if eh_gather_output_buf_tensor is not None:
                 io_tensors.append(eh_gather_output_buf_tensor)
         if is_mtp_verify_stage:

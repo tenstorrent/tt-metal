@@ -86,24 +86,20 @@ class EmbeddingStage(StageKind):
 
     def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights, *, d2h_page_size: int | None = None) -> None:
         self._weights = weights
-        self._d2h_page_size = d2h_page_size or TOKEN_PAGE_SIZE_BYTES
-        print(f"[STAGE] EmbeddingStage.__init__ d2h_page={self._d2h_page_size}", flush=True)
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         print(f"[STAGE P{ctx.my_mesh_id}] EmbeddingStage.create_pipeline_block", flush=True)
         mesh_device = ctx.mesh_device
-        d2h_page = self._d2h_page_size
-        d2h_fifo = max(d2h_page * 2, TOKEN_FIFO_SIZE)
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=d2h_fifo,
+            upstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
             downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=d2h_page,
+            upstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
             downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_fifo_size=d2h_fifo,
-            d2h_socket_page_size=d2h_page,
+            d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
+            d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
             embedding_tensor=self._weights.embedding,
         )
 

@@ -4,17 +4,11 @@ rank_bindings:
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,1,2,3,4,5,6,7
-    TT_METAL_DPRINT_FILE: "rank_0.txt"
-    TT_METAL_DPRINT_CORES: all
-    TT_METAL_DPRINT_CHIPS: all
 - rank: 1
   mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 24,25,26,27,28,29,30,31
-    TT_METAL_DPRINT_FILE: "rank_1.txt"
-    TT_METAL_DPRINT_CORES: all
-    TT_METAL_DPRINT_CHIPS: all
 - rank: 2
   mesh_id: 2
   mesh_host_rank: 0

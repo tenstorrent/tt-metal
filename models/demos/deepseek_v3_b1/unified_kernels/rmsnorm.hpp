@@ -120,10 +120,11 @@ struct RMSNorm {
 #if defined(COMPILE_FOR_TRISC)
         void compute_rmsnorm(const ComputeArgs& args) {
             constexpr uint32_t num_tiles = CTArgs::num_tiles;
-            reconfig_data_format<true, true>(CTArgs::input_cb, CTArgs::input_cb);
+            reconfig_data_format<false, true>(CTArgs::input_cb, CTArgs::input_cb);
             pack_reconfig_data_format<true>(CTArgs::output_cb);
             {
                 mul_reduce_scalar_init(CTArgs::input_cb, CTArgs::input_cb);
+                add_rsqrt_tile_init();
                 DPRINT << ">rn_wf cb=" << CTArgs::input_cb << " n=" << num_tiles << ENDL();
                 cb_wait_front(CTArgs::input_cb, num_tiles);
                 DPRINT << "<rn_wf" << ENDL();
@@ -132,7 +133,6 @@ struct RMSNorm {
                 mul_reduce_scalar_uninit();
             }
             {
-                add_rsqrt_tile_init();
                 add_rsqrt_tile<CTArgs::rsqrt_fast_approx, VectorMode::RC_custom, 1>(0, args.epsilon);
             }
             {
