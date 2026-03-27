@@ -15,10 +15,47 @@ import ttnn
 
 from models.common.rmsnorm import RMSNorm
 from models.experimental.glm4_moe.tt.config import Glm4MoeHParams
-from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
-
-
 import math
+from typing import Sequence
+
+
+def dequantize_tensor(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
+    """Block-wise dequantize using inverse scales (formerly in deepseek_v3.utils.dequantize)."""
+    if tensor.ndim != inv_scale.ndim:
+        raise ValueError(f"Tensor and inverse scale must have same ndim, got {tensor.ndim} and {inv_scale.ndim}")
+    if len(block_shape) != tensor.ndim:
+        raise ValueError(
+            f"Block shape rank mismatch, got len(block_shape)={len(block_shape)} and tensor.ndim={tensor.ndim}"
+        )
+    if any(inv_scale.shape[i] * block_shape[i] < tensor.shape[i] for i in range(tensor.ndim)):
+        raise ValueError(
+            "Inverse scale shape does not cover tensor shape: "
+            f"tensor={tuple(tensor.shape)}, inv_scale={tuple(inv_scale.shape)}, block_shape={tuple(block_shape)}"
+        )
+
+    original_shape = tuple(tensor.shape)
+    padded_shape = tuple(inv_scale.shape[i] * block_shape[i] for i in range(tensor.ndim))
+    original_slices = tuple(slice(0, size) for size in original_shape)
+
+    out = tensor.float()
+    out = out.clone() if out.data_ptr() == tensor.data_ptr() else out
+
+    if padded_shape != original_shape:
+        padded = torch.zeros(padded_shape, dtype=out.dtype)
+        padded[original_slices] = out
+        out = padded
+
+    interleaved_shape: list[int] = []
+    scale_broadcast_shape: list[int] = []
+    for dim, block_dim in enumerate(block_shape):
+        blocks = inv_scale.shape[dim]
+        interleaved_shape.extend([blocks, block_dim])
+        scale_broadcast_shape.extend([blocks, 1])
+
+    out_view = out.reshape(*interleaved_shape)
+    out_view.mul_(inv_scale.float().reshape(*scale_broadcast_shape))
+    out = out_view.reshape(*padded_shape)
+    return out[original_slices]
 
 
 def _env_prefetch() -> bool:
