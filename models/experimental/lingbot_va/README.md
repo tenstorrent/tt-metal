@@ -28,10 +28,10 @@ At a high level (no GPU path; reference and prep run on **CPU**, model math on *
 
 ## Performance
 
-| Kind | Measured FPS |
+| Kind | Measured value |
 |------|----------------|
-| **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`) | 0.5 |
-| **End-to-end** (`tests/perf/test_perf_e2e.py`) | **3208.2641** FPS |
+| **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`) | *TBD* |
+| **End-to-end** | **ToDo** (no perf test in-tree yet) |
 
 ## PyTorch / CPU components
 
@@ -64,7 +64,7 @@ lingbot_va/
 │   └── wan_rotary_pos_embed.py  # 3D RoPE for Wan
 ├── tests/
 │   ├── pcc/                    # PCC (accuracy) tests vs reference
-│   ├── perf/                   # Device perf + E2E timing (pytest)
+│   ├── perf/                   # Device perf (pytest); E2E perf **ToDo**
 │   ├── demo/                   # demo.py, inference_torch.py, sample_images/
 │   └── download_pretrained_weights.py # Script to download the pretrained weights
 ├── PR_SUMMARY.md               # PR / release template (problem, PCC table, host paths)
@@ -139,14 +139,12 @@ pytest models/experimental/lingbot_va/tests/pcc/test_encoder_wan.py::test_umt5_e
 | File | Test function | Notes |
 |------|----------------|-------|
 | `tests/perf/test_perf_ttnn_lingbot_va.py` | `test_perf_device_bare_metal_lingbot_va` | Device profiler; internally runs `pytest …/test_lingbot_va.py::test_lingbot_va` |
-| `tests/perf/test_perf_e2e.py` | `test_e2e_perf` | End-to-end wall time via spawn-isolated `run_inference` |
+
+**End-to-end perf:** **ToDo**
 
 ```bash
 pytest models/experimental/lingbot_va/tests/perf/test_perf_ttnn_lingbot_va.py -v -s
-pytest models/experimental/lingbot_va/tests/perf/test_perf_e2e.py -v -s
 ```
-
-Markers: `test_perf_ttnn_lingbot_va` uses `@pytest.mark.models_device_performance_bare_metal`; `test_perf_e2e` uses `@pytest.mark.models_performance_bare_metal`. Your CI may filter on these.
 
 ## Demo Scripts
 
