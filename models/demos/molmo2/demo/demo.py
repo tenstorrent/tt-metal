@@ -239,6 +239,16 @@ class Molmo2Generator:
             Fused hidden states [1, 1, seq_len, hidden_dim] on device
         """
         if pixel_values is not None and pooled_patches_idx is not None:
+            # Track request number for debugging SDPA issues
+            from models.demos.molmo2.tt.vision_attention import VisionAttention
+
+            VisionAttention._current_request += 1
+            request_num = VisionAttention._current_request
+            sdpa_calls_before = VisionAttention._sdpa_call_count
+
+            logger.info(f"_prepare_text_inputs (DEMO): Starting vision+text fusion (REQUEST #{request_num})")
+            logger.info(f"  SDPA calls so far: {sdpa_calls_before}")
+
             # pixel_values can be:
             # 1. Pre-unfolded from vLLM: [num_crops, num_patches, 588] - 3D with last dim == 588
             # 2. Raw image: [C, H, W] or [B, C, H, W]
@@ -248,6 +258,13 @@ class Molmo2Generator:
                 # Raw image [C, H, W] -> [1, C, H, W]
                 pixel_values = pixel_values.unsqueeze(0)
             visual_embeddings_ttnn, valid_token = self.model.embed_image(pixel_values, pooled_patches_idx)
+
+            sdpa_calls_after = VisionAttention._sdpa_call_count
+            logger.info(f"_prepare_text_inputs (DEMO): embed_image completed (REQUEST #{request_num})")
+            logger.info(
+                f"  SDPA calls this request: {sdpa_calls_after - sdpa_calls_before} (total: {sdpa_calls_after})"
+            )
+
             fused_ttnn = self.model.prepare_inputs_for_multimodal(input_ids, visual_embeddings_ttnn, valid_token)
             ttnn.deallocate(visual_embeddings_ttnn)
         else:
@@ -1307,6 +1324,7 @@ class Molmo2Generator:
         self,
         bucket_sizes: List[int] = None,
         use_decode_trace: bool = True,
+        use_prefill_trace: bool = True,
     ):
         """
         Warmup prefill traces for all bucket sizes and decode trace.
@@ -1316,6 +1334,7 @@ class Molmo2Generator:
         Args:
             bucket_sizes: List of bucket sizes to warmup (default: [128, 1024, 2048, 4096])
             use_decode_trace: Whether to also warmup decode trace
+            use_prefill_trace: Whether to capture prefill traces (disable for debugging)
         """
         if bucket_sizes is None:
             # Cover: text-only (128), image (256-1024), video (1024-4096)
@@ -1377,14 +1396,17 @@ class Molmo2Generator:
             self.reset_kv_cache(0)
 
             # Warmup (compile)
-            self.warmup_prefill(hidden_states_ttnn, trace_tensors, use_trace=True)
+            self.warmup_prefill(hidden_states_ttnn, trace_tensors, use_trace=use_prefill_trace)
 
-            # Capture trace
-            trace_id, trace_output = self._capture_prefill_trace(trace_tensors)
-            self.prefill_traces[seq_len] = (trace_id, trace_tensors, trace_output)
+            if use_prefill_trace:
+                # Capture trace
+                trace_id, trace_output = self._capture_prefill_trace(trace_tensors)
+                self.prefill_traces[seq_len] = (trace_id, trace_tensors, trace_output)
+                logger.info(f"  Bucket {seq_len} trace captured")
+            else:
+                logger.info(f"  Bucket {seq_len} compile complete (no trace)")
 
             ttnn.deallocate(hidden_states_ttnn)
-            logger.info(f"  Bucket {seq_len} trace captured")
 
         # Cleanup warmup page table
         ttnn.deallocate(warmup_page_table)
@@ -2256,9 +2278,9 @@ def run_demo(
         use_unified_trace: Whether to use unified Vision+Prefill trace (eliminates CPU roundtrip)
     """
     # Validate incompatible options
-    # Paged attention is incompatible with PREFILL traces (use-trace, use-unified-trace)
-    # because prefill writes to KV cache which cannot be captured in traces.
-    # However, DECODE trace works with paged attention (page_table is a trace input tensor).
+    # Paged attention is incompatible with UNIFIED traces because paged KV cache
+    # writes (paged_fill_cache) cannot be captured during trace capture.
+    # Regular prefill traces (--use-trace) work because they don't include the unified vision+prefill path.
     if use_paged_attention and use_unified_trace:
         logger.warning(
             "WARNING: --paged-attention and --use-unified-trace are incompatible. "
@@ -2321,6 +2343,7 @@ def run_demo(
         generator.warmup_all_buckets(
             bucket_sizes=[128, 256, 512, 1024, 2048, 4096],
             use_decode_trace=use_decode_trace,
+            use_prefill_trace=use_trace,  # Only capture prefill traces if --use-trace is passed
         )
         warmup_time = (time.perf_counter() - warmup_start) * 1000
         logger.info(f"Total warmup time: {warmup_time:.2f}ms")

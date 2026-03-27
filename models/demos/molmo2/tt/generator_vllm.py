@@ -614,7 +614,8 @@ class Molmo2ProcessorWrapper:
                     f"input_ids len={text_inputs['input_ids'].shape if hasattr(text_inputs.get('input_ids', None), 'shape') else 'N/A'}"
                 )
             else:
-                # IMAGE FLOW: Keep <|image|> placeholder, vLLM will replace via _get_prompt_updates
+                # IMAGE FLOW: Apply chat template in processor to ensure <|image|> placeholder
+                # is at the correct position INSIDE the user message, not at the start
                 num_images = 0
                 if images is not None:
                     num_images = len(images) if isinstance(images, list) else 1
@@ -626,27 +627,32 @@ class Molmo2ProcessorWrapper:
                     f"  IMAGE FLOW: num_images={num_images}, existing_image={existing_image}, existing_video={existing_video}"
                 )
 
-                if num_images > 0 and existing_image == 0 and existing_video == 0:
-                    image_placeholders = "<|image|>" * num_images
-                    # If chat template already applied, insert inside user message
-                    # vLLM applies chat template before calling processor
-                    if "<|im_start|>user\n" in text:
-                        text = text.replace("<|im_start|>user\n", f"<|im_start|>user\n{image_placeholders}", 1)
-                        logger.info(f"  Inserted {num_images} <|image|> placeholders inside user message")
-                    else:
-                        text = image_placeholders + text
-                        logger.info(f"  Added {num_images} <|image|> placeholders at start")
-                elif num_images > existing_image and existing_video == 0:
-                    additional = num_images - existing_image
-                    image_placeholders = "<|image|>" * additional
-                    if "<|im_start|>user\n" in text:
-                        text = text.replace("<|im_start|>user\n", f"<|im_start|>user\n{image_placeholders}", 1)
-                        logger.info(f"  Inserted {additional} additional <|image|> placeholders inside user message")
-                    else:
-                        text = image_placeholders + text
-                        logger.info(f"  Added {additional} additional <|image|> placeholders at start")
+                # Check if chat template is already applied
+                has_chat_template = "<|im_start|>" in text
 
-                logger.info(f"  IMAGE FLOW: final text (first 150 chars) = {repr(text[:150])}")
+                # If no chat template, apply it manually to ensure <|image|> is inside user message
+                if num_images > 0 and not has_chat_template:
+                    # Strip leading <|image|> placeholder if present (vLLM adds it at wrong position)
+                    user_content = text
+                    if user_content.startswith("<|image|>"):
+                        user_content = user_content[len("<|image|>") :].lstrip()
+
+                    # Build proper prompt with <|image|> inside user message
+                    image_placeholders = "<|image|>" * num_images
+                    user_content_with_image = f"{image_placeholders}{user_content}"
+
+                    # Apply chat template
+                    messages = [{"role": "user", "content": user_content_with_image}]
+                    text = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                    logger.info(f"  IMAGE FLOW: Applied chat template with image inside user message")
+                elif num_images > 0 and existing_image == 0 and existing_video == 0:
+                    # Has chat template but no image placeholder - add it
+                    image_placeholders = "<|image|>" * num_images
+                    if "<|im_start|>user\n" in text:
+                        text = text.replace("<|im_start|>user\n", f"<|im_start|>user\n{image_placeholders}", 1)
+                        logger.info(f"  IMAGE FLOW: Inserted {num_images} <|image|> placeholders inside user message")
+
+                logger.info(f"  IMAGE FLOW: final text (first 200 chars) = {repr(text[:200])}")
                 text_inputs = self.tokenizer(text, return_tensors=return_tensors, **kwargs)
                 if "input_ids" in text_inputs:
                     ids = text_inputs["input_ids"]
@@ -886,8 +892,7 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             return [hf_processor.image_patch_id] * total_tokens
 
         # Return prompt replacements for both image and video modalities
-        # Video frames are processed as images, but vLLM's mm_items has "video" modality
-        # We need to register both so vLLM can match based on the original request type
+        # vLLM replaces <|image|> placeholder tokens with actual image patch tokens
         prompt_replacements = [
             PromptReplacement(
                 modality="image",
@@ -1192,18 +1197,42 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         """
         if pixel_values is not None and pooled_patches_idx is not None:
             # Vision + text fusion
-            logger.info(f"_prepare_text_inputs: Starting vision+text fusion")
+            # Track request number for debugging SDPA issues
+            from models.demos.molmo2.tt.vision_attention import VisionAttention
+
+            VisionAttention._current_request += 1
+            request_num = VisionAttention._current_request
+            sdpa_calls_before = VisionAttention._sdpa_call_count
+
+            logger.info(f"_prepare_text_inputs: Starting vision+text fusion (REQUEST #{request_num})")
             logger.info(
                 f"  pixel_values.shape={pixel_values.shape}, pooled_patches_idx.shape={pooled_patches_idx.shape}"
             )
             logger.info(f"  input_ids.shape={input_ids.shape}")
+            logger.info(f"  SDPA calls so far: {sdpa_calls_before}")
+
+            # CRITICAL: Synchronize ALL devices before starting vision processing
+            # This ensures clean state from any previous requests
+            logger.info(f"_prepare_text_inputs: Syncing all devices before vision processing...")
+            try:
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(f"_prepare_text_inputs: All devices synced successfully")
+            except Exception as e:
+                logger.error(f"_prepare_text_inputs: Device sync FAILED: {e}")
+                raise
 
             logger.info(f"_prepare_text_inputs: Calling embed_image...")
             visual_embeddings_ttnn, valid_token = self.model.embed_image(pixel_values, pooled_patches_idx)
             # CRITICAL: Synchronize after vision backbone to ensure operations complete
             # Without this, async TTNN operations may not finish, causing garbage output or hangs
             ttnn.synchronize_device(self.mesh_device)
-            logger.info(f"_prepare_text_inputs: embed_image completed, valid_token.shape={valid_token.shape}")
+
+            sdpa_calls_after = VisionAttention._sdpa_call_count
+            logger.info(f"_prepare_text_inputs: embed_image completed (REQUEST #{request_num})")
+            logger.info(f"  valid_token.shape={valid_token.shape}")
+            logger.info(
+                f"  SDPA calls this request: {sdpa_calls_after - sdpa_calls_before} (total: {sdpa_calls_after})"
+            )
 
             logger.info(f"_prepare_text_inputs: Calling prepare_inputs_for_multimodal...")
             fused_ttnn = self.model.prepare_inputs_for_multimodal(input_ids, visual_embeddings_ttnn, valid_token)
@@ -1338,6 +1367,11 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             ttnn.deallocate(rot_mats[0])
             ttnn.deallocate(rot_mats[1])
             ttnn.deallocate(hidden_states_ttnn)
+
+            # DEBUG: Force synchronization after non-traced forward to ensure cleanup
+            logger.info("_run_prefill: Syncing device after non-traced forward...")
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info("_run_prefill: Device sync complete")
 
         # Initialize position tensors for decode phase
         self._reset_kv_cache(original_seq_len)
@@ -1723,6 +1757,15 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 # Deallocate per-user page_table_tt before continue
                 if page_table_tt is not None:
                     ttnn.deallocate(page_table_tt)
+
+                # DEBUG: Force synchronization and cleanup after video request
+                logger.info("  VIDEO DEBUG: Syncing device after video request...")
+                try:
+                    ttnn.synchronize_device(self.mesh_device)
+                    logger.info("  VIDEO DEBUG: Device sync complete")
+                except Exception as e:
+                    logger.error(f"  VIDEO DEBUG: Device sync FAILED: {e}")
+                    # Don't raise - continue to next request
                 continue
 
             # Check for vLLM-style pre-processed images

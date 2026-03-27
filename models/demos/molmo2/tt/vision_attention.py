@@ -38,7 +38,7 @@ class VisionAttention(LightweightModule):
         num_heads: int,
         head_dim: int,
         weight_cache_path=None,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,  # Changed from bfloat8_b for better vision precision
     ):
         """
         Initialize VisionAttention.
@@ -187,6 +187,33 @@ class VisionAttention(LightweightModule):
             packer_l1_acc=True,
         )
 
+        # Max chunk size for SDPA - keep small to fit in L1
+        self.max_chunk_size = 128
+
+    def _get_sdpa_program_config(self, seq_len: int) -> ttnn.SDPAProgramConfig:
+        """Get SDPA program config with chunking for memory efficiency."""
+        # Get device grid size
+        if hasattr(self.mesh_device, "get_devices"):
+            device = self.mesh_device.get_devices()[0]
+        else:
+            device = self.mesh_device
+        grid_size = device.compute_with_storage_grid_size()
+
+        # Pad seq_len to tile boundary
+        padded_seq_len = ((seq_len + 31) // 32) * 32
+        chunk_size = min(padded_seq_len, self.max_chunk_size)
+
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            q_chunk_size=chunk_size,
+            k_chunk_size=chunk_size,
+            exp_approx_mode=False,
+        )
+
+    # Class-level counter for SDPA calls (for debugging)
+    _sdpa_call_count = 0
+    _current_request = 0
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass through attention.
@@ -197,7 +224,19 @@ class VisionAttention(LightweightModule):
         Returns:
             Output tensor of shape [1, 1, seq_len, hidden_dim]
         """
+        from loguru import logger
+
         seq_len = x.shape[-2]
+
+        # Track SDPA calls for debugging
+        VisionAttention._sdpa_call_count += 1
+        call_num = VisionAttention._sdpa_call_count
+
+        # Log every 25 calls (once per ViT layer set)
+        if call_num % 25 == 1 or call_num <= 3:
+            logger.debug(
+                f"VisionAttention SDPA call #{call_num} (request #{VisionAttention._current_request}): seq_len={seq_len}"
+            )
 
         # Reshape for long sequences (only when divisible for memory optimization)
         if seq_len > 2048 and seq_len % 2048 == 0:
@@ -231,18 +270,26 @@ class VisionAttention(LightweightModule):
 
         ttnn.deallocate(qkv)
 
-        # Convert to bfloat8 for SDPA
-        q = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
-        k = ttnn.typecast(k, dtype=ttnn.bfloat8_b)
-        v = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
+        # Convert to bfloat16 for SDPA (changed from bfloat8_b for better precision)
+        q = ttnn.typecast(q, dtype=ttnn.bfloat16)
+        k = ttnn.typecast(k, dtype=ttnn.bfloat16)
+        v = ttnn.typecast(v, dtype=ttnn.bfloat16)
 
         # Scaled dot-product attention (bidirectional - no causal mask)
+        # Use SDPAProgramConfig with chunking to avoid memory issues on repeated calls
+        sdpa_config = self._get_sdpa_program_config(seq_len)
+
+        # Log SDPA config for first few calls
+        if call_num <= 3:
+            logger.debug(f"  SDPA config: q_chunk={sdpa_config.q_chunk_size}, k_chunk={sdpa_config.k_chunk_size}")
+
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
             v,
             is_causal=False,
             scale=self.scale,
+            program_config=sdpa_config,
             compute_kernel_config=self.compute_kernel_config_hifi4,
         )
 

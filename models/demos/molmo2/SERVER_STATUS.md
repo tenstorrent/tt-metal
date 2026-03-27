@@ -3,15 +3,41 @@
 ## Goal
 Get the vLLM server working with **text, images, and video** using the same server code path.
 
-## Current Status: ALL MODALITIES WORKING (2026-03-27)
-
-**Note:** Simple prompts work well, complex descriptive prompts may produce lower quality output.
+## Current Status: VIDEO QUALITY ISSUE (2026-03-27)
 
 | Input Type | Demo (paged attn) | vLLM Server | Notes |
 |------------|-------------------|-------------|-------|
-| Text-only | WORKING | WORKING | Both use traces |
-| Images | WORKING | WORKING | Output is low quality but no crash |
-| Video | WORKING | WORKING | ~22s response time, content generated |
+| Text-only | ✅ WORKING | ✅ WORKING | Both use traces |
+| Images | ✅ WORKING | ✅ WORKING | Coherent, accurate responses |
+| Video | ✅ WORKING | ⚠️ GARBLED OUTPUT | First request works but output is incoherent |
+
+### vLLM Server Test Results (2026-03-27)
+- **Image:** "A small French bulldog" - coherent and accurate
+- **Video:** Garbled output (see Video Quality Bug section below)
+- **Response time:** ~15-25 seconds for image/video requests
+
+### Major Fix: Image Token Reordering (2026-03-27)
+
+**Root Cause:** vLLM's multimodal processing was placing image tokens BEFORE the chat template structure instead of INSIDE the user message.
+
+**Wrong structure:**
+```
+[IMAGE_TOKENS, <|im_start|>user\n, text, <|im_end|>, ...]
+```
+
+**Correct structure:**
+```
+[<|im_start|>user\n, IMAGE_TOKENS, text, <|im_end|>, ...]
+```
+
+**Fix:** Added token reordering in `prepare_inputs_for_multimodal()` in `molmo2_model.py`:
+1. Detect if image tokens are at position 0 (wrong)
+2. Find where `<|im_start|>user\n` sequence starts
+3. Reorder: move image tokens to after the chat template prefix
+
+**Files Changed:**
+- `models/demos/molmo2/tt/molmo2_model.py`: Added token reordering logic
+- `models/demos/molmo2/tt/generator_vllm.py`: Apply chat template in processor to ensure correct `<|image|>` position
 
 ### Fixes Applied (2026-03-26)
 
@@ -268,9 +294,116 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 2. [x] Test demo with `--paged-attention` + video - **CONFIRMED WORKING**
 3. [x] Test demo with `--paged-attention --use-decode-trace` - **OPTIMAL CONFIG FOUND**
 4. [x] Test demo with `--paged-attention --use-trace --use-decode-trace` - **HANGS for video (large seq_len)**
-5. [ ] Compare demo vs vLLM code paths to find the difference
-6. [ ] Debug why vLLM non-traced path crashes in text_attention.py line 319
-7. [ ] Fix the vLLM path to match demo behavior
+5. [x] Compare demo vs vLLM code paths to find the difference
+6. [x] Debug why vLLM non-traced path crashes in text_attention.py line 319
+7. [x] Identified video hang issue on second request
+
+## Video Quality Bug (2026-03-27)
+
+### Finding: Video Output is Garbled/Incoherent
+
+**Symptoms:**
+- Images produce coherent, accurate responses: "A small French bulldog"
+- Videos produce nonsensical output even on first request
+
+**Example Video Response (Big Buck Bunny):**
+```
+"After loading the first clip: The scene, the image appears, an end of the video
+plays as if 1, there appears to fade to fade to a As the pivots back, the sequence,
+following the scene shows a it clears瞬间 of a peaceful forest scene in:, more trees:
+video with a towering tree unfolds with lush..."
+```
+
+**Key Observations:**
+1. **Images work correctly** through the same vision backbone pipeline
+2. **Videos produce garbage** despite using similar code path
+3. **This is a pre-existing bug** - not caused by memory leak fixes
+4. The issue is specific to video frame processing (8 frames × 729 patches = 5832 tokens vs 729 for images)
+
+**Potential Root Causes:**
+1. Video frame extraction or multi-frame pooling has a bug
+2. Video embeddings not being fused correctly with text
+3. Shape mismatch or tensor corruption during video-specific operations
+
+**Note:** This is separate from the "second video request timeout" issue documented below. The quality issue affects even the first video request.
+
+---
+
+## Video Multi-Request Investigation (2026-03-27)
+
+### Finding: Second Video Request Causes Device Timeout
+
+**Symptoms:**
+- First video request: SUCCESS (~40 seconds)
+- Second video request: FAILS with device timeout (~60 seconds)
+- Device becomes "unrecoverable"
+
+**Root Cause Location:**
+- `image_pooling.py` → `scaled_dot_product_attention` (line 342)
+- During second request, SDPA operation causes device timeout
+- Tensor data becomes corrupted (all zeros)
+
+**Debug Trace:**
+```
+Request #1: image_pooling_2d: min=-56.5000, max=62.7500 (SUCCESS)
+Request #2: TIMEOUT: device timeout, potential hang detected, the device is unrecoverable
+Request #2: image_pooling_2d: min=0.0000, max=0.0000 (CORRUPTED)
+```
+
+**Affected Components:**
+- `models/demos/molmo2/tt/image_pooling.py:342` - `scaled_dot_product_attention`
+- Device state not properly cleared between video requests
+
+**Why Qwen VL Doesn't Have This Issue:**
+- Qwen VL does vision processing on CPU (HuggingFace model)
+- Only text model runs on TTNN
+- Sidesteps TTNN vision stability issues entirely
+
+**Potential Fixes:**
+1. **Short-term:** Add device reset between video requests (heavy-handed)
+2. **Medium-term:** Investigate TTNN SDPA memory management for video-sized tensors
+3. **Long-term:** Move vision processing to CPU like Qwen VL (architectural change)
+
+### Fix Attempt (2026-03-27): Device Synchronization
+
+**Hypothesis:** Device state not properly synchronized between video requests.
+
+**Changes in `image_pooling.py`:**
+1. Added request counter tracking
+2. Added `ttnn.synchronize_device()` BEFORE SDPA
+3. Added `ttnn.synchronize_device()` AFTER SDPA
+4. Added final `ttnn.synchronize_device()` before return
+
+**Changes in `vision_backbone.py`:**
+1. Added request counter tracking
+2. Added `ttnn.synchronize_device()` at START of forward_ttnn
+
+**Test Results:** Still fails on second video request.
+
+### Root Cause Confirmed (2026-03-27)
+
+**Pattern Identified:**
+- REQUEST #1 (batch_seq=196, warmup image) - WORKS
+- REQUEST #2 (batch_seq=1568, first video) - WORKS
+- REQUEST #3 (batch_seq=1568, second video) - HANGS at pre-SDPA sync
+
+**Critical Finding:** The issue is specific to running **large batch SDPA twice**.
+- Small batch (196) works repeatedly without issues
+- Large batch (1568) works once, then hangs on second call
+- All syncs complete successfully, but the second large SDPA causes device timeout
+
+**Hypothesis:** TTNN's `scaled_dot_product_attention` has a memory leak or resource corruption when processing large tensors (batch_seq=1568). The first call consumes resources that aren't properly freed, causing the second call to deadlock.
+
+**Evidence:**
+- Vision backbone initial sync completes on REQUEST #3
+- encode_image completes successfully
+- Query/key_value tensors have valid data (non-zero ranges)
+- Device hangs at sync BEFORE SDPA, not during/after
+
+**Recommended Solutions (in order of preference):**
+1. **File TTNN bug report** - This appears to be a TTNN kernel issue with repeated large-tensor SDPA
+2. **Move vision to CPU** - Like Qwen VL, sidesteps TTNN vision entirely (architectural change)
+3. **Device reset between video requests** - Heavy-handed workaround
 
 ## Recommended vLLM Fix
 
@@ -339,4 +472,4 @@ RuntimeError: TT_THROW @ system_memory_manager.cpp:561
 ```
 
 ---
-Last Updated: 2026-03-26
+Last Updated: 2026-03-27 (Video quality bug documented)
