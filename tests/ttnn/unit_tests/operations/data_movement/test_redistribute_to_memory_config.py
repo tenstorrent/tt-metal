@@ -1941,3 +1941,300 @@ def test_redistribute_to_memory_config_rm_nd_sharded_to_interleaved_large_row(
     assert not output_tensor.is_sharded(), "Output tensor should be interleaved, not sharded"
     output_torch = ttnn.to_torch(output_tensor)
     assert_equal(torch_input, output_torch)
+
+
+# ---------------------------------------------------------------------------
+# Tilized ND sharded → interleaved (tile layout)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape, grid",
+    [
+        # 3-D even sharding, single core
+        ([1, 32, 64], [1, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})),
+        # 3-D even sharding across first dim
+        ([6, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))})),
+        # 3-D uneven first dim (5 / 2 → last shard has 1)
+        ([5, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))})),
+        # 3-D uneven last two dims (96 / 64 tiles height, 96 / 64 tiles width)
+        (
+            [4, 96, 96],
+            [2, 64, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ),
+        # 4-D uneven in all dims (3/2 batches, 5/3 channels, 160/96 rows, 96/64 cols)
+        (
+            [3, 5, 160, 96],
+            [2, 3, 96, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+        ),
+        # 4-D even sharding across batch dim
+        (
+            [4, 1, 32, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ),
+        # 3-D uneven all dims, disjoint grid
+        (
+            [3, 160, 160],
+            [2, 64, 64],
+            ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 2), ttnn.CoreCoord(4, 2)),
+                }
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+)
+@pytest.mark.parametrize("output_buffer_type", [ttnn.BufferType.DRAM, ttnn.BufferType.L1])
+def test_redistribute_to_memory_config_tilized_nd_sharded_to_interleaved(
+    device, tensor_shape, shard_shape, grid, shard_orientation, output_buffer_type
+):
+    torch.manual_seed(0)
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+    input_nd_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=shard_orientation)
+    input_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, input_nd_spec)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
+
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_mem_config)
+
+    assert not output_tensor.is_sharded(), "Output tensor should be interleaved, not sharded"
+    output_torch = ttnn.to_torch(output_tensor)
+    assert_equal(torch_input, output_torch)
+
+
+# ---------------------------------------------------------------------------
+# Tilized ND sharded → interleaved with dtype conversion (tile layout)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape, grid",
+    [
+        # 3-D even sharding
+        ([6, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))})),
+        # 3-D uneven last two dims
+        (
+            [4, 96, 96],
+            [2, 64, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ),
+        # 4-D uneven in all dims
+        (
+            [3, 5, 160, 96],
+            [2, 3, 96, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype, pcc",
+    [
+        (ttnn.bfloat16, ttnn.float32, 0.9999),
+        (ttnn.float32, ttnn.bfloat16, 0.9999),
+        (ttnn.bfloat16, ttnn.bfloat8_b, 0.9999),
+        (ttnn.bfloat8_b, ttnn.bfloat16, 0.9999),
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+)
+def test_redistribute_to_memory_config_tilized_nd_sharded_to_interleaved_dtype_conversion(
+    device, tensor_shape, shard_shape, grid, input_dtype, output_dtype, pcc, shard_orientation
+):
+    torch.manual_seed(0)
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+    input_nd_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=shard_orientation)
+    input_mem_config = ttnn.MemoryConfig(ttnn.BufferType.L1, input_nd_spec)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=input_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_mem_config, output_dtype=output_dtype)
+
+    assert not output_tensor.is_sharded(), "Output tensor should be interleaved, not sharded"
+    assert output_tensor.dtype == output_dtype, f"Expected dtype {output_dtype}, got {output_tensor.dtype}"
+    output_torch = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_input, output_torch, pcc=pcc)
+
+
+# ---------------------------------------------------------------------------
+# Tilized legacy 2D sharded → interleaved (tile layout)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "tensor_shape, input_shard_layout, input_shard_shape, input_grid",
+    [
+        # HEIGHT_SHARDED even
+        (
+            [1, 1, 128, 64],
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (32, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ),
+        # HEIGHT_SHARDED uneven (160 rows / 64 → 3 shards, last has 32)
+        (
+            [1, 1, 160, 64],
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (64, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+        ),
+        # WIDTH_SHARDED even
+        (
+            [1, 1, 64, 128],
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (64, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ),
+        # WIDTH_SHARDED uneven (160 cols / 64 → 3 shards, last has 32)
+        (
+            [1, 1, 64, 160],
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (64, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+        ),
+        # BLOCK_SHARDED even (2×2 grid)
+        (
+            [1, 1, 128, 128],
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (64, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+        # BLOCK_SHARDED uneven (192×192 on 3×3, each shard 64×64)
+        (
+            [1, 1, 192, 192],
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (64, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2))}),
+        ),
+        # HEIGHT_SHARDED 4-D (3×5×160×96)
+        (
+            [3, 5, 160, 96],
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (96, 96),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+)
+@pytest.mark.parametrize("output_buffer_type", [ttnn.BufferType.DRAM, ttnn.BufferType.L1])
+def test_redistribute_to_memory_config_tilized_legacy_2d_sharded_to_interleaved(
+    device, tensor_shape, input_shard_layout, input_shard_shape, input_grid, shard_orientation, output_buffer_type
+):
+    torch.manual_seed(0)
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+    input_shard_spec = ttnn.ShardSpec(input_grid, input_shard_shape, shard_orientation)
+    input_mem_config = ttnn.MemoryConfig(input_shard_layout, ttnn.BufferType.L1, input_shard_spec)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
+
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_mem_config)
+
+    assert not output_tensor.is_sharded(), "Output tensor should be interleaved, not sharded"
+    output_torch = ttnn.to_torch(output_tensor)
+    assert_equal(torch_input, output_torch)
+
+
+# ---------------------------------------------------------------------------
+# Tilized legacy 2D sharded → interleaved with dtype conversion (tile layout)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "tensor_shape, input_shard_layout, input_shard_shape, input_grid",
+    [
+        # HEIGHT_SHARDED even
+        (
+            [1, 1, 128, 64],
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (32, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ),
+        # BLOCK_SHARDED uneven (192×192 on 3×3)
+        (
+            [1, 1, 192, 192],
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (64, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 2))}),
+        ),
+        # HEIGHT_SHARDED 4-D
+        (
+            [3, 5, 160, 96],
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            (96, 96),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype, pcc",
+    [
+        (ttnn.bfloat16, ttnn.float32, 0.9999),
+        (ttnn.float32, ttnn.bfloat16, 0.9999),
+        (ttnn.bfloat16, ttnn.bfloat8_b, 0.9999),
+        (ttnn.bfloat8_b, ttnn.bfloat16, 0.9999),
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_orientation",
+    [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
+)
+def test_redistribute_to_memory_config_tilized_legacy_2d_sharded_to_interleaved_dtype_conversion(
+    device,
+    tensor_shape,
+    input_shard_layout,
+    input_shard_shape,
+    input_grid,
+    input_dtype,
+    output_dtype,
+    pcc,
+    shard_orientation,
+):
+    torch.manual_seed(0)
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+
+    input_shard_spec = ttnn.ShardSpec(input_grid, input_shard_shape, shard_orientation)
+    input_mem_config = ttnn.MemoryConfig(input_shard_layout, ttnn.BufferType.L1, input_shard_spec)
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=input_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, output_mem_config, output_dtype=output_dtype)
+
+    assert not output_tensor.is_sharded(), "Output tensor should be interleaved, not sharded"
+    assert output_tensor.dtype == output_dtype, f"Expected dtype {output_dtype}, got {output_tensor.dtype}"
+    output_torch = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_input, output_torch, pcc=pcc)

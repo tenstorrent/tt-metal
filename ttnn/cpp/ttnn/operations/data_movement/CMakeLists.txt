@@ -244,6 +244,7 @@ target_sources(
             sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_row_major_sharded_program_factory.hpp
             sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_tilized_sharded_program_factory.hpp
             sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_row_major_default_program_factory.hpp
+            sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_tilized_default_program_factory.hpp
             sharded/reshard/reshard_nanobind.hpp
             sharded/reshard/device/reshard_device_operation.hpp
             sharded/reshard/device/reshard_device_operation_types.hpp
@@ -443,6 +444,7 @@ target_sources(
         sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_row_major_sharded_program_factory.cpp
         sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_tilized_sharded_program_factory.cpp
         sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_row_major_default_program_factory.cpp
+        sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_tilized_default_program_factory.cpp
         sharded/redistribute_to_memory_config/redistribute_to_memory_config.cpp
         sharded/reshard/device/reshard_device_operation.cpp
         sharded/reshard/device/reshard_program_factory_same_width.cpp

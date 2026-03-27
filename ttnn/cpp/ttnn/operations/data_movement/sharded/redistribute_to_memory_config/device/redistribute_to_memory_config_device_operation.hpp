@@ -13,6 +13,7 @@
 #include "redistribute_to_memory_config_row_major_sharded_program_factory.hpp"
 #include "redistribute_to_memory_config_tilized_sharded_program_factory.hpp"
 #include "redistribute_to_memory_config_row_major_default_program_factory.hpp"
+#include "redistribute_to_memory_config_tilized_default_program_factory.hpp"
 
 namespace ttnn::prim {
 
@@ -25,7 +26,8 @@ struct RedistributeToMemoryConfigDeviceOperation {
     using program_factory_t = std::variant<
         RedistributeToMemoryConfigRowMajorShardedProgramFactory,
         RedistributeToMemoryConfigTilizedShardedProgramFactory,
-        RedistributeToMemoryConfigRowMajorDefaultProgramFactory>;
+        RedistributeToMemoryConfigRowMajorDefaultProgramFactory,
+        RedistributeToMemoryConfigTilizedDefaultProgramFactory>;
     static program_factory_t select_program_factory(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 

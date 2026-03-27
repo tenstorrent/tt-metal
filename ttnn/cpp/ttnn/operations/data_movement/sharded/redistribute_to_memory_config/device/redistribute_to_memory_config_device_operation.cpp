@@ -54,7 +54,7 @@ RedistributeToMemoryConfigDeviceOperation::select_program_factory(
         }
     }
     if (input_tensor.layout() == Layout::TILE) {
-        return RedistributeToMemoryConfigTilizedShardedProgramFactory{};  // TODO: will implement tilized path next!
+        return RedistributeToMemoryConfigTilizedDefaultProgramFactory{};
     }
     return RedistributeToMemoryConfigRowMajorDefaultProgramFactory{};
 }
