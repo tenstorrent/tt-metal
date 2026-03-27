@@ -18,6 +18,16 @@
     DebugPrinter()
 #endif
 
+#define ENABLE_PERF_TRACE 1
+#if ENABLE_PERF_TRACE
+inline uint32_t read_wall_clock() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
+#define PERF_BEGIN(var) uint32_t var##_start = read_wall_clock()
+#define PERF_END(var, accum) accum += (read_wall_clock() - var##_start)
+#else
+#define PERF_BEGIN(var)
+#define PERF_END(var, accum)
+#endif
+
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 
 void kernel_main() {
@@ -130,6 +140,22 @@ void kernel_main() {
     DPRINT_DISPATCH << "Reader kernel: tokens=[" << token_start_idx << "," << token_end_idx << ")"
                     << " dispatch_core=" << dispatch_core_idx << "/" << num_dispatch_cores << ENDL();
 
+#if ENABLE_PERF_TRACE
+    uint32_t perf_total_start = read_wall_clock();
+    uint32_t perf_init_cycles = 0;
+    uint32_t perf_dram_read_cycles = 0;
+    uint32_t perf_local_write_cycles = 0;
+    uint32_t perf_l1_payload_copy_cycles = 0;
+    uint32_t perf_l1_metadata_copy_cycles = 0;
+    uint32_t perf_cb_route_cycles = 0;
+    uint32_t perf_local_barrier_cycles = 0;
+    uint32_t perf_next_batch_read_cycles = 0;
+    uint32_t perf_next_batch_barrier_cycles = 0;
+    uint32_t perf_num_local = 0;
+    uint32_t perf_num_remote = 0;
+    PERF_BEGIN(init);
+#endif
+
     // Read offsets into local scratch
     const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address, offsets_page_size);
     cb_reserve_back(cb_offsets_id, offsets_pages);
@@ -151,6 +177,8 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     int32_t* expert_dispatch_table = (int32_t*)dispatch_table_base_addr;
+
+    PERF_END(init, perf_init_cycles);
 
     // Set up batched scratch buffers
     constexpr uint32_t read_batch_size = 8;
@@ -176,12 +204,14 @@ void kernel_main() {
         (token_start_idx + read_batch_size < token_end_idx) ? token_start_idx + read_batch_size : token_end_idx;
     uint32_t first_batch_count = first_batch_end - token_start_idx;
     if (first_batch_count > 0) {
+        PERF_BEGIN(dram_prefetch);
         for (uint32_t t = 0; t < first_batch_count; t++) {
             noc_async_read_page(token_start_idx + t, input_addr_gen, input_base + t * aligned_input_page_size);
             noc_async_read_page(token_start_idx + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
             noc_async_read_page(token_start_idx + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
         }
         noc_async_read_barrier();
+        PERF_END(dram_prefetch, perf_dram_read_cycles);
     }
 
     // Main batch loop
@@ -190,6 +220,10 @@ void kernel_main() {
             (batch_start + read_batch_size < token_end_idx) ? batch_start + read_batch_size : token_end_idx;
         uint32_t batch_count = batch_end - batch_start;
         bool batch_did_local_write = false;
+
+        uint32_t remote_count = 0;
+        constexpr uint32_t max_remotes_per_batch = read_batch_size * num_experts_per_tok;
+        uint32_t remote_payload_src[max_remotes_per_batch];
 
         for (uint32_t t = 0; t < batch_count; t++) {
             uint32_t token_idx = batch_start + t;
@@ -219,27 +253,31 @@ void kernel_main() {
                 }
                 auto page_idx = expert_index_within_chip * max_dispatched_tokens_per_expert + offset;
 
-                // Construct metadata
-                volatile tt_l1_ptr int32_t* metadata =
-                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_temp_addr);
-                metadata[0] = linearized_mesh_coord;
-                metadata[1] = token_idx;
-                metadata[2] = k;
-                metadata[3] = routed_expert;
-                metadata[4] = static_cast<int16_t>(weights[k]);
-
                 if (expert_chip == linearized_mesh_coord) {
+                    volatile tt_l1_ptr int32_t* metadata =
+                        reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_temp_addr);
+                    metadata[0] = linearized_mesh_coord;
+                    metadata[1] = token_idx;
+                    metadata[2] = k;
+                    metadata[3] = routed_expert;
+                    metadata[4] = static_cast<int16_t>(weights[k]);
+
+                    PERF_BEGIN(local_wr);
                     noc_async_write_page(page_idx, output_addr_gen, input_scratch_addr);
                     noc_async_write_page(page_idx, metadata_addr_gen, metadata_temp_addr);
                     noc_async_writes_flushed();
+                    PERF_END(local_wr, perf_local_write_cycles);
                     batch_did_local_write = true;
+#if ENABLE_PERF_TRACE
+                    perf_num_local++;
+#endif
                 } else {
                     if constexpr (is_1d_topology<topology>()) {
                         uint32_t route = get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
                         uint32_t distance =
                             manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
 
-                        // Push route info to writer
+                        PERF_BEGIN(cb_route);
                         cb_reserve_back(cb_route_info_id, 1);
                         volatile tt_l1_ptr uint32_t* route_info =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_route_info_id));
@@ -248,20 +286,25 @@ void kernel_main() {
                         route_info[2] = page_idx;
                         route_info[3] = 0;
                         cb_push_back(cb_route_info_id, 1);
+                        PERF_END(cb_route, perf_cb_route_cycles);
 
-                        // Push payload to writer
-                        cb_reserve_back(cb_payload_for_writer_id, 1);
-                        uint32_t payload_dst = get_write_ptr(cb_payload_for_writer_id);
-                        noc_async_read(get_noc_addr(input_scratch_addr), payload_dst, aligned_input_page_size);
-                        noc_async_read_barrier();
-                        cb_push_back(cb_payload_for_writer_id, 1);
-
-                        // Push metadata to writer
+                        PERF_BEGIN(l1_meta);
                         cb_reserve_back(cb_metadata_for_writer_id, 1);
-                        uint32_t metadata_dst = get_write_ptr(cb_metadata_for_writer_id);
-                        noc_async_read(get_noc_addr(metadata_temp_addr), metadata_dst, aligned_metadata_page_size);
-                        noc_async_read_barrier();
+                        volatile tt_l1_ptr int32_t* meta_dst =
+                            reinterpret_cast<volatile tt_l1_ptr int32_t*>(get_write_ptr(cb_metadata_for_writer_id));
+                        meta_dst[0] = linearized_mesh_coord;
+                        meta_dst[1] = token_idx;
+                        meta_dst[2] = k;
+                        meta_dst[3] = routed_expert;
+                        meta_dst[4] = static_cast<int16_t>(weights[k]);
                         cb_push_back(cb_metadata_for_writer_id, 1);
+                        PERF_END(l1_meta, perf_l1_metadata_copy_cycles);
+
+                        remote_payload_src[remote_count] = input_scratch_addr;
+                        remote_count++;
+#if ENABLE_PERF_TRACE
+                        perf_num_remote++;
+#endif
                     }
                 }
 
@@ -269,10 +312,37 @@ void kernel_main() {
             }
         }
 
+        if (remote_count > 0) {
+            PERF_BEGIN(l1_payload);
+            uint32_t sent = 0;
+            while (sent < remote_count) {
+                uint32_t fifo_lim = get_local_cb_interface(cb_payload_for_writer_id).fifo_limit;
+                uint32_t wr = get_write_ptr(cb_payload_for_writer_id);
+                uint32_t pages_to_end = (fifo_lim - wr) / aligned_input_page_size;
+                uint32_t chunk = remote_count - sent;
+                if (chunk > pages_to_end) {
+                    chunk = pages_to_end;
+                }
+                cb_reserve_back(cb_payload_for_writer_id, chunk);
+                uint32_t base = get_write_ptr(cb_payload_for_writer_id);
+                for (uint32_t i = 0; i < chunk; i++) {
+                    noc_async_read(
+                        get_noc_addr(remote_payload_src[sent + i]),
+                        base + i * aligned_input_page_size,
+                        aligned_input_page_size);
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_payload_for_writer_id, chunk);
+                sent += chunk;
+            }
+            PERF_END(l1_payload, perf_l1_payload_copy_cycles);
+        }
+
         // Issue next batch DRAM reads BEFORE write barrier to overlap read/write NOC channels
         uint32_t next_batch_start = batch_start + read_batch_size;
         bool has_next_batch = (next_batch_start < token_end_idx);
         if (has_next_batch) {
+            PERF_BEGIN(next_batch_rd);
             uint32_t next_batch_end = (next_batch_start + read_batch_size < token_end_idx)
                                           ? next_batch_start + read_batch_size
                                           : token_end_idx;
@@ -284,14 +354,19 @@ void kernel_main() {
                 noc_async_read_page(
                     next_batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
             }
+            PERF_END(next_batch_rd, perf_next_batch_read_cycles);
         }
 
         if (batch_did_local_write) {
+            PERF_BEGIN(local_barr);
             noc_async_write_barrier();
+            PERF_END(local_barr, perf_local_barrier_cycles);
         }
 
         if (has_next_batch) {
+            PERF_BEGIN(next_barr);
             noc_async_read_barrier();
+            PERF_END(next_barr, perf_next_batch_barrier_cycles);
         }
     }
 
@@ -304,4 +379,15 @@ void kernel_main() {
     route_info[2] = 0;
     route_info[3] = 0;
     cb_push_back(cb_route_info_id, 1);
+
+#if ENABLE_PERF_TRACE
+    uint32_t perf_total = read_wall_clock() - perf_total_start;
+    DPRINT << "PERF dispatch_reader chip=" << linearized_mesh_coord << " core=" << dispatch_core_idx
+           << " total=" << perf_total << " init=" << perf_init_cycles << " dram_read=" << perf_dram_read_cycles
+           << " local_wr=" << perf_local_write_cycles << " l1_payload=" << perf_l1_payload_copy_cycles
+           << " l1_meta=" << perf_l1_metadata_copy_cycles << " cb_route=" << perf_cb_route_cycles
+           << " local_barr=" << perf_local_barrier_cycles << " next_rd=" << perf_next_batch_read_cycles
+           << " next_barr=" << perf_next_batch_barrier_cycles << " n_local=" << perf_num_local
+           << " n_remote=" << perf_num_remote << ENDL();
+#endif
 }
