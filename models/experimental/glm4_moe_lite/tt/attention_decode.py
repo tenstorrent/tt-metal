@@ -18,9 +18,9 @@ from typing import Any
 import torch
 
 import ttnn
-from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.demos.glm4_moe_lite.tt.linear_helpers import attn_linear, mlp_linear, tp_row_parallel_linear
-from models.demos.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
+from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+from models.experimental.glm4_moe_lite.tt.linear_helpers import attn_linear, mlp_linear, tp_row_parallel_linear
+from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
 
 def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -> None:

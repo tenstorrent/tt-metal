@@ -15,13 +15,13 @@ from typing import Any
 import torch
 
 import ttnn
-from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.demos.glm4_moe_lite.tt.decoder_layer_tt import (
+from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+from models.experimental.glm4_moe_lite.tt.decoder_layer_tt import (
     prepare_decode_rope_and_positions_tt,
     prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt,
     run_decoder_layer_decode_one_step_update_cache_tt,
 )
-from models.demos.glm4_moe_lite.tt.tt_embedding import run_tt_embedding
+from models.experimental.glm4_moe_lite.tt.tt_embedding import run_tt_embedding
 
 
 def _is_mesh_device(device: Any) -> bool:

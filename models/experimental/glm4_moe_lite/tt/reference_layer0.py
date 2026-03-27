@@ -14,7 +14,7 @@ from transformers import AutoTokenizer
 from transformers.models.deepseek_v3.modeling_deepseek_v3 import DeepseekV3Attention
 from transformers.models.glm4_moe.modeling_glm4_moe import Glm4MoeMLP, Glm4MoeRMSNorm, Glm4MoeRotaryEmbedding
 
-from models.demos.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
+from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
 
 
 @dataclass(frozen=True)

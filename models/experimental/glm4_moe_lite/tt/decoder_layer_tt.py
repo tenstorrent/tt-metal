@@ -12,10 +12,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.glm4_moe_lite.tt.attention_decode import flash_mla_and_output, kv_cache_update, q_projection
-from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.demos.glm4_moe_lite.tt.mlp_decode import dense_mlp_forward, moe_mlp_forward
-from models.demos.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
+from models.experimental.glm4_moe_lite.tt.attention_decode import flash_mla_and_output, kv_cache_update, q_projection
+from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+from models.experimental.glm4_moe_lite.tt.mlp_decode import dense_mlp_forward, moe_mlp_forward
+from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
 _SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
 if _SIGNPOST_ENABLED:
@@ -283,7 +283,7 @@ def _fused_kv_branch_forward(
     Input x: [1,1,1,2048] TILE DRAM (batch=1 only).
     Returns kvpe_new: [1,1,1,576] TILE DRAM.
     """
-    from models.demos.glm4_moe_lite.fused_ops.kv_cache_branch.op import GLMKVCacheBranch
+    from models.experimental.glm4_moe_lite.fused_ops.kv_cache_branch.op import GLMKVCacheBranch
 
     # 1. Convert x to ROW_MAJOR DRAM (kernel reads contiguous bytes as TILE_1x32 tiles)
     x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
@@ -987,7 +987,7 @@ def run_decoder_layer_prefill_update_cache_tt(
     else:
         # MoE path:
         # - shared_experts MLP (dense) + routed experts MLP
-        from models.demos.glm4_moe_lite.tt.moe_tt import (
+        from models.experimental.glm4_moe_lite.tt.moe_tt import (
             moe_dense_experts_forward_prefill_tt,
             moe_packed_experts_forward_prefill_tt,
             moe_sparse_experts_forward_tt,

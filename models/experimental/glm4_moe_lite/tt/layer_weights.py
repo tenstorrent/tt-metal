@@ -12,8 +12,8 @@ import torch
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
-from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.demos.glm4_moe_lite.tt.weights import LazyStateDict
+from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict
 
 
 def _env_tp_enabled() -> bool:
