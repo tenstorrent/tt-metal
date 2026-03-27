@@ -23,10 +23,10 @@
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/host_api.hpp>
 
-#include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_manager.hpp"
-#include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_manager_types.hpp"
-#include "models/demos/deepseek_v3_b1/pipeline_manager/socket_pipeline.hpp"
-#include "models/demos/deepseek_v3_b1/pipeline_manager/wire_format.hpp"
+#include "pipeline_manager/pipeline_manager.hpp"
+#include "pipeline_manager/pipeline_manager_types.hpp"
+#include "pipeline_manager/socket_pipeline.hpp"
+#include "pipeline_manager/wire_format.hpp"
 
 namespace pm = models::demos::deepseek_v3_b1::pipeline_manager;
 

@@ -8,7 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_interface.hpp"
+#include "pipeline_manager/pipeline_interface.hpp"
 
 namespace models::demos::deepseek_v3_b1::pipeline_manager {
 

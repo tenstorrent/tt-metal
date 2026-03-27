@@ -9,7 +9,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_manager_types.hpp"
+#include "pipeline_manager/pipeline_manager_types.hpp"
 
 namespace models::demos::deepseek_v3_b1::pipeline_manager {
 

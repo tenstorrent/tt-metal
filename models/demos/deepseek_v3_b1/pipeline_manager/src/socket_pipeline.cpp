@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "models/demos/deepseek_v3_b1/pipeline_manager/socket_pipeline.hpp"
+#include "pipeline_manager/socket_pipeline.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -11,7 +11,7 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 
-#include "models/demos/deepseek_v3_b1/pipeline_manager/wire_format.hpp"
+#include "pipeline_manager/wire_format.hpp"
 
 namespace models::demos::deepseek_v3_b1::pipeline_manager {
 
@@ -63,9 +63,6 @@ void SocketPipeline::shutdown() {
     impl_->write_buf = serialize_inject(sentinel);
     impl_->h2d_socket->write(impl_->write_buf.data(), 1);
 
-    // Drain all pending results until the kernel echoes the sentinel back.
-    // In-flight tokens from cancelled users may still have results queued
-    // in the D2H socket ahead of the sentinel echo.
     while (true) {
         impl_->read_buf.fill(0);
         impl_->d2h_socket->read(impl_->read_buf.data(), 1);

@@ -1,4 +1,4 @@
-#include "models/demos/deepseek_v3_b1/pipeline_manager/socket_connector.hpp"
+#include "socket_connector.hpp"
 
 #include <algorithm>
 

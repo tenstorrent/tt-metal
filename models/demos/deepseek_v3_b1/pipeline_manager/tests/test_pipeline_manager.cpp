@@ -12,9 +12,9 @@
 #include <thread>
 #include <vector>
 
-#include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_interface.hpp"
-#include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_manager.hpp"
-#include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_manager_types.hpp"
+#include "pipeline_manager/pipeline_interface.hpp"
+#include "pipeline_manager/pipeline_manager.hpp"
+#include "pipeline_manager/pipeline_manager_types.hpp"
 
 namespace pm = models::demos::deepseek_v3_b1::pipeline_manager;
 

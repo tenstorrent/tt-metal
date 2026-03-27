@@ -9,8 +9,8 @@
 #include <cstdint>
 #include <iostream>
 
-#include "models/demos/deepseek_v3_b1/pipeline_manager/bounded_queue.hpp"
-#include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_manager_types.hpp"
+#include "bounded_queue.hpp"
+#include "pipeline_manager/pipeline_manager_types.hpp"
 
 namespace models::demos::deepseek_v3_b1::pipeline_manager {
 

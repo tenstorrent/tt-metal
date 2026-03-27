@@ -2,19 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_manager.hpp"
+#include "pipeline_manager/pipeline_manager.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <thread>
 #include <iostream>
 
-#include "models/demos/deepseek_v3_b1/pipeline_manager/bounded_queue.hpp"
-#include "models/demos/deepseek_v3_b1/pipeline_manager/decode_staging.hpp"
-#include "models/demos/deepseek_v3_b1/pipeline_manager/free_id_pool.hpp"
-#include "models/demos/deepseek_v3_b1/pipeline_manager/pipeline_interface.hpp"
-#include "models/demos/deepseek_v3_b1/pipeline_manager/prefill_queue.hpp"
-#include "models/demos/deepseek_v3_b1/pipeline_manager/user_table.hpp"
+#include "bounded_queue.hpp"
+#include "decode_staging.hpp"
+#include "free_id_pool.hpp"
+#include "pipeline_manager/pipeline_interface.hpp"
+#include "prefill_queue.hpp"
+#include "user_table.hpp"
 
 namespace models::demos::deepseek_v3_b1::pipeline_manager {
 
@@ -55,11 +55,9 @@ struct PipelineManager::Impl {
             return;
         }
 
-        // Phase 1: Signal threads to exit their loops.
         running.store(false, std::memory_order_release);
         pipeline.request_stop();
 
-        // Phase 2: Wait for threads to drain and exit.
         std::cout << "Start joining writer thread" << std::endl;
         if (writer_thread.joinable()) {
             writer_thread.join();
@@ -69,7 +67,6 @@ struct PipelineManager::Impl {
         }
 
         std::cout << "Start shutting down pipeline" << std::endl;
-        // Phase 3: Exclusive socket access — send sentinel to kill the device kernel.
         pipeline.shutdown();
         std::cout << "Finished shutting down pipeline" << std::endl;
     }
@@ -81,7 +78,6 @@ struct PipelineManager::Impl {
 
     void writer_loop() {
         while (running.load(std::memory_order_acquire)) {
-            // --- Priority 1: Decode tokens ---
             int uid;
             int32_t tok;
             int32_t pos;
@@ -105,7 +101,6 @@ struct PipelineManager::Impl {
                 continue;
             }
 
-            // --- Priority 2: Prefill tokens (chunked round-robin) ---
             int pfuid;
             if (prefill_queue.try_front(pfuid)) {
                 if (cancel_pending.is_set(pfuid)) {
@@ -156,7 +151,6 @@ struct PipelineManager::Impl {
                 continue;
             }
 
-            // No work
             std::this_thread::yield();
         }
     }
@@ -208,8 +202,6 @@ struct PipelineManager::Impl {
             if (is_complete) {
                 user_table.state[uid].store(UserState::COMPLETE, std::memory_order_release);
             } else {
-                // Decode loopback: stage token for re-injection by Writer.
-                // current_position is the next free KV slot.
                 int32_t next_pos = user_table.current_position[uid].load(std::memory_order_acquire);
                 decode_staging.stage(uid, tok, next_pos);
                 user_table.current_position[uid].store(next_pos + 1, std::memory_order_release);
@@ -290,10 +282,6 @@ struct PipelineManager::Impl {
     }
 
     // Safe to call from any thread (writer, reader, or API handler).
-    // cancel_pending stays set until the slot is re-allocated — this prevents
-    // the writer from injecting stale decode staging entries after the uid
-    // is freed. All operations here are idempotent, so concurrent calls from
-    // multiple threads are harmless.
     void maybe_finalize_cleanup(int uid) {
         if (cancel_pending.is_set(uid) && user_table.in_flight_count[uid].load(std::memory_order_acquire) == 0) {
             pipeline.reset_kv(uid);
