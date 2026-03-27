@@ -150,7 +150,7 @@ def upsample_latent_reference(video_latent, upsampler_path, checkpoint_path):
         checkpoint_path=checkpoint_path,
         spatial_upsampler_path=upsampler_path,
     )
-    upsampler = ledger.spatial_latent_upsampler()
+    upsampler = ledger.spatial_upsampler()
 
     with torch.no_grad():
         upsampled = upsampler(video_latent.bfloat16())
