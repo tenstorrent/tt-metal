@@ -16,7 +16,7 @@ At a high level (no GPU path; reference and prep run on **CPU**, model math on *
 **Key details:**
 
 - Transformer and VAE TT code live under `tt/`; weights are mapped from the reference checkpoints.
-- Demo entrypoint is **`tests/demo/inference_ttnn.py`** (TTNN path); `tests/demo/inference_torch.py` is a CPU PyTorch reference runner for comparison/debug.
+- Demo entrypoint is **`tests/demo/demo.py`** (TTNN path); `tests/demo/inference_torch.py` is a CPU PyTorch reference runner for comparison/debug.
 
 ## Directory Structure
 
@@ -37,7 +37,7 @@ lingbot_va/
 ├── tests/
 │   ├── pcc/                    # PCC (accuracy) tests vs reference
 │   ├── perf/                   # Device perf + E2E timing (pytest)
-│   ├── demo/                   # inference_ttnn.py, inference_torch.py, sample_images/
+│   ├── demo/                   # demo.py, inference_torch.py, sample_images/
 │   └── download_pretrained_weights.py
 └── README.md
 ```
@@ -120,27 +120,14 @@ Sample RobotWin camera PNGs live under `tests/demo/sample_images/robotwin/` (thr
 From the **tt-metal** repo root:
 
 ```bash
-python3 models/experimental/lingbot_va/tests/demo/inference_ttnn.py \
+python3 models/experimental/lingbot_va/tests/demo/demo.py \
   --checkpoint models/experimental/lingbot_va/reference/checkpoints/ \
   --images-dir models/experimental/lingbot_va/tests/demo/sample_images/robotwin/ \
-  --prompt "Lift the cup from the table" \
+  --prompt "Use an arm to place the smooth blue drinking cup on the wooden coaster" \
   --generate
 ```
 
 By default, `demo.mp4` is written under `tests/demo/` (see `--save-dir` to override). Use `--num-chunks` to change how many chunks are stitched into the video.
-
-### Inference (single-chunk action)
-
-Omit `--generate` to run reset + one infer chunk and print the action shape; optional `--output action.npy` saves the array.
-
-```bash
-python3 models/experimental/lingbot_va/tests/demo/inference_ttnn.py \
-  --checkpoint models/experimental/lingbot_va/reference/checkpoints/ \
-  --images-dir models/experimental/lingbot_va/tests/demo/sample_images/robotwin/ \
-  --prompt "Lift the cup from the table"
-```
-
-You can set `LINGBOT_VA_CHECKPOINT` instead of `--checkpoint` when convenient.
 
 ## Troubleshooting
 
@@ -159,7 +146,7 @@ Ensure `--images-dir` contains the three `observation.images.*.png` files, or se
 | Transformer | Wan-style 3D blocks; Lingbot `in_channels=48`, action head, UMT5 conditioning |
 | VAE | Wan 2.x causal encoder/decoder; TT path uses BTHWC layouts and conv blocking tuned for Wormhole |
 | Text | UMT5 encoder; TT port in `models.tt_dit.encoders.umt5` |
-| Demo TT entry | `tests/demo/inference_ttnn.py` |
+| Demo TT entry | `tests/demo/demo.py` |
 
 ## License
 

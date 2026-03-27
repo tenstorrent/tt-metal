@@ -9,6 +9,7 @@ import ttnn
 from diffusers import AutoencoderKLWan
 
 from models.common.metrics import compute_pcc
+from models.experimental.lingbot_va.tests.mesh_utils import mesh_shape_request_param
 from models.experimental.lingbot_va.tt.vae_encoder import WanVAEEncoder
 from models.tt_dit.parallel.config import ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
@@ -20,14 +21,6 @@ BATCH_SIZE = 1
 VIDEO_T = 1
 VIDEO_H = 256
 VIDEO_W = 320
-
-
-@pytest.fixture(scope="module")
-def mesh_device():
-    device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
-    device.enable_program_cache()
-    yield device
-    ttnn.close_mesh_device(device)
 
 
 @pytest.fixture(scope="module")
@@ -106,8 +99,14 @@ def encode_ttnn(vae, video, mesh_device):
     return out.permute(0, 4, 1, 2, 3)
 
 
+@pytest.mark.parametrize(
+    "mesh_device",
+    [mesh_shape_request_param()],
+    indirect=True,
+)
 @pytest.mark.timeout(0)
 def test_encode_one_video_pcc(mesh_device, vae):
+    mesh_device.enable_program_cache()
     torch.manual_seed(42)
     video = torch.randn(BATCH_SIZE, 3, VIDEO_T, VIDEO_H, VIDEO_W, dtype=torch.float32) * 2.0 - 1.0
 

@@ -57,6 +57,7 @@ from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor, Vae
 from models.tt_dit.parallel.manager import CCLManager
 
 # TTNN components: text encoder, transformer, VAE encoder and decoder wrappers (all inference is TTNN)
+from models.experimental.lingbot_va.tt.transformer_wan import NUM_HEADS as LINGBOT_NUM_HEADS
 from tt.utils import (
     load_text_encoder as load_text_encoder_tt,
     load_transformer as load_transformer_tt,
@@ -273,13 +274,22 @@ def load_message_from_files(
 
 def _open_lingbot_mesh_device():
     """
-    Open a (1,1) mesh device. Optional env (used by perf tests, e.g. 2 CQ, no trace buffer):
+    Open mesh for inference. If ``MESH_DEVICE`` is set, shape matches tt_transformers / PCC tests
+    (N150 ``(1,1)``, N300 ``(1,2)``, etc.). If unset, demo uses one column per PCIe device when
+    count is 1 or 2 (N150 vs N300); more devices default to ``(1, 1)`` until ``MESH_DEVICE`` is set.
+    Multi-chip opens use tensor / sequence /
+    VAE parallel factors derived from ``mesh_device.shape`` unless
+    ``LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1`` (see ``mesh_utils.inference_work_mesh_from_opened``).
+
+    Optional env (used by perf tests, e.g. 2 CQ, no trace buffer):
 
     - LINGBOT_VA_NUM_COMMAND_QUEUES: default 1 if unset (ttnn default).
     - LINGBOT_VA_TRACE_REGION_SIZE: if set (e.g. 0 for no trace region), passed to open_mesh_device.
     - LINGBOT_VA_L1_SMALL_SIZE, LINGBOT_VA_WORKER_L1_SIZE: optional overrides.
     """
-    kwargs: dict = {"mesh_shape": ttnn.MeshShape(1, 1)}
+    from models.experimental.lingbot_va.tests.mesh_utils import ttnn_mesh_shape_for_inference_demo
+
+    kwargs: dict = {"mesh_shape": ttnn_mesh_shape_for_inference_demo()}
     n_cq = os.environ.get("LINGBOT_VA_NUM_COMMAND_QUEUES")
     if n_cq is not None and str(n_cq).strip() != "":
         kwargs["num_command_queues"] = int(n_cq)
@@ -295,6 +305,46 @@ def _open_lingbot_mesh_device():
     return ttnn.open_mesh_device(**kwargs)
 
 
+def _lingbot_dit_parallel_config(mesh_device: ttnn.MeshDevice) -> DiTParallelConfig:
+    """Align with PCC ``test_transformer_wan._make_parallel_config`` (sp_axis=0, tp_axis=1)."""
+    rows, cols = tuple(mesh_device.shape)
+    return DiTParallelConfig(
+        tensor_parallel=ParallelFactor(mesh_axis=1, factor=cols),
+        sequence_parallel=ParallelFactor(mesh_axis=0, factor=rows),
+        cfg_parallel=None,
+    )
+
+
+def _lingbot_vae_hw_parallel_config(mesh_device: ttnn.MeshDevice) -> VaeHWParallelConfig:
+    """Shard VAE over mesh rows (H) and columns (W), same axes as tt_dit Wan VAE."""
+    rows, cols = tuple(mesh_device.shape)
+    return VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=rows, mesh_axis=0),
+        width_parallel=ParallelFactor(factor=cols, mesh_axis=1),
+    )
+
+
+def _close_lingbot_mesh_stack(models: dict) -> None:
+    """Close ``mesh_device`` and optional ``mesh_device_parent`` (multi-chip open + submesh)."""
+    work = models.pop("mesh_device", None)
+    parent = models.pop("mesh_device_parent", None)
+    if work is None:
+        return
+    try:
+        ttnn.synchronize_device(work)
+    except Exception as e:
+        logger.warning("synchronize_device before mesh close: %s", e)
+    try:
+        ttnn.close_mesh_device(work)
+    except Exception as e:
+        logger.warning("close_mesh_device(work): %s", e)
+    if parent is not None:
+        try:
+            ttnn.close_mesh_device(parent)
+        except Exception as e:
+            logger.warning("close_mesh_device(parent): %s", e)
+
+
 def _load_models_phase1(config, load_text_encoder=True):
     """
     Load VAE (PyTorch, once; reused for streaming_vae_half when robotwin_tshape), tokenizer, and open mesh device.
@@ -308,13 +358,37 @@ def _load_models_phase1(config, load_text_encoder=True):
     enable_offload = getattr(config, "enable_offload", True)
     ckpt = config.wan22_pretrained_model_name_or_path
 
-    mesh_device = _open_lingbot_mesh_device()
+    from models.experimental.lingbot_va.tests.mesh_utils import inference_work_mesh_from_opened
+
+    opened_mesh = _open_lingbot_mesh_device()
+    mesh_device, mesh_parent = inference_work_mesh_from_opened(opened_mesh)
+    rows, cols = tuple(mesh_device.shape)
+    if mesh_parent is not None:
+        logger.info(
+            "LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH: using (1,1) submesh inside %s-device open.",
+            opened_mesh.get_num_devices(),
+        )
+    elif mesh_device.get_num_devices() > 1:
+        logger.info(
+            "Full mesh %sx%s: DiT tensor_parallel=%s (axis 1), sequence_parallel=%s (axis 0); "
+            "VAE height_parallel=%s, width_parallel=%s. Text encoder TP follows mesh width (see load_text_encoder). "
+            "Set LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1 to force one die only.",
+            rows,
+            cols,
+            cols,
+            rows,
+            rows,
+            cols,
+        )
+    tp_factor = cols
+    if tp_factor > 1 and LINGBOT_NUM_HEADS % tp_factor != 0:
+        raise RuntimeError(
+            f"Lingbot WanTransformer NUM_HEADS={LINGBOT_NUM_HEADS} is not divisible by tensor_parallel "
+            f"factor {tp_factor} (mesh columns). Use MESH_DEVICE=N150, unset MESH_DEVICE, or "
+            "LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH=1."
+        )
     ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    dit_parallel_config = DiTParallelConfig(
-        tensor_parallel=ParallelFactor(mesh_axis=1, factor=1),
-        sequence_parallel=ParallelFactor(mesh_axis=0, factor=1),
-        cfg_parallel=None,
-    )
+    dit_parallel_config = _lingbot_dit_parallel_config(mesh_device)
 
     text_encoder = None
     if load_text_encoder:
@@ -359,6 +433,7 @@ def _load_models_phase1(config, load_text_encoder=True):
         "env_type": config.env_type,
         "transformer_is_tt": True,
         "mesh_device": mesh_device,
+        "mesh_device_parent": mesh_parent,
         "parallel_config": dit_parallel_config,
         "ccl_manager": ccl_manager,
     }
@@ -392,6 +467,10 @@ def _load_text_encoder_into_models(models: dict, config) -> None:
     """Load TTNN text encoder into models. Call only when text cache missed."""
     ckpt = config.wan22_pretrained_model_name_or_path
     dtype = models["dtype"]
+    logger.info(
+        "Loading TT text encoder onto mesh %s (first graph build can take several minutes; this is not a hang).",
+        models["mesh_device"].shape,
+    )
     models["text_encoder"] = load_text_encoder_tt(
         os.path.join(ckpt, "text_encoder"),
         models["mesh_device"],
@@ -416,10 +495,7 @@ def _prepare_state_for_vae_encode(state: dict, config) -> None:
 
 def _load_tt_vae_into_models(models: dict, config) -> None:
     """Load TTNN VAE (streaming encoder + quant_conv) into models. Only one TT sub-network on device."""
-    vae_parallel_config = VaeHWParallelConfig(
-        height_parallel=ParallelFactor(factor=1, mesh_axis=0),
-        width_parallel=ParallelFactor(factor=1, mesh_axis=1),
-    )
+    vae_parallel_config = _lingbot_vae_hw_parallel_config(models["mesh_device"])
     models["streaming_vae"] = TTWanVAEStreamingWrapper(
         models["vae"],
         models["mesh_device"],
@@ -1039,10 +1115,7 @@ def _infer_entry(models, state, obs):
 
 def _load_tt_vae_decoder_into_models(models: dict, config) -> None:
     """Load TTNN VAE decoder into models. Use before decode when running generate with TT path."""
-    vae_parallel_config = VaeHWParallelConfig(
-        height_parallel=ParallelFactor(factor=1, mesh_axis=0),
-        width_parallel=ParallelFactor(factor=1, mesh_axis=1),
-    )
+    vae_parallel_config = _lingbot_vae_hw_parallel_config(models["mesh_device"])
     models["vae_decoder_tt"] = TTWanVAEDecoderWrapper(
         models["vae"],
         models["mesh_device"],
@@ -1291,12 +1364,14 @@ def run_generate(
     gc.collect()
     _release_ttnn_runtime_configs(models)
     gc.collect()
-    mesh_device = models["mesh_device"]
-    ttnn.synchronize_device(mesh_device)
-    ttnn.close_mesh_device(mesh_device)
+    _close_lingbot_mesh_stack(models)
     # Reopen a fresh mesh device so the TT decoder is the only user and has full DRAM.
-    mesh_device = _open_lingbot_mesh_device()
+    from models.experimental.lingbot_va.tests.mesh_utils import inference_work_mesh_from_opened
+
+    opened_mesh = _open_lingbot_mesh_device()
+    mesh_device, mesh_parent = inference_work_mesh_from_opened(opened_mesh)
     models["mesh_device"] = mesh_device
+    models["mesh_device_parent"] = mesh_parent
     models["ccl_manager"] = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
     # Run TTNN VAE decoder on the fresh device. Fall back to PyTorch only on OOM (e.g. very small devices).
@@ -1325,6 +1400,7 @@ def run_generate(
             models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
         decoded_video = _decode_one_video(models, pred_latent, "np")[0]
     export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=10)
+    _close_lingbot_mesh_stack(models)
     return str(Path(save_dir) / "demo.mp4")
 
 

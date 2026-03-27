@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import torch
 import ttnn
-from models.common.utility_functions import is_blackhole
 
 from models.tt_dit.layers.linear import ColParallelLinear
 from models.tt_dit.layers.module import Module
@@ -39,10 +38,8 @@ class WanAttention(Module):
     """Multi-head attention matching ``reference.transformer_wan.WanAttention`` numerics (no host KV dict)."""
 
     sdpa_chunk_size_map = {
-        (False, 2, 4): (256, 256),
-        (False, 8, 4): (256, 256),
-        (True, 2, 2): (128, 512),
-        (True, 8, 4): (128, 512),
+        (2, 4): (256, 256),
+        (8, 4): (256, 256),
     }
     default_sdpa_chunk_size = (256, 256)
 
@@ -124,7 +121,7 @@ class WanAttention(Module):
         )
         self.sdpa_worker_grid = (grid.x, grid.y - 1)
         ring_chunks = self.sdpa_chunk_size_map.get(
-            (is_blackhole(), sp, parallel_config.tensor_parallel.factor),
+            (sp, parallel_config.tensor_parallel.factor),
             self.default_sdpa_chunk_size,
         )
         self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(

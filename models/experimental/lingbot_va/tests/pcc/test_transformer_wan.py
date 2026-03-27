@@ -27,6 +27,7 @@ from models.experimental.lingbot_va.tt.transformer_wan import WanTransformer3DMo
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.cache import model_cache_dir
+from models.experimental.lingbot_va.tests.mesh_utils import mesh_shape_request_param
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.test import line_params
 
@@ -141,7 +142,17 @@ def _make_action_grid_id(
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((1, 2), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="1x1_single_device"),
+        pytest.param(
+            mesh_shape_request_param(),
+            (1, 1),
+            0,
+            1,
+            1,
+            line_params,
+            ttnn.Topology.Linear,
+            False,
+            id="submesh_1x1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -281,7 +292,17 @@ def test_wan_transformer_model(
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((1, 2), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="1x1_single_device"),
+        pytest.param(
+            mesh_shape_request_param(),
+            (1, 1),
+            0,
+            1,
+            1,
+            line_params,
+            ttnn.Topology.Linear,
+            False,
+            id="submesh_1x1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )

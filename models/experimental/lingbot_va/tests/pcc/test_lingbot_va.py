@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from models.experimental.lingbot_va.tests.demo.inference_ttnn import build_infer_message, run_inference
+from models.experimental.lingbot_va.tests.demo.demo import build_infer_message, run_inference
 
 
 def _resolve_checkpoint_path() -> Path | None:
