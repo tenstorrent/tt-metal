@@ -445,6 +445,10 @@ def test_multi_host_loopback_pipeline_with_embedding(
     ],
 )
 @pytest.mark.parametrize(
+    "manual_allocation",
+    [True, False],
+)
+@pytest.mark.parametrize(
     "mesh_device",
     [(4, 2)],
     indirect=True,
@@ -459,7 +463,9 @@ def test_multi_host_loopback_pipeline_with_embedding(
     ],
     indirect=True,
 )
-def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor):
+def test_pipeline_block(
+    mesh_device, vocab_size, embedding_dim, token_fifo_size, embedding_fifo_factor, manual_allocation
+):
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
     if ttnn.get_num_devices() < 32:
@@ -473,6 +479,15 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
     embedding_shape = (1, 1, vocab_size, embedding_dim)
     embedding_size_bytes = embedding_dim * dtype_size(embedding_dtype)
     embedding_fifo_size = embedding_size_bytes * embedding_fifo_factor
+
+    if manual_allocation:
+        sender_config_buffer_address = 1024 * 1024  # Allocate sender config buf at 1MB
+        receiver_config_buffer_address = 1024 * 1024 + 128  # Allocate receiver config 128 bytes after sender config
+        data_buffer_address = 1024 * 1024 + 256  # Allocate data buffer 256 bytes after sender config buffer
+    else:
+        sender_config_buffer_address = None
+        receiver_config_buffer_address = None
+        data_buffer_address = None
 
     if mesh_device.get_system_mesh_id() == 0:
         torch_embedding = torch.randn(embedding_shape, dtype=embedding_dtype)
@@ -491,6 +506,9 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
             d2h_socket_fifo_size=embedding_fifo_size,  # d2h socket fifo size
             d2h_socket_page_size=embedding_size_bytes,  # d2h socket page size
             embedding_tensor=embedding_tensor,
+            sender_config_buffer_address=sender_config_buffer_address,
+            receiver_config_buffer_address=receiver_config_buffer_address,
+            data_buffer_address=data_buffer_address,
         )
     else:
         pipeline_block = PipelineBlock(
@@ -500,6 +518,9 @@ def test_pipeline_block(mesh_device, vocab_size, embedding_dim, token_fifo_size,
             embedding_fifo_size,  # downstream d2d socket fifo size
             embedding_size_bytes,  # upstream d2d socket page size
             embedding_size_bytes,  # downstream d2d socket page size
+            sender_config_buffer_address=sender_config_buffer_address,
+            receiver_config_buffer_address=receiver_config_buffer_address,
+            data_buffer_address=data_buffer_address,
         )
 
     pipeline_block.run()

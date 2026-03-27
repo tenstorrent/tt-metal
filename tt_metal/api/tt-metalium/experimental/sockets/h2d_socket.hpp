@@ -73,13 +73,17 @@ public:
      * @param buffer_type Memory type for the device-side FIFO buffer (currently only L1).
      * @param fifo_size Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
      * @param h2d_mode Transfer mode: HOST_PUSH or DEVICE_PULL.
+     * @param config_buffer_address Optional L1 address of the socket configuration buffer on the device.
+     * @param data_buffer_address Optional L1 address of the socket data buffer on the device.
      */
     H2DSocket(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoreCoord& recv_core,
         BufferType buffer_type,
         uint32_t fifo_size,
-        H2DMode h2d_mode);
+        H2DMode h2d_mode,
+        std::optional<DeviceAddr> config_buffer_address = std::nullopt,
+        std::optional<DeviceAddr> data_buffer_address = std::nullopt);
 
     /**
      * @brief Connects to an existing H2DSocket from another process.
@@ -157,8 +161,12 @@ private:
         uint32_t pcie_alignment,
         const std::string& shm_name);
 
-    void init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device);
-    void init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment);
+    void init_config_buffer(
+        const std::shared_ptr<MeshDevice>& mesh_device, std::optional<DeviceAddr> config_buffer_address);
+    void init_data_buffer(
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        uint32_t pcie_alignment,
+        std::optional<DeviceAddr> data_buffer_address);
     void write_socket_metadata(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const PinnedBufferInfo& bytes_acked_info,
