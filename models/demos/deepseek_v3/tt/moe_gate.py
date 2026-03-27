@@ -67,7 +67,7 @@ class MoEGate(AbstractModule):
             "add_score_correction_bias": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"e_score_correction_bias.input_tensor_b",
-                    score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0),
+                    score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0).reshape(1, 16, 16).transpose(1, 2),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.float32,
@@ -92,14 +92,14 @@ class MoEGate(AbstractModule):
         ttnn_output_tensor = ttnn.zeros(
             shape=(1, 32, 32),
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn_output_indices = ttnn.zeros(
             shape=(1, 32, 32),
             dtype=ttnn.uint16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -116,6 +116,7 @@ class MoEGate(AbstractModule):
         ttnn_input_indices = ttnn.reshape(ttnn_input_indices, (1, 16, 16))
         ttnn_input_indices = ttnn.transpose(ttnn_input_indices, dim1=-2, dim2=-1)
         ttnn_input_indices = ttnn.typecast(ttnn_input_indices, dtype=ttnn.uint16)
+        ttnn_input_indices = ttnn.to_layout(ttnn_input_indices, ttnn.ROW_MAJOR_LAYOUT)
         return {
             "gate_routing": {
                 "ttnn_output_tensor": ttnn_output_tensor,
@@ -169,6 +170,7 @@ class MoEGate(AbstractModule):
                 "routed_scaling_factor": hf_config.routed_scaling_factor,
                 "eps": 1e-20,
                 "enable_sigmoid": True,
+                "mode": mode,
             }
         else:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -197,6 +199,7 @@ class MoEGate(AbstractModule):
                 "routed_scaling_factor": hf_config.routed_scaling_factor,
                 "eps": 1e-20,
                 "enable_sigmoid": True,
+                "mode": mode,
             }
 
     @classmethod
@@ -226,7 +229,7 @@ class MoEGate(AbstractModule):
             logits = ttnn.linear(x, **cfg["gate_proj"])
 
         mesh_device = cfg["mesh_device"]
-        num_experts = cfg["add_score_correction_bias"].input_tensor_b.shape[3]
+        num_experts = 256
         assert num_experts == 256, "num_experts should be 256"
         total_batch_size = logits.shape[2]
 
@@ -237,6 +240,10 @@ class MoEGate(AbstractModule):
         eps = cfg["eps"]
         scaling_factor = cfg["routed_scaling_factor"]
         enable_sigmoid = cfg["enable_sigmoid"]
+        if cfg["mode"] == "decode":
+            assert (
+                total_batch_size <= num_device_cores
+            ), "total_batch_size should be less than or equal to num_device_cores for decode mode"
         # in order to save time, we need to reuse bias, input_tensor, output indices and output tensor
         # we pad the logits to make the shape of above three are always the same
         num_iters = (total_batch_size + num_device_cores - 1) // num_device_cores
@@ -263,11 +270,10 @@ class MoEGate(AbstractModule):
         )
         # create the bias tensor
         scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size_per_iter, 1)))
-        scores_correction_bias = ttnn.reshape(scores_correction_bias, reshaped_input_shape)
-        scores_correction_bias = ttnn.transpose(scores_correction_bias, dim1=-2, dim2=-1)
-        scores_correction_bias = ttnn.to_layout(scores_correction_bias, ttnn.TILE_LAYOUT)
-        scores_correction_bias = ttnn.to_memory_config(scores_correction_bias, memory_config=input_output_mem_config)
+        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size_per_iter, 1, 1)))
+        scores_correction_bias = ttnn.to_layout(
+            scores_correction_bias, ttnn.TILE_LAYOUT, memory_config=input_output_mem_config
+        )
 
         # create the output tensor, input indices and output indices
         ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
@@ -276,7 +282,7 @@ class MoEGate(AbstractModule):
 
         ttnn_input_indices = cfg["gate_routing"]["ttnn_input_indices"]
         ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (batch_size_per_iter, 1, 1))
-        ttnn_input_indices = ttnn.to_memory_config(ttnn_input_indices, memory_config=input_output_mem_config)
+        ttnn_input_indices = ttnn.to_layout(ttnn_input_indices, ttnn.TILE_LAYOUT, memory_config=input_output_mem_config)
 
         ttnn_output_indices = cfg["gate_routing"]["ttnn_output_indices"]
         ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (batch_size_per_iter, 1, 1))
@@ -284,16 +290,15 @@ class MoEGate(AbstractModule):
 
         # we can only have one token per core at a time
         # this while loop is designed to handle the huge batch size (4096)
-        topk_experts_scores_list = []
+        topk_experts_weights_list = []
         topk_experts_indices_list = []
         for start_index in range(0, total_batch_size + padding_shape, batch_size_per_iter):
             cur_logits = logits[:, :, start_index : start_index + batch_size_per_iter, :]
-            cur_logits = ttnn.reshape(cur_logits, reshaped_input_shape)
-
-            # change the memory config of the logits
+            cur_logits = ttnn.reshape(cur_logits, reshaped_input_shape)  # maybe remove this
             cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
 
-            topk_experts_scores, topk_experts_indices = DeepseekMoeGateSingleCore.op(
+            topk_experts_weights, topk_experts_indices = DeepseekMoeGateSingleCore.op(
+                # why dram
                 cur_logits,
                 scores_correction_bias,
                 ttnn_output_tensor,
@@ -303,40 +308,29 @@ class MoEGate(AbstractModule):
                 scaling_factor,
                 enable_sigmoid,
             )
-
-            topk_experts_scores = ttnn.reshape(
-                topk_experts_scores, (-1, topk_experts_scores.shape[-2], topk_experts_scores.shape[-1])
-            )
-            topk_experts_scores = ttnn.to_memory_config(topk_experts_scores, memory_config=ttnn.L1_MEMORY_CONFIG)
-            topk_experts_indices = ttnn.reshape(
-                topk_experts_indices, (-1, topk_experts_indices.shape[-2], topk_experts_indices.shape[-1])
-            )
+            topk_experts_indices = ttnn.typecast(
+                topk_experts_indices, dtype=ttnn.int32
+            )  # remove this after above op outputs to L1
+            topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
             topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=ttnn.L1_MEMORY_CONFIG)
-            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.int32)
-            topk_experts_scores_list.append(topk_experts_scores[:batch_size_per_iter, :, :])
-            topk_experts_indices_list.append(topk_experts_indices[:batch_size_per_iter, :, :])
+            if cfg["mode"] == "prefill":
+                topk_experts_weights_list.append(topk_experts_weights)
+                topk_experts_indices_list.append(topk_experts_indices)
             ttnn.deallocate(cur_logits)
 
         ttnn.deallocate(logits)
 
-        topk_experts_weights = ttnn.concat(topk_experts_scores_list, dim=0)
-        topk_experts_indices = ttnn.concat(topk_experts_indices_list, dim=0)
+        if cfg["mode"] == "prefill":
+            topk_experts_weights = ttnn.concat(topk_experts_weights_list, dim=0)
+            topk_experts_indices = ttnn.concat(topk_experts_indices_list, dim=0)
         # here we only take the 1x8  out of 32x32
-        topk_experts_weights = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
         topk_experts_weights = topk_experts_weights[:total_batch_size, 0, :8]
-        topk_experts_indices = topk_experts_indices[:total_batch_size, 0, :]
-        topk_experts_weights = ttnn.unsqueeze(topk_experts_weights, dim=0)
-        topk_experts_weights = ttnn.unsqueeze(topk_experts_weights, dim=0)
-        topk_experts_indices = ttnn.unsqueeze(topk_experts_indices, dim=0)
-        topk_experts_indices = ttnn.unsqueeze(topk_experts_indices, dim=0)
-        topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, memory_config=cfg["output_memory_config"])
-        topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=cfg["output_memory_config"])
-        # if we do typecast on a row_major tensor, then we may see a hang
+        topk_experts_indices = topk_experts_indices[:total_batch_size, 0, :8]
+        topk_experts_weights = ttnn.view(topk_experts_weights, (1, 1, total_batch_size, 8))
+        topk_experts_indices = ttnn.view(topk_experts_indices, (1, 1, total_batch_size, 8))
+        # remove below two
         topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.TILE_LAYOUT)
         topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
-        topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
-        topk_experts_indices = ttnn.slice(topk_experts_indices, [0, 0, 0, 0], [1, 1, total_batch_size, 8])
 
         return topk_experts_weights, topk_experts_indices
 
@@ -391,3 +385,97 @@ class MoEGate(AbstractModule):
         )
 
         return ttnn_output
+
+
+"""
+{
+    "MatmulDeviceOperation": {
+        "DEVICE KERNEL": {
+            "AVG": 73506.26349206349,
+            "MIN": 71781.0,
+            "MAX": 73988.0,
+            "STD": 471.5722824890904
+        }
+    },
+    "ReshapeViewDeviceOperation": {
+        "DEVICE KERNEL": {
+            "AVG": 8085.6796875,
+            "MIN": 7099.0,
+            "MAX": 9457.0,
+            "STD": 843.3255091918757
+        }
+    },
+    "RepeatDeviceOperation": {
+        "DEVICE KERNEL": {
+            "AVG": 4423.990625,
+            "MIN": 4195.0,
+            "MAX": 10900.0,
+            "STD": 797.7202328439369
+        }
+    },
+    "PermuteDeviceOperation": {
+        "DEVICE KERNEL": {
+            "AVG": 5226.18125,
+            "MIN": 5124.0,
+            "MAX": 5435.0,
+            "STD": 65.01182645003836
+        }
+    },
+    "TilizeWithValPaddingDeviceOperation": {
+        "DEVICE KERNEL": {
+            "AVG": 6114.472916666667,
+            "MIN": 5371.0,
+            "MAX": 6980.0,
+            "STD": 620.465963432937
+        }
+    },
+    "InterleavedToShardedDeviceOperation": {
+        "DEVICE KERNEL": {
+            "AVG": 2974.9109375,
+            "MIN": 1954.0,
+            "MAX": 3895.0,
+            "STD": 701.5092775543458
+        }
+    },
+    "UntilizeWithUnpaddingDeviceOperation": {
+        "DEVICE KERNEL": {
+            "AVG": 6708.809375,
+            "MIN": 6595.0,
+            "MAX": 6959.0,
+            "STD": 80.32756940883785
+        }
+    },
+    "GenericOpDeviceOperation": {
+        "DEVICE KERNEL": {
+            "AVG": 3719.746875,
+            "MIN": 3668.0,
+            "MAX": 3860.0,
+            "STD": 30.416569527192046
+        }
+    },
+    "TypecastDeviceOperation": {
+        "DEVICE KERNEL": {
+            "AVG": 4483.453125,
+            "MIN": 1626.0,
+            "MAX": 7611.0,
+            "STD": 2824.5118637624482
+        }
+    },
+    "ShardedToInterleavedDeviceOperation": {
+        "DEVICE KERNEL": {
+            "AVG": 3702.403125,
+            "MIN": 3548.0,
+            "MAX": 3757.0,
+            "STD": 30.671769164965365
+        }
+    },
+    "SliceDeviceOperation": {
+        "DEVICE KERNEL": {
+            "AVG": 2748.6828125,
+            "MIN": 2616.0,
+            "MAX": 2851.0,
+            "STD": 23.708275627626826
+        }
+    }
+}
+"""

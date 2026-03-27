@@ -36,7 +36,7 @@ def galaxy_type():
     [
         ("dram_dram", 10, 79.54),
         ("l1_l1", 10, 202.26),
-        ("l1_dram", 10, 202.26),
+        ("l1_dram", 10, 71.62),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
