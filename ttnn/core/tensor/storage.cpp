@@ -93,6 +93,10 @@ void DeviceStorage::reset_root_mesh_buffer() {
 
 bool DeviceStorage::is_allocated() const { return this->mesh_buffer != nullptr && this->mesh_buffer->is_allocated(); }
 
+distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() const {
+    return this->mesh_buffer ? this->mesh_buffer->device() : nullptr;
+}
+
 distributed::MeshDevice* DeviceStorage::get_device() const {
     if (this->mesh_buffer != nullptr) {
         return this->mesh_buffer->device();

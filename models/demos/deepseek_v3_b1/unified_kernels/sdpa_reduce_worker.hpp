@@ -654,6 +654,21 @@ struct SdpaReduceWorker {
                 cb_reserve_back(CTArgs::cb_neighbor_l, CTArgs::out_tiles);
                 cb_push_back(CTArgs::cb_neighbor_l, CTArgs::out_tiles);
             }
+
+            // Clear the semaphores if the neighbor is not valid
+            if (!r1_neighbor_valid) {
+                volatile tt_l1_ptr uint32_t* sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.r1_neighbor_sem_addr);
+                noc_semaphore_wait(sem_ptr, CTArgs::L_SEM_BASE_THRESHOLD + CTArgs::num_l_chunks - 1);
+                noc_semaphore_set(sem_ptr, 0);
+            }
+
+            if (!r2_neighbor_r1_valid) {
+                volatile tt_l1_ptr uint32_t* sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.r2_neighbor_sem_addr);
+                noc_semaphore_wait(sem_ptr, CTArgs::L_SEM_BASE_THRESHOLD + CTArgs::num_l_chunks - 1);
+                noc_semaphore_set(sem_ptr, 0);
+            }
         }
 #endif  // COMPILE_FOR_NCRISC
 
