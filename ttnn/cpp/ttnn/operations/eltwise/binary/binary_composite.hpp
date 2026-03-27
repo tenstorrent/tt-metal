@@ -12,7 +12,6 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/eltwise/binary/device/binary_composite_op.hpp"
 #include "ttnn/operations/eltwise/binary/device/binary_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

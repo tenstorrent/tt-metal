@@ -57,9 +57,9 @@ using BinaryOpTensorScalarFn = Tensor (*)(
     const std::optional<const DataType>&,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
     const std::optional<bool>&,
     const std::optional<CoreRangeSet>&);
 using BinaryOpTensorTensorFn = Tensor (*)(
@@ -68,27 +68,27 @@ using BinaryOpTensorTensorFn = Tensor (*)(
     const std::optional<const DataType>&,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
     const std::optional<bool>&,
     const std::optional<CoreRangeSet>&);
 
 using InplaceScalarFn = Tensor (*)(
     const Tensor&,
     float,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
     std::optional<bool>,
     const std::optional<CoreRangeSet>&);
 
 using InplaceTensorFn = Tensor (*)(
     const Tensor&,
     const Tensor&,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
     std::optional<bool>,
     const std::optional<CoreRangeSet>&);
 
@@ -162,18 +162,18 @@ using PreluTensorArrayFn = Tensor (*)(const Tensor&, const std::array<float, 1>&
 using InplaceFastApproxScalarFn = Tensor (*)(
     const Tensor&,
     float,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
     std::optional<bool>,
     std::optional<bool>,
     const std::optional<CoreRangeSet>&);
 using InplaceFastApproxTensorFn = Tensor (*)(
     const Tensor&,
     const Tensor&,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
-    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
+    ttsl::Span<const unary::EltwiseUnaryWithParam>,
     std::optional<bool>,
     std::optional<bool>,
     const std::optional<CoreRangeSet>&);
@@ -1092,10 +1092,10 @@ Tensor multiply_fast_approx_tensor_scalar(
         dtype,
         memory_config,
         output_tensor,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_a_activations.data(), input_tensor_a_activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_b_activations.data(), input_tensor_b_activations.size()),
         use_legacy,
         fast_and_approximate_mode,
@@ -1120,10 +1120,10 @@ Tensor multiply_fast_approx_tensor_tensor(
         dtype,
         memory_config,
         output_tensor,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_a_activations.data(), input_tensor_a_activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_b_activations.data(), input_tensor_b_activations.size()),
         use_legacy,
         fast_and_approximate_mode,
@@ -1148,10 +1148,10 @@ Tensor divide_fast_approx_tensor_scalar(
         dtype,
         memory_config,
         output_tensor,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_a_activations.data(), input_tensor_a_activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_b_activations.data(), input_tensor_b_activations.size()),
         use_legacy,
         fast_and_approximate_mode,
@@ -1176,10 +1176,10 @@ Tensor divide_fast_approx_tensor_tensor(
         dtype,
         memory_config,
         output_tensor,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_a_activations.data(), input_tensor_a_activations.size()),
-        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        ttsl::Span<const unary::EltwiseUnaryWithParam>(
             input_tensor_b_activations.data(), input_tensor_b_activations.size()),
         use_legacy,
         fast_and_approximate_mode,
