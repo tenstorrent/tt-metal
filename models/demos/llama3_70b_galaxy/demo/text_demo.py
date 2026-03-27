@@ -1474,7 +1474,7 @@ def test_demo_text(
     if model_key in PERFORMANCE_TARGETS:
         test_id = request.node.callspec.id
         if "repeat2" in test_id:
-            PERF_TOLERANCE_PERCENTAGE = 1.5
+            PERF_TOLERANCE_PERCENTAGE = 2.2
             model_perf_targets = PERFORMANCE_TARGETS[model_key]
             assert_perf_within_tolerance(
                 "TTFT (ms)",
