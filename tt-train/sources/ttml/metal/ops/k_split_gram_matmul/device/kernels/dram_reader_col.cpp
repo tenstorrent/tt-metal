@@ -5,7 +5,7 @@
 // DRAM reader for diagonal helper cores with M_block x N_block streaming.
 // Phase 1: Reads N_block odd K-columns from DRAM into c_1 for compute.
 //          Loop: for m_sub: for n_sub: for blk: read N_block rows.
-// Phase 2: Writes combined output (c_6, after accumulation) to DRAM row by row (per msb).
+// Phase 2: Writes combined output (c_6, after accumulation) to DRAM per (m_sub, n_sub) block.
 
 #include <stdint.h>
 

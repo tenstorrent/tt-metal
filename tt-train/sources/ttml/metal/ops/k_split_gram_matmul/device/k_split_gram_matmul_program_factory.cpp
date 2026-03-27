@@ -359,7 +359,6 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     if (!row_upper_recv.empty()) {
         auto ct = make_recv_write_ct(row_sender_sem2, row_receiver_sem2);
         auto recv_defines = std::map<std::string, std::string>{{"REDUCE_RECV", "1"}};
-        recv_defines["BLOCK_STREAMING"] = "1";
         if (mirror_active)
             recv_defines["MIRROR_OUTPUT"] = "1";
         row_upper_recv_kid = CreateKernel(
@@ -470,7 +469,6 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         TensorAccessorArgs(*input.buffer()).append_to(ct_dram);
         TensorAccessorArgs(*output.buffer()).append_to(ct_dram);
         auto dram_defines = std::map<std::string, std::string>{};
-        dram_defines["BLOCK_STREAMING"] = "1";
         if (mirror_active)
             dram_defines["MIRROR_OUTPUT"] = "1";
         helper_dram_reader_kid = CreateKernel(
@@ -483,7 +481,6 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     // === Compute ===
     // Different defines per core group for reduction mode
     auto compute_cfg = [&](std::map<std::string, std::string> defines = {}) {
-        defines["BLOCK_STREAMING"] = "1";
         return ComputeConfig{
             .math_fidelity = attrs.math_fidelity,
             .fp32_dest_acc_en = true,
