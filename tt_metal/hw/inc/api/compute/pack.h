@@ -101,7 +101,9 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
 ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
     PACK((llk_matmul_pack<DST_ACCUM_MODE, false, false>(ifrom_dst, icb, ntiles)));
-#endif  // TODO: AM; add Quasar implementation
+#else
+    PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
+#endif
 }
 
 // clang-format off
