@@ -7,6 +7,7 @@ target_sources(
     unit_tests_stl_smoke
     PRIVATE
         test_cleanup.cpp
+        test_gha_annotation.cpp
         test_fmt.cpp
         test_indestructible.cpp
         test_optional_reference.cpp
