@@ -661,7 +661,7 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
 
 namespace {
 
-static std::optional<std::string> hostname_for_asic_from_hostname_map(
+std::optional<std::string> hostname_for_asic_from_hostname_map(
     tt::tt_metal::AsicID asic_id, const std::map<std::string, std::set<tt::tt_metal::AsicID>>& hostname_to_asics) {
     for (const auto& [hostname, asics] : hostname_to_asics) {
         if (asics.contains(asic_id)) {
@@ -677,7 +677,7 @@ static std::optional<std::string> hostname_for_asic_from_hostname_map(
 // TODO: THis can be removed and replaced with cost hieristics when using a SAT solver because preferred constraints
 // aren't very effective here
 // https://github.com/tenstorrent/tt-metal/issues/40640
-static void add_inter_mesh_minimal_host_cover_from_hostname_map(
+void add_inter_mesh_minimal_host_cover_from_hostname_map(
     const TopologyMappingConfig& config,
     const PhysicalMultiMeshGraph& physical_graph,
     const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
