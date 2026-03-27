@@ -28,10 +28,10 @@ At a high level (no GPU path; reference and prep run on **CPU**, model math on *
 
 ## Performance
 
-| Kind | Measured value |
+| Kind | Measured FPS |
 |------|----------------|
-| **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`) | *TBD* |
-| **End-to-end** (`tests/perf/test_perf_e2e.py`) | *TBD* |
+| **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`) | 0.5 |
+| **End-to-end** (`tests/perf/test_perf_e2e.py`) | **3208.2641** FPS |
 
 ## PyTorch / CPU components
 
@@ -67,6 +67,7 @@ lingbot_va/
 │   ├── perf/                   # Device perf + E2E timing (pytest)
 │   ├── demo/                   # demo.py, inference_torch.py, sample_images/
 │   └── download_pretrained_weights.py # Script to download the pretrained weights
+├── PR_SUMMARY.md               # PR / release template (problem, PCC table, host paths)
 └── README.md
 ```
 
@@ -111,6 +112,15 @@ Run pytest from the **tt-metal** repo root with `PYTHONPATH=$TT_METAL_HOME` (or 
 | `tests/pcc/test_vae_encoder.py` | `test_encode_one_video_pcc` | Torch encoder vs TT `WanVAEEncoder` |
 | `tests/pcc/test_vae_decoder.py` | `test_decode_one_video_pcc` | Torch decode vs TT `WanVAEDecoder` |
 | `tests/pcc/test_causal_conv_3d.py` | `test_wan_causal_conv3d` | Diffusers causal conv vs TT `WanCausalConv3d` (encoder `conv_in`) |
+
+#### PCC scores
+
+TTNN vs PyTorch reference; values are **PCC × 100** (%).
+
+| Path | PCC (%) |
+|------|--------:|
+| Action path | 99.9966 |
+| Video path | 99.9684 |
 
 ```bash
 # One file
