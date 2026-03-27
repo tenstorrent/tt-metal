@@ -160,14 +160,14 @@ def get_hardware_id_from_machine_info(machine_info) -> Optional[str]:
     if not device_series:
         return None
 
-    # A multi-card n300 configuration (card_count >= 2, e.g. T3K = 4 × n300 cards)
-    # reports device_series="n300" but must run on the config-t3000 runner, not the
-    # single-card n300 runner.  Distinguish by card_count from traced_machine_info.
+    # A T3K configuration (4 × n300 cards) reports device_series="n300" with
+    # card_count=4.  It must run on the config-t3000 runner, not the single-card
+    # n300 runner.  Use the exact card count to avoid misrouting other n300 configs.
     if device_series == "n300":
         card_count = machine_info.get("card_count", 1)
         if isinstance(card_count, list):
             card_count = card_count[0] if card_count else 1
-        if card_count >= 2:
+        if card_count == 4:
             return "t3k"
 
     return device_series
