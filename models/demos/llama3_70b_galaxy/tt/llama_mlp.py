@@ -544,6 +544,9 @@ class TtLlamaMLP(LightweightModule):
             dtype=ff1ff3_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        # Deallocate reduce_scatter outputs after mul (prevents memory leak in prefill)
+        ttnn.deallocate(w1_out_reduced)
+        ttnn.deallocate(w3_out_reduced)
         if is_olmo:
             # Use the pre-allocated bfloat16 persistent buffer (FF3_BF16) so the
             # all_gather preserves the bfloat16 ff1ff3 values.  Using "FF3" (bfloat8_b)

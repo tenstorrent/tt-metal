@@ -930,6 +930,8 @@ class TT_CCL:
                 num_links=num_links,
                 buffer_key=buffer_key,
             )
+            # Deallocate scattered tensor after gather (prevents memory leak in prefill)
+            ttnn.deallocate(output_tensor_scattered)
             # ttnn.synchronize_device(self.mesh_device)
 
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
