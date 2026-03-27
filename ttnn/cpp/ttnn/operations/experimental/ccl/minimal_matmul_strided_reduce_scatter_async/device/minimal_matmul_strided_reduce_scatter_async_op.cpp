@@ -34,26 +34,79 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
         attributes.topology == ttnn::ccl::Topology::Ring,
         "MinimalMatmulStridedReduceScatterAsync only supports Ring topology.");
 
-    // Delegate full matmul validation (dtype, layout, shape, tile alignment, config/subblock
-    // constraints, fused ternary checks, etc.).  fused_ternary_scalar lives at the fused-op
-    // level rather than inside matmul_struct, so inject it before calling.
-    MinimalMatmulParams mm_attrs = attributes.matmul_struct;
-    mm_attrs.fused_ternary_scalar = attributes.fused_ternary_scalar;
-
+    // Delegate matmul validation (dtype, layout, shape, tile alignment, config/subblock
+    // constraints, etc.) — but NOT the ternary checks, because the ternary inputs belong to
+    // the RS output, not the matmul output.  The addcmul is fused at the RS final write step,
+    // so ternary_a/b are shaped [M, N/ring_size], not [M, N].  Passing them here would cause
+    // the matmul validator to reject the correct shape.
     auto to_mutable_opt = [](const std::optional<const Tensor>& opt) -> std::optional<Tensor> {
         return opt.has_value() ? std::optional<Tensor>(opt.value()) : std::nullopt;
     };
 
     matmul_device_operation_t::validate_on_program_cache_miss(
-        mm_attrs,
+        attributes.matmul_struct,
         matmul_device_operation_t::tensor_args_t{
             .input_tensor = tensor_args.input_tensor,
             .weight_tensor = tensor_args.weight_tensor,
             .bias_tensor = to_mutable_opt(tensor_args.bias),
             .optional_input_tensor = std::nullopt,
-            .fused_ternary_input_a = to_mutable_opt(tensor_args.addcmul_input_tensor1),
-            .fused_ternary_input_b = to_mutable_opt(tensor_args.addcmul_input_tensor2),
+            .fused_ternary_input_a = std::nullopt,
+            .fused_ternary_input_b = std::nullopt,
         });
+
+    // Validate ternary (addcmul) inputs against the RS output shape [M, N/ring_size].
+    // The addcmul is applied at the RS final write step, so the reference N is
+    // N_mm / ring_size, not the full matmul output N.
+    if (tensor_args.addcmul_input_tensor1.has_value() || tensor_args.addcmul_input_tensor2.has_value()) {
+        TT_FATAL(
+            tensor_args.addcmul_input_tensor1.has_value() && tensor_args.addcmul_input_tensor2.has_value(),
+            "Both addcmul_input_tensor1 and addcmul_input_tensor2 must be provided together.");
+        TT_FATAL(
+            attributes.fused_ternary_scalar.has_value(),
+            "fused_ternary_scalar must be set when addcmul inputs are provided.");
+
+        const auto& ta = tensor_args.addcmul_input_tensor1.value();
+        const auto& tb = tensor_args.addcmul_input_tensor2.value();
+
+        auto dtype_supported = [](tt::tt_metal::DataType dt) {
+            return dt == DataType::BFLOAT16 || dt == DataType::BFLOAT8_B || dt == DataType::BFLOAT4_B ||
+                   dt == DataType::FLOAT32;
+        };
+
+        TT_FATAL(ta.storage_type() == StorageType::DEVICE, "addcmul_input_tensor1 must be on device");
+        TT_FATAL(tb.storage_type() == StorageType::DEVICE, "addcmul_input_tensor2 must be on device");
+        TT_FATAL(
+            ta.device() == tensor_args.input_tensor.device(), "addcmul_input_tensor1 must be on same device as input");
+        TT_FATAL(
+            tb.device() == tensor_args.input_tensor.device(), "addcmul_input_tensor2 must be on same device as input");
+        TT_FATAL(ta.buffer() != nullptr, "addcmul_input_tensor1 must be allocated");
+        TT_FATAL(tb.buffer() != nullptr, "addcmul_input_tensor2 must be allocated");
+        TT_FATAL(ta.layout() == Layout::TILE, "addcmul_input_tensor1 must be TILE layout");
+        TT_FATAL(tb.layout() == Layout::TILE, "addcmul_input_tensor2 must be TILE layout");
+        TT_FATAL(
+            dtype_supported(ta.dtype()) && dtype_supported(tb.dtype()),
+            "addcmul tensors must have supported dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32)");
+
+        const uint32_t M = tensor_args.input_tensor.padded_shape()[-2];
+        const uint32_t N_rs = tensor_args.weight_tensor.padded_shape()[-1] / attributes.ring_size;
+
+        const auto& ta_shape = ta.logical_shape();
+        const auto& tb_shape = tb.logical_shape();
+
+        TT_FATAL(
+            ta_shape[-2] == M && ta_shape[-1] == N_rs,
+            "addcmul_input_tensor1 shape must match RS output [M={}, N/ring_size={}], got [{}, {}]",
+            M,
+            N_rs,
+            ta_shape[-2],
+            ta_shape[-1]);
+        TT_FATAL(
+            tb_shape[-2] == 1 && tb_shape[-1] == N_rs,
+            "addcmul_input_tensor2 shape must be broadcast [1, N/ring_size={}], got [{}, {}]",
+            N_rs,
+            tb_shape[-2],
+            tb_shape[-1]);
+    }
 
     // RS validation: checks we can perform without the (not-yet-created) MM output tensor.
     TT_FATAL(attributes.num_links > 0, "num_links must be greater than 0.");
