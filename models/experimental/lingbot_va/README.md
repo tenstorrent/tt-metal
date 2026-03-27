@@ -30,8 +30,8 @@ At a high level (no GPU path; reference and prep run on **CPU**, model math on *
 
 | Kind | Measured value |
 |------|----------------|
-| **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`) | *TBD* |
-| **End-to-end** | **ToDo** (no perf test in-tree yet) |
+| **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`) | 0.5 |
+| **End-to-end** | **ToDo** |
 
 ## PyTorch / CPU components
 
