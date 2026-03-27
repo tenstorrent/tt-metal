@@ -731,6 +731,11 @@ autograd::TensorPtr GPTMLP::operator()(const autograd::TensorPtr& input) {
 | **Factory** (`ttml.init.uniform(...)`) | Callable `shape → Tensor` | Pass to layer constructors (`weight_init=`) |
 | **In-place** (`ttml.init.uniform_(tensor, ...)`) | Same tensor, values replaced | Re-initialize existing parameters |
 
+> **Note:** The in-place variants are not truly in-place at the device level.
+> Each call allocates a temporary tensor with the new values and copies it into the
+> existing tensor via `set_value`. The temporary is freed afterwards, but be aware
+> of the transient allocation.
+
 **Available initializers:**
 
 | Function | Factory | In-place | Description |

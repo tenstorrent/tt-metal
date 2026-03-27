@@ -22,6 +22,11 @@ In-place variants (uniform_, normal_, constant_, zeros_, ones_, xavier_uniform_,
     in-place, returning the same object that was passed in.
     Mirrors the PyTorch torch.nn.init convention.
 
+    Note: these are not truly in-place at the device level. Each call
+    allocates a temporary tensor with the new values and then copies it
+    into the existing tensor via set_value. The temporary is freed
+    afterwards, but callers should be aware of the transient allocation.
+
     Usage:
         ttml.init.uniform_(tensor, a=-0.1, b=0.1)
         ttml.init.xavier_uniform_(model.fc1.weight, gain=1.0)
@@ -294,6 +299,10 @@ def kaiming_normal(
 
 # ---------------------------------------------------------------------------
 # In-place variants (fill existing tensor, return it)
+#
+# NOTE: Not truly in-place - each function allocates a new temporary tensor
+# via the corresponding factory variant and copies the values into the
+# existing tensor with set_value(). The temporary is freed after the call.
 # ---------------------------------------------------------------------------
 
 
