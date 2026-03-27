@@ -13,12 +13,12 @@ import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
-from models.demos.glm4_moe_lite.tt.layer0_tt import run_layer0_decode_one_step_update_cache_tt
-from models.demos.glm4_moe_lite.tt.reference_layer0 import (
+from models.experimental.glm4_moe_lite.tt.layer0_tt import run_layer0_decode_one_step_update_cache_tt
+from models.experimental.glm4_moe_lite.tt.reference_layer0 import (
     run_layer0_reference,
     run_layer0_reference_from_input_ids,
 )
-from models.demos.glm4_moe_lite.tt.weights import (
+from models.experimental.glm4_moe_lite.tt.weights import (
     find_missing_shards,
     resolve_best_effort_snapshot_dir,
 )

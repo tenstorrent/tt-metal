@@ -14,8 +14,8 @@ import torch
 import ttnn
 
 from models.common.rmsnorm import RMSNorm
-from models.demos.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
-from models.demos.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
+from models.experimental.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
+from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
 
 
 def _round_up(x: int, multiple: int) -> int:

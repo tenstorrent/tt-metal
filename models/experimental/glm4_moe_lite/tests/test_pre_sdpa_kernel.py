@@ -47,19 +47,19 @@ def main():
         with open(snapshot_dir / "config.json") as f:
             raw = json.load(f)
         hf_config = SimpleNamespace(**raw)
-        from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+        from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 
         hparams = Glm4MoeLiteHParams.from_hf_config(hf_config)
         print(f"[TEST] HParams loaded: hidden={hparams.hidden_size}, heads={hparams.num_attention_heads}")
 
         # Load lazy state dict
-        from models.demos.glm4_moe_lite.tt.weights import load_glm_lazy_state_dict
+        from models.experimental.glm4_moe_lite.tt.weights import load_glm_lazy_state_dict
 
         state = load_glm_lazy_state_dict(snapshot_dir)
         print("[TEST] LazyStateDict loaded")
 
         # Prepare fused weights
-        from models.demos.glm4_moe_lite.tt.layer_weights import _prepare_fused_pre_sdpa_weights
+        from models.experimental.glm4_moe_lite.tt.layer_weights import _prepare_fused_pre_sdpa_weights
 
         cache_dir = Path("/root/.cache/ttnn/models/glm4_moe_lite/vllm")
 
@@ -103,7 +103,7 @@ def main():
         print(f"[TEST] Input tensor created")
 
         # Run the kernel
-        from models.demos.glm4_moe_lite.fused_ops.pre_sdpa.op import PreSDPA
+        from models.experimental.glm4_moe_lite.fused_ops.pre_sdpa.op import PreSDPA
 
         print(f"\n[TEST] === Calling PreSDPA.op(debug_stage={args.stage}) ===")
         t0 = time.monotonic()

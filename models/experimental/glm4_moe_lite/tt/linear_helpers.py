@@ -14,7 +14,7 @@ import math
 from typing import Any
 
 import ttnn
-from models.demos.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
+from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
 
 
 def compute_1d_prog_cfg(

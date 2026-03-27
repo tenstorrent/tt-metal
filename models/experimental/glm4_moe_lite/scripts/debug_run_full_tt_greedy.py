@@ -14,9 +14,9 @@ import torch
 from transformers import AutoTokenizer
 
 import ttnn
-from models.demos.glm4_moe_lite.tt.layer0_tt import _alloc_contiguous_page_table, _round_up
-from models.demos.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT
-from models.demos.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
+from models.experimental.glm4_moe_lite.tt.layer0_tt import _alloc_contiguous_page_table, _round_up
+from models.experimental.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT
+from models.experimental.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
 
 _profiler_read_interval = int(os.environ.get("GLM4_MOE_LITE_PROFILER_READ_INTERVAL", "0").strip() or "0")
 

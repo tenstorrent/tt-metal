@@ -16,7 +16,7 @@ from loguru import logger
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
-from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 
 _SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
 if _SIGNPOST_ENABLED:
@@ -24,21 +24,21 @@ if _SIGNPOST_ENABLED:
 
 _PROFILER_READ_INTERVAL = int(os.environ.get("GLM4_MOE_LITE_PROFILER_READ_INTERVAL", "0").strip() or "0")
 
-from models.demos.glm4_moe_lite.tt.decoder_layer_tt import (
+from models.experimental.glm4_moe_lite.tt.decoder_layer_tt import (
     prepare_decode_rope_and_positions_tt,
     prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt,
     run_decoder_layer_decode_one_step_update_cache_tt,
     run_decoder_layer_prefill_update_cache_tt,
 )
-from models.demos.glm4_moe_lite.tt.layer0_tt import _rot_transformation_mat_torch, make_rope_tensors
-from models.demos.glm4_moe_lite.tt.layer_weights import (
+from models.experimental.glm4_moe_lite.tt.layer0_tt import _rot_transformation_mat_torch, make_rope_tensors
+from models.experimental.glm4_moe_lite.tt.layer_weights import (
     _env_dense_dtype,
     _env_tp_enabled,
     _linear_weight_tt,
     convert_decoder_layer_weights,
 )
-from models.demos.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
-from models.demos.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
+from models.experimental.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
+from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
 
 
 @dataclass
@@ -320,7 +320,7 @@ class Glm4MoeLiteDenseOnlyTT:
         enable_moe = os.environ.get("GLM4_MOE_LITE_ENABLE_MOE", "").strip() == "1"
         moe_runtime = None
         if enable_moe:
-            from models.demos.glm4_moe_lite.tt.moe_tt import create_moe_runtime
+            from models.experimental.glm4_moe_lite.tt.moe_tt import create_moe_runtime
 
             moe_runtime = create_moe_runtime(device=device, hparams=hparams)
 

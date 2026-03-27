@@ -15,11 +15,11 @@ import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
-from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.demos.glm4_moe_lite.tt.layer_weights import convert_decoder_layer_weights
-from models.demos.glm4_moe_lite.tt.moe_tt import create_moe_runtime, moe_sparse_experts_forward_tt
-from models.demos.glm4_moe_lite.tt.reference_moe import run_layer_moe_reference_from_hidden_states
-from models.demos.glm4_moe_lite.tt.weights import (
+from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+from models.experimental.glm4_moe_lite.tt.layer_weights import convert_decoder_layer_weights
+from models.experimental.glm4_moe_lite.tt.moe_tt import create_moe_runtime, moe_sparse_experts_forward_tt
+from models.experimental.glm4_moe_lite.tt.reference_moe import run_layer_moe_reference_from_hidden_states
+from models.experimental.glm4_moe_lite.tt.weights import (
     find_missing_shards,
     load_glm_lazy_state_dict,
     resolve_best_effort_snapshot_dir,

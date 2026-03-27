@@ -8,8 +8,8 @@ import os
 import pytest
 import torch
 
-from models.demos.glm4_moe_lite.tt.reference_moe import run_layer_moe_reference_from_hidden_states
-from models.demos.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
+from models.experimental.glm4_moe_lite.tt.reference_moe import run_layer_moe_reference_from_hidden_states
+from models.experimental.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
 
 
 @pytest.mark.skipif(

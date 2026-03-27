@@ -13,14 +13,17 @@ import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
-from models.demos.glm4_moe_lite.tt.layer0_tt import (
+from models.experimental.glm4_moe_lite.tt.layer0_tt import (
     debug_flash_mla_decode_attention_unpaged_vs_paged_tt,
     debug_fill_kvpe_cache_for_one_step_tt,
     debug_q_for_decode_prefill_vs_single_token_tt,
     run_layer0_decode_one_step_tt,
 )
-from models.demos.glm4_moe_lite.tt.reference_layer0 import run_layer0_reference, run_layer0_reference_from_input_ids
-from models.demos.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
+from models.experimental.glm4_moe_lite.tt.reference_layer0 import (
+    run_layer0_reference,
+    run_layer0_reference_from_input_ids,
+)
+from models.experimental.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
 
 
 @pytest.mark.skipif(

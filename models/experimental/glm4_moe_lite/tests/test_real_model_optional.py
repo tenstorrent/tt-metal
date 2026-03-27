@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from models.demos.glm4_moe_lite.tt.weights import (
+from models.experimental.glm4_moe_lite.tt.weights import (
     find_missing_shards,
     load_glm_lazy_state_dict,
     resolve_best_effort_snapshot_dir,

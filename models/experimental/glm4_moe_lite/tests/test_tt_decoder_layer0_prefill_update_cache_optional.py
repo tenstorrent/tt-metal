@@ -15,9 +15,9 @@ import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
-from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.demos.glm4_moe_lite.tt.decoder_layer_tt import run_decoder_layer_prefill_update_cache_tt
-from models.demos.glm4_moe_lite.tt.layer0_tt import (
+from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+from models.experimental.glm4_moe_lite.tt.decoder_layer_tt import run_decoder_layer_prefill_update_cache_tt
+from models.experimental.glm4_moe_lite.tt.layer0_tt import (
     _alloc_contiguous_page_table,
     _alloc_paged_kvpe_cache,
     _round_up,
@@ -25,8 +25,8 @@ from models.demos.glm4_moe_lite.tt.layer0_tt import (
     make_rope_tensors,
     run_layer0_prefill_tt,
 )
-from models.demos.glm4_moe_lite.tt.tt_embedding import run_tt_embedding
-from models.demos.glm4_moe_lite.tt.weights import (
+from models.experimental.glm4_moe_lite.tt.tt_embedding import run_tt_embedding
+from models.experimental.glm4_moe_lite.tt.weights import (
     find_missing_shards,
     load_glm_lazy_state_dict,
     resolve_best_effort_snapshot_dir,
