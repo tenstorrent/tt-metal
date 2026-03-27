@@ -29,25 +29,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr auto dest_producer = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_producer, dest_dvalid_client::PACK});
 
-    if constexpr (unpack_to_dest)
+    if constexpr (unpack_to_dest && is_fp32_dest_acc_en)
     {
-        if constexpr (is_fp32_dest_acc_en)
+        const bool int32_dest = static_cast<DataFormat>(formats.unpack_A_src) == DataFormat::Int32;
+        // Dst is in 32b mode (and we unpack directly to dest) determine whether it's Float32 or Int32 from the unpack source format.
+        if (int32_dest)
         {
-            // dest is in 32b mode (and we unpack directly to dest)determine whether it's Float32 or Int32 from the unpack source format.
-            const bool int32_dest = static_cast<DataFormat>(formats.unpack_A_src) == DataFormat::Int32;
-            if (int32_dest)
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false, true>();
-            }
-            else
-            {
-                _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true, false>();
-            }
+            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false, true>();
         }
         else
         {
-            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false, false>();
+            _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, true, false>();
         }
+    }
+    else if constexpr (unpack_to_dest)
+    {
+        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, false, false>();
     }
 
     buffer_descriptor_u bd_val = {0};
@@ -87,26 +84,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(td_val);
     }
 
-    constexpr std::uint32_t TILIZE_BLOCK_CT = unpack_to_dest ? 1 : BLOCK_CT_DIM;
-    _llk_unpack_tilize_init_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en, FULL_CT_DIM, TILIZE_BLOCK_CT, C_DIM_FACES>(buf_desc_id);
-
-    // Each _llk_unpack_tilize_ call unpacks BLOCK_CT_DIM tiles (one tile row).
-    // Column stride (tile-to-tile within a row) is handled internally by the MOP:
-    // HW auto-increments the L1 source pointer by SRC_Z_STRIDE (= C_DIM_FACES) after each tile.
-    // Row stride (advancing to the next tile row) is computed here and passed as the starting L1 offset.
     std::uint32_t y_stride_external = FULL_CT_DIM * R_DIM_FACES * TEST_FACE_R_DIM;
-    for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
+    if constexpr (unpack_to_dest)
     {
-        if constexpr (unpack_to_dest)
+        // Batched tilize directly into DEST using block API.
+        // DST_Z_STRIDE=num_faces so each Dst_Z_Cntr_inc advances DEST by one full tile.
+        // L1 and DEST counters are set once per row.
+        _llk_unpack_tilize_block_init_<FULL_CT_DIM, BLOCK_CT_DIM, C_DIM_FACES, num_faces>(buf_desc_id);
+        for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
         {
-            // One tile at a time for UNP_DEST with SyncHalf double-buffering.
-            for (std::uint32_t x = 0; x < BLOCK_CT_DIM; x++)
-            {
-                _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(y * y_stride_external + x);
-                _llk_unpack_dest_dvalid_section_done_();
-            }
+            _llk_unpack_tilize_block_(y * y_stride_external, y * BLOCK_CT_DIM);
         }
-        else
+        _llk_unpack_dest_dvalid_section_done_();
+    }
+    else
+    {
+        _llk_unpack_tilize_init_<UNPACKER_ENGINE_SEL, is_fp32_dest_acc_en, FULL_CT_DIM, BLOCK_CT_DIM, C_DIM_FACES>(buf_desc_id);
+        for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
         {
             _llk_unpack_tilize_<UNPACKER_ENGINE_SEL>(y * y_stride_external);
         }
@@ -184,21 +178,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
 
-    if constexpr (unpack_to_dest)
-    {
-        // One tile at a time, double-buffering with unpack (SyncHalf).
-        _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, 1);
-        for (std::uint32_t i = 0; i < TILE_CNT; i++)
-        {
-            _llk_pack_<p_pacr::PACK0>(0, i);
-            _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
-        }
-    }
-    else
-    {
-        _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, num_tiles_per_pack);
-        _llk_pack_<p_pacr::PACK0>(0, 0);
-        _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
-    }
+    _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, num_tiles_per_pack);
+    _llk_pack_<p_pacr::PACK0>(0, 0);
+    _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 #endif
