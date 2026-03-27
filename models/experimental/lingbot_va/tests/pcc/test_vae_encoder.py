@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: diffusers AutoencoderKLWan encoder vs TTNN WanVAEEncoder."""
+"""PCC: diffusers AutoencoderKLWan encoder vs TTNN WanVAEEncoder (reference VAE in fp32 on CPU for speed)."""
 
 import pytest
 import torch
@@ -25,9 +25,10 @@ VIDEO_W = 320
 
 @pytest.fixture(scope="module")
 def vae():
+    # bf16 conv on CPU is very slow; fp32 uses fast MKL paths (same idea as test_vae_decoder.py).
     model = AutoencoderKLWan.from_pretrained(
         CHECKPOINT_PATH,
-        torch_dtype=torch.bfloat16,
+        torch_dtype=torch.float32,
     ).to(device="cpu")
     model.eval()
     return model

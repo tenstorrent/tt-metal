@@ -4,11 +4,14 @@
 """PCC: Lingbot-VA TT WanTransformer3DModel vs reference (video and action paths)."""
 
 import gc
+import json
 import os
 import sys
-import tempfile
 import time
 from pathlib import Path
+
+# Avoid inspector writing under generated/ when the filesystem is full (common on dev boxes).
+os.environ.setdefault("TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT", "0")
 
 import pytest
 import torch
@@ -65,6 +68,50 @@ def _make_parallel_config(mesh_device, sp_axis, tp_axis):
 
 def _make_ccl_manager(mesh_device, num_links, topology):
     return CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+
+
+def _load_torch_reference() -> TorchWanTransformer3DModel:
+    path = str(LINGBOT_VA_CHECKPOINT)
+    kw = dict(torch_dtype=torch.float32, attn_mode="torch")
+    try:
+        return TorchWanTransformer3DModel.from_pretrained(path, low_cpu_mem_usage=True, **kw)
+    except TypeError:
+        return TorchWanTransformer3DModel.from_pretrained(path, **kw)
+
+
+def _release_host_tensors() -> None:
+    gc.collect()
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def _load_state_dict_from_diffusers_safetensors(checkpoint_dir: Path) -> dict[str, torch.Tensor]:
+    """Load flat state dict from diffusers-format sharded ``.safetensors`` (same keys as ``torch_model.state_dict()``).
+
+    Used after deleting the reference PyTorch model so TT weights load without a second ~10GB copy in RAM
+    (avoids ``torch.save`` to ``/tmp`` when disk is full).
+    """
+    from safetensors.torch import load_file
+
+    index_path = checkpoint_dir / "diffusion_pytorch_model.safetensors.index.json"
+    single_path = checkpoint_dir / "diffusion_pytorch_model.safetensors"
+    if index_path.is_file():
+        with open(index_path, encoding="utf-8") as f:
+            index = json.load(f)
+        weight_map = index["weight_map"]
+        merged: dict[str, torch.Tensor] = {}
+        for shard_file in sorted(set(weight_map.values())):
+            shard_path = checkpoint_dir / shard_file
+            if not shard_path.is_file():
+                raise FileNotFoundError(f"Missing shard {shard_path}")
+            merged.update(load_file(str(shard_path)))
+        return merged
+    if single_path.is_file():
+        return load_file(str(single_path))
+    raise FileNotFoundError(
+        f"Expected diffusion_pytorch_model.safetensors.index.json or diffusion_pytorch_model.safetensors under {checkpoint_dir}"
+    )
 
 
 def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp, num_layers=NUM_LAYERS):
@@ -156,36 +203,26 @@ def _make_action_grid_id(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize(
-    ("B", "T", "H", "W", "prompt_seq_len"),
-    [
-        pytest.param(
-            1,
-            DEMO_FRAME_CHUNK,
-            DEMO_LATENT_H,
-            DEMO_LATENT_W,
-            DEMO_PROMPT_SEQ_LEN,
-            id="demo_robotwin",
-        ),
-    ],
-)
-def test_wan_transformer_model(
+def test_wan_transformer_model_video_and_action(
     mesh_device: ttnn.MeshDevice,
     submesh_shape: tuple,
     sp_axis: int,
     tp_axis: int,
     num_links: int,
-    B: int,
-    T: int,
-    H: int,
-    W: int,
-    prompt_seq_len: int,
     topology: ttnn.Topology,
     is_fsdp: bool,
     reset_seeds,
 ) -> None:
+    """Single checkpoint load: reference video + action forwards, then one TT model (avoids OOM from loading ~10GB twice)."""
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
+    B = 1
+    T = DEMO_FRAME_CHUNK
+    H = DEMO_LATENT_H
+    W = DEMO_LATENT_W
+    prompt_seq_len = DEMO_PROMPT_SEQ_LEN
+    F_action = DEMO_FRAME_CHUNK
+    action_per_frame = DEMO_ACTION_PER_FRAME
 
     if not LINGBOT_VA_CHECKPOINT.exists():
         pytest.skip(f"Lingbot-VA checkpoint not found: {LINGBOT_VA_CHECKPOINT}")
@@ -194,31 +231,42 @@ def test_wan_transformer_model(
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
-    torch_model = TorchWanTransformer3DModel.from_pretrained(
-        str(LINGBOT_VA_CHECKPOINT),
-        torch_dtype=torch.float32,
-        attn_mode="torch",
-    )
+    torch_model = _load_torch_reference()
     torch_model.eval()
 
     torch.manual_seed(0)
-    spatial_input = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
-    prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
-    timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
-
-    grid_id = _make_grid_id(B, T, H, W, PATCH_SIZE, spatial_input.device)
+    spatial_video = torch.randn((B, IN_CHANNELS, T, H, W), dtype=torch.float32)
+    prompt_video = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
+    timestep_video = torch.randint(0, 1000, (B,), dtype=torch.float32)
+    grid_id_video = _make_grid_id(B, T, H, W, PATCH_SIZE, spatial_video.device)
     F_patched = T // PATCH_SIZE[0]
-    timesteps_ref = timestep_input.unsqueeze(1).expand(B, F_patched)
-    input_dict = {
-        "noisy_latents": spatial_input,
-        "text_emb": prompt_input,
-        "timesteps": timesteps_ref,
-        "grid_id": grid_id,
+    timesteps_ref_video = timestep_video.unsqueeze(1).expand(B, F_patched)
+    input_dict_video = {
+        "noisy_latents": spatial_video,
+        "text_emb": prompt_video,
+        "timesteps": timesteps_ref_video,
+        "grid_id": grid_id_video,
+    }
+
+    torch.manual_seed(0)
+    spatial_action = torch.randn((B, ACTION_DIM, F_action, action_per_frame, 1), dtype=torch.float32)
+    prompt_action = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
+    timestep_action = torch.randint(0, 1000, (B,), dtype=torch.float32)
+    timesteps_ref_action = timestep_action.unsqueeze(1).expand(B, F_action)
+    grid_id_action = _make_action_grid_id(B, F_action, action_per_frame, spatial_action.device)
+    input_dict_action = {
+        "noisy_latents": spatial_action,
+        "text_emb": prompt_action,
+        "timesteps": timesteps_ref_action,
+        "grid_id": grid_id_action,
     }
 
     with torch.no_grad():
-        ref_out = torch_model(input_dict, action_mode=False, train_mode=False)
-    ref_out_bcfhw = _ref_output_to_bcfhw(ref_out, B, T, H, W, PATCH_SIZE, OUT_CHANNELS)
+        ref_out_video = torch_model(input_dict_video, action_mode=False, train_mode=False)
+        ref_out_action = torch_model(input_dict_action, action_mode=True, train_mode=False)
+    ref_out_bcfhw = _ref_output_to_bcfhw(ref_out_video, B, T, H, W, PATCH_SIZE, OUT_CHANNELS)
+    del ref_out_video
+    _release_host_tensors()
 
     cache_dir = model_cache_dir(
         model_name="lingbot_va",
@@ -231,7 +279,7 @@ def test_wan_transformer_model(
 
     if use_cache:
         del torch_model
-        gc.collect()
+        _release_host_tensors()
         tt_model = _make_wan_transformer(
             mesh_device=mesh_device,
             ccl_manager=ccl_manager,
@@ -239,198 +287,62 @@ def test_wan_transformer_model(
             is_fsdp=is_fsdp,
             num_layers=NUM_LAYERS,
         )
-        start = time.time()
+        t0 = time.time()
         tt_model.load(cache_dir)
-        end = time.time()
-        logger.info("Loaded TT model from cache in {} s", end - start)
+        logger.info("Loaded TT model from cache in {} s", time.time() - t0)
     else:
-        state_dict = torch_model.state_dict()
-        fd, state_path = tempfile.mkstemp(suffix=".pt")
-        try:
-            os.close(fd)
-            torch.save(state_dict, state_path)
-            del torch_model
-            del state_dict
-            gc.collect()
-            state_dict = torch.load(state_path, map_location=torch.device("cpu"), mmap=True)
-            tt_model = _make_wan_transformer(
-                mesh_device=mesh_device,
-                ccl_manager=ccl_manager,
-                parallel_config=parallel_config,
-                is_fsdp=is_fsdp,
-                num_layers=NUM_LAYERS,
-            )
-            start = time.time()
-            tt_model.load_torch_state_dict(state_dict)
-            end = time.time()
-            logger.info("Loaded TT model from state dict (mmap) in {} s", end - start)
-        finally:
-            try:
-                os.unlink(state_path)
-            except OSError:
-                pass
+        # Drop reference weights before loading TT: in-memory state_dict + torch_model peaks at ~2× weights.
+        # Reload from on-disk safetensors (same checkpoint) after freeing the HF model.
+        del torch_model
+        _release_host_tensors()
+        t0 = time.time()
+        state_dict = _load_state_dict_from_diffusers_safetensors(LINGBOT_VA_CHECKPOINT)
+        tt_model = _make_wan_transformer(
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+            num_layers=NUM_LAYERS,
+        )
+        tt_model.load_torch_state_dict(state_dict)
+        del state_dict
+        _release_host_tensors()
+        logger.info("Loaded TT model from safetensors checkpoint in {} s", time.time() - t0)
 
     logger.info(
-        "Running TT model (video path): spatial {}, prompt {}, timestep {}",
-        spatial_input.shape,
-        prompt_input.shape,
-        timestep_input.shape,
+        "TT video path: spatial {}, prompt {}, timestep {}",
+        spatial_video.shape,
+        prompt_video.shape,
+        timestep_video.shape,
     )
-    tt_spatial_out = tt_model(
-        spatial=spatial_input,
-        prompt=prompt_input,
-        timestep=timestep_input,
-        grid_id=grid_id,
+    tt_video = tt_model(
+        spatial=spatial_video,
+        prompt=prompt_video,
+        timestep=timestep_video,
+        grid_id=grid_id_video,
         action_mode=False,
     )
-    del tt_model
-    gc.collect()
-
-    assert_quality(ref_out_bcfhw, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
-
-
-@pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
-    [
-        pytest.param(
-            mesh_shape_request_param(),
-            (1, 1),
-            0,
-            1,
-            1,
-            line_params,
-            ttnn.Topology.Linear,
-            False,
-            id="submesh_1x1",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.parametrize(
-    ("B", "F_action", "action_per_frame", "prompt_seq_len"),
-    [
-        pytest.param(
-            1,
-            DEMO_FRAME_CHUNK,
-            DEMO_ACTION_PER_FRAME,
-            DEMO_PROMPT_SEQ_LEN,
-            id="demo_robotwin_action",
-        ),
-    ],
-)
-def test_wan_transformer_model_action_mode(
-    mesh_device: ttnn.MeshDevice,
-    submesh_shape: tuple,
-    sp_axis: int,
-    tp_axis: int,
-    num_links: int,
-    B: int,
-    F_action: int,
-    action_per_frame: int,
-    prompt_seq_len: int,
-    topology: ttnn.Topology,
-    is_fsdp: bool,
-    reset_seeds,
-) -> None:
-    MIN_PCC = 0.992_000
-    MAX_RMSE = 0.15
-
-    if not LINGBOT_VA_CHECKPOINT.exists():
-        pytest.skip(f"Lingbot-VA checkpoint not found: {LINGBOT_VA_CHECKPOINT}")
-
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
-    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
-
-    torch_model = TorchWanTransformer3DModel.from_pretrained(
-        str(LINGBOT_VA_CHECKPOINT),
-        torch_dtype=torch.float32,
-        attn_mode="torch",
-    )
-    torch_model.eval()
-
-    torch.manual_seed(0)
-    spatial_input = torch.randn((B, ACTION_DIM, F_action, action_per_frame, 1), dtype=torch.float32)
-    prompt_input = torch.randn((B, prompt_seq_len, TEXT_DIM), dtype=torch.float32)
-    timestep_input = torch.randint(0, 1000, (B,), dtype=torch.float32)
-    timesteps_ref = timestep_input.unsqueeze(1).expand(B, F_action)
-
-    grid_id = _make_action_grid_id(B, F_action, action_per_frame, spatial_input.device)
-    input_dict = {
-        "noisy_latents": spatial_input,
-        "text_emb": prompt_input,
-        "timesteps": timesteps_ref,
-        "grid_id": grid_id,
-    }
-
-    with torch.no_grad():
-        ref_out = torch_model(input_dict, action_mode=True, train_mode=False)
-
-    cache_dir = model_cache_dir(
-        model_name="lingbot_va",
-        subfolder="transformer",
-        parallel_config=parallel_config,
-        mesh_shape=tuple(mesh_device.shape),
-        required=False,
-    )
-    use_cache = cache_dir is not None and cache_dir.is_dir()
-
-    if use_cache:
-        del torch_model
-        gc.collect()
-        tt_model = _make_wan_transformer(
-            mesh_device=mesh_device,
-            ccl_manager=ccl_manager,
-            parallel_config=parallel_config,
-            is_fsdp=is_fsdp,
-            num_layers=NUM_LAYERS,
-        )
-        start = time.time()
-        tt_model.load(cache_dir)
-        end = time.time()
-        logger.info("Loaded TT model from cache (action path) in {} s", end - start)
-    else:
-        state_dict = torch_model.state_dict()
-        fd, state_path = tempfile.mkstemp(suffix=".pt")
-        try:
-            os.close(fd)
-            torch.save(state_dict, state_path)
-            del torch_model
-            del state_dict
-            gc.collect()
-            state_dict = torch.load(state_path, map_location=torch.device("cpu"), mmap=True)
-            tt_model = _make_wan_transformer(
-                mesh_device=mesh_device,
-                ccl_manager=ccl_manager,
-                parallel_config=parallel_config,
-                is_fsdp=is_fsdp,
-                num_layers=NUM_LAYERS,
-            )
-            start = time.time()
-            tt_model.load_torch_state_dict(state_dict)
-            end = time.time()
-            logger.info("Loaded TT model from state dict (mmap, action path) in {} s", end - start)
-        finally:
-            try:
-                os.unlink(state_path)
-            except OSError:
-                pass
+    assert_quality(ref_out_bcfhw, tt_video, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+    del tt_video
+    del ref_out_bcfhw
+    _release_host_tensors()
 
     logger.info(
-        "Running TT model (action path): spatial {}, prompt {}, timestep {}",
-        spatial_input.shape,
-        prompt_input.shape,
-        timestep_input.shape,
+        "TT action path: spatial {}, prompt {}, timestep {}",
+        spatial_action.shape,
+        prompt_action.shape,
+        timestep_action.shape,
     )
-    tt_spatial_out = tt_model(
-        spatial=spatial_input,
-        prompt=prompt_input,
-        timestep=timestep_input,
-        grid_id=grid_id,
+    tt_action = tt_model(
+        spatial=spatial_action,
+        prompt=prompt_action,
+        timestep=timestep_action,
+        grid_id=grid_id_action,
         action_mode=True,
     )
+    assert ref_out_action.shape == tt_action.shape, (ref_out_action.shape, tt_action.shape)
+    assert_quality(ref_out_action, tt_action, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
     del tt_model
-    gc.collect()
-
-    assert ref_out.shape == tt_spatial_out.shape, (ref_out.shape, tt_spatial_out.shape)
-    assert_quality(ref_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+    del ref_out_action
+    del tt_action
+    _release_host_tensors()

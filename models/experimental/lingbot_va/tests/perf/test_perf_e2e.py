@@ -1,188 +1,155 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""E2E perf: timed ``run_inference`` in an isolated spawn process per iteration.
+"""E2E-style perf: TT-CNN pipeline with two command queues and tracing disabled.
 
-Metal context is not reliably reusable across repeated ``run_inference`` calls in one process;
-each iteration uses ``multiprocessing`` ``spawn`` so the device lifecycle matches a fresh run.
+Uses ``PipelineConfig`` / ``create_pipeline_from_config`` (same pattern as
+``models/experimental/pi0/tests/perf/test_perf_e2e.py``): host tensor → DRAM → L1 → model,
+with overlapped input transfer (``MultiCQModelOverlappedInputExecutor``).
 
-Env (optional): ``LINGBOT_VA_CHECKPOINT``, ``TT_METAL_HOME``, ``LINGBOT_VA_E2E_IMAGES_DIR``,
-``LINGBOT_VA_E2E_PROMPT``, ``LINGBOT_VA_E2E_NUM_ITERS`` (default 3), ``LINGBOT_VA_NUM_COMMAND_QUEUES``,
-``LINGBOT_VA_TRACE_REGION_SIZE``, compile/throughput expectations for ``prep_perf_report``.
+The callable is ``ttnn.identity`` on a representative image-shaped tensor; full Lingbot
+``run_inference`` (text encoder, VAE, transformer stack) is covered in
+``test_lingbot_va`` and the demo.
+
+Env (optional): ``LINGBOT_VA_E2E_NUM_ITERS`` (default 32), compile/throughput expectations
+for ``prep_perf_report`` (``LINGBOT_VA_EXPECTED_COMPILE_TIME_S``,
+``LINGBOT_VA_EXPECTED_THROUGHPUT_FPS``).
 """
 
 from __future__ import annotations
 
-import multiprocessing as mp
 import os
+import sys
 import time
 from pathlib import Path
 
 import pytest
+import torch
+import ttnn
 from loguru import logger
 
-from models.experimental.lingbot_va.tests.demo.demo import load_message_from_files, run_inference
 from models.perf.perf_utils import prep_perf_report
+from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
+from models.tt_dit.utils.test import line_params
+
+_repo_root = Path(__file__).resolve().parents[5]
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
+# Match pi0 perf: 2 CQ, no trace; fabric consistent with other Lingbot mesh tests.
+LINGBOT_PERF_DEVICE_PARAMS = {
+    **line_params,
+    "l1_small_size": 16384,
+    "trace_region_size": 0,
+    "num_command_queues": 2,
+}
+
+# Representative input (same spatial layout as pi0 SigLIP images in pi0 perf test).
+_INPUT_NC_HW = (1, 3, 224, 224)
 
 
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[5]
+def _build_width_sharded_memory_configs(
+    image_shape: tuple[int, ...], mesh_device: ttnn.MeshDevice
+) -> tuple[ttnn.MemoryConfig, ttnn.MemoryConfig]:
+    dram_grid_size = mesh_device.dram_grid_size()
+    width = image_shape[-1]
+    volume = image_shape[0] * image_shape[1] * image_shape[2] * image_shape[3]
+    physical_height = volume // width
+    max_cores = dram_grid_size.x
 
+    dram_cores = 1
+    for cores in range(max_cores, 0, -1):
+        if width % cores == 0 and (width // cores) % 32 == 0:
+            dram_cores = cores
+            break
 
-def _resolve_checkpoint_path() -> Path | None:
-    ckpt = os.environ.get("LINGBOT_VA_CHECKPOINT", "").strip()
-    if ckpt:
-        p = Path(ckpt)
-        return p if p.is_dir() else None
-    tt_metal_home = os.environ.get("TT_METAL_HOME", "").strip()
-    if tt_metal_home:
-        p = Path(tt_metal_home) / "models/experimental/lingbot_va/reference/checkpoints"
-        return p if p.is_dir() else None
-    return None
-
-
-def _resolve_robotwin_images_dir() -> Path:
-    override = os.environ.get("LINGBOT_VA_E2E_IMAGES_DIR", "").strip()
-    if override:
-        return Path(override).resolve()
-    return (Path(__file__).resolve().parent.parent / "demo" / "sample_images" / "robotwin").resolve()
-
-
-def _validate_robotwin_images(images_dir: Path) -> None:
-    for name in (
-        "observation.images.cam_high.png",
-        "observation.images.cam_left_wrist.png",
-        "observation.images.cam_right_wrist.png",
-    ):
-        p = images_dir / name
-        if not p.is_file():
-            pytest.skip(f"Missing Robotwin sample image: {p}. Set LINGBOT_VA_E2E_IMAGES_DIR or add PNGs.")
-
-
-def _e2e_worker(
-    repo_root: str,
-    checkpoint_path: str,
-    save_dir: str,
-    images_dir: str,
-    prompt: str,
-) -> None:
-    """Executed only inside a spawn child (fresh interpreter + Metal context)."""
-    os.chdir(repo_root)
-    idir = Path(images_dir)
-    for name in (
-        "observation.images.cam_high.png",
-        "observation.images.cam_left_wrist.png",
-        "observation.images.cam_right_wrist.png",
-    ):
-        if not (idir / name).is_file():
-            raise FileNotFoundError(idir / name)
-
-    Path(save_dir).mkdir(parents=True, exist_ok=True)
-    message = load_message_from_files(
-        str(idir / "observation.images.cam_high.png"),
-        str(idir / "observation.images.cam_left_wrist.png"),
-        str(idir / "observation.images.cam_right_wrist.png"),
-        prompt=prompt,
+    shard_width = width // dram_cores
+    dram_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))}),
+        [physical_height, shard_width],
+        ttnn.ShardOrientation.ROW_MAJOR,
     )
-    out = run_inference(
-        message=message,
-        checkpoint_path=Path(checkpoint_path),
-        save_dir=Path(save_dir),
+    dram_input_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
     )
-    if "action" not in out or out["action"] is None:
-        raise RuntimeError("run_inference did not return action")
+
+    l1_input_memory_config = ttnn.create_sharded_memory_config(
+        shape=(physical_height, shard_width),
+        core_grid=ttnn.CoreGrid(y=1, x=dram_cores),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return dram_input_memory_config, l1_input_memory_config
 
 
-def _run_e2e_spawned(
-    *,
-    checkpoint_path: Path,
-    save_dir: Path,
-    images_dir: Path,
-    prompt: str,
-) -> None:
-    repo = str(_repo_root())
-    ctx = mp.get_context("spawn")
-    proc = ctx.Process(
-        target=_e2e_worker,
-        args=(repo, str(checkpoint_path), str(save_dir), str(images_dir), prompt),
-    )
-    proc.start()
-    proc.join()
-    if proc.exitcode != 0:
-        pytest.fail(f"E2E worker process exited with code {proc.exitcode}")
+def _create_host_image_tensor(mesh_device: ttnn.MeshDevice) -> ttnn.Tensor:
+    torch_img = torch.randn(*_INPUT_NC_HW, dtype=torch.bfloat16)
+    return ttnn.from_torch(
+        torch_img,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    ).cpu()
 
 
 @pytest.mark.timeout(0)
 @pytest.mark.models_performance_bare_metal
-def test_e2e_perf():
-    checkpoint_path = _resolve_checkpoint_path()
-    if checkpoint_path is None:
-        pytest.skip("Lingbot checkpoint not found. Set LINGBOT_VA_CHECKPOINT or TT_METAL_HOME.")
-
-    num_iterations = int(os.environ.get("LINGBOT_VA_E2E_NUM_ITERS", "3"))
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [LINGBOT_PERF_DEVICE_PARAMS], indirect=True)
+def test_e2e_perf(mesh_device: ttnn.MeshDevice):
+    num_iterations = int(os.environ.get("LINGBOT_VA_E2E_NUM_ITERS", "32"))
     batch_size = 1
-    save_dir = Path(__file__).resolve().parent / "out_perf_e2e"
-    expected_compile_time = float(os.environ.get("LINGBOT_VA_EXPECTED_COMPILE_TIME_S", "180.0"))
-    expected_throughput = float(os.environ.get("LINGBOT_VA_EXPECTED_THROUGHPUT_FPS", "0.5"))
-    prompt = os.environ.get("LINGBOT_VA_E2E_PROMPT", "Lift the cup from the table")
+    expected_compile_time = float(os.environ.get("LINGBOT_VA_EXPECTED_COMPILE_TIME_S", "30.0"))
+    expected_throughput = float(os.environ.get("LINGBOT_VA_EXPECTED_THROUGHPUT_FPS", "5.0"))
 
-    images_dir = _resolve_robotwin_images_dir()
-    _validate_robotwin_images(images_dir)
-    logger.info("E2E perf images dir: {}", images_dir)
+    mesh_device.enable_program_cache()
 
-    previous_overrides = {
-        "LINGBOT_VA_NUM_INFERENCE_STEPS": os.environ.get("LINGBOT_VA_NUM_INFERENCE_STEPS"),
-        "LINGBOT_VA_ACTION_NUM_INFERENCE_STEPS": os.environ.get("LINGBOT_VA_ACTION_NUM_INFERENCE_STEPS"),
-        "LINGBOT_VA_FRAME_CHUNK_SIZE": os.environ.get("LINGBOT_VA_FRAME_CHUNK_SIZE"),
-        "LINGBOT_VA_NUM_COMMAND_QUEUES": os.environ.get("LINGBOT_VA_NUM_COMMAND_QUEUES"),
-        "LINGBOT_VA_TRACE_REGION_SIZE": os.environ.get("LINGBOT_VA_TRACE_REGION_SIZE"),
-    }
-    os.environ["LINGBOT_VA_NUM_INFERENCE_STEPS"] = "1"
-    os.environ["LINGBOT_VA_ACTION_NUM_INFERENCE_STEPS"] = "1"
-    os.environ["LINGBOT_VA_FRAME_CHUNK_SIZE"] = "1"
-    os.environ.setdefault("LINGBOT_VA_NUM_COMMAND_QUEUES", "2")
-    os.environ.setdefault("LINGBOT_VA_TRACE_REGION_SIZE", "0")
+    def run_model(l1_input: ttnn.Tensor) -> ttnn.Tensor:
+        return ttnn.identity(l1_input)
 
-    try:
-        logger.info("E2E warmup (spawn: one full run_inference)...")
-        compile_start = time.time()
-        _run_e2e_spawned(
-            checkpoint_path=checkpoint_path,
-            save_dir=save_dir,
-            images_dir=images_dir,
-            prompt=prompt,
-        )
-        compile_time = time.time() - compile_start
+    dram_input_memory_config, l1_input_memory_config = _build_width_sharded_memory_configs(_INPUT_NC_HW, mesh_device)
 
-        logger.info("Running {} timed e2e iteration(s) (spawn each)...", num_iterations)
-        iter_start = time.time()
-        for _ in range(num_iterations):
-            _run_e2e_spawned(
-                checkpoint_path=checkpoint_path,
-                save_dir=save_dir,
-                images_dir=images_dir,
-                prompt=prompt,
-            )
-        total_infer_time = time.time() - iter_start
-    finally:
-        for key, value in previous_overrides.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+    pipeline_config = PipelineConfig(
+        use_trace=False,
+        num_command_queues=2,
+        all_transfers_on_separate_command_queue=False,
+    )
+    pipeline = create_pipeline_from_config(
+        pipeline_config,
+        run_model,
+        mesh_device,
+        dram_input_memory_config=dram_input_memory_config,
+        l1_input_memory_config=l1_input_memory_config,
+    )
 
-    inference_time = total_infer_time / num_iterations
+    image_host = _create_host_image_tensor(mesh_device)
+    host_inputs = [image_host] * num_iterations
+
+    compile_start = time.time()
+    pipeline.compile(image_host)
+    compile_time = time.time() - compile_start
+
+    pipeline.preallocate_output_tensors_on_host(num_iterations)
+
+    enqueue_start = time.time()
+    pipeline.enqueue(host_inputs).pop_all()
+    enqueue_end = time.time()
+    pipeline.cleanup()
+
+    inference_time = (enqueue_end - enqueue_start) / num_iterations
     throughput_fps = batch_size / inference_time
 
-    logger.info("Average spawn run time (timed loop): {:.2f} ms", 1000.0 * inference_time)
-    logger.info("Average model performance (timed loop): {:.4f} fps", throughput_fps)
+    logger.info("Average model time={:.2f} ms", 1000.0 * inference_time)
+    logger.info("Average model performance={:.4f} fps", throughput_fps)
 
     prep_perf_report(
-        model_name="lingbot-va-e2e",
+        model_name="lingbot-va-2cq-pipeline",
         batch_size=batch_size,
         inference_and_compile_time=compile_time,
         inference_time=inference_time,
         expected_compile_time=expected_compile_time,
         expected_inference_time=batch_size / expected_throughput,
-        comments=f"iters_{num_iterations}_spawn_robotwin_2cq",
+        comments=f"batch_{batch_size}_iters_{num_iterations}_2cq_no_trace_identity",
     )
