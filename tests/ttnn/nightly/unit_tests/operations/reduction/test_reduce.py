@@ -67,22 +67,22 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
     y = torch.amax(x, 2)
 
     if dtype == ttnn.bfloat16:
-        # test for equivalance
-        assert_numeric_metrics(
-            y,
-            tt_got_back,
-            pcc_threshold=1,
-            rtol=1e-06,
-            atol=1e-06,
-            frobenius_threshold=1e-09,
-        )
+        pcc_threshold = 1
+        rtol = 1e-06
+        atol = 1e-06
+        frobenius_threshold = 1e-09
     else:
-        # test for equivalance
-        assert_numeric_metrics(
-            y,
-            tt_got_back,
-            pcc_threshold=0.999,
-            rtol=0.032,
-            atol=0.039,
-            frobenius_threshold=0.005,
-        )
+        pcc_threshold = 0.999
+        rtol = 0.032
+        atol = 0.039
+        frobenius_threshold = 0.005
+
+    # test for equivalance
+    assert_numeric_metrics(
+        y,
+        tt_got_back,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
