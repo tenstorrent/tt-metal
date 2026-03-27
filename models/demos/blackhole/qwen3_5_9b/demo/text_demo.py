@@ -123,15 +123,17 @@ def _get_prompt(seqlen, tokenizer):
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
-    "seqlen, max_seq_len, max_generated_tokens, use_trace",
+    "seqlen, max_seq_len, max_generated_tokens, use_trace, use_paged",
     [
-        (128, 2048, 50, True),
-        (4096, 8192, 100, True),
-        (8192, 16384, 50, True),
-        (65536, 131072, 100, True),
-        (131072, 262144, 100, True),
+        (128, 2048, 50, True, False),
+        (128, 2048, 50, False, True),
+        (4096, 8192, 100, True, False),
+        (8192, 16384, 50, True, False),
+        (65536, 131072, 100, True, False),
+        (65536, 131072, 100, False, True),
+        (131072, 262144, 100, True, False),
     ],
-    ids=["prefill_128", "prefill_4k", "prefill_8k", "prefill_64k", "prefill_128k"],
+    ids=["prefill_128", "paged_128", "prefill_4k", "prefill_8k", "prefill_64k", "paged_64k", "prefill_128k"],
 )
 def test_demo_text(
     device,
@@ -139,6 +141,7 @@ def test_demo_text(
     max_seq_len,
     max_generated_tokens,
     use_trace,
+    use_paged,
 ):
     """End-to-end text generation: prefill + decode with performance validation."""
     from transformers import PreTrainedTokenizerFast
@@ -159,7 +162,16 @@ def test_demo_text(
     actual_len = token_ids.shape[1]
     logger.info(f"Prompt: {actual_len} tokens (target: {seqlen}, max_seq_len: {max_seq_len})")
 
-    if use_trace:
+    if use_paged:
+        generated, perf = _run_paged_generation(
+            model,
+            tokenizer,
+            device,
+            token_ids,
+            max_generated_tokens,
+            max_seq_len,
+        )
+    elif use_trace:
         generated, perf = _run_traced_generation(
             model,
             tokenizer,
@@ -273,6 +285,76 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
 
         if current_token == tokenizer.eos_token_id:
             break
+
+    avg_decode = sum(decode_times) / len(decode_times) if decode_times else float("inf")
+    return generated, {"ttft": ttft, "avg_decode_s": avg_decode, "decode_steps": len(decode_times)}
+
+
+def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tokens, max_seq_len):
+    """Prefill + paged decode loop. Returns (generated_tokens, perf_dict).
+
+    Uses paged KV cache for the 8 full attention layers.
+    DeltaNet layers use their recurrent state as usual.
+    """
+    T = token_ids.shape[1]
+    block_size = 64
+    num_blocks = (max_seq_len + block_size - 1) // block_size
+    num_kv_heads = model.args.n_kv_heads
+    head_dim = model.args.head_dim
+
+    # Allocate paged KV caches for the 8 attention layers
+    attention_layer_indices = [i for i in range(model.args.n_layers) if model.args.is_full_attention_layer(i)]
+    kv_caches = []
+    for _ in range(len(attention_layer_indices)):
+        k = ttnn.from_torch(
+            torch.zeros(num_blocks, num_kv_heads, block_size, head_dim, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        v = ttnn.from_torch(
+            torch.zeros(num_blocks, num_kv_heads, block_size, head_dim, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        kv_caches.append([k, v])
+    model.set_paged_kv_caches(kv_caches)
+
+    # Identity page table: virtual block i -> physical block i
+    page_table = torch.arange(num_blocks, dtype=torch.int32).unsqueeze(0)
+    page_table_tt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Prefill
+    t0 = time.time()
+    logits = model.prefill_paged(token_ids, page_table_tt)
+    ttnn.synchronize_device(device)
+    ttft = time.time() - t0
+
+    logits_torch = ttnn.to_torch(logits).squeeze()
+    assert not torch.isnan(logits_torch).any(), "NaN in paged prefill logits"
+    next_token = logits_torch.argmax().item()
+
+    generated = [next_token]
+    decode_times = []
+
+    for i in range(max_generated_tokens - 1):
+        next_input = torch.tensor([[next_token]], dtype=torch.long)
+
+        t_step = time.time()
+        logits = model.decode_paged(next_input, current_pos=T + i, page_table=page_table_tt)
+        ttnn.synchronize_device(device)
+        decode_times.append(time.time() - t_step)
+
+        logits_torch = ttnn.to_torch(logits).squeeze()
+        assert not torch.isnan(logits_torch).any(), f"NaN in paged decode logits at step {i}"
+        next_token = logits_torch.argmax().item()
+
+        if next_token == tokenizer.eos_token_id:
+            break
+        generated.append(next_token)
 
     avg_decode = sum(decode_times) / len(decode_times) if decode_times else float("inf")
     return generated, {"ttft": ttft, "avg_decode_s": avg_decode, "decode_steps": len(decode_times)}

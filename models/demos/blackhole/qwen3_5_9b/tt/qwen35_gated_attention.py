@@ -93,6 +93,10 @@ class Qwen35GatedAttention:
         self.cache_pos = 0
         self.use_preallocated_cache = False
         self.use_paged_cache_trace = False
+        # Paged attention state (for vLLM integration)
+        self.paged_kv_cache_key = None
+        self.paged_kv_cache_value = None
+        self.use_paged_attention = False
 
     def enable_preallocated_cache(self, batch_size=1):
         """Allocate fixed-size KV cache for trace-compatible decode."""
@@ -220,12 +224,39 @@ class Qwen35GatedAttention:
         ttnn.deallocate(combined)
         ttnn.deallocate(new_mask)
 
-    def forward(self, x, cos, sin, position_tensor=None):
+    def forward(self, x, cos, sin, position_tensor=None, page_table=None):
         T = x.shape[1]
         mc = ttnn.L1_MEMORY_CONFIG if T == 1 else None
         ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
 
-        if self.use_preallocated_cache and self.use_trace_mode:
+        if self.use_paged_attention and T == 1:
+            # Paged decode: use paged_update_cache + paged_sdpa_decode via page_table
+            output, _, _ = gated_attention_forward_ttnn(
+                hidden_states=x,
+                q_proj_weight=self.q_proj_weight,
+                k_proj_weight=self.k_proj_weight,
+                v_proj_weight=self.v_proj_weight,
+                o_proj_weight=self.o_proj_weight,
+                q_norm_weight=self.q_norm_weight,
+                k_norm_weight=self.k_norm_weight,
+                cos=cos,
+                sin=sin,
+                num_attention_heads=self.num_heads,
+                num_key_value_heads=self.num_kv_heads,
+                head_dim=self.head_dim,
+                device=self.device,
+                norm_eps=self.norm_eps,
+                compute_kernel_config=ckc,
+                use_optimized_concat=True,
+                memory_config=mc,
+                norm_weights_pre_offset=True,
+                cur_pos_tensor=position_tensor,
+                page_table=page_table,
+                paged_kv_cache_key=self.paged_kv_cache_key,
+                paged_kv_cache_value=self.paged_kv_cache_value,
+            )
+            return output
+        elif self.use_preallocated_cache and self.use_trace_mode:
             # Trace-compatible mode with sdpa_decode when position_tensor is available,
             # fallback to staging+mask approach otherwise.
             output, _, _ = gated_attention_forward_ttnn(
@@ -286,6 +317,7 @@ class Qwen35GatedAttention:
             self.cache_pos += T
             return output
         else:
+            # Concat path: used by paged prefill (T>1) and non-paged prefill
             output, new_key, new_value = gated_attention_forward_ttnn(
                 hidden_states=x,
                 q_proj_weight=self.q_proj_weight,
@@ -317,3 +349,9 @@ class Qwen35GatedAttention:
         self.past_key = None
         self.past_value = None
         self.cache_pos = 0
+
+    def set_paged_kv_cache(self, k_cache, v_cache):
+        """Attach externally-allocated paged KV cache (called once after allocate_kv_cache)."""
+        self.paged_kv_cache_key = k_cache
+        self.paged_kv_cache_value = v_cache
+        self.use_paged_attention = True
