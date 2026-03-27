@@ -146,7 +146,12 @@ void kernel_main() {
     SocketSenderInterface profiler_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(profiler_socket, realtime_profiler_page_size);
 
+#ifdef PCIE_NOC_X
+    profiler_socket.d2h.pcie_xy_enc = pcie_xy_enc_noc1;
+    uint32_t pcie_xy_enc = pcie_xy_enc_noc1;
+#else
     uint32_t pcie_xy_enc = profiler_socket.d2h.pcie_xy_enc;
+#endif
     uint32_t data_addr_hi = profiler_socket.d2h.data_addr_hi;
     uint32_t data_addr_lo = profiler_socket.downstream_fifo_addr;
     uint32_t fifo_page_aligned_size = profiler_socket.downstream_fifo_total_size -
