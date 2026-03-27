@@ -39,7 +39,7 @@ void kernel_main() {
             #endif
         #endif
     #else
-        constexpr auto cb_in0 = tt::CBIndex::c_0;   
+        constexpr auto cb_in0 = tt::CBIndex::c_0;
         constexpr auto cb_in1 = tt::CBIndex::c_1;
         constexpr auto cb_inp0 = cb_in0;
         constexpr auto cb_inp1 = cb_in1;

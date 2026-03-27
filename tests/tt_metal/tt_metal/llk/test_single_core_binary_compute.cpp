@@ -151,7 +151,7 @@ bool single_core_binary(
     uint32_t inp1_dfb = 0;
     uint32_t inp2_dfb = 0;
     uint32_t out_dfb = 0;
-    
+
     constexpr uint32_t inp0_dfb_id = 0;
     constexpr uint32_t inp1_dfb_id = 1;
     constexpr uint32_t inp2_dfb_id = 2;
@@ -169,7 +169,7 @@ bool single_core_binary(
             .data_format = tt::DataFormat::Float16_b,
             .tile = tt_metal::Tile({32, 32}),
         };
-        
+
         tt_metal::experimental::dfb::DataflowBufferConfig l1_input1_dfb_config = {
             .entry_size = test_config.tile_byte_size,
             .num_entries = test_config.num_tiles,
@@ -251,7 +251,7 @@ bool single_core_binary(
             }
         }
     }
-    
+
     KernelHandle reader_kernel, writer_kernel, binary_kernel;
     std::vector<uint32_t> reader_cta, writer_cta, compute_cta;
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
@@ -296,7 +296,7 @@ bool single_core_binary(
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = tt_metal::NOC::RISCV_1_default,
                 .defines = defines});
-    
+
         writer_kernel = tt_metal::CreateKernel(
             program_,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
@@ -339,7 +339,7 @@ bool single_core_binary(
     if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
         set_math_fid_masks(srca_fid_mask, srcb_fid_mask, test_config.math_fidelity);
     }
-    
+
     std::transform(
         input0.begin(),
         input0.end(),
