@@ -225,8 +225,14 @@ int main(int argc, char** argv) {
             auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
             test_context.set_code_profiling_enabled(rtoptions.get_enable_fabric_code_profiling_rx_ch_fwd());
 
-            for (auto& built_test : built_tests) {
-                log_info(tt::LogTest, "Running Test: {}", built_test.parametrized_name);
+            for (uint32_t test_idx = 0; test_idx < built_tests.size(); ++test_idx) {
+                auto& built_test = built_tests[test_idx];
+                log_info(
+                    tt::LogTest,
+                    "Running Test ({}/{}): {}",
+                    test_idx + 1,
+                    built_tests.size(),
+                    built_test.parametrized_name);
 
                 // Prepare allocator and memory maps for this specific test
                 test_context.prepare_for_test(built_test);

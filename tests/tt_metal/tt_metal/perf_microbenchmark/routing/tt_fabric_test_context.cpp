@@ -7,6 +7,24 @@
 
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
+#include <future>
+
+namespace {
+std::string format_device_label(const FabricNodeId& node_id) {
+    try {
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        auto asic_id = control_plane.get_asic_id_from_fabric_node_id(node_id);
+        auto& psd = control_plane.get_physical_system_descriptor();
+        auto tray_id = psd.get_tray_id(asic_id);
+        auto asic_location = psd.get_asic_location(asic_id);
+        return fmt::format("{} [T{}/N{}]", node_id, *tray_id, *asic_location);
+    } catch (...) {
+        return fmt::format("{}", node_id);
+    }
+}
+}  // namespace
 
 void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
     for (const auto& sync_config : config.sync_configs) {
@@ -79,26 +97,93 @@ void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
 }
 
 void TestContext::wait_for_programs_with_progress() {
-    if (!progress_config_.enabled) {
-        fixture_->wait_for_programs();
-        return;
+    if (progress_config_.enabled) {
+        // Create progress monitor (but don't start polling thread yet)
+        TestProgressMonitor monitor(this, progress_config_);
+
+        // Poll and check for completion in this thread
+        log_info(
+            tt::LogTest,
+            "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
+            progress_config_.poll_interval_seconds,
+            progress_config_.hung_threshold_seconds);
+
+        monitor.poll_until_complete();
+        log_info(tt::LogTest, "Progress monitoring complete, waiting for programs to finish...");
     }
 
-    // Create progress monitor (but don't start polling thread yet)
-    TestProgressMonitor monitor(this, progress_config_);
+    // Collect per-device sender info for completion tracking
+    struct DeviceStatus {
+        FabricNodeId node_id;
+        uint64_t total_packets = 0;
+    };
+    std::vector<std::pair<MeshCoordinate, DeviceStatus>> local_devices;
+    for (const auto& [coord, test_device] : test_devices_) {
+        FabricNodeId device_id = test_device.get_node_id();
+        if (!fixture_->is_local_fabric_node_id(device_id)) {
+            continue;
+        }
+        uint64_t total_packets = 0;
+        for (const auto& [core, sender] : test_device.get_senders()) {
+            total_packets += sender.get_total_packets();
+        }
+        local_devices.emplace_back(coord, DeviceStatus{device_id, total_packets});
+    }
 
-    // Poll and check for completion in this thread
-    log_info(
-        tt::LogTest,
-        "Progress monitoring started (poll interval: {}s, hung threshold: {}s)",
-        progress_config_.poll_interval_seconds,
-        progress_config_.hung_threshold_seconds);
+    // Run Finish() in a background thread so we can poll device status while waiting
+    auto finish_future = std::async(std::launch::async, [this]() { fixture_->wait_for_programs(); });
 
-    monitor.poll_until_complete();
-    log_info(tt::LogTest, "Progress monitoring complete, waiting for programs to finish...");
+    if (!local_devices.empty()) {
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        uint32_t result_addr = sender_memory_map_.get_result_buffer_address();
 
-    // Now call wait_for_programs() to ensure proper cleanup
-    fixture_->wait_for_programs();
+        constexpr auto poll_interval = std::chrono::seconds(5);
+        while (finish_future.wait_for(poll_interval) != std::future_status::ready) {
+            std::string finished_str;
+            std::string pending_str;
+
+            for (const auto& [coord, status] : local_devices) {
+                const auto& test_device = test_devices_.at(coord);
+                const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(status.node_id);
+
+                uint64_t current_packets = 0;
+                for (const auto& [core, sender] : test_device.get_senders()) {
+                    CoreCoord virtual_core = fixture_->get_virtual_core_from_logical_core(sender.get_core());
+                    constexpr uint32_t result_size = 4 * sizeof(uint32_t);
+                    auto result_data =
+                        cluster.read_core<uint32_t>(physical_chip_id, virtual_core, result_addr, result_size);
+                    if (result_data.size() >= 4) {
+                        uint32_t lo = result_data[TT_FABRIC_WORD_CNT_INDEX];
+                        uint32_t hi = result_data[TT_FABRIC_WORD_CNT_INDEX + 1];
+                        current_packets += (static_cast<uint64_t>(hi) << 32) | lo;
+                    }
+                }
+
+                auto device_label = format_device_label(status.node_id);
+                if (current_packets >= status.total_packets) {
+                    if (!finished_str.empty()) {
+                        finished_str += ", ";
+                    }
+                    finished_str += device_label;
+                } else {
+                    if (!pending_str.empty()) {
+                        pending_str += ", ";
+                    }
+                    pending_str += fmt::format("{} ({}/{})", device_label, current_packets, status.total_packets);
+                }
+            }
+
+            if (!finished_str.empty()) {
+                log_info(tt::LogTest, "Devices finished: {}", finished_str);
+            }
+            if (!pending_str.empty()) {
+                log_warning(tt::LogTest, "Devices pending: {}", pending_str);
+            }
+        }
+    }
+
+    finish_future.get();
 }
 
 void TestContext::read_telemetry() {
@@ -328,11 +413,23 @@ void TestContext::compile_programs() {
     }
 
     // Enqueue all programs
+    std::string devices_str;
     for (auto& [coord, test_device] : test_devices_) {
         auto& program_handle = test_device.get_program_handle();
         if (program_handle.impl().num_kernels()) {
+            if (!devices_str.empty()) {
+                devices_str += ", ";
+            }
+            devices_str += fmt::format(
+                "{} (senders: {}, receivers: {})",
+                format_device_label(test_device.get_node_id()),
+                test_device.get_senders().size(),
+                test_device.get_receivers().size());
             fixture_->enqueue_program(coord, std::move(program_handle));
         }
+    }
+    if (!devices_str.empty()) {
+        log_info(tt::LogTest, "Programs enqueued on devices: {}", devices_str);
     }
 }
 
