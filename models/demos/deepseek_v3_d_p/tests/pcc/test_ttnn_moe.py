@@ -111,6 +111,8 @@ def create_shared_expert_weights(
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, False), # skip PCC validation
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, True),  # run PCC validation
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, True, marks=pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, False, id='mesh-8x4-1600_no_pcc'),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, False, id="mesh-8x4-3200_no_pcc"),
         # fmt: on
     ],
 )
@@ -157,7 +159,7 @@ def create_shared_expert_weights(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
             },
-            1,
+            2,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="mesh-8x4",
@@ -204,14 +206,17 @@ def test_ttnn_moe(
     logger.debug(f"mesh_shape={mesh_device.shape}, num_devices={num_devices}")
     logger.debug(f"dispatch_group_size={dispatch_group_size}, num_dispatch_groups={num_dispatch_groups}")
 
-    signpost(
-        f"TtMoe PCC test - mesh {mesh_device.shape}, seq_len={seq_len_per_chip}, "
-        f"emb_dim={emb_dim}, experts={num_routed_experts}"
-    )
 
     # Compute configuration constants
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
         seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    )
+    signpost(
+        f"TtMoe PCC test - mesh {mesh_device.shape}, {seq_len_per_chip=}"
+        f"\n{hidden_dim=} {emb_dim=}"
+        f"\n{num_routed_experts=} {num_experts_per_tok=}, {capacity_factor=}"
+        f"\n{experts_per_chip=} mdt_pe={max_dispatched_tokens_per_expert}"
+        f"\n{topology=} {num_links=}"
     )
     logger.debug(f"experts_per_chip={experts_per_chip}, metadata_len={metadata_len}")
     logger.debug(f"max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}")
