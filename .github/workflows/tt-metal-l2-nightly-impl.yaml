@@ -90,7 +90,7 @@ on:
         required: false
         type: boolean
         default: true
-      run_compute_only_tests:
+      run_compute_fused_tests:
         required: false
         type: boolean
         default: true
@@ -889,8 +889,8 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
-  ttnn-compute-only-tests:
-    if: ${{ inputs.run_compute_only_tests }}
+  ttnn-compute-fused-tests:
+    if: ${{ inputs.run_compute_fused_tests }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -909,7 +909,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    name: ttnn compute-only validation tests ${{ inputs.arch }} ${{ inputs.runner-label }}
+    name: ttnn compute-fused validation tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: ubuntu-latest
     steps:
       - name: 🧬 Checkout Repository
@@ -946,9 +946,9 @@ jobs:
           mkdir -p $TT_METAL_SIMULATOR_HOME
           mv /tmp/ttsim/${{ steps.ttsim-info.outputs.asset_name }} $TT_METAL_SIMULATOR_HOME/libttsim.so
           cp /work/tt_metal/soc_descriptors/${{ steps.ttsim-info.outputs.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
-      - name: ttnn compute-only validation tests
+      - name: ttnn compute-fused validation tests
         timeout-minutes: 20
-        run: pytest tests/ttnn/nightly/unit_tests/operations_compute_only -xv --timeout=${{ env.TEST_BUDGET_SECONDS }}
+        run: pytest tests/ttnn/nightly/unit_tests/operations_compute_only/fused -xv --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

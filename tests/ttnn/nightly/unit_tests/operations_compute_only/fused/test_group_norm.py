@@ -9,24 +9,6 @@ L2 nightly workflow.  Tests that call host-side C++ helpers directly do not
 need a device at all; tests that go through ``ttnn.group_norm`` use the
 simulated device provided by the ``device`` fixture under TT-Sim.
 
-Covers the following checks:
-
-  groupnorm_input_mask.cpp  create_group_norm_input_mask_impl():
-    TT_FATAL  — num_cores_across_channel == 0
-    TT_FATAL  — num_groups not divisible by num_cores_across_channel
-
-  groupnorm_nanobind.cpp  _find_expected_dram_grid wrapper:
-    RuntimeError  — no valid DRAM grid found
-
-  groupnorm.cpp  get_mask_tensor():
-    TT_FATAL  — compute_num_virtual_cols returns 0 (non-L1 buffer path)
-
-  groupnorm.cpp  validate_dram_grid():
-    TT_THROW  — invalid grid with a valid sub-grid suggestion
-    TT_THROW  — no valid grid exists at all
-
-  groupnorm_mcast_program_factory.cpp / groupnorm_no_mcast_program_factory.cpp:
-    TT_FATAL  — num_out_blocks > block_ht
 """
 
 import pytest
@@ -45,8 +27,8 @@ from ttnn._ttnn.operations.normalization import (
 
 
 # ---------------------------------------------------------------------------
-# create_group_norm_input_mask_impl: num_cores_across_channel must be > 0
-# Source: groupnorm_input_mask.cpp
+# groupnorm_input_mask.cpp  create_group_norm_input_mask_impl():
+#   TT_FATAL — num_cores_across_channel must be > 0
 # ---------------------------------------------------------------------------
 def test_input_mask_num_cores_across_channel_zero():
     with pytest.raises(RuntimeError, match="num_cores_across_channel must be > 0"):
@@ -59,8 +41,8 @@ def test_input_mask_num_cores_across_channel_zero():
 
 
 # ---------------------------------------------------------------------------
-# create_group_norm_input_mask_impl: num_groups % num_cores_across_channel != 0
-# Source: groupnorm_input_mask.cpp
+# groupnorm_input_mask.cpp  create_group_norm_input_mask_impl():
+#   TT_FATAL — num_groups must be divisible by num_cores_across_channel
 # ---------------------------------------------------------------------------
 def test_input_mask_num_groups_not_divisible_by_num_cores():
     with pytest.raises(RuntimeError, match="must be divisible by num_cores_across_channel"):
@@ -73,8 +55,8 @@ def test_input_mask_num_groups_not_divisible_by_num_cores():
 
 
 # ---------------------------------------------------------------------------
-# _find_expected_dram_grid: no valid grid exists
-# Source: groupnorm_nanobind.cpp (RuntimeError wrapper around find_expected_dram_grid)
+# groupnorm_nanobind.cpp  _find_expected_dram_grid (wrapper):
+#   RuntimeError — no valid DRAM grid (calls find_expected_dram_grid)
 # ---------------------------------------------------------------------------
 def test_find_expected_dram_grid_no_valid_grid():
     with pytest.raises(RuntimeError, match="Cannot find a valid DRAM group-norm grid"):
@@ -93,8 +75,8 @@ def test_find_expected_dram_grid_no_valid_grid():
 
 
 # ---------------------------------------------------------------------------
-# get_mask_tensor: compute_num_virtual_cols returns 0 (non-L1 buffer path)
-# Source: groupnorm.cpp
+# groupnorm.cpp  get_mask_tensor():
+#   TT_FATAL — num_virtual_cols == 0 (non-L1 buffer path; DRAM height-sharded skips validate_dram_grid)
 # ---------------------------------------------------------------------------
 def test_get_mask_tensor_num_virtual_cols_zero(device):
     torch_x = torch.randn(1, 1, 32, 48, dtype=torch.bfloat16)
@@ -118,8 +100,11 @@ def test_get_mask_tensor_num_virtual_cols_zero(device):
 
 
 # ---------------------------------------------------------------------------
-# validate_dram_grid: invalid grid / no valid grid
-# Source: groupnorm.cpp
+# groupnorm.cpp  validate_dram_grid():
+#   TT_THROW — invalid core_grid for input dimensions; suggests largest valid sub-grid
+#     (param id: invalid_grid_with_suggestion)
+#   TT_THROW — cannot find any valid core grid for given Ht, W, num_groups
+#     (param id: no_valid_grid)
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "input_shape, num_groups, core_grid, msg_pattern",
@@ -147,8 +132,10 @@ def test_validate_dram_grid(input_shape, num_groups, core_grid, msg_pattern, dev
 
 
 # ---------------------------------------------------------------------------
-# num_out_blocks > block_ht in mcast and no_mcast program factories
-# Source: groupnorm_mcast_program_factory.cpp, groupnorm_no_mcast_program_factory.cpp
+# groupnorm_mcast_program_factory.cpp / groupnorm_no_mcast_program_factory.cpp:
+#   TT_FATAL — num_out_blocks must be in [1, block_h]
+#     (param id: mcast_num_out_blocks_exceeds_block_ht — mcast factory path)
+#     (param id: no_mcast_num_out_blocks_exceeds_block_ht — no-mcast factory path)
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "input_shape, core_grid, num_out_blocks",
