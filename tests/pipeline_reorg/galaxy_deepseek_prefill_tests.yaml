@@ -18,7 +18,7 @@
     export MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE='10,9' pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
-    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE='10,9' pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py -k mesh-8x4-3200_pcc --timeout==900
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE='10,9' pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py -k mesh-8x4-3200_pcc --timeout=900
   test_type: module
   skus:
     bh_galaxy:
