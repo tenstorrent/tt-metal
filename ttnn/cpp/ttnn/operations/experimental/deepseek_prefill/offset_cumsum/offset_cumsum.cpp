@@ -32,7 +32,7 @@ std::array<ttnn::Tensor, 2> offset_cumsum(
 
     auto row_major = ttnn::to_layout(gathered, tt::tt_metal::Layout::ROW_MAJOR, std::nullopt, std::nullopt);
 
-    return ttnn::prim::offset_cumsum(row_major);
+    return ttnn::prim::offset_cumsum(row_major, cluster_axis);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum

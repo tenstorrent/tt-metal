@@ -112,7 +112,7 @@ DEVICE_PERF_EXPECTATIONS = {
         "blackhole": 81_886_264 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
-        "wormhole": 83_531_333 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "wormhole": 82_300_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "refiner_unet_1024x1024": {

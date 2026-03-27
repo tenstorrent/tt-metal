@@ -82,7 +82,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     // Get DRAM usage
     auto dram_usage = ttml::utils::MemoryUsageTracker::get_dram_usage();
 
-    size_t binary_size = 18432;          // Size of DRAM buffer used for matmul program
+    size_t binary_size = 16384;          // Size of DRAM buffer used for matmul program
     size_t expected_size = binary_size;  // Allocated left over is program cache
     size_t expected_peak_size = tensor1_size + tensor2_size + result_size + expected_size;
     // LLK_ASSERTs add constant DRAM overhead (one page) due to additional assertion code
@@ -399,7 +399,7 @@ TEST_F(MemoryUtilsTest, SnapshotFeature) {
     // LLK_ASSERTs add constant DRAM overhead (one page) due to additional assertion code
     // in unpacker/packer configurations that invoke functions exclusively used for assertions.
     size_t peak_1 = 34816, alloc_1 = 34816, dealloc_1 = 10240;
-    size_t peak_2 = 86016, alloc_2 = 86016, dealloc_2 = 20480;
+    size_t peak_2 = 83968, alloc_2 = 83968, dealloc_2 = 18432;
     size_t peak_3 = 272384, alloc_3 = 280576, dealloc_3 = 18432;
     if (ttml::core::is_llk_assert_enabled()) {
         constexpr size_t llk_assert_overhead = 2048;
