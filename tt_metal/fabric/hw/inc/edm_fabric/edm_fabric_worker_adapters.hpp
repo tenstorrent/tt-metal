@@ -180,6 +180,38 @@ struct WorkerToFabricEdmSenderBase {
             write_at_cmd_buf);
     }
 
+    // Build a sender directly from the L1 connection table using an ETH channel index.
+    // No RT arg reads — all connection info comes from the table populated by device-init.
+    // Use when the ETH channel is known at compile time (e.g., resolved by the host and
+    // passed as a CT arg or named RT arg).
+    static WorkerToFabricEdmSenderBase build_from_eth_channel(uint32_t eth_channel) {
+        constexpr bool is_persistent_fabric = true;
+        tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+            reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+        const auto conn = &connection_info->read_only[eth_channel];
+        const auto aligned_conn = &connection_info->read_write[eth_channel];
+        const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
+
+        return WorkerToFabricEdmSenderBase(
+            is_persistent_fabric,
+            conn->edm_noc_x,
+            conn->edm_noc_y,
+            conn->edm_buffer_base_addr,
+            conn->num_buffers_per_channel,
+            conn->edm_connection_handshake_addr,
+            conn->edm_worker_location_info_addr,
+            conn->buffer_size_bytes,
+            conn->buffer_index_semaphore_id,
+            reinterpret_cast<volatile uint32_t*>(
+                reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore)),
+            reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(&aligned_conn->worker_teardown_semaphore)),
+            0,  // local_buffer_index_addr — dead code, init() ignores it
+            static_cast<uint32_t>(conn->worker_free_slots_stream_id),
+            my_fc_stream_channel_id,
+            write_reg_cmd_buf,
+            write_at_cmd_buf);
+    }
+
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
     FORCE_INLINE void init(
         bool connected_to_persistent_fabric,
