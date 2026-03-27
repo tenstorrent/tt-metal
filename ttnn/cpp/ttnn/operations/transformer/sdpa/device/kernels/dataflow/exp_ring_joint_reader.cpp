@@ -6,8 +6,6 @@
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
 #include "exp_fused_op_receiver.hpp"
-#include "api/debug/dprint.h"
-
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
@@ -162,11 +160,8 @@ void kernel_main() {
     const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
     const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
 
-    // DPRINT << "before find_last_active_ring_iter: " << fused_op_receiver.seq.transfer_idx << ENDL();
     const uint32_t last_active_ring_iter =
         find_last_active_ring_iter(fused_op_receiver.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L);
-    // DPRINT << "after find_last_active_ring_iter: " << fused_op_receiver.seq.transfer_idx << ENDL();
-    DPRINT << "last_active_ring_iter: " << last_active_ring_iter << ENDL();
 
     // Tracks whether Q has been pushed for q_per_core == 1 optimization.
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.

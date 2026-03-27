@@ -16,7 +16,6 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
-#include "api/debug/dprint.h"
 using namespace tt::tt_fabric::linear::experimental;
 #endif
 
@@ -462,8 +461,6 @@ void kernel_main() {
         fabric_set_unicast_route<false>(pkt_scatter_hdr, 1);
         fabric_set_unicast_route<false>(pkt_unicast_hdr, 1);
         fabric_set_unicast_route<false>(pkt_hdr_sem_inc, 1);
-
-        DPRINT << "injector sem x,y: " << injector_noc_x << "," << injector_noc_y << " addr: " << out_ready_sem_addr << ENDL();
     }
 
     const auto gathered_k_writer = TensorAccessor(ag_gathered_k_args, gathered_k_addr_ag_rt, ag_page_size);
@@ -844,21 +841,17 @@ void kernel_main() {
 
 #ifdef USE_MUX
     if (mux_connection_valid) {
-        DPRINT << "Disconnecting from mux" << ENDL();
         tt::tt_fabric::fabric_client_disconnect(mux_conn);
         if (is_termination_master) {
-            DPRINT << "Waiting for termination sync" << ENDL();
             auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_sem_addr);
             noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
-            DPRINT << "Sending termination signal" << ENDL();
             uint64_t dest_addr =
                 get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_sem_addr);
             noc_semaphore_inc(dest_addr, 1);
             noc_async_atomic_barrier();
         }
     }
-    DPRINT << "Mux done" << ENDL();
 #endif
 }
