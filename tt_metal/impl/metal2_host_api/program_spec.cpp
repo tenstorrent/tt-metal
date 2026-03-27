@@ -23,6 +23,8 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 // TODO: These constants should be queriable from the public API (currently HAL, for consistency)
 //       They are currently also hardcoded in the temporary Quasar host_api.hpp. Need to clean this up.
 static constexpr uint32_t QUASAR_DM_CORES_PER_NODE = 8;
+static constexpr uint32_t QUASAR_RESERVED_DM_CORES_PER_NODE = 2;  // DM0 and DM1 reserved for internal use
+static constexpr uint32_t QUASAR_USER_DM_CORES_PER_NODE = QUASAR_DM_CORES_PER_NODE - QUASAR_RESERVED_DM_CORES_PER_NODE;
 static constexpr uint32_t QUASAR_TENSIX_CORES_PER_NODE = 4;
 
 // ============================================================================
@@ -411,11 +413,10 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
         if (kernel.is_dm_kernel()) {
             TT_FATAL(
-                kernel.num_threads <= QUASAR_DM_CORES_PER_NODE,
-                "KernelSpec '{}' has too many data movement threads. The architecture supports up to {} for data "
-                "movement kernels.",
+                kernel.num_threads <= QUASAR_USER_DM_CORES_PER_NODE,
+                "KernelSpec '{}' has too many data movement threads. The maximum is {}.",
                 kernel.unique_id,
-                QUASAR_DM_CORES_PER_NODE);
+                QUASAR_USER_DM_CORES_PER_NODE);
         }
     }
 
@@ -567,11 +568,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             compute_cores_needed,
             QUASAR_TENSIX_CORES_PER_NODE);
         TT_FATAL(
-            dm_cores_needed <= QUASAR_DM_CORES_PER_NODE,
-            "WorkerSpec '{}' needs {} data movement cores, but only {} are available",
+            dm_cores_needed <= QUASAR_USER_DM_CORES_PER_NODE,
+            "WorkerSpec '{}' requests {} data movement cores. This exceeds the permitted maximum of {}.",
             worker.unique_id,
             dm_cores_needed,
-            QUASAR_DM_CORES_PER_NODE);
+            QUASAR_USER_DM_CORES_PER_NODE);
     }
 
     // A worker can have at most one compute kernel
@@ -767,8 +768,7 @@ std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssign
 
     for (const WorkerSpec& worker : spec.workers.value()) {
         // Cumulative DM processor mask for this WorkerSpec
-        // (If we decide to reserve DM cores for internal use, just update the initial mask here.)
-        DMProcessorMask cumulative_dm_mask = CreateMask<QUASAR_DM_CORES_PER_NODE>(0x00);
+        DMProcessorMask cumulative_dm_mask = CreateMask<QUASAR_DM_CORES_PER_NODE>(0x03);  //
 
         // Since we enforce (at most) one compute kernel per WorkerSpec, no need to track cumulative mask.
 
