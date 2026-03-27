@@ -45,7 +45,7 @@ def generate_unpack_tilize_combinations(
     Generate unpack_tilize combinations.
 
     Rules:
-    1. Tilize 32b data into dest is not yet supported
+    1. 32-bit formats require DestAccumulation.Yes
 
     Args: List of input-output format pairs
 
@@ -65,15 +65,21 @@ def generate_unpack_tilize_combinations(
     for fmt in formats_list:
         in_fmt = fmt.input_format
 
-        if in_fmt.is_32_bit():
-            continue  # Tilize 32b data into dest not yet supported
-
         dest_acc_modes = (
-            (DestAccumulation.No,)
-            if in_fmt == DataFormat.Int16
-            else (DestAccumulation.No, DestAccumulation.Yes)
+            (DestAccumulation.Yes,)
+            if in_fmt.is_32_bit()
+            else (
+                (DestAccumulation.No,)
+                if in_fmt in [DataFormat.Float16, DataFormat.Int16]
+                else (DestAccumulation.No, DestAccumulation.Yes)
+            )
         )
-        unpacker_engines = (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
+        # 32-bit tilize uses unpack_to_dest (UNP_DEST)
+        unpacker_engines = (
+            (UnpackerEngine.UnpDest,)
+            if in_fmt.is_32_bit()
+            else (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
+        )
 
         for dest_acc in dest_acc_modes:
             for unpacker_sel in unpacker_engines:
@@ -87,6 +93,7 @@ UNPACK_TILIZE_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
         DataFormat.Float16,
+        DataFormat.Int32,
         DataFormat.Int16,
     ],
     same=True,  # Input format and output format are the same
@@ -108,9 +115,6 @@ def test_unpack_tilize_quasar(
     dest_acc = formats_dest_acc_unpack_sel_dimensions[1]
     unpacker_sel = formats_dest_acc_unpack_sel_dimensions[2]
     input_dimensions = formats_dest_acc_unpack_sel_dimensions[3]
-
-    if formats.input_format == DataFormat.Float16 and dest_acc == DestAccumulation.Yes:
-        pytest.skip("Fails for now.")
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -154,8 +158,6 @@ def test_unpack_tilize_quasar(
             tile_count_res=tile_cnt_A,
             num_faces=4,
         ),
-        # Determine unpack_to_dest based on format and accumulation mode
-        # This follows the same logic as pack_test
         unpack_to_dest=(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),

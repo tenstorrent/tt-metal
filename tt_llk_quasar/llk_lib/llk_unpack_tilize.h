@@ -30,12 +30,17 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id)
     constexpr std::uint32_t MOP_OUTER_LOOP = 1;
     constexpr std::uint32_t MOP_INNER_LOOP = BLOCK_CT_DIM;
 
-    std::uint32_t unpack_tile_instrn = TT_OP_UNPACR_TILIZE(0, 0, 0 /*dst Z increment*/, 1 /*src Z increment*/, UNP_SEL, buf_desc_id, 1 /*Set Dvalid*/);
+    // For UNP_DEST, don't set dvalid on individual tiles — the section_done signal handles it.
+    // Setting dvalid per tile would cause the packer to start (and ZEROACC) before all tiles are in DEST.
+    constexpr std::uint32_t SET_DVALID = (UNP_SEL == p_unpacr::UNP_DEST) ? 0 : 1;
+    std::uint32_t unpack_tile_instrn   = TT_OP_UNPACR_TILIZE(0, 0, 0 /*dst Z increment*/, 1 /*src Z increment*/, UNP_SEL, buf_desc_id, SET_DVALID);
 
     std::uint32_t reset_src_reg_instrn =
-        TT_OP_UNPACR_TILIZE(0, 1 /*Cntr_Reset_Mask*/, 0 /*dst Z increment*/, 0 /*src Z increment*/, UNP_SEL, buf_desc_id, 1 /*Set Dvalid*/);
+        TT_OP_UNPACR_TILIZE(0, 1 /*Cntr_Reset_Mask*/, 0 /*dst Z increment*/, 0 /*src Z increment*/, UNP_SEL, buf_desc_id, SET_DVALID);
 
-    if constexpr (IS_32b_DEST_EN)
+    // This path is exclusively for FP32 datacopy via math thread (ELWADD on SrcA+SrcB),
+    // not for UNP_DEST where data goes directly to DEST without involving the math thread.
+    if constexpr (IS_32b_DEST_EN && (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_B))
     {
         // FP32 datacopy uses ELWADD, which requires dvalid from both SrcA and SrcB
         // Set dvalid for the opposite unpacker (if using UNP_A, set dvalid for UNP_B and vice versa)
@@ -67,12 +72,12 @@ inline void _llk_unpack_tilize_mop_config_(const std::uint32_t buf_desc_id)
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN, std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM, std::uint32_t C_DIM_FACES>
 inline void _llk_unpack_tilize_init_(const std::uint32_t buf_desc_id)
 {
-    if constexpr (UNP_SEL == p_unpacr::UNP_A)
+    if constexpr (UNP_SEL == p_unpacr::UNP_A || UNP_SEL == p_unpacr::UNP_DEST)
     {
         cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);                            // Disable transpose
         cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_TILIZE_SRC_Z_STRIDE_RMW, C_DIM_FACES); // col dim of a tile in L1 in units of 16 datums (1 face). This is used for
                                                                                    // Src (L1) counter increments in the UNPACR_TILIZE instruction
-        cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_TILIZE_DST_Z_STRIDE_RMW, 1); // col dim of a tile in SRC reg - SRC reg will always be 16 datums across (1 face)
+        cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_TILIZE_DST_Z_STRIDE_RMW, 1);           // col dim of a tile in dest reg (1 face)
         cfg_rmw(THCON_UNPACKER0_REG1_UNPACK_STRIDE_VAL_SOURCE_RMW, 0);
         cfg_rmw(THCON_UNPACKER0_REG2_UNPACK_STRIDE_OFFSET_0_RMW, FULL_CT_DIM * C_DIM_FACES); // how much to stride to go to next row within the same tile
     }
@@ -103,8 +108,10 @@ inline void _llk_unpack_tilize_(const std::uint32_t l1_tile_idx)
 
     // Reset Dest counters for Unpacker to 0
     // Set Source counter to L1 base + offset
-    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, UNP_SEL, l1_tile_idx);
-    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 0);
+    // UNP_DEST shares UNP_A's hardware path, so use UNP_A for counter instructions
+    constexpr std::uint32_t CNT_SEL = (UNP_SEL == p_unpacr::UNP_DEST) ? p_unpacr::UNP_A : UNP_SEL;
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::FACE_SEL, CNT_SEL, l1_tile_idx);
+    TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, CNT_SEL, 0);
 
     // Runs MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
