@@ -342,9 +342,9 @@ void D2HSocket::set_page_size(uint32_t page_size) {
     fifo_curr_size_ = fifo_page_aligned_size;
 }
 
-bool D2HSocket::has_data() {
+bool D2HSocket::has_data(std::optional<uint32_t> num_bytes_to_check) {
     TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
-    uint32_t num_bytes = page_size_;
+    uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
     if (read_ptr_ + num_bytes >= fifo_curr_size_) {
         num_bytes += fifo_size_ - fifo_curr_size_;
     }

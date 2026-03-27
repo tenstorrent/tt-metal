@@ -192,11 +192,12 @@ public:
      * without blocking. Useful for poll-based readers that need to check
      * a shutdown flag between iterations.
      *
-     * @return true if at least one page can be read immediately.
+     * @param num_bytes_to_check Optional number of bytes to check. If not provided, the default page size is used.
+     * @return true if at least the requested number of bytes can be read immediately.
      *
      * @throws TT_FATAL if page_size has not been set.
      */
-    bool has_data();
+    bool has_data(std::optional<uint32_t> num_bytes_to_check = std::nullopt);
 
     /**
      * @brief Reads data pages from the socket FIFO.
