@@ -146,7 +146,8 @@ Tensor create_tt_tensor_from_host_data(
         if (mesh_mapper != nullptr) {
             TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
 
-            const bool construct_on_device = device != nullptr && enable_device_typecast && !preserve_nan_values;
+            const bool construct_on_device =
+                device != nullptr && enable_device_typecast && !preserve_nan_values && tensor_shape.volume() > 0;
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,

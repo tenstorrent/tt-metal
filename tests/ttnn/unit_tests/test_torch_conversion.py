@@ -849,3 +849,60 @@ def test_from_torch_mesh_mapper_preserves_memory_config(
     ), f"Memory config mismatch: expected {memory_config}, got {ttnn_tensor.memory_config()}"
     assert ttnn_tensor.dtype == ttnn_dtype, f"Dtype mismatch: expected {ttnn_dtype}, got {ttnn_tensor.dtype}"
     assert ttnn_tensor.layout == layout, f"Layout mismatch: expected {layout}, got {ttnn_tensor.layout}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(2, 2)], ids=["2x2"], indirect=True)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 64, 0, 576),
+    ],
+    ids=["mla_joint"],
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT])
+def test_from_torch_zero_sized_dimension(mesh_device, shape, ttnn_dtype, ttnn_layout):
+    """
+    Regression test: from_torch with a mesh_mapper must handle tensors where
+    one logical dimension is zero (e.g. shape (1, 64, 0, 576)).
+
+    Reproduces the failure from ring-joint MLA (test_mla_sdpa) where
+    joint_seq_len == 0 creates dummy tensors with a zero sequence dimension.
+    The sub_device_manager loaded onto the submesh changes device operation
+    behavior, exposing the zero-volume bug in to_layout / typecast on device.
+    """
+    if mesh_device.get_num_devices() < 4:
+        pytest.skip("Requires at least 4 devices (2x2 mesh)")
+
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(2, 2))
+
+    full_compute_grid = submesh.compute_with_storage_grid_size()
+    ccl_sub_device_crs = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
+    )
+    worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+
+    sub_device_manager = submesh.create_sub_device_manager([worker_sub_device], 0)
+    submesh.load_sub_device_manager(sub_device_manager)
+    submesh.set_sub_device_stall_group([worker_sub_device_id])
+
+    torch_tensor = torch.empty(shape, dtype=torch.float32)
+
+    mesh_mapper = ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=[None, 1])
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn_dtype,
+        layout=ttnn_layout,
+        device=submesh,
+        mesh_mapper=mesh_mapper,
+    )
+
+    assert ttnn_tensor.dtype == ttnn_dtype
+    assert ttnn_tensor.layout == ttnn_layout
