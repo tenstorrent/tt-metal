@@ -10,11 +10,13 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "tt-metalium/host_api.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "umd/device/cluster.hpp"
 
 class DISABLED_MemoryUtilsTest : public ::testing::Test {
 protected:
@@ -32,11 +34,25 @@ size_t compute_tensor_size(const ttnn::Tensor& tensor) {
     return physical_shape.volume() * tensor.element_size();
 }
 
+bool should_skip_dram_usage_ci() {
+    // TODO: Re-enable on BH/Wormhole once DRAM accounting is stable on CI.
+    // Tracking issue: TODO(create issue for DRAM accounting instability on BH/Wormhole).
+    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
+    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
+        return true;
+    }
+
+    return ttml::autograd::ctx().get_device().arch() == tt::ARCH::WORMHOLE_B0;
+}
+
 TEST_F(DISABLED_MemoryUtilsTest, DRAMUsageMatmulInScope) {
     // Test is skipped with watcher due to the nature of the test.
     // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
     // since watcher adds code overhead and uses memory to store its assert messages
     SKIP_FOR_WATCHER();
+    if (should_skip_dram_usage_ci()) {
+        GTEST_SKIP() << "Skipping flaky DRAM accounting test on P100/P150/Wormhole B0";
+    }
     auto* device = &ttml::autograd::ctx().get_device();
 
     std::vector<float> data1(64 * 128, 1.0F);
@@ -120,6 +136,9 @@ TEST_F(DISABLED_MemoryUtilsTest, DRAMUsageMultipleOperations) {
     // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
     // since watcher adds code overhead and uses memory to store its assert messages
     SKIP_FOR_WATCHER();
+    if (should_skip_dram_usage_ci()) {
+        GTEST_SKIP() << "Skipping flaky DRAM accounting test on P100/P150/Wormhole B0";
+    }
     auto* device = &ttml::autograd::ctx().get_device();
 
     // Create multiple tensors of various sizes
