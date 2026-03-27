@@ -22,6 +22,6 @@ void kernel_main() {
     auto chain = sfpu_chain(Load<cb_a, Dst::D0>{}, Load<cb_b, Dst::D1>{}, SfpuAdd<Dst::D0, Dst::D1, Dst::D0>{});
 
     for (uint32_t block = 0; block < per_core_block_cnt; block++) {
-        sfpu_pipeline(cb_out, 0, per_core_block_dim, chain);
+        sfpu_pipeline(chain, cb_out, per_core_block_dim);
     }
 }

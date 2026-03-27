@@ -43,7 +43,7 @@ void kernel_main() {
                 Tanh<Approx::Exact, Dst::D0>{},
                 SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
             sfpu_pipeline<SfpuInputPolicy::WaitAndPopPerTile, SfpuOutputPolicy::Bulk, SfpuDataFormatReconfig::NONE>(
-                cb_output, 0, per_core_block_dim, chain);
+                chain, cb_output, per_core_block_dim);
         } else {
             auto chain = sfpu_chain(
                 Load<cb_input, Dst::D0>{},
@@ -53,7 +53,7 @@ void kernel_main() {
                 Tanh<Approx::Exact, Dst::D0>{},
                 SfpuMul<Dst::D0, Dst::D1, Dst::D0>{});
             sfpu_pipeline<SfpuInputPolicy::WaitAndPopPerTile, SfpuOutputPolicy::Bulk, SfpuDataFormatReconfig::NONE>(
-                cb_output, 0, per_core_block_dim, chain);
+                chain, cb_output, per_core_block_dim);
         }
     }
 #endif

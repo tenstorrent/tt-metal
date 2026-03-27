@@ -160,14 +160,14 @@ template <
     SfpuDataFormatReconfig reconfig,
     typename Chain>
 ALWI void sfpu_pipeline(
+    Chain chain,
     uint32_t ocb,
-    uint32_t pack_slot,
     uint32_t num_tiles,
-    Chain chain) {
+    Dst pack_slot) {
     ASSERT(num_tiles > 0);
 
     // Runtime DEST capacity validation
-    ASSERT(pack_slot < DEST_AUTO_LIMIT);
+    ASSERT(static_cast<uint32_t>(pack_slot) < DEST_AUTO_LIMIT);
 
     // Data format reconfiguration (once before the tile loop)
     // Input: reconfig unpacker to first Load's CB format. This is a safety net
@@ -220,7 +220,7 @@ ALWI void sfpu_pipeline(
             cb_reserve_back(ocb, 1);
         }
 
-        pack_tile(pack_slot, ocb);
+        pack_tile(static_cast<uint32_t>(pack_slot), ocb);
 
         if constexpr (output_policy == SfpuOutputPolicy::PerTile) {
             cb_push_back(ocb, 1);
@@ -247,7 +247,7 @@ template <
     typename Op>
 ALWI void sfpu_op(uint32_t ocb, uint32_t num_tiles, Op op) {
     auto chain = sfpu_chain(Load<ICB, Dst::D0>{}, op);
-    sfpu_pipeline<input_policy, output_policy, reconfig>(ocb, /*pack_slot=*/0, num_tiles, chain);
+    sfpu_pipeline<input_policy, output_policy, reconfig>(chain, ocb, num_tiles);
 }
 
 // =============================================================================

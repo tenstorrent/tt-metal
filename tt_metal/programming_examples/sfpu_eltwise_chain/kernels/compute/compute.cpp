@@ -21,5 +21,5 @@ void kernel_main() {
         SfpuAdd<Dst::D0, Dst::D1, Dst::D0>{},  // D0 = exp(x) + 1
         Log<>{});                              // D0 = log(exp(x) + 1)
 
-    sfpu_pipeline(result_cb_index, /*pack_slot=*/0, /*num_tiles=*/1, chain);
+    sfpu_pipeline(chain, result_cb_index, /*num_tiles=*/1);
 }

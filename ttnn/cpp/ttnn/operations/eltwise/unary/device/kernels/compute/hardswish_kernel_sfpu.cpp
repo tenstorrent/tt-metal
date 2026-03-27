@@ -24,6 +24,6 @@ void kernel_main() {
 
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         sfpu_pipeline<SfpuInputPolicy::WaitAndPopPerTile, SfpuOutputPolicy::Bulk, SfpuDataFormatReconfig::NONE>(
-            cb_output, /*pack_slot=*/0, per_core_block_dim, chain);
+            chain, cb_output, per_core_block_dim);
     }
 }

@@ -80,7 +80,7 @@
  *       SfpuAdd<Dst::D0, Dst::D1, Dst::D0>{},
  *       Log<Dst::D0>{}
  *   );
- *   sfpu_pipeline(cb_out, 0 [pack_slot], 1 [num_tiles], chain);
+ *   sfpu_pipeline(chain, cb_out, 1 [num_tiles]);
  *
  *   // 4. Hardswish: x * hardsigmoid(x)
  *   //    Load x into D0 and D1, hardsigmoid on D0, mul D0*D1->D0
@@ -92,7 +92,7 @@
  *       SfpuMul<Dst::D0, Dst::D1, Dst::D0>{}
  *   );
  *   sfpu_pipeline<SfpuInputPolicy::WaitAndPopPerTile, SfpuOutputPolicy::Bulk>(
- *       cb_output, 0 [pack_slot], per_core_block_dim, chain);
+ *       chain, cb_output, per_core_block_dim);
  *
  *   // 5. Tanhshrink: x - tanh(x)
  *   auto chain = sfpu_chain(
@@ -102,7 +102,7 @@
  *       SfpuSub<Dst::D0, Dst::D1, Dst::D0>{}
  *   );
  *   sfpu_pipeline<SfpuInputPolicy::WaitAndPopPerTile, SfpuOutputPolicy::Bulk>(
- *       cb_output, 0 [pack_slot], per_core_block_dim, chain);
+ *       chain, cb_output, per_core_block_dim);
  *
  *   // 6. Parameterized op — hardtanh with min/max
  *   sfpu_op<cb_in>(cb_out, num_tiles, Hardtanh<>{min_val, max_val});
@@ -984,17 +984,17 @@ constexpr ALWI SfpuChain<Ops...> sfpu_chain(Ops... ops) {
  * @tparam reconfig       Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
  * @tparam Chain          SfpuChain<...> type (deduced)
  *
- * @param ocb        Output circular buffer
- * @param pack_slot  DEST slot to pack from (typically the slot where the final result lands)
- * @param num_tiles  Number of tiles to process
  * @param chain      The SfpuChain instance
+ * @param ocb        Output circular buffer
+ * @param num_tiles  Number of tiles to process
+ * @param pack_slot  DEST slot to pack from (default: D0, typically the slot where the final result lands)
  */
 template <
     SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
     SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
     SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT,
     typename Chain>
-ALWI void sfpu_pipeline(uint32_t ocb, uint32_t pack_slot, uint32_t num_tiles, Chain chain);
+ALWI void sfpu_pipeline(Chain chain, uint32_t ocb, uint32_t num_tiles, Dst pack_slot = Dst::D0);
 
 // =============================================================================
 // Convenience: Single Unary Op
@@ -1004,7 +1004,7 @@ ALWI void sfpu_pipeline(uint32_t ocb, uint32_t pack_slot, uint32_t num_tiles, Ch
  * @brief Single unary SFPU op: load from ICB to DST[0], apply Op, pack to ocb
  *
  * This is the most common SFPU pattern. Equivalent to:
- *   sfpu_pipeline(ocb, 0, num_tiles, sfpu_chain(Load<ICB, Dst::D0>{}, op));
+ *   sfpu_pipeline(sfpu_chain(Load<ICB, Dst::D0>{}, op), ocb, num_tiles);
  *
  * @tparam ICB           Input circular buffer (compile-time)
  * @tparam input_policy  Input synchronization policy
