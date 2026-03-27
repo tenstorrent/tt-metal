@@ -4,14 +4,13 @@
 
 #include <gtest/gtest.h>
 
-#include <random>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/layernorm_op.hpp"
 #include "ops/losses.hpp"
+#include "test_utils/random_data.hpp"
 
 class LayerNormOpTest : public ::testing::Test {
 protected:
@@ -39,11 +38,8 @@ TEST_F(LayerNormOpTest, CompositeLayerNormOp_0) {
     for (uint32_t i = 0; i < batch_size * seq_len * heads; i++) {
         float mean = (float)i / (float)size;
         float stddev = 1.F + (float)i / (float)(size * 2);
-        std::mt19937 gen(i);
-        std::normal_distribution<float> dist(mean, stddev);
-        for (uint32_t j = 0; j < features; j++) {
-            test_data.push_back(dist(gen));
-        }
+        auto chunk = ttml::test_utils::make_normal_vector<float>(features, mean, stddev, i);
+        test_data.insert(test_data.end(), chunk.begin(), chunk.end());
     }
 
     auto tensor = autograd::create_tensor(core::from_vector(

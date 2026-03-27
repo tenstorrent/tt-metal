@@ -11,9 +11,9 @@
 #include <ttnn/tensor/shape/shape.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 
 class ProfilerNoOpTest : public ::testing::Test {
 protected:
@@ -35,10 +35,7 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Batch) {
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{input_tensor.data(), input_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        seed);
+    ttml::test_utils::fill_uniform<float>(std::span{input_tensor.data(), input_tensor.size()}, -10.0F, 10.0F, seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 

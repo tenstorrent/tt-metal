@@ -22,6 +22,7 @@
 #include "models/llama.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
+#include "test_utils/random_data.hpp"
 #include "utils/memory_utils.hpp"
 
 namespace {
@@ -112,11 +113,7 @@ bool model_is_enabled(const SweepConfig& cfg, const std::string& name) {
 }
 
 std::vector<uint32_t> make_random_tokens(size_t count, uint32_t vocab_size, uint32_t seed) {
-    std::mt19937 gen(seed);
-    std::uniform_int_distribution<uint32_t> dist(0U, vocab_size - 1U);
-    std::vector<uint32_t> values(count);
-    std::generate(values.begin(), values.end(), [&]() { return dist(gen); });
-    return values;
+    return ttml::test_utils::make_uniform_vector<uint32_t>(count, 0U, vocab_size - 1U, seed);
 }
 
 RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batch_size, bool use_fused) {

@@ -18,11 +18,11 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -487,30 +487,20 @@ void run_sdpa_test(const SDPATestConfig& config) {
     const uint32_t head_dim_q = config.query_dim / config.num_query_heads;
     const uint32_t head_dim_kv = config.key_value_dim / config.num_key_heads;
 
-    std::mt19937 gen(42);
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
 
     xt::xarray<float> query_tensor =
         xt::empty<float>({config.batch_size, config.num_query_heads, config.sequence_length, head_dim_q});
-    ttml::core::parallel_generate(
-        std::span{query_tensor.data(), query_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    ttml::test_utils::fill_uniform<float>(std::span{query_tensor.data(), query_tensor.size()}, -1.0F, 1.0F, seed);
 
     xt::xarray<float> key_tensor =
         xt::empty<float>({config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv});
-    ttml::core::parallel_generate(
-        std::span{key_tensor.data(), key_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    ttml::test_utils::fill_uniform<float>(std::span{key_tensor.data(), key_tensor.size()}, -1.0F, 1.0F, seed);
 
     xt::xarray<float> value_tensor =
         xt::empty<float>({config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv});
-    ttml::core::parallel_generate(
-        std::span{value_tensor.data(), value_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    ttml::test_utils::fill_uniform<float>(std::span{value_tensor.data(), value_tensor.size()}, -1.0F, 1.0F, seed);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
@@ -740,8 +730,6 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
 TEST_F(SDPAForwardTest, ValidationTest_EdgeCaseDimensions) {
     using namespace ttml;
 
-    std::mt19937 gen(42);
-
     // Test Case 1: Minimum viable dimensions
     {
         SDPATestConfig config{
@@ -811,27 +799,17 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
     const uint32_t num_heads = 2U;
     const uint32_t head_dim = d / num_heads;
 
-    std::mt19937 gen(42);
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
 
     xt::xarray<float> query_tensor = xt::empty<float>({B, num_heads, S, head_dim});
-    ttml::core::parallel_generate(
-        std::span{query_tensor.data(), query_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    ttml::test_utils::fill_uniform<float>(std::span{query_tensor.data(), query_tensor.size()}, -1.0F, 1.0F, seed);
 
     xt::xarray<float> key_tensor = xt::empty<float>({B, num_heads, S, head_dim});
-    ttml::core::parallel_generate(
-        std::span{key_tensor.data(), key_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    ttml::test_utils::fill_uniform<float>(std::span{key_tensor.data(), key_tensor.size()}, -1.0F, 1.0F, seed);
 
     xt::xarray<float> value_tensor = xt::empty<float>({B, num_heads, S, head_dim});
-    ttml::core::parallel_generate(
-        std::span{value_tensor.data(), value_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
+    ttml::test_utils::fill_uniform<float>(std::span{value_tensor.data(), value_tensor.size()}, -1.0F, 1.0F, seed);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);

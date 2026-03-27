@@ -10,10 +10,10 @@
 #include <cstdlib>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "optimizers/sgd.hpp"
 #include "optimizers/sgd_composite.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "xtensor/core/xtensor_forward.hpp"
 
@@ -52,15 +52,6 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 };
-
-static xt::xarray<float> make_random_xarray(const std::array<std::size_t, 4>& s, uint32_t seed) {
-    xt::xarray<float> x = xt::empty<float>({s[0], s[1], s[2], s[3]});
-    ttml::core::parallel_generate(
-        std::span{x.data(), x.size()},  // NOLINT(performance-no-span-copy)
-        []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); },
-        seed);
-    return x;
-}
 
 static ttnn::Tensor to_tt(const xt::xarray<float>& x) {
     return ttml::core::from_xtensor(x, &ttml::autograd::ctx().get_device());
@@ -116,8 +107,8 @@ static void run_steps_and_compare(const ParityCase& pc, uint32_t steps) {
     const uint32_t seed_grad = g();
 
     // Same data used for all optimizers
-    xt::xarray<float> g0 = make_random_xarray(pc.shape, seed_grad);
-    xt::xarray<float> w0 = make_random_xarray(pc.shape, seed_param);
+    xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_grad, -1.0F, 1.0F);
+    xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_param, -1.0F, 1.0F);
 
     xt::xarray<float> g_cpu = g0;
     xt::xarray<float> w_cpu = w0;

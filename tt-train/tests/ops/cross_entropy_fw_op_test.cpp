@@ -6,15 +6,16 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "test_utils/random_data.hpp"
 
 class CrossEntropyForwardTest : public ::testing::Test {
 protected:
@@ -47,6 +48,18 @@ xt::xarray<float> calculate_cross_entropy_loss(const xt::xarray<float>& input, c
     xt::xarray<float> log_exp_sum_test = xt::log(xt::sum(xt::exp(shifted_input), -1, xt::keep_dims));
     xt::xarray<float> result = -target_inputs + max_input + log_exp_sum_test;
     return result;
+}
+
+static xt::xarray<float> make_random_input(uint32_t n, uint32_t c, uint32_t h, uint32_t w, uint32_t seed) {
+    return ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{n, c, h, w}, seed, -10.0F, 10.0F);
+}
+
+static xt::xarray<uint32_t> make_random_targets(uint32_t n, uint32_t h, uint32_t num_classes, uint32_t seed) {
+    auto labels =
+        ttml::test_utils::make_uniform_vector<uint32_t>(static_cast<size_t>(n) * h, 0U, num_classes - 1U, seed);
+    xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({n, h});
+    std::copy(labels.begin(), labels.end(), target_tensor.begin());
+    return target_tensor;
 }
 
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Small_Forward) {
@@ -102,23 +115,11 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
     const uint32_t N = 2U, C = 1U, H = 91U, W = 157U;
     const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
 
-    std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
-    uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{input_tensor.data(), input_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        seed);
-    xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
-
-    std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
-    for (uint32_t n = 0; n < N; ++n) {
-        for (uint32_t h = 0; h < H; ++h) {
-            uint32_t true_class = class_dist(gen);
-            target_tensor(n, h) = true_class;
-        }
-    }
+    const uint32_t seed = rng();
+    input_tensor = make_random_input(N, C, H, W, seed);
+    xt::xarray<uint32_t> target_tensor = make_random_targets(N, H, W, seed + 1U);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -141,23 +142,11 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
     const uint32_t N = 64U, C = 1U, H = 1017U, W = 1018U;
     const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
 
-    std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
-    uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{input_tensor.data(), input_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        seed);
-    xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
-
-    std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
-    for (uint32_t n = 0; n < N; ++n) {
-        for (uint32_t h = 0; h < H; ++h) {
-            uint32_t true_class = class_dist(gen);
-            target_tensor(n, h) = true_class;
-        }
-    }
+    const uint32_t seed = rng();
+    input_tensor = make_random_input(N, C, H, W, seed);
+    xt::xarray<uint32_t> target_tensor = make_random_targets(N, H, W, seed + 1U);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -180,23 +169,11 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
     const uint32_t N = 1U, C = 1U, H = 1U, W = 65536U;
     const auto shape = ttsl::SmallVector<size_t>{N, C, H, W};
 
-    std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
-    uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{input_tensor.data(), input_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        seed);
-    xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
-
-    std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
-    for (uint32_t n = 0; n < N; ++n) {
-        for (uint32_t h = 0; h < H; ++h) {
-            uint32_t true_class = class_dist(gen);
-            target_tensor(n, h) = true_class;
-        }
-    }
+    const uint32_t seed = rng();
+    input_tensor = make_random_input(N, C, H, W, seed);
+    xt::xarray<uint32_t> target_tensor = make_random_targets(N, H, W, seed + 1U);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -219,23 +196,11 @@ TEST_F(CrossEntropyForwardTest, NIGHTLY_CrossEntropyForward_Huge_Forward) {
     const uint32_t N = 64U, C = 1U, H = 32U, W = 128000U;
     const auto shape = ttsl::SmallVector<size_t>{N, C, H, W};
 
-    std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
-    uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{input_tensor.data(), input_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        seed);
-    xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
-
-    std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
-    for (uint32_t n = 0; n < N; ++n) {
-        for (uint32_t h = 0; h < H; ++h) {
-            uint32_t true_class = class_dist(gen);
-            target_tensor(n, h) = true_class;
-        }
-    }
+    const uint32_t seed = rng();
+    input_tensor = make_random_input(N, C, H, W, seed);
+    xt::xarray<uint32_t> target_tensor = make_random_targets(N, H, W, seed + 1U);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 

@@ -3,11 +3,11 @@
 
 #include <benchmark/benchmark.h>
 
-#include <random>
 #include <type_traits>
 #include <vector>
 
 #include "core/tt_tensor_utils.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -19,22 +19,17 @@ ttnn::distributed::MeshDevice* g_device = nullptr;
 
 template <typename T>
 std::vector<T> make_random_data(size_t volume, unsigned seed) {
-    std::vector<T> data(volume);
-    std::mt19937 gen(seed);
     if constexpr (std::is_same_v<T, float>) {
-        std::uniform_real_distribution<float> dist(-1.f, 1.f);
-        for (auto& x : data) x = dist(gen);
+        return ttml::test_utils::make_uniform_vector<float>(volume, -1.0F, 1.0F, seed);
     } else if constexpr (std::is_same_v<T, bfloat16>) {
-        std::uniform_real_distribution<float> dist(-1.f, 1.f);
-        for (auto& x : data) x = bfloat16(dist(gen));
+        return ttml::test_utils::make_uniform_vector<bfloat16>(volume, bfloat16{-1.0F}, bfloat16{1.0F}, seed);
     } else if constexpr (std::is_same_v<T, uint32_t>) {
-        std::uniform_int_distribution<uint32_t> dist(0, 1000000u);
-        for (auto& x : data) x = dist(gen);
+        return ttml::test_utils::make_uniform_vector<uint32_t>(volume, 0U, 1'000'000U, seed);
     } else if constexpr (std::is_same_v<T, int32_t>) {
-        std::uniform_int_distribution<int32_t> dist(-1000000, 1000000);
-        for (auto& x : data) x = dist(gen);
+        return ttml::test_utils::make_uniform_vector<int32_t>(volume, -1'000'000, 1'000'000, seed);
+    } else {
+        static_assert(!std::is_same_v<T, T>, "Unsupported random data type");
     }
-    return data;
 }
 
 void BM_FromVector_Bfloat16_BFLOAT16(benchmark::State& state) {

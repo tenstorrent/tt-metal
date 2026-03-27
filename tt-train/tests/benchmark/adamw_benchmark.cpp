@@ -5,9 +5,9 @@
 
 #include <chrono>
 
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/optimizers/adamw/adamw.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -43,9 +43,7 @@ const std::vector<AdamWShape> adamw_shapes = {
 
 ttnn::Tensor make_random_tensor(
     const ttnn::Shape& shape, ttnn::DataType dtype, ttnn::distributed::MeshDevice* device, uint32_t seed) {
-    std::vector<float> data(shape.volume());
-    ttml::core::parallel_generate(
-        std::span{data.data(), data.size()}, []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); }, seed);
+    auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), -1.0F, 1.0F, seed);
     return ttnn::Tensor::from_vector(
         data,
         ttnn::TensorSpec(
@@ -55,9 +53,7 @@ ttnn::Tensor make_random_tensor(
 
 ttnn::Tensor make_positive_tensor(
     const ttnn::Shape& shape, ttnn::DataType dtype, ttnn::distributed::MeshDevice* device, uint32_t seed) {
-    std::vector<float> data(shape.volume());
-    ttml::core::parallel_generate(
-        std::span{data.data(), data.size()}, []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); }, seed);
+    auto data = ttml::test_utils::make_uniform_vector<float>(shape.volume(), 0.0F, 1.0F, seed);
     return ttnn::Tensor::from_vector(
         data,
         ttnn::TensorSpec(

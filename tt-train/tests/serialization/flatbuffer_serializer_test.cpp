@@ -19,9 +19,9 @@
 #include <vector>
 
 #include "autograd/auto_context.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "serialization/serialization.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -366,27 +366,19 @@ TEST_F(FlatBufferFileTest, BFloat16TypeMismatchThrows) {
 namespace {
 template <typename T>
 std::vector<T> generate_random_vector(size_t size, uint32_t seed) {
-    std::vector<T> data(size);
-
     if constexpr (std::is_floating_point_v<T>) {
-        ttml::core::parallel_generate(
-            std::span{data.data(), data.size()}, []() { return std::uniform_real_distribution<T>(-10.0, 10.0); }, seed);
+        return ttml::test_utils::make_uniform_vector<T>(size, static_cast<T>(-10.0), static_cast<T>(10.0), seed);
     } else if constexpr (std::is_same_v<T, bfloat16>) {
-        ttml::core::parallel_generate(
-            std::span{data.data(), data.size()},
-            []() { return std::uniform_real_distribution<float>(-10.0f, 10.0f); },
-            seed);
+        return ttml::test_utils::make_uniform_vector<bfloat16>(size, bfloat16{-10.0F}, bfloat16{10.0F}, seed);
     } else if constexpr (std::is_integral_v<T>) {
-        ttml::core::parallel_generate(
-            std::span{data.data(), data.size()},
-            []() {
-                return std::uniform_int_distribution<T>(
-                    std::numeric_limits<T>::min() / 2, std::numeric_limits<T>::max() / 2);
-            },
+        return ttml::test_utils::make_uniform_vector<T>(
+            size,
+            static_cast<T>(std::numeric_limits<T>::min() / 2),
+            static_cast<T>(std::numeric_limits<T>::max() / 2),
             seed);
+    } else {
+        static_assert(!std::is_same_v<T, T>, "Unsupported random vector type");
     }
-
-    return data;
 }
 
 // Create a random tensor with specified dtype, layout, and storage type

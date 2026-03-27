@@ -18,9 +18,9 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/comm_ops.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -80,10 +80,7 @@ static void TestRingShift(
     std::vector<float> test_data_vec(batch * seq * hidden);
     auto& rng = autograd::ctx().get_generator();
     const auto seed = rng();
-    core::parallel_generate(
-        std::span{test_data_vec.data(), test_data_vec.size()},
-        []() { return std::uniform_real_distribution<float>{0.F, 2.F}; },
-        seed);
+    ttml::test_utils::fill_uniform<float>(std::span{test_data_vec.data(), test_data_vec.size()}, 0.0F, 2.0F, seed);
 
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     const xt::xarray<float> xtensor = test_data.reshape({batch, 1UL, seq, hidden});
@@ -134,10 +131,7 @@ static void TestRingShift(
     if (test_backward_grad) {
         xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
         const auto seed = rng();
-        core::parallel_generate(
-            std::span{grad_data.data(), grad_data.size()},
-            []() { return std::uniform_real_distribution<float>{0.F, 1.F}; },
-            seed);
+        ttml::test_utils::fill_uniform<float>(std::span{grad_data.data(), grad_data.size()}, 0.0F, 1.0F, seed);
 
         const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
         const auto tt_grad_tensor =

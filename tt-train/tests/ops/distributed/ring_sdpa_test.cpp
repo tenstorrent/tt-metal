@@ -17,10 +17,10 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/socket_manager.hpp"
-#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/distributed/ring_attention_sdpa.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "test_utils/random_data.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -297,20 +297,11 @@ static void TestRingAttention(
     std::vector<float> value_data(batch * num_heads * seq_len * head_dim);
 
     auto seed = rng();
-    core::parallel_generate(
-        std::span{query_data.data(), query_data.size()},
-        []() { return std::uniform_real_distribution<float>{0, 2.F}; },
-        seed);
+    ttml::test_utils::fill_uniform<float>(std::span{query_data.data(), query_data.size()}, 0.0F, 2.0F, seed);
     seed = rng();
-    core::parallel_generate(
-        std::span{key_data.data(), key_data.size()},
-        []() { return std::uniform_real_distribution<float>{0, 2.F}; },
-        seed);
+    ttml::test_utils::fill_uniform<float>(std::span{key_data.data(), key_data.size()}, 0.0F, 2.0F, seed);
     seed = rng();
-    core::parallel_generate(
-        std::span{value_data.data(), value_data.size()},
-        []() { return std::uniform_real_distribution<float>{0, 2.F}; },
-        seed);
+    ttml::test_utils::fill_uniform<float>(std::span{value_data.data(), value_data.size()}, 0.0F, 2.0F, seed);
 
     // Convert to xtensor for reference computation
     xt::xarray<float> query_xt = xt::adapt(query_data, std::vector<size_t>{batch, num_heads, seq_len, head_dim});
@@ -381,10 +372,8 @@ static void TestRingAttention(
     if (test_backward) {
         std::vector<float> grad_output_data(batch * num_heads * seq_len * head_dim);
         seed = rng();
-        core::parallel_generate(
-            std::span{grad_output_data.data(), grad_output_data.size()},
-            []() { return std::uniform_real_distribution<float>{0.F, 2.F}; },
-            seed);
+        ttml::test_utils::fill_uniform<float>(
+            std::span{grad_output_data.data(), grad_output_data.size()}, 0.0F, 2.0F, seed);
 
         xt::xarray<float> grad_output_xt =
             xt::adapt(grad_output_data, std::vector<size_t>{batch, num_heads, seq_len, head_dim});
