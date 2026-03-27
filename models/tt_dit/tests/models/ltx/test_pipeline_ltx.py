@@ -282,7 +282,7 @@ def test_pipeline_av_22b(mesh_device: ttnn.MeshDevice, mesh_shape, sp_axis: int,
     num_frames = int(os.environ.get("NUM_FRAMES", "121"))
     height = int(os.environ.get("HEIGHT", "512"))
     width = int(os.environ.get("WIDTH", "768"))
-    num_steps = int(os.environ.get("NUM_STEPS", "40"))
+    num_steps = int(os.environ.get("NUM_STEPS", "30"))  # Reference default for LTX-2.3
     seed = int(os.environ.get("SEED", "42"))
     output_path = os.environ.get("OUTPUT_PATH", "output_e2e.mp4")
 
@@ -357,8 +357,8 @@ def test_pipeline_av_22b(mesh_device: ttnn.MeshDevice, mesh_shape, sp_axis: int,
         num_inference_steps=num_steps,
         video_cfg_scale=3.0,
         audio_cfg_scale=7.0,
-        video_stg_scale=0.0,
-        audio_stg_scale=0.0,
+        video_stg_scale=1.0,
+        audio_stg_scale=1.0,
         video_modality_scale=3.0,
         audio_modality_scale=3.0,
         rescale_scale=0.7,
