@@ -51,11 +51,9 @@ jobs:
             cmd: |
               { [ "$GTEST_FILTER" = "*NIGHTLY_*" ]; } && echo "Skipping run_cpp_unit_tests.sh (nightly filter: $GTEST_FILTER)" || ./tests/scripts/run_cpp_unit_tests.sh
               ./build/test/tt_metal/unit_tests_api --gtest_filter=$GTEST_FILTER
-              if [[ "$ARCH_NAME" == "blackhole" ]]; then
-                TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
-                  ./build/test/tt_metal/unit_tests_api \
-                  --gtest_filter=MeshDispatchFixture.TensixDRAMLoopbackSingleCore:MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore
-              fi
+              TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1 \
+                ./build/test/tt_metal/unit_tests_api \
+                --gtest_filter=MeshDispatchFixture.TensixDRAMLoopbackSingleCore:MeshDispatchFixture.IdleEthDRAMLoopbackSingleCore
               rm -rf /tmp/kernels
               mkdir -p /tmp/kernels
               TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.${GTEST_FILTER}
