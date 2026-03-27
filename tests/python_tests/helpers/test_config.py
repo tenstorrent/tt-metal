@@ -41,6 +41,7 @@ from .device import (
     commit_brisc_command,
     exalens_device_setup,
     handle_if_assert_hit,
+    reset_mailboxes,
     set_tensix_soft_reset,
 )
 from .format_config import (
@@ -1122,6 +1123,8 @@ class TestConfig:
             case BootMode.BRISC:
                 commit_brisc_command(location, BriscCmd.START_TRISCS)
             case BootMode.TRISC:
+                # Reset all mailboxes here to ensure that emu/sim see correct test completion state
+                reset_mailboxes(location)
                 set_tensix_soft_reset(0, [RiscCore.TRISC0], location)
             case BootMode.EXALENS:
                 exalens_device_setup(TestConfig.CHIP_ARCH, location)
