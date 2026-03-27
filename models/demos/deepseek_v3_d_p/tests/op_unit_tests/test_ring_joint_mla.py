@@ -452,6 +452,11 @@ def run_ring_joint_sdpa(
             logger.debug("Synchronize call...")
             ttnn.synchronize_device(submesh)
             logger.debug("Done synchronizing...")
+
+            logger.debug("  Distributed synchronization started")
+            ttnn.distributed_context_barrier()
+            logger.debug("✓ Distributed synchronization completed")
+
             tt_out = ttnn.to_torch(
                 tt_out_list[i],
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -498,6 +503,10 @@ def run_ring_joint_sdpa(
 
                 assert passing
     else:
+        logger.debug("  Distributed synchronization started")
+        ttnn.distributed_context_barrier()
+        logger.debug("✓ Distributed synchronization completed")
+
         logger.info("Starting synchronize call")
         ttnn.synchronize_device(submesh)
         logger.info("Synchronize call ended")
@@ -542,8 +551,8 @@ def run_ring_joint_sdpa(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [(4, 2), (2, 2)],
-    ids=["4x2", "2x2"],
+    [(32, 4), (4, 2), (2, 2)],
+    ids=["32x4", "4x2", "2x2"],
     indirect=True,
 )
 @pytest.mark.parametrize(
