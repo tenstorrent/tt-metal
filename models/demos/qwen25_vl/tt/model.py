@@ -570,14 +570,20 @@ class Transformer(TTTransformer):
 
         return (host_tokens, host_cos, host_sin, host_page_table)
 
-    def prepare_inputs_prefill(self, tokens, rot_mats, start_pos=0, page_table=None, chunk_page_table=None):
+    def prepare_inputs_prefill(
+        self, tokens, rot_mats, start_pos=0, page_table=None, chunk_page_table=None, batch_size=1
+    ):
         assert isinstance(rot_mats[0], torch.Tensor)
         assert isinstance(rot_mats[1], torch.Tensor)
-        # tokens is actually embeddings
-        assert tokens.dim() == 3, "tokens should be a 3D tensor"  # [batch_size = 1, seq_len, head_dim]
-        S = tokens.shape[-2]
+        assert tokens.dim() == 3  # [B, seq_len, hidden_dim]
+        B, S, H = tokens.shape
+        if batch_size > 1:
+            tokens = tokens.reshape(1, 1, B * S, H)
+        else:
+            tokens = tokens.unsqueeze(1)
+
         tokens_embd = ttnn.from_torch(
-            tokens.unsqueeze(1),
+            tokens,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -586,37 +592,37 @@ class Transformer(TTTransformer):
             ),
         )
 
-        # Slice the rot mats to the prefill seqlen
         cos_matrix, sin_matrix = self._prepare_cos_sin(rot_mats=rot_mats)
-        assert (
-            cos_matrix.shape[2] >= start_pos + S
-        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {cos_matrix.shape[2]}"
-        tt_rot_mats_prefill = [
-            cos_matrix[:, :, start_pos : start_pos + S, :],
-            sin_matrix[:, :, start_pos : start_pos + S, :],
-        ]
+        assert cos_matrix.shape[2] >= start_pos + S
+        cos_slice = cos_matrix[:, :, start_pos : start_pos + S, :]
+        sin_slice = sin_matrix[:, :, start_pos : start_pos + S, :]
+        if batch_size > 1:
+            cos_slice = ttnn.reshape(cos_slice, [1, 1, B * S, cos_slice.shape[-1]])
+            sin_slice = ttnn.reshape(sin_slice, [1, 1, B * S, sin_slice.shape[-1]])
+        tt_rot_mats_prefill = [cos_slice, sin_slice]
 
-        if page_table is not None:
-            tt_page_table = ttnn.from_torch(
+        tt_page_table = (
+            ttnn.from_torch(
                 page_table,
                 device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        else:
-            tt_page_table = None
-
-        if chunk_page_table is not None:
-            tt_chunk_page_table = ttnn.from_torch(
+            if page_table is not None
+            else None
+        )
+        tt_chunk_page_table = (
+            ttnn.from_torch(
                 chunk_page_table,
                 device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        else:
-            tt_chunk_page_table = None
+            if chunk_page_table is not None
+            else None
+        )
 
         return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table
 

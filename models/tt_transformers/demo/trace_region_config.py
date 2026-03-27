@@ -132,7 +132,7 @@ def get_supported_trace_region_size(request, mesh_device):
             "N150": 10000000,
         },
         "Qwen2.5-VL-7B": {
-            "N300": 10000000,
+            "N300": 10805248,
         },
         "olmOCR-2-7B": {
             "N300": 10000000,

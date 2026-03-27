@@ -11,6 +11,7 @@ import ttnn
 from models.common.warmup import WarmupForwardMixin
 from models.demos.qwen25_vl.tt.common import get_block_size, get_max_prefill_chunk_size, num_blocks_in_seq
 from models.tt_transformers.tt.common import copy_host_to_device
+from models.tt_transformers.tt.generator import MAX_BATCHED_PREFILL_SEQ_LEN
 from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
@@ -154,6 +155,13 @@ class Generator(WarmupForwardMixin):
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
         return tt_out
 
+    def _unwrap_kv_cache(self, kv_cache):
+        """Unwrap single-element kv_cache list for DP=1 (e.g. T3K)."""
+        is_dp = self.data_parallel > 1 and isinstance(kv_cache, list)
+        if not is_dp and isinstance(kv_cache, list) and len(kv_cache) == 1:
+            kv_cache = kv_cache[0]
+        return kv_cache, is_dp
+
     def prefill_forward_text(
         self,
         tokens: torch.Tensor,
@@ -167,6 +175,8 @@ class Generator(WarmupForwardMixin):
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
+        if not isinstance(prompt_lens, list):
+            prompt_lens = prompt_lens.tolist()
         max_batch_size_per_model = self.model_args.max_batch_size
 
         if empty_slots is None:
@@ -177,87 +187,188 @@ class Generator(WarmupForwardMixin):
                 page_table, torch.Tensor
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
 
-        use_trace = False  # Traced prefill not yet supported for Qwen 2.5 VL
+        kv_cache, is_dp_kv_cache = self._unwrap_kv_cache(kv_cache)
+        first_kv_cache = kv_cache[0] if is_dp_kv_cache else kv_cache
 
-        total_tokens = batch_seq_len * batch
-        if batch > 1:
-            if use_trace:
+        max_batch = getattr(self.model_args, "max_batched_prefill_size", 32)
+        users_per_group = max_batch_size_per_model if self.data_parallel > 1 else batch
+        use_batched_prefill = (
+            batch > 1
+            and batch_seq_len * min(users_per_group, max_batch) <= MAX_BATCHED_PREFILL_SEQ_LEN
+            and not getattr(self.model_args, "disable_batched_prefill", False)
+            and page_table is not None
+            and first_kv_cache is not None
+        )
+
+        if use_batched_prefill:
+            total_tokens = batch_seq_len * batch
+            logger.info(
+                f"Using batched prefill: {batch} users × {batch_seq_len} tokens"
+                f" = {total_tokens} total tokens (DP={self.data_parallel})"
+            )
+            num_dp = max(self.data_parallel, 1)
+            for dp_group in range(num_dp):
+                group_start = dp_group * max_batch_size_per_model
+                group_end = min(group_start + max_batch_size_per_model, batch)
+                if group_start >= batch:
+                    break
+                group_kv_cache = kv_cache[dp_group] if is_dp_kv_cache else kv_cache
+                group_size = group_end - group_start
+                chunk_size = min(group_size, max_batch)
+
+                for chunk_start in range(0, group_size, chunk_size):
+                    chunk_end = min(chunk_start + chunk_size, group_size)
+                    abs_start = group_start + chunk_start
+                    abs_end = group_start + chunk_end
+                    chunk_logits = self.__prefill_forward_batched_text(
+                        tokens=tokens[abs_start:abs_end],
+                        rot_mats=(rot_mats[0][abs_start:abs_end], rot_mats[1][abs_start:abs_end]),
+                        page_table=page_table[abs_start:abs_end],
+                        kv_cache=group_kv_cache,
+                        prompt_lens=prompt_lens[abs_start:abs_end],
+                        prefill_seq_len=batch_seq_len,
+                        slot_offset=chunk_start,
+                        model_id=dp_group,
+                    )
+                    output_logits[abs_start:abs_end] = chunk_logits
+        else:
+            use_trace = enable_trace and page_table is not None
+            total_tokens = batch_seq_len * batch
+            if batch > 1:
                 logger.info(
-                    f"Using trace-based sequential prefill: {batch} users × {batch_seq_len} tokens"
+                    f"Using {'traced ' if use_trace else ''}sequential prefill: {batch} users × {batch_seq_len} tokens"
                     f" = {total_tokens} total tokens (DP={self.data_parallel})"
                 )
-            else:
+
+            block_size = get_block_size(first_kv_cache) if first_kv_cache is not None else None
+            num_blocks_padded = num_blocks_in_seq(batch_seq_len, block_size) if block_size is not None else None
+            out_list = []
+
+            for idx, user_id in enumerate(empty_slots):
+                model_id = user_id // max_batch_size_per_model if self.data_parallel > 1 else 0
+                group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
+                model_kv_cache = kv_cache[model_id] if is_dp_kv_cache else kv_cache
+
                 logger.info(
-                    f"Using sequential prefill: {batch} users × {batch_seq_len} tokens = {total_tokens} total tokens"
-                    f" (DP={self.data_parallel})"
+                    f"Prefilling User {user_id + 1} slot={user_id}"
+                    f" (DP group {model_id}, local user {group_user_id})"
                 )
-
-        is_dp_kv_cache = self.data_parallel > 1 and isinstance(kv_cache, list)
-        first_kv_cache = kv_cache[0] if is_dp_kv_cache else kv_cache
-        block_size = get_block_size(first_kv_cache) if first_kv_cache is not None else None
-        num_blocks_padded = num_blocks_in_seq(batch_seq_len, block_size) if block_size is not None else None
-        out_list = []
-
-        for idx, user_id in enumerate(empty_slots):
-            model_id = user_id // max_batch_size_per_model if self.data_parallel > 1 else 0
-            group_user_id = user_id % max_batch_size_per_model if page_table is None else 0
-            model_kv_cache = kv_cache[model_id] if is_dp_kv_cache else kv_cache
-
-            logger.info(
-                f"Prefilling User {user_id + 1} slot={user_id} (DP group {model_id}, local user {group_user_id})"
-            )
-            seq_len = int(prompt_lens[idx])
-            last_token_idx = seq_len - 1
-
-            user_rot_mats = (
-                rot_mats[0][idx : idx + 1],
-                rot_mats[1][idx : idx + 1],
-            )
-
-            if use_trace:
-                pt_user = page_table[idx : idx + 1, :num_blocks_padded]
-                trace_rot_mats = (
-                    user_rot_mats[0][:, :, :batch_seq_len, :],
-                    user_rot_mats[1][:, :, :batch_seq_len, :],
-                )
-                tt_hidden = self._easy_trace_prefill(
-                    tokens[idx : idx + 1],
-                    trace_rot_mats,
-                    pt_user,
-                    model_kv_cache,
-                    batch_seq_len,
-                )
-                model_inst = self._ttt_generator.model[model_id]
-                logits = model_inst.process_logits_after_prefill_trace(tt_hidden, last_token_idx)
-                out_list.append((logits.cpu(blocking=False), model_id))
-            else:
-                if page_table is not None:
-                    page_table_user = self._ttt_generator._get_prefill_user_page_table(
-                        page_table[idx : idx + 1], model_kv_cache, seq_len
-                    )
-                else:
-                    page_table_user = None
-
-                logits = self.__prefill_forward_single_user_text(
-                    tokens[idx : idx + 1],
-                    page_table=page_table_user,
-                    user_id=group_user_id,
-                    last_token_idx=last_token_idx,
-                    rot_mats=user_rot_mats,
-                    kv_cache=model_kv_cache,
-                    model_id=model_id,
-                )
-                output_logits[idx] = logits
-
-        if use_trace:
-            ttnn.synchronize_device(self.mesh_device)
-            for idx, (out, mid) in enumerate(out_list):
                 seq_len = int(prompt_lens[idx])
                 last_token_idx = seq_len - 1
-                model_inst = self._ttt_generator.model[mid]
-                output_logits[idx] = model_inst.process_output_prefill(out, last_token_idx=(last_token_idx % 32))
+
+                user_rot_mats = (
+                    rot_mats[0][idx : idx + 1],
+                    rot_mats[1][idx : idx + 1],
+                )
+
+                if use_trace:
+                    pt_user = page_table[idx : idx + 1, :num_blocks_padded]
+                    trace_rot_mats = (
+                        user_rot_mats[0][:, :, :batch_seq_len, :],
+                        user_rot_mats[1][:, :, :batch_seq_len, :],
+                    )
+                    tt_hidden = self._easy_trace_prefill(
+                        tokens[idx : idx + 1],
+                        trace_rot_mats,
+                        pt_user,
+                        model_kv_cache,
+                        batch_seq_len,
+                    )
+                    model_inst = self._ttt_generator.model[model_id]
+                    logits = model_inst.process_logits_after_prefill_trace(tt_hidden, last_token_idx)
+                    out_list.append((logits.cpu(blocking=False), model_id))
+                else:
+                    if page_table is not None:
+                        page_table_user = self._ttt_generator._get_prefill_user_page_table(
+                            page_table[idx : idx + 1], model_kv_cache, seq_len
+                        )
+                    else:
+                        page_table_user = None
+
+                    logits = self.__prefill_forward_single_user_text(
+                        tokens[idx : idx + 1],
+                        page_table=page_table_user,
+                        user_id=group_user_id,
+                        last_token_idx=last_token_idx,
+                        rot_mats=user_rot_mats,
+                        kv_cache=model_kv_cache,
+                        model_id=model_id,
+                    )
+                    output_logits[idx] = logits
+
+            if use_trace:
+                ttnn.synchronize_device(self.mesh_device)
+                for idx, (out, mid) in enumerate(out_list):
+                    seq_len = int(prompt_lens[idx])
+                    last_token_idx = seq_len - 1
+                    model_inst = self._ttt_generator.model[mid]
+                    output_logits[idx] = model_inst.process_output_prefill(out, last_token_idx=(last_token_idx % 32))
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
+        return output_logits
+
+    def __prefill_forward_batched_text(
+        self,
+        tokens,
+        rot_mats,
+        page_table,
+        kv_cache,
+        prompt_lens,
+        prefill_seq_len,
+        slot_offset=0,
+        model_id=0,
+    ):
+        model_inst = self._ttt_generator.model[model_id]
+        batch_size = tokens.shape[0]
+        last_token_idx = [int(pl) - 1 for pl in prompt_lens]
+        batch_user_ids = list(range(slot_offset, slot_offset + batch_size))
+
+        page_table_user = self._ttt_generator._get_prefill_user_page_table(
+            page_table,
+            kv_cache,
+            prefill_seq_len,
+            trace_enabled=False,
+            prefill_seq_len=prefill_seq_len,
+            use_batched_prefill=True,
+            user_id=batch_user_ids,
+        )
+
+        prefill_input, rot_mats_prefill, page_table_tt, _ = model_inst.prepare_inputs_prefill(
+            tokens,
+            rot_mats=rot_mats,
+            page_table=page_table_user,
+            batch_size=batch_size,
+        )
+
+        tt_out = model_inst.ttnn_prefill_forward(
+            prefill_input,
+            rot_mats_global=rot_mats_prefill,
+            user_id=batch_user_ids,
+            page_table=page_table_tt,
+            get_last_token=-1,
+            kv_cache=kv_cache,
+            batch_size=batch_size,
+        )
+
+        hidden_dim = tt_out.shape[-1]
+        tt_out = ttnn.reshape(tt_out, [batch_size, 1, prefill_seq_len, hidden_dim])
+
+        user_hidden = model_inst.extract_last_tokens_batched_prefill(
+            tt_out, last_token_idx, batch_size, prefill_seq_len
+        )
+        batched_logits = model_inst._apply_norm_and_lm_head(user_hidden)
+
+        output_logits = torch.zeros(batch_size, 1, self.model_args.vocab_size)
+        batched_logits_cpu = ttnn.to_torch(
+            batched_logits,
+            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1),
+        )
+        output_logits[:, 0, :] = batched_logits_cpu[0, 0, :batch_size, : self.model_args.vocab_size]
+
+        ttnn.deallocate(tt_out)
+        ttnn.deallocate(prefill_input)
+        if page_table_tt is not None:
+            ttnn.deallocate(page_table_tt)
 
         return output_logits
 
@@ -460,7 +571,7 @@ class Generator(WarmupForwardMixin):
         hidden_dim = self.model_args.dim
         head_dim = self.model_args.head_dim
 
-        is_dp_kv_cache = self.data_parallel > 1 and isinstance(kv_cache, list)
+        kv_cache, is_dp_kv_cache = self._unwrap_kv_cache(kv_cache)
         for model_id in range(self.data_parallel):
             model_kv_cache = kv_cache[model_id] if is_dp_kv_cache else kv_cache
             logger.info(f"  Warming up DP group {model_id}")
