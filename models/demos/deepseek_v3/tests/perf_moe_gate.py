@@ -64,20 +64,15 @@ moe_gate_decode_dict = {
 }
 
 moe_gate_prefill_dict = {
-    "InterleavedToShardedDeviceOperation": 6,
-    "UntilizeDeviceOperation": 5,
-    "SliceDeviceOperation": 5,
-    "ShardedToInterleavedDeviceOperation": 4,
     "RepeatDeviceOperation": 4,
+    "InterleavedToShardedDeviceOperation": 4,
+    "ShardedToInterleavedDeviceOperation": 4,
+    "SliceDeviceOperation": 4,
     "TilizeWithValPaddingDeviceOperation": 3,
-    "ReshapeViewDeviceOperation": 3,
     "TypecastDeviceOperation": 3,
-    "TilizeDeviceOperation": 3,
     "GenericOpDeviceOperation": 2,
-    "UntilizeWithUnpaddingDeviceOperation": 2,
+    "ReshapeViewDeviceOperation": 2,
     "ConcatDeviceOperation": 2,
-    "PadDeviceOperation": 1,
-    "PermuteDeviceOperation": 1,
     "MatmulDeviceOperation": 1,
 }
 
@@ -100,8 +95,8 @@ def galaxy_type():
 @pytest.mark.parametrize(
     "use_unoptimized_moe_gate, mode, warmup_iters, num_iters, perf_target_us",
     [
-        (False, "decode", 5, 10, 153.79),
-        (False, "prefill", 5, 10, 252.19),
+        (False, "decode", 5, 10, 153.13),
+        (False, "prefill", 5, 10, 246.73),
         (True, "decode", 5, 10, 812.04),
         (True, "prefill", 5, 10, 832.85),
     ],

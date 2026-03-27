@@ -94,14 +94,14 @@ class MoEGate(AbstractModule):
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn_output_indices = ttnn.zeros(
             shape=(1, 32, 32),
             dtype=ttnn.uint16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         ttnn_input_indices = ttnn.arange(
             start=0,
@@ -109,7 +109,7 @@ class MoEGate(AbstractModule):
             step=1,
             dtype=ttnn.int32,
             device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
         ttnn_input_indices = ttnn.unsqueeze(ttnn_input_indices, dim=0)
@@ -276,6 +276,7 @@ class MoEGate(AbstractModule):
         )
 
         # create the output tensor, input indices and output indices
+        # might run three repeats in parallel (and three mempry_config)
         ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
         ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (batch_size_per_iter, 1, 1))
         ttnn_output_tensor = ttnn.to_memory_config(ttnn_output_tensor, memory_config=input_output_mem_config)
@@ -298,7 +299,6 @@ class MoEGate(AbstractModule):
             cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
 
             topk_experts_weights, topk_experts_indices = DeepseekMoeGateSingleCore.op(
-                # why dram
                 cur_logits,
                 scores_correction_bias,
                 ttnn_output_tensor,
@@ -308,9 +308,7 @@ class MoEGate(AbstractModule):
                 scaling_factor,
                 enable_sigmoid,
             )
-            topk_experts_indices = ttnn.typecast(
-                topk_experts_indices, dtype=ttnn.int32
-            )  # remove this after above op outputs to L1
+            topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.int32)
             topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
             topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=ttnn.L1_MEMORY_CONFIG)
             if cfg["mode"] == "prefill":
@@ -328,7 +326,6 @@ class MoEGate(AbstractModule):
         topk_experts_indices = topk_experts_indices[:total_batch_size, 0, :8]
         topk_experts_weights = ttnn.view(topk_experts_weights, (1, 1, total_batch_size, 8))
         topk_experts_indices = ttnn.view(topk_experts_indices, (1, 1, total_batch_size, 8))
-        # remove below two
         topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.TILE_LAYOUT)
         topk_experts_indices = ttnn.typecast(topk_experts_indices, dtype=ttnn.uint16)
 
