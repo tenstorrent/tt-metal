@@ -91,7 +91,10 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
             mesh_buffer->device()->mesh_command_queue(), mesh_buffer, host_buffer, true);
     } else {
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_buffer->device()->shape())) {
-            tt::tt_metal::detail::WriteToBuffer(*mesh_buffer->get_device_buffer(coord), host_buffer);
+            // Skip remote devices - only write to devices this process owns
+            if (mesh_buffer->device()->is_local(coord)) {
+                tt::tt_metal::detail::WriteToBuffer(*mesh_buffer->get_device_buffer(coord), host_buffer);
+            }
         }
     }
 }

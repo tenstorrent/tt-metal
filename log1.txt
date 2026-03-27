@@ -1,0 +1,972 @@
+2026-03-26 19:29:40.622 | DEBUG    | __main__:resolve_path:731 - [tt-run] Resolved Configuration file: generated/ttrun/rank_bindings.yaml -> /localdev/nzhao/tt-metal/generated/ttrun/rank_bindings.yaml
+2026-03-26 19:29:40.622 | DEBUG    | __main__:parse_binding_config:763 - [tt-run] Loading configuration from: /localdev/nzhao/tt-metal/generated/ttrun/rank_bindings.yaml
+2026-03-26 19:29:40.622 | DEBUG    | __main__:parse_binding_config:764 - [tt-run] Original CWD: /localdev/nzhao/tt-metal
+2026-03-26 19:29:40.624 | DEBUG    | __main__:resolve_path:731 - [tt-run] Resolved Mock cluster rank binding configuration: generated/ttrun/phase2_mock_mapping.yaml -> /localdev/nzhao/tt-metal/generated/ttrun/phase2_mock_mapping.yaml
+2026-03-26 19:29:40.627 | DEBUG    | __main__:get_rank_environment:870 - [tt-run] Auto-propagating 5 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEBUG_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SIMULATOR, TT_METAL_SLOW_DISPATCH_MODE, TT_MULTIPROC_SIM_ENABLE, TT_SIM_PATH
+2026-03-26 19:29:40.627 | DEBUG    | __main__:get_rank_environment:876 - [tt-run] Blocked 1 environment variables from pass-through (managed by tt-run or rank bindings): TT_METAL_MOCK_CLUSTER_DESC_PATH
+2026-03-26 19:29:40.627 | DEBUG    | __main__:get_rank_environment:870 - [tt-run] Auto-propagating 5 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEBUG_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SIMULATOR, TT_METAL_SLOW_DISPATCH_MODE, TT_MULTIPROC_SIM_ENABLE, TT_SIM_PATH
+2026-03-26 19:29:40.627 | DEBUG    | __main__:get_rank_environment:876 - [tt-run] Blocked 1 environment variables from pass-through (managed by tt-run or rank bindings): TT_METAL_MOCK_CLUSTER_DESC_PATH
+2026-03-26 19:29:40.627 | DEBUG    | __main__:get_rank_environment:870 - [tt-run] Auto-propagating 5 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEBUG_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SIMULATOR, TT_METAL_SLOW_DISPATCH_MODE, TT_MULTIPROC_SIM_ENABLE, TT_SIM_PATH
+2026-03-26 19:29:40.627 | DEBUG    | __main__:get_rank_environment:876 - [tt-run] Blocked 1 environment variables from pass-through (managed by tt-run or rank bindings): TT_METAL_MOCK_CLUSTER_DESC_PATH
+2026-03-26 19:29:40.628 | DEBUG    | __main__:get_rank_environment:870 - [tt-run] Auto-propagating 5 environment variables with prefixes ('TT_', 'ARCH_', 'WH_', 'TTNN_', 'DEBUG_', 'DEEPSEEK_', 'MESH_'): TT_METAL_HOME, TT_METAL_SIMULATOR, TT_METAL_SLOW_DISPATCH_MODE, TT_MULTIPROC_SIM_ENABLE, TT_SIM_PATH
+2026-03-26 19:29:40.628 | DEBUG    | __main__:get_rank_environment:876 - [tt-run] Blocked 1 environment variables from pass-through (managed by tt-run or rank bindings): TT_METAL_MOCK_CLUSTER_DESC_PATH
+[1,1]<stderr>: 2026-03-26 19:29:44.402 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,1]<stderr>: Config{cache_path=/home/nzhao/.cache/ttnn,model_cache_path=/home/nzhao/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,0]<stderr>: 2026-03-26 19:29:44.427 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,0]<stderr>: Config{cache_path=/home/nzhao/.cache/ttnn,model_cache_path=/home/nzhao/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,2]<stderr>: 2026-03-26 19:29:44.429 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,2]<stderr>: Config{cache_path=/home/nzhao/.cache/ttnn,model_cache_path=/home/nzhao/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,1]<stdout>: [90m2026-03-26 19:29:44.482[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,3]<stderr>: 2026-03-26 19:29:44.494 | DEBUG    | ttnn:<module>:77 - Initial ttnn.CONFIG:
+[1,3]<stderr>: Config{cache_path=/home/nzhao/.cache/ttnn,model_cache_path=/home/nzhao/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1,0]<stdout>: [90m2026-03-26 19:29:44.508[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:44.509[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:44.574[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,0]<stdout>: [1m============================= test session starts ==============================[0m
+[1,0]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/nzhao/tt-metal/python_env/bin/python3
+[1,0]<stdout>: cachedir: .pytest_cache
+[1,0]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+[1,0]<stdout>: rootdir: /localdev/nzhao/tt-metal
+[1,0]<stdout>: configfile: pytest.ini
+[1,0]<stdout>: plugins: timeout-2.4.0, benchmark-5.1.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, split-0.10.0, anyio-4.13.0, dash-2.15.0
+[1,0]<stdout>: timeout: 300.0s
+[1,0]<stdout>: timeout method: signal
+[1,0]<stdout>: timeout func_only: False
+[1,2]<stdout>: [1mcollecting ... [0m[1m============================= test session starts ==============================[0m
+[1,2]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/nzhao/tt-metal/python_env/bin/python3
+[1,3]<stdout>: [1m============================= test session starts ==============================[0m
+[1,3]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/nzhao/tt-metal/python_env/bin/python3
+[1,2]<stdout>: cachedir: .pytest_cache
+[1,2]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+[1,2]<stdout>: rootdir: /localdev/nzhao/tt-metal
+[1,2]<stdout>: configfile: pytest.ini
+[1,2]<stdout>: plugins: timeout-2.4.0, benchmark-5.1.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, split-0.10.0, anyio-4.13.0, dash-2.15.0
+[1,2]<stdout>: timeout: 300.0s
+[1,2]<stdout>: timeout method: signal
+[1,2]<stdout>: timeout func_only: False
+[1,0]<stderr>: 2026-03-26 19:29:45.489 | WARNING  | models.perf.benchmarking_utils:<module>:18 - Skipping import of pydantic_models for benchmarking since not running in CI environment
+[1,3]<stdout>: [1mcollecting ... [0mcachedir: .pytest_cache
+[1,3]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+[1,3]<stdout>: rootdir: /localdev/nzhao/tt-metal
+[1,3]<stdout>: configfile: pytest.ini
+[1,3]<stdout>: plugins: timeout-2.4.0, benchmark-5.1.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, split-0.10.0, anyio-4.13.0, dash-2.15.0
+[1,3]<stdout>: timeout: 300.0s
+[1,3]<stdout>: timeout method: signal
+[1,3]<stdout>: timeout func_only: False
+[1,0]<stdout>: [1mcollecting ... [0m[1mcollected 4 items                                                              [0m
+[1,0]<stdout>:
+[1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True] [1m============================= test session starts ==============================[0m
+[1,1]<stdout>: platform linux -- Python 3.10.19, pytest-8.4.2, pluggy-1.6.0 -- /localdev/nzhao/tt-metal/python_env/bin/python3
+[1,1]<stdout>: cachedir: .pytest_cache
+[1,1]<stdout>: benchmark: 5.1.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+[1,1]<stdout>: rootdir: /localdev/nzhao/tt-metal
+[1,1]<stdout>: configfile: pytest.ini
+[1,1]<stdout>: plugins: timeout-2.4.0, benchmark-5.1.0, cov-7.0.0, github-actions-annotate-failures-0.3.0, split-0.10.0, anyio-4.13.0, dash-2.15.0
+[1,1]<stdout>: timeout: 300.0s
+[1,1]<stdout>: timeout method: signal
+[1,1]<stdout>: timeout func_only: False
+[1,2]<stderr>: 2026-03-26 19:29:45.513 | WARNING  | models.perf.benchmarking_utils:<module>:18 - Skipping import of pydantic_models for benchmarking since not running in CI environment
+[1,3]<stderr>: 2026-03-26 19:29:45.518 | WARNING  | models.perf.benchmarking_utils:<module>:18 - Skipping import of pydantic_models for benchmarking since not running in CI environment
+[1,2]<stdout>: [1mcollecting ... [0m[1mcollected 4 items                                                              [0m
+[1,2]<stdout>:
+[1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True] [1mcollected 4 items                                                              [0m
+[1,3]<stdout>:
+[1,1]<stderr>: 2026-03-26 19:29:45.529 | WARNING  | models.perf.benchmarking_utils:<module>:18 - Skipping import of pydantic_models for benchmarking since not running in CI environment
+[1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True] [1mcollected 4 items                                                              [0m
+[1,1]<stdout>:
+[1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True] [90m2026-03-26 19:29:45.662[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.666[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:224)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.670[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x400 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.680[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.681[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x80 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.690[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.692[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.701[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.702[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x40 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.710[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.712[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.713[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.714[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:224)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.718[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x1 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.722[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.723[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x10 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.727[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.729[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.733[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.734[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x10 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.738[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.739[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x200 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.744[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.745[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.749[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.750[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x8 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.754[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.759[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.760[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x2000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.770[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.770[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.771[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x80 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.774[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:224)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.778[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.781[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.782[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x200 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.787[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.789[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x2 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.791[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.792[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x1 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.798[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.799[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x10 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.802[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.802[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.806[0m | [32minfo    [m | [35m         Device[0m | [37mOpening user mode device driver[0m [90m(tt_cluster.cpp:224)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.809[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.810[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 0 tensix: 0x20 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.811[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.820[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.821[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.821[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 1 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.822[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x40 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.831[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.832[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.832[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 2 tensix: 0x8 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.833[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x4 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.842[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.843[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.843[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 3 tensix: 0x1 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.844[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x10 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.853[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.854[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.855[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x100 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.855[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 4 tensix: 0x20 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.864[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.865[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.866[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 5 tensix: 0x2000 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.876[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.878[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 6 tensix: 0x10 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.881[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:990)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.887[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.888[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.889[0m | [32minfo    [m | [35m            UMD[0m | [37mHarvesting masks for chip 7 tensix: 0x800 dram: 0x0 eth: 0x120 pcie: 0x1 l2cpu: 0x0[0m [90m(cluster.cpp:332)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.894[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.900[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.906[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.909[0m | [32minfo    [m | [35m            UMD[0m | [37mCreating Simulation device[0m [90m(cluster.cpp:219)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.913[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.919[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.925[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.926[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:990)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.928[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:990)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.929[0m | [32minfo    [m | [35m            UMD[0m | [37mStarting devices in cluster[0m [90m(cluster.cpp:990)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:45.932[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.932[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.935[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.936[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.939[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.942[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.942[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.946[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.948[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.949[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.952[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.955[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.957[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.958[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.961[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.963[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.965[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.968[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.970[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.971[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.975[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.977[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:45.978[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:45.981[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:45.985[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mPCI vendor_id=0x1e52 device_id=0xb140[0m [90m(tt_sim_chip_impl.cpp:139)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:46.111[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.111[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:46.111[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:46.111[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,2]<stderr>: 2026-03-26 19:29:46.112 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stdout>: [90m2026-03-26 19:29:46.112[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.112[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:46.112[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,0]<stderr>: 2026-03-26 19:29:46.112 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stderr>: 2026-03-26 19:29:46.112 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stderr>: 2026-03-26 19:29:46.112 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stdout>: [90m2026-03-26 19:29:46.112[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,2]<stderr>: 2026-03-26 19:29:46.113 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stdout>: [90m2026-03-26 19:29:46.113[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,0]<stderr>: 2026-03-26 19:29:46.113 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stderr>: 2026-03-26 19:29:46.113 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stderr>: 2026-03-26 19:29:46.113 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stdout>: [90m2026-03-26 19:29:46.113[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:46.113[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:46.113[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.118[0m | [32minfo    [m | [35m         Fabric[0m | [37mTopologyMapper: Logical Multi-Mesh Adjacency Map:[0m [90m(topology_mapper.cpp:1474)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.118[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh-Level Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 4
+[1,0]<stdout>: Degree histogram: {2:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.118[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 0 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.118[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 1 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.118[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 2 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.118[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 3 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.118[0m | [32minfo    [m | [35m         Fabric[0m | [37mTopologyMapper: Physical Multi-Mesh Adjacency Map:[0m [90m(topology_mapper.cpp:1485)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.118[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh-Level Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 4
+[1,0]<stdout>: Degree histogram: {2:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.118[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 0 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.118[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 1 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.119[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 2 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.119[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 3 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.119[0m | [32minfo    [m | [35m         Fabric[0m | [37mStarting multi-mesh mapping: 4 logical mesh(es) to 4 physical mesh(es)[0m [90m(topology_mapper_utils.cpp:1336)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.119[0m | [32minfo    [m | [35m         Fabric[0m | [37mMulti-mesh mapping attempt 1/17: Trying inter-mesh mapping[0m [90m(topology_mapper_utils.cpp:1377)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.119[0m | [32minfo    [m | [35m         Fabric[0m | [37mAttempt 1: Inter-mesh mapping succeeded, found 4 mesh pair(s)[0m [90m(topology_mapper_utils.cpp:1406)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.119[0m | [32minfo    [m | [35m         Fabric[0m | [37mMulti-mesh mapping succeeded after 1 attempt(s): 4 mesh pair(s) mapped[0m [90m(topology_mapper_utils.cpp:1546)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:46.127[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to create logging directory: /localdev/nzhao/tt-metal/generated/inspector. Error: filesystem error: cannot remove all: No such file or directory [/localdev/nzhao/tt-metal/generated/inspector] [/localdev/nzhao/tt-metal/generated/inspector/startup.yaml]
+[1,3]<stdout>:
+[1,3]<stdout>: You can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment variables. Note that this will not throw an exception, but will log a warning instead. Running without Inspector logger will impact tt-triage functionality.[0m [90m(logger.cpp:28)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:46.127[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to create logging directory: /localdev/nzhao/tt-metal/generated/inspector. Error: filesystem error: cannot remove all: No such file or directory [/localdev/nzhao/tt-metal/generated/inspector] [/localdev/nzhao/tt-metal/generated/inspector/startup.yaml]
+[1,1]<stdout>:
+[1,1]<stdout>: You can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment variables. Note that this will not throw an exception, but will log a warning instead. Running without Inspector logger will impact tt-triage functionality.[0m [90m(logger.cpp:28)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:46.127[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to create logging directory: /localdev/nzhao/tt-metal/generated/inspector. Error: filesystem error: cannot remove all: No such file or directory [/localdev/nzhao/tt-metal/generated/inspector] [/localdev/nzhao/tt-metal/generated/inspector/programs_log.yaml]
+[1,2]<stdout>:
+[1,2]<stdout>: You can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment variables. Note that this will not throw an exception, but will log a warning instead. Running without Inspector logger will impact tt-triage functionality.[0m [90m(logger.cpp:28)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:46.128[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to start Inspector RPC server: ::bind(sockfd, &addr.generic, addrlen): Address already in use; toString() = 127.0.0.1:50051[0m [90m(data.cpp:47)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:46.128[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to start Inspector RPC server: ::bind(sockfd, &addr.generic, addrlen): Address already in use; toString() = 127.0.0.1:50051[0m [90m(data.cpp:47)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:46.128[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to start Inspector RPC server: ::bind(sockfd, &addr.generic, addrlen): Address already in use; toString() = 127.0.0.1:50051[0m [90m(data.cpp:47)[0m
+[1,3]<stdout>: [90m2026-03-26 19:29:49.020[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,2]<stdout>: [90m2026-03-26 19:29:49.024[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,0]<stdout>: [90m2026-03-26 19:29:49.024[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,1]<stdout>: [90m2026-03-26 19:29:49.025[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:02.277[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:03.128[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:03.134[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:03.399[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:03.549[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:03.551[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:03.557[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:03.561[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:03.566[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:03.571[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:03.578[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:03.582[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:03.586[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:03.586[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:03.586[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:03.670[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:03.675[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:03.682[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:03.687[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:03.692[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:03.696[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:03.701[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:03.701[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:03.701[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:03.932[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:03.935[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:03.942[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:03.947[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:03.954[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:03.954[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:03.959[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:03.959[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:03.959[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:03.964[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:03.967[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:03.981[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:03.990[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:03.995[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:03.995[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:03.995[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,1]<stderr>: 2026-03-26 19:30:04.118 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-03-26 19:30:04.129 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,1]<stdout>: [33mSKIPPED[0m[33mSKIPPED[0m
+[1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,3]<stderr>: 2026-03-26 19:30:04.147 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True] [33mSKIPPED[0m
+[1,2]<stderr>: 2026-03-26 19:30:04.180 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,2]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True] [33mSKIPPED[0m
+[1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True] [90m2026-03-26 19:30:04.432[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,1]<stderr>: 2026-03-26 19:30:04.433 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stdout>: [90m2026-03-26 19:30:04.433[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,1]<stderr>: 2026-03-26 19:30:04.434 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stdout>: [90m2026-03-26 19:30:04.434[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_2D to FabricConfig::FABRIC_2D, reinitializing control plane[0m [90m(metal_env.cpp:254)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:04.434[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:04.477[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,2]<stderr>: 2026-03-26 19:30:04.478 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stdout>: [90m2026-03-26 19:30:04.478[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,2]<stderr>: 2026-03-26 19:30:04.479 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stdout>: [90m2026-03-26 19:30:04.479[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_2D to FabricConfig::FABRIC_2D, reinitializing control plane[0m [90m(metal_env.cpp:254)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:04.479[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.494[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,0]<stderr>: 2026-03-26 19:30:04.495 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stdout>: [90m2026-03-26 19:30:04.495[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,0]<stderr>: 2026-03-26 19:30:04.496 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stdout>: [90m2026-03-26 19:30:04.496[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_2D to FabricConfig::FABRIC_2D, reinitializing control plane[0m [90m(metal_env.cpp:254)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.496[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:04.565[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,3]<stderr>: 2026-03-26 19:30:04.566 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stdout>: [90m2026-03-26 19:30:04.567[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,3]<stderr>: 2026-03-26 19:30:04.567 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stdout>: [90m2026-03-26 19:30:04.568[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_2D to FabricConfig::FABRIC_2D, reinitializing control plane[0m [90m(metal_env.cpp:254)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:04.568[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37mTopologyMapper: Logical Multi-Mesh Adjacency Map:[0m [90m(topology_mapper.cpp:1474)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh-Level Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 4
+[1,0]<stdout>: Degree histogram: {2:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 0 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 1 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 2 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 3 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37mTopologyMapper: Physical Multi-Mesh Adjacency Map:[0m [90m(topology_mapper.cpp:1485)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh-Level Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 4
+[1,0]<stdout>: Degree histogram: {2:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 0 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 1 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 2 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 3 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37mStarting multi-mesh mapping: 4 logical mesh(es) to 4 physical mesh(es)[0m [90m(topology_mapper_utils.cpp:1336)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37mMulti-mesh mapping attempt 1/17: Trying inter-mesh mapping[0m [90m(topology_mapper_utils.cpp:1377)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.572[0m | [32minfo    [m | [35m         Fabric[0m | [37mAttempt 1: Inter-mesh mapping succeeded, found 4 mesh pair(s)[0m [90m(topology_mapper_utils.cpp:1406)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.573[0m | [32minfo    [m | [35m         Fabric[0m | [37mMulti-mesh mapping succeeded after 1 attempt(s): 4 mesh pair(s) mapped[0m [90m(topology_mapper_utils.cpp:1546)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:04.657[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to start Inspector RPC server: ::bind(sockfd, &addr.generic, addrlen): Address already in use; toString() = 127.0.0.1:50051[0m [90m(data.cpp:47)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:04.672[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to start Inspector RPC server: ::bind(sockfd, &addr.generic, addrlen): Address already in use; toString() = 127.0.0.1:50051[0m [90m(data.cpp:47)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:04.676[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to start Inspector RPC server: ::bind(sockfd, &addr.generic, addrlen): Address already in use; toString() = 127.0.0.1:50051[0m [90m(data.cpp:47)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:05.851[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:05.854[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:05.855[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:05.866[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:06.134[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.135[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:06.139[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.139[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:06.144[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:06.146[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.149[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:06.149[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:06.151[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:06.154[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.155[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:06.156[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:06.158[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.159[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:06.161[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:06.161[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:06.164[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.165[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:06.165[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:06.165[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:06.166[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:06.168[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.168[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:06.172[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.172[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.172[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.172[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:06.177[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:06.177[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:06.177[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.192[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.200[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.205[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.209[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.212[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.218[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.229[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.234[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.234[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.234[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,2]<stderr>: 2026-03-26 19:30:06.265 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,2]<stdout>: [33mSKIPPED[0m
+[1,1]<stderr>: 2026-03-26 19:30:06.399 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-03-26 19:30:06.401 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True] [33mSKIPPED[0m
+[1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True] [33mSKIPPED[0m
+[1,0]<stderr>: 2026-03-26 19:30:06.410 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True] [33mSKIPPED[0m
+[1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True] [90m2026-03-26 19:30:06.649[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,1]<stderr>: 2026-03-26 19:30:06.650 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stdout>: [90m2026-03-26 19:30:06.650[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,1]<stderr>: 2026-03-26 19:30:06.651 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stdout>: [90m2026-03-26 19:30:06.651[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_2D to FabricConfig::FABRIC_2D, reinitializing control plane[0m [90m(metal_env.cpp:254)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:06.651[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:06.663[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,2]<stderr>: 2026-03-26 19:30:06.664 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stdout>: [90m2026-03-26 19:30:06.664[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,2]<stderr>: 2026-03-26 19:30:06.666 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stdout>: [90m2026-03-26 19:30:06.666[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_2D to FabricConfig::FABRIC_2D, reinitializing control plane[0m [90m(metal_env.cpp:254)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:06.666[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.754[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,0]<stderr>: 2026-03-26 19:30:06.755 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stdout>: [90m2026-03-26 19:30:06.755[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,0]<stderr>: 2026-03-26 19:30:06.756 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stdout>: [90m2026-03-26 19:30:06.756[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_2D to FabricConfig::FABRIC_2D, reinitializing control plane[0m [90m(metal_env.cpp:254)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.756[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.806[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,3]<stderr>: 2026-03-26 19:30:06.807 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stdout>: [90m2026-03-26 19:30:06.808[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,3]<stderr>: 2026-03-26 19:30:06.809 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stdout>: [90m2026-03-26 19:30:06.809[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_2D to FabricConfig::FABRIC_2D, reinitializing control plane[0m [90m(metal_env.cpp:254)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.809[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37mTopologyMapper: Logical Multi-Mesh Adjacency Map:[0m [90m(topology_mapper.cpp:1474)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh-Level Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 4
+[1,0]<stdout>: Degree histogram: {2:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 0 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 1 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 2 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 3 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37mTopologyMapper: Physical Multi-Mesh Adjacency Map:[0m [90m(topology_mapper.cpp:1485)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh-Level Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 4
+[1,0]<stdout>: Degree histogram: {2:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 0 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 1 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 2 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 3 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37mStarting multi-mesh mapping: 4 logical mesh(es) to 4 physical mesh(es)[0m [90m(topology_mapper_utils.cpp:1336)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37mMulti-mesh mapping attempt 1/17: Trying inter-mesh mapping[0m [90m(topology_mapper_utils.cpp:1377)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37mAttempt 1: Inter-mesh mapping succeeded, found 4 mesh pair(s)[0m [90m(topology_mapper_utils.cpp:1406)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.813[0m | [32minfo    [m | [35m         Fabric[0m | [37mMulti-mesh mapping succeeded after 1 attempt(s): 4 mesh pair(s) mapped[0m [90m(topology_mapper_utils.cpp:1546)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:06.900[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to start Inspector RPC server: ::bind(sockfd, &addr.generic, addrlen): Address already in use; toString() = 127.0.0.1:50051[0m [90m(data.cpp:47)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:06.911[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to start Inspector RPC server: ::bind(sockfd, &addr.generic, addrlen): Address already in use; toString() = 127.0.0.1:50051[0m [90m(data.cpp:47)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:06.915[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to start Inspector RPC server: ::bind(sockfd, &addr.generic, addrlen): Address already in use; toString() = 127.0.0.1:50051[0m [90m(data.cpp:47)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:08.118[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:08.122[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:08.122[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:08.132[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:08.380[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:08.385[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:08.388[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:08.391[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:08.395[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:08.396[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:08.398[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:08.399[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:08.401[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:08.403[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:08.404[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:08.406[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:08.410[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:08.410[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:08.412[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:08.414[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:08.414[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:08.414[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:08.414[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:08.416[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:08.417[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:08.419[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:08.421[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:08.423[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:08.423[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:08.423[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:08.425[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:08.429[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:08.430[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:08.430[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,1]<stderr>: 2026-03-26 19:30:08.504 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,1]<stdout>: [33mSKIPPED[0m
+[1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True] [90m2026-03-26 19:30:08.531[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:08.534[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:08.543[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:08.547[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:08.554[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:08.568[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:08.573[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:08.584[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:08.584[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:08.584[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,2]<stderr>: 2026-03-26 19:30:08.787 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,0]<stderr>: 2026-03-26 19:30:08.792 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,2]<stdout>: [33mSKIPPED[0m
+[1,0]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True] [33mSKIPPED[0m
+[1,3]<stderr>: 2026-03-26 19:30:08.800 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,3]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True] [33mSKIPPED[0m
+[1,1]<stdout>: models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True] [90m2026-03-26 19:30:08.851[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,1]<stderr>: 2026-03-26 19:30:08.852 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,1]<stdout>: [90m2026-03-26 19:30:08.852[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,1]<stderr>: 2026-03-26 19:30:08.853 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,1]<stdout>: [90m2026-03-26 19:30:08.854[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_2D to FabricConfig::FABRIC_2D, reinitializing control plane[0m [90m(metal_env.cpp:254)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:08.854[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:09.156[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,2]<stderr>: 2026-03-26 19:30:09.158 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,2]<stdout>: [90m2026-03-26 19:30:09.158[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,2]<stderr>: 2026-03-26 19:30:09.159 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,2]<stdout>: [90m2026-03-26 19:30:09.159[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_2D to FabricConfig::FABRIC_2D, reinitializing control plane[0m [90m(metal_env.cpp:254)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:09.159[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.189[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,0]<stderr>: 2026-03-26 19:30:09.190 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,0]<stdout>: [90m2026-03-26 19:30:09.190[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,0]<stderr>: 2026-03-26 19:30:09.192 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,0]<stdout>: [90m2026-03-26 19:30:09.192[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_2D to FabricConfig::FABRIC_2D, reinitializing control plane[0m [90m(metal_env.cpp:254)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.192[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:09.214[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,3]<stderr>: 2026-03-26 19:30:09.215 | DEBUG    | ttnn.device:__init__:149 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+[1,3]<stdout>: [90m2026-03-26 19:30:09.216[0m | [32minfo    [m | [35m          Metal[0m | [37mDisabling multi-erisc mode with simulator/mock target device[0m [90m(rtoptions.cpp:316)[0m
+[1,3]<stderr>: 2026-03-26 19:30:09.217 | DEBUG    | ttnn.device:__init__:151 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+[1,3]<stdout>: [90m2026-03-26 19:30:09.217[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric config changed from FabricConfig::FABRIC_2D to FabricConfig::FABRIC_2D, reinitializing control plane[0m [90m(metal_env.cpp:254)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:09.217[0m | [32minfo    [m | [35m    Distributed[0m | [37mUsing custom mesh graph descriptor: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto[0m [90m(metal_env.cpp:325)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37mTopologyMapper: Logical Multi-Mesh Adjacency Map:[0m [90m(topology_mapper.cpp:1474)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh-Level Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 4
+[1,0]<stdout>: Degree histogram: {2:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 0 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 1 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 2 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Logical Mesh 3 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37mTopologyMapper: Physical Multi-Mesh Adjacency Map:[0m [90m(topology_mapper.cpp:1485)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh-Level Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 4
+[1,0]<stdout>: Degree histogram: {2:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 0 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 1 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 2 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37m
+[1,0]<stdout>: === Physical Mesh 3 Internal Graph Adjacency Map ===
+[1,0]<stdout>: Total nodes: 8
+[1,0]<stdout>: Degree histogram: {2:4, 3:4}
+[1,0]<stdout>: [0m [90m(topology_solver.tpp:91)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37mStarting multi-mesh mapping: 4 logical mesh(es) to 4 physical mesh(es)[0m [90m(topology_mapper_utils.cpp:1336)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37mMulti-mesh mapping attempt 1/17: Trying inter-mesh mapping[0m [90m(topology_mapper_utils.cpp:1377)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37mAttempt 1: Inter-mesh mapping succeeded, found 4 mesh pair(s)[0m [90m(topology_mapper_utils.cpp:1406)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.222[0m | [32minfo    [m | [35m         Fabric[0m | [37mMulti-mesh mapping succeeded after 1 attempt(s): 4 mesh pair(s) mapped[0m [90m(topology_mapper_utils.cpp:1546)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:09.307[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to create logging directory: /localdev/nzhao/tt-metal/generated/inspector. Error: filesystem error: cannot remove all: No such file or directory [/localdev/nzhao/tt-metal/generated/inspector] [/localdev/nzhao/tt-metal/generated/inspector/programs_log.yaml]
+[1,0]<stdout>:
+[1,0]<stdout>: You can disable exception by setting TT_METAL_INSPECTOR_INITIALIZATION_IS_IMPORTANT=0 in your environment variables. Note that this will not throw an exception, but will log a warning instead. Running without Inspector logger will impact tt-triage functionality.[0m [90m(logger.cpp:28)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:09.308[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to start Inspector RPC server: ::bind(sockfd, &addr.generic, addrlen): Address already in use; toString() = 127.0.0.1:50051[0m [90m(data.cpp:47)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:09.309[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to start Inspector RPC server: ::bind(sockfd, &addr.generic, addrlen): Address already in use; toString() = 127.0.0.1:50051[0m [90m(data.cpp:47)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:09.336[0m | [33m[1mwarning [m | [35m      Inspector[0m | [37mFailed to start Inspector RPC server: ::bind(sockfd, &addr.generic, addrlen): Address already in use; toString() = 127.0.0.1:50051[0m [90m(data.cpp:47)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:10.468[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:10.471[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:10.471[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:10.481[0m | [32minfo    [m | [35m          Metal[0m | [37mInitializing Fabric[0m [90m(fabric_firmware_initializer.cpp:45)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:10.762[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:10.771[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:10.774[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:10.775[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:10.777[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:10.778[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:10.784[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:10.785[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:10.785[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:10.788[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 0[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:10.789[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:10.789[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:10.792[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 1[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:10.793[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:10.794[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:10.795[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:10.797[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 2[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:10.798[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:10.799[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:10.800[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:10.803[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 3[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:10.805[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:10.806[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:10.806[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:10.806[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:10.806[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:10.808[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 4[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:10.809[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:10.812[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:10.813[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:10.813[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:10.813[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:10.815[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 5[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:10.816[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:10.816[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:10.816[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:10.817[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 6[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:10.823[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on Device 7[0m [90m(device.cpp:395)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:10.823[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric initialized on 8 devices[0m [90m(fabric_firmware_initializer.cpp:173)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:10.823[0m | [32minfo    [m | [35m          Metal[0m | [37mFabric Initialized with config FabricConfig::FABRIC_2D[0m [90m(fabric_firmware_initializer.cpp:48)[0m
+[1,2]<stderr>: 2026-03-26 19:30:10.891 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,2]<stdout>: [33mSKIPPED[0m
+[1,2]<stdout>:
+[1,2]<stdout>: - generated xml file: /localdev/nzhao/tt-metal/generated/test_reports/most_recent_tests.xml -
+[1,2]<stdout>: ============================== slowest durations ===============================
+[1,2]<stdout>: 18.66s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True]
+[1,2]<stdout>: 2.52s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True]
+[1,2]<stdout>: 2.10s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True]
+[1,2]<stdout>: 2.08s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,2]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True]
+[1,2]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True]
+[1,2]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,2]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True]
+[1,2]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True]
+[1,2]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True]
+[1,2]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,2]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True]
+[1,2]<stdout>: [36m[1m=========================== short test summary info ============================[0m
+[1,2]<stdout>: [33mSKIPPED[0m [4] models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py:1728: Test requires a full galaxy
+[1,2]<stdout>: [33m============================= [33m[1m4 skipped[0m[33m in 25.42s[0m[33m ==============================[0m
+[1,1]<stderr>: 2026-03-26 19:30:10.905 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,1]<stdout>: [33mSKIPPED[0m
+[1,1]<stdout>:
+[1,1]<stdout>: - generated xml file: /localdev/nzhao/tt-metal/generated/test_reports/most_recent_tests.xml -
+[1,1]<stdout>: ============================== slowest durations ===============================
+[1,1]<stdout>: 18.58s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True]
+[1,1]<stdout>: 2.39s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True]
+[1,1]<stdout>: 2.27s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,1]<stdout>: 2.10s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True]
+[1,1]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True]
+[1,1]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True]
+[1,1]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True]
+[1,1]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,1]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True]
+[1,1]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True]
+[1,1]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True]
+[1,1]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,1]<stdout>: [36m[1m=========================== short test summary info ============================[0m
+[1,1]<stdout>: [33mSKIPPED[0m [4] models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py:1728: Test requires a full galaxy
+[1,1]<stdout>: [33m============================= [33m[1m4 skipped[0m[33m in 25.41s[0m[33m ==============================[0m
+[1,0]<stderr>: 2026-03-26 19:30:10.958 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,3]<stderr>: 2026-03-26 19:30:10.961 | DEBUG    | conftest:bh_2d_mesh_device_context:727 - multidevice with 8 devices is created
+[1,0]<stdout>: [33mSKIPPED[0m[33mSKIPPED[0m
+[1,0]<stdout>:
+[1,0]<stdout>: - generated xml file: /localdev/nzhao/tt-metal/generated/test_reports/most_recent_tests.xml -
+[1,0]<stdout>: ============================== slowest durations ===============================
+[1,0]<stdout>: 18.63s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True]
+[1,0]<stdout>: 2.38s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True]
+[1,0]<stdout>: 2.27s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,0]<stdout>: 2.16s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True]
+[1,0]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True]
+[1,0]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True]
+[1,0]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True]
+[1,0]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,0]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True]
+[1,0]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True]
+[1,0]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,0]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True]
+[1,0]<stdout>: [36m[1m=========================== short test summary info ============================[0m
+[1,0]<stdout>: [33mSKIPPED[0m [4] models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py:1728: Test requires a full galaxy
+[1,0]<stdout>: [33m============================= [33m[1m4 skipped[0m[33m in 25.50s[0m[33m ==============================[0m
+[1,3]<stdout>:
+[1,3]<stdout>:
+[1,3]<stdout>: - generated xml file: /localdev/nzhao/tt-metal/generated/test_reports/most_recent_tests.xml -
+[1,3]<stdout>: ============================== slowest durations ===============================
+[1,3]<stdout>: 18.62s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True]
+[1,3]<stdout>: 2.39s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True]
+[1,3]<stdout>: 2.24s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,3]<stdout>: 2.16s setup    models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True]
+[1,3]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True]
+[1,3]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True]
+[1,3]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True]
+[1,3]<stdout>: 0.00s teardown models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,3]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord0-True]
+[1,3]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord2-True]
+[1,3]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord3-True]
+[1,3]<stdout>: 0.00s call     models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py::test_4stage_galaxy_1_iteration[blackhole-True-device_params0-5449-final_mesh_coord1-True]
+[1,3]<stdout>: [36m[1m=========================== short test summary info ============================[0m
+[1,3]<stdout>: [33mSKIPPED[0m [4] models/demos/deepseek_v3_b1/tests/unit_tests/test_lm_head_sampling.py:1728: Test requires a full galaxy
+[1,3]<stdout>: [33m============================= [33m[1m4 skipped[0m[33m in 25.48s[0m[33m ==============================[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:12.956[0m | [32minfo    [m | [35m         Device[0m | [37mClosing user mode device drivers[0m [90m(tt_cluster.cpp:478)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:12.956[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster[0m [90m(cluster.cpp:1001)[0m
+[1,3]<stdout>: [90m2026-03-26 19:30:12.956[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,3]<stdout>: [2931900] branch_mispredicts=63898
+[1,3]<stdout>: [2931900] icache_misses=162195
+[1,3]<stdout>: [2931900] dcache_misses=223336405
+[1,3]<stdout>: [2931900] 20.9 seconds (140.2 KHz)
+[1,3]<stdout>: [90m2026-03-26 19:30:12.956[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,3]<stdout>: [3045450] branch_mispredicts=75418
+[1,3]<stdout>: [3045450] icache_misses=188281
+[1,3]<stdout>: [3045450] dcache_misses=196315644
+[1,3]<stdout>: [3045450] 20.5 seconds (148.5 KHz)
+[1,3]<stdout>: [90m2026-03-26 19:30:12.957[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,3]<stdout>: [3478790] branch_mispredicts=90666
+[1,3]<stdout>: [3478790] icache_misses=177440
+[1,3]<stdout>: [3478790] dcache_misses=196882738
+[1,3]<stdout>: [3478790] 20.7 seconds (168.3 KHz)
+[1,3]<stdout>: [90m2026-03-26 19:30:12.957[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,3]<stdout>: [3457370] branch_mispredicts=66678
+[1,3]<stdout>: [3457370] icache_misses=172645
+[1,3]<stdout>: [3457370] dcache_misses=180333671
+[1,3]<stdout>: [3457370] 20.5 seconds (168.3 KHz)
+[1,3]<stdout>: [90m2026-03-26 19:30:12.957[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,3]<stdout>: [4264390] branch_mispredicts=77896
+[1,3]<stdout>: [4264390] icache_misses=167719
+[1,3]<stdout>: [4264390] dcache_misses=205255078
+[1,3]<stdout>: [4264390] 20.4 seconds (209.4 KHz)
+[1,3]<stdout>: [90m2026-03-26 19:30:12.957[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,3]<stdout>: [4211350] branch_mispredicts=63628
+[1,3]<stdout>: [4211350] icache_misses=161159
+[1,3]<stdout>: [4211350] dcache_misses=186649753
+[1,3]<stdout>: [4211350] 22.1 seconds (190.5 KHz)
+[1,3]<stdout>: [90m2026-03-26 19:30:12.957[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,3]<stdout>: [4890590] branch_mispredicts=75148
+[1,3]<stdout>: [4890590] icache_misses=195794
+[1,3]<stdout>: [4890590] dcache_misses=172502530
+[1,3]<stdout>: [4890590] 21.0 seconds (232.9 KHz)
+[1,3]<stdout>: [90m2026-03-26 19:30:12.957[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,3]<stdout>: [4850650] branch_mispredicts=83086
+[1,3]<stdout>: [4850650] icache_misses=170460
+[1,3]<stdout>: [4850650] dcache_misses=161885396
+[1,3]<stdout>: [4850650] 20.7 seconds (234.1 KHz)
+[1,1]<stdout>: [90m2026-03-26 19:30:13.720[0m | [32minfo    [m | [35m         Device[0m | [37mClosing user mode device drivers[0m [90m(tt_cluster.cpp:478)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:13.720[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster[0m [90m(cluster.cpp:1001)[0m
+[1,1]<stdout>: [90m2026-03-26 19:30:13.720[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,1]<stdout>: [3116650] branch_mispredicts=63160
+[1,1]<stdout>: [3116650] icache_misses=153090
+[1,1]<stdout>: [3116650] dcache_misses=247485800
+[1,1]<stdout>: [3116650] 20.9 seconds (149.1 KHz)
+[1,1]<stdout>: [90m2026-03-26 19:30:13.720[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,1]<stdout>: [3296290] branch_mispredicts=62238
+[1,1]<stdout>: [3296290] icache_misses=155024
+[1,1]<stdout>: [3296290] dcache_misses=243307774
+[1,1]<stdout>: [3296290] 23.5 seconds (140.2 KHz)
+[1,1]<stdout>: [90m2026-03-26 19:30:13.720[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,1]<stdout>: [3573340] branch_mispredicts=70832
+[1,1]<stdout>: [3573340] icache_misses=189001
+[1,1]<stdout>: [3573340] dcache_misses=229743395
+[1,1]<stdout>: [3573340] 22.0 seconds (162.5 KHz)
+[1,1]<stdout>: [90m2026-03-26 19:30:13.720[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,1]<stdout>: [3685940] branch_mispredicts=63938
+[1,1]<stdout>: [3685940] icache_misses=162103
+[1,1]<stdout>: [3685940] dcache_misses=207498904
+[1,1]<stdout>: [3685940] 20.6 seconds (179.1 KHz)
+[1,1]<stdout>: [90m2026-03-26 19:30:13.721[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,1]<stdout>: [4012400] branch_mispredicts=111082
+[1,1]<stdout>: [4012400] icache_misses=195857
+[1,1]<stdout>: [4012400] dcache_misses=207479639
+[1,1]<stdout>: [4012400] 22.9 seconds (175.0 KHz)
+[1,1]<stdout>: [90m2026-03-26 19:30:13.721[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,1]<stdout>: [4535110] branch_mispredicts=99187
+[1,1]<stdout>: [4535110] icache_misses=162618
+[1,1]<stdout>: [4535110] dcache_misses=202449162
+[1,1]<stdout>: [4535110] 20.4 seconds (221.9 KHz)
+[1,1]<stdout>: [90m2026-03-26 19:30:13.721[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,1]<stdout>: [5035350] branch_mispredicts=90227
+[1,1]<stdout>: [5035350] icache_misses=214125
+[1,1]<stdout>: [5035350] dcache_misses=200858140
+[1,1]<stdout>: [5035350] 21.2 seconds (237.7 KHz)
+[1,1]<stdout>: [90m2026-03-26 19:30:13.721[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,1]<stdout>: [5157900] branch_mispredicts=112119
+[1,1]<stdout>: [5157900] icache_misses=196802
+[1,1]<stdout>: [5157900] dcache_misses=205308804
+[1,1]<stdout>: [5157900] 23.1 seconds (223.2 KHz)
+[1,0]<stdout>: [90m2026-03-26 19:30:13.905[0m | [32minfo    [m | [35m         Device[0m | [37mClosing user mode device drivers[0m [90m(tt_cluster.cpp:478)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:13.905[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster[0m [90m(cluster.cpp:1001)[0m
+[1,0]<stdout>: [90m2026-03-26 19:30:13.905[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,0]<stdout>: [3248820] branch_mispredicts=63560
+[1,0]<stdout>: [3248820] icache_misses=159436
+[1,0]<stdout>: [3248820] dcache_misses=262821299
+[1,0]<stdout>: [3248820] 23.7 seconds (137.0 KHz)
+[1,0]<stdout>: [90m2026-03-26 19:30:13.905[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,0]<stdout>: [3102340] branch_mispredicts=63338
+[1,0]<stdout>: [3102340] icache_misses=158812
+[1,0]<stdout>: [3102340] dcache_misses=206940471
+[1,0]<stdout>: [3102340] 21.2 seconds (146.5 KHz)
+[1,0]<stdout>: [90m2026-03-26 19:30:13.905[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,0]<stdout>: [3441460] branch_mispredicts=75825
+[1,0]<stdout>: [3441460] icache_misses=179862
+[1,0]<stdout>: [3441460] dcache_misses=187378510
+[1,0]<stdout>: [3441460] 22.2 seconds (155.0 KHz)
+[1,0]<stdout>: [90m2026-03-26 19:30:13.905[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,0]<stdout>: [3516560] branch_mispredicts=110966
+[1,0]<stdout>: [3516560] icache_misses=195888
+[1,0]<stdout>: [3516560] dcache_misses=203303461
+[1,0]<stdout>: [3516560] 22.9 seconds (153.4 KHz)
+[1,0]<stdout>: [90m2026-03-26 19:30:13.905[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,0]<stdout>: [4299860] branch_mispredicts=78768
+[1,0]<stdout>: [4299860] icache_misses=233689
+[1,0]<stdout>: [4299860] dcache_misses=218312791
+[1,0]<stdout>: [4299860] 21.7 seconds (198.5 KHz)
+[1,0]<stdout>: [90m2026-03-26 19:30:13.905[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,0]<stdout>: [4190670] branch_mispredicts=76259
+[1,0]<stdout>: [4190670] icache_misses=163653
+[1,0]<stdout>: [4190670] dcache_misses=198448367
+[1,0]<stdout>: [4190670] 21.6 seconds (194.1 KHz)
+[1,0]<stdout>: [90m2026-03-26 19:30:13.906[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,0]<stdout>: [4304050] branch_mispredicts=74817
+[1,0]<stdout>: [4304050] icache_misses=161980
+[1,0]<stdout>: [4304050] dcache_misses=170185893
+[1,0]<stdout>: [4304050] 22.7 seconds (189.9 KHz)
+[1,0]<stdout>: [90m2026-03-26 19:30:13.906[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,0]<stdout>: [4933960] branch_mispredicts=121682
+[1,0]<stdout>: [4933960] icache_misses=176201
+[1,0]<stdout>: [4933960] dcache_misses=182103801
+[1,0]<stdout>: [4933960] 22.1 seconds (223.3 KHz)
+[1,2]<stdout>: [90m2026-03-26 19:30:14.130[0m | [32minfo    [m | [35m         Device[0m | [37mClosing user mode device drivers[0m [90m(tt_cluster.cpp:478)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:14.130[0m | [32minfo    [m | [35m            UMD[0m | [37mClosing devices in cluster[0m [90m(cluster.cpp:1001)[0m
+[1,2]<stdout>: [90m2026-03-26 19:30:14.130[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,2]<stdout>: [3250140] branch_mispredicts=86151
+[1,2]<stdout>: [3250140] icache_misses=161544
+[1,2]<stdout>: [3250140] dcache_misses=273587725
+[1,2]<stdout>: [3250140] 25.0 seconds (130.1 KHz)
+[1,2]<stdout>: [90m2026-03-26 19:30:14.130[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,2]<stdout>: [3277350] branch_mispredicts=72984
+[1,2]<stdout>: [3277350] icache_misses=197669
+[1,2]<stdout>: [3277350] dcache_misses=240191470
+[1,2]<stdout>: [3277350] 22.2 seconds (147.5 KHz)
+[1,2]<stdout>: [90m2026-03-26 19:30:14.130[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,2]<stdout>: [3619770] branch_mispredicts=63859
+[1,2]<stdout>: [3619770] icache_misses=161886
+[1,2]<stdout>: [3619770] dcache_misses=240407484
+[1,2]<stdout>: [3619770] 23.6 seconds (153.6 KHz)
+[1,2]<stdout>: [90m2026-03-26 19:30:14.130[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,2]<stdout>: [4036810] branch_mispredicts=121499
+[1,2]<stdout>: [4036810] icache_misses=205320
+[1,2]<stdout>: [4036810] dcache_misses=228986226
+[1,2]<stdout>: [4036810] 21.2 seconds (190.8 KHz)
+[1,2]<stdout>: [90m2026-03-26 19:30:14.130[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,2]<stdout>: [4391630] branch_mispredicts=94320
+[1,2]<stdout>: [4391630] icache_misses=224093
+[1,2]<stdout>: [4391630] dcache_misses=229190163
+[1,2]<stdout>: [4391630] 23.2 seconds (189.1 KHz)
+[1,2]<stdout>: [90m2026-03-26 19:30:14.131[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,2]<stdout>: [4740070] branch_mispredicts=86080
+[1,2]<stdout>: [4740070] icache_misses=187165
+[1,2]<stdout>: [4740070] dcache_misses=276225904
+[1,2]<stdout>: [4740070] 28.3 seconds (167.3 KHz)
+[1,2]<stdout>: [90m2026-03-26 19:30:14.131[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,2]<stdout>: [4339380] branch_mispredicts=73973
+[1,2]<stdout>: [4339380] icache_misses=201813
+[1,2]<stdout>: [4339380] dcache_misses=185397092
+[1,2]<stdout>: [4339380] 21.5 seconds (202.0 KHz)
+[1,2]<stdout>: [90m2026-03-26 19:30:14.131[0m | [32minfo    [m | [35mEmulationDriver[0m | [37mSending exit signal to remote...[0m [90m(tt_sim_chip_impl.cpp:144)[0m
+[1,2]<stdout>: [4930080] branch_mispredicts=122875
+[1,2]<stdout>: [4930080] icache_misses=206576
+[1,2]<stdout>: [4930080] dcache_misses=198504605
+[1,2]<stdout>: [4930080] 22.6 seconds (218.6 KHz)

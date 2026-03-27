@@ -381,11 +381,37 @@ std::pair<AsicID, uint8_t> PhysicalSystemDescriptor::get_connected_asic_and_chan
 
 AsicID PhysicalSystemDescriptor::get_asic_id(
     const std::string& hostname, TrayID tray_id, ASICLocation asic_location) const {
+    log_info(
+        tt::LogMetalTrace,
+        "DEBUG: get_asic_id searching for hostname='{}', tray_id={}, asic_location={}",
+        hostname,
+        *tray_id,
+        *asic_location);
+    log_info(tt::LogMetalTrace, "DEBUG: Total ASICs in descriptor: {}", asic_descriptors_.size());
+
     for (const auto& [asic_id, asic_descriptor] : asic_descriptors_) {
+        log_info(
+            tt::LogMetalTrace,
+            "DEBUG:   ASIC {} -> hostname='{}', tray_id={}, asic_location={}",
+            asic_id,
+            asic_descriptor.host_name,
+            *asic_descriptor.tray_id,
+            *asic_descriptor.asic_location);
         if (asic_descriptor.host_name == hostname && asic_descriptor.tray_id == tray_id &&
             asic_descriptor.asic_location == asic_location) {
+            log_info(tt::LogMetalTrace, "DEBUG: Found matching ASIC {}", asic_id);
             return asic_id;
         }
+    }
+    log_info(LogMetal, "DEBUG: No match found! Available hostnames in descriptor:");
+    for (const auto& [asic_id, asic_descriptor] : asic_descriptors_) {
+        log_info(
+            LogMetal,
+            "DEBUG:   ASIC {}: hostname='{}', tray={}, loc={}",
+            asic_id,
+            asic_descriptor.host_name,
+            *asic_descriptor.tray_id,
+            *asic_descriptor.asic_location);
     }
     TT_THROW("No ASIC ID found at hostname {}, tray ID {}, and ASIC location {}", hostname, *tray_id, *asic_location);
     return AsicID{0};

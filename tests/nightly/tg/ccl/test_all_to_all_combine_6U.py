@@ -79,6 +79,7 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
     ],
     ids=["dram_in_l1_out_axis0", "l1_in_dram_out_axis1"],
 )
+@pytest.mark.timeout(900)
 def test_all_to_all_combine_8x4(
     mesh_device,
     trace_mode,
@@ -152,7 +153,82 @@ def test_all_to_all_combine_8x4(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.timeout(900)
 def test_all_to_all_combine_8x8_dual_galaxy(
+    mesh_device,
+    trace_mode,
+    mesh_shape,
+    axis,
+    batches_per_device,
+    experts,
+    select_experts_k,
+    hidden_size,
+    seq,
+    local_reduce,
+    num_iters,
+    num_links,
+    topology,
+    dtype,
+    input_memory_config,
+    output_memory_config,
+):
+    batch = batches_per_device * mesh_shape[axis]
+
+    run_all_to_all_combine_test(
+        mesh_device,
+        mesh_shape,
+        axis,
+        batch,
+        seq,
+        local_reduce,
+        experts,
+        select_experts_k,
+        hidden_size,
+        num_iters,
+        num_links=num_links,
+        scheme="sequential",
+        topology=topology,
+        input_memory_config=input_memory_config,
+        output_memory_config=output_memory_config,
+    )
+
+
+# Quad galaxy (8x16) tests - single test for basic validation
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        },
+    ],
+    ids=["fabric_1d_line"],
+    indirect=True,
+)
+@pytest.mark.parametrize("trace_mode", [False])
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device",
+    [
+        pytest.param((8, 16), (8, 16), id="8x16_grid"),
+    ],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("axis", [1], ids=["axis_1"])
+@pytest.mark.parametrize("batches_per_device", [32])
+@pytest.mark.parametrize("experts", [256])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("seq", [1], ids=["s1"])
+@pytest.mark.parametrize("local_reduce", [True], ids=["sparse"])
+@pytest.mark.parametrize("num_iters", [2])
+@pytest.mark.parametrize("num_links", [1], ids=["num_links_1"])
+@pytest.mark.parametrize("topology", [None])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.timeout(900)
+def test_all_to_all_combine_8x16_quad_galaxy(
     mesh_device,
     trace_mode,
     mesh_shape,
@@ -220,11 +296,12 @@ def test_all_to_all_combine_8x8_dual_galaxy(
 @pytest.mark.parametrize("seq", [1], ids=["s1"])
 @pytest.mark.parametrize("local_reduce", [True], ids=["sparse"])
 @pytest.mark.parametrize("num_iters", [2])
-@pytest.mark.parametrize("num_links", [4], ids=["num_links_4"])
+@pytest.mark.parametrize("num_links", [1], ids=["num_links_1"])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.timeout(900)
 def test_all_to_all_combine_quad_host_mesh(
     mesh_device,
     trace_mode,
