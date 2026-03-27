@@ -265,6 +265,16 @@ class LTXPipeline:
     def load_transformer(self, state_dict: dict[str, torch.Tensor]) -> None:
         """Load transformer weights from a state dict."""
         has_gate = any("to_gate_logits" in k for k in state_dict)
+        # Auto-detect cross_attention_adaln from adaln_single.linear weight shape.
+        # 9-output (22B): adaln_single.linear.weight has shape (9*dim, dim)
+        # 6-output (19B distilled): adaln_single.linear.weight has shape (6*dim, dim)
+        adaln_weight = state_dict.get("adaln_single.linear.weight")
+        cross_attention_adaln = True
+        if adaln_weight is not None:
+            adaln_out = adaln_weight.shape[0]
+            cross_attention_adaln = adaln_out > 6 * self.inner_dim
+            logger.info(f"AdaLN output dim: {adaln_out} → cross_attention_adaln={cross_attention_adaln}")
+
         self.transformer = LTXTransformerModel(
             num_attention_heads=self.num_attention_heads,
             attention_head_dim=self.attention_head_dim,
@@ -277,6 +287,7 @@ class LTXPipeline:
             parallel_config=self.parallel_config,
             has_audio=self.mode == "av",
             apply_gated_attention=has_gate,
+            cross_attention_adaln=cross_attention_adaln,
         )
         self.transformer.load_torch_state_dict(state_dict)
         logger.info(f"Loaded LTX transformer ({self.mode} mode) with {self.num_layers} layers")
@@ -833,7 +844,11 @@ class LTXPipeline:
             if k.startswith("vae.decoder."):
                 vae_state[k[len("vae.decoder.") :]] = v
             elif k.startswith("vae.per_channel_statistics."):
-                vae_state[k[len("vae.") :]] = v
+                # Only keep mean-of-means and std-of-means (required by TTNN VAE).
+                # Skip extra stats (channel, mean-of-stds, etc.) from some checkpoints.
+                short_key = k[len("vae.") :]
+                if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
+                    vae_state[short_key] = v
         del raw
         self.vae_decoder = LTXVideoDecoder(
             decoder_blocks=self._vae_decoder_blocks,
@@ -921,15 +936,25 @@ class LTXPipeline:
         return tt_cos, tt_sin
 
     def _prepare_prompt(self, prompt_embeds: torch.Tensor) -> ttnn.Tensor:
-        """Push prompt embeddings to device, padding to cross_attention_dim if needed."""
+        """Push prompt embeddings to device, padding to cross_attention_dim if needed.
+
+        When the transformer has a caption_projection (19B distilled), skip padding —
+        the projection handles the dimension mapping (3840→4096/2048) inside inner_step.
+        """
         # (B, L, D) -> (1, B, L, D)
         prompt = prompt_embeds.unsqueeze(0)
-        # Pad if encoder dim != cross_attention_dim (e.g., Gemma 3840 -> 4096)
-        if prompt.shape[-1] < self.cross_attention_dim:
-            pad_size = self.cross_attention_dim - prompt.shape[-1]
-            prompt = torch.nn.functional.pad(prompt, (0, pad_size))
-        elif prompt.shape[-1] > self.cross_attention_dim:
-            prompt = prompt[..., : self.cross_attention_dim]
+        # Only pad/truncate if no caption projection (22B model outputs at cross_attention_dim directly)
+        has_caption_proj = (
+            self.transformer is not None
+            and hasattr(self.transformer, "_caption_proj_state")
+            and self.transformer._caption_proj_state
+        )
+        if not has_caption_proj:
+            if prompt.shape[-1] < self.cross_attention_dim:
+                pad_size = self.cross_attention_dim - prompt.shape[-1]
+                prompt = torch.nn.functional.pad(prompt, (0, pad_size))
+            elif prompt.shape[-1] > self.cross_attention_dim:
+                prompt = prompt[..., : self.cross_attention_dim]
         tt_prompt = bf16_tensor(prompt, device=self.mesh_device)
         return tt_prompt
 
