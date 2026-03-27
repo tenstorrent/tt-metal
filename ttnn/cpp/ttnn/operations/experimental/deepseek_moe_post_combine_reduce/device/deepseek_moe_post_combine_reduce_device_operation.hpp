@@ -4,51 +4,30 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 
+#include "deepseek_moe_post_combine_reduce_device_operation_types.hpp"
+#include "deepseek_moe_post_combine_reduce_program_factory.hpp"
+
+#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct DeepseekMoEPostCombineReduceParams {
-    uint32_t expert_dim;
-    tt::tt_metal::MemoryConfig output_memory_config;
-};
-
-struct DeepseekMoEPostCombineReduceInputs {
-    ttnn::Tensor combine_output;
-    ttnn::Tensor weights;
-};
-
-using DeepseekMoEPostCombineReduceDeviceOperation = ttnn::device_operation::DeviceOperation<
-    DeepseekMoEPostCombineReduceParams,
-    DeepseekMoEPostCombineReduceInputs,
-    ttnn::Tensor>;
-
-class DeepseekMoEPostCombineReduceDeviceOperationImpl : public DeepseekMoEPostCombineReduceDeviceOperation {
-public:
+struct DeepseekMoEPostCombineReduceDeviceOperation {
     using operation_attributes_t = DeepseekMoEPostCombineReduceParams;
     using tensor_args_t = DeepseekMoEPostCombineReduceInputs;
+    using spec_return_value_t = ttnn::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
+    using program_factory_t = std::variant<DeepseekMoEPostCombineReduceProgramFactory>;
 
-    static void validate_on_program_cache_hit(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
-    static void validate_on_program_cache_miss(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args);
-
-    static ttnn::TensorSpec compute_output_specs(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args);
-
-    static ttnn::Tensor create_output_tensors(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args);
-
-    static tt::stl::reflection::Attributes attributes();
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
+    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim

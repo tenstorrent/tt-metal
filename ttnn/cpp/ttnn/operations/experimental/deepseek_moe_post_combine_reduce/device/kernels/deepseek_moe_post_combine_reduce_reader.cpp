@@ -61,6 +61,8 @@ void kernel_main() {
     for (uint32_t token_idx = 0; token_idx < tokens_per_core; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
 
+        DPRINT << "READER: Processing token " << global_token_idx << ENDL();
+
         // ──────────────────────────────────────────────────────────────────────
         // For each expert, load weight and expert output
         // ──────────────────────────────────────────────────────────────────────
@@ -79,6 +81,11 @@ void kernel_main() {
 
             cb_push_back(cb_weights, 1);
 
+            // Debug: Print weight value
+            SliceRange sr_weight = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+            DPRINT << "  READER: Expert " << expert_idx << " weight (page " << weight_page_idx
+                   << "): " << TileSlice(cb_weights, 0, sr_weight, true, false) << ENDL();
+
             // ──────────────────────────────────────────────────────────────────
             // 2. Read expert output as "fake tiles" (ROW_MAJOR → treated as tiles)
             // ──────────────────────────────────────────────────────────────────
@@ -95,6 +102,11 @@ void kernel_main() {
             noc_async_read_barrier();
 
             cb_push_back(cb_combine_input, emb_dim_tiles);
+
+            // Debug: Print first few values of first "fake tile"
+            SliceRange sr_data = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 10, .ws = 1};
+            DPRINT << "  READER: Expert " << expert_idx << " activations tile 0 (page " << expert_output_start_page
+                   << "): " << TileSlice(cb_combine_input, 0, sr_data, true, false) << ENDL();
 
             // Compute kernel will now:
             // - Multiply these emb_dim_tiles by the weight

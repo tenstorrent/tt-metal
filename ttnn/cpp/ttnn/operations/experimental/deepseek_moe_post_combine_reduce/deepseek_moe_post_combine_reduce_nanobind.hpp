@@ -4,10 +4,9 @@
 
 #pragma once
 
-#include <nanobind/nanobind.h>
+#include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::detail {
-
+namespace ttnn::operations::experimental::deepseek_moe_post_combine_reduce::detail {
+namespace nb = nanobind;
 void bind_deepseek_moe_post_combine_reduce(nb::module_& mod);
-
-}  // namespace ttnn::operations::experimental::detail
+}  // namespace ttnn::operations::experimental::deepseek_moe_post_combine_reduce::detail

@@ -10,7 +10,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/deepseek_moe_post_combine_reduce/deepseek_moe_post_combine_reduce.hpp"
 
-namespace ttnn::operations::experimental::detail {
+namespace ttnn::operations::experimental::deepseek_moe_post_combine_reduce::detail {
 
 void bind_deepseek_moe_post_combine_reduce(nb::module_& mod) {
     ttnn::bind_function<"deepseek_moe_post_combine_reduce", "ttnn.experimental.">(
@@ -59,4 +59,4 @@ void bind_deepseek_moe_post_combine_reduce(nb::module_& mod) {
         nb::arg("output_memory_config") = nb::none());
 }
 
-}  // namespace ttnn::operations::experimental::detail
+}  // namespace ttnn::operations::experimental::deepseek_moe_post_combine_reduce::detail

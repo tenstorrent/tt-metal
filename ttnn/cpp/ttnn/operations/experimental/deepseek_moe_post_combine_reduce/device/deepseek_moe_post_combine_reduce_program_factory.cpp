@@ -152,7 +152,7 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
         "deepseek_moe_post_combine_reduce_compute.cpp",
         core_range_set,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi2,
+            .math_fidelity = MathFidelity::HiFi2,
             .fp32_dest_acc_en = false,
             .dst_full_sync_en = true,
             .compile_args = compute_compile_time_args,
@@ -217,7 +217,7 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
 
 void DeepseekMoEPostCombineReduceProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const DeepseekMoEPostCombineReduceParams& operation_attributes,
+    [[maybe_unused]] const DeepseekMoEPostCombineReduceParams& operation_attributes,
     const DeepseekMoEPostCombineReduceInputs& tensor_args,
     ttnn::Tensor& tensor_return_value) {
     auto& program = cached_program.program;

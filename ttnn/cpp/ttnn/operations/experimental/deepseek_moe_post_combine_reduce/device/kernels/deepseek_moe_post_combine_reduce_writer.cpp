@@ -39,8 +39,14 @@ void kernel_main() {
     for (uint32_t token_idx = 0; token_idx < tokens_per_core; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
 
+        DPRINT << "WRITER: Writing token " << global_token_idx << ENDL();
+
         // Wait for output tiles for this token (224 tiles)
         cb_wait_front(cb_output, emb_dim_tiles);
+
+        // Debug: Print first output tile before writing
+        SliceRange sr_out = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 10, .ws = 1};
+        DPRINT << "  WRITER: Output tile 0: " << TileSlice(cb_output, 0, sr_out, true, false) << ENDL();
 
         uint32_t output_read_addr = get_read_ptr(cb_output);
 
@@ -59,6 +65,8 @@ void kernel_main() {
         }
 
         noc_async_write_barrier();
+
+        DPRINT << "  WRITER: Wrote " << emb_dim_tiles << " tiles to DRAM" << ENDL();
 
         cb_pop_front(cb_output, emb_dim_tiles);
     }
