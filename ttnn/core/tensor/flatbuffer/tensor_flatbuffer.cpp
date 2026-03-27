@@ -183,9 +183,15 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     // Used to deduplicate buffer addresses for replicated tensor data.
     std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
 
-    uint64_t next_buffer_offset = 0;
-    // Iterate over distribution coordinates and map to physical coordinates via the topology.
     const auto& topology_mesh_coords = tensor.tensor_topology().mesh_coords();
+    TT_FATAL(
+        topology_mesh_coords.size() == mesh_shape.mesh_size(),
+        "Topology mesh coords size {} should match distribution shape size {}",
+        topology_mesh_coords.size(),
+        mesh_shape.mesh_size());
+
+    // Iterate over distribution coordinates and map to physical coordinates via the topology.
+    uint64_t next_buffer_offset = 0;
     size_t dist_idx = 0;
     for (const auto& dist_coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
         const auto& coord = topology_mesh_coords[dist_idx++];
