@@ -29,6 +29,9 @@ void kernel_main() {
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
+#ifdef USE_MCAST
+    constexpr uint32_t num_mcast_receivers = get_compile_time_arg_val(21);
+#endif
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -45,6 +48,17 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
+#ifdef USE_MCAST
+    uint32_t in1_mcast_start_x = 0, in1_mcast_start_y = 0;
+    uint32_t in1_mcast_end_x = 0, in1_mcast_end_y = 0;
+    if constexpr (is_injector_core) {
+        in1_mcast_start_x = get_arg_val<uint32_t>(argidx++);
+        in1_mcast_start_y = get_arg_val<uint32_t>(argidx++);
+        in1_mcast_end_x = get_arg_val<uint32_t>(argidx++);
+        in1_mcast_end_y = get_arg_val<uint32_t>(argidx++);
+    }
+#endif
+
 #ifdef FUSE_TERNARY
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
     const uint32_t ternary_a_addr = get_arg_val<uint32_t>(argidx++);
@@ -54,7 +68,11 @@ void kernel_main() {
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
     // Tensor accessor for input tensor
+#ifdef USE_MCAST
+    constexpr auto in1_args = TensorAccessorArgs<22>();
+#else
     constexpr auto in1_args = TensorAccessorArgs<21>();
+#endif
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
 
     // Always create tuple of output accessors (size = N_chunks)
@@ -141,6 +159,17 @@ void kernel_main() {
         get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_receiver_semaphore_addr);
 
     const uint64_t in1_unicast_data_base_addr = get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, 0);
+
+#ifdef USE_MCAST
+    uint64_t in1_mcast_data_base_addr = 0;
+    uint64_t in1_mcast_sem_noc_addr = 0;
+    if constexpr (is_injector_core && num_mcast_receivers > 0) {
+        in1_mcast_data_base_addr =
+            get_noc_multicast_addr(in1_mcast_start_x, in1_mcast_start_y, in1_mcast_end_x, in1_mcast_end_y, 0);
+        in1_mcast_sem_noc_addr = get_noc_multicast_addr(
+            in1_mcast_start_x, in1_mcast_start_y, in1_mcast_end_x, in1_mcast_end_y, in1_receiver_semaphore_addr);
+    }
+#endif
 
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
@@ -231,6 +260,21 @@ void kernel_main() {
                 // This frees sender to start next read earlier
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
 
+#ifdef USE_MCAST
+                if constexpr (is_injector_core && num_mcast_receivers > 0) {
+                    noc_semaphore_wait(in1_sender_semaphore_addr_ptr, num_mcast_receivers);
+                    noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
+                    uint32_t in1_row_ptr = in1_start_address;
+                    for (uint32_t i = 0; i < K_block_tiles; i++) {
+                        uint64_t in1_mcast_data_addr = in1_mcast_data_base_addr | in1_row_ptr;
+                        noc_async_write_multicast(
+                            in1_row_ptr, in1_mcast_data_addr, current_N_tiles_bytes, num_mcast_receivers);
+                        in1_row_ptr += full_N_tiles_bytes;
+                    }
+                    noc_async_writes_flushed();
+                    noc_semaphore_set_multicast(in1_valid_semaphore_addr, in1_mcast_sem_noc_addr, num_mcast_receivers);
+                }
+#else
                 if (!is_sink_core) {
                     noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
                     noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
@@ -252,6 +296,7 @@ void kernel_main() {
 
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
+#endif  // USE_MCAST
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {

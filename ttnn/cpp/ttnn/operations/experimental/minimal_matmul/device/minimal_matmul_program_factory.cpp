@@ -279,17 +279,26 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
-    auto core_0_0 = CoreCoord{0, 0};
-    auto core_0_1 = CoreCoord{0, 1};
-    auto core_1_0 = CoreCoord{1, 0};
-    auto core_endx_0 = CoreCoord{grid_size.x - 1, 0};
-    auto core_0_endy = CoreCoord{0, grid_size.y - 1};
-    auto core_endx_endy = CoreCoord{grid_size.x - 1, grid_size.y - 1};
-
-    auto in0_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
-    auto in0_receiver_cores = CoreRange(transpose_core_grid ? core_0_1 : core_1_0, core_endx_endy);
-    auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
-    auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
+    // Build strided (diagonal) sender/receiver core sets for DRAM channel spreading.
+    // in0 injector for M-row r is at N-column (r % in1_parallel_axis_cores).
+    // in1 injector for N-column c is at M-row (c % in0_parallel_axis_cores).
+    std::set<CoreRange> in0_sender_set, in0_receiver_set;
+    std::set<CoreRange> in1_sender_set, in1_receiver_set;
+    for (uint32_t y = 0; y < grid_size.y; y++) {
+        for (uint32_t x = 0; x < grid_size.x; x++) {
+            CoreCoord c{x, y};
+            uint32_t in0_idx = transpose_core_grid ? x : y;
+            uint32_t in1_idx = transpose_core_grid ? y : x;
+            bool is_in0_injector = (in1_idx == (in0_idx % in1_parallel_axis_cores));
+            bool is_in1_injector = (in0_idx == (in1_idx % in0_parallel_axis_cores));
+            (is_in0_injector ? in0_sender_set : in0_receiver_set).insert(CoreRange(c, c));
+            (is_in1_injector ? in1_sender_set : in1_receiver_set).insert(CoreRange(c, c));
+        }
+    }
+    auto in0_sender_cores = CoreRangeSet(in0_sender_set);
+    auto in0_receiver_cores = CoreRangeSet(in0_receiver_set);
+    auto in1_sender_cores = CoreRangeSet(in1_sender_set);
+    auto in1_receiver_cores = CoreRangeSet(in1_receiver_set);
 
     auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
@@ -374,6 +383,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     std::map<std::string, std::string> defines;
     std::map<std::string, std::string> in0_injector_defines;
+    defines["USE_MCAST"] = "1";
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
@@ -446,6 +456,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
         in3_tile_size,
+        in1_parallel_axis_cores - 1,  // USE_MCAST: num_mcast_receivers for in0 injector
     };
     append_accessors(
         in0_sender_compile_time_args,
@@ -488,6 +499,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
         in3_tile_size,
+        0,  // USE_MCAST: num_mcast_receivers = 0 for in0 receivers
     };
     append_accessors(
         in0_receiver_compile_time_args,
@@ -524,9 +536,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in1_receiver_semaphore_id,
         in1_valid_semaphore_id,
         in1_is_output_writer,
-        true,               // is_injector_core
-        N_chunks,           // N_chunks
-        N_tiles_per_chunk,  // N_tiles_per_chunk
+        true,                         // is_injector_core
+        N_chunks,                     // N_chunks
+        N_tiles_per_chunk,            // N_tiles_per_chunk
+        in0_parallel_axis_cores - 1,  // USE_MCAST: num_mcast_receivers for in1 injector
     };
     append_accessors(
         in1_sender_compile_time_args,
@@ -566,6 +579,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         false,              // is_injector_core
         N_chunks,           // N_chunks
         N_tiles_per_chunk,  // N_tiles_per_chunk
+        0,                  // USE_MCAST: num_mcast_receivers = 0 for in1 receivers
     };
     append_accessors(
         in1_receiver_compile_time_args,
@@ -638,8 +652,17 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
 
-        CoreCoord left_core = {(std::size_t)0, (std::size_t)core.y};
-        CoreCoord top_core = {(std::size_t)core.x, (std::size_t)0};
+        // Strided (diagonal) injector selection for DRAM channel spreading
+        bool is_in0_injector = (in1_idx == (in0_idx % in1_parallel_axis_cores));
+        bool is_in1_injector = (in0_idx == (in1_idx % in0_parallel_axis_cores));
+
+        // Compute injector logical core for this row/column (strided position)
+        uint32_t in0_injector_axis_pos = in0_idx % in1_parallel_axis_cores;
+        CoreCoord in0_injector_logical = transpose_core_grid ? CoreCoord{core.x, (std::size_t)in0_injector_axis_pos}
+                                                             : CoreCoord{(std::size_t)in0_injector_axis_pos, core.y};
+        uint32_t in1_injector_axis_pos = in1_idx % in0_parallel_axis_cores;
+        CoreCoord in1_injector_logical = transpose_core_grid ? CoreCoord{(std::size_t)in1_injector_axis_pos, core.y}
+                                                             : CoreCoord{core.x, (std::size_t)in1_injector_axis_pos};
 
         auto [in0_core_order, in0_core_order_index] = build_core_order_for_axis(
             core,
@@ -647,7 +670,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in1_parallel_axis_cores,
             in0_noc,
             /*axis_is_x_when_not_transposed=*/true,
-            /*initial_endpoint=*/(transpose_core_grid ? top_core : left_core));
+            /*initial_endpoint=*/in0_injector_logical);
 
         auto [in1_core_order, in1_core_order_index] = build_core_order_for_axis(
             core,
@@ -655,7 +678,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in0_parallel_axis_cores,
             in1_noc,
             /*axis_is_x_when_not_transposed=*/false,
-            /*initial_endpoint=*/(transpose_core_grid ? left_core : top_core));
+            /*initial_endpoint=*/in1_injector_logical);
 
         auto in0_prev_core = clamped_prev(in0_core_order, in0_core_order_index);
         auto in0_next_core = clamped_next(in0_core_order, in0_core_order_index);
@@ -666,6 +689,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         auto in0_next_core_physical = device->worker_core_from_logical_core(in0_next_core);
         auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
         auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
+
+        auto in0_injector_physical = device->worker_core_from_logical_core(in0_injector_logical);
+        auto in1_injector_physical = device->worker_core_from_logical_core(in1_injector_logical);
+        // For receivers, sender_noc = injector physical; for injector itself, keep clamped prev (itself)
+        const auto& in0_effective_sender_physical = !is_in0_injector ? in0_injector_physical : in0_prev_core_physical;
+        const auto& in1_effective_sender_physical = !is_in1_injector ? in1_injector_physical : in1_prev_core_physical;
 
         /**
          * NOTE: Some cores are doing unnecessary work, on blocks which are processed just to make
@@ -683,25 +712,52 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         uint32_t defer_write_k_block = core.y * k_blocks_per_core;
         defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
 
-        bool is_in0_sink = core == in0_core_order.back();
-        bool is_in1_sink = core == in1_core_order.back();
+        // USE_MCAST: all non-injector cores are sinks (no forwarding); injector only has receivers if axis > 1
+        bool is_in0_sink = !is_in0_injector || (in1_parallel_axis_cores == 1);
+        bool is_in1_sink = !is_in1_injector || (in0_parallel_axis_cores == 1);
 
         std::vector<uint32_t> in0_args = {
             in0_addr,
             in2_addr,
             in3_addr,
             is_in0_sink,
-            (std::uint32_t)in0_next_core_physical.x,  // in0_dest_noc_x
-            (std::uint32_t)in0_next_core_physical.y,  // in0_dest_noc_y
-            (std::uint32_t)in0_prev_core_physical.x,  // in0_sender_noc_x
-            (std::uint32_t)in0_prev_core_physical.y,  // in0_sender_noc_y
+            (std::uint32_t)in0_next_core_physical.x,         // in0_dest_noc_x
+            (std::uint32_t)in0_next_core_physical.y,         // in0_dest_noc_y
+            (std::uint32_t)in0_effective_sender_physical.x,  // in0_sender_noc_x (injector for receivers)
+            (std::uint32_t)in0_effective_sender_physical.y,  // in0_sender_noc_y
             M_start_tile,
             M_end_tile,
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
         };
-        // Add ternary addresses if present (after defer_write_k_block, before output addresses)
+        if (is_in0_injector) {
+            // USE_MCAST: injector appends 4 mcast rect coords; box spans full line (hardware excludes sender)
+            if (in1_parallel_axis_cores > 1) {
+                CoreCoord in0_mcast_start_l =
+                    transpose_core_grid ? CoreCoord{core.x, (std::size_t)0} : CoreCoord{(std::size_t)0, core.y};
+                CoreCoord in0_mcast_end_l =
+                    transpose_core_grid ? CoreCoord{core.x, grid_size.y - 1} : CoreCoord{grid_size.x - 1, core.y};
+                auto in0_ms = device->worker_core_from_logical_core(in0_mcast_start_l);
+                auto in0_me = device->worker_core_from_logical_core(in0_mcast_end_l);
+                CoreCoord in0_mcast_start = {std::min(in0_ms.x, in0_me.x), std::min(in0_ms.y, in0_me.y)};
+                CoreCoord in0_mcast_end = {std::max(in0_ms.x, in0_me.x), std::max(in0_ms.y, in0_me.y)};
+                if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+                    std::swap(in0_mcast_start, in0_mcast_end);
+                }
+                in0_args.push_back((uint32_t)in0_mcast_start.x);
+                in0_args.push_back((uint32_t)in0_mcast_start.y);
+                in0_args.push_back((uint32_t)in0_mcast_end.x);
+                in0_args.push_back((uint32_t)in0_mcast_end.y);
+            } else {
+                // No receivers (single-axis core) — placeholder zeros (kernel skips with num_mcast_receivers=0)
+                in0_args.push_back(0);
+                in0_args.push_back(0);
+                in0_args.push_back(0);
+                in0_args.push_back(0);
+            }
+        }
+        // Add ternary addresses if present (after defer_write_k_block [+4 mcast for sender], before output addresses)
         if (use_fused_ternary) {
             in0_args.push_back(fused_ternary_input_a.value().buffer()->address());
             in0_args.push_back(fused_ternary_input_b.value().buffer()->address());
@@ -713,7 +769,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
         }
-        if (in1_idx == 0) {
+        if (is_in0_injector) {
             // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
         } else {
@@ -725,17 +781,43 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             in1_addr,
             in2_addr,
             is_in1_sink,
-            (std::uint32_t)in1_next_core_physical.x,  // in1_dest_noc_x
-            (std::uint32_t)in1_next_core_physical.y,  // in1_dest_noc_y
-            (std::uint32_t)in1_prev_core_physical.x,  // in1_sender_noc_x
-            (std::uint32_t)in1_prev_core_physical.y,  // in1_sender_noc_y
+            (std::uint32_t)in1_next_core_physical.x,         // in1_dest_noc_x
+            (std::uint32_t)in1_next_core_physical.y,         // in1_dest_noc_y
+            (std::uint32_t)in1_effective_sender_physical.x,  // in1_sender_noc_x (injector for receivers)
+            (std::uint32_t)in1_effective_sender_physical.y,  // in1_sender_noc_y
             M_start_tile,
             M_end_tile,
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
         };
-        // Add ternary addresses if present (after defer_write_k_block, before output addresses)
+        if (is_in1_injector) {
+            // USE_MCAST: injector appends 4 mcast rect coords; box spans full line (hardware excludes sender)
+            if (in0_parallel_axis_cores > 1) {
+                CoreCoord in1_mcast_start_l =
+                    transpose_core_grid ? CoreCoord{(std::size_t)0, core.y} : CoreCoord{core.x, (std::size_t)0};
+                CoreCoord in1_mcast_end_l =
+                    transpose_core_grid ? CoreCoord{grid_size.x - 1, core.y} : CoreCoord{core.x, grid_size.y - 1};
+                auto in1_ms = device->worker_core_from_logical_core(in1_mcast_start_l);
+                auto in1_me = device->worker_core_from_logical_core(in1_mcast_end_l);
+                CoreCoord in1_mcast_start = {std::min(in1_ms.x, in1_me.x), std::min(in1_ms.y, in1_me.y)};
+                CoreCoord in1_mcast_end = {std::max(in1_ms.x, in1_me.x), std::max(in1_ms.y, in1_me.y)};
+                if (in1_noc == tt::tt_metal::NOC::NOC_1) {
+                    std::swap(in1_mcast_start, in1_mcast_end);
+                }
+                in1_args.push_back((uint32_t)in1_mcast_start.x);
+                in1_args.push_back((uint32_t)in1_mcast_start.y);
+                in1_args.push_back((uint32_t)in1_mcast_end.x);
+                in1_args.push_back((uint32_t)in1_mcast_end.y);
+            } else {
+                // No receivers (single-axis core) — placeholder zeros (kernel skips with num_mcast_receivers=0)
+                in1_args.push_back(0);
+                in1_args.push_back(0);
+                in1_args.push_back(0);
+                in1_args.push_back(0);
+            }
+        }
+        // Add ternary addresses if present (after defer_write_k_block [+4 mcast for sender], before output addresses)
         if (use_fused_ternary) {
             in1_args.push_back(fused_ternary_input_a.value().buffer()->address());
             in1_args.push_back(fused_ternary_input_b.value().buffer()->address());
@@ -747,7 +829,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
         }
-        if (in0_idx == 0) {
+        if (is_in1_injector) {
             // in1 sender
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
         } else {
@@ -776,7 +858,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in1_receiver_kernels_id,
         compute_kernels_id,
         transpose_core_grid,
-        fuse_op && fused_op_signaler->read_local_slice_from_input};
+        fuse_op && fused_op_signaler->read_local_slice_from_input,
+        in0_parallel_axis_cores,
+        in1_parallel_axis_cores};
 }
 
 MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(
@@ -819,35 +903,48 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
     auto& compute_runtime_args = GetRuntimeArgs(program, override_variables.compute_kernels_id);
 
-    // RT args layout for in0: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
-    // [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
-    // RT args layout for in1: [in1_addr, in2_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
-    // [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
+    // RT args layout for in0 SENDER: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
+    //   mcast_coords(4), [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
+    // RT args layout for in0 RECEIVER: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
+    //   [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
+    // RT args layout for in1 SENDER: [in1_addr, in2_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
+    //   mcast_coords(4), [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
+    // RT args layout for in1 RECEIVER: [in1_addr, in2_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
+    //   [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
     constexpr uint32_t in0_in0_addr_idx = 0;
     constexpr uint32_t in0_in2_addr_idx = 1;
     constexpr uint32_t in0_in3_addr_idx = 2;
-    constexpr uint32_t in0_ternary_a_addr_idx = 13;  // After defer_write_k_block (index 12) for in0
-    constexpr uint32_t in0_ternary_b_addr_idx = 14;
+    // USE_MCAST: sender has 4 extra mcast coords after defer_k (index 12), so ternary starts at 17
+    constexpr uint32_t in0_sender_ternary_a_addr_idx = 17;
+    constexpr uint32_t in0_sender_ternary_b_addr_idx = 18;
+    constexpr uint32_t in0_receiver_ternary_a_addr_idx = 13;
+    constexpr uint32_t in0_receiver_ternary_b_addr_idx = 14;
 
     constexpr uint32_t in1_in0_addr_idx = 0;
     constexpr uint32_t in1_bias_addr_idx = 1;
-    constexpr uint32_t in1_ternary_a_addr_idx = 12;  // After defer_write_k_block (index 11)
-    constexpr uint32_t in1_ternary_b_addr_idx = 13;
+    // USE_MCAST: sender has 4 extra mcast coords after defer_k (index 11), so ternary starts at 16
+    constexpr uint32_t in1_sender_ternary_a_addr_idx = 16;
+    constexpr uint32_t in1_sender_ternary_b_addr_idx = 17;
+    constexpr uint32_t in1_receiver_ternary_a_addr_idx = 12;
+    constexpr uint32_t in1_receiver_ternary_b_addr_idx = 13;
 
     // Check if ternary addresses are present
     bool has_fused_ternary =
         tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
     // Output addresses start after ternary addresses (if present)
-    uint32_t in0_out_addr_start_idx =
-        has_fused_ternary ? 15 : 13;  // After defer_write_k_block and optional ternary addresses
-    uint32_t in1_out_addr_start_idx = has_fused_ternary ? 14 : 12;
+    uint32_t in0_sender_out_addr_start_idx = has_fused_ternary ? 19 : 17;
+    uint32_t in0_receiver_out_addr_start_idx = has_fused_ternary ? 15 : 13;
+    uint32_t in1_sender_out_addr_start_idx = has_fused_ternary ? 18 : 16;
+    uint32_t in1_receiver_out_addr_start_idx = has_fused_ternary ? 14 : 12;
 
     for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
         CoreCoord core = override_variables.cores.at(i);
         uint32_t in0_idx = override_variables.transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
+        bool is_in0_injector = (in1_idx == (in0_idx % override_variables.in1_parallel_axis_cores));
+        bool is_in1_injector = (in0_idx == (in1_idx % override_variables.in0_parallel_axis_cores));
 
-        if (in1_idx == 0) {
+        if (is_in0_injector) {
             auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
 
             in0_sender_args[in0_in0_addr_idx] = tensor_args.input_tensor.buffer()->address();
@@ -859,12 +956,15 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
                                                     : 0;
             // Update ternary addresses if present
             if (has_fused_ternary) {
-                in0_sender_args[in0_ternary_a_addr_idx] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                in0_sender_args[in0_ternary_b_addr_idx] = tensor_args.fused_ternary_input_b.value().buffer()->address();
+                in0_sender_args[in0_sender_ternary_a_addr_idx] =
+                    tensor_args.fused_ternary_input_a.value().buffer()->address();
+                in0_sender_args[in0_sender_ternary_b_addr_idx] =
+                    tensor_args.fused_ternary_input_b.value().buffer()->address();
             }
             // Update N output addresses at the end
             for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
-                in0_sender_args[in0_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
+                in0_sender_args[in0_sender_out_addr_start_idx + out_idx] =
+                    tensor_return_value[out_idx].buffer()->address();
             }
         } else {
             auto& in0_receiver_args = in0_receiver_runtime_args[core.x][core.y];
@@ -872,30 +972,34 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
                 tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
             // Update ternary addresses if present
             if (has_fused_ternary) {
-                in0_receiver_args[in0_ternary_a_addr_idx] =
+                in0_receiver_args[in0_receiver_ternary_a_addr_idx] =
                     tensor_args.fused_ternary_input_a.value().buffer()->address();
-                in0_receiver_args[in0_ternary_b_addr_idx] =
+                in0_receiver_args[in0_receiver_ternary_b_addr_idx] =
                     tensor_args.fused_ternary_input_b.value().buffer()->address();
             }
             // Update N output addresses at the end
             for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
-                in0_receiver_args[in0_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
+                in0_receiver_args[in0_receiver_out_addr_start_idx + out_idx] =
+                    tensor_return_value[out_idx].buffer()->address();
             }
         }
 
-        if (in0_idx == 0) {
+        if (is_in1_injector) {
             auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
             in1_sender_args[in1_in0_addr_idx] = tensor_args.weight_tensor.buffer()->address();
             in1_sender_args[in1_bias_addr_idx] =
                 tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
             // Update ternary addresses if present
             if (has_fused_ternary) {
-                in1_sender_args[in1_ternary_a_addr_idx] = tensor_args.fused_ternary_input_a.value().buffer()->address();
-                in1_sender_args[in1_ternary_b_addr_idx] = tensor_args.fused_ternary_input_b.value().buffer()->address();
+                in1_sender_args[in1_sender_ternary_a_addr_idx] =
+                    tensor_args.fused_ternary_input_a.value().buffer()->address();
+                in1_sender_args[in1_sender_ternary_b_addr_idx] =
+                    tensor_args.fused_ternary_input_b.value().buffer()->address();
             }
             // Update N output addresses at the end
             for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
-                in1_sender_args[in1_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
+                in1_sender_args[in1_sender_out_addr_start_idx + out_idx] =
+                    tensor_return_value[out_idx].buffer()->address();
             }
         } else {
             auto& in1_receiver_args = in1_receiver_runtime_args[core.x][core.y];
@@ -903,14 +1007,15 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
                 tensor_args.bias_tensor.has_value() ? tensor_args.bias_tensor.value().buffer()->address() : 0;
             // Update ternary addresses if present
             if (has_fused_ternary) {
-                in1_receiver_args[in1_ternary_a_addr_idx] =
+                in1_receiver_args[in1_receiver_ternary_a_addr_idx] =
                     tensor_args.fused_ternary_input_a.value().buffer()->address();
-                in1_receiver_args[in1_ternary_b_addr_idx] =
+                in1_receiver_args[in1_receiver_ternary_b_addr_idx] =
                     tensor_args.fused_ternary_input_b.value().buffer()->address();
             }
             // Update N output addresses at the end
             for (size_t out_idx = 0; out_idx < tensor_return_value.size(); ++out_idx) {
-                in1_receiver_args[in1_out_addr_start_idx + out_idx] = tensor_return_value[out_idx].buffer()->address();
+                in1_receiver_args[in1_receiver_out_addr_start_idx + out_idx] =
+                    tensor_return_value[out_idx].buffer()->address();
             }
         }
     }
