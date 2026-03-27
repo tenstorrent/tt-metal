@@ -93,9 +93,7 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      # Generic message only — filter-stage LLM maps "E2E/deliberate/wrong inputs" text to cancel.json "invoked in error".
       - name: Post-triage validation
-        if: ${{ inputs.force_e2e_failure_after_triage && inputs['run-hang-report-test'] }}
         run: |
           echo "::error::Post-triage validation step failed."
           exit 1
