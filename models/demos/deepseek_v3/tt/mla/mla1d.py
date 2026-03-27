@@ -30,7 +30,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     SavedWeight,
     SliceConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import SEQ_LEN_CHUNK_SIZE as DEFAULT_SEQ_LEN_CHUNK_SIZE
 from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
     even_int_div,
@@ -1709,12 +1708,18 @@ class MLA1D(AbstractModule):
         assert WKV_B2_AG_SEQ_CHUNK_SIZE > 0, (
             "DEEPSEEK_WKV_B2_AG_PREFILL_CHUNK_SIZE must be > 0, " f"got {WKV_B2_AG_SEQ_CHUNK_SIZE}"
         )
+        wo_k = num_heads * v_head_dim
         if seq_len > WKV_B2_AG_SEQ_CHUNK_SIZE:
+            # Fuse wkv_b2 and wo into a single chunked loop to avoid materializing the full
+            # [1, num_heads, seq_len, v_head_dim] tensor in DRAM before wo.
             num_chunks = (seq_len + WKV_B2_AG_SEQ_CHUNK_SIZE - 1) // WKV_B2_AG_SEQ_CHUNK_SIZE
-            v_out_chunks = []
+            hidden_dim = num_heads * v_head_dim
+            output_chunks = []
             for chunk_idx in range(num_chunks):
                 start = chunk_idx * WKV_B2_AG_SEQ_CHUNK_SIZE
                 end = min(start + WKV_B2_AG_SEQ_CHUNK_SIZE, seq_len)
+                chunk_seq_len = end - start
+
                 attn_out_chunk = ttnn.slice(
                     attn_out,
                     (0, 0, start, 0),
@@ -1723,61 +1728,29 @@ class MLA1D(AbstractModule):
                 v_out_chunk_ag = ttnn.experimental.all_gather_async(attn_out_chunk, **wkv_b2_ag_prefill_runtime_args)
                 ttnn.deallocate(attn_out_chunk)
 
-                v_out_chunk = _run_wkv_b2_prefill_matmul(v_out_chunk_ag, end - start)
+                v_out_chunk = _run_wkv_b2_prefill_matmul(v_out_chunk_ag, chunk_seq_len)
                 ttnn.deallocate(v_out_chunk_ag)
-                v_out_chunks.append(v_out_chunk)
 
-            ttnn.deallocate(attn_out)
-            if len(v_out_chunks) == 1:
-                v_out = v_out_chunks[0]
-            else:
-                v_out = ttnn.concat(v_out_chunks, dim=2)
-                for v_chunk in v_out_chunks:
-                    ttnn.deallocate(v_chunk)
-        else:
-            v_out_ag = ttnn.experimental.all_gather_async(attn_out, **wkv_b2_ag_prefill_runtime_args)
-            v_out = _run_wkv_b2_prefill_matmul(v_out_ag, seq_len)
-            ttnn.deallocate(v_out_ag)
-            ttnn.deallocate(attn_out)
-
-        v_out = ttnn.permute(v_out, (0, 2, 1, 3))
-
-        wo_k = num_heads * v_head_dim
-        wo_prefill_seq_chunk_size = int(os.getenv("DEEPSEEK_WO_PREFILL_CHUNK_SIZE", str(DEFAULT_SEQ_LEN_CHUNK_SIZE)))
-        assert wo_prefill_seq_chunk_size > 0, (
-            "DEEPSEEK_WO_PREFILL_CHUNK_SIZE must be > 0, " f"got {wo_prefill_seq_chunk_size}"
-        )
-        if seq_len > wo_prefill_seq_chunk_size:
-            num_heads_v = v_out.shape[2]
-            v_head_dim_v = v_out.shape[3]
-            num_chunks = (seq_len + wo_prefill_seq_chunk_size - 1) // wo_prefill_seq_chunk_size
-
-            output_chunks = []
-            hidden_dim = num_heads_v * v_head_dim_v
-            for chunk_idx in range(num_chunks):
-                start = chunk_idx * wo_prefill_seq_chunk_size
-                end = min(start + wo_prefill_seq_chunk_size, seq_len)
-                v_chunk = ttnn.slice(v_out, (0, start, 0, 0), (1, end, num_heads_v, v_head_dim_v))
-                chunk_seq_len = end - start
+                # Immediately pipe through wo: permute + reshape + matmul
+                v_out_chunk = ttnn.permute(v_out_chunk, (0, 2, 1, 3))  # [1, chunk_seq_len, num_heads, v_head_dim]
                 padded_chunk_seq_len = nearest_y(chunk_seq_len, ttnn.TILE_SIZE)
                 if padded_chunk_seq_len != chunk_seq_len:
-                    v_chunk = ttnn.pad(
-                        v_chunk,
+                    v_out_chunk = ttnn.pad(
+                        v_out_chunk,
                         padding=((0, 0), (0, padded_chunk_seq_len - chunk_seq_len), (0, 0), (0, 0)),
                         value=0.0,
                     )
-                v_chunk = ttnn.reshape(v_chunk, (1, 1, padded_chunk_seq_len, hidden_dim))
+                v_out_chunk = ttnn.reshape(v_out_chunk, (1, 1, padded_chunk_seq_len, hidden_dim))
                 wo_chunk_program_config = build_prefill_matmul_program_config(padded_chunk_seq_len, k=wo_k, n=dim)
-                out_chunk = ttnn.linear(v_chunk, **cfg["wo"], program_config=wo_chunk_program_config)
-                ttnn.deallocate(v_chunk)
+                out_chunk = ttnn.linear(v_out_chunk, **cfg["wo"], program_config=wo_chunk_program_config)
+                ttnn.deallocate(v_out_chunk)
                 if padded_chunk_seq_len != chunk_seq_len:
                     trimmed_out_chunk = ttnn.slice(out_chunk, (0, 0, 0, 0), (1, 1, chunk_seq_len, dim))
                     ttnn.deallocate(out_chunk)
                     out_chunk = trimmed_out_chunk
                 output_chunks.append(out_chunk)
 
-            ttnn.deallocate(v_out)
-
+            ttnn.deallocate(attn_out)
             if len(output_chunks) == 1:
                 out = output_chunks[0]
             else:
@@ -1785,7 +1758,12 @@ class MLA1D(AbstractModule):
                 for chunk in output_chunks:
                     ttnn.deallocate(chunk)
         else:
-            v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
+            v_out_ag = ttnn.experimental.all_gather_async(attn_out, **wkv_b2_ag_prefill_runtime_args)
+            v_out = _run_wkv_b2_prefill_matmul(v_out_ag, seq_len)
+            ttnn.deallocate(v_out_ag)
+            ttnn.deallocate(attn_out)
+            v_out = ttnn.permute(v_out, (0, 2, 1, 3))
+            v_out = ttnn.reshape(v_out, (1, 1, seq_len, wo_k))
             wo_program_config = build_prefill_matmul_program_config(seq_len, k=wo_k, n=dim)
             out = ttnn.linear(v_out, **cfg["wo"], program_config=wo_program_config)
             ttnn.deallocate(v_out)
