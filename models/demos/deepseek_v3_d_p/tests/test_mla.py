@@ -87,8 +87,8 @@ def random_weights(config_only):
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
-    [(8, 4), (2, 4)],
-    ids=["8x4", "2x4"],
+    [(32, 4), (8, 4), (2, 4)],
+    ids=["32x4", "8x4", "2x4"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -290,6 +290,14 @@ def test_mla(
         ).to(torch.bfloat16)
         tt_kvpe_cache = tt_kvpe_cache[:, :1, :, :]
 
+        logger.info("Starting synchronize call")
+        ttnn.synchronize_device(mesh_device)
+        logger.info("Synchronize call ended")
+
+        logger.debug("  Distributed synchronization started")
+        ttnn.distributed_context_barrier()
+        logger.debug("✓ Distributed synchronization completed")
+
         if is_balanced:
             tt_kvpe_cache = reverse_reorder_tensor_chunks(tt_kvpe_cache, chunk_order, seq_dim=2)
 
@@ -304,6 +312,12 @@ def test_mla(
         )
         logger.info(f"KVPE cache PE part PCC is {pe_pcc_message}")
     else:
+        logger.info("Starting synchronize call")
         ttnn.synchronize_device(mesh_device)
+        logger.info("Synchronize call ended")
+
+        logger.debug("  Distributed synchronization started")
+        ttnn.distributed_context_barrier()
+        logger.debug("✓ Distributed synchronization completed")
 
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
