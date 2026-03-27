@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""PCC: torch VAE decode vs TTNN WanVAEDecoder (small latents for CPU reference speed)."""
+"""PCC: torch VAE decode vs TTNN WanVAEDecoder (small latents; reference VAE in fp32 on CPU for speed)."""
 
 import pytest
 import torch
@@ -111,8 +111,10 @@ def decode_ttnn(vae, latents, mesh_device):
     [mesh_shape_request_param()],
     indirect=True,
 )
+@pytest.mark.timeout(0)
 def test_decode_one_video_pcc(mesh_device):
-    vae = AutoencoderKLWan.from_pretrained(CHECKPOINT_PATH, torch_dtype=torch.bfloat16).to("cpu")
+    # bf16 conv3d on CPU is very slow; fp32 uses fast MKL paths. Timeout disabled (pytest-timeout: 0 = no limit).
+    vae = AutoencoderKLWan.from_pretrained(CHECKPOINT_PATH, torch_dtype=torch.float32).to("cpu")
     vae.eval()
 
     torch.manual_seed(42)
