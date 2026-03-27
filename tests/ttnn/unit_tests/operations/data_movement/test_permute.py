@@ -16,6 +16,8 @@ from models.common.utility_functions import is_blackhole
 def random_torch_tensor(dtype, shape):
     if dtype == ttnn.int32:
         return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
     if dtype == ttnn.float32:
         return torch.rand(shape, dtype=torch.float32)
     if dtype == ttnn.bfloat16:
@@ -366,7 +368,7 @@ def test_permute_4d_cn(device, shape, dtype):
 @pytest.mark.parametrize(
     "shape", [[1, 1, 32, 32], [2, 2, 32, 32], [32, 32, 32, 32], [1, 1, 64, 64], [2, 2, 64, 64], [32, 32, 64, 64]]
 )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32])
 def test_permute_4d_wh(device, shape, dtype):
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(dtype, shape)
@@ -487,7 +489,7 @@ def test_permute_adversarial(device, shape, perm, dtype):
     "shape", [[1, 1, 32, 32], [2, 2, 32, 32], [1, 1, 64, 64], [2, 2, 64, 64], [32, 32, 32, 32], [32, 32, 64, 64]]
 )
 @pytest.mark.parametrize("perm", generate_fixed_w_permutations(4))
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32])
 def test_permute_4d_fixed_w(device, shape, perm, dtype):
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(dtype, shape)
@@ -564,6 +566,7 @@ def test_permute_5d_yw_permutations(device, shape, perm, dtype):
     [
         ttnn.bfloat16,
         ttnn.int32,
+        ttnn.uint32,
     ],
 )
 def test_permute_4d_yw_permutations(device, shape, perm, dtype):
@@ -583,6 +586,7 @@ def test_permute_4d_yw_permutations(device, shape, perm, dtype):
     [
         ttnn.bfloat16,
         ttnn.int32,
+        ttnn.uint32,
     ],
 )
 def test_permute_4d_whyx_permutations(device, shape, perm, dtype):
@@ -637,6 +641,19 @@ def test_permute_5d_wyh(device, shape, perm, dtype):
         assert_with_pcc(torch_output, output_tensor, 0.9999)
     else:
         assert_equal(torch_output, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[1, 1, 32, 64], [2, 3, 32, 32], [1, 1, 64, 96], [1, 8, 96, 32]])
+def test_transpose_wh_tiled_uint32(device, shape):
+    # ttnn.transpose(-2,-1) on TILE_LAYOUT → prim::TransposeWH → transpose_wh_program_factory
+    # compute/transpose_wh.cpp → transpose_wh_tile() → MOVD2B dest_32b_lo=1
+    # Unlike ttnn.permute({0,1,3,2}), ttnn.transpose dispatches to transpose_wh_program_factory
+    # directly (not permute_tiled_program_factory), so a dedicated test is needed.
+    torch.manual_seed(2005)
+    t = random_torch_tensor(ttnn.uint32, shape)
+    tt = ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.uint32, device=device)
+    out = ttnn.transpose(tt, -2, -1)
+    assert_equal(t.permute(0, 1, 3, 2), ttnn.to_torch(out))
 
 
 # TODO: Fix sharded permute bugs for width and block shard strategies
