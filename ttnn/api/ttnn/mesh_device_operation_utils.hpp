@@ -143,7 +143,7 @@ void update_output_tensor_topologies(
             output_tensors.size());
 
         for (auto i = 0ul; i < custom_topologies.size(); i++) {
-            output_tensors[i].get().update_tensor_topology(std::move(custom_topologies[i]));
+            output_tensors[i].get().update_tensor_topology(custom_topologies[i]);
         }
     } else {
         auto output_topology_result =
@@ -154,7 +154,7 @@ void update_output_tensor_topologies(
                 output_topology_result.second,
                 output_topology_result.first,
                 tensor.get().tensor_topology().mesh_coords());
-            tensor.get().update_tensor_topology(std::move(topology));
+            tensor.get().update_tensor_topology(topology);
         }
     }
 }

@@ -476,8 +476,8 @@ Tensor Tensor::reshape(
     return view(*this, new_logical_shape, new_padded_shape);
 }
 
-void Tensor::update_tensor_topology(TensorTopology tensor_topology) {
-    tensor_attributes->update_tensor_topology(std::move(tensor_topology));
+void Tensor::update_tensor_topology(const TensorTopology& tensor_topology) {
+    tensor_attributes->update_tensor_topology(tensor_topology);
 }
 
 bool Tensor::is_allocated() const {
