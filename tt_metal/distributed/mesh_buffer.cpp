@@ -158,7 +158,7 @@ bool MeshBuffer::is_allocated() const {
 MeshBuffer::~MeshBuffer() { deallocate(); }
 
 MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
-    config_(std::move(other.config_)),
+    config_(other.config_),
     device_local_config_(std::move(other.device_local_config_)),
     mesh_device_(std::move(other.mesh_device_)),
     address_(other.address_),
@@ -173,7 +173,7 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
 MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
     if (this != &other) {
         deallocate();
-        config_ = std::move(other.config_);
+        config_ = other.config_;
         device_local_config_ = std::move(other.device_local_config_);
         mesh_device_ = std::move(other.mesh_device_);
         address_ = other.address_;
