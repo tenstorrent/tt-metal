@@ -64,6 +64,12 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
         // TODO: If we want to support mixed precision like decode, we need to add simple compute kernel for conversion
         TT_FATAL(input_tensor.dtype() == cache_tensor.dtype(), "Input and cache tensors must have same dtype!");
 
+        TT_FATAL(
+            args.update_idx % TILE_HEIGHT == 0,
+            "update_idx ({}) must be a multiple of TILE_HEIGHT ({}) for fill cache",
+            args.update_idx,
+            TILE_HEIGHT);
+
         if (input_tensor.is_sharded()) {
             TT_FATAL(
                 input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
@@ -86,8 +92,9 @@ void UpdateKVCacheOperation::validate_on_program_cache_miss(
             args.batch_idx,
             cache_tensor.padded_shape()[0]);
         TT_FATAL(
-            input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2],
-            "Input tensor height ({}) must be <= cache tensor height ({})",
+            args.update_idx + input_tensor.padded_shape()[-2] <= cache_tensor.padded_shape()[-2],
+            "update_idx ({}) + input seq len ({}) must be <= cache seq len ({})",
+            args.update_idx,
             input_tensor.padded_shape()[-2],
             cache_tensor.padded_shape()[-2]);
     } else if (args.op_type == UpdateCacheOpType::UPDATE) {
