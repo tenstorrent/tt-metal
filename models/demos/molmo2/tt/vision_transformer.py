@@ -53,7 +53,7 @@ class VisionTransformer(LightweightModule):
         layer_norm_eps: float = 1e-6,
         weight_cache_path=None,
         state_dict_prefix: str = "model.vision_backbone.image_vit",
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,  # Changed from bfloat8_b for better precision
     ):
         """
         Initialize VisionTransformer.

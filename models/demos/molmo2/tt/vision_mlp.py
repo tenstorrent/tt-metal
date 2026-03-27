@@ -35,7 +35,7 @@ class VisionMLP(LightweightModule):
         hidden_dim: int,
         intermediate_dim: int,
         weight_cache_path=None,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,  # Changed from bfloat8_b for better precision
     ):
         """
         Initialize VisionMLP.
