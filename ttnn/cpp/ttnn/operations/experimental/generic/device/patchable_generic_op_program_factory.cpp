@@ -85,24 +85,11 @@ void discover_address_slots(
     }
 }
 
-/// Flatten io_tensor addresses into a flat uint32_t vector (0 for null buffers).
-/// Unlike collect_io_tensor_addresses (which returns optional), this is cheaper
-/// to compare against prev_io_addresses.
-std::vector<std::uint32_t> collect_io_addresses_flat(const patchable_tensor_args_t& tensor_args) {
-    std::vector<std::uint32_t> addrs;
-    addrs.reserve(tensor_args.io_tensors.size());
-    for (const auto& t : tensor_args.io_tensors) {
-        auto* buf = t.buffer();
-        addrs.push_back(buf != nullptr ? buf->address() : 0u);
-    }
-    return addrs;
-}
-
 void patch_program_from_io_tensors(
     Program& program,
     PatchableGenericMeshProgramFactory::shared_variables_t& shared_vars,
     const patchable_tensor_args_t& tensor_args) {
-    const auto cur_addrs = collect_io_addresses_flat(tensor_args);
+    const auto cur_addrs = collect_io_tensor_addresses(tensor_args);
 
     const auto& prev = shared_vars.prev_io_addresses;
     const bool have_prev = prev.size() == cur_addrs.size();
@@ -118,27 +105,27 @@ void patch_program_from_io_tensors(
 
     for (const auto& slot : shared_vars.per_core_runtime_arg_slots) {
         check_io_index(slot.io_tensor_index, "per-core runtime arg");
-        const auto addr = cur_addrs[slot.io_tensor_index];
+        const auto& addr = cur_addrs[slot.io_tensor_index];
         if (have_prev && addr == prev[slot.io_tensor_index]) {
             continue;
         }
         auto& cached = GetRuntimeArgs(program, slot.kernel_idx, slot.core);
-        cached.at(slot.arg_idx) = addr;
+        cached.at(slot.arg_idx) = addr.value();
     }
 
     for (const auto& slot : shared_vars.common_runtime_arg_slots) {
         check_io_index(slot.io_tensor_index, "common runtime arg");
-        const auto addr = cur_addrs[slot.io_tensor_index];
+        const auto& addr = cur_addrs[slot.io_tensor_index];
         if (have_prev && addr == prev[slot.io_tensor_index]) {
             continue;
         }
         auto& cached = GetCommonRuntimeArgs(program, slot.kernel_idx);
-        cached.at(slot.arg_idx) = addr;
+        cached.at(slot.arg_idx) = addr.value();
     }
 
     for (const auto& slot : shared_vars.cb_tensor_slots) {
         check_io_index(slot.io_tensor_index, "CB tensor");
-        const auto addr = cur_addrs[slot.io_tensor_index];
+        const auto& addr = cur_addrs[slot.io_tensor_index];
         if (have_prev && addr == prev[slot.io_tensor_index]) {
             continue;
         }

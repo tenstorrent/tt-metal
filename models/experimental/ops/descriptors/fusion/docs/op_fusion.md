@@ -2572,9 +2572,9 @@ layernorm) not covered by the device hash.
 The cache key is a single integer — the hash of three components:
 
 ```python
-def _fusion_hash_from_ops(items, container_prefix, ops, device_id):
+def _fusion_cache_key_from_ops(items, container_prefix, ops, device_id):
     surface = _build_cache_surface_key(items, container_prefix)
-    return hash((surface, tuple(_branch_program_cache_key(op) for op in ops), device_id))
+    return (surface, tuple(_branch_program_cache_key(op) for op in ops), device_id)
 ```
 
 1. **Topology fingerprint** (`surface`): Encodes the tree shape and container

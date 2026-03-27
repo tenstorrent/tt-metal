@@ -10,6 +10,7 @@
 #include <tt-metalium/core_coord.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace ttnn::operations::experimental::generic::program {
@@ -42,7 +43,7 @@ struct PatchableGenericMeshProgramFactory {
 
         /// Previous io_tensor addresses — enables skip-if-unchanged patching.
         /// Populated after the first override; empty until then.
-        std::vector<std::uint32_t> prev_io_addresses;
+        std::vector<std::optional<std::uint32_t>> prev_io_addresses;
     };
 
     struct mesh_shared_variables_t {

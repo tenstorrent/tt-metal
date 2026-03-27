@@ -8,7 +8,7 @@ High-Level Fusion API: Sequential and Parallel.
 Fused execution uses ``patchable_generic_op`` so the device program cache can patch
 only tensor-address slots on repeat launches.
 
-**Fusion build cache** (``_BUILD_CACHE``): single stable integer key per
+**Fusion build cache** (``_BUILD_CACHE``): collision-free tuple key
 ``(container kind, tree shape, branch program_cache_key / descriptor hash)``.
 Cache lookup never accesses :attr:`DeferredOpDescriptor.descriptor`.
 
@@ -54,10 +54,10 @@ from models.experimental.ops.descriptors.fusion.common import (
 # Fusion Build Cache
 # =============================================================================
 
-# Fused ``ProgramDescriptor`` + metadata, keyed by fusion cache id (stable int per process).
+# Fused ``ProgramDescriptor`` + metadata, keyed by fusion cache key (collision-free tuple).
 # No IO tensors are stored — entries are lightweight and never go stale from
 # device buffer deallocation.
-_BUILD_CACHE: Dict[int, "_CacheEntry"] = {}
+_BUILD_CACHE: Dict[tuple, "_CacheEntry"] = {}
 
 
 @dataclass
@@ -139,18 +139,18 @@ def _build_cache_device_id(items, build_device) -> int:
         return 0
 
 
-def _fusion_hash_from_ops(items, container_prefix: str, ops: List, device_id: int) -> int:
-    """Process-local fusion build-cache id from already-flattened ``ops``."""
+def _fusion_cache_key_from_ops(items, container_prefix: str, ops: List, device_id: int) -> tuple:
+    """Process-local fusion build-cache key from already-flattened ``ops``."""
     surface = _build_cache_surface_key(items, container_prefix)
-    return hash((surface, tuple(_branch_program_cache_key(op) for op in ops), device_id))
+    return (surface, tuple(_branch_program_cache_key(op) for op in ops), device_id)
 
 
-def _fusion_cache_id_and_ops(items, container_prefix: str, build_device=None) -> Tuple[int, List]:
-    """Return ``(fusion_cache_id, flattened_ops)`` for ``Sequential``/``Parallel`` ``._items``."""
+def _fusion_cache_key_and_ops(items, container_prefix: str, build_device=None) -> Tuple[tuple, List]:
+    """Return ``(fusion_cache_key, flattened_ops)`` for ``Sequential``/``Parallel`` ``._items``."""
     ops = _flatten_ops(items)
     dev_id = _build_cache_device_id(items, build_device)
-    cache_id = _fusion_hash_from_ops(items, container_prefix, ops, dev_id)
-    return cache_id, ops
+    cache_key = _fusion_cache_key_from_ops(items, container_prefix, ops, dev_id)
+    return cache_key, ops
 
 
 def _make_rebind_output_sources(ops: List, output_source_map) -> Optional[Tuple[Tuple[int, int], ...]]:
@@ -312,8 +312,8 @@ def _container_run(container: Any, surface_prefix: str, results, device=None, ke
             cache_device = _extract_device(container._items)
         except ValueError:
             cache_device = None
-    cache_id, ops = _fusion_cache_id_and_ops(container._items, surface_prefix, cache_device)
-    sig = (cache_id, tuple(id(op) for op in ops), kernel_dir)
+    cache_key, ops = _fusion_cache_key_and_ops(container._items, surface_prefix, cache_device)
+    sig = (cache_key, tuple(id(op) for op in ops), kernel_dir)
     if container._run_fused is None or container._run_signature != sig:
         container._run_fused = container.build(device=device, kernel_dir=kernel_dir)
         container._run_signature = sig
@@ -547,8 +547,8 @@ class Sequential:
                 cache_device = _extract_device(self._items)
             except ValueError:
                 cache_device = None
-        cache_id, ops = _fusion_cache_id_and_ops(self._items, "S", cache_device)
-        entry = _BUILD_CACHE.get(cache_id)
+        cache_key, ops = _fusion_cache_key_and_ops(self._items, "S", cache_device)
+        entry = _BUILD_CACHE.get(cache_key)
         if entry is not None:
             result = _fused_op_from_cache_entry(entry, ops)
             if kernel_dir is not None:
@@ -567,7 +567,7 @@ class Sequential:
             branch_ops=tuple(ops),
         )
 
-        _BUILD_CACHE[cache_id] = _cache_build_result(fused, ops, r.output_source_map)
+        _BUILD_CACHE[cache_key] = _cache_build_result(fused, ops, r.output_source_map)
 
         if kernel_dir is not None:
             fused._apply_kernel_dir(kernel_dir)
@@ -653,8 +653,8 @@ class Parallel:
                 cache_device = _extract_device(self._items)
             except ValueError:
                 cache_device = None
-        cache_id, ops = _fusion_cache_id_and_ops(self._items, "P", cache_device)
-        entry = _BUILD_CACHE.get(cache_id)
+        cache_key, ops = _fusion_cache_key_and_ops(self._items, "P", cache_device)
+        entry = _BUILD_CACHE.get(cache_key)
         if entry is not None:
             result = _fused_op_from_cache_entry(entry, ops)
             if kernel_dir is not None:
@@ -673,7 +673,7 @@ class Parallel:
             branch_ops=tuple(ops),
         )
 
-        _BUILD_CACHE[cache_id] = _cache_build_result(fused, ops, r.output_source_map)
+        _BUILD_CACHE[cache_key] = _cache_build_result(fused, ops, r.output_source_map)
 
         if kernel_dir is not None:
             fused._apply_kernel_dir(kernel_dir)
