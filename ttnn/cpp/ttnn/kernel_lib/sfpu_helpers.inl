@@ -120,27 +120,21 @@ struct TileLoader {
 };
 
 /**
- * @brief Functor that reconfigures input data format for the chain's Load CBs
+ * @brief Functor that reconfigures unpacker format to the first Load's CB
  *
- * For the first CB: unconditional reconfig (no previous format known).
- * For subsequent different CBs: conditional reconfig using (old_cb, new_cb)
- * variant which skips if formats already match.
+ * Only reconfigures once — on the first Load's CB. This is a safety net for
+ * when sfpu_pipeline is called after a different operation (reduce, binary FPU)
+ * that may have left the unpacker in an unknown state. Within the tile loop,
+ * TileLoader's copy_tile_to_dst_init_short handles the full unpacker init,
+ * and _with_dt handles subsequent CB switches conditionally.
  */
 struct InputReconfigFunctor {
-    uint32_t last_cb;
-    bool initialized;
+    bool done;
     template <typename LoadOp>
     ALWI void operator()(const LoadOp&) {
-        constexpr uint32_t cb = LoadOp::cb;
-        if (!initialized) {
-            // First CB: unconditional reconfig
-            reconfig_data_format_srca(cb);
-            last_cb = cb;
-            initialized = true;
-        } else if (cb != last_cb) {
-            // Subsequent CB: conditional reconfig (skips if formats match)
-            reconfig_data_format_srca(last_cb, cb);
-            last_cb = cb;
+        if (!done) {
+            reconfig_data_format_srca(LoadOp::cb);
+            done = true;
         }
     }
 };
@@ -176,10 +170,14 @@ ALWI void sfpu_pipeline(
     ASSERT(pack_slot < DEST_AUTO_LIMIT);
 
     // Data format reconfiguration (once before the tile loop)
+    // Input: reconfig unpacker to first Load's CB format. This is a safety net
+    // for when the pipeline follows a different operation type. Within the tile
+    // loop, TileLoader handles CB switches via copy_tile_to_dst_init_short/_with_dt.
     if constexpr (detail::sfpu_reconfig_input(reconfig)) {
-        detail::InputReconfigFunctor reconfig_fn{0, false};
+        detail::InputReconfigFunctor reconfig_fn{false};
         chain.for_each_load(reconfig_fn);
     }
+    // Output: reconfig packer to output CB format.
     if constexpr (detail::sfpu_reconfig_output(reconfig)) {
         pack_reconfig_data_format(ocb);
     }
