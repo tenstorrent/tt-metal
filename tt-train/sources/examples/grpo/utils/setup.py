@@ -59,7 +59,7 @@ class TrainingCtx:
         return filepath
 
 
-def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimizer=False) -> InferenceCtx:
+def setup_inference(yaml_config_path, hf_model_id, checkpoint_path=None, device_id=None) -> InferenceCtx:
     yaml_config = load_config(yaml_config_path, get_tt_metal_runtime_root())
 
     # training_config -> model_config path
@@ -73,6 +73,9 @@ def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimi
     max_tokens_to_complete = int(grpo_cfg["max_tokens_to_complete"])
     group_size = int(grpo_cfg["group_size"])
 
+    # hack to pass device_id, can't pass as an argument
+    if device_id is not None:
+        yaml_config.setdefault("device_config", {})["device_ids"] = [device_id]
     initialize_device(yaml_config)
 
     tokenizer = AutoTokenizer.from_pretrained(hf_model_id)
@@ -112,7 +115,9 @@ def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimi
     )
 
     tt_model = LlamaCompositeKV(llama_cfg)
-    if load_pretrained:
+    if checkpoint_path:
+        load_checkpoint(tt_model, checkpoint_path)
+    else:
         model_repo_path = snapshot_download(
             repo_id=hf_model_id,
             allow_patterns=["*.safetensors", "*.json", "*.model", "*.txt"],
@@ -132,6 +137,37 @@ def setup_inference(yaml_config_path, hf_model_id, load_pretrained, setup_optimi
     )
 
     return ctx
+
+
+def load_checkpoint(model, checkpoint_path):
+    from safetensors.numpy import load_file
+    import numpy as np
+    import ml_dtypes
+    import ttml
+    import ttnn
+
+    checkpoint = load_file(checkpoint_path)
+    parameters = model.parameters()
+    loaded, missing = 0, []
+
+    for name, param in parameters.items():
+        if name in checkpoint:
+            arr = checkpoint[name].astype(ml_dtypes.bfloat16)
+            if arr.ndim == 1:
+                arr = arr.reshape(1, 1, 1, -1)
+            elif arr.ndim == 2:
+                arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
+            restored = ttml.autograd.Tensor.from_numpy(arr, layout=ttnn.Layout.TILE)
+            param.assign(restored)
+            loaded += 1
+        else:
+            missing.append(name)
+
+    print(f"Loaded {loaded}/{len(parameters)} parameters from {checkpoint_path}")
+    if missing:
+        print(f"Warning: {len(missing)} parameters not found in checkpoint:")
+        for n in missing:
+            print(f"  - {n}")
 
 
 def setup_grpo_config(yaml_config_path) -> GrpoConfig:

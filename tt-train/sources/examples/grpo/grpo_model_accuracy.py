@@ -46,27 +46,25 @@ def compare_numeric_answers(logger, completion, golden_answer) -> tuple[bool, st
     return correct, str(completion_answer)
 
 
-if __name__ == "__main__":
-    import argparse
+def run_accuracy(num_prompts, checkpoint_path, device_id, output_dir):
+    run = setup_accuracy_run(output_dir)
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--num-prompts", type=int, default=None, help="Number of prompts to test (default: all)")
-    accuracy_args, _ = parser.parse_known_args()
+    run.logger.info(f"--num-prompts={num_prompts}, --checkpoint-path={checkpoint_path} --output_dir={output_dir}")
 
-    run = setup_accuracy_run()
     tracker = AccuracyMetricsTracker(run.output_dir)
 
     yaml_config_path = "tt-train/sources/examples/grpo/grpo_model_accuracy.yaml"
     ctx = setup_inference(
         yaml_config_path,
         hf_model_id="unsloth/Llama-3.2-1B-Instruct",
-        load_pretrained=True,
+        checkpoint_path=checkpoint_path,  # will use the checkpoint file if not None,
+        device_id=device_id,
     )
     grpo_cfg = setup_grpo_config(yaml_config_path)
 
     split = "test"
     prompts, answers = get_gsm8k(ctx, split=split)
-    prompts_to_test = accuracy_args.num_prompts or len(prompts)
+    prompts_to_test = num_prompts or len(prompts)
     run.logger.info(f"{split=}, {prompts_to_test=}, {ctx.group_size=}")
 
     correct_answers = 0
@@ -106,3 +104,22 @@ if __name__ == "__main__":
         f"elapsed={elapsed:.1f}s"
     )
     tracker.close()
+
+
+if __name__ == "__main__":
+    import argparse
+    import subprocess
+    import sys
+    from pathlib import Path
+    from datetime import datetime, timezone
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--num-prompts", type=int, default=None)
+    # Worker mode args (single run)
+    parser.add_argument("--checkpoint-path", type=str, default=None)
+    parser.add_argument("--device-id", type=int, default=None)
+    parser.add_argument("--output-dir", type=str, default=None)
+
+    args, _ = parser.parse_known_args()
+
+    run_accuracy(args.num_prompts, args.checkpoint_path, args.device_id, args.output_dir)
