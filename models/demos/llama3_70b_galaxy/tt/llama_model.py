@@ -771,14 +771,13 @@ class TtTransformer(LightweightModule):
     def apply_bitmask_to_logits(self, tt_logits):
         if self._active_bitmask is None:
             return tt_logits
-        with ttnn.trace_allocation_safe_scope(self.mesh_device):
-            bitmask_unpacked = self.unpack_bitmask(self._active_bitmask)
-            ttnn.add_(
-                tt_logits,
-                bitmask_unpacked,
-                **({"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}),
-            )
-            bitmask_unpacked.deallocate(True)
+        bitmask_unpacked = self.unpack_bitmask(self._active_bitmask)
+        ttnn.add_(
+            tt_logits,
+            bitmask_unpacked,
+            **({"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}),
+        )
+        bitmask_unpacked.deallocate(True)
         return tt_logits
 
     def ttnn_decode_forward(
