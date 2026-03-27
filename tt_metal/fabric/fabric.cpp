@@ -357,8 +357,9 @@ std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(Fabri
 }
 
 // Compute fabric connection RT args without any PD mutation.
-// Teardown semaphore is reserved in the L1 connection table — no longer passed by caller.
-// Returns the flat RT args vector for RoutingPlaneConnectionManager::build_from_args().
+// Produces per-sender RT args: [eth_channel, buffer_idx_dummy] × N.
+// Consumed directly by WorkerToFabricEdmSender::build_from_args() on the device.
+// No direction tags, no 2D metadata — kernel uses senders directly without RoutingPlaneConnectionManager.
 std::vector<uint32_t> compute_fabric_connection_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
@@ -369,21 +370,11 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
         "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& fabric_context = control_plane.get_fabric_context();
 
     std::vector<uint32_t> worker_args;
 
     for (size_t i = 0; i < dst_nodes.size(); i++) {
         const auto& dst_node = dst_nodes[i];
-
-        // Direction tag
-        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_node);
-        TT_FATAL(
-            dir_opt.has_value(),
-            "Could not determine forwarding direction from src {} to first hop {}",
-            src_fabric_node_id,
-            dst_node);
-        worker_args.push_back(static_cast<uint32_t>(dir_opt.value()));
 
         // ETH channel
         uint32_t link_idx = 0;
@@ -401,24 +392,11 @@ std::vector<uint32_t> compute_fabric_connection_rt_args(
         TT_FATAL(link_idx < candidate_eth_chans.size(), "Link index {} out of bounds", link_idx);
         const auto fabric_router_channel = candidate_eth_chans[link_idx];
 
-        // Per-connection RT args: [eth_channel, buffer_idx_sem(dummy)]
-        // Teardown semaphore is now in the L1 connection table.
+        // Per-sender RT args: [eth_channel, buffer_idx_sem(dummy)]
+        // Teardown semaphore is reserved in the L1 connection table.
         // buffer_index_sem is dead code (device reads and discards) — kept for RT arg compat.
         worker_args.push_back(fabric_router_channel);
         worker_args.push_back(0);  // dummy buffer_index_sem — cleanup in follow-up PR
-    }
-
-    // 2D metadata
-    if (fabric_context.is_2D_routing_enabled()) {
-        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        worker_args.push_back(mesh_shape[1]);                     // ew_dim
-        worker_args.push_back(src_fabric_node_id.chip_id);        // my_chip_id
-        worker_args.push_back(src_fabric_node_id.mesh_id.get());  // my_mesh_id
-
-        for (const auto& dst_node : dst_nodes) {
-            worker_args.push_back(static_cast<uint16_t>(dst_node.chip_id));
-            worker_args.push_back(static_cast<uint16_t>(*dst_node.mesh_id));
-        }
     }
 
     return worker_args;
