@@ -572,7 +572,7 @@ class Molmo2ProcessorWrapper:
                 "image_num_crops": np.array([1] * len(images_list)),  # 1 crop per image for simple mode
             }
         elif self._video_data is not None:
-            # For video: create video-specific outputs
+            # For video: use video-specific field names
             # vLLM will handle token replacement via _get_prompt_updates
             n_frames = self._video_data["n_frames"]
             pooled_h = self._video_data["pooled_h"]
@@ -700,6 +700,32 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
         # Video uses pixel_values_videos or video_grid_thw fields
         is_video = "pixel_values_videos" in hf_inputs or "video_grid_thw" in hf_inputs
 
+        # IMPORTANT: Handle video FIRST before image logic
+        # Video doesn't have image_num_crops, so we need to check before early return
+        if is_video:
+            # VIDEO: Entire video is ONE item (not one item per frame!)
+            # pixel_values_videos: [n_frames, 3, H, W] -> 1 video item
+            # video_grid_thw: [[n_frames, pooled_h, pooled_w]] -> 1 video item
+            # video_token_pooling: [n_frames, N_out, K_pool] -> 1 video item
+            #
+            # Use shared("video", 1) to treat entire tensor as single item
+            # batched("video") would incorrectly split by first dimension (frames)
+            pixel_values_videos = hf_inputs.get("pixel_values_videos")
+            n_frames = pixel_values_videos.shape[0] if pixel_values_videos is not None else 8
+
+            # Cache video_token_pooling for prefill_forward
+            video_token_pooling = hf_inputs.get("video_token_pooling", None)
+            if video_token_pooling is not None:
+                _image_token_pooling_cache["last"] = video_token_pooling
+                logger.info(f"  Cached video_token_pooling: shape={video_token_pooling.shape}")
+
+            logger.info(f"  VIDEO mode: shared config (n_frames={n_frames}) - entire video is 1 item")
+            return dict(
+                pixel_values_videos=MultiModalFieldConfig.shared("video", 1),
+                video_grid_thw=MultiModalFieldConfig.shared("video", 1),
+                video_token_pooling=MultiModalFieldConfig.shared("video", 1),
+            )
+
         # Molmo2 uses image_num_crops instead of num_crops
         num_crops_raw = hf_inputs.get("image_num_crops", None)
 
@@ -724,7 +750,7 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
                 image_num_crops=MultiModalFieldConfig.batched("image"),
             )
 
-        logger.info(f"  num_crops = {num_crops}, num_images = {num_images}, is_video = {is_video}")
+        logger.info(f"  num_crops = {num_crops}, num_images = {num_images}")
 
         # Cache image_token_pooling for prefill_forward (can't be batched by vLLM)
         image_token_pooling = hf_inputs.get("image_token_pooling", None)
@@ -732,27 +758,13 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             _image_token_pooling_cache["last"] = image_token_pooling
             logger.info(f"  Cached image_token_pooling: shape={image_token_pooling.shape}")
 
-        if is_video:
-            # VIDEO: Use video-specific fields
-            # pixel_values_videos: [n_frames, 3, H, W] -> batched by video
-            # video_grid_thw: [[n_frames, pooled_h, pooled_w]] -> batched by video
-            # video_token_pooling: [n_frames, N_out, K_pool] -> batched by video
-            pixel_values_videos = hf_inputs.get("pixel_values_videos")
-            n_frames = pixel_values_videos.shape[0] if pixel_values_videos is not None else 8
-            logger.info(f"  VIDEO mode: batched config (n_frames={n_frames})")
-            return dict(
-                pixel_values_videos=MultiModalFieldConfig.batched("video"),
-                video_grid_thw=MultiModalFieldConfig.batched("video"),
-                video_token_pooling=MultiModalFieldConfig.batched("video"),
-            )
-        else:
-            # IMAGE: Use flat_from_sizes for multi-crop images
-            logger.info(f"  IMAGE mode: flat_from_sizes config (num_crops={num_crops})")
-            return dict(
-                pixel_values=MultiModalFieldConfig.flat_from_sizes("image", num_crops),
-                image_grids=MultiModalFieldConfig.batched("image"),
-                image_num_crops=MultiModalFieldConfig.batched("image"),
-            )
+        # IMAGE: Use flat_from_sizes for multi-crop images
+        logger.info(f"  IMAGE mode: flat_from_sizes config (num_crops={num_crops})")
+        return dict(
+            pixel_values=MultiModalFieldConfig.flat_from_sizes("image", num_crops),
+            image_grids=MultiModalFieldConfig.batched("image"),
+            image_num_crops=MultiModalFieldConfig.batched("image"),
+        )
 
     def _get_prompt_updates(
         self,
@@ -862,33 +874,95 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
         if mm_counts.get("video", 0) > 0:
             logger.info(f"  Registering video modality replacement (video count={mm_counts['video']})")
 
+            # Try to get video grid info from mm_items directly
+            # mm_items contains the raw video data before batching
+            video_grid_info = None
+            try:
+                video_items = mm_items.get_items("video")
+                logger.info(f"  video_items from mm_items: {len(video_items)} items")
+                if len(video_items) > 0:
+                    first_video = video_items[0]
+                    logger.info(f"  first_video type: {type(first_video)}")
+                    # Try to extract grid info
+                    if hasattr(first_video, "video_grid_thw"):
+                        video_grid_info = first_video.video_grid_thw
+                    elif hasattr(first_video, "__getitem__"):
+                        video_grid_info = first_video.get("video_grid_thw")
+                    logger.info(f"  video_grid_info: {video_grid_info}")
+            except Exception as e:
+                logger.warning(f"  Could not get video items from mm_items: {e}")
+
             def get_replacement_video(item_idx: int) -> list:
                 """Generate replacement tokens for video at item_idx.
 
                 Video: 8 frames × 196 tokens each = 1568 tokens total.
                 Each frame is 14×14 pooled patches.
                 """
-                # Try to get video data from out_mm_kwargs
+                nonlocal video_grid_info
+
+                # Try to get video data from out_mm_kwargs first
                 video_data = out_mm_kwargs.get("video", [])
                 logger.info(f"  get_replacement_video[{item_idx}]: video_data len={len(video_data)}")
 
                 if len(video_data) > 0 and item_idx < len(video_data):
                     video_item = video_data[item_idx]
-                    # Check for video_grid_thw which contains [n_frames, pooled_h, pooled_w]
-                    video_grid = video_item.get("video_grid_thw")
-                    if video_grid is not None:
-                        if hasattr(video_grid, "tolist"):
-                            grid = video_grid.tolist()
+                    # video_item is a MultiModalKwargsItem containing MultiModalFieldElem objects
+                    # Access the data via get_data() or directly via elem.data
+                    try:
+                        # Try to get video_grid_thw data
+                        video_grid = None
+                        if hasattr(video_item, "get_data"):
+                            # MultiModalKwargsItem has get_data() method
+                            item_data = video_item.get_data()
+                            video_grid = item_data.get("video_grid_thw")
+                        elif hasattr(video_item, "__getitem__"):
+                            # Access as dict-like
+                            video_grid_elem = video_item.get("video_grid_thw")
+                            if video_grid_elem is not None:
+                                video_grid = getattr(video_grid_elem, "data", video_grid_elem)
+
+                        if video_grid is not None:
+                            logger.info(
+                                f"  get_replacement_video[{item_idx}]: video_grid type={type(video_grid)}, value={video_grid}"
+                            )
+                            if hasattr(video_grid, "tolist"):
+                                grid = video_grid.tolist()
+                            else:
+                                grid = list(video_grid)
+                            # Handle nested list [[n_frames, pooled_h, pooled_w]]
+                            if len(grid) > 0 and isinstance(grid[0], (list, tuple)):
+                                grid = grid[0]
+                            if len(grid) >= 3:
+                                n_frames, pooled_h, pooled_w = int(grid[0]), int(grid[1]), int(grid[2])
+                                total_tokens = n_frames * pooled_h * pooled_w
+                                logger.info(
+                                    f"  get_replacement_video[{item_idx}]: "
+                                    f"n_frames={n_frames}, pooled={pooled_h}x{pooled_w}, total={total_tokens}"
+                                )
+                                return [hf_processor.image_patch_id] * total_tokens
+                    except Exception as e:
+                        logger.warning(f"  get_replacement_video[{item_idx}]: Error accessing video_item: {e}")
+
+                # Fallback: use video_grid_info captured earlier
+                if video_grid_info is not None:
+                    try:
+                        if hasattr(video_grid_info, "tolist"):
+                            grid = video_grid_info.tolist()
                         else:
-                            grid = list(video_grid)
+                            grid = list(video_grid_info)
+                        # Handle nested list [[n_frames, pooled_h, pooled_w]]
+                        if isinstance(grid[0], (list, tuple)):
+                            grid = grid[0]
                         if len(grid) >= 3:
                             n_frames, pooled_h, pooled_w = int(grid[0]), int(grid[1]), int(grid[2])
                             total_tokens = n_frames * pooled_h * pooled_w
                             logger.info(
-                                f"  get_replacement_video[{item_idx}]: "
+                                f"  get_replacement_video[{item_idx}]: from video_grid_info "
                                 f"n_frames={n_frames}, pooled={pooled_h}x{pooled_w}, total={total_tokens}"
                             )
                             return [hf_processor.image_patch_id] * total_tokens
+                    except Exception as e:
+                        logger.warning(f"  Error parsing video_grid_info: {e}")
 
                 # Default: 8 frames × 196 tokens (14×14 pooled) = 1568 tokens
                 num_frames = 8
@@ -1521,17 +1595,23 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             page_table_tt = self._get_user_page_table_tt(page_table, user_id, trace_num_blocks)
 
             # Check for VIDEO first (new vLLM multimodal flow)
+            # NOTE: pixel_values_videos may be [[None]] for image requests (filled with None in tt_model_runner)
+            # Must check the actual data after unwrapping nested lists
+            pvv_data = None
             if has_vllm_videos and user_id < len(pixel_values_videos) and pixel_values_videos[user_id] is not None:
-                # VIDEO PATH: vLLM provides pixel_values_videos [n_frames, 3, H, W]
                 pvv = pixel_values_videos[user_id]
                 if isinstance(pvv, list) and len(pvv) > 0:
                     pvv = pvv[0]
-                if isinstance(pvv, torch.Tensor):
-                    pv_tensor = pvv
-                elif hasattr(pvv, "__array__"):
-                    pv_tensor = torch.from_numpy(pvv)
-                else:
-                    pv_tensor = torch.tensor(pvv)
+                # After unwrapping, check if we have actual data
+                if pvv is not None:
+                    if isinstance(pvv, torch.Tensor):
+                        pvv_data = pvv
+                    elif hasattr(pvv, "__array__"):
+                        pvv_data = torch.from_numpy(pvv)
+
+            if pvv_data is not None:
+                # VIDEO PATH: vLLM provides pixel_values_videos [n_frames, 3, H, W]
+                pv_tensor = pvv_data
 
                 n_frames = pv_tensor.shape[0]
                 logger.info(f"  prefill_forward[user={user_id}]: VIDEO with {n_frames} frames, shape={pv_tensor.shape}")
@@ -1542,13 +1622,14 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     vtp = video_token_pooling[user_id]
                     if isinstance(vtp, list) and len(vtp) > 0:
                         vtp = vtp[0]
-                    if isinstance(vtp, torch.Tensor):
-                        pooling = vtp
-                    elif hasattr(vtp, "__array__"):
-                        pooling = torch.from_numpy(vtp)
-                    else:
-                        pooling = torch.tensor(vtp)
-                    logger.info(f"    video_token_pooling shape: {pooling.shape}")
+                    # After unwrapping, check if we have actual data
+                    if vtp is not None:
+                        if isinstance(vtp, torch.Tensor):
+                            pooling = vtp
+                        elif hasattr(vtp, "__array__"):
+                            pooling = torch.from_numpy(vtp)
+                    if pooling is not None:
+                        logger.info(f"    video_token_pooling shape: {pooling.shape}")
 
                     # Reshape pooling from [n_frames, N_out, K_pool] to [batch, n_frames*N_out, K_pool]
                     if pooling.dim() == 3:
@@ -1584,7 +1665,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 )
 
                 # Run vision + prefill using generator's run_prefill
-                logits, _ = self._run_prefill(
+                logits_ttnn, prefill_timing = self._run_prefill(
                     input_ids=user_tokens,
                     pixel_values=pv_tensor,
                     pooled_patches_idx=pooling,
@@ -1592,7 +1673,25 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     use_vision_trace=enable_trace,
                     page_table=page_table_tt,
                 )
-                output_logits.append(logits)
+
+                # Convert ttnn tensor to torch tensor (same as image/text path)
+                ttnn.synchronize_device(self.mesh_device)
+                mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                logits_torch = ttnn.to_torch(logits_ttnn, mesh_composer=mesh_composer)[0].squeeze()
+
+                # Deallocate if trace is disabled
+                if not enable_trace:
+                    ttnn.deallocate(logits_ttnn)
+
+                # Extract last token's logits
+                original_seq_len = prefill_timing.get("original_seq_len", user_prompt_len)
+                if logits_torch.dim() == 2:
+                    last_token_logits = logits_torch[original_seq_len - 1, :]  # [vocab_size]
+                else:
+                    last_token_logits = logits_torch  # Already [vocab_size]
+
+                output_logits.append(last_token_logits.unsqueeze(0).unsqueeze(1))  # [1, 1, vocab_size]
+
                 # Deallocate per-user page_table_tt before continue
                 if page_table_tt is not None:
                     ttnn.deallocate(page_table_tt)
@@ -1616,32 +1715,69 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 else:
                     pv_tensor = torch.tensor(pv)
 
-                # Detect video: shape [n_frames, 3, H, W] where n_frames > 1 and H=W=378
-                # Image crops have shape [n_crops, 3, 378, 378] but n_crops is typically 1-9
-                # Video has n_frames=8 typically
-                is_demo_video = (
+                # Detect video: Check multiple sources for video indicator
+                # 1. Cached pooling with 3D shape [n_frames, N_out, K_pool] indicates video
+                # 2. image_token_pooling parameter with 3D shape indicates video
+                # 3. pixel_values shape [n_frames, 3, 378, 378] with n_frames >= 2
+                cached_pooling = _image_token_pooling_cache.get("last")
+
+                # Check image_token_pooling from parameter (vLLM path)
+                param_pooling = None
+                if image_token_pooling is not None and len(image_token_pooling) > user_id:
+                    itp = image_token_pooling[user_id]
+                    if isinstance(itp, list) and len(itp) > 0:
+                        itp = itp[0]
+                    if itp is not None:
+                        if isinstance(itp, torch.Tensor):
+                            param_pooling = itp
+                        elif hasattr(itp, "__array__"):
+                            import numpy as np
+
+                            param_pooling = torch.from_numpy(np.array(itp))
+
+                # Detect video from pooling shape (most reliable)
+                has_video_pooling = (
+                    cached_pooling is not None and cached_pooling.dim() == 3
+                ) or (  # [n_frames, N_out, K_pool]
+                    param_pooling is not None and param_pooling.dim() == 3
+                )
+
+                # Also check pixel_values shape as backup
+                has_video_shape = (
                     pv_tensor.dim() == 4
                     and pv_tensor.shape[0] >= 2  # Multiple frames
                     and pv_tensor.shape[1] == 3  # RGB
                     and pv_tensor.shape[2] == 378
                     and pv_tensor.shape[3] == 378
-                    and _image_token_pooling_cache.get("last") is not None
-                    and _image_token_pooling_cache["last"].dim() == 3  # [n_frames, N_out, K_pool]
                 )
 
-                if is_demo_video:
-                    # Demo-style video: pixel_values already combined [n_frames, 3, H, W]
+                is_video_input = has_video_pooling and has_video_shape
+
+                logger.info(
+                    f"  prefill_forward: has_video_pooling={has_video_pooling}, has_video_shape={has_video_shape}"
+                )
+
+                if is_video_input:
+                    # VIDEO detected: pixel_values is [n_frames, 3, H, W]
                     n_frames = pv_tensor.shape[0]
-                    logger.info(f"  prefill_forward: Detected DEMO-STYLE video with {n_frames} frames")
+                    logger.info(f"  prefill_forward: Detected VIDEO with {n_frames} frames")
                     logger.info(f"    pixel_values shape: {pv_tensor.shape}")
 
-                    # Get pooling from cache - shape [n_frames, N_out, K_pool]
-                    pooling = _image_token_pooling_cache["last"]
-                    logger.info(f"    Cached pooling shape: {pooling.shape}")
+                    # Get pooling from param (vLLM path) or cache (demo path)
+                    # shape [n_frames, N_out, K_pool]
+                    if param_pooling is not None and param_pooling.dim() == 3:
+                        pooling = param_pooling
+                        logger.info(f"    Using param pooling shape: {pooling.shape}")
+                    elif cached_pooling is not None and cached_pooling.dim() == 3:
+                        pooling = cached_pooling
+                        logger.info(f"    Using cached pooling shape: {pooling.shape}")
+                    else:
+                        pooling = None
+                        logger.warning(f"    No valid 3D pooling found for video!")
 
                     # Reshape pooling from [n_frames, N_out, K_pool] to [batch, n_frames*N_out, K_pool]
                     # This is what run_prefill expects for video
-                    if pooling.dim() == 3:
+                    if pooling is not None and pooling.dim() == 3:
                         n_frames_p, n_out, k_pool = pooling.shape
                         pooling = pooling.reshape(n_frames_p * n_out, k_pool).unsqueeze(0)
                         logger.info(f"    Reshaped pooling for prefill: {pooling.shape}")
