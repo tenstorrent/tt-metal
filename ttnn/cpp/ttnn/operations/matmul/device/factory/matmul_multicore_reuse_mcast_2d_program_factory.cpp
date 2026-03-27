@@ -35,6 +35,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     bool packer_l1_acc,
     uint32_t B,
     uint32_t M,
+    uint32_t M_per_batch,
     uint32_t N,
     uint32_t K,
     bool bcast_batch,
@@ -339,8 +340,14 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
         }
     }
 
-    const auto in0_tensor_stride_w = transpose_a ? M : 1;
-    const auto in0_tensor_stride_h = transpose_a ? 1 : K;
+    const bool batch_fused = (M != M_per_batch);
+    TT_FATAL(
+        !(transpose_a && batch_fused && M_per_batch > 1),
+        "transpose_a with fuse_batch is not supported when M_per_batch > 1 (M_per_batch={}, M={})",
+        M_per_batch,
+        M);
+    const auto in0_tensor_stride_w = (transpose_a && !batch_fused) ? M_per_batch : 1;
+    const auto in0_tensor_stride_h = (transpose_a && !batch_fused) ? 1 : K;
     const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
     const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
     const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
@@ -1670,6 +1677,7 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
     const auto B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
     const auto Mt = get_M_dim(a_shape_padded, in0_tile, fuse_batch);
+    const auto Mt_per_batch = get_M_dim(a_shape_padded, in0_tile, false);
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
     const auto Nt = get_N_dim(b_shape_padded, in1_tile);
 
@@ -1728,6 +1736,7 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
         packer_l1_acc,
         B,
         Mt,
+        Mt_per_batch,
         Nt,
         Kt,
         bcast_batch,
