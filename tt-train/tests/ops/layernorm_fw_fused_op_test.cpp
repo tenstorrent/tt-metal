@@ -71,7 +71,7 @@ static void CompareKernelVsXArray(
         uint32_t total_elements = batch_size * seq_len * heads * features;
         uint32_t combined_batch = batch_size * seq_len * heads;
 
-        auto rng = autograd::ctx().get_generator();
+        auto& rng = autograd::ctx().get_generator();
         uint32_t seed1 = rng();
         xt::xarray<float> x_data =
             test_utils::make_uniform_xarray<float>(std::array<std::size_t, 1>{total_elements}, seed1, -1.0F, 1.0F);

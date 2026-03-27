@@ -22,10 +22,11 @@ inline void fill_uniform(std::span<T> data, T min, T max, uint32_t seed) {
     if constexpr (std::is_integral_v<T>) {
         ttml::core::parallel_generate(data, [min, max]() { return std::uniform_int_distribution<T>(min, max); }, seed);
     } else {
-        const float min_f = static_cast<float>(min);
-        const float max_f = static_cast<float>(max);
+        using DistScalar = std::conditional_t<std::is_floating_point_v<T>, T, float>;
+        const DistScalar min_v = static_cast<DistScalar>(min);
+        const DistScalar max_v = static_cast<DistScalar>(max);
         ttml::core::parallel_generate(
-            data, [min_f, max_f]() { return std::uniform_real_distribution<float>(min_f, max_f); }, seed);
+            data, [min_v, max_v]() { return std::uniform_real_distribution<DistScalar>(min_v, max_v); }, seed);
     }
 }
 
