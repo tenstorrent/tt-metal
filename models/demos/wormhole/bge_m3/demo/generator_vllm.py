@@ -150,6 +150,21 @@ class BgeM3ForEmbedding:
         padded[:, :seq_len] = tensor
         return padded
 
+    @staticmethod
+    def _pad_batch_tensor(tensor: torch.Tensor, padded_batch_size: int, pad_value: int = 0) -> torch.Tensor:
+        batch_size = tensor.shape[0]
+        if batch_size == padded_batch_size:
+            return tensor
+
+        padded = torch.full(
+            (padded_batch_size, *tensor.shape[1:]),
+            fill_value=pad_value,
+            dtype=tensor.dtype,
+            device=tensor.device,
+        )
+        padded[:batch_size] = tensor
+        return padded
+
     def _pad_inputs(
         self,
         input_ids: torch.Tensor,
@@ -163,12 +178,28 @@ class BgeM3ForEmbedding:
             attention_mask = torch.ones_like(input_ids)
 
         padded_inputs = {
-            "input_ids": self._pad_tensor(input_ids, padded_seq_len, pad_value=self.tokenizer.pad_token_id),
-            "attention_mask": self._pad_tensor(attention_mask, padded_seq_len, pad_value=0),
-            "token_type_ids": self._pad_tensor(token_type_ids, padded_seq_len, pad_value=0)
+            "input_ids": self._pad_batch_tensor(
+                self._pad_tensor(input_ids, padded_seq_len, pad_value=self.tokenizer.pad_token_id),
+                self.max_batch_size,
+                pad_value=self.tokenizer.pad_token_id,
+            ),
+            "attention_mask": self._pad_batch_tensor(
+                self._pad_tensor(attention_mask, padded_seq_len, pad_value=0),
+                self.max_batch_size,
+                pad_value=0,
+            ),
+            "token_type_ids": self._pad_batch_tensor(
+                self._pad_tensor(token_type_ids, padded_seq_len, pad_value=0),
+                self.max_batch_size,
+                pad_value=0,
+            )
             if token_type_ids is not None
             else None,
-            "position_ids": self._pad_tensor(position_ids, padded_seq_len, pad_value=self.tokenizer.pad_token_id)
+            "position_ids": self._pad_batch_tensor(
+                self._pad_tensor(position_ids, padded_seq_len, pad_value=self.tokenizer.pad_token_id),
+                self.max_batch_size,
+                pad_value=self.tokenizer.pad_token_id,
+            )
             if position_ids is not None
             else None,
         }
@@ -227,6 +258,9 @@ class BgeM3ForEmbedding:
         last_hidden_state = to_torch_auto_compose(output, device=self.device)
         if last_hidden_state.dim() == 4 and last_hidden_state.shape[1] == 1:
             last_hidden_state = last_hidden_state.squeeze(1)
+
+        if last_hidden_state.shape[0] > batch_size:
+            last_hidden_state = last_hidden_state[:batch_size]
 
         return last_hidden_state.to(torch.float32)
 

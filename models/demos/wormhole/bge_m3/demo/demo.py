@@ -176,7 +176,7 @@ def run_bge_vllm_demo(device, inputs, model_name, sequence_length, model_locatio
 
     generator_model = BgeM3ForEmbedding(
         device=device,
-        max_batch_size=len(inputs),
+        max_batch_size=32,
         max_seq_len=sequence_length,
         dtype=DEFAULT_TT_DTYPE,
         model_name=resolved_model_name,
