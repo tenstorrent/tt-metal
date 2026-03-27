@@ -22,10 +22,14 @@ void kernel_main() {
 
 
     #ifdef ARCH_QUASAR
-        experimental::DataflowBuffer dfb_in0(0);
-        experimental::DataflowBuffer dfb_in1(1);
-        experimental::DataflowBuffer dfb_in2(2);
-        experimental::DataflowBuffer dfb_out(3);
+        constexpr uint32_t dfb_in0_id = get_compile_time_arg_val(0);
+        constexpr uint32_t dfb_in1_id = get_compile_time_arg_val(1);
+        constexpr uint32_t dfb_in2_id = get_compile_time_arg_val(2);
+        constexpr uint32_t dfb_out_id = get_compile_time_arg_val(3);
+        experimental::DataflowBuffer dfb_in0(dfb_in0_id);
+        experimental::DataflowBuffer dfb_in1(dfb_in1_id);
+        experimental::DataflowBuffer dfb_in2(dfb_in2_id);
+        experimental::DataflowBuffer dfb_out(dfb_out_id);
         binary_op_init_common(dfb_in0.get_id(), dfb_in1.get_id(), dfb_out.get_id());
         #if not defined ELTWISE_DEST_REUSE_TYPE
             #ifdef FULL_INIT

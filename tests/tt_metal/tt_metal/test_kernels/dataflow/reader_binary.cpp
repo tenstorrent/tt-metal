@@ -25,8 +25,10 @@ void kernel_main() {
 
     // single-tile ublocks
     #ifdef ARCH_QUASAR
-        experimental::DataflowBuffer dfb0(0);
-        experimental::DataflowBuffer dfb1(1);
+        constexpr uint32_t dfb_in0_id = get_compile_time_arg_val(0);
+        constexpr uint32_t dfb_in1_id = get_compile_time_arg_val(1);
+        experimental::DataflowBuffer dfb0(dfb_in0_id);
+        experimental::DataflowBuffer dfb1(dfb_in1_id);
         uint32_t ublock_size_bytes_0 = dfb0.get_entry_size() * ublock_size_tiles;
         uint32_t ublock_size_bytes_1 = dfb1.get_entry_size() * ublock_size_tiles;
     #else

@@ -151,6 +151,12 @@ bool single_core_binary(
     uint32_t inp1_dfb = 0;
     uint32_t inp2_dfb = 0;
     uint32_t out_dfb = 0;
+    
+    constexpr uint32_t inp0_dfb_id = 0;
+    constexpr uint32_t inp1_dfb_id = 1;
+    constexpr uint32_t inp2_dfb_id = 2;
+    constexpr uint32_t out_dfb_id = 3;
+
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
         tt_metal::experimental::dfb::DataflowBufferConfig l1_input0_dfb_config = {
             .entry_size = test_config.tile_byte_size,
@@ -226,7 +232,7 @@ bool single_core_binary(
                 .set_page_size(16, test_config.tile_byte_size);
         tt_metal::CreateCircularBuffer(program_, test_config.core, l1_output_cb_config);
     }
-    vector<uint32_t> compute_kernel_args = {};
+
     std::map<std::string, std::string> defines = {
         {"ELTWISE_OP_TYPE", binary_op_name_to_op_type.at(test_config.binary_op)}};
 
@@ -247,26 +253,30 @@ bool single_core_binary(
     }
     
     KernelHandle reader_kernel, writer_kernel, binary_kernel;
+    std::vector<uint32_t> reader_cta, writer_cta, compute_cta;
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        reader_cta = {inp0_dfb_id, inp1_dfb_id};
         reader_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
             test_config.core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = 1, .defines = defines});
+                .num_threads_per_cluster = 1, .compile_args = reader_cta, .defines = defines});
 
+        writer_cta = {out_dfb_id};
         writer_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             test_config.core,
-            tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = writer_cta});
 
+        compute_cta = {inp0_dfb_id, inp1_dfb_id, inp2_dfb_id, out_dfb_id};
         binary_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tt_metal/kernels/compute/eltwise_binary.cpp",
             test_config.core,
             tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = 1, .math_fidelity = test_config.math_fidelity, .compile_args = compute_kernel_args, .defines = defines});
+                .num_threads_per_cluster = 1, .math_fidelity = test_config.math_fidelity, .compile_args = compute_cta, .defines = defines});
 
         tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
             program_, inp0_dfb, reader_kernel, binary_kernel);
@@ -299,7 +309,7 @@ bool single_core_binary(
             "tt_metal/kernels/compute/eltwise_binary.cpp",
             test_config.core,
             tt_metal::ComputeConfig{
-                .math_fidelity = test_config.math_fidelity, .compile_args = compute_kernel_args, .defines = defines});
+                .math_fidelity = test_config.math_fidelity, .compile_args = compute_cta, .defines = defines});
     }
 
     SetRuntimeArgs(program_, binary_kernel, test_config.core, {uint32_t(test_config.num_tiles), 1});
