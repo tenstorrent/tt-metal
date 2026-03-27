@@ -234,3 +234,51 @@ def test_standalone_tensor_cache_miss_then_hit(tmp_path, device):
     miss_torch = ttnn.to_torch(result_miss)
     hit_torch = ttnn.to_torch(result_hit)
     assert torch.equal(miss_torch, hit_torch)
+
+
+def test_tensor_list_cache_miss_then_hit(tmp_path, device):
+    """get_or_create_tensor_list: miss calls create, hit loads from disk with sentinel."""
+    torch.manual_seed(42)
+    N = 5
+
+    cache = TensorCache(tmp_path / "cache")
+    fp = Fingerprint(
+        schema_version=1,
+        hf_model_id="test",
+        hf_revision="abc",
+        transform_version=1,
+        mesh_shape=(1, 1),
+        group_name="test_list",
+        layer_idx=0,
+        spec_fingerprints=(),
+    )
+
+    raw_tensors = [torch.randn(32, 64, dtype=torch.bfloat16) for _ in range(N)]
+    create_count = [0]
+
+    def create():
+        create_count[0] += 1
+        return [
+            ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for t in raw_tensors
+        ]
+
+    result_miss = cache.get_or_create_tensor_list(fp, create=create, device=device)
+    assert create_count[0] == 1
+    assert len(result_miss) == N
+
+    result_hit = cache.get_or_create_tensor_list(fp, create=create, device=device)
+    assert create_count[0] == 1, "create should not be called on cache hit"
+    assert len(result_hit) == N
+
+    for i in range(N):
+        miss_data = ttnn.to_torch(result_miss[i])
+        hit_data = ttnn.to_torch(result_hit[i])
+        assert miss_data.shape == hit_data.shape
+        assert torch.equal(miss_data, hit_data)

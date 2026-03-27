@@ -19,14 +19,12 @@ import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.prepare_weights import (
     CACHE_TYPE_OVERLAPPED,
-    CACHE_TYPE_ROUTED_EXPERTS,
     CACHE_TYPE_TENSOR,
-    NUM_ROUTED_EXPERTS,
+    CACHE_TYPE_TENSOR_LIST,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
-    MoERoutedExpertWeights,
     embedding_fingerprint,
     layer_fingerprints,
     lm_head_fingerprints,
@@ -230,22 +228,20 @@ class CacheWeightProvider:
 
     def _load_layer_groups(
         self, layer_id: int, device: ttnn.MeshDevice, is_moe: bool
-    ) -> dict[str, dict | ttnn.Tensor | MoERoutedExpertWeights]:
+    ) -> dict[str, dict | ttnn.Tensor | list[ttnn.Tensor]]:
         fps = layer_fingerprints(self._cc, self._mesh_shape(device), layer_id, is_moe=is_moe)
         result: dict = {}
         for name, (fp, ctype) in fps.items():
             if ctype == CACHE_TYPE_OVERLAPPED:
-                result[name] = self._cache.load(fp, device=device)
+                result[name] = self._cache.load_overlapped(fp, device=device)
             elif ctype == CACHE_TYPE_TENSOR:
                 result[name] = self._cache.load_tensor(fp, device=device)
-            elif ctype == CACHE_TYPE_ROUTED_EXPERTS:
-                result[name] = self._cache.load_routed_experts(fp, device=device, num_experts=NUM_ROUTED_EXPERTS)
+            elif ctype == CACHE_TYPE_TENSOR_LIST:
+                result[name] = self._cache.load_tensor_list(fp, device=device)
         return result
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
         g = self._load_layer_groups(layer_id, device, is_moe=True)
-        routed = g["routed_experts"]
-        assert isinstance(routed, MoERoutedExpertWeights)
         return DeepSeekV3MoELayerWeights(
             q_a_proj=g["q_ab_kv_a"]["q_a_proj"],
             q_b_proj=g["q_ab_kv_a"]["q_b_proj"],
@@ -262,9 +258,9 @@ class CacheWeightProvider:
             shared_gate_proj=g["gate_up"]["gate_proj"],
             shared_up_proj=g["gate_up"]["up_proj"],
             shared_down_proj=g["shared_down_proj"],
-            routed_gate_proj=routed.routed_gate_proj,
-            routed_up_proj=routed.routed_up_proj,
-            routed_down_proj=routed.routed_down_proj,
+            routed_gate_proj=g["routed_gate_proj"],
+            routed_up_proj=g["routed_up_proj"],
+            routed_down_proj=g["routed_down_proj"],
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:

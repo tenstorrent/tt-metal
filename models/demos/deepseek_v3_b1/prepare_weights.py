@@ -124,7 +124,7 @@ def _gate_up_spec_fps() -> tuple[str, ...]:
 # Cache artifact types returned by layer_fingerprints
 CACHE_TYPE_OVERLAPPED = "overlapped"
 CACHE_TYPE_TENSOR = "tensor"
-CACHE_TYPE_ROUTED_EXPERTS = "routed_experts"
+CACHE_TYPE_TENSOR_LIST = "tensor_list"
 
 
 def layer_fingerprints(
@@ -137,7 +137,7 @@ def layer_fingerprints(
 
     Returns ``{group_name: (fingerprint, cache_type)}`` where *cache_type* is
     one of ``CACHE_TYPE_OVERLAPPED``, ``CACHE_TYPE_TENSOR``, or
-    ``CACHE_TYPE_ROUTED_EXPERTS``.
+    ``CACHE_TYPE_TENSOR_LIST``.
     """
     fp = lambda name, specs: _make_fp(cache_config, mesh_shape, name, layer_idx, specs)
     result: dict[str, tuple[Fingerprint, str]] = {
@@ -149,7 +149,9 @@ def layer_fingerprints(
     }
     if is_moe:
         result["gate_bias"] = (fp("gate_bias", ()), CACHE_TYPE_TENSOR)
-        result["routed_experts"] = (fp("routed_experts", ()), CACHE_TYPE_ROUTED_EXPERTS)
+        result["routed_gate_proj"] = (fp("routed_gate_proj", ()), CACHE_TYPE_TENSOR_LIST)
+        result["routed_up_proj"] = (fp("routed_up_proj", ()), CACHE_TYPE_TENSOR_LIST)
+        result["routed_down_proj"] = (fp("routed_down_proj", ()), CACHE_TYPE_TENSOR_LIST)
     else:
         result["routed_gate_proj"] = (fp("routed_gate_proj", ()), CACHE_TYPE_TENSOR)
         result["routed_up_proj"] = (fp("routed_up_proj", ()), CACHE_TYPE_TENSOR)
@@ -782,8 +784,9 @@ def prepare_routed_expert_weights(
     """Prepare routed expert weights for one layer (dense: single MLP; MoE: num_routed_experts experts).
 
     When ``cache_config`` is provided:
-    * **MoE** — routed through :meth:`TensorCache.get_or_create_routed_experts`
-      (768 individual ``.tensorbin`` files with a ``_complete`` sentinel).
+    * **MoE** — each projection list (gate, up, down) is routed through
+      :meth:`TensorCache.get_or_create_tensor_list` for atomic, order-preserving
+      caching that guarantees contiguous DRAM allocation.
     * **Dense** — each of the three projections is routed through
       :meth:`TensorCache.get_or_create_tensor`.
     """
@@ -791,7 +794,8 @@ def prepare_routed_expert_weights(
 
     if is_moe:
 
-        def _create_moe() -> MoERoutedExpertWeights:
+        def _create_all_experts():
+            """Load raw weights and convert all experts. Returns (gate_list, up_list, down_list)."""
             logger.info(
                 "Loading and converting {} routed experts for layer {} (this may be slow)...",
                 num_routed_experts,
@@ -814,25 +818,50 @@ def prepare_routed_expert_weights(
             gate_stacked = torch.stack(gate_list, dim=0)
             up_stacked = torch.stack(up_list, dim=0)
             down_stacked = torch.stack(down_list, dim=0)
-            routed_gate_proj, routed_up_proj, routed_down_proj = bdw.get_tt_moe_routed_expert_weights(
+            routed_gate, routed_up, routed_down = bdw.get_tt_moe_routed_expert_weights(
                 gate_stacked, up_stacked, down_stacked, move_to_device=move_to_device
             )
             logger.info("  converted routed experts in {:.3f}s", time.perf_counter() - t0)
-            routed = MoERoutedExpertWeights(
-                routed_gate_proj=routed_gate_proj,
-                routed_up_proj=routed_up_proj,
-                routed_down_proj=routed_down_proj,
-            )
-            if move_to_device:
-                routed.validate_contiguous_dram()
-            return routed
+            return routed_gate, routed_up, routed_down
 
         if cache_config is not None:
-            fp = _make_fp(cache_config, mesh_shape, "routed_experts", layer_idx, ())
-            return cache_config.cache.get_or_create_routed_experts(
-                fp, create=_create_moe, device=bdw._device, num_experts=num_routed_experts
+            _experts_cache: tuple | None = None
+
+            def _ensure_experts():
+                nonlocal _experts_cache
+                if _experts_cache is None:
+                    _experts_cache = _create_all_experts()
+
+            def _create_proj(proj_idx):
+                def _create():
+                    _ensure_experts()
+                    return list(_experts_cache[proj_idx])
+
+                return _create
+
+            fp_gate = _make_fp(cache_config, mesh_shape, "routed_gate_proj", layer_idx, ())
+            fp_up = _make_fp(cache_config, mesh_shape, "routed_up_proj", layer_idx, ())
+            fp_down = _make_fp(cache_config, mesh_shape, "routed_down_proj", layer_idx, ())
+            routed_gate_proj = cache_config.cache.get_or_create_tensor_list(
+                fp_gate, create=_create_proj(0), device=bdw._device
             )
-        return _create_moe()
+            routed_up_proj = cache_config.cache.get_or_create_tensor_list(
+                fp_up, create=_create_proj(1), device=bdw._device
+            )
+            routed_down_proj = cache_config.cache.get_or_create_tensor_list(
+                fp_down, create=_create_proj(2), device=bdw._device
+            )
+        else:
+            routed_gate_proj, routed_up_proj, routed_down_proj = _create_all_experts()
+
+        routed = MoERoutedExpertWeights(
+            routed_gate_proj=routed_gate_proj,
+            routed_up_proj=routed_up_proj,
+            routed_down_proj=routed_down_proj,
+        )
+        if move_to_device:
+            routed.validate_contiguous_dram()
+        return routed
     else:
         mlp_gate = state_dict[_key(layer_idx, "mlp.gate_proj.weight")].T.contiguous()
         mlp_up = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()

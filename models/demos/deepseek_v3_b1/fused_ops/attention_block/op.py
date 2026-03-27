@@ -553,7 +553,7 @@ class AttentionBlock:
 
         # Active Matmul5 cores: o_proj cores (12×8 + 8×2 = 112 cores)
         o_proj_spec = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
-        matmul5_active_core_grid = o_proj_spec.o_proj_core_range_set
+        matmul5_active_core_grid = o_proj_spec.o_proj.core_range_set
         num_matmul5_cores = matmul5_active_core_grid.num_cores()  # 112
 
         # Per-core gather3 sender index: contiguous 0..111 in row-major order.

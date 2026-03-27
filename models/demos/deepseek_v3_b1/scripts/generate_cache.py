@@ -38,9 +38,8 @@ from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.prepare_weights import (
     CACHE_TYPE_OVERLAPPED,
-    CACHE_TYPE_ROUTED_EXPERTS,
     CACHE_TYPE_TENSOR,
-    NUM_ROUTED_EXPERTS,
+    CACHE_TYPE_TENSOR_LIST,
     embedding_fingerprint,
     layer_fingerprints,
     lm_head_fingerprints,
@@ -49,7 +48,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
 )
-from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, CacheMiss, TensorCache
+from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, TensorCache
 
 NUM_LAYERS = 61
 FIRST_K_DENSE_REPLACE = 3
@@ -241,19 +240,16 @@ def _verify_cache(output_path: Path, layer_num: int, mode: str) -> bool:
     cache, cc = _make_cache_config(output_path)
     fps = layer_fingerprints(cc, DEVICE_MESH_SHAPE, layer_num, is_moe=is_moe)
 
+    _HAS_FN = {
+        CACHE_TYPE_OVERLAPPED: cache.has_overlapped,
+        CACHE_TYPE_TENSOR: cache.has_tensor,
+        CACHE_TYPE_TENSOR_LIST: cache.has_tensor_list,
+    }
     for name, (fp, ctype) in fps.items():
-        if ctype == CACHE_TYPE_OVERLAPPED:
-            if not cache.exists(fp):
-                logger.error("Missing overlapped group '{}' (fingerprint {})", name, fp.artifact_id()[:12])
-                return False
-        elif ctype == CACHE_TYPE_TENSOR:
-            if not cache.tensor_exists(fp):
-                logger.error("Missing tensor '{}' (fingerprint {})", name, fp.artifact_id()[:12])
-                return False
-        elif ctype == CACHE_TYPE_ROUTED_EXPERTS:
-            if not cache.routed_experts_exist(fp):
-                logger.error("Missing routed experts '{}' (fingerprint {})", name, fp.artifact_id()[:12])
-                return False
+        has_fn = _HAS_FN.get(ctype)
+        if has_fn and not has_fn(fp):
+            logger.error("Missing artifact '{}' (type={}, fingerprint {})", name, ctype, fp.artifact_id()[:12])
+            return False
     logger.info("All {} layer artifacts present", mode)
 
     logger.info("Loading to device for sanity check...")
@@ -265,7 +261,7 @@ def _verify_cache(output_path: Path, layer_num: int, mode: str) -> bool:
             submesh = mesh_device.create_submesh(ttnn.MeshShape(*DEVICE_MESH_SHAPE))
             for name, (fp, ctype) in fps.items():
                 if ctype == CACHE_TYPE_OVERLAPPED:
-                    views = cache.load(fp, device=submesh)
+                    views = cache.load_overlapped(fp, device=submesh)
                     for vname, ot in views.items():
                         if not _check_on_device(ot.fused_tensor, f"{name}.{vname}.fused_tensor"):
                             return False
@@ -273,15 +269,12 @@ def _verify_cache(output_path: Path, layer_num: int, mode: str) -> bool:
                     t = cache.load_tensor(fp, device=submesh)
                     if not _check_on_device(t, name):
                         return False
-                elif ctype == CACHE_TYPE_ROUTED_EXPERTS:
-                    routed = cache.load_routed_experts(fp, device=submesh, num_experts=NUM_ROUTED_EXPERTS)
-                    for e in range(len(routed.routed_gate_proj)):
-                        if not _check_on_device(routed.routed_gate_proj[e], f"routed_gate_proj[{e}]"):
+                elif ctype == CACHE_TYPE_TENSOR_LIST:
+                    tensor_list = cache.load_tensor_list(fp, device=submesh)
+                    for i, t in enumerate(tensor_list):
+                        if not _check_on_device(t, f"{name}[{i}]"):
                             return False
         logger.info("Device load OK (on-device checks passed)")
-    except CacheMiss as e:
-        logger.error("Cache miss during device load: {}", e)
-        return False
     except Exception as e:
         logger.error("Device load failed: {}", e)
         return False
