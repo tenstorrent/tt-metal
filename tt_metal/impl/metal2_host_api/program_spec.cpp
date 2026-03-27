@@ -768,7 +768,8 @@ std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssign
 
     for (const WorkerSpec& worker : spec.workers.value()) {
         // Cumulative DM processor mask for this WorkerSpec
-        DMProcessorMask cumulative_dm_mask = CreateMask<QUASAR_DM_CORES_PER_NODE>(0x03);  //
+        DMProcessorMask cumulative_dm_mask =
+            CreateMask<QUASAR_DM_CORES_PER_NODE>(0x03);  // Reserve DM0 and DM1 for internal use
 
         // Since we enforce (at most) one compute kernel per WorkerSpec, no need to track cumulative mask.
 
