@@ -4,7 +4,7 @@
 
 from .tt_sampling import TTSampling
 from .tt_penalties import TTPenalties, apply_penalties
-from .tt_log_probs import LogProbsCalculator
+from .tt_log_probs import LogProbsCalculator, LogProbsResult
 from .generator import (
     SamplingGenerator,
     SamplingParams,
@@ -21,6 +21,7 @@ __all__ = [
     "TTPenalties",
     "apply_penalties",
     "LogProbsCalculator",
+    "LogProbsResult",
     "SamplingGenerator",
     "SamplingParams",
     "SAMPLING_PARAM_FIELDS",
