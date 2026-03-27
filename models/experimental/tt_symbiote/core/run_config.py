@@ -307,7 +307,16 @@ class DispatchManager:
             )
             module_times = func_times[func_times["TorchModules"] != 0]["TorchModules"].sort_values(ascending=False)
             print(
-                "Top 30 Modules by total duration (s):\n",
+                "Top 30 Modules by total duration (s):\n\n\n",
+                module_times.head(30),
+            )
+        if "Torch" in pivot_table.columns:
+            func_times = df.pivot_table(
+                index=["func_name"], columns="backend", values="duration", aggfunc="sum", fill_value=0
+            )
+            module_times = func_times[func_times["Torch"] != 0]["Torch"].sort_values(ascending=False)
+            print(
+                "Top 30 Torch Functions by total duration (s):\n\n\n",
                 module_times.head(30),
             )
         print(f"Saved timing stats to {os.path.abspath(file_name)}")

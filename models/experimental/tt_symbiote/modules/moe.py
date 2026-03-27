@@ -682,6 +682,37 @@ class TTNNGlm4MoeMLP(TTNNModule):
         return x
 
 
+class TTNNBailingMoeV2MLP(TTNNModule):
+    """TTNN-accelerated BailingMoeV2MLP for dense layers in Ling model.
+
+    Replaces the PyTorch BailingMoeV2MLP to keep the multiply operation
+    on-device using ttnn.mul, avoiding dispatch overhead.
+    """
+
+    @classmethod
+    def from_torch(cls, torch_layer):
+        """Create from PyTorch BailingMoeV2MLP.
+
+        Args:
+            torch_layer: HuggingFace BailingMoeV2MLP instance
+        """
+        tt_module = cls()
+        tt_module._fallback_torch_layer = torch_layer
+        tt_module.gate_proj = TTNNLinearSilu.from_torch(
+            torch_layer.gate_proj, linear_class=TTNNLinearIColShardedWRowSharded
+        )
+        tt_module.up_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.up_proj)
+        tt_module.down_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.down_proj)
+        return tt_module
+
+    def forward(self, x):
+        x_gate = self.gate_proj(x)
+        x_up = self.up_proj(x)
+        x = ttnn.mul(x_gate.to_ttnn, x_up.to_ttnn)
+        x = self.down_proj(x)
+        return x
+
+
 class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
     def preprocess_weights_impl(self):
         self.e_score_correction_bias = ttnn.from_torch(

@@ -26,6 +26,7 @@ from models.experimental.tt_symbiote.modules.attention import (
     TTNNPagedAttentionKVCache,
 )
 from models.experimental.tt_symbiote.modules.decoder_layer import TTNNBailingMoEDecoderLayer
+from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
 def create_paged_kv_cache(model_config, device, batch_size=1):
@@ -83,6 +84,7 @@ def test_ling_mini_2_0(mesh_device):
     model = AutoModelForCausalLM.from_pretrained("inclusionAI/Ling-mini-2.0", trust_remote_code=True)
     nn_to_ttnn = {
         model.model.layers[0].__class__: TTNNBailingMoEDecoderLayer,
+        model.model.norm.__class__: TTNNDistributedRMSNorm,
     }
     nn_to_ttnn2 = {
         nn.Linear: TTNNLinearIColShardedWRowSharded,

@@ -148,4 +148,8 @@ class TTNNDistributedRMSNorm(TTNNModule):
         )
         tt_stats.deallocate(True)
 
+        # Squeeze back to original shape if we added a batch dimension
+        if len(original_shape) == 3 and len(tt_out.shape) == 4:
+            tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
+
         return tt_out

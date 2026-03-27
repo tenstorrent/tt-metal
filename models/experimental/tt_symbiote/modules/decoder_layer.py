@@ -9,7 +9,6 @@ eliminating host round-trips that force device synchronization.
 """
 
 
-import torch
 import ttnn
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
@@ -17,8 +16,6 @@ from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.attention import TTNNBailingMoEAttention
 from models.experimental.tt_symbiote.modules.moe import TTNNBailingMoE
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
-from models.experimental.tt_symbiote.modules.linear import TTNNLinearIColShardedWRowSharded
-from models.experimental.tt_symbiote.modules.activation import TTNNSilu
 
 
 def _to_ttnn(x):
@@ -64,17 +61,9 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
         new_layer._is_dense_layer = is_dense
 
         if is_dense:
-            # Layer 0: keep BailingMoeV2MLP as nn.Module but replace its children
-            # manually since register_module_replacement_dict doesn't recurse into
-            # nn.Module attributes of TTNNModule
-            from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
+            from models.experimental.tt_symbiote.modules.moe import TTNNBailingMoeV2MLP
 
-            mlp = torch_layer.mlp
-            register_module_replacement_dict(
-                mlp,
-                {torch.nn.Linear: TTNNLinearIColShardedWRowSharded, torch.nn.SiLU: TTNNSilu},
-            )
-            new_layer.mlp = mlp
+            new_layer.mlp = TTNNBailingMoeV2MLP.from_torch(torch_layer.mlp)
         else:
             new_layer.mlp = TTNNBailingMoE.from_torch(torch_layer.mlp)
 
@@ -103,13 +92,9 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
         # Save residual (stays on device as TTNN tensor)
         residual = hs
 
-        # Input layernorm (distributed norm needs device_state from module_run)
-        input_ndim = len(hs.shape)
+        # Input layernorm
         hs = self.input_layernorm(hs)
         hs = _to_ttnn(hs)
-        # TTNNDistributedRMSNorm adds a batch dim via unsqueeze(1) for 3D inputs; squeeze back
-        if input_ndim == 3 and len(hs.shape) == 4:
-            hs = ttnn.reshape(hs, [hs.shape[0], hs.shape[2], hs.shape[3]])
 
         # Attention
         attn_out, self_attn_weights, present_key_value = self.attention(
@@ -129,13 +114,9 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
         # Save new residual
         residual = hs
 
-        # Post-attention layernorm (distributed norm needs device_state from module_run)
-        post_norm_ndim = len(hs.shape)
+        # Post-attention layernorm
         hs_normed = self.post_attention_layernorm(hs)
         hs_normed = _to_ttnn(hs_normed)
-        # Squeeze back if distributed norm added a dimension
-        if post_norm_ndim == 3 and len(hs_normed.shape) == 4:
-            hs_normed = ttnn.reshape(hs_normed, [hs_normed.shape[0], hs_normed.shape[2], hs_normed.shape[3]])
 
         # MLP / MoE
         # MLP (layer 0) or MoE (layers 1-19)

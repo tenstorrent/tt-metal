@@ -158,7 +158,7 @@ def tree_map(*args, **kwargs):
     result = optimized_tree_map_with_only_dict_list(*args, **kwargs)
     end_time = time.time()
     DispatchManager.record_timing(
-        "Torch",
+        "TorchModules",
         (
             ""
             if DispatchManager.current_module_name is None
