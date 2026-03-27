@@ -2197,6 +2197,64 @@ def legacy_flow(
     if verbose and not had_oversubscribe and effective_mpi_args and effective_mpi_args[0:1] == ["--oversubscribe"]:
         logger.info(f"{TT_RUN_PREFIX} Added --oversubscribe (multiple processes per host from rankfile or --host)")
 
+    # Inject rankfile args if provided (auto-detect MPI syntax)
+    # This happens after multihost args so rankfile comes right before user args
+    # Check if user already specified rankfile in mpi_args to avoid conflicts
+    if rankfile:
+        # Check for existing rankfile-related args in user's mpi_args
+        rankfile_keywords = ["--rankfile", "--map-by", "rankfile:file=", "rmaps_rankfile_path"]
+        has_existing_rankfile = False
+        if mpi_args:
+            mpi_args_str = " ".join(mpi_args)
+            for keyword in rankfile_keywords:
+                if keyword in mpi_args_str:
+                    has_existing_rankfile = True
+                    break
+
+        if has_existing_rankfile:
+            logger.warning(
+                f"{TT_RUN_PREFIX} Rankfile argument already present in --mpi-args. "
+                f"Skipping rankfile injection from parameter. "
+                f"To use the rankfile parameter, remove rankfile-related args from --mpi-args."
+            )
+        else:
+            mpi_launcher = get_mpi_launcher()
+            rankfile_args: List[str] = []
+
+            # Add --host host1:N,host2:N for Phase 2 real cluster (skip when mock)
+            if not mock_cluster_rank_binding:
+                has_host = "--host" in effective_mpi_args
+                if not has_host:
+                    host_str, total_ranks = build_host_slots_from_rankfile(rankfile)
+                    if host_str and total_ranks > 0:
+                        rankfile_args.extend(["--host", host_str])
+                        if verbose:
+                            logger.info(f"{TT_RUN_PREFIX} Injected --host {host_str} from rankfile")
+
+            # Detect or use forced rankfile syntax and add rankfile args (use relpath from cwd)
+            syntax = rankfile_syntax or detect_rankfile_syntax(mpi_launcher)
+            rankfile_args.extend(build_rankfile_args(syntax, rankfile, cwd=ORIGINAL_CWD))
+            effective_mpi_args = rankfile_args + effective_mpi_args
+            if verbose:
+                logger.info(f"{TT_RUN_PREFIX} Injected rankfile: {rankfile}")
+
+            # Check if rankfile requires oversubscription (multiple ranks per host)
+            # Add --oversubscribe if needed and not already present
+            if rankfile_needs_oversubscribe(rankfile):
+                has_oversubscribe = False
+                if effective_mpi_args:
+                    has_oversubscribe = "--oversubscribe" in effective_mpi_args
+                if not has_oversubscribe:
+                    # Insert --oversubscribe right after rankfile args (before other args)
+                    rankfile_args_len = len(rankfile_args)
+                    effective_mpi_args = (
+                        effective_mpi_args[:rankfile_args_len]
+                        + ["--oversubscribe"]
+                        + effective_mpi_args[rankfile_args_len:]
+                    )
+                    if verbose:
+                        logger.info(f"{TT_RUN_PREFIX} Added --oversubscribe (rankfile has multiple ranks per host)")
+
     # Build MPI command
     tracy_config = None
     if tracy_args is not None:
@@ -2723,6 +2781,372 @@ def main(
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
             force_rediscovery=force_rediscovery,
             tracy_args=tracy_args,
+        )
+        return
+
+
+def new_mode_flow(
+    ctx: click.Context,
+    mesh_graph_descriptor: Path,
+    hosts: Optional[List[str]],
+    dry_run: bool,
+    verbose: bool,
+    mpi_args: Optional[List[str]],
+    debug_gdbserver: bool,
+    mock_cluster_rank_binding: Optional[Path],
+    skip_executable_check: bool,
+    skip_mgd_check: bool,
+    bare: bool,
+    tcp_interface: Optional[str],
+    rankfile_syntax: Optional[RankfileSyntax] = None,
+) -> None:
+    """New mode flow for ttrun using mesh graph descriptor.
+
+    This function implements the new mode of ttrun that uses --mesh-graph-descriptor
+    instead of --rank-binding. It runs generate_rank_bindings (Phase 1) to produce
+    rank_bindings.yaml and rankfile, then calls legacy_flow (Phase 2) with those files.
+
+    Args:
+        ctx: Click context
+        mesh_graph_descriptor: Path to mesh graph descriptor file
+        hosts: List of hostnames (required unless mock_cluster_rank_binding is provided)
+        dry_run: If True, print command without executing
+        verbose: If True, show detailed diagnostics
+        mpi_args: Additional MPI arguments
+        debug_gdbserver: If True, launch with gdbserver for debugging
+        mock_cluster_rank_binding: Optional mock cluster rank binding configuration
+        skip_executable_check: If True, skip program executable validation
+        bare: If True, disable tt-run defaults
+        tcp_interface: Network interface for MPI TCP communication
+    """
+    program = ctx.args
+
+    if not program:
+        raise click.ClickException("No program specified. Please provide a program to run.")
+
+    # Resolve mesh_graph_descriptor path
+    resolved_mgd = resolve_path(
+        mesh_graph_descriptor,
+        description="Mesh graph descriptor",
+        must_be_file=True,
+        must_exist=not skip_mgd_check,
+    )
+
+    if verbose:
+        logger.info(f"{TT_RUN_PREFIX} New mode: Mesh Graph Descriptor = {resolved_mgd}")
+
+    # Parse mock cluster mapping if provided
+    mock_rank_to_desc: Optional[Dict[int, Path]] = None
+    if mock_cluster_rank_binding:
+        resolved_mock_path = resolve_path(
+            mock_cluster_rank_binding, description="Mock cluster rank binding configuration", must_be_file=True
+        )
+        with open(resolved_mock_path, "r") as f:
+            mock_data = yaml.safe_load(f)
+
+        mock_rank_to_desc = {}
+
+        # Check if this is a mapping file (has rank_to_cluster_mock_cluster_desc key) or a cluster descriptor file
+        # Check the key in the YAML data, not the filename
+        if mock_data and isinstance(mock_data, dict) and "rank_to_cluster_mock_cluster_desc" in mock_data:
+            # Mapping format: rank -> cluster descriptor path
+            for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
+                resolved_path = resolve_path(
+                    path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
+                )
+                mock_rank_to_desc[int(rank)] = resolved_path
+        else:
+            # Cluster descriptor format: treat as single entry with rank 0
+            mock_rank_to_desc[0] = resolved_mock_path
+
+        if verbose:
+            logger.info(f"{TT_RUN_PREFIX} Mock cluster: {len(mock_rank_to_desc)} ranks")
+
+    # Output directory: generated/ttrun (create if it doesn't exist)
+    output_dir = ORIGINAL_CWD / "generated" / "ttrun"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if verbose:
+        logger.info(f"{TT_RUN_PREFIX} Phase 1 output directory: {output_dir}")
+
+    # Apply default multihost MPI args to Phase 1 (same as Phase 2) unless --bare
+    phase1_mpi_args: Optional[List[str]] = None
+    if tcp_interface and not bare:
+        validate_network_interface(tcp_interface, verbose=verbose)
+    if not bare:
+        multihost_args = [
+            "--mca",
+            "btl",
+            "self,tcp",
+            "--mca",
+            "btl_tcp_if_exclude",
+            "docker0,lo",
+        ]
+        if tcp_interface:
+            multihost_args = [
+                "--mca",
+                "btl",
+                "self,tcp",
+                "--mca",
+                "btl_tcp_if_include",
+                tcp_interface,
+            ]
+        phase1_mpi_args = multihost_args + (mpi_args or [])
+        if verbose:
+            logger.info(f"{TT_RUN_PREFIX} Phase 1 using multihost MPI args: {' '.join(multihost_args)}")
+    else:
+        phase1_mpi_args = mpi_args
+
+    # Phase 1: Run generate_rank_bindings
+    try:
+        rank_bindings_path, rankfile_path = run_phase1_generate_rank_bindings(
+            resolved_mgd,
+            hosts,
+            output_dir,
+            subprocess_run=subprocess.run,
+            sleep_secs=5,
+            mock_rank_to_desc=mock_rank_to_desc,
+            mpi_args=phase1_mpi_args,
+        )
+    except (FileNotFoundError, RuntimeError) as e:
+        raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
+
+    # Phase 2: Use phase2_mock_mapping.yaml from generate_rank_bindings (cluster descriptors used during allocation).
+    # The C++ tool writes this file; ttrun only reads it.
+    phase2_mock_binding_path: Optional[Path] = None
+    if mock_rank_to_desc:
+        generated_phase2_mock_path = output_dir / "phase2_mock_mapping.yaml"
+        if generated_phase2_mock_path.exists():
+            phase2_mock_binding_path = generated_phase2_mock_path
+            if verbose:
+                with open(phase2_mock_binding_path, "r") as f:
+                    phase2_data = yaml.safe_load(f) or {}
+                phase2_mock_mapping = phase2_data.get("rank_to_cluster_mock_cluster_desc", {})
+                logger.info(
+                    f"{TT_RUN_PREFIX} Phase 2 mock mapping: {len(phase2_mock_mapping)} ranks from "
+                    f"generate_rank_bindings"
+                )
+
+    # Log Phase 2-only command for re-runs without re-running generate_rank_bindings
+    def _path_for_display(p: Path) -> str:
+        try:
+            return str(p.relative_to(ORIGINAL_CWD))
+        except ValueError:
+            return str(p)
+
+    phase2_parts = ["tt-run", "--rank-binding", _path_for_display(rank_bindings_path)]
+    if phase2_mock_binding_path:
+        phase2_parts.extend(["--mock-cluster-rank-binding", _path_for_display(phase2_mock_binding_path)])
+    if rankfile_syntax is not None:
+        syntax_name = (
+            "rankfile"
+            if rankfile_syntax == RankfileSyntax.RANKFILE
+            else "map-by"
+            if rankfile_syntax == RankfileSyntax.MAP_BY_RANKFILE_FILE
+            else "mca"
+        )
+        phase2_parts.extend(["--rankfile-syntax", syntax_name])
+    mpi_launcher = get_mpi_launcher()
+    # Use version-based rankfile syntax (--map-by rankfile:file= for OpenMPI 5+, --rankfile for older)
+    rankfile_args = inject_rankfile_mpi_args(
+        rankfile_path,
+        mpi_args or [],
+        mpi_launcher,
+        add_host_slots=False,  # Do not add --host; rankfile alone specifies placement
+        force_rankfile_syntax=rankfile_syntax,
+    )
+    # Ensure Phase 2 re-run command includes --oversubscribe when applicable
+    resolved_rankfile = rankfile_path.resolve()
+    if rankfile_needs_oversubscribe(resolved_rankfile) and "--oversubscribe" not in rankfile_args:
+        rankfile_args = ["--oversubscribe"] + rankfile_args
+    mpi_args_str = " ".join(shlex.quote(a) for a in rankfile_args)
+    phase2_parts.extend(["--mpi-args", shlex.quote(mpi_args_str)])
+    phase2_parts.extend(["--"] + [str(a) for a in ctx.args])
+    logger.info(f"{TT_RUN_PREFIX} To re-run only Phase 2 (skip generate_rank_bindings): {' '.join(phase2_parts)}")
+
+    legacy_flow(
+        ctx,
+        rank_binding=rank_bindings_path,
+        dry_run=dry_run,
+        verbose=verbose,
+        mpi_args=mpi_args,
+        debug_gdbserver=debug_gdbserver,
+        mock_cluster_rank_binding=phase2_mock_binding_path,  # Pass Phase 2 mock mapping
+        skip_executable_check=skip_executable_check,
+        skip_mgd_check=skip_mgd_check,
+        bare=bare,
+        tcp_interface=tcp_interface,
+        rankfile=rankfile_path,  # Pass generated rankfile
+        rankfile_syntax=rankfile_syntax,
+    )
+
+
+@click.command(
+    context_settings=dict(
+        ignore_unknown_options=True,
+        allow_extra_args=True,
+    )
+)
+@click.option(
+    "--rank-binding",
+    type=click.Path(path_type=Path),
+    required=False,
+    help="Rank binding configuration file (YAML). Relative paths are resolved against the launch directory.",
+)
+@click.option(
+    "--mesh-graph-descriptor",
+    type=click.Path(path_type=Path),
+    required=False,
+    help="Mesh graph descriptor file. When provided, enables new mode (mutually exclusive with --rank-binding). "
+    "Requires --hosts unless --mock-cluster-rank-binding is provided.",
+)
+@click.option(
+    "--hosts",
+    type=str,
+    required=False,
+    callback=lambda ctx, param, value: [h.strip() for h in value.split(",")] if value else None,
+    help="Comma-separated list of hostnames for MPI processes (e.g., 'node1,node2,node3'). "
+    "Required for new mode (--mesh-graph-descriptor) unless --mock-cluster-rank-binding is provided. "
+    "Not used in legacy mode (--rank-binding).",
+)
+@click.option("--dry-run", is_flag=True, help="Print command without executing")
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Show path resolution diagnostics, environment propagation, and MPI command details",
+)
+@click.option(
+    "--mpi-args",
+    callback=lambda ctx, param, value: shlex.split(value) if value else None,
+    help="Additional MPI arguments (quoted)",
+)
+@click.option("--debug-gdbserver", is_flag=True, help="Launch each process with gdbserver for remote debugging")
+@click.option(
+    "--mock-cluster-rank-binding",
+    required=False,
+    type=click.Path(path_type=Path),
+    help="Mock cluster rank binding configuration file (YAML). Relative paths are resolved against the launch directory. "
+    "When used with new mode (--mesh-graph-descriptor), makes --hosts optional.",
+)
+@click.option(
+    "--skip-executable-check", is_flag=True, help="Skip the check if program executable exists on the local host"
+)
+@click.option("--skip-mgd-check", is_flag=True, help="Skip the check if MGD file exists on the local host")
+@click.option(
+    "--bare",
+    is_flag=True,
+    help="Disable tt-run defaults (TCP transport, interface exclusions). Use for single-host or special setups.",
+)
+@click.option(
+    "--tcp-interface",
+    type=str,
+    default=None,
+    help="Network interface for MPI TCP communication (e.g., 'eth0', 'cnx1'). Uses btl_tcp_if_include instead of default exclusions.",
+)
+@click.option(
+    "--rankfile-syntax",
+    type=click.Choice(["auto", "rankfile", "map-by", "mca"]),
+    default="auto",
+    help="Rankfile MPI syntax. 'auto' (default) detects from MPI version. Use 'rankfile' (--rankfile) if "
+    "--map-by rankfile:file= fails with 'unrecognized qualifier' on mpirun-ulfm.",
+)
+@click.pass_context
+def main(
+    ctx: click.Context,
+    rank_binding: Optional[Path],
+    mesh_graph_descriptor: Optional[Path],
+    hosts: Optional[List[str]],
+    dry_run: bool,
+    verbose: bool,
+    mpi_args: Optional[List[str]],
+    debug_gdbserver: bool,
+    mock_cluster_rank_binding: Optional[Path],
+    skip_executable_check: bool,
+    skip_mgd_check: bool,
+    bare: bool,
+    tcp_interface: Optional[str],
+    rankfile_syntax: str,
+) -> None:
+    """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
+
+    tt-run operates in two modes:
+        - Legacy mode: Use --rank-binding (see legacy_flow function for detailed documentation)
+        - New mode: Use --mesh-graph-descriptor (mutually exclusive with --rank-binding)
+
+    The two modes are mutually exclusive - you must specify exactly one.
+
+    \b
+    Quick Start:
+        # Legacy mode
+        tt-run --rank-binding rank_binding.yaml ./my_app
+
+        # New mode (not yet implemented)
+        tt-run --mesh-graph-descriptor mesh_graph.yaml --hosts node1,node2 ./my_app
+        # Or with mock cluster (makes --hosts optional):
+        tt-run --mesh-graph-descriptor mesh_graph.yaml --mock-cluster-rank-binding mock.yaml ./my_app
+
+    For detailed documentation on legacy mode, see the legacy_flow function docstring.
+    """
+    # Check for mutually exclusive options
+    if rank_binding is not None and mesh_graph_descriptor is not None:
+        raise click.ClickException(
+            "--rank-binding and --mesh-graph-descriptor are mutually exclusive. " "Please use only one of them."
+        )
+
+    if rank_binding is None and mesh_graph_descriptor is None:
+        raise click.ClickException(
+            "Either --rank-binding (legacy mode) or --mesh-graph-descriptor (new mode) must be specified."
+        )
+
+    # Legacy mode: use --rank-binding
+    if rank_binding is not None:
+        # Warn if new mode options are used with legacy mode
+        if hosts is not None:
+            logger.warning(
+                f"{TT_RUN_PREFIX} --hosts is ignored in legacy mode (--rank-binding). "
+                "Use --mesh-graph-descriptor to enable new mode."
+            )
+        legacy_flow(
+            ctx,
+            rank_binding,
+            dry_run,
+            verbose,
+            mpi_args,
+            debug_gdbserver,
+            mock_cluster_rank_binding,
+            skip_executable_check,
+            skip_mgd_check,
+            bare,
+            tcp_interface,
+            rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
+        )
+        return
+
+    # New mode: --mesh-graph-descriptor is provided
+    # Validate required arguments for new mode
+    if mesh_graph_descriptor is not None:
+        # --hosts is required unless --mock-cluster-rank-binding is provided
+        if mock_cluster_rank_binding is None and hosts is None:
+            raise click.ClickException(
+                "--hosts is required for new mode (--mesh-graph-descriptor) "
+                "unless --mock-cluster-rank-binding is provided."
+            )
+
+        new_mode_flow(
+            ctx,
+            mesh_graph_descriptor,
+            hosts,
+            dry_run,
+            verbose,
+            mpi_args,
+            debug_gdbserver,
+            mock_cluster_rank_binding,
+            skip_executable_check,
+            skip_mgd_check,
+            bare,
+            tcp_interface,
+            rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
         )
         return
 
