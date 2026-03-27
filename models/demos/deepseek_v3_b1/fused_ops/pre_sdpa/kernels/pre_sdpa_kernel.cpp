@@ -859,6 +859,7 @@ uint32_t per_core_rta_arg_idx = 0;
     // local_cur_pos is used for kv cache update and flash mla.
     // ========================================================================
     volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_addr);
+    invalidate_l1_cache();
     uint32_t cur_pos = pos_ptr[0];
 
     const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(

@@ -628,6 +628,7 @@ struct SdpaReduceWorker {
 
             if constexpr (CTArgs::position_enabled) {
                 volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
+                invalidate_l1_cache();
                 uint32_t position_id = pos_ptr[0];
                 constexpr uint32_t chunk = CTArgs::per_device_chunk_size;
                 r1_neighbor_valid = (position_id >= args.r1_neighbor_device_idx * chunk);
@@ -774,6 +775,7 @@ struct SdpaReduceWorker {
                 r2_neighbor_device_idx = args.r2_neighbor_device_idx;
 
                 volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
+                invalidate_l1_cache();
                 position_id = pos_ptr[0];
 
                 constexpr uint32_t chunk = CTArgs::per_device_chunk_size;

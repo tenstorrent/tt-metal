@@ -106,6 +106,9 @@ struct Rope {
         void impl(const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
 
+            // The persistent decoder updates position_ids in-place on BRISC between
+            // iterations, so refresh the local L1 view before reading it here.
+            invalidate_l1_cache();
             volatile tt_l1_ptr uint32_t* position_ids_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.position_ids_tensor_address);
             uint32_t position_id = position_ids_ptr[0];

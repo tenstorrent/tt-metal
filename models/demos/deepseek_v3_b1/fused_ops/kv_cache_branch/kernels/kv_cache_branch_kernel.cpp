@@ -241,6 +241,7 @@ void kernel_main() {
     uint32_t position_ids_addr = get_common_arg_val<uint32_t>(1);
 
     volatile tt_l1_ptr uint32_t* position_ids_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(position_ids_addr);
+    invalidate_l1_cache();
     uint32_t kv_cache_start_tile_id = position_ids_ptr[0];
 
     // Create TensorAccessor for DRAM interleaved tensor
