@@ -27,7 +27,6 @@ RedistributeToMemoryConfigRowMajorDefaultProgramFactory::create(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
-    std::cout << "default program factory" << std::endl;
     const auto& input = tensor_args.input_tensor;
     const auto& output = output_tensor;
     tt::tt_metal::Program program{};
