@@ -357,9 +357,10 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
     const auto& cluster = env_.get_cluster();
     const auto& hal = env_.get_hal();
     std::vector<dev_msgs::watcher_msg_t> watcher_init_val;
-    watcher_init_val.reserve(NumHalProgrammableCoreTypes);
+    watcher_init_val.reserve(hal.get_programmable_core_type_count());
 
-    for (int programmable_core_type_index = 0; programmable_core_type_index < NumHalProgrammableCoreTypes;
+    for (uint32_t programmable_core_type_index = 0;
+         programmable_core_type_index < hal.get_programmable_core_type_count();
          programmable_core_type_index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
         auto factory = hal.get_dev_msgs_factory(programmable_core_type);
@@ -477,34 +478,49 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
             rtoptions.get_watcher_debug_delay());
     }
 
-    auto write_watcher_init_val = [&](const CoreCoord& logical_core, HalProgrammableCoreType programmable_core_type) {
+    auto write_watcher_init_val_virtual = [&](const CoreCoord& virtual_core,
+                                              HalProgrammableCoreType programmable_core_type) {
         auto programmable_core_type_index = hal.get_programmable_core_type_index(programmable_core_type);
-        CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-            device_id, logical_core, hal.get_core_type(programmable_core_type_index));
         auto data = watcher_init_val[programmable_core_type_index].view();
         if (auto iter = debug_delays_val.find(virtual_core); iter != debug_delays_val.end()) {
             std::copy_n(iter->second.data(), iter->second.size(), data.debug_insert_delays().data());
         } else {
             std::fill_n(data.debug_insert_delays().data(), data.debug_insert_delays().size(), std::byte{0});
         }
-        auto addr = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER);
+        auto addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::WATCHER);
         cluster.write_core(data.data(), data.size(), {static_cast<size_t>(device_id), virtual_core}, addr);
+    };
+    auto write_watcher_init_val_logical = [&](const CoreCoord& logical_core,
+                                              HalProgrammableCoreType programmable_core_type) {
+        auto programmable_core_type_index = hal.get_programmable_core_type_index(programmable_core_type);
+        CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+            device_id, logical_core, hal.get_core_type(programmable_core_type_index));
+        write_watcher_init_val_virtual(virtual_core, programmable_core_type);
     };
 
     // Initialize worker cores debug values
     CoreCoord grid_size = cluster.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
     for (uint32_t y = 0; y < grid_size.y; y++) {
         for (uint32_t x = 0; x < grid_size.x; x++) {
-            write_watcher_init_val({x, y}, HalProgrammableCoreType::TENSIX);
+            write_watcher_init_val_logical({x, y}, HalProgrammableCoreType::TENSIX);
         }
     }
 
     // Initialize ethernet cores debug values
     for (const CoreCoord& active_eth_core : env_.get_control_plane().get_active_ethernet_cores(device_id)) {
-        write_watcher_init_val(active_eth_core, HalProgrammableCoreType::ACTIVE_ETH);
+        write_watcher_init_val_logical(active_eth_core, HalProgrammableCoreType::ACTIVE_ETH);
     }
     for (const CoreCoord& inactive_eth_core : env_.get_control_plane().get_inactive_ethernet_cores(device_id)) {
-        write_watcher_init_val(inactive_eth_core, HalProgrammableCoreType::IDLE_ETH);
+        write_watcher_init_val_logical(inactive_eth_core, HalProgrammableCoreType::IDLE_ETH);
+    }
+
+    // Initialize DRAM cores debug values (Blackhole only)
+    bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
+    if (has_dram_fw) {
+        for (const auto& dram_core :
+             cluster.get_soc_desc(device_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+            write_watcher_init_val_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
+        }
     }
 
     log_debug(LogLLRuntime, "Watcher initialized device {}", device_id);

@@ -15,6 +15,7 @@ set(PROCS
     main_aerisc
     subordinate_aerisc
 )
+set(BH_ONLY_PROCS drisc)
 set(TYPES
     firmware
     kernel
@@ -175,6 +176,8 @@ foreach(ARCH IN LISTS ARCHS)
     set(HW_OUTPUT_DIR "runtime/hw/toolchain/${ARCH}")
     string(TOUPPER ${ARCH} ARCH_DEFINE)
 
+    set(ARCH_PROCS ${PROCS})
+
     if(ARCH STREQUAL "wormhole")
         foreach(SCRIPT_TYPE IN LISTS WH_LD_SCRIPTS)
             foreach(IRAM_OPT IN LISTS IRAM_OPTIONS)
@@ -206,9 +209,11 @@ foreach(ARCH IN LISTS ARCHS)
                 list(APPEND LD_FILES ${PROJECT_SOURCE_DIR}/${HW_OUTPUT_DIR}/${HW_OUTPUT_FILE})
             endforeach()
         endforeach()
+    elseif(ARCH STREQUAL "blackhole")
+        list(APPEND ARCH_PROCS ${BH_ONLY_PROCS})
     endif()
 
-    foreach(PROC IN LISTS PROCS)
+    foreach(PROC IN LISTS ARCH_PROCS)
         string(TOUPPER ${PROC} PROC_DEFINE)
         string(REPLACE "=" "" PROC_FILE "${PROC}")
         foreach(TYPE IN LISTS TYPES)
