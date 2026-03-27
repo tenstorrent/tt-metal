@@ -1,0 +1,40 @@
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "Generate a short two-speaker dialog with distinct voices."
+    },
+    {
+      "role": "user",
+      "content": "Speaker A reference."
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "audio",
+          "audio_ref": "en_woman",
+          "duration": 2.0
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "Speaker B reference."
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "audio",
+          "audio_ref": "en_man",
+          "duration": 2.0
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": "Create a brief dialog where speaker A says hello and speaker B responds warmly."
+    }
+  ]
+}
