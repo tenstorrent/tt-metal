@@ -80,6 +80,7 @@ fiftyone==0.25.2 # Required for Yolo benchmarking
 jiwer==3.0.5 # Required for speech recognition evaluation
 toolz==0.12.0 # Required for Save environment data step
 open_clip_torch==2.26.1 # Required for SDXL accuracy evaluation
+imageio-ffmpeg==0.5.1 # MP4 via diffusers export_to_video (e.g. Lingbot-VA demo --generate)
 
 # Suff that used to be in pyproject.toml
 # Needed for various tests
