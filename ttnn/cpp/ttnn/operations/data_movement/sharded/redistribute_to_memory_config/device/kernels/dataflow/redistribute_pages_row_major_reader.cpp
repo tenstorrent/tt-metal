@@ -108,12 +108,11 @@ void kernel_main() {
                                          // the end column of the next output subblock and the end of the tensor row
                 // We have processed the entire output subblock, so we must commit it to the output cb
                 cb_push_back(cb_id_in1, 1);
-            } else {
+            } else {  // Case where we are finishing reading in an input subblock
                 uint32_t bytes_to_write_to_output_subblock;
                 uint32_t l1_output_subblock_write_addr_offset;
                 uint32_t l1_input_subblock_read_addr_offset;
                 if (output_start_column >= input_start_column) {
-                    DPRINT << "WRITING NEW OUTPUT SUBBLOCK ELSE" << ENDL();
                     cb_reserve_back(
                         cb_id_in1,
                         1);  // We are writing a new output subblock, so we need to reserve a slot on the output cb
