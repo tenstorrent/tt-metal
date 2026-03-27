@@ -41,7 +41,7 @@ def main() -> None:
         pipe = Pipeline(tt_device=device, if_f0=True, version="v1", num="48k")
         import time
 
-        for _ in range(2):
+        for _ in range(3):
             start_time = time.time()
             audio = pipe.infer(
                 args.input,

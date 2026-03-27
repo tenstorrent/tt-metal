@@ -53,11 +53,11 @@ def test_groupnorm(device, batch_size, input_length, channels, num_groups):
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
 
-    tt_output = tt_groupnorm.gp_slice(tt_input)
+    tt_output = tt_groupnorm(tt_input)
     tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32)
 
     assert tuple(tt_output_torch.shape) == tuple(torch_output.shape)

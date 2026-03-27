@@ -233,7 +233,7 @@ class ConvFeatureExtractionModel:
                 x = self.layer_norms[i](x)
 
             elif self.mode == "default" and i == 0:
-                x = self.group_norms[i].gp_slice(x)
+                x = self.group_norms[i](x)
             x = ttnn.gelu(x, output_tensor=x)
 
         return x

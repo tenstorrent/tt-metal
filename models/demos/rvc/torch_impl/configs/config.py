@@ -21,6 +21,11 @@ class Config:
 
         # x_pad = 1
         # x_query = 6
+        # x_center = 24
+        # x_max = 16
+
+        # x_pad = 1
+        # x_query = 6
         # x_center = 38
         # x_max = 41
 
@@ -28,6 +33,12 @@ class Config:
         # x_query = 2
         # x_center = 6
         # x_max = 8
+
+        # x_pad = 1
+        # x_query = 1
+        # x_center = 3
+        # x_max = 4
+
         return x_pad, x_query, x_center, x_max
 
     def use_cpu(self) -> None:
