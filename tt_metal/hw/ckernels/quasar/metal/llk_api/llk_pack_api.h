@@ -196,3 +196,35 @@ TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
     _llk_pack_relu_config_<p_pacr::PACK0, false>(relu_config);
 }
+
+/*************************************************************************
+ * LLK PACK REDUCE MASK CONFIGURATION
+ *************************************************************************/
+
+/**
+ *
+ * @brief Configures PACKER0 edge mask programming to support reduce operations
+ *
+ * @tparam reduce_dim: The reduce op dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
+ *
+ * This function configures the packer edge masks based on the reduce dimension:
+ * - REDUCE_ROW: Preserves only datum[0] in each row, masks datums[1:15] to 0 (keeps first column)
+ * - REDUCE_COL: Preserves all datums in row 0 only, masks all other rows to 0 (keeps first row)
+ * - REDUCE_SCALAR: Preserves only datum[0] in row 0 of face 0 (keeps single element)
+ *
+ **/
+template <ReduceDim reduce_dim>
+inline void llk_pack_reduce_mask_config() {
+    _llk_pack_reduce_mask_config_<reduce_dim>();
+}
+
+/**
+ *
+ * @brief Clears PACKER0 edge mask configuration to restore normal packing behavior after reduce operations
+ *
+ * This function disables the edge mask programming for PACKER0 by resetting all masks
+ * to preserve all datums in all faces. Should be called after reduce operations to restore
+ * normal packing behavior.
+ *
+ **/
+inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }
