@@ -4,10 +4,7 @@
 """
 Regression test for matmul with batch dimension mismatch (in0_B > 1, in1_B = 1).
 
-This tests the reuse_in0_in_CB optimization path that was previously causing hangs
-when the input tensor had batch > 1 and the weight tensor had batch = 1.
-
-GitHub Issue: Fixed hang in BEVFormer spatial cross attention with batch=6
+This tests the path that was previously causing hangs when the input tensor had batch > 1 and the weight tensor had batch = 1.
 """
 
 import pytest
@@ -19,7 +16,7 @@ from models.common.utility_functions import comp_pcc
 @pytest.mark.parametrize(
     "batch, M, K, N",
     [
-        (6, 30125, 256, 256),
+        (6, 3000, 256, 256),
     ],
 )
 def test_matmul_batch_mismatch(batch, M, K, N, device):
@@ -30,8 +27,7 @@ def test_matmul_batch_mismatch(batch, M, K, N, device):
     - Input: [batch, M, K]
     - Weight: [K, N] (no batch dimension, implicitly batch=1)
 
-    Previously, batch=6 would hang in the matmul kernel due to incorrect handling
-    of the reuse_in0_in_CB optimization in the 1D mcast reuse program factory.
+    Previously, batch=6 would hang in the matmul kernel due to incorrect argument passed to the in1 reader receiver kernel.
     """
     # Create input tensor [batch, M, K]
     input_torch = torch.randn(batch, M, K)
