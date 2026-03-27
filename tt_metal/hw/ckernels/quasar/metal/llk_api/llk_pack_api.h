@@ -39,7 +39,7 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
  * @brief Gets the output L1 tile index where the tile will be packed out to, determined by out_of_order_output
  *
  * @tparam out_of_order_output: Set true to write the output tile to the tile index specified by
- * the user in `output_tile_index`, set false for pack to operqate sequentially: write to the next tile index
+ * the user in `output_tile_index`, set false for pack to operate sequentially: write to the next tile index
  * starting from index 0, and ignore the `output_tile_index` parameter
  * @tparam untilize: Selects pack or pack untilizem
  * @param output_id The output circular buffer identifier
@@ -87,6 +87,28 @@ inline void llk_pack(
     const std::uint32_t l1_tile_index = get_output_tile_index<out_of_order_output, false>(output_id, output_tile_index);
 
     _llk_pack_<p_pacr::PACK0>(tile_index, l1_tile_index);
+}
+
+/**
+ * @brief Packs a block of destination tiles into the specified output buffer
+ *
+ * @param start_tile_index Starting destination register tile index to pack out from
+ * @param pack_output Logical output dataflow buffer id
+ * @param ntiles Number of consecutive tiles to pack
+ *
+ * Packs ntiles tiles starting at start_tile_index from the destination register into the L1
+ * output buffer identified by pack_output starting from output_tile_index
+ */
+// TODO: AM; Optimize block calls by using ntiles per pack, issue #40798
+inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_output, uint32_t ntiles) {
+    std::uint8_t output_id = get_output_id(pack_output);
+
+    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+        std::uint32_t l1_tile_index = get_output_tile_index<false /* out_of_order_output */, false /* untilize */>(
+            output_id, 0 /* output_tile_index */);
+
+        _llk_pack_<p_pacr::PACK0>(tile_index, l1_tile_index);
+    }
 }
 
 /*************************************************************************

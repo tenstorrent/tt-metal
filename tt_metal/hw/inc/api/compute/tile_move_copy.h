@@ -111,7 +111,10 @@ ALWI void copy_block_matmul_partials(
         in_cb_id, start_in_tile_index, ntiles)));
     MATH((llk_math_eltwise_unary_datacopy_block<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
         start_dst_tile_index, ntiles, in_cb_id)));
-#endif  // TODO: AM; add Quasar implementation
+#else
+    UNPACK((llk_unpack_A_block(in_cb_id, start_in_tile_index, ntiles)));
+    MATH((llk_math_eltwise_unary_datacopy_block(start_dst_tile_index, ntiles, in_cb_id)));
+#endif
 }
 
 }  // namespace ckernel
