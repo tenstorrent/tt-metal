@@ -119,12 +119,13 @@ HARDWARE_RUNNER_MAP = {
         "runner_label": "config-t3000",
         "tt_smi_cmd": "tt-smi -r",
     },
-    "tt-galaxy-wh": {
-        "arch": "wormhole_b0",
-        "runs_on": ["topology-6u", "arch-wormhole_b0", "in-service", "pipeline-functional"],
-        "runner_label": "topology-6u",
-        "tt_smi_cmd": "tt-smi -r",
-    },
+    # TODO: Re-enable Galaxy once model-traced Galaxy runners are available
+    # "tt-galaxy-wh": {
+    #     "arch": "wormhole_b0",
+    #     "runs_on": ["topology-6u", "arch-wormhole_b0", "in-service", "pipeline-functional"],
+    #     "runner_label": "topology-6u",
+    #     "tt_smi_cmd": "tt-smi -r",
+    # },
     # --- Blackhole (future) ---
     # "tt-galaxy-bh": {
     #     "arch": "blackhole",
