@@ -1480,7 +1480,8 @@ void pytensor_module(nb::module_& mod) {
         nb::arg("tensor"),
         nb::arg("noc") = tt::tt_metal::NOC::RISCV_0_default,
         R"doc(
-            Return the optimal worker cores on which to launch programs and kernels for a sharded tensor.
+            Returns the optimal worker cores on which to launch programs and kernels for a sharded tensor.
+            These are the worker cores that will allow the program to maximize its use of shard data locality and reduce NoC traffic.
 
             For L1-sharded tensors, returns the cores that hold shards in shard-orientation order.
             For DRAM-sharded tensors, returns the optimal Tensix worker core for each DRAM bank
