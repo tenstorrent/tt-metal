@@ -75,7 +75,8 @@ void kernel_main() {
     uint32_t src2_bank_id = get_arg_val<uint32_t>(6);
 
     #ifdef ARCH_QUASAR
-        experimental::DataflowBuffer dfb2(2);
+        constexpr uint32_t dfb_in2_id = get_compile_time_arg_val(2);
+        experimental::DataflowBuffer dfb2(dfb_in2_id);
         uint32_t ublock_size_bytes_2 = dfb2.get_entry_size() * ublock_size_tiles;
     #else
         constexpr uint32_t cb_id_in2 = 2;

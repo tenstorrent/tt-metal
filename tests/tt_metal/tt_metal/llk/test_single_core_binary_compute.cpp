@@ -250,7 +250,7 @@ bool single_core_binary(
     KernelHandle reader_kernel, writer_kernel, binary_kernel;
     std::vector<uint32_t> reader_cta, writer_cta, compute_cta;
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        reader_cta = {inp0_dfb, inp1_dfb};
+        reader_cta = {inp0_dfb, inp1_dfb, inp2_dfb};
         reader_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary.cpp",
