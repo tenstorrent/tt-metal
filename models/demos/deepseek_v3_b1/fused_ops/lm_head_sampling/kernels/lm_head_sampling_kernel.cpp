@@ -26,7 +26,9 @@
 //   CB 0  (mcast_src):   Input tensor on sender core (tensor-backed).
 //                         In multi-device mode, backed by intermediate_tensor (CCL broadcast
 //                         destination). In single-device mode, backed by input_tensor directly.
-//   CB 1  (mcast_dst):   Mcast destination / matmul in0 on all cores (intermediate)
+//   CB 1  (mcast_dst):   Mcast destination / matmul in0 on all cores (intermediate).
+//                         [MTP] Also reused for EH mcast destination and gather destination
+//                         (sequential use — sized to max(num_tiles_k, eh_num_tiles_k)).
 //   CB 2  (matmul_in1):  Vocab weights on matmul cores (tensor-backed)
 //   CB 9  (matmul_eh):   [MTP] EH projection weights on matmul cores (tensor-backed)
 //   CB 10 (embedding):   [MTP] Embedding row for e_rmsnorm input
@@ -35,8 +37,6 @@
 //   CB 15 (mcast_eh_src):[MTP] [e_norm|h_norm] — embedding loaded here, e_rmsnorm in-place, h_rmsnorm appends
 //   CB 16 (matmul_out):  Matmul output on matmul cores (tensor-backed)
 //   CB 17 (matmul_eh_out):[MTP] EH matmul output (tensor-backed)
-//   CB 18 (mcast_eh_dst):[MTP] Mcast destination for concat on all cores(intermediate)
-//   CB 19 (eh_gather_dst):[MTP] EH output gather destination on argmax_final_core (tensor-backed)
 //   CB 30 (bcast_pkt):   CCL broadcast packet buffer (multi-device mode only)
 //
 // [MTP] CBs that intersect the output-token path and can cause corruption when enable_mtp:
@@ -95,15 +95,12 @@ struct Core {
     static_assert(input_socket_mode != 1, "lm_head_sampling input socket mode=1 is invalid");
 
     // ── MTP (Multi-Token Prediction) ────────────────────────────────
-    static constexpr bool enable_mtp = get_named_compile_time_arg_val("is_mtp_base_stage") == 1;
-    static constexpr bool enable_mtp_verification = get_named_compile_time_arg_val("is_mtp_verify_stage") == 1;
+    static constexpr bool enable_mtp = get_named_compile_time_arg_val("enable_mtp") == 1;
+    static constexpr bool is_base_stage = get_named_compile_time_arg_val("is_mtp_base_stage") == 1;
+    static constexpr bool is_spec_stage = get_named_compile_time_arg_val("is_mtp_verify_stage") == 1;
     static constexpr bool is_eh_matmul_core = enable_mtp && get_named_compile_time_arg_val("is_eh_matmul_core") == 1;
     static constexpr bool gather_use_per_core_sender_idx =
         enable_mtp && get_named_compile_time_arg_val("gather_use_per_core_sender_idx") == 1;
-
-    // -- MTP Stage Identification --------------------------------------------
-    static constexpr bool is_base_stage = !enable_mtp_verification;
-    static constexpr bool is_spec_stage = enable_mtp_verification;
 
     // ── Verify stage metadata transfer ───────────────────────────────
     static constexpr bool is_exit_device = get_named_compile_time_arg_val("is_exit_device") == 1;
@@ -230,6 +227,7 @@ void kernel_main() {
     uint32_t mtp_input_core_noc_y = 0;
     uint32_t mtp_argmax_output_addr = 0;
     if constexpr (Core::enable_mtp) {
+        DPRINT << "mtp enabled" << ENDL();
         mtp_embedding_base = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
         mtp_token_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
         mtp_input_core_noc_x = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
@@ -239,7 +237,7 @@ void kernel_main() {
 
     uint32_t verify_output_staging_addr = 0;
     uint32_t verify_bcast_buffer_addr = 0;
-    if constexpr (Core::enable_mtp_verification) {
+    if constexpr (Core::is_spec_stage) {
         verify_output_staging_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
         verify_bcast_buffer_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
     }
@@ -324,10 +322,9 @@ void kernel_main() {
     //   │ Argmax writer        │  [0..3] │ final_noc_x/y, scratch, socket    │
     //   │ Socket input reader  │  [4..6] │ config_addr, page_size, num_pages │
     //   │ Persistent routing   │ [7..12] │ enable, dst noc/mesh/chip, sem    │
-    //   │ MTP args (base+mtp)  │ [13..16]│ input_core xy, token/argmax addr  │
     //   │ Verify staging (spec)│   [13]  │ verify_output_staging_addr        │
-    //   │ Mcast dst override   │ [13/14/17] │ depends on stage config        │
-    //   │ MTP mcast override   │   [18]  │ tensor-backed CB 18 addr (0=CB)   │
+    //   │ Mcast dst override   │ [13/14] │ non-verify/verify                 │
+    //   │ Mcast EH dst override│ [14/15] │ non-verify/verify                 │
     //   │ Fabric routing       │  [N+]   │ per-core appended                 │
     //   └──────────────────────┴─────────┴────────────────────────────────────┘
     // ========================================================================
@@ -360,7 +357,7 @@ void kernel_main() {
 
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
     constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
-    constexpr uint32_t mcast_dst_override_idx = Core::enable_mtp ? 17 : (Core::enable_mtp_verification ? 14 : 13);
+    constexpr uint32_t mcast_dst_override_idx = Core::is_spec_stage ? 14 : 13;
     const uint32_t mcast_dst_addr_override = get_common_arg_val<uint32_t>(mcast_dst_override_idx);
 
     deepseek_b1_ops::Mcast::SenderArgs mcast_args{
@@ -400,14 +397,9 @@ void kernel_main() {
     };
     const uint32_t persistent_next_iter_global_sem_addr = get_common_arg_val<uint32_t>(12);
 
-    // ── MTP runtime args (all cores, enable_mtp) ────────────────────
-    // These args are consumed in the NCRISC section; BRISC/TRISC only need
-    // to skip past them so the common-arg index stays in sync.  Nothing to
-    // read here — the values live in the NCRISC-local copies above.
-
     // ── Verify stage runtime arg (BRISC, for reading base token metadata)
     uint32_t brisc_verify_output_staging_addr = 0;
-    if constexpr (Core::enable_mtp_verification) {
+    if constexpr (Core::is_spec_stage) {
         brisc_verify_output_staging_addr = get_common_arg_val<uint32_t>(13);
     }
 
@@ -418,7 +410,7 @@ void kernel_main() {
         false>;
     constexpr uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("mcast_eh_src_cb");
     constexpr uint32_t mcast_eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
-    const uint32_t mcast_eh_dst_addr_override = get_common_arg_val<uint32_t>(18);
+    const uint32_t mcast_eh_dst_addr_override = get_common_arg_val<uint32_t>(Core::is_spec_stage ? 15 : 14);
     deepseek_b1_ops::Mcast::SenderArgs mcast_eh_args{
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_x"),
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_y"),
@@ -591,10 +583,10 @@ void kernel_main() {
 #endif
             deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
             {
-                // DPRINT << ">bc" << ENDL();
+                DPRINT << ">bc" << ENDL();
                 DeviceZoneScopedN("CCL_BROADCAST");
                 bcast(bcast_args);
-                // DPRINT << "bc<" << ENDL();
+                DPRINT << "bc<" << ENDL();
             }
         }
 
@@ -605,7 +597,13 @@ void kernel_main() {
         if constexpr (Core::is_input_core && (!Core::skip_ccl || !Core::bcast_use_socket_input)) {
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+            DPRINT << ">sb np=" << rmsnorm_num_tiles << ENDL();
             unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+            invalidate_l1_cache();
+            auto cb0_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(rmsnorm_input_cb));
+            DPRINT << "cb0 @" << get_read_ptr(rmsnorm_input_cb) << " [0]=" << (uint32_t)cb0_ptr[0]
+                   << " [1]=" << (uint32_t)cb0_ptr[1] << " [2]=" << (uint32_t)cb0_ptr[2]
+                   << " [3]=" << (uint32_t)cb0_ptr[3] << ENDL();
             DPRINT << "sb<" << ENDL();
         }
 
@@ -621,18 +619,22 @@ void kernel_main() {
             constexpr uint32_t metadata_size = 64;
             uint32_t metadata_src = verify_bcast_buffer_addr + Core::bcast_activation_size_bytes;
             uint64_t dst = get_noc_addr(argmax_noc_x, argmax_noc_y, verify_output_staging_addr);
+            invalidate_l1_cache();
+            auto vm_meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_src);
+            DPRINT << "vm nt=" << vm_meta[0] << " t0=" << vm_meta[1] << " src=" << metadata_src
+                   << " dst=" << verify_output_staging_addr << ENDL();
             noc_async_write(metadata_src, dst, metadata_size);
             noc_async_write_barrier();
-            // DPRINT << "vm<" << ENDL();
+            DPRINT << "vm<" << ENDL();
         }
 #endif
 
         {
-            // DPRINT << ">rn" << ENDL();
+            DPRINT << ">rn" << ENDL();
             DeviceZoneScopedN("RMSNORM");
             deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_rmsnorm_core, !Core::enable_mtp> rmsnorm;
             rmsnorm(rmsnorm_args);
-            // DPRINT << "rn<" << ENDL();
+            DPRINT << "rn<" << ENDL();
         }
 
         {
@@ -675,12 +677,12 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_input_core) {
-            DPRINT << ">tw" << ENDL();
+            // DPRINT << ">tw" << ENDL();
             volatile tt_l1_ptr uint32_t* mtp_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
             noc_semaphore_wait(mtp_ready_sem, 1);
             noc_semaphore_set(mtp_ready_sem, 0);
-            DPRINT << "tw<" << ENDL();
+            // DPRINT << "tw<" << ENDL();
         }
 #endif
 
@@ -710,7 +712,7 @@ void kernel_main() {
 #endif
 
         // ====================================================================
-        // [MTP] h_rmsnorm on TRISC — starts immediately after the LM head matmul,
+        // [MTP] h_rmsnorm and e_rmsnorm on TRISC — starts immediately after the LM head matmul,
         // overlapping with argmax on NCRISC/BRISC. CB 0 still has hidden states
         // (first RMSNorm used pop_input=false when MTP is enabled).
         // Output writes directly to mcast_eh_src_cb (first half of concat buffer).
@@ -722,11 +724,6 @@ void kernel_main() {
                 DeviceZoneScopedN("MTP_H_RMSNORM");
                 h_rmsnorm(rmsnorm_args);
             }
-        }
-#endif
-
-#if defined(COMPILE_FOR_TRISC)
-        if constexpr (Core::is_rmsnorm_core) {
             {
                 DeviceZoneScopedN("MTP_E_RMSNORM");
                 deepseek_b1_ops::RMSNorm::Op<ERMSNormCTArgs, Core::is_rmsnorm_core, true> e_rmsnorm;
@@ -805,15 +802,16 @@ void kernel_main() {
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t speculative_token =
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
-            cb_pop_front(argmax_socket_cb, 1);
-
+            DPRINT << "us st=" << speculative_token << ENDL();
+            invalidate_l1_cache();
             auto meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_verify_output_staging_addr);
             uint32_t base_token = meta[1];
-            DPRINT << "uB=" << base_token << " uS=" << speculative_token << ENDL();
-
+            DPRINT << "uB=" << base_token << " uS=" << speculative_token << " @" << brisc_verify_output_staging_addr
+                   << ENDL();
+            cb_pop_front(argmax_socket_cb, 1);
             DeviceZoneScopedN("MTP_VERIFY_SEND");
             write_token_metadata_to_socket_cb(
-                argmax_socket_cb, 2, base_token, TOKEN_TYPE_BASE, 0, speculative_token, TOKEN_TYPE_SPEC, 1);
+                argmax_socket_cb, 1, base_token, TOKEN_TYPE_BASE, 0, speculative_token, TOKEN_TYPE_SPEC, 1);
             DPRINT << "us<" << ENDL();
         }
 #endif
@@ -861,15 +859,15 @@ void kernel_main() {
                         get_named_compile_time_arg_val("gather_send_total_bytes");
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                         sampling_args.socket_config_addr, eh_gather_dst_cb, eh_gather_num_pages, eh_gather_total_bytes);
-                    DPRINT << "sM<" << ENDL();
                 } else {
-                    DPRINT << ">sN" << ENDL();
+                    DPRINT << ">sS" << ENDL();
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                         sampling_args.socket_config_addr,
                         ArgmaxCTArgs::socket_cb_id,
                         1,
                         ArgmaxCTArgs::socket_page_size_bytes);
-                    DPRINT << "sN<" << ENDL();
+
+                    DPRINT << "sS<" << ENDL();
                 }
 
             } else if constexpr (Core::is_spec_stage) {
@@ -881,10 +879,10 @@ void kernel_main() {
                     ArgmaxCTArgs::socket_page_size_bytes);
                 DPRINT << "sS<" << ENDL();
             }
-            DPRINT << ">ni" << ENDL();
+            // DPRINT << ">ni" << ENDL();
             size_t fabric_arg_idx = sampling_op.persistent_fabric_arg_idx;
             sampling_op.send_persistent_next_iter_inc_via_fabric_brisc(sampling_args, fabric_arg_idx);
-            DPRINT << "ni<" << ENDL();
+            // DPRINT << "ni<" << ENDL();
         }
 #endif
 

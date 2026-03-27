@@ -16,6 +16,7 @@ from typing import Any
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.demo.weight_provider import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.prepare_weights import (
@@ -31,7 +32,7 @@ TOKEN_PAGE_SIZE_BYTES = 64
 TOKEN_FIFO_SIZE = 1024
 ACTIVATION_DIM = 7168
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
-ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 4
+ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 1
 PIPELINE_CORE_COORD = ttnn.CoreCoord(11, 0)
 
 # MTP constants
@@ -45,16 +46,9 @@ mtp_padded_dim = num_dram_banks * mtp_n_per_core
 TOKEN_META_PAGE_SIZE_BYTES = TOKEN_PAGE_SIZE_BYTES
 TOKEN_META_FIFO_SIZE = TOKEN_FIFO_SIZE
 
-# Activation + token metadata payload: gathered EH logits + 1 metadata tile (token).
-# Tile [1,32] bf16 → tile_size bytes per tile; total = (num_cores * tiles_per_core + 1) * tile_size.
-_ACT_W_META_TILE = ttnn.Tile([1, 32])
-_ACT_W_META_TILE_SIZE = _ACT_W_META_TILE.get_tile_size(ttnn.bfloat16)
-_ACT_W_META_TILES_PER_CORE = mtp_n_per_core // _ACT_W_META_TILE.tile_shape[1]
-_ACT_W_META_TOTAL_TILES = num_dram_banks * _ACT_W_META_TILES_PER_CORE + 1
-ACTIVATION_W_TOKEN_META_TILE_SIZE_BYTES = _ACT_W_META_TILE_SIZE
-ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES = _ACT_W_META_TOTAL_TILES * _ACT_W_META_TILE_SIZE
-ACTIVATION_W_TOKEN_META_FIFO_SIZE = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES * 2
-ACTIVATION_W_TOKEN_META_LOGITS_BYTES = (_ACT_W_META_TOTAL_TILES - 1) * _ACT_W_META_TILE_SIZE
+# Activation + token metadata payload: logits + 1 metadata tile (token).
+ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES = ACTIVATION_FIFO_SIZE + TOKEN_PAGE_SIZE_BYTES
+ACTIVATION_W_TOKEN_META_FIFO_SIZE = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
 
 
 @dataclass
@@ -235,7 +229,7 @@ class SpecLMHeadStage(StageKind):
         pipeline_config = ctx.pipeline_config
         entry_core = ttnn.MeshCoreCoord(
             pipeline_config[my_mesh_id].entry_node_coord,
-            SpecLMHeadStage.ARGMAX_FINAL_CORE,
+            SpecLMHeadStage.LMHEAD_INPUT_CORE,
         )
         exit_core = ttnn.MeshCoreCoord(
             pipeline_config[my_mesh_id].exit_node_coord,
@@ -392,7 +386,7 @@ class SpecLMHeadStage(StageKind):
         element_size = 2  # bfloat16
         bcast_page_size_bytes = 32 * 32 * element_size
         bcast_num_pages = cls.M * cls.K * element_size // bcast_page_size_bytes
-        verify_bcast_total_pages = bcast_num_pages + 1
+        verify_bcast_total_pages = bcast_num_pages + 1  # 8 tiles
         verify_bcast_total_bytes = verify_bcast_total_pages * bcast_page_size_bytes
         verify_bcast_num_elements = verify_bcast_total_bytes // element_size
         verify_bcast_mem_config = ttnn.MemoryConfig(
@@ -404,6 +398,7 @@ class SpecLMHeadStage(StageKind):
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
+        # bcast buffer
         verify_bcast_buffer = ttnn.from_torch(
             torch.zeros((num_devices, verify_bcast_num_elements), dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
@@ -502,7 +497,7 @@ class BaseLMHeadStage(StageKind):
     A_TILE = ttnn.Tile([1, 32])
     B_TILE = ttnn.Tile([32, 32])
     OUT_TILE = ttnn.Tile([1, 32])
-    ARGMAX_FINAL_CORE = ttnn.CoreCoord(0, 0)
+    ARGMAX_FINAL_CORE = ttnn.CoreCoord(0, 1)  # Changed from (0, 1) to (0, 0)
     LMHEAD_INPUT_CORE = ttnn.CoreCoord(10, 9)
 
     def __init__(
@@ -543,6 +538,7 @@ class BaseLMHeadStage(StageKind):
         else:
             down_page = TOKEN_PAGE_SIZE_BYTES
             down_fifo = TOKEN_FIFO_SIZE
+        # Flag here we are creating socket page size of
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
@@ -733,34 +729,17 @@ class BaseLMHeadStage(StageKind):
                 ttnn.CoreRange(ttnn.CoreCoord(0, sender.y + 1), ttnn.CoreCoord(mcast_end_x, mcast_end_y))
             )
 
-        mcast_receiver_grid = ttnn.CoreRangeSet(mcast_receiver_ranges)
-        num_receiver_cores = (mcast_end_x + 1) * (mcast_end_y + 1) - 1
-
-        mcast_dst_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                mcast_receiver_grid, (BaseLMHeadStage.M, BaseLMHeadStage.K), ttnn.ShardOrientation.ROW_MAJOR
-            ),
-        )
-        mcast_dst_working_buf = ttnn.from_torch(
-            torch.zeros((num_devices * num_receiver_cores, BaseLMHeadStage.K), dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            tile=BaseLMHeadStage.A_TILE,
-            device=mesh_device,
-            memory_config=mcast_dst_mem_config,
-            mesh_mapper=mesh_mapper,
-        )
-
-        mcast_eh_dst_working_buf = None
-
         eh_gather_output_buf = None
+
         if self._enable_mtp:
             eh_out_w_per_core = mtp_n_per_core // BaseLMHeadStage.OUT_TILE.tile_shape[1]
             eh_gather_total_tiles = num_dram_banks * eh_out_w_per_core + 1
             out_tile_h = BaseLMHeadStage.OUT_TILE.tile_shape[0]
             out_tile_w = BaseLMHeadStage.OUT_TILE.tile_shape[1]
+            print(
+                f"[STAGE P{ctx.my_mesh_id}] eh_gather_total_tiles={eh_gather_total_tiles}, out_tile_h={out_tile_h}, out_tile_w={out_tile_w}",
+                flush=True,
+            )
             eh_gather_shard_shape = (eh_gather_total_tiles * out_tile_h, out_tile_w)
             eh_gather_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -779,6 +758,10 @@ class BaseLMHeadStage(StageKind):
                 device=mesh_device,
                 memory_config=eh_gather_mem_config,
                 mesh_mapper=mesh_mapper,
+            )
+            print(
+                f"[STAGE P{ctx.my_mesh_id}] eh_gather_output_buf shape={eh_gather_output_buf.shape}, memory_config={eh_gather_mem_config}",
+                flush=True,
             )
 
         lmhead_input_socket = pipeline_block.get_downstream_socket()
@@ -815,8 +798,6 @@ class BaseLMHeadStage(StageKind):
             "secondary_sync_semaphore": secondary_sync_semaphore,
             "global_semaphore": global_semaphore,
             "global_stage2_semaphore": global_stage2_semaphore,
-            "mcast_dst_working_buf": mcast_dst_working_buf,
-            "mcast_eh_dst_working_buf": mcast_eh_dst_working_buf,
             "eh_gather_output_buf": eh_gather_output_buf,
         }
         if self._enable_mtp:
@@ -856,8 +837,6 @@ class BaseLMHeadStage(StageKind):
             h_gamma_tensor=d.get("ttnn_h_gamma"),
             e_gamma_tensor=d.get("ttnn_e_gamma"),
             eh_projection_tensor=d.get("ttnn_eh_proj"),
-            mcast_dst_working_buf_tensor=d.get("mcast_dst_working_buf"),
-            mcast_eh_dst_working_buf_tensor=d.get("mcast_eh_dst_working_buf"),
             indices_tensor=d["ttnn_indices"],
             output_index_tensor=d["ttnn_output_index"],
             argmax_final_core_coord=BaseLMHeadStage.ARGMAX_FINAL_CORE,
@@ -876,7 +855,7 @@ class BaseLMHeadStage(StageKind):
             socket_output=d["lmhead_output_socket"],
             persistent_mode=self._persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
-            is_mtp_base_stage=self._enable_mtp,
+            is_mtp_base_stage=True,
             eh_subblock_k=d.get("eh_subblock_k"),
             eh_gather_output_buf_tensor=d.get("eh_gather_output_buf"),
         )

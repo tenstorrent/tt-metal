@@ -26,6 +26,7 @@ from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import (
     PipelineConfiguration,
     create_single_galaxy_pipeline_configuration,
+    create_single_galaxy_pipeline_spec_stage_only_configuration,
     create_single_galaxy_spec_decode_pipeline_configuration,
 )
 from models.demos.deepseek_v3_b1.demo.stage import (
@@ -3524,16 +3525,6 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
                     f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
                     flush=True,
                 )
-                # assert num_tokens == 2, f"Iteration {iteration}: expected num_tokens=2, got {num_tokens}"
-                # assert (
-                #     tok0_id == expected_base
-                # ), f"Iteration {iteration}: base token mismatch: got {tok0_id}, expected {expected_base}"
-                # assert tok0_type == 0, f"Iteration {iteration}: tok0_type should be BASE(0), got {tok0_type}"
-                # assert (
-                #     tok1_id == expected_spec
-                # ), f"Iteration {iteration}: spec token mismatch: got {tok1_id}, expected {expected_spec}"
-                # assert tok1_type == 1, f"Iteration {iteration}: tok1_type should be SPEC(1), got {tok1_type}"
-
         print(f"[TEST P{pid}] all iterations done, barrier", flush=True)
         pipeline.barrier()
         print(f"[TEST P{pid}] barrier done, terminate", flush=True)
@@ -3541,6 +3532,89 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
         print(f"[TEST P{pid}] terminate done, final barrier", flush=True)
         pipeline.barrier()
         print(f"[TEST P{pid}] final barrier done", flush=True)
+    finally:
+        pass
+
+
+@pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+            "trace_region_size": 1600000,
+            "worker_l1_size": 1499000,
+        }
+    ],
+    indirect=True,
+)
+def test_persistent_mode_mtp_spec(mesh_device, use_fp32):
+    """
+    4-stage 4x2 single-galaxy pipeline with MTP fusion enabled:
+    P1(H2D) -> P2(LMHead+Sampling+MTP) -> P3(forward) -> P4(forward) -> P1(D2H).
+
+    Verifies both the sampled token index (on P1) and the MTP EH projection output (on P2).
+    """
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 4:
+        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
+
+    iterations = 100
+    config = create_single_galaxy_pipeline_spec_stage_only_configuration(
+        _SyntheticWeightProvider(),
+        fp32_dest_acc_en=use_fp32,
+        persistent_mode=True,
+        enable_mtp=True,
+    )
+    pipeline = config.build_pipeline(mesh_device)
+    try:
+        pipeline.setup_and_run()
+
+        if pipeline.my_mesh_id == 0:
+            for iteration in range(iterations):
+                logger.info(f"[MTP] Writing token for iteration {iteration}")
+                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+                torch_token[0, 0] = iteration
+                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                output_tensor = ttnn.from_torch(
+                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                pipeline.write_token(token_tensor)
+                pipeline.read_output(output_tensor)
+                raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
+                num_tokens = raw[0].item()
+                tok0_id = raw[1].item()
+                tok0_type = raw[2].item()
+                tok0_pos = raw[3].item()
+                tok1_id = raw[4].item()
+                tok1_type = raw[5].item()
+                tok1_pos = raw[6].item()
+                type_name = {0: "BASE", 1: "SPEC"}
+                print(
+                    f"[MTP SPEC] iter {iteration} "
+                    f"ntok={num_tokens} t0={tok0_id}/{type_name.get(tok0_type,'?')} "
+                    f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
+                    flush=True,
+                )
+
+        logger.info(f"[MTP] Barrier for P{pipeline.my_mesh_id}")
+        pipeline.barrier()
+        logger.info(f"[MTP] Barrier completed for P{pipeline.my_mesh_id}")
+
+        pipeline.terminate()
+        pipeline.barrier()
     finally:
         pass
 

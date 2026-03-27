@@ -136,14 +136,18 @@ struct Broadcast {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
+                        DPRINT << ">br sz=" << args.socket_page_size << ENDL();
                         socket_wait_for_pages(recv, args.socket_num_pages);
+                        DPRINT << ">br1 np=" << CTArgs::num_pages_to_read << ENDL();
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                        DPRINT << "<br" << ENDL();
                         invalidate_l1_cache();
                         noc_async_read(
                             get_noc_addr(recv.read_ptr),
-                            get_write_ptr(CTArgs::cb0_id),
+                            get_write_ptr(CTArgs::cb0_id),  //
                             args.socket_page_size,
                             1 - noc_index);
+                        DPRINT << "<br1" << ENDL();
                         noc_async_read_barrier(1 - noc_index);
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         socket_pop_pages(recv, args.socket_num_pages);
@@ -196,6 +200,8 @@ struct Broadcast {
                     ranges[0] = ranges[1];
                 }
 
+                DPRINT << ">fc" << ENDL();
+
                 // Configure fused route for payload + semaphore increment
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader fused_header(0, 0, 1, true);
                 if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
@@ -213,6 +219,7 @@ struct Broadcast {
                     safe_get_noc_addr(args.barrier_sem_noc0_x, args.barrier_sem_noc0_y, args.secondary_sync_sem, 0);
 
                 if (CTArgs::is_sender) {
+                    DPRINT << ">fc1 np=" << CTArgs::num_pages_to_read << ENDL();
                     cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                     size_t l1_read_addr = get_read_ptr(CTArgs::cb0_id);
                     uint64_t dst_noc_addr =
@@ -250,6 +257,7 @@ struct Broadcast {
                             dst_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
                         CTArgs::tensor0_page_size * CTArgs::num_pages_to_read);
 
+                    DPRINT << ">fc1 mc" << ENDL();
                     noc_async_write(l1_read_addr, dst_noc_addr, CTArgs::tensor0_page_size * CTArgs::num_pages_to_read);
 
                     // increment locally
@@ -275,11 +283,13 @@ struct Broadcast {
                         unified_kernels::semaphore_dec(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
+                    DPRINT << ">fc1 fl" << ENDL();
                     noc_async_writes_flushed();
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                     noc_async_atomic_barrier();
-
+                    DPRINT << "<fc1" << ENDL();
                 } else if constexpr (CTArgs::is_secondary_sender) {
+                    DPRINT << ">fc2" << ENDL();
                     // Secondary sender: wait for data from primary sender, then broadcast along primary axis
                     // First wait for data to arrive from primary sender
                     if (args.wait_output_semaphore) {
@@ -312,25 +322,29 @@ struct Broadcast {
                             src_noc_addr, out_ready_sem_noc_addr_in_pkt, 1, true},
                         CTArgs::tensor0_page_size * CTArgs::num_pages_to_read);
                     noc_async_writes_flushed();
+                    DPRINT << "<fc2" << ENDL();
 
                 } else {
+                    DPRINT << ">fc3" << ENDL();
                     // Receiver: wait for data from broadcaster
                     if (args.wait_output_semaphore) {
                         volatile tt_l1_ptr uint32_t* sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr);
                         noc_semaphore_wait_min(sem_ptr, args.out_ready_sem_wait_value);
                     }
-
+                    DPRINT << ">fc3 mid" << ENDL();
                     // Reset global semaphore
                     if (args.reset_global_semaphore) {
                         unified_kernels::semaphore_dec(
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.out_ready_sem_bank_addr));
                     }
+                    DPRINT << "<fc3" << ENDL();
                 }
                 if constexpr (CTArgs::is_secondary_sender || CTArgs::is_sender) {
                     close_connections(fabric_connection);
                 }
 
+                DPRINT << "<fc" << ENDL();
                 noc_async_write_barrier();
             }
 #elif defined(COMPILE_FOR_TRISC)
