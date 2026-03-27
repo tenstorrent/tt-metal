@@ -247,6 +247,7 @@ TEST_F(KSplitGramMatmulTest, Benchmark) {
         return std::chrono::duration<double, std::micro>(t1 - t0).count() / iters;
     };
 
+    constexpr MathFidelity bench_fidelity = MathFidelity::HiFi4;
     auto compute_kernel_config = ttml::core::ComputeKernelConfig::matmul();
 
     for (auto& s : shapes) {
@@ -255,11 +256,19 @@ TEST_F(KSplitGramMatmulTest, Benchmark) {
 
         uint64_t M = s.M_tiles * 32;
         uint64_t K = s.K_dim;
-        auto tflops = [&](double us) { return 2.0 * M * M * K / 1e12 / (us / 1e6); };
+        // Utilization: ideal time / actual time
+        // HiFi4: 64 cycles per tile op (32x32x32 matmul), 110 compute cores, ~1.2 GHz
+        constexpr int cycles_per_tile = (bench_fidelity == MathFidelity::HiFi4) ? 64 : 32;
+        constexpr int num_cores = 110;
+        constexpr double freq_ghz = 1.35;
+        double num_tile_ops = static_cast<double>(M) * M * K / (32.0 * 32.0 * 32.0);
+        double ideal_us = num_tile_ops * cycles_per_tile / num_cores / (freq_ghz * 1e3);
+        auto util = [&](double us) { return 100.0 * ideal_us / us; };
 
         double t_gram = bench(
             [&]() {
-                auto out = ttml::metal::gram_matmul(input);
+                auto out = ttml::metal::gram_matmul(input, ttml::metal::OutputMode::UpperTriangle, bench_fidelity);
+
                 out.deallocate();
             },
             "gram_matmul");
@@ -298,12 +307,12 @@ TEST_F(KSplitGramMatmulTest, Benchmark) {
             "ttnn::matmul");
 
         std::cout << "\n  " << s.label << ":\n" << std::flush;
-        std::cout << "    gram_matmul:      " << std::fixed << std::setprecision(1) << t_gram << " us  ("
-                  << std::setprecision(2) << tflops(t_gram) << " TF)\n";
-        std::cout << "    minimal_matmul:   " << std::setprecision(1) << t_minimal << " us  (" << std::setprecision(2)
-                  << tflops(t_minimal) << " TF)\n";
-        std::cout << "    ttnn::matmul:     " << std::setprecision(1) << t_ttnn << " us  (" << std::setprecision(2)
-                  << tflops(t_ttnn) << " TF)\n";
+        std::cout << "    gram_matmul:      " << std::fixed << std::setprecision(1) << t_gram << " us  "
+                  << std::setprecision(1) << util(t_gram) << "%\n";
+        std::cout << "    minimal_matmul:   " << std::setprecision(1) << t_minimal << " us  " << std::setprecision(1)
+                  << util(t_minimal) << "%\n";
+        std::cout << "    ttnn::matmul:     " << std::setprecision(1) << t_ttnn << " us  " << std::setprecision(1)
+                  << util(t_ttnn) << "%\n";
         std::cout << "    vs minimal:       " << std::setprecision(2) << t_minimal / t_gram << "x\n";
         std::cout << "    vs ttnn:          " << std::setprecision(2) << t_ttnn / t_gram << "x\n" << std::flush;
 
