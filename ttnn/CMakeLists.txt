@@ -679,6 +679,7 @@ target_link_libraries(
         TTNN::Ops::Eltwise::Ternary
         TTNN::Ops::Eltwise::Ternary::Backward
         TTNN::Ops::Eltwise::Unary
+        TTNN::Ops::Eltwise::UnaryNG
         TTNN::Ops::Eltwise::Unary::Backward
         TTNN::Ops::Embedding
         TTNN::Ops::Embedding::Backward
@@ -928,6 +929,7 @@ add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary_backward)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary)
+add_subdirectory(cpp/ttnn/operations/eltwise/unary_ng)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
 add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
