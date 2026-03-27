@@ -360,14 +360,14 @@ void matmul_tile(
             cfg.reader_kernel,
             core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = reader_cta});
-        
+
         std::vector<uint32_t> writer_cta = {dst_dfb};
         unary_writer_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
             tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = writer_cta});
-        
+
         // Add dataflow buffer ids as compile args and prepend test-passed flags to compute_cta vector
         std::vector<uint32_t> compute_cta = {src0_dfb, src1_dfb, dst_dfb};
         compute_cta.insert(compute_cta.begin(), cfg.compute_kernel_args.begin(), cfg.compute_kernel_args.end());
