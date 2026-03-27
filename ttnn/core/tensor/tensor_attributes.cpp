@@ -51,10 +51,7 @@ const TensorTopology& TensorAttributes::get_tensor_topology() const {
     return tensor_topology_;
 }
 
-void TensorAttributes::update_tensor_topology(TensorTopology tensor_topology) {
-    if (auto* host_storage = std::get_if<HostStorage>(&storage_)) {
-        host_storage->host_tensor().update_tensor_topology(tensor_topology);
-    }
+void TensorAttributes::update_tensor_topology(const TensorTopology& tensor_topology) {
     tensor_topology_ = tensor_topology;
 }
 

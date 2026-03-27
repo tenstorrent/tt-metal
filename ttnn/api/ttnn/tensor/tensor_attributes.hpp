@@ -45,7 +45,7 @@ public:
     const TensorSpec& get_tensor_spec() const;
     const TensorTopology& get_tensor_topology() const;
 
-    void update_tensor_topology(TensorTopology tensor_topology);
+    void update_tensor_topology(const TensorTopology& tensor_topology);
 
 private:
     Storage storage_;
