@@ -238,7 +238,6 @@ MoEGPTMeshWorkloadFactory::create_at(
     matmul_defines["TILIZE_FUSED"] = "1";
 
     // OUTPUT_SHARD_CORE_MAP define for dm1 (combine core physical coords)
-    dm1_defines["TILIZE_FUSED"] = "1";
     dm1_defines["OUTPUT_SHARD_CORE_MAP"] = serialize_physical_core_coords(combine_cores, device);
 
     {
