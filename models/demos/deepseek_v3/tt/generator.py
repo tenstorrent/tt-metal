@@ -739,6 +739,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
     def _reset_sampling_state(self, sampling_params: SamplingParams, batch_size: int, batch_size_per_row: int) -> None:
+        # TODO(vllm): Thread prompt/output token state into sampling resets for penalty correctness.
         sampling_params = format_sampling_params(sampling_params, max_batch_size=batch_size)
         self.sampling_generator.reset_sampling_params(sampling_params)
         seed = getattr(sampling_params, "seed", None)
@@ -756,6 +757,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         if isinstance(tt_out, tuple):
             tt_tokens, tt_log_probs = tt_out
+            # TODO: tt_log_probs support not yet implemented.
             if tt_log_probs is not None:
                 ttnn.deallocate(tt_log_probs)
             tt_out = tt_tokens
