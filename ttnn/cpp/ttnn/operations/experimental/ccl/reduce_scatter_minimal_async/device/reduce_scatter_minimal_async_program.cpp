@@ -229,6 +229,7 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t input_batch_num_pages,
     const uint32_t output_batch_num_pages,
     const uint32_t input_channel_num_pages,
+    const uint32_t output_channel_num_pages,
     const uint32_t input_tensor_B,
     const uint32_t input_tensor_Wt,
     const uint32_t slice_B,
@@ -252,23 +253,24 @@ std::vector<uint32_t> get_ring_reader_compile_args(
         };
     }
     return {
-        ring_index,               // my_chip_id
-        ring_size,                // ring_size
-        input_cb_index,           // cb_input_id
-        intermediate_cb_index,    // cb_intermediate_id
-        reader_output_cb_index,   // cb_reader_output_id
-        tile_granularity,         // tile_granularity
-        page_size,                // page_size
-        input_batch_num_pages,    // input_batch_num_pages
-        output_batch_num_pages,   // output_batch_num_pages
-        input_channel_num_pages,  // input_channel_num_pages
-        input_tensor_B,           // input_tensor_B
-        input_tensor_Wt,          // input_tensor_Wt
-        slice_C,                  // slice_C
-        slice_Ht,                 // slice_Ht
-        slice_Wt,                 // slice_Wt
-        fuse_op,                  // fused         op
-        normalized_dim,           // dim normalized to 4D
+        ring_index,                // my_chip_id
+        ring_size,                 // ring_size
+        input_cb_index,            // cb_input_id
+        intermediate_cb_index,     // cb_intermediate_id
+        reader_output_cb_index,    // cb_reader_output_id
+        tile_granularity,          // tile_granularity
+        page_size,                 // page_size
+        input_batch_num_pages,     // input_batch_num_pages
+        output_batch_num_pages,    // output_batch_num_pages
+        input_channel_num_pages,   // input_channel_num_pages
+        output_channel_num_pages,  // output_channel_num_pages
+        input_tensor_B,            // input_tensor_B
+        input_tensor_Wt,           // input_tensor_Wt
+        slice_C,                   // slice_C
+        slice_Ht,                  // slice_Ht
+        slice_Wt,                  // slice_Wt
+        fuse_op,                   // fused         op
+        normalized_dim,            // dim normalized to 4D
     };
 }
 
@@ -828,6 +830,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         input_batch_num_pages,
         output_batch_num_pages,
         input_channel_num_pages,
+        output_channel_num_pages,
         input_tensor_B,
         input_tensor_Wt,
         slice_B,
@@ -956,6 +959,14 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 auto core = *((worker_core_iter++)->begin());
                 CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
+                // FWD core needs BWD core coordinate (and vice-versa) to send sem incrs in 2nd last iter
+                uint32_t opposite_mux_core_offset =
+                    (link * num_cores_per_link) +
+                    ((1 - dir) * (num_mux_cores_per_direction_per_link + num_workers_per_direction));
+                uint32_t opposite_core_idx = opposite_mux_core_offset + num_mux_cores_per_direction_per_link + worker;
+                auto opposite_core = all_cores[opposite_core_idx];
+                auto opposite_core_coord = mesh_device->worker_core_from_logical_core(opposite_core);
+
                 uint32_t worker_id = (link * num_workers_per_direction) + worker;
                 uint32_t num_workers = num_links * num_workers_per_direction;
 
@@ -983,7 +994,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                     output_tensor.buffer()->address(),        // output_tensor address
                     semaphore.at(dir).address(),              // out_ready_semaphore for this dir
-                    semaphore.at(!dir).address(),             // out_ready_semaphore for other dir
+                    semaphore.at(!dir).address(),             // out_ready_semaphore for opposite dir
                     dir,                                      // direction
                     chunks_per_sync_val,                      // chunks_per_sync
                     start_tiles_read,                         // start_tiles_read
@@ -1004,8 +1015,10 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                 std::vector<uint32_t> writer_rt_args = {
                     intermediate_tensor.buffer()->address(),                     // intermediate_tensor_address
                     output_tensor.buffer()->address(),                           // output_tensor_address
-                    virtual_core.x,                                              // out_ready_sem_noc0_x
-                    virtual_core.y,                                              // out_ready_sem_noc0_y
+                    virtual_core.x,                                              // this core.x
+                    virtual_core.y,                                              // this core.y
+                    opposite_core_coord.x,                                       // opposite direction core.x
+                    opposite_core_coord.y,                                       // opposite direction core.y
                     semaphore.at(dir).address(),                                 // out_ready_semaphore for this dir
                     semaphore.at(num_directions_per_link).address(),             // batch_ready_semaphore
                     barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
@@ -1018,7 +1031,6 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
                     start_row_offset,         // start_row_offset (unused by dim0 kernel)
                     start_tiles_read,         // start_tiles_read
                     start_tiles_to_read,      // tiles_to_read
-
                 };
                 if (num_mux_cores_per_direction_per_link) {
                     append_fabric_mux_connection_rt_args(
@@ -1113,11 +1125,11 @@ void ring_reduce_scatter_minimal_async_helper_override_runtime_arguments(
                 auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
                 worker_writer_sender_runtime_args[1] = output.buffer()->address();
-                worker_writer_sender_runtime_args[4] = semaphore.at(dir).address();
-                worker_writer_sender_runtime_args[5] = semaphore.at(num_directions_per_link).address();
+                worker_writer_sender_runtime_args[6] = semaphore.at(dir).address();
+                worker_writer_sender_runtime_args[7] = semaphore.at(num_directions_per_link).address();
 
                 if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[7] = barrier_semaphore.value().address();
+                    worker_writer_sender_runtime_args[9] = barrier_semaphore.value().address();
                 }
             }
         }
