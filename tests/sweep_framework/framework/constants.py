@@ -136,10 +136,13 @@ HARDWARE_RUNNER_MAP = {
 
 
 def get_hardware_id_from_machine_info(machine_info) -> Optional[str]:
-    """Derive the hardware identifier from traced_machine_info.
+    """Read the hardware identifier directly from traced_machine_info.
 
-    Returns the full device_series (e.g. "tt-galaxy-wh", "p150b") or a
-    disambiguated name for n300-based topologies ("n150", "n300", "t3k").
+    Returns device_series as-is (e.g. "n150", "n300", "t3k", "tt-galaxy-wh",
+    "p150b").  The tracer records the exact hardware type in device_series so
+    there is no need to infer it from device counts — both "n300" and "t3k"
+    (and their device counts) are explicitly present in the trace.
+
     This value is embedded in vector filenames and later used to look up
     the runner config from HARDWARE_RUNNER_MAP.
     """
@@ -153,38 +156,7 @@ def get_hardware_id_from_machine_info(machine_info) -> Optional[str]:
     if isinstance(device_series, list):
         device_series = device_series[0] if device_series else ""
 
-    if not device_series:
-        return None
-
-    # Non-n300 series: use device_series directly (e.g. "tt-galaxy-wh", "p150b")
-    if device_series != "n300":
-        return device_series
-
-    # n300 series: disambiguate by device count
-    # n300 cards are used in N300 (1-2 dev) and T3K (8 dev)
-    # Single-device configs (1x1 mesh) still run on N300 runners since
-    # the traced hardware was an n300 card.
-    mesh = machine_info.get("mesh_device_shape")
-    if isinstance(mesh, str):
-        try:
-            import ast as _ast
-
-            mesh = _ast.literal_eval(mesh)
-        except (ValueError, SyntaxError):
-            mesh = None
-    if isinstance(mesh, (list, tuple)) and len(mesh) == 2:
-        num_devices = mesh[0] * mesh[1]
-    else:
-        num_devices = machine_info.get("device_count", machine_info.get("card_count", 1))
-        if isinstance(num_devices, list):
-            num_devices = num_devices[0] if num_devices else 1
-
-    if num_devices <= 2:
-        return "n300"
-    elif num_devices <= 8:
-        return "t3k"
-    # n300 cards in galaxy-scale topology (unusual but possible)
-    return "tt-galaxy-wh"
+    return device_series if device_series else None
 
 
 def get_runner_config_for_hardware(hardware_id: str) -> Optional[dict]:
