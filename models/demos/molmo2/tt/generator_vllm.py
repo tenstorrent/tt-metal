@@ -1819,7 +1819,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     input_ids=tokens[user_id : user_id + 1, : prompt_lens[user_id]],
                     pixel_values=pv_tensor,
                     pooled_patches_idx=pooling,
-                    use_trace=False,  # Traces cause device hang with vision input
+                    use_trace=enable_trace,  # Re-enabled: traces work after tensor conversion fixes
                     use_vision_trace=False,  # Disabled for vLLM: variable multi-crop sizes
                     use_unified_trace=False,
                     page_table=page_table_tt,
