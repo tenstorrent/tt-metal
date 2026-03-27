@@ -126,6 +126,7 @@ def assert_perf_within_tolerance(metric_name, measured_value, target_value, tole
         f"{metric_name} {measured_value:.2f} is outside the allowed +/-{tolerance_percentage * 100:.2f}% range "
         f"around target {target_value:.2f}: [{lower_bound:.2f}, {upper_bound:.2f}]."
     )
+    logger.info(f"{metric_name} {measured_value:.2f} is inside the performance range.")
 
 
 def create_tt_model(
