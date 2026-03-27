@@ -265,6 +265,7 @@ void bind_unary_operation(
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -293,11 +294,12 @@ void bind_unary_operation(
     ttnn::bind_function<OpName>(
         mod,
         doc.c_str(),
-        &unary_3param_wrapper<Func>,
+        Func,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("output_tensor") = nb::none());
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 template <ttnn::unique_string OpName, typename Func>
