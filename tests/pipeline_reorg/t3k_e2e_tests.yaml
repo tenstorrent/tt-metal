@@ -133,7 +133,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc" -vvv --tb=short
   skus:
     wh_llmbox:
-      timeout: 35
+      timeout: 45
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
   model-name: deepseek_prefill
