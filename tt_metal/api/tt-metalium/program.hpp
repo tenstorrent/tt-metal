@@ -20,20 +20,18 @@ namespace detail {
 class ProgramImpl;
 }  // namespace detail
 
-namespace experimental::metal2_host_api {
-struct ProgramSpec;
-// Forward declaration of experimental API (to enable friend access)
-Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation);
-}  // namespace experimental::metal2_host_api
-
 using ProgramId = std::uint64_t;
 
 class Program {
 public:
     Program();
 
-    // TODO (#34009): Change to free function and move impl to experimental
+    // Alternative "ProgramDescriptor" API, created for TTNN generic op
     explicit Program(const ProgramDescriptor& descriptor);
+
+    // Internal: construct from an already-built ProgramImpl.
+    explicit Program(std::shared_ptr<detail::ProgramImpl> impl);
+
     ~Program() noexcept;
 
     Program(const Program& other) = delete;
@@ -64,12 +62,6 @@ public:
 private:
     // The internal ProgramImpl may outlive the Program object if it's in-use by a command queue.
     std::shared_ptr<detail::ProgramImpl> internal_;
-
-    // Private constructor for wrapping an already-constructed impl.
-    // Used by experimental::metal2_host_api::MakeProgramFromSpec.
-    explicit Program(std::shared_ptr<detail::ProgramImpl> impl);
-    friend Program experimental::metal2_host_api::MakeProgramFromSpec(
-        const experimental::metal2_host_api::ProgramSpec& spec, bool skip_validation);
 };
 
 // Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.
