@@ -12,6 +12,7 @@ RReLU(x) = x if x >= 0; RReLU(x) = a * x if x < 0
 /localdev/vignjatijevic/tt-metal-4/tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_rrelu.h
 /localdev/vignjatijevic/tt-metal-4/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_rrelu.h
 /localdev/vignjatijevic/tt-metal-4/tt_metal/hw/inc/api/compute/eltwise_unary/rrelu.h
+/localdev/vignjatijevic/tt-metal-4/tests/ttnn/unit_tests/operations/eltwise/test_rrelu.py
 
 ### Modified Files
 /localdev/vignjatijevic/tt-metal-4/tt_metal/hw/inc/api/compute/eltwise_unary/sfpu_split_includes.h
@@ -46,3 +47,11 @@ RReLU(x) = x if x >= 0; RReLU(x) = a * x if x < 0
 - Training mode (random per-element slopes) is not implemented. The operation always uses eval/inference mode with fixed slope = (lower + upper) / 2.
 - No bfloat16 rounding is applied in the kernel since the operation is a simple multiply (not involving exp or other transcendental functions), and the result precision matches the input.
 - The `training` parameter mentioned in the requirements is not exposed in the Python API. All invocations behave as eval mode.
+
+## Test Results
+- **Status**: PASS (attempt 1 of 1)
+- **Test file**: tests/ttnn/unit_tests/operations/eltwise/test_rrelu.py
+- **Max ULP**: <= 2 (within threshold of 2)
+- **allclose**: PASS (rtol=1.6e-2, atol=1e-2)
+- **Test coverage**: All 65,536 bfloat16 bit patterns tested with default parameters (lower=0.125, upper=1/3)
+- **Test duration**: 2.08s (call) + 4.12s (setup) = ~6.25s total

@@ -2,3 +2,4 @@
 {"event":"notes_parsed","op_name":"rrelu","new_files_count":5,"modified_files_count":11,"has_parameter":true,"known_limitations":"eval mode only, no training mode random slopes, no bfloat16 rounding in kernel","ts":"2026-03-27T12:47:30+00:00"}
 {"event":"test_created","test_file":"tests/ttnn/unit_tests/operations/eltwise/test_rrelu.py","test_type":"exhaustive_bfloat16","ulp_threshold":2,"param_values":["lower=0.125, upper=1/3"],"ts":"2026-03-27T12:48:24+00:00"}
 {"event":"test_run","status":"pass","test_file":"test_rrelu.py","max_ulp":"<=2","allclose_pass":true,"attempt":1,"ts":"2026-03-27T12:48:56+00:00"}
+{"event":"complete","final_status":"TESTS_PASSED","total_test_runs":1,"total_fixes":0,"max_ulp":"<=2","allclose_pass":true,"ts":"2026-03-27T12:49:49+00:00"}
