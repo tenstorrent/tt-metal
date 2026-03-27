@@ -10,8 +10,8 @@ import torch
 
 import ttnn
 
-from models.demos.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
-from models.demos.glm4_moe_lite.tt.weights import load_glm_lazy_state_dict, resolve_best_effort_snapshot_dir
+from models.experimental.glm4_moe_lite.tt.tt_embedding import convert_embedding_weight_to_tt, run_tt_embedding
+from models.experimental.glm4_moe_lite.tt.weights import load_glm_lazy_state_dict, resolve_best_effort_snapshot_dir
 
 
 @pytest.mark.skipif(

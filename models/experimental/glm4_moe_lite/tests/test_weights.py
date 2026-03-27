@@ -10,7 +10,7 @@ import pytest
 import safetensors.torch
 import torch
 
-from models.demos.glm4_moe_lite.tt import weights as glm_weights
+from models.experimental.glm4_moe_lite.tt import weights as glm_weights
 
 
 def _write_index(model_dir: Path, weight_map: dict[str, str]) -> None:

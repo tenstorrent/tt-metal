@@ -16,9 +16,9 @@ import time
 from typing import Any
 
 import ttnn
-from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.demos.glm4_moe_lite.tt.linear_helpers import _DS_BATCH, dram_sharded_mlp, mlp_linear
-from models.demos.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig, mesh_shape
+from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+from models.experimental.glm4_moe_lite.tt.linear_helpers import _DS_BATCH, dram_sharded_mlp, mlp_linear
+from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig, mesh_shape
 
 _SIGNPOST_ENABLED = os.environ.get("GLM4_MOE_LITE_SIGNPOST", "").strip() == "1"
 if _SIGNPOST_ENABLED:
@@ -136,7 +136,7 @@ def moe_mlp_forward(
     use_signpost: bool = False,
 ) -> ttnn.Tensor:
     """MoE MLP: shared expert (dense) + routed experts. Returns mlp_out [1,1,B,hidden]."""
-    from models.demos.glm4_moe_lite.tt.moe_tt import (
+    from models.experimental.glm4_moe_lite.tt.moe_tt import (
         moe_dense_experts_forward_decode_tt,
         moe_dense_experts_forward_prefill_tt,
         moe_packed_experts_forward_prefill_tt,

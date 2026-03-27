@@ -89,6 +89,15 @@ models/experimental/glm4_moe_lite/
 ---
 
 ## Quick Start
+```bash
+# After you have TT_METAL built (./build_metal.sh)
+# And python env created (./create_venv.sh)
+
+cd tt-metal
+source python_env/bin/activate
+export TT_METAL_HOME=$(pwd)
+export PYTHONPATH=$(pwd)
+```
 
 ### Greedy Debug Script (single run)
 

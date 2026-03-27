@@ -8,8 +8,8 @@ import os
 import pytest
 import torch
 
-from models.demos.glm4_moe_lite.tt.reference_layer0 import run_layer0_reference
-from models.demos.glm4_moe_lite.tt.weights import resolve_best_effort_snapshot_dir
+from models.experimental.glm4_moe_lite.tt.reference_layer0 import run_layer0_reference
+from models.experimental.glm4_moe_lite.tt.weights import resolve_best_effort_snapshot_dir
 
 
 @pytest.mark.skipif(

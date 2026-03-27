@@ -13,10 +13,10 @@ from loguru import logger
 
 import ttnn
 
-import models.demos.glm4_moe_lite.tt.debug_runtime  # noqa: F401
+import models.experimental.glm4_moe_lite.tt.debug_runtime  # noqa: F401
 
-from models.demos.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT, _torch_dtype_to_ttnn
-from models.demos.glm4_moe_lite.tt.weights import resolve_best_effort_snapshot_dir
+from models.experimental.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT, _torch_dtype_to_ttnn
+from models.experimental.glm4_moe_lite.tt.weights import resolve_best_effort_snapshot_dir
 
 
 class Glm4MoeLiteForCausalLM(nn.Module):
@@ -47,7 +47,7 @@ class Glm4MoeLiteForCausalLM(nn.Module):
         super().__init__()
         self.hf_config = hf_config
         # Parsed, validated hyperparameters (stable interface for tt-metal code).
-        from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+        from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 
         self.hparams = Glm4MoeLiteHParams.from_hf_config(hf_config)
         self.hparams.validate()
@@ -108,7 +108,7 @@ class Glm4MoeLiteForCausalLM(nn.Module):
         # of the sharded safetensors downloaded. We don't need weights for the
         # Phase-3 placeholder forward, but we *will* need them for real compute.
         try:
-            from models.demos.glm4_moe_lite.tt.weights import find_missing_shards
+            from models.experimental.glm4_moe_lite.tt.weights import find_missing_shards
 
             missing = find_missing_shards(snapshot_dir)
             if missing:

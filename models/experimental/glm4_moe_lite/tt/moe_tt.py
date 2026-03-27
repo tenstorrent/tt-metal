@@ -11,8 +11,8 @@ import numpy as np
 import torch
 
 import ttnn
-from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
-from models.demos.glm4_moe_lite.tt.layer_weights import MoELayerTTWeights
+from models.experimental.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
+from models.experimental.glm4_moe_lite.tt.layer_weights import MoELayerTTWeights
 
 _SCATTER_ZERO_CACHE: dict[tuple[int, int, int], ttnn.Tensor] = {}
 
