@@ -514,7 +514,7 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=F
     # ALL other inputs have ROW_MAJOR_LAYOUT and inplace True
     N, C, H, W = input_shape
     layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
-    inplace = C != 512
+    inplace = layout != ttnn.TILE_LAYOUT
     run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode)
 
 
@@ -527,7 +527,7 @@ def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, perf_
     # ALL other inputs have ROW_MAJOR_LAYOUT and inplace False
     N, C, H, W = input_shape
     layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
-    inplace = C == 512
+    inplace = layout != ttnn.TILE_LAYOUT
     run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode)
 
 
@@ -559,7 +559,7 @@ def test_sdxl_base_group_norm_bh(device, input_shape, perf_test_mode=False):
 
     core_grid = ttnn.CoreGrid(y=8, x=8)
     layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
-    inplace = C != 512
+    inplace = layout != ttnn.TILE_LAYOUT
 
     # Generate torch tensor
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
