@@ -5,24 +5,58 @@
 #include "redistribute_to_memory_config_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <ttnn/operation.hpp>
 #include "redistribute_to_memory_config_device_operation_types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::prim {
+
+namespace CMAKE_UNIQUE_NAMESPACE {
+bool has_large_pages(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
+    if (input_tensor.layout() == Layout::TILE) {
+        return false;
+    }
+    const auto max_l1_size = operations::data_movement::get_max_l1_space(input_tensor);
+
+    uint32_t output_page_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();
+    if (output_mem_config.is_sharded() &&
+        output_mem_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        uint32_t shard_width = output_mem_config.shard_spec().has_value()
+                                   ? output_mem_config.shard_spec().value().shape[1]
+                                   : output_mem_config.nd_shard_spec().value().shard_shape[-1];
+        output_page_size = shard_width * input_tensor.element_size();
+    }
+    auto output_buffer_type = output_mem_config.buffer_type();
+    auto alignment = (output_buffer_type == tt::tt_metal::BufferType::DRAM) ? tt::tt_metal::hal::get_dram_alignment()
+                                                                            : tt::tt_metal::hal::get_l1_alignment();
+    auto output_aligned_page_size = tt::align(output_page_size, alignment);
+
+    return (input_tensor.buffer()->page_size() + 2 * output_aligned_page_size > max_l1_size);
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 RedistributeToMemoryConfigDeviceOperation::program_factory_t
 RedistributeToMemoryConfigDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
+
+    bool has_large_pages =
+        CMAKE_UNIQUE_NAMESPACE::has_large_pages(input_tensor, operation_attributes.output_mem_config);
+
     if (operation_attributes.output_mem_config.is_sharded()) {
         if (input_tensor.layout() == Layout::TILE) {
             return RedistributeToMemoryConfigTilizedShardedProgramFactory{};
         }
-        // return RedistributeToMemoryConfigRowMajorShardedProgramFactory{};
+        if (!has_large_pages) {
+            return RedistributeToMemoryConfigRowMajorShardedProgramFactory{};
+        }
     }
-    return RedistributeToMemoryConfigRowMajorDefaultProgramFactory{};  // TODO: will implement to interleaved program
-                                                                       // factories in follow up PR!
+    if (input_tensor.layout() == Layout::TILE) {
+        return RedistributeToMemoryConfigTilizedShardedProgramFactory{};  // TODO: will implement tilized path next!
+    }
+    return RedistributeToMemoryConfigRowMajorDefaultProgramFactory{};
 }
 
 void RedistributeToMemoryConfigDeviceOperation::validate_on_program_cache_miss(
@@ -45,10 +79,6 @@ void RedistributeToMemoryConfigDeviceOperation::validate_on_program_cache_miss(
             output_tensor.device() == input_tensor.device(),
             "Output tensor needs to be on the same device as the input tensor!");
     }
-
-    // TT_FATAL(
-    //     output_mem_config.is_sharded(),
-    //     "Output memory config must be sharded");  // TODO: Add path to support interleaved output in subsequent PR
 
     if (input_tensor.dtype() != output_dtype) {
         TT_FATAL(

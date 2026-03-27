@@ -84,12 +84,10 @@ RedistributeToMemoryConfigRowMajorDefaultProgramFactory::create(
                                     // the CB, so we process data in subblock units of MAX_SUBBLOCK_SIZE_BYTES instead
         input_page_size = MAX_SUBBLOCK_SIZE_BYTES;
         input_subblock_size_bytes = MAX_SUBBLOCK_SIZE_BYTES;
-        std::cout << "Inpur is using subblock limit" << std::endl;
     }
     if (aligned_output_page_size > MAX_SUBBLOCK_SIZE_BYTES) {
         aligned_output_page_size = MAX_SUBBLOCK_SIZE_BYTES;
         output_subblock_size_bytes = MAX_SUBBLOCK_SIZE_BYTES;
-        std::cout << "Output is using subblock limit" << std::endl;
     }
 
     // Configuring the CB that store input pages
