@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <memory>
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
@@ -32,11 +33,10 @@ protected:
 TEST_F(ReduceOpTest, TestMeanDim0) {
     ttml::autograd::ctx().set_seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
-    xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{xtensor_a.data(), xtensor_a.size()}, -0.5F, 0.5F, seed);
-    xtensor_a.reshape({2, 1, 64, 64});
+    xt::xarray<float> xtensor_a =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 64, 64}, seed, -0.5F, 0.5F);
 
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
@@ -56,11 +56,10 @@ TEST_F(ReduceOpTest, TestMeanDim0) {
 
 TEST_F(ReduceOpTest, TestSumDim0) {
     auto* device = &ttml::autograd::ctx().get_device();
-    xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{xtensor_a.data(), xtensor_a.size()}, -0.1F, 0.1F, seed);
-    xtensor_a.reshape({2, 1, 64, 64});
+    xt::xarray<float> xtensor_a =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 64, 64}, seed, -0.1F, 0.1F);
 
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
@@ -80,11 +79,10 @@ TEST_F(ReduceOpTest, TestSumDim0) {
 
 TEST_F(ReduceOpTest, TestMeanDim3) {
     auto* device = &ttml::autograd::ctx().get_device();
-    xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{xtensor_a.data(), xtensor_a.size()}, -0.5F, 0.5F, seed);
-    xtensor_a.reshape({2, 1, 64, 64});
+    xt::xarray<float> xtensor_a =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 64, 64}, seed, -0.5F, 0.5F);
 
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
@@ -103,11 +101,10 @@ TEST_F(ReduceOpTest, TestMeanDim3) {
 
 TEST_F(ReduceOpTest, TestSumDim3) {
     auto* device = &ttml::autograd::ctx().get_device();
-    xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{xtensor_a.data(), xtensor_a.size()}, -0.1F, 0.1F, seed);
-    xtensor_a.reshape({2, 1, 64, 64});
+    xt::xarray<float> xtensor_a =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 64, 64}, seed, -0.1F, 0.1F);
 
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
@@ -127,11 +124,10 @@ TEST_F(ReduceOpTest, TestSumDim3) {
 
 TEST_F(ReduceOpTest, TestMeanLargeDim3) {
     auto* device = &ttml::autograd::ctx().get_device();
-    xt::xarray<float> xtensor_a = xt::empty<float>({1024 * 1024});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{xtensor_a.data(), xtensor_a.size()}, -0.5F, 0.5F, seed);
-    xtensor_a.reshape({2, 1, 512, 1024});
+    xt::xarray<float> xtensor_a =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 512, 1024}, seed, -0.5F, 0.5F);
 
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 

@@ -105,17 +105,14 @@ void run_softmax_backward_case(
     std::optional<tt::tt_metal::CoreRangeSet> sub_core_grids = std::nullopt) {
     using namespace ttml;
 
-    xt::xarray<float> logits_tensor = xt::empty<float>({test_case.n, test_case.c, test_case.h, test_case.w});
-    xt::xarray<float> grad_tensor = xt::empty<float>({test_case.n, test_case.c, test_case.h, test_case.w});
-
     const uint32_t logits_seed = make_case_seed(test_case, 0xA5A5A5A5U);
     const uint32_t grad_seed = make_case_seed(test_case, 0x5A5A5A5AU);
-    ttml::test_utils::fill_uniform<float>(
-        std::span{logits_tensor.data(), logits_tensor.size()}, -10.0F, 10.0F, logits_seed);
+    xt::xarray<float> logits_tensor = ttml::test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{test_case.n, test_case.c, test_case.h, test_case.w}, logits_seed, -10.0F, 10.0F);
     const float grad_min = test_case.grad_min;
     const float grad_max = test_case.grad_max;
-    ttml::test_utils::fill_uniform<float>(
-        std::span{grad_tensor.data(), grad_tensor.size()}, grad_min, grad_max, grad_seed);
+    xt::xarray<float> grad_tensor = ttml::test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{test_case.n, test_case.c, test_case.h, test_case.w}, grad_seed, grad_min, grad_max);
 
     const int32_t rank = 4;
     const int32_t normalized_dim = test_case.dim >= 0 ? test_case.dim : rank + test_case.dim;

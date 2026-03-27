@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
@@ -47,10 +48,10 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
     const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
     int32_t dim = 3U;
 
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{input_tensor.data(), input_tensor.size()}, -10.0F, 10.0F, seed);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, seed, -10.0F, 10.0F);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -74,10 +75,10 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
     const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
     int32_t dim = 3U;
 
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{input_tensor.data(), input_tensor.size()}, -10.0F, 10.0F, seed);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, seed, -10.0F, 10.0F);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -98,10 +99,10 @@ TEST_F(SoftmaxTest, NIGHTLY_SoftmaxTest_Huge_Batch) {
     const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
     int32_t dim = 3U;
 
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{input_tensor.data(), input_tensor.size()}, -10.0F, 10.0F, seed);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, seed, -10.0F, 10.0F);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 

@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
+
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
@@ -26,24 +28,15 @@ protected:
 TEST_F(LayerNormOpTest, CompositeLayerNormOp_0) {
     using namespace ttml;
 
-    uint32_t batch_size = 6;
-    uint32_t seq_len = 13;
-    uint32_t heads = 16;
-    uint32_t features = 333;
+    const uint32_t batch_size = 6;
+    const uint32_t seq_len = 13;
+    const uint32_t heads = 16;
+    const uint32_t features = 333;
 
-    uint32_t size = batch_size * seq_len * heads;
+    auto input_data = ttml::test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{batch_size, seq_len, heads, features}, 42U, -1.0F, 1.0F);
 
-    std::vector<float> test_data;
-    test_data.reserve((size_t)batch_size * seq_len * heads * features);
-    for (uint32_t i = 0; i < batch_size * seq_len * heads; i++) {
-        float mean = (float)i / (float)size;
-        float stddev = 1.F + (float)i / (float)(size * 2);
-        auto chunk = ttml::test_utils::make_normal_vector<float>(features, mean, stddev, i);
-        test_data.insert(test_data.end(), chunk.begin(), chunk.end());
-    }
-
-    auto tensor = autograd::create_tensor(core::from_vector(
-        test_data, ttnn::Shape({batch_size, seq_len, heads, features}), &autograd::ctx().get_device()));
+    auto tensor = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
 
     auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device()));
     auto beta = autograd::create_tensor(core::zeros(ttnn::Shape({1, 1, 1, features}), &autograd::ctx().get_device()));
@@ -53,7 +46,7 @@ TEST_F(LayerNormOpTest, CompositeLayerNormOp_0) {
     auto result_tensor = result->get_value();
     auto result_data = core::to_vector(result_tensor);
     for (uint32_t i = 0; i < batch_size * seq_len * heads; i++) {
-        uint32_t idx = i * features;
+        const uint32_t idx = i * features;
 
         float exp_mean = 0.F;
         float exp_var = 0.F;

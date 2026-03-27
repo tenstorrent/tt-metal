@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
@@ -32,10 +33,10 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Batch) {
 
     const uint32_t N = 2U, C = 1U, H = 91U, W = 187U;
 
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{input_tensor.data(), input_tensor.size()}, -10.0F, 10.0F, seed);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, seed, -10.0F, 10.0F);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR);
 

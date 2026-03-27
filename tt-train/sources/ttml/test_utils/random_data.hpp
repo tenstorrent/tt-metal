@@ -30,22 +30,9 @@ inline void fill_uniform(std::span<T> data, T min, T max, uint32_t seed) {
 }
 
 template <typename T>
-inline void fill_normal(std::span<T> data, float mean, float stddev, uint32_t seed) {
-    ttml::core::parallel_generate(
-        data, [mean, stddev]() { return std::normal_distribution<float>(mean, stddev); }, seed);
-}
-
-template <typename T>
 inline std::vector<T> make_uniform_vector(std::size_t count, T min, T max, uint32_t seed) {
     std::vector<T> data(count);
     fill_uniform<T>(std::span<T>{data.data(), data.size()}, min, max, seed);
-    return data;
-}
-
-template <typename T>
-inline std::vector<T> make_normal_vector(std::size_t count, float mean, float stddev, uint32_t seed) {
-    std::vector<T> data(count);
-    fill_normal<T>(std::span<T>{data.data(), data.size()}, mean, stddev, seed);
     return data;
 }
 
@@ -58,18 +45,6 @@ inline xt::xarray<T> make_uniform_xarray(const Shape& shape, uint32_t seed, T mi
     }
     xt::xarray<T> x = xt::empty<T>(xt_shape);
     fill_uniform<T>(std::span<T>{x.data(), x.size()}, min, max, seed);
-    return x;
-}
-
-template <typename T, typename Shape>
-inline xt::xarray<T> make_normal_xarray(const Shape& shape, uint32_t seed, float mean = 0.0F, float stddev = 1.0F) {
-    std::vector<std::size_t> xt_shape;
-    xt_shape.reserve(std::size(shape));
-    for (const auto dim : shape) {
-        xt_shape.push_back(static_cast<std::size_t>(dim));
-    }
-    xt::xarray<T> x = xt::empty<T>(xt_shape);
-    fill_normal<T>(std::span<T>{x.data(), x.size()}, mean, stddev, seed);
     return x;
 }
 

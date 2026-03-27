@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <core/xtensor_utils.hpp>
 #include <umd/device/cluster.hpp>
 #include <xtensor-blas/xlinalg.hpp>
@@ -129,11 +130,10 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    xt::xarray<float> xtensor_data = xt::empty<float>({32 * 32});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{xtensor_data.data(), xtensor_data.size()}, -0.05F, 0.05F, seed);
-    xt::xarray<float> xtensor = xtensor_data.reshape({1, 1, 32, 32});
+    xt::xarray<float> xtensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 32, 32}, seed, -0.05F, 0.05F);
 
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
@@ -157,11 +157,10 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    xt::xarray<float> xtensor_data = xt::empty<float>({32});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{xtensor_data.data(), xtensor_data.size()}, -1.0F, 1.0F, seed);
-    xt::xarray<float> xtensor = xtensor_data.reshape({1, 1, 4, 8});
+    xt::xarray<float> xtensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 4, 8}, seed, -1.0F, 1.0F);
 
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
@@ -198,18 +197,14 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    xt::xarray<float> xtensor_a_data = xt::empty<float>({128 * 64});
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
-    ttml::test_utils::fill_uniform<float>(
-        std::span{xtensor_a_data.data(), xtensor_a_data.size()}, -0.005F, 0.005F, seed);
-    xt::xarray<float> xtensor_a = xtensor_a_data.reshape({1, 1, 128, 64});
+    xt::xarray<float> xtensor_a =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 128, 64}, seed, -0.005F, 0.005F);
 
-    xt::xarray<float> xtensor_b_data = xt::empty<float>({256 * 64});
     uint32_t seed2 = rng();
-    ttml::test_utils::fill_uniform<float>(
-        std::span{xtensor_b_data.data(), xtensor_b_data.size()}, -0.005F, 0.005F, seed2);
-    xt::xarray<float> xtensor_b = xtensor_b_data.reshape({1, 1, 64, 256});
+    xt::xarray<float> xtensor_b =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 64, 256}, seed2, -0.005F, 0.005F);
 
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
     auto tensor_a = ttml::core::from_xtensor(xtensor_a, device, ttnn::Layout::TILE, mapper.get());

@@ -12,6 +12,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <core/xtensor_utils.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <umd/device/cluster.hpp>
@@ -76,14 +77,11 @@ static void TestRingShift(
     const uint32_t mesh_rows = mesh_shape[0];
     const uint32_t mesh_cols = mesh_shape[1];
 
-    // Create input tensor with unique values - full tensor that will be sharded
-    std::vector<float> test_data_vec(batch * seq * hidden);
+    // Create input tensor - full tensor that will be sharded
     auto& rng = autograd::ctx().get_generator();
     const auto seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{test_data_vec.data(), test_data_vec.size()}, 0.0F, 2.0F, seed);
-
-    xt::xarray<float> test_data = xt::adapt(test_data_vec);
-    const xt::xarray<float> xtensor = test_data.reshape({batch, 1UL, seq, hidden});
+    const xt::xarray<float> xtensor = ttml::test_utils::make_uniform_xarray<float>(
+        std::array<std::size_t, 4>{batch, 1UL, seq, hidden}, seed, 0.0F, 2.0F);
 
     // Shard tensor across devices along the appropriate dimension
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
@@ -129,9 +127,9 @@ static void TestRingShift(
 
     // Optionally test backward gradient flow
     if (test_backward_grad) {
-        xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
-        const auto seed = rng();
-        ttml::test_utils::fill_uniform<float>(std::span{grad_data.data(), grad_data.size()}, 0.0F, 1.0F, seed);
+        const auto grad_seed = rng();
+        xt::xarray<float> grad_data = ttml::test_utils::make_uniform_xarray<float>(
+            std::array<std::size_t, 4>{batch, 1UL, seq, hidden}, grad_seed, 0.0F, 1.0F);
 
         const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
         const auto tt_grad_tensor =

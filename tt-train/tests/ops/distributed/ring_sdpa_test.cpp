@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <core/xtensor_utils.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <umd/device/cluster.hpp>
@@ -292,21 +293,13 @@ static void TestRingAttention(
     auto& rng = autograd::ctx().get_generator();
 
     // Create full Q, K, V tensors
-    std::vector<float> query_data(batch * num_heads * seq_len * head_dim);
-    std::vector<float> key_data(batch * num_heads * seq_len * head_dim);
-    std::vector<float> value_data(batch * num_heads * seq_len * head_dim);
-
-    auto seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{query_data.data(), query_data.size()}, 0.0F, 2.0F, seed);
-    seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{key_data.data(), key_data.size()}, 0.0F, 2.0F, seed);
-    seed = rng();
-    ttml::test_utils::fill_uniform<float>(std::span{value_data.data(), value_data.size()}, 0.0F, 2.0F, seed);
-
-    // Convert to xtensor for reference computation
-    xt::xarray<float> query_xt = xt::adapt(query_data, std::vector<size_t>{batch, num_heads, seq_len, head_dim});
-    xt::xarray<float> key_xt = xt::adapt(key_data, std::vector<size_t>{batch, num_heads, seq_len, head_dim});
-    xt::xarray<float> value_xt = xt::adapt(value_data, std::vector<size_t>{batch, num_heads, seq_len, head_dim});
+    const std::array<std::size_t, 4> qkv_shape{batch, num_heads, seq_len, head_dim};
+    const auto query_seed = rng();
+    const auto key_seed = rng();
+    const auto value_seed = rng();
+    xt::xarray<float> query_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, query_seed, 0.0F, 2.0F);
+    xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, key_seed, 0.0F, 2.0F);
+    xt::xarray<float> value_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, value_seed, 0.0F, 2.0F);
 
     // Create reference mask (full causal)
     std::optional<xt::xarray<float>> ref_mask_xt;
@@ -370,13 +363,9 @@ static void TestRingAttention(
         << "Ring attention output does not match reference SDPA output";
 
     if (test_backward) {
-        std::vector<float> grad_output_data(batch * num_heads * seq_len * head_dim);
-        seed = rng();
-        ttml::test_utils::fill_uniform<float>(
-            std::span{grad_output_data.data(), grad_output_data.size()}, 0.0F, 2.0F, seed);
-
+        const auto grad_seed = rng();
         xt::xarray<float> grad_output_xt =
-            xt::adapt(grad_output_data, std::vector<size_t>{batch, num_heads, seq_len, head_dim});
+            ttml::test_utils::make_uniform_xarray<float>(qkv_shape, grad_seed, 0.0F, 2.0F);
 
         auto ref_grads = reference_sdpa_backward(
             query_xt, key_xt, value_xt, ref_result.attention_weights, grad_output_xt, ref_result.scale);

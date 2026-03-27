@@ -490,17 +490,16 @@ void run_sdpa_test(const SDPATestConfig& config) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
 
-    xt::xarray<float> query_tensor =
-        xt::empty<float>({config.batch_size, config.num_query_heads, config.sequence_length, head_dim_q});
-    ttml::test_utils::fill_uniform<float>(std::span{query_tensor.data(), query_tensor.size()}, -1.0F, 1.0F, seed);
+    const std::array<std::size_t, 4> query_shape{
+        config.batch_size, config.num_query_heads, config.sequence_length, head_dim_q};
+    const std::array<std::size_t, 4> kv_shape{
+        config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv};
 
-    xt::xarray<float> key_tensor =
-        xt::empty<float>({config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv});
-    ttml::test_utils::fill_uniform<float>(std::span{key_tensor.data(), key_tensor.size()}, -1.0F, 1.0F, seed);
+    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, seed, -1.0F, 1.0F);
 
-    xt::xarray<float> value_tensor =
-        xt::empty<float>({config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv});
-    ttml::test_utils::fill_uniform<float>(std::span{value_tensor.data(), value_tensor.size()}, -1.0F, 1.0F, seed);
+    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, seed, -1.0F, 1.0F);
+
+    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, seed, -1.0F, 1.0F);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
@@ -802,14 +801,13 @@ TEST_F(SDPAForwardTest, ValidationTest_IntermediateReturnModes) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
 
-    xt::xarray<float> query_tensor = xt::empty<float>({B, num_heads, S, head_dim});
-    ttml::test_utils::fill_uniform<float>(std::span{query_tensor.data(), query_tensor.size()}, -1.0F, 1.0F, seed);
+    const std::array<std::size_t, 4> split_shape{B, num_heads, S, head_dim};
 
-    xt::xarray<float> key_tensor = xt::empty<float>({B, num_heads, S, head_dim});
-    ttml::test_utils::fill_uniform<float>(std::span{key_tensor.data(), key_tensor.size()}, -1.0F, 1.0F, seed);
+    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(split_shape, seed, -1.0F, 1.0F);
 
-    xt::xarray<float> value_tensor = xt::empty<float>({B, num_heads, S, head_dim});
-    ttml::test_utils::fill_uniform<float>(std::span{value_tensor.data(), value_tensor.size()}, -1.0F, 1.0F, seed);
+    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(split_shape, seed, -1.0F, 1.0F);
+
+    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(split_shape, seed, -1.0F, 1.0F);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);

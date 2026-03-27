@@ -6,7 +6,6 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
-#include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -48,18 +47,6 @@ xt::xarray<float> calculate_cross_entropy_loss(const xt::xarray<float>& input, c
     xt::xarray<float> log_exp_sum_test = xt::log(xt::sum(xt::exp(shifted_input), -1, xt::keep_dims));
     xt::xarray<float> result = -target_inputs + max_input + log_exp_sum_test;
     return result;
-}
-
-static xt::xarray<float> make_random_input(uint32_t n, uint32_t c, uint32_t h, uint32_t w, uint32_t seed) {
-    return ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{n, c, h, w}, seed, -10.0F, 10.0F);
-}
-
-static xt::xarray<uint32_t> make_random_targets(uint32_t n, uint32_t h, uint32_t num_classes, uint32_t seed) {
-    auto labels =
-        ttml::test_utils::make_uniform_vector<uint32_t>(static_cast<size_t>(n) * h, 0U, num_classes - 1U, seed);
-    xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({n, h});
-    std::copy(labels.begin(), labels.end(), target_tensor.begin());
-    return target_tensor;
 }
 
 TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Small_Forward) {
@@ -113,13 +100,12 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
     using namespace ttml;
 
     const uint32_t N = 2U, C = 1U, H = 91U, W = 157U;
-    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
-
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     const uint32_t seed = rng();
-    input_tensor = make_random_input(N, C, H, W, seed);
-    xt::xarray<uint32_t> target_tensor = make_random_targets(N, H, W, seed + 1U);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, seed, -10.0F, 10.0F);
+    xt::xarray<uint32_t> target_tensor =
+        ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, seed + 1U, 0U, W - 1U);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -140,13 +126,12 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 1017U, W = 1018U;
-    const auto shape = ttsl::SmallVector<uint32_t>{N, C, H, W};
-
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     const uint32_t seed = rng();
-    input_tensor = make_random_input(N, C, H, W, seed);
-    xt::xarray<uint32_t> target_tensor = make_random_targets(N, H, W, seed + 1U);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, seed, -10.0F, 10.0F);
+    xt::xarray<uint32_t> target_tensor =
+        ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, seed + 1U, 0U, W - 1U);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -167,13 +152,12 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
     using namespace ttml;
 
     const uint32_t N = 1U, C = 1U, H = 1U, W = 65536U;
-    const auto shape = ttsl::SmallVector<size_t>{N, C, H, W};
-
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     const uint32_t seed = rng();
-    input_tensor = make_random_input(N, C, H, W, seed);
-    xt::xarray<uint32_t> target_tensor = make_random_targets(N, H, W, seed + 1U);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, seed, -10.0F, 10.0F);
+    xt::xarray<uint32_t> target_tensor =
+        ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, seed + 1U, 0U, W - 1U);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -194,13 +178,12 @@ TEST_F(CrossEntropyForwardTest, NIGHTLY_CrossEntropyForward_Huge_Forward) {
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 32U, W = 128000U;
-    const auto shape = ttsl::SmallVector<size_t>{N, C, H, W};
-
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
     auto& rng = ttml::autograd::ctx().get_generator();
     const uint32_t seed = rng();
-    input_tensor = make_random_input(N, C, H, W, seed);
-    xt::xarray<uint32_t> target_tensor = make_random_targets(N, H, W, seed + 1U);
+    xt::xarray<float> input_tensor =
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, seed, -10.0F, 10.0F);
+    xt::xarray<uint32_t> target_tensor =
+        ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, seed + 1U, 0U, W - 1U);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
