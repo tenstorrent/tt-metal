@@ -68,6 +68,7 @@ class TTNNModule:
         self._unique_name = None
         self._device_state: Optional[DistributedConfig] = None
         self._model_config = {}
+        self._bypass_tensor_wrapping = False
 
     def set_model_config(self, model_config):
         """Set model configuration dictionary."""

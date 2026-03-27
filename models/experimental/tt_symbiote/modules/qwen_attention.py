@@ -393,8 +393,8 @@ class TTNNQwen3FullAttention(TTNNModule):
     def _maybe_all_gather(self, tensor):
         """All-gather tensor across mesh devices if in distributed mode."""
         if not self._is_distributed:
-            return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
-        t = tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+            return tensor
+        t = tensor
         gathered = ttnn.experimental.all_gather_async(
             t,
             dim=-1,
@@ -476,7 +476,7 @@ class TTNNQwen3FullAttention(TTNNModule):
             return tensor
         t = tensor
         if isinstance(t, TorchTTNNTensor):
-            t = t.to_ttnn
+            t = t.to_ttnn if hasattr(t, "to_ttnn") else t
         orig_shape = list(t.shape)
         mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
         t_torch = ttnn.to_torch(t, mesh_composer=mesh_composer)
@@ -585,12 +585,8 @@ class TTNNQwen3FullAttention(TTNNModule):
         query_states, key_states = self.rope(query_states, key_states, cos, sin)
 
         # Expand KV to match Q heads (GQA)
-        key_states = self._repeat_kv(
-            key_states.to_ttnn if hasattr(key_states, "to_ttnn") else key_states, self.num_key_value_groups
-        )
-        value_states = self._repeat_kv(
-            value_states.to_ttnn if hasattr(value_states, "to_ttnn") else value_states, self.num_key_value_groups
-        )
+        key_states = self._repeat_kv(key_states, self.num_key_value_groups)
+        value_states = self._repeat_kv(value_states, self.num_key_value_groups)
 
         return query_states, key_states, value_states, gate, cos, sin
 
@@ -666,7 +662,7 @@ class TTNNQwen3FullAttention(TTNNModule):
         # Compute attention
         attn_output = self.sdpa(
             self,
-            query_states.to_ttnn if hasattr(query_states, "to_ttnn") else query_states,
+            query_states,
             key_states,
             value_states,
             attention_mask,
@@ -674,7 +670,7 @@ class TTNNQwen3FullAttention(TTNNModule):
             scaling=self.scaling,
             is_causal=self.is_causal,
             transpose_output=True,
-        ).to_ttnn
+        )
 
         # Reshape output: [batch, seq_len, num_heads, head_dim] -> [batch, seq_len, hidden_size]
         # Use actual tensor shape after SDPA
@@ -755,9 +751,7 @@ class TTNNQwen3FullAttention(TTNNModule):
         )
 
         # --- permute B H S D -> S B H D (the layout paged kernels expect) ---
-        query_states_paged = ttnn.permute(
-            query_states.to_ttnn if hasattr(query_states, "to_ttnn") else query_states, (2, 0, 1, 3)
-        )
+        query_states_paged = ttnn.permute(query_states, (2, 0, 1, 3))
         kv_key = ttnn.permute(kv_key, (2, 0, 1, 3))
         kv_value = ttnn.permute(kv_value, (2, 0, 1, 3))
 
@@ -1136,8 +1130,8 @@ class TTNNQwen3LinearAttention(TTNNModule):
     def _maybe_all_gather(self, tensor):
         """All-gather tensor across mesh devices if in distributed mode."""
         if not self._is_distributed:
-            return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
-        t = tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+            return tensor
+        t = tensor
         gathered = ttnn.experimental.all_gather_async(
             t,
             dim=-1,
@@ -1452,7 +1446,7 @@ class TTNNQwen3LinearAttention(TTNNModule):
             # Convert back to TTNN for projections
             hidden_states_ttnn = self._to_ttnn(hidden_states_masked)
         except ImportError:
-            hidden_states_ttnn = hidden_states.to_ttnn if hasattr(hidden_states, "to_ttnn") else hidden_states
+            hidden_states_ttnn = hidden_states
 
         batch_size, seq_len, _ = hidden_states_ttnn.shape
 

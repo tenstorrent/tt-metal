@@ -880,18 +880,14 @@ class TTNNQwen3MoE(TTNNMoE):
 
             # Convert indices and weights to PyTorch
             # Extract underlying TTNN tensor from TorchTTNNTensor wrapper
-            idx_ttnn = (
-                topk_experts_indices.to_ttnn if hasattr(topk_experts_indices, "to_ttnn") else topk_experts_indices
-            )
+            idx_ttnn = topk_experts_indices
             idx_rm = ttnn.to_layout(idx_ttnn, ttnn.ROW_MAJOR_LAYOUT)
             idx_torch_full = ttnn.to_torch(idx_rm, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
             idx_batch_per_device = idx_torch_full.shape[0] // num_devices
             idx_torch = idx_torch_full[:idx_batch_per_device]  # Take only first device's data
             idx_torch = idx_torch.to(torch.int64)
 
-            wgt_ttnn = (
-                topk_experts_weights.to_ttnn if hasattr(topk_experts_weights, "to_ttnn") else topk_experts_weights
-            )
+            wgt_ttnn = topk_experts_weights
             wgt_rm = ttnn.to_layout(wgt_ttnn, ttnn.ROW_MAJOR_LAYOUT)
             wgt_torch_full = ttnn.to_torch(wgt_rm, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
             wgt_batch_per_device = wgt_torch_full.shape[0] // num_devices
@@ -916,7 +912,7 @@ class TTNNQwen3MoE(TTNNMoE):
         # 4. Reduce-scatter final output.
         n_rs = self.device.get_num_devices()  # devices along cluster_axis=1
         # Extract underlying TTNN tensor - handle both wrapped and raw tensors
-        routed_out = routed_output.to_ttnn if hasattr(routed_output, "to_ttnn") else routed_output
+        routed_out = routed_output
         if n_rs > 1:
             routed_out = ttnn.mul(routed_out, 1.0 / float(n_rs))
         routed_output = ttnn.experimental.reduce_scatter_minimal_async(
@@ -950,12 +946,12 @@ class TTNNQwen3MoE(TTNNMoE):
             gate_values = ttnn.sigmoid(gate_logits)
             ttnn.deallocate(gate_logits)
             # Gate the shared expert output - broadcast gate_values (shape [..., 1]) to shared_output shape
-            shared_output_gated = ttnn.mul(shared_output.to_ttnn, gate_values)
+            shared_output_gated = ttnn.mul(shared_output, gate_values)
             ttnn.deallocate(gate_values)
             output = ttnn.add(routed_output, shared_output_gated)
             ttnn.deallocate(shared_output_gated)
         else:
-            output = ttnn.add(routed_output, shared_output.to_ttnn)
+            output = ttnn.add(routed_output, shared_output)
 
         output = ttnn.squeeze(output, 1)  # Remove experts dimension
 

@@ -534,7 +534,7 @@ class TTNNGlm4MoeExpertLayers(TTNNModule):
         """Execute single expert forward pass."""
         gate = self.gate_layers[expert_idx](current_state)
         up = self.up_layers[expert_idx](current_state)
-        current_hidden_states = gate.to_ttnn * up.to_ttnn
+        current_hidden_states = gate * up
         current_hidden_states = self.down_layers[expert_idx](current_hidden_states)
         return current_hidden_states
 
@@ -677,40 +677,13 @@ class TTNNGlm4MoeMLP(TTNNModule):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         x_gate = self.gate_proj(x)
         x_up = self.up_proj(x)
-        x = ttnn.mul(x_gate.to_ttnn, x_up.to_ttnn)
+        x = ttnn.mul(x_gate, x_up)
         x = self.down_proj(x)
         return x
 
 
-class TTNNBailingMoeV2MLP(TTNNModule):
-    """TTNN-accelerated BailingMoeV2MLP for dense layers in Ling model.
-
-    Replaces the PyTorch BailingMoeV2MLP to keep the multiply operation
-    on-device using ttnn.mul, avoiding dispatch overhead.
-    """
-
-    @classmethod
-    def from_torch(cls, torch_layer):
-        """Create from PyTorch BailingMoeV2MLP.
-
-        Args:
-            torch_layer: HuggingFace BailingMoeV2MLP instance
-        """
-        tt_module = cls()
-        tt_module._fallback_torch_layer = torch_layer
-        tt_module.gate_proj = TTNNLinearSilu.from_torch(
-            torch_layer.gate_proj, linear_class=TTNNLinearIColShardedWRowSharded
-        )
-        tt_module.up_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.up_proj)
-        tt_module.down_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.down_proj)
-        return tt_module
-
-    def forward(self, x):
-        x_gate = self.gate_proj(x)
-        x_up = self.up_proj(x)
-        x = ttnn.mul(x_gate.to_ttnn, x_up.to_ttnn)
-        x = self.down_proj(x)
-        return x
+class TTNNBailingMoeV2MLP(TTNNGlm4MoeMLP):
+    pass
 
 
 class TTNNGlm4MoeRouteTokenToExperts(TTNNModule):
@@ -880,7 +853,7 @@ class TTNNGlm4MoeMoE(TTNNModule):
         hidden_states = hidden_states.view(-1, hidden_states.shape[-1])
         hidden_states = self.experts(hidden_states, topk_indices.to(dtype=torch.int64), topk_weights).view(*orig_shape)
         hidden_states = hidden_states + self.shared_experts(residuals)
-        return hidden_states.to_ttnn
+        return hidden_states
 
 
 class TTNNMoERouterDecode(TTNNModule):
@@ -1503,7 +1476,7 @@ class TTNNMoE(TTNNModule):
 
         # 4. Reduce-scatter final output.
         n_rs = self.device.shape[1]  # devices along cluster_axis=1
-        routed_out = routed_output.to_ttnn
+        routed_out = routed_output
         if n_rs > 1:
             routed_out = ttnn.mul(routed_out, 1.0 / float(n_rs))
         routed_output = ttnn.experimental.reduce_scatter_minimal_async(
@@ -1522,7 +1495,7 @@ class TTNNMoE(TTNNModule):
 
         # 5. Add shared experts output
         shared_output = self.shared_experts(residual)
-        output = ttnn.add(routed_output, shared_output.to_ttnn)
+        output = ttnn.add(routed_output, shared_output)
         output = ttnn.squeeze(output, 1)  # Remove experts dimension
         return output
 

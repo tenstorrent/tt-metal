@@ -604,7 +604,7 @@ class TTNNSelfAttention(TTNNModule):
 
         ttnn.deallocate(hidden_states)
         if self.should_reallocate_in_attention:
-            value = ttnn.reallocate(value.to_ttnn)
+            value = ttnn.reallocate(value)
 
         context_layer = self.sdpa(
             self,
@@ -616,7 +616,7 @@ class TTNNSelfAttention(TTNNModule):
             scaling=self.scaling,
             transpose_output=False,
         )
-        context_layer = ttnn.experimental.nlp_concat_heads(context_layer.to_ttnn)
+        context_layer = ttnn.experimental.nlp_concat_heads(context_layer)
         # context_layer = ttnn.typecast(context_layer, original_dtype)
         context_layer = ttnn.typecast(context_layer, original_dtype)
         context_layer = ttnn.squeeze(context_layer, 1)
@@ -749,7 +749,7 @@ class TTNNWhisperAttention(TTNNModule):
         if is_cross:
             # Cross-attention: extract Q from fused weights
             query = self.q_proj_ttnn(hidden_states)
-            query = ttnn.multiply(query.to_ttnn, self.scaling)
+            query = ttnn.multiply(query, self.scaling)
             query = self._reshape_heads(query, tgt_len, bsz)
 
             if cache and is_updated:
@@ -759,8 +759,8 @@ class TTNNWhisperAttention(TTNNModule):
                     key_value_states = ttnn.to_layout(
                         key_value_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
                     )
-                key = self.k_proj_cross(key_value_states).to_ttnn
-                value = self.v_proj_cross(key_value_states).to_ttnn
+                key = self.k_proj_cross(key_value_states)
+                value = self.v_proj_cross(key_value_states)
                 src_len = key.shape[1]
                 key = self._reshape_heads(key, src_len, bsz)
                 value = self._reshape_heads(value, src_len, bsz)
@@ -832,7 +832,7 @@ class TTNNWhisperAttention(TTNNModule):
             # Slice: [B, kv_len, H, D] -> [B, q_len, H, D]
             attn_out = attn_out[:, -original_q_len:, :, :]
 
-        attn_out = ttnn.reshape(attn_out.to_ttnn, (bsz, tgt_len, self.embed_dim))
+        attn_out = ttnn.reshape(attn_out, (bsz, tgt_len, self.embed_dim))
         return self.out_proj(attn_out), None, past_key_value
 
 
@@ -990,7 +990,7 @@ class LlamaAttention(TTNNModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=hidden_states.dtype,
             )
-            query_states = ttnn.concat([zero_pad, query_states.to_ttnn], dim=2)
+            query_states = ttnn.concat([zero_pad, query_states], dim=2)
 
         attn_out = self.sdpa(
             self,
@@ -1003,7 +1003,7 @@ class LlamaAttention(TTNNModule):
             is_causal=self.torch_layer.is_causal,
             transpose_output=False,
         )
-        attn_out = ttnn.experimental.nlp_concat_heads(attn_out.to_ttnn)
+        attn_out = ttnn.experimental.nlp_concat_heads(attn_out)
         attn_out = ttnn.squeeze(attn_out, 1)
         # Slice output if query was padded
         if self.torch_layer.is_causal and original_q_len < kv_len:
@@ -1600,8 +1600,8 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
 
     def _maybe_all_gather(self, tensor):
         if not self._is_distributed:
-            return tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
-        t = tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+            return tensor
+        t = tensor
         return ttnn.experimental.all_gather_async(
             t,
             dim=-1,
@@ -1720,9 +1720,9 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
 
         q_rot, k_rot = self.rope(q_rot, k_rot, cos, sin)
 
-        k_rot = ttnn.repeat(k_rot.to_ttnn, (1, self.num_heads, 1, 1))
+        k_rot = ttnn.repeat(k_rot, (1, self.num_heads, 1, 1))
 
-        query_states = ttnn.concat([q_pass, q_rot.to_ttnn], dim=-1)
+        query_states = ttnn.concat([q_pass, q_rot], dim=-1)
         key_states = ttnn.concat([key_nope, k_rot], dim=-1)
 
         return query_states, key_states, value_states, cos, sin
@@ -1790,7 +1790,7 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
             scaling=self.scaling,
             is_causal=self.is_causal,
             transpose_output=True,
-        ).to_ttnn
+        )
 
         if self.qk_head_dim != self.v_head_dim:
             attn_output = attn_output[:, :, :, : self.v_head_dim]
@@ -1811,8 +1811,6 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         if self.device.get_num_devices() <= 1:
             return tensor
         t = tensor
-        if isinstance(t, TorchTTNNTensor):
-            t = t.to_ttnn
         orig_shape = list(t.shape)
         mesh_composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
         t_torch = ttnn.to_torch(t, mesh_composer=mesh_composer)
@@ -2143,8 +2141,6 @@ class TTNNQwen3NextGatedAttention(TTNNModule):
         **kwargs,
     ):
         cos, sin = position_embeddings
-        if isinstance(hidden_states, TorchTTNNTensor):
-            hidden_states = hidden_states.to_ttnn
         if isinstance(cos, torch.Tensor):
             cos = ttnn.from_torch(cos.to(torch.bfloat16), device=self.device, layout=ttnn.TILE_LAYOUT)
         if isinstance(sin, torch.Tensor):
@@ -2283,7 +2279,7 @@ class TTNNBailingMoEAttention(TTNNModule):
 
     def _maybe_all_gather(self, tensor):
         """All-gather tensor across mesh devices."""
-        t = tensor.to_ttnn if hasattr(tensor, "to_ttnn") else tensor
+        t = tensor
         gathered = ttnn.all_gather(t, dim=-1, num_links=1)
         if gathered.dtype != ttnn.bfloat16:
             gathered = ttnn.typecast(gathered, ttnn.bfloat16)
@@ -2298,8 +2294,6 @@ class TTNNBailingMoEAttention(TTNNModule):
         host for decode tokens (tiny tensors, negligible overhead).
         """
         t = tensor
-        if hasattr(t, "to_ttnn"):
-            t = t.to_ttnn
         num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
         if num_devices <= 1:
             return t
@@ -2477,10 +2471,6 @@ class TTNNBailingMoEAttention(TTNNModule):
         q_normed = self.query_layernorm(q_reshaped)
         k_normed = self.key_layernorm(k_reshaped)
 
-        if hasattr(q_normed, "to_ttnn"):
-            q_normed = q_normed.to_ttnn
-        if hasattr(k_normed, "to_ttnn"):
-            k_normed = k_normed.to_ttnn
         if q_normed.dtype != ttnn.bfloat16:
             q_normed = ttnn.typecast(q_normed, ttnn.bfloat16)
         if k_normed.dtype != ttnn.bfloat16:
@@ -2517,12 +2507,6 @@ class TTNNBailingMoEAttention(TTNNModule):
         # cos/sin should already be sized according to partial_rotary_factor
         query_states, key_states = self.rope(query_states, key_states, cos, sin)
 
-        # Handle TorchTTNNTensor wrapping
-        if hasattr(query_states, "to_ttnn"):
-            query_states = query_states.to_ttnn
-        if hasattr(key_states, "to_ttnn"):
-            key_states = key_states.to_ttnn
-
         return query_states, key_states
 
     def _forward_prefill(
@@ -2541,9 +2525,6 @@ class TTNNBailingMoEAttention(TTNNModule):
 
         # Fused QKV: 1 matmul + 1 all_reduce
         qkv_states = self.qkv_proj(hidden_states)
-
-        if hasattr(qkv_states, "to_ttnn"):
-            qkv_states = qkv_states.to_ttnn
 
         # Split into Q, K, V by slicing last dimension
         q_size = self.num_heads * self.head_dim
@@ -2569,12 +2550,8 @@ class TTNNBailingMoEAttention(TTNNModule):
         cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
         trans_mat = self._rotary_setup.get_trans_mat(is_decode=False)
 
-        if hasattr(query_states, "to_ttnn"):
-            query_states = query_states.to_ttnn
         if isinstance(query_states, ttnn.Tensor) and query_states.dtype != ttnn.bfloat16:
             query_states = ttnn.typecast(query_states, ttnn.bfloat16)
-        if hasattr(key_states, "to_ttnn"):
-            key_states = key_states.to_ttnn
         if isinstance(key_states, ttnn.Tensor) and key_states.dtype != ttnn.bfloat16:
             key_states = ttnn.typecast(key_states, ttnn.bfloat16)
 
@@ -2603,8 +2580,6 @@ class TTNNBailingMoEAttention(TTNNModule):
             transpose_output=True,
         )
 
-        if hasattr(attn_output, "to_ttnn"):
-            attn_output = attn_output.to_ttnn
         if isinstance(attn_output, ttnn.Tensor) and attn_output.dtype != ttnn.bfloat16:
             attn_output = ttnn.typecast(attn_output, ttnn.bfloat16)
 
@@ -2631,9 +2606,6 @@ class TTNNBailingMoEAttention(TTNNModule):
         # === FUSED QKV: 1 matmul + 1 all_reduce (replaces 3 matmuls + 5 CCL ops) ===
         qkv_states = self.qkv_proj(hidden_states)
         # qkv_states shape: [B, 1, 3072] replicated on all devices
-
-        if hasattr(qkv_states, "to_ttnn"):
-            qkv_states = qkv_states.to_ttnn
 
         # Split into Q, K, V by slicing last dimension
         q_size = self.num_heads * self.head_dim
@@ -2687,12 +2659,8 @@ class TTNNBailingMoEAttention(TTNNModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        if hasattr(query_states, "to_ttnn"):
-            query_states = query_states.to_ttnn
         if isinstance(query_states, ttnn.Tensor) and query_states.dtype != ttnn.bfloat16:
             query_states = ttnn.typecast(query_states, ttnn.bfloat16)
-        if hasattr(key_states, "to_ttnn"):
-            key_states = key_states.to_ttnn
         if isinstance(key_states, ttnn.Tensor) and key_states.dtype != ttnn.bfloat16:
             key_states = ttnn.typecast(key_states, ttnn.bfloat16)
 
@@ -2791,9 +2759,6 @@ class TTNNBailingMoEAttention(TTNNModule):
         )
         attn_output = self.dense(attn_output)
 
-        if hasattr(attn_output, "to_ttnn"):
-            attn_output = attn_output.to_ttnn
-
         if batch_size < 32:
             attn_output = ttnn.slice(attn_output, [0, 0, 0, 0], [1, 1, batch_size, attn_output.shape[-1]])
 
@@ -2818,8 +2783,6 @@ class TTNNBailingMoEAttention(TTNNModule):
         if past_key_value is not None and past_key_values is None:
             past_key_values = past_key_value
 
-        if hasattr(hidden_states, "to_ttnn"):
-            hidden_states = hidden_states.to_ttnn
         if isinstance(hidden_states, ttnn.Tensor) and hidden_states.dtype != ttnn.bfloat16:
             hidden_states = ttnn.typecast(hidden_states, ttnn.bfloat16)
         seq_length = hidden_states.shape[1]

@@ -12,17 +12,9 @@ eliminating host round-trips that force device synchronization.
 import ttnn
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
-from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.modules.attention import TTNNBailingMoEAttention
 from models.experimental.tt_symbiote.modules.moe import TTNNBailingMoE
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
-
-
-def _to_ttnn(x):
-    """Extract raw ttnn.Tensor from TorchTTNNTensor or passthrough."""
-    if isinstance(x, TorchTTNNTensor):
-        return x.to_ttnn
-    return x
 
 
 class TTNNBailingMoEDecoderLayer(TTNNModule):
@@ -94,7 +86,6 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
 
         # Input layernorm
         hs = self.input_layernorm(hs)
-        hs = _to_ttnn(hs)
 
         # Attention
         attn_out, self_attn_weights, present_key_value = self.attention(
@@ -104,7 +95,6 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
             past_key_value=past_key_value,
             cache_position=kwargs.get("cache_position"),
         )
-        attn_out = _to_ttnn(attn_out)
 
         # Residual add ON DEVICE (replaces aten::add on CPU)
         hs = ttnn.add(residual, attn_out)
@@ -116,7 +106,6 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
 
         # Post-attention layernorm
         hs_normed = self.post_attention_layernorm(hs)
-        hs_normed = _to_ttnn(hs_normed)
 
         # MLP / MoE
         # MLP (layer 0) or MoE (layers 1-19)
@@ -124,7 +113,6 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
         router_logits = None
         if isinstance(mlp_out, tuple):
             mlp_out, router_logits = mlp_out
-        mlp_out = _to_ttnn(mlp_out)
 
         # Residual add ON DEVICE (replaces aten::add on CPU)
         hs = ttnn.add(residual, mlp_out)

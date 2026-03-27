@@ -404,6 +404,25 @@ def compose_transforms(*transforms):
     return _composed
 
 
+def fast_unwrap_to_device(device):
+    """Lightweight transform: extract ttnn.Tensor and ensure on-device. No TorchTTNNTensor wrapping."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    def _transform(e):
+        if isinstance(e, TorchTTNNTensor):
+            t = e.ttnn_tensor if e.ttnn_tensor is not None else e.to_ttnn
+            if device is not None and t.device() != device:
+                t = ttnn.to_device(t, device)
+            return t
+        elif isinstance(e, ttnn.Tensor):
+            if device is not None and e.device() != device:
+                e = ttnn.to_device(e, device)
+            return e
+        return e
+
+    return _transform
+
+
 def post_process_ttnn_module_output(self, result):
     result = tree_map(wrap_to_torch_ttnn_tensor, result)
     if self.device_state is not None:
@@ -566,7 +585,11 @@ class NormalRun:
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         assert self.device is not None, "Device must be set for TTNN module execution."
         begin_full = time.time()
-        transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+        bypass = getattr(self, "_bypass_tensor_wrapping", False)
+        if bypass:
+            transform = fast_unwrap_to_device(self.device)
+        else:
+            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
         func_args = tree_map(transform, args)
         # TODO: fix kwds not being passed correctly
         other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
@@ -588,7 +611,10 @@ class NormalRun:
         if NormalRun.signpost_mode is not None:
             signpost(f"{self.module_name}", f"{self.__class__.__name__}")
         begin = time.time()
-        result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
+        if bypass:
+            result = self.forward(*func_args, **func_kwargs)
+        else:
+            result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
         DispatchManager.set_current_module_name(None)
@@ -629,13 +655,20 @@ class NormalRunWithFallback(NormalRun):
         print(f"{self.__class__.__name__}: {self.module_name} on device {self.device}")
         result = None
         if self.device is not None:
-            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+            bypass = getattr(self, "_bypass_tensor_wrapping", False)
+            if bypass:
+                transform = fast_unwrap_to_device(self.device)
+            else:
+                transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
             func_args = tree_map(transform, args)
             func_kwargs = tree_map(transform, kwds)
             self.preprocess_weights()
             self.move_weights_to_device()
             try:
-                result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
+                if bypass:
+                    result = self.forward(*func_args, **func_kwargs)
+                else:
+                    result = post_process_ttnn_module_output(self, self.forward(*func_args, **func_kwargs))
             except Exception as e:
                 print(f"Error {e} in {self.__class__.__name__} forward, falling back to torch")
                 assert (
@@ -1018,7 +1051,11 @@ class TracedRun(LightweightRun):
         assert self.device is not None, "Device must be set for TTNN module execution."
         begin_full = time.time()
         # Transform inputs
-        transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
+        bypass = getattr(self, "_bypass_tensor_wrapping", False)
+        if bypass:
+            transform = fast_unwrap_to_device(self.device)
+        else:
+            transform = compose_transforms(wrap_to_torch_ttnn_tensor, to_ttnn_wrap, set_device_wrap(self.device))
         func_args = tree_map(transform, args)
         other_kwargs = {k: v for k, v in kwds.items() if "past_key_value" not in k}
         func_kwargs = tree_map(transform, other_kwargs)
@@ -1059,6 +1096,8 @@ class TracedRun(LightweightRun):
                 "TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin
             )
             DispatchManager.set_current_module_name(None)
+            if bypass:
+                return result
             return post_process_ttnn_module_output(self, result)
 
         # Traced execution path
@@ -1092,6 +1131,8 @@ class TracedRun(LightweightRun):
         DispatchManager.record_timing(
             "TorchModules", self.module_name, self.__class__.__name__, {}, end_full - begin_full
         )
+        if bypass:
+            return result
         return post_process_ttnn_module_output(self, result)
 
 

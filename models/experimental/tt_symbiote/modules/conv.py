@@ -456,7 +456,7 @@ class TTNNBottleneck(TTNNModule):
 
             identity = self.downsample(TorchTTNNTensor(identity, dtype=torch.bfloat16))
             if identity.to_ttnn.device() != out.to_ttnn.device():
-                identity = ttnn.to_device(identity.to_ttnn, out.to_ttnn.device())
+                identity = ttnn.to_device(identity.to_ttnn, out.device())
 
             identity = self.permute(identity, perm=[0, 2, 3, 1])
         out = out + identity
@@ -615,7 +615,6 @@ class TTNNViTEmbeddings(TTNNModule):
         patch_embedding_output = self.patch_embeddings(pixel_values, **kwargs)
         batch = pixel_values.shape[0]
         # expand the cls token to the batch size
-        patch_embedding_output = patch_embedding_output.to_ttnn
         if patch_embedding_output.layout != ttnn.TILE_LAYOUT:
             patch_embedding_output = ttnn.to_layout(patch_embedding_output, layout=ttnn.TILE_LAYOUT)
         # add the [CLS] token to the embedded patch tokens

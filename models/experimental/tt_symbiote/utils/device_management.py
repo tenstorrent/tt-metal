@@ -48,10 +48,10 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
     if isinstance(obj, nn.Module):
         module_names = {module: name for name, module in obj.named_modules()}
 
-    def _set_device_recursive(current_obj, module_name=None):
+    def _set_device_recursive(current_obj, parent_is_ttnn=False):
         if isinstance(current_obj, nn.Module):
             # Get the name for this module from the mapping
-            name = module_names.get(current_obj, module_name or "")
+            name = module_names.get(current_obj, "")
 
             # Register forward hook for this module
             if kwargs.get("register_forward_hook", True):
@@ -78,12 +78,13 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
                         current_obj.__call__ = timed_call(current_obj.__call__, name, current_obj.__class__.__name__)
                         current_obj.__call__._is_timed = True
 
+            # nn.Module children: TTNNModule children get bypass=False (parent is nn.Module)
             for child_name, module in current_obj._modules.items():
                 if module is None:
                     continue
                 if isinstance(module, TTNNModule):
                     _initialize_module_on_device(module, device, device_init)
-                _set_device_recursive(module)
+                _set_device_recursive(module, parent_is_ttnn=isinstance(current_obj, TTNNModule))
 
             for attr_name in dir(current_obj):
                 if attr_name.startswith("_"):
@@ -94,18 +95,20 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
                     continue
                 if isinstance(value, TTNNModule):
                     _initialize_module_on_device(value, device, device_init)
-                    _set_device_recursive(value)
+                    _set_device_recursive(value, parent_is_ttnn=isinstance(current_obj, TTNNModule))
                 if isinstance(value, dict):
                     for k, v in value.items():
                         if isinstance(v, TTNNModule):
                             _initialize_module_on_device(v, device, device_init)
-                        _set_device_recursive(v)
+                        _set_device_recursive(v, parent_is_ttnn=isinstance(current_obj, TTNNModule))
                 if isinstance(value, (list, tuple)):
                     for v in value:
                         if isinstance(v, TTNNModule):
                             _initialize_module_on_device(v, device, device_init)
-                        _set_device_recursive(v)
+                        _set_device_recursive(v, parent_is_ttnn=isinstance(current_obj, TTNNModule))
         elif isinstance(current_obj, TTNNModule):
+            # Set bypass based on parent type: TTNN children of TTNN modules bypass wrapping
+            current_obj._bypass_tensor_wrapping = parent_is_ttnn
             _initialize_module_on_device(current_obj, device, device_init)
             for attr_name in dir(current_obj):
                 if attr_name.startswith("_"):
@@ -117,17 +120,17 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
                 if isinstance(value, (nn.Module, TTNNModule)):
                     if isinstance(value, TTNNModule):
                         _initialize_module_on_device(value, device, device_init)
-                    _set_device_recursive(value)
+                    _set_device_recursive(value, parent_is_ttnn=True)
                 if isinstance(value, dict):
                     for k, v in value.items():
                         if isinstance(v, TTNNModule):
                             _initialize_module_on_device(v, device, device_init)
-                        _set_device_recursive(v)
+                        _set_device_recursive(v, parent_is_ttnn=True)
                 if isinstance(value, (list, tuple)):
                     for v in value:
                         if isinstance(v, TTNNModule):
                             _initialize_module_on_device(v, device, device_init)
-                        _set_device_recursive(v)
+                        _set_device_recursive(v, parent_is_ttnn=True)
 
     _set_device_recursive(obj)
     if kwargs.get("dump_visualization", True):

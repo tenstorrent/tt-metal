@@ -373,7 +373,7 @@ class TTNNLinearActivation(TTNNModule):
 
     def forward(self, hidden_states):
         hidden_states = self.dense(hidden_states)
-        hidden_states = self.activation(hidden_states.to_ttnn)
+        hidden_states = self.activation(hidden_states)
         return hidden_states
 
 
