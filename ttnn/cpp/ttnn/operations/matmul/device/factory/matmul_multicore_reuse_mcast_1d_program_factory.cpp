@@ -367,6 +367,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B,      // batch
             (std::uint32_t)B,      // batch
+            (std::uint32_t)false,  // reuse_in0_in_CB
             // sparsity args
             (std::uint32_t)0,     // batchB
             (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -1270,9 +1271,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)0,  // in0_mcast_num_dests
         (std::uint32_t)0,  // in0_mcast_num_cores
         // batch args
-        (std::uint32_t)M * K,  // MtKt
-        (std::uint32_t)in0_B,  // batch
-        (std::uint32_t)in1_B,  // batch
+        (std::uint32_t)M * K,            // MtKt
+        (std::uint32_t)in0_B,            // batch
+        (std::uint32_t)in1_B,            // batch
+        (std::uint32_t)reuse_in0_in_CB,  // reuse_in0_in_CB
         // sparsity args
         (std::uint32_t)0,     // batchB
         (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
