@@ -583,7 +583,7 @@ inline auto invoke_binary_ng_impl(
 
 Tensor invoke_binary_ng(
     const Tensor& lhs,
-    const float& rhs,
+    const Tensor& rhs,
     operations::binary::BinaryOpType binary_op_type,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
@@ -611,7 +611,7 @@ Tensor invoke_binary_ng(
 
 Tensor invoke_binary_ng(
     const Tensor& lhs,
-    const int32_t& rhs,
+    float rhs,
     operations::binary::BinaryOpType binary_op_type,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
