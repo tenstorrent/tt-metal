@@ -30,6 +30,9 @@ class ttMLA:
         self.layer_idx = layer_idx
         self.is_balanced = is_balanced
 
+        self.sp_axis = sp_axis
+        self.tp_axis = tp_axis
+
         # Store per-matmul and SDPA config dicts keyed by local seq_len for runtime lookup
         self.mm_configs = {
             name: MLA_MATMUL_CONFIG.get(name, {})
@@ -210,9 +213,7 @@ class ttMLA:
         q_a_proj = q_a_proj.transpose(-2, -1)
 
         shard_dims = [None, None]
-        tp_axis = 1
-        sp_axis = 0
-        shard_dims[tp_axis] = 0
+        shard_dims[self.tp_axis] = 0
         mesh_mapper = ttnn.ShardTensor2dMesh(
             self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
         )
@@ -225,8 +226,8 @@ class ttMLA:
             mesh_mapper=mesh_mapper,
         )
 
-        shard_dims[tp_axis] = 1
-        shard_dims[sp_axis] = None
+        shard_dims[self.tp_axis] = 1
+        shard_dims[self.sp_axis] = None
         mesh_mapper_q_b_proj = ttnn.ShardTensor2dMesh(
             self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=shard_dims
         )
@@ -254,8 +255,8 @@ class ttMLA:
         torch_weights_k = kv_b_proj_weights[..., : self.qk_nope_head_dim, :].transpose(-2, -1)
         torch_weights_v = kv_b_proj_weights[..., self.qk_nope_head_dim :, :]
 
-        shard_dims[tp_axis] = 1
-        shard_dims[sp_axis] = None
+        shard_dims[self.tp_axis] = 1
+        shard_dims[self.sp_axis] = None
         self.wkv_b1_weight = ttnn.from_torch(
             torch_weights_k.transpose(-2, -1),
             device=self.mesh_device,
@@ -352,22 +353,22 @@ class ttMLA:
             tt_q,
             persistent_output_buffers=None,
             dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
-            cluster_axis=1,
+            cluster_axis=self.tp_axis,
         )
         tt_q = ttnn.experimental.all_gather_async(
             tt_q,
             dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
-            cluster_axis=1,
+            cluster_axis=self.tp_axis,
         )
 
         # rmsnorm
@@ -434,12 +435,12 @@ class ttMLA:
         tt_kv = ttnn.experimental.all_gather_async(
             tt_kv,
             dim=1,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.tp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
-            cluster_axis=1,
+            cluster_axis=self.tp_axis,
         )
         tt_kv = ttnn.experimental.fast_reduce_nc(
             tt_kv, dims=[1], output=None, compute_kernel_config=self.hifi4_fp32_compute_kernel_config
@@ -504,7 +505,7 @@ class ttMLA:
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
             num_links=self.ccl_num_links,
-            cluster_axis=0,
+            cluster_axis=self.sp_axis,
             mesh_device=self.mesh_device,
             topology=ttnn.Topology.Linear,
             subdevice_id=self.tt_ccl.worker_sub_device_id,
@@ -524,11 +525,11 @@ class ttMLA:
         out = ttnn.experimental.reduce_scatter_minimal_async(
             v_out,
             dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
-            cluster_axis=1,
+            cluster_axis=self.tp_axis,
         )
         return out

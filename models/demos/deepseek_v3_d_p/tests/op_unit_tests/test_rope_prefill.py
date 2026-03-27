@@ -55,7 +55,6 @@ def test_rope_prefill(
     config = request.getfixturevalue("config_only")
 
     sp_axis = 0
-    tp_axis = 1
     production_mesh = [32, 4]
     mesh_shape = list(mesh_device.shape)
 

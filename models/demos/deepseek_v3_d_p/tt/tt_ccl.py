@@ -5,6 +5,10 @@ from typing import Optional
 
 import ttnn
 
+# NOTE: This file is forked from models/common/modules/tt_ccl.py
+#       This is done to include logic for divifing the grid of cores for ring attention
+#       One row is taken for the CCL communication of the op
+
 # =============================================================================
 # CCL tuning defaults - shared across all TTTv2 modules
 # =============================================================================
@@ -221,8 +225,8 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
         "P150x4": (2, 2),
         "P150x8": (2, 2),
         "P300": (2, 2),
-        "BHGLX": (4, 3),
-        "TG": (4, 3),
+        "BHGLX": (2, 2),  # NOTE: Possible increase to 4 when it's enabled
+        "TG": (4, 4),
         "N150x4": (1, 1),
     }
     device_links = link_dict[device_name]

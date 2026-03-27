@@ -2,14 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pathlib
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.mla.utils import (
+    create_balanced_chunk_order,
+    reorder_tensor_chunks,
+    reverse_reorder_tensor_chunks,
+)
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
@@ -58,63 +61,6 @@ def create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_
     return submesh_device
 
 
-def create_balanced_chunk_order(rp_factor):
-    """Create balanced chunk order for sequence reordering.
-
-    For rp_factor=4, creates 2*4=8 chunks with order: 0,7,1,6,2,5,3,4
-    This interleaves chunks from start and end to balance workload.
-    """
-    num_chunks = 2 * rp_factor
-    balanced_order = []
-
-    left = 0
-    right = num_chunks - 1
-
-    for i in range(num_chunks):
-        if i % 2 == 0:
-            balanced_order.append(left)
-            left += 1
-        else:
-            balanced_order.append(right)
-            right -= 1
-
-    return balanced_order
-
-
-def reorder_tensor_chunks(tensor, chunk_order, seq_dim=2):
-    """Reorder tensor chunks along sequence dimension according to chunk_order."""
-    seq_len = tensor.shape[seq_dim]
-    num_chunks = len(chunk_order)
-    chunk_size = seq_len // num_chunks
-
-    # Split into chunks
-    chunks = []
-    for i in range(num_chunks):
-        start = i * chunk_size
-        end = start + chunk_size
-        if seq_dim == 2:
-            chunks.append(tensor[:, :, start:end, :])
-        else:
-            raise NotImplementedError(f"Reordering for seq_dim={seq_dim} not implemented")
-
-    # Reorder chunks according to chunk_order
-    reordered_chunks = [chunks[i] for i in chunk_order]
-
-    # Concatenate reordered chunks
-    return torch.cat(reordered_chunks, dim=seq_dim)
-
-
-def reverse_reorder_tensor_chunks(tensor, chunk_order, seq_dim=2):
-    """Reverse the chunk reordering to restore original order."""
-    # Create inverse permutation
-    inverse_order = [0] * len(chunk_order)
-    for new_pos, orig_pos in enumerate(chunk_order):
-        inverse_order[orig_pos] = new_pos
-
-    logger.debug(f"inverse order: {inverse_order}")
-    return reorder_tensor_chunks(tensor, inverse_order, seq_dim)
-
-
 def run_ring_joint_sdpa(
     submesh,
     b,
@@ -149,8 +95,8 @@ def run_ring_joint_sdpa(
 
     sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
     ccl_core_grid_offset = (0, full_compute_grid.y - 1)
-    print(f"full_compute_grid: {full_compute_grid}")
-    print(f"sdpa_compute_grid: {sdpa_compute_grid}")
+    logger.debug(f"full_compute_grid: {full_compute_grid}")
+    logger.debug(f"sdpa_compute_grid: {sdpa_compute_grid}")
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_compute_grid.x - 1, full_compute_grid.y - 1))}
@@ -625,138 +571,4 @@ def test_mla_sdpa(
         is_causal=True,
         is_balanced=is_balanced,
         cache_path=cache_path,
-    )
-
-
-@pytest.mark.parametrize("q_dtype, kv_dtype", [(ttnn.bfloat16, ttnn.bfloat8_b)], ids=["q_bf16_kv_bf8"])
-@pytest.mark.parametrize(
-    "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v, is_balanced, q_chunk_size, k_chunk_size, math_fidelity",
-    [
-        # best is 256, 256, but OOM (need memory fixing)
-        (1, 128, 1, 128, 128 * 1024, 576, 576, 128, True, 256, 128, ttnn.MathFidelity.HiFi2),
-        # best is 320, 160, but OOM (need memory fixing)
-        (1, 128, 1, 128, 100 * 1024, 576, 576, 128, True, 320, 64, ttnn.MathFidelity.HiFi2),
-        # best is 256, 256 but OOM (need memory fixing)
-        (1, 128, 1, 128, 128 * 1024, 576, 576, 128, True, 256, 128, ttnn.MathFidelity.LoFi),
-        # best is 320, 160 but OOM (need memory fixing)
-        (1, 128, 1, 128, 100 * 1024, 576, 576, 128, True, 320, 64, ttnn.MathFidelity.LoFi),
-    ],
-    ids=[
-        "128k_hifi2",
-        "100k_hifi2",
-        "128k_lofi",
-        "100k_lofi",
-    ],
-)
-@pytest.mark.timeout(1200)
-@pytest.mark.parametrize(
-    "n_iters, trace_enabled, skip_check",
-    [
-        (1, False, True),
-    ],
-    ids=["no_trace"],
-)
-@pytest.mark.parametrize("num_links", [2], ids=["2link"])
-@pytest.mark.parametrize(
-    "device_params, all_gather_topology",
-    [
-        (
-            {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
-            ttnn.Topology.Linear,
-        ),
-    ],
-    indirect=["device_params"],
-    ids=[
-        "line",
-    ],
-)
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 8)],
-    ids=["4x8"],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "rp_axis, rp_factor, up_axis, up_factor",
-    [
-        [1, 8, 0, 4],
-    ],
-    ids=[
-        "8rpx4up",
-    ],
-)
-def test_mla_sdpa_bh_galaxy(
-    mesh_device,
-    b,
-    nhq,
-    nhk,
-    nhv,
-    base_seq_len,
-    head_dim_q,
-    head_dim_k,
-    head_dim_v,
-    q_chunk_size,
-    k_chunk_size,
-    q_dtype,
-    kv_dtype,
-    n_iters,
-    trace_enabled,
-    num_links,
-    rp_axis,
-    rp_factor,
-    up_axis,
-    up_factor,
-    all_gather_topology,
-    skip_check,
-    is_balanced,
-    reset_seeds,
-    math_fidelity,
-):
-    if is_blackhole() == False:
-        pytest.skip("This test only runs on Blackhole galaxy todo add galaxy")
-    mesh_device_shape = list(mesh_device.shape)
-    assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
-
-    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
-
-    padded_seq_len = get_padded_vision_seq_len(base_seq_len, mesh_device_shape[rp_axis])
-
-    logger.debug(f"RP axis: {rp_axis} factor: {rp_factor}, UP axis: {up_axis} factor: {up_factor}")
-    logger.debug(f"submesh: {submesh.shape}")
-
-    joint_seq_len = 0  # causality is enabled only for non-joint cases
-
-    # Setup cache directory for tensor data
-    cache_path = pathlib.Path(f"/tmp/ttnn_tensor_cache/test_mla_sdpa_bh_galaxy_{base_seq_len}")
-    cache_path.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Using tensor cache directory: {cache_path}")
-
-    run_ring_joint_sdpa(
-        submesh,
-        b,
-        nhq,
-        nhk,
-        nhv,
-        base_seq_len,
-        padded_seq_len,
-        joint_seq_len,
-        head_dim_q,
-        head_dim_k,
-        head_dim_v,
-        q_chunk_size,
-        k_chunk_size,
-        q_dtype,
-        kv_dtype,
-        n_iters,
-        trace_enabled,
-        num_links,
-        rp_axis,
-        up_axis,
-        all_gather_topology,
-        skip_check,
-        0.999,
-        is_causal=True,
-        is_balanced=is_balanced,
-        cache_path=cache_path,
-        math_fidelity=math_fidelity,
     )

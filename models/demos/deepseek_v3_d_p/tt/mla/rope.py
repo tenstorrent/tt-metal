@@ -11,7 +11,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_orde
 
 def get_rot_transformation_mat():
     """Generate the rotation transformation matrix for RoPE. Uses a single tile."""
-    dhead = 32
+    dhead = ttnn.TILE_SIZE
     rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
     rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
     rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
