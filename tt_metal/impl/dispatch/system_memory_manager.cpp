@@ -28,6 +28,22 @@
 #include <umd/device/tt_io.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
+
+// Doorbell delay injection for KMD overhead simulation.
+// Set TT_DOORBELL_DELAY_NS to inject a spin delay before each MMIO doorbell
+// write, simulating ioctl round-trip overhead.
+static uint64_t get_doorbell_delay_ns() {
+    const char* env = std::getenv("TT_DOORBELL_DELAY_NS");
+    return env ? std::strtoull(env, nullptr, 10) : 0;
+}
+static const uint64_t doorbell_delay_ns = get_doorbell_delay_ns();
+
+static inline void spin_delay_ns(uint64_t ns) {
+    if (ns == 0) return;
+    auto start = std::chrono::steady_clock::now();
+    while (std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now() - start).count() < (int64_t)ns) {}
+}
 #include <tracy/Tracy.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
@@ -598,6 +614,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
+    spin_delay_ns(doorbell_delay_ns);
     this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
     auto& ctx = tt::tt_metal::MetalContext::instance(this->context_id);
     const uint32_t completion_q_rd_ptr =
@@ -802,6 +819,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     if (stall_prefetcher) {
         command_size_16B |= (1 << ((sizeof(DispatchSettings::prefetch_q_entry_type) * 8) - 1));
     }
+    spin_delay_ns(doorbell_delay_ns);
     this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
