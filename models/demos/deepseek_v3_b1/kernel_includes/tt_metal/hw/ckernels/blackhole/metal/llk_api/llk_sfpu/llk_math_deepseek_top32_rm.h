@@ -45,4 +45,34 @@ inline void llk_math_deepseek_top32_rm_rebuild(
         skip_second);
 }
 
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, bool top_min>
+inline void llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep(
+    uint dst_index, int vector_mode = (int)VectorMode::RC_custom) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::_bitonic_top32_of_1024_rm_pre_sorted_prep_<APPROXIMATE, is_fp32_dest_acc_en, top_min>,
+        dst_index,
+        vector_mode,
+        dst_index);
+}
+
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
+inline void llk_math_deepseek_top32_of_1024_rm_pre_sorted_combine(
+    uint dst_index, int vector_mode = (int)VectorMode::RC_custom) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::_bitonic_top32_of_1024_rm_pre_sorted_combine_<APPROXIMATE, is_fp32_dest_acc_en>,
+        dst_index,
+        vector_mode,
+        dst_index);
+}
+
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
+inline void llk_math_deepseek_top32_of_1024_rm_pre_sorted_final(
+    uint dst_index, int vector_mode = (int)VectorMode::RC_custom) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::_bitonic_top32_of_1024_rm_pre_sorted_final_<APPROXIMATE, is_fp32_dest_acc_en>,
+        dst_index,
+        vector_mode,
+        dst_index);
+}
+
 }  // namespace ckernel
