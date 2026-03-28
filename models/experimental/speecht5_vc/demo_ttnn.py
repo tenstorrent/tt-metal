@@ -262,11 +262,15 @@ def generate_mel_with_ttnn(
     total_time = time.time() - generation_start
     steps_completed = len(all_mel_outputs)
     avg_token_time = (total_decoder_time + total_postnet_time) / max(steps_completed, 1)
+    decoder_avg_token_time = total_decoder_time / max(steps_completed, 1)
 
     stats = {
         "steps_completed": float(steps_completed),
         "mel_frames": float(mel_spectrogram.shape[1]),
         "ttft_s": float(ttft if ttft is not None else 0.0),
+        # Decoder-only token throughput (matches Stage-1 "decoder generation" target definition).
+        "decoder_token_per_sec": float(1.0 / decoder_avg_token_time) if decoder_avg_token_time > 0 else 0.0,
+        # Decoder + postnet throughput (kept for backward compatibility).
         "token_per_sec": float(1.0 / avg_token_time) if avg_token_time > 0 else 0.0,
         "encoder_time_s": float(encoder_time),
         "decoder_time_s": float(total_decoder_time),
