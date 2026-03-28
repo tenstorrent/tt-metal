@@ -238,26 +238,25 @@ void generate_cross_host_connections(PhysicalSystemDescriptor& psd) {
 }
 
 void validate_graphs(PhysicalSystemDescriptor& psd) {
-    // Validate that the representation of the system is internally consistent.
     const auto& asic_descriptors = psd.get_asic_descriptors();
     auto& system_graph = psd.get_system_graph();
+    std::vector<std::string> errors;
 
     for (auto& [host, asic_group] : system_graph.asic_connectivity_graph) {
         for (auto& [src_asic, edges] : asic_group) {
-            // Skip if src_asic doesn't exist (shouldn't happen, but be defensive)
             if (!asic_descriptors.contains(src_asic)) {
                 continue;
             }
             const auto& src_host = asic_descriptors.at(src_asic).host_name;
 
-            // Skip if host_connectivity_graph doesn't have src_host (shouldn't happen, but be defensive)
             if (!system_graph.host_connectivity_graph.contains(src_host)) {
+                errors.push_back(fmt::format(
+                    "Host '{}' (has ASIC {}) is missing entirely from host_connectivity_graph", src_host, src_asic));
                 continue;
             }
             const auto& src_host_edges = system_graph.host_connectivity_graph.at(src_host);
 
             for (auto& [dst_asic, eth_conns] : edges) {
-                // Skip if dst_asic doesn't exist (shouldn't happen, but be defensive)
                 if (!asic_descriptors.contains(dst_asic)) {
                     continue;
                 }
@@ -269,43 +268,67 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                 bool all_global = std::all_of(
                     eth_conns.begin(), eth_conns.end(), [](const EthConnection& conn) { return !conn.is_local; });
 
-                // All connections must be uniformly local or global.
-                TT_FATAL(
-                    all_local || all_global,
-                    "Physical Discovery Error: All ethernet connections should either be local or global. "
-                    "Please reset the system and try again.");
-
-                if (all_local) {
-                    // Local connections must remain within the same host.
-                    TT_FATAL(
-                        src_host == dst_host,
-                        "Physical Discovery Error: Local Connection between {} and {} is not on the same host. "
-                        "Please reset the system and try again.",
+                if (!(all_local || all_global)) {
+                    errors.push_back(fmt::format(
+                        "ASIC {} -> ASIC {}: ethernet connections have mixed local/global flags ({} conns, "
+                        "host '{}' -> host '{}')",
+                        src_asic,
+                        dst_asic,
+                        eth_conns.size(),
                         src_host,
-                        dst_host);
-                    continue;  // no need to check further
+                        dst_host));
+                    continue;
                 }
 
-                // Global connections must cross hosts
-                TT_FATAL(
-                    src_host != dst_host,
-                    "Physical Discovery Error: Hostnames for connections marked as global should be different. "
-                    "Please reset the system and try again.");
+                if (all_local) {
+                    if (src_host != dst_host) {
+                        errors.push_back(fmt::format(
+                            "ASIC {} -> ASIC {}: marked as local but spans different hosts ('{}' vs '{}')",
+                            src_asic,
+                            dst_asic,
+                            src_host,
+                            dst_host));
+                    }
+                    continue;
+                }
 
-                // Validate each global ethernet connection.
+                if (src_host == dst_host) {
+                    errors.push_back(fmt::format(
+                        "ASIC {} -> ASIC {}: marked as global but both on same host '{}'",
+                        src_asic,
+                        dst_asic,
+                        src_host));
+                    continue;
+                }
+
                 for (const auto& eth_conn : eth_conns) {
-                    // Look for a host edge matching dst_host.
                     auto host_edge_it =
                         std::find_if(src_host_edges.begin(), src_host_edges.end(), [&](const auto& host_edge) {
                             return host_edge.first == dst_host;
                         });
 
-                    TT_FATAL(
-                        host_edge_it != src_host_edges.end(),
-                        "Physical Discovery Error: Global Connection between {} and {} is not found in the host "
-                        "connectivity graph. Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    if (host_edge_it == src_host_edges.end()) {
+                        std::string available_hosts;
+                        for (const auto& edge : src_host_edges) {
+                            if (!available_hosts.empty()) {
+                                available_hosts += ", ";
+                            }
+                            available_hosts += fmt::format("'{}' ({} exit conns)", edge.first, edge.second.size());
+                        }
+                        errors.push_back(fmt::format(
+                            "ASIC {} (host '{}') -> ASIC {} (host '{}'): "
+                            "no host_connectivity_graph edge from '{}' to '{}'. "
+                            "Available host edges from '{}': [{}]",
+                            src_asic,
+                            src_host,
+                            dst_asic,
+                            dst_host,
+                            src_host,
+                            dst_host,
+                            src_host,
+                            available_hosts.empty() ? "none" : available_hosts));
+                        continue;
+                    }
 
                     const auto& exit_node_conns = host_edge_it->second;
                     bool exit_conn_found = std::any_of(
@@ -316,15 +339,46 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                                    exit_node_conn.eth_conn.dst_chan == eth_conn.dst_chan;
                         });
 
-                    TT_FATAL(
-                        exit_conn_found,
-                        "Physical Discovery Error: Global Connection between {} and {} is not found in the "
-                        "host connectivity graph. Please reset the system and try again.",
-                        src_host,
-                        dst_host);
+                    if (!exit_conn_found) {
+                        std::string available_exit_conns;
+                        for (const auto& enc : exit_node_conns) {
+                            if (!available_exit_conns.empty()) {
+                                available_exit_conns += ", ";
+                            }
+                            available_exit_conns += fmt::format(
+                                "[{} ch{} -> {} ch{}]",
+                                enc.src_exit_node,
+                                enc.eth_conn.src_chan,
+                                enc.dst_exit_node,
+                                enc.eth_conn.dst_chan);
+                        }
+                        errors.push_back(fmt::format(
+                            "ASIC {} -> ASIC {} (host '{}' -> host '{}'): "
+                            "exit node connection not found for eth ch{} -> ch{}. "
+                            "Exit node connections present for '{}'->'{}': [{}]",
+                            src_asic,
+                            dst_asic,
+                            src_host,
+                            dst_host,
+                            eth_conn.src_chan,
+                            eth_conn.dst_chan,
+                            src_host,
+                            dst_host,
+                            available_exit_conns.empty() ? "none" : available_exit_conns));
+                    }
                 }
             }
         }
+    }
+
+    if (!errors.empty()) {
+        std::string full_report =
+            fmt::format("Physical Discovery Validation Failed: {} error(s) detected.\n", errors.size());
+        for (size_t i = 0; i < errors.size(); i++) {
+            full_report += fmt::format("  [{}] {}\n", i + 1, errors[i]);
+        }
+        full_report += "Please reset the system and try again.";
+        TT_FATAL(false, "{}", full_report);
     }
 }
 
