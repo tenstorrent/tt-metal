@@ -6,6 +6,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/transpose_wh.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_tile_helpers.hpp"
 
 ////////////////////
 // global variables
@@ -314,19 +315,16 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 }
 
 FORCE_INLINE void matmul(uint32_t num_output_tiles, uint32_t Kt) {
-    mm_init(cb_in0, cb_in1, cb_out0);
-    for (uint32_t i = 0; i < num_output_tiles; ++i) {
-        tile_regs_acquire();
-        for (uint32_t kt = 0; kt < Kt; kt++) {
-            cb_wait_front(cb_in0, onetile);
-            cb_wait_front(cb_in1, onetile);
-            matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
-            cb_pop_front(cb_in0, onetile);
-            cb_pop_front(cb_in1, onetile);
-        }
-        tile_regs_commit();
-        pack_onetile_to_cb(cb_out0);
-    }
+    // Each output tile accumulates Kt inner tiles. Use matmul_tile helper with
+    // Mt=1, Nt=1, batch=num_output_tiles to produce all tiles sequentially.
+    compute_kernel_lib::matmul_tile<
+        cb_in0,
+        cb_in1,
+        cb_out0,
+        compute_kernel_lib::matmul_tile_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::matmul_tile_config::WaitMode::WaitPerTile,
+        compute_kernel_lib::matmul_tile_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
+        1, 1, Kt, num_output_tiles);
 }
 
 void kernel_main() {

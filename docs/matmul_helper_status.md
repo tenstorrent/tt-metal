@@ -19,10 +19,12 @@ All helpers live in `ttnn/cpp/ttnn/kernel_lib/` with `.hpp` + `.inl` pairs.
 
 | File | Helper Used | Notes |
 |------|-------------|-------|
-| `matmul/device/kernels/compute/bmm.cpp` | `matmul_tile` | Core TTNN tile-matmul kernel |
-| `matmul/device/kernels/compute/bmm_large_block_zm.cpp` | `matmul_block` | Core TTNN block-matmul kernel |
+| `matmul/.../bmm.cpp` | `matmul_tile` | Core TTNN tile-matmul kernel |
+| `matmul/.../bmm_large_block_zm.cpp` | `matmul_block` | Core TTNN block-matmul kernel |
+| `matmul/.../bmm_large_block_zm_fused_bias_activation.cpp` | `matmul_block` + `matmul_block_fused_bias` | Core TTNN fused kernel (non-L1_ACC, non-FP32_DEST_ACC_EN, non-transpose path) |
+| `moreh/moreh_matmul/.../moreh_matmul.cpp` | `matmul_tile` | Simple matmul path (non-transpose/mask/bias) |
 | `programming_examples/matmul/.../bmm_large_block_zm.cpp` | `matmul_block` | Programming example |
-| `experimental/conv3d/device/kernels/compute.cpp` | `matmul_block` | Replaced local `matmul_blocks()` with library helper using `NoWaitNoPop` mode |
+| `experimental/conv3d/.../compute.cpp` | `matmul_block` | Replaced local `matmul_blocks()` with NoWaitNoPop mode |
 
 ### Not Migratable
 
