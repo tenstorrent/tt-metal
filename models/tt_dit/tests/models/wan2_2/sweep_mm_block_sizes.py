@@ -483,7 +483,7 @@ def test_mm_sweep_worker(device_config, shape, m_block):
             f"m_block={m_block}, {len(kn_combos)} K/N combos (batch [{batch_start}:{batch_end}])"
         )
 
-    mesh_device = open_mesh(cfg, trace_region_size=90112 if is_agmm else None)
+    mesh_device = open_mesh(cfg, trace_region_size=4194304 if is_agmm else None)  # 4MB for trace region
     try:
         core_grid = ttnn.CoreCoord(cgx, cgy)
         dtype = ttnn.bfloat16
