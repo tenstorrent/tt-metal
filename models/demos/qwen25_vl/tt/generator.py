@@ -31,10 +31,11 @@ class Generator(WarmupForwardMixin):
         self._ttt_generator = TTTGenerator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
         # Trace infrastructure for prefill
-        # Keyed by padded sequence length string (e.g., "4096")
+        # Keyed by "{padded_len}_{model_id}" (e.g., "4096_0")
         self.trace_id_prefill = collections.defaultdict(lambda: None)
         self.trace_inputs_prefill = {}
         self.trace_output_prefill = {}
+        self.trace_mesh_prefill = {}
 
     @property
     def data_parallel(self):
@@ -60,35 +61,27 @@ class Generator(WarmupForwardMixin):
     def processor(self):
         return self._ttt_generator.processor
 
-    def _capture_trace_prefill(self, tokens_embd, rot_mats_user, page_table_user, kv_cache):
-        """
-        Capture a prefill trace for a given sequence length.
+    def _get_model_mesh_device(self, model_id=0):
+        """Get the mesh device for a specific model instance (submesh for DP>1)."""
+        return self._ttt_generator.model[model_id].mesh_device
 
-        Steps:
-        1. Create host tensors via prepare_prefill_inputs_trace
-        2. Copy to device and run forward pass (compile)
-        3. Copy to device again and capture trace
+    def _capture_trace_prefill(self, tokens_embd, rot_mats_user, page_table_user, kv_cache, model_id=0):
+        """Capture a prefill trace for a given sequence length on a specific model's submesh."""
+        model_inst = self._ttt_generator.model[model_id]
+        model_mesh = model_inst.mesh_device
 
-        The trace includes a to_memory_config copy of each input tensor at the
-        start. This ensures the input device buffers (which live in normal device
-        memory) are only READ by the trace, not consumed. Without this, the trace
-        system may reclaim the input buffer, making subsequent copy_host_to_device
-        calls fail with "Buffer must be allocated on device".
-        """
-        host_inputs = self.model.prepare_prefill_inputs_trace(
+        host_inputs = model_inst.prepare_prefill_inputs_trace(
             tokens_embd, rot_mats=rot_mats_user, page_table=page_table_user
         )
 
-        # Compile run: copy to device and run forward to compile all programs
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=model_mesh)
         device_tokens, device_cos, device_sin, device_page_table = device_inputs
 
-        # Create working copies (so inputs survive as read-only buffers)
         work_tokens = ttnn.to_memory_config(device_tokens, ttnn.DRAM_MEMORY_CONFIG)
         work_cos = ttnn.to_memory_config(device_cos, ttnn.DRAM_MEMORY_CONFIG)
         work_sin = ttnn.to_memory_config(device_sin, ttnn.DRAM_MEMORY_CONFIG)
 
-        tt_out = self.model.ttnn_prefill_forward(
+        tt_out = model_inst.ttnn_prefill_forward(
             x=work_tokens,
             rot_mats_global=[work_cos, work_sin],
             user_id=0,
@@ -96,19 +89,16 @@ class Generator(WarmupForwardMixin):
             get_last_token=-1,
             kv_cache=kv_cache,
         )
-        logger.info("Done compiling prefill model for trace")
+        logger.info(f"Done compiling prefill model for trace (model_id={model_id})")
 
-        # Trace capture: copy to device again (allocates new device tensors for trace)
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=model_mesh)
         device_tokens, device_cos, device_sin, device_page_table = device_inputs
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        # Create working copies inside trace — these allocate in trace memory,
-        # keeping the original device_inputs buffers in normal memory intact.
+        trace_id = ttnn.begin_trace_capture(model_mesh, cq_id=0)
         work_tokens = ttnn.to_memory_config(device_tokens, ttnn.DRAM_MEMORY_CONFIG)
         work_cos = ttnn.to_memory_config(device_cos, ttnn.DRAM_MEMORY_CONFIG)
         work_sin = ttnn.to_memory_config(device_sin, ttnn.DRAM_MEMORY_CONFIG)
-        tt_out = self.model.ttnn_prefill_forward(
+        tt_out = model_inst.ttnn_prefill_forward(
             x=work_tokens,
             rot_mats_global=[work_cos, work_sin],
             user_id=0,
@@ -116,26 +106,23 @@ class Generator(WarmupForwardMixin):
             get_last_token=-1,
             kv_cache=kv_cache,
         )
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-        logger.info("Done capturing prefill trace")
+        ttnn.end_trace_capture(model_mesh, trace_id, cq_id=0)
+        logger.info(f"Done capturing prefill trace (model_id={model_id})")
 
         return trace_id, tt_out, device_inputs
 
-    def _easy_trace_prefill(self, tokens_embd, rot_mats_user, page_table_user, kv_cache, padded_len):
-        """
-        Capture trace on first call per padded_len, replay on subsequent calls.
-
-        Returns the trace output (raw hidden states, [1, 1, padded_len, hidden]).
-        """
-        trace_key = str(padded_len)
+    def _easy_trace_prefill(self, tokens_embd, rot_mats_user, page_table_user, kv_cache, padded_len, model_id=0):
+        """Capture trace on first call per (padded_len, model_id), replay on subsequent calls."""
+        trace_key = f"{padded_len}_{model_id}"
 
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out, device_inputs = self._capture_trace_prefill(
-                tokens_embd, rot_mats_user, page_table_user, kv_cache
+                tokens_embd, rot_mats_user, page_table_user, kv_cache, model_id=model_id
             )
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = device_inputs
             self.trace_output_prefill[trace_key] = tt_out
+            self.trace_mesh_prefill[trace_key] = self._ttt_generator.model[model_id].mesh_device
 
         return self._prefill_forward_trace(
             self.trace_id_prefill[trace_key],
@@ -144,15 +131,20 @@ class Generator(WarmupForwardMixin):
             tokens_embd,
             rot_mats_user,
             page_table_user,
+            model_id=model_id,
         )
 
-    def _prefill_forward_trace(self, trace_id, device_inputs, tt_out, tokens_embd, rot_mats_user, page_table_user):
+    def _prefill_forward_trace(
+        self, trace_id, device_inputs, tt_out, tokens_embd, rot_mats_user, page_table_user, model_id=0
+    ):
         """Copy new user data to pre-allocated device tensors and execute the trace."""
-        host_inputs = self.model.prepare_prefill_inputs_trace(
+        model_inst = self._ttt_generator.model[model_id]
+        model_mesh = model_inst.mesh_device
+        host_inputs = model_inst.prepare_prefill_inputs_trace(
             tokens_embd, rot_mats=rot_mats_user, page_table=page_table_user
         )
-        copy_host_to_device(host_inputs, device_tensors=device_inputs, mesh_device=self.mesh_device)
-        ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
+        copy_host_to_device(host_inputs, device_tensors=device_inputs, mesh_device=model_mesh)
+        ttnn.execute_trace(model_mesh, trace_id, cq_id=0, blocking=False)
         return tt_out
 
     def _unwrap_kv_cache(self, kv_cache):
@@ -273,6 +265,7 @@ class Generator(WarmupForwardMixin):
                         pt_user,
                         model_kv_cache,
                         batch_seq_len,
+                        model_id=model_id,
                     )
                     model_inst = self._ttt_generator.model[model_id]
                     logits = model_inst.process_logits_after_prefill_trace(tt_hidden, last_token_idx)
@@ -297,7 +290,9 @@ class Generator(WarmupForwardMixin):
                     output_logits[idx] = logits
 
             if use_trace:
-                ttnn.synchronize_device(self.mesh_device)
+                used_model_ids = set(mid for _, mid in out_list)
+                for mid in used_model_ids:
+                    ttnn.synchronize_device(self._ttt_generator.model[mid].mesh_device)
                 for idx, (out, mid) in enumerate(out_list):
                     seq_len = int(prompt_lens[idx])
                     last_token_idx = seq_len - 1
@@ -361,7 +356,7 @@ class Generator(WarmupForwardMixin):
         output_logits = torch.zeros(batch_size, 1, self.model_args.vocab_size)
         batched_logits_cpu = ttnn.to_torch(
             batched_logits,
-            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1),
+            mesh_composer=ttnn.ConcatMeshToTensor(model_inst.mesh_device, dim=-1),
         )
         output_logits[:, 0, :] = batched_logits_cpu[0, 0, :batch_size, : self.model_args.vocab_size]
 
@@ -606,7 +601,8 @@ class Generator(WarmupForwardMixin):
     def __del__(self):
         for trace_key, trace_id in self.trace_id_prefill.items():
             if trace_id is not None:
-                ttnn.release_trace(self.mesh_device, trace_id)
+                mesh = self.trace_mesh_prefill.get(trace_key, self.mesh_device)
+                ttnn.release_trace(mesh, trace_id)
 
         if hasattr(self, "trace_id"):
             ttnn.release_trace(self.mesh_device, self.trace_id)
