@@ -276,7 +276,11 @@ void kernel_main() {
         constexpr uint32_t in1_cb = get_named_compile_time_arg_val("matmul_in1");
         constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("matmul_k_num_tiles");
         constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
+        DPRINT << ">mm setup sharded buffer" << ENDL();
+        DPRINT << ">mm num_tiles_k=" << num_tiles_k << " out_w=" << out_w << ENDL();
+        DPRINT << ">mm fp=" << get_local_cb_interface(in1_cb).fifo_num_pages << ENDL();
         unified_kernels::setup_sharded_buffer(in1_cb, num_tiles_k * out_w);
+        DPRINT << "<mm setup sharded buffer" << ENDL();
     }
 
     // ── MTP: EH mcast receiver (all cores, enable_mtp) ─────────────
@@ -408,6 +412,8 @@ void kernel_main() {
     // mcast dst CB addr (needed since this CB not allocated on sender)
     uint32_t mcast_dst_addr_override = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++);
 
+    DPRINT << "mcast_dst_addr_override=" << mcast_dst_addr_override << ENDL();
+
     deepseek_b1_ops::Mcast::SenderArgs mcast_args{
         get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
@@ -430,9 +436,11 @@ void kernel_main() {
     constexpr uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("mcast_eh_src_cb");
     constexpr uint32_t mcast_eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
     uint32_t mcast_eh_dst_addr_override = 0;
-    if constexpr (Core::is_spec_stage && Core::enable_mtp) {
+    if constexpr (Core::is_base_stage && Core::enable_mtp) {
         mcast_eh_dst_addr_override = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++);
     }
+
+    DPRINT << "mcast_eh_dst_addr_override=" << mcast_eh_dst_addr_override << ENDL();
     DPRINT << "mcast_eh_args" << ENDL();
     deepseek_b1_ops::Mcast::SenderArgs mcast_eh_args{
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_x"),
@@ -630,12 +638,14 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
         // Device-local fabric gate (post-bcast release to argmax side).
         if constexpr (Core::is_input_core && !Core::skip_ccl) {
+            DPRINT << ">ax turn_sem inc" << ENDL();
             auto argmax_turn_sem_noc_addr = get_noc_addr(
                 Core::fabric_gate_argmax_noc_x,
                 Core::fabric_gate_argmax_noc_y,
                 get_semaphore(Core::fabric_gate_argmax_turn_semaphore_id));
             noc_semaphore_inc(argmax_turn_sem_noc_addr, 1);
             noc_async_atomic_barrier();
+            DPRINT << "<ax turn_sem inc" << ENDL();
         }
 #endif
 
@@ -832,6 +842,7 @@ void kernel_main() {
             constexpr uint32_t argmax_socket_cb = get_named_compile_time_arg_val("argmax_socket_cb");
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
+            DPRINT << ">ax token_id=" << token_id << ENDL();
             write_token_metadata_to_socket_cb(eh_gather_dst_cb, 1, token_id, TOKEN_TYPE_BASE, 0);
             cb_pop_front(argmax_socket_cb, 1);
         }
@@ -855,16 +866,21 @@ void kernel_main() {
         if constexpr (
             Core::is_argmax_final_core && ArgmaxCTArgs::defer_socket_output && ArgmaxCTArgs::socket_mode != 0) {
             constexpr uint32_t argmax_socket_cb = ArgmaxCTArgs::socket_cb_id;
+
+            DPRINT << ">ax us wait cb" << ENDL();
             cb_wait_front(argmax_socket_cb, 1);
+            DPRINT << "<ax us wait cb" << ENDL();
             uint32_t speculative_token =
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
             invalidate_l1_cache();
             auto meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_verify_output_staging_addr);
             uint32_t base_token = meta[1];
+            DPRINT << ">ax base_token=" << base_token << ENDL();
             cb_pop_front(argmax_socket_cb, 1);
             DeviceZoneScopedN("MTP_VERIFY_SEND");
             write_token_metadata_to_socket_cb(
                 argmax_socket_cb, 1, base_token, TOKEN_TYPE_BASE, 0, speculative_token, TOKEN_TYPE_SPEC, 1);
+            DPRINT << "<ax us write cb" << ENDL();
         }
 #endif
     };
@@ -889,10 +905,10 @@ void kernel_main() {
 
         // Spec Stage: run LM head sampling and update speculative state
         if constexpr (Core::is_spec_stage) {
-            // DPRINT << ">SP" << ENDL();
+            DPRINT << ">SP" << ENDL();
             lm_head_sampling();
             update_speculative_state();
-            // DPRINT << "SP<" << ENDL();
+            DPRINT << "SP<" << ENDL();
         }
 
         // ====================================================================
@@ -941,12 +957,14 @@ void kernel_main() {
 #if defined(COMPILE_FOR_BRISC)
         // Device-local fabric gate (post-sampling release back to bcast side).
         if constexpr (Core::is_argmax_final_core && !Core::skip_ccl) {
+            DPRINT << ">b turn_sem" << ENDL();
             auto bcast_turn_sem_noc_addr = get_noc_addr(
                 Core::fabric_gate_bcast_noc_x,
                 Core::fabric_gate_bcast_noc_y,
                 get_semaphore(Core::fabric_gate_bcast_turn_semaphore_id));
             noc_semaphore_inc(bcast_turn_sem_noc_addr, 1);
             noc_async_atomic_barrier();
+            DPRINT << "<b turn_sem" << ENDL();
         }
 #endif
 
