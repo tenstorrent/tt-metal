@@ -13,46 +13,11 @@
 
 namespace ttnn::prim {
 
-namespace CMAKE_UNIQUE_NAMESPACE {
-bool has_large_pages(const Tensor& input_tensor, const MemoryConfig& output_mem_config) {
-    if (input_tensor.layout() == Layout::TILE) {
-        return false;
-    }
-    const auto max_l1_size = operations::data_movement::get_max_l1_space(input_tensor);
-
-    uint32_t output_page_size = input_tensor.logical_shape()[-1] * input_tensor.element_size();
-    if (output_mem_config.is_sharded() &&
-        output_mem_config.memory_layout() != tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
-        uint32_t shard_width = output_mem_config.shard_spec().has_value()
-                                   ? output_mem_config.shard_spec().value().shape[1]
-                                   : output_mem_config.nd_shard_spec().value().shard_shape[-1];
-        output_page_size = shard_width * input_tensor.element_size();
-    }
-    auto output_buffer_type = output_mem_config.buffer_type();
-    auto alignment = (output_buffer_type == tt::tt_metal::BufferType::DRAM) ? tt::tt_metal::hal::get_dram_alignment()
-                                                                            : tt::tt_metal::hal::get_l1_alignment();
-    auto output_aligned_page_size = tt::align(output_page_size, alignment);
-
-    return (input_tensor.buffer()->page_size() + 2 * output_aligned_page_size > max_l1_size);
-}
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-
 RedistributeToMemoryConfigDeviceOperation::program_factory_t
 RedistributeToMemoryConfigDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
-    bool has_large_pages =
-        CMAKE_UNIQUE_NAMESPACE::has_large_pages(input_tensor, operation_attributes.output_mem_config);
-
-    if (operation_attributes.output_mem_config.is_sharded()) {
-        if (input_tensor.layout() == Layout::TILE) {
-            return RedistributeToMemoryConfigTilizedShardedProgramFactory{};
-        }
-        if (!has_large_pages) {
-            return RedistributeToMemoryConfigRowMajorShardedProgramFactory{};
-        }
-    }
     if (input_tensor.layout() == Layout::TILE) {
         return RedistributeToMemoryConfigTilizedDefaultProgramFactory{};
     }
