@@ -724,7 +724,10 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
         TT_FATAL(
             !existing.conflicts_with(cumulative_mask),
             "Kernel '{}' requires processors already in use on WorkerSpec '{}'. "
-            "The \"common DM cores\" assumption has been violated!",
+            "One of the following must be true: \n"
+            " - The ProgramSpec is invalid, and the legality checks were bypassed. \n"
+            " - A solution exists, but the greedy algorithm failed to find it. \n"
+            " - The runtime's \"common DM cores\" assumption has been violated!",
             kernel_spec->unique_id,
             worker_id);
 
@@ -756,11 +759,15 @@ ComputeEngineMask AssignComputeProcessors(const KernelSpec* kernel_spec, const K
 }
 
 // Solve kernel-to-core assignments.
-// NOTE: Despite the earlier legality checks, it is possible for the solver to fail! (with TT_FATAL)
-//   The current implementation makes a (likely temporary) simplifying assumption:
-//      A given DM kernel will run on the _same_ set of DM cores on every node/cluster.
-//   If the input ProgramSpec passes legality checks but fails in the solver, the resulting error
-//   message will make it clear what went wrong (i.e. overly restrictive "common DM cores" assumption).
+// NOTE: It is possible for the solver to fail on a legal ProgramSpec!
+// This could happen because
+//    1. The greedy algorithm does not explore the full solution space.
+//        Fix: use a proper CSP solver (e.g. simple backtracking)
+//    2. The runtime's simplifying assumption -- that a given DM kernel will run on the _same_ set of DM cores on every
+//    node/cluster -- has been violated.
+//        Fix: Update the runtime to support different DM core assignments per node.
+// (See the test cases for examples of these failure modes.)
+//
 std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssignments(
     const ProgramSpec& spec, const CollectedSpecData& collected) {
     DMProcessorMaskMap kernels_to_dm_processor_mask;
@@ -773,6 +780,9 @@ std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssign
 
         // Since we enforce (at most) one compute kernel per WorkerSpec, no need to track cumulative mask.
 
+        // This is a simple greedy algorithm.
+        // It assigns kernels to processors in the order they are listed in the WorkerSpec.
+        // TODO: Switch to a simple CSP solver.
         for (const KernelSpecName& kernel_name : worker.kernels) {
             const KernelSpec* kernel_spec = collected.kernel_by_name.at(kernel_name);
 
