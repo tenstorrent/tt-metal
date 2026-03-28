@@ -401,6 +401,8 @@ void kernel_main() {
         brisc_verify_output_staging_addr = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++);
     }
 
+    DPRINT << "brisc_verify_output_staging_addr=" << brisc_verify_output_staging_addr << ENDL();
+
     // ── Mcast sender (input_core) ───────────────────────────────────
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_num_cores"),
@@ -658,6 +660,8 @@ void kernel_main() {
             constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
             DPRINT << ">sb np=" << rmsnorm_num_tiles << ENDL();
             unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
+            DPRINT << "rmsnorm_input_cb=" << rmsnorm_input_cb << ENDL();
+            DPRINT << "rmsnorm_num_tiles=" << rmsnorm_num_tiles << ENDL();
         }
 
         if constexpr (Core::is_spec_stage && Core::is_input_core && Core::is_exit_device) {
@@ -667,17 +671,26 @@ void kernel_main() {
                 constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
                 cb_wait_front(rmsnorm_input_cb, rmsnorm_num_tiles);
             }
-            constexpr uint32_t bcast_input_cb = get_named_compile_time_arg_val("bcast_data_cb_id");
+            constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t argmax_noc_x = get_named_compile_time_arg_val("argmax_core_noc_x");
             constexpr uint32_t argmax_noc_y = get_named_compile_time_arg_val("argmax_core_noc_y");
             constexpr uint32_t metadata_size = 64;
+            constexpr uint32_t bcast_num_pages = 225;
             constexpr uint32_t activation_size_bytes = 14336;
-            uint32_t bcast_buffer_addr = get_read_ptr(bcast_input_cb);
-            uint32_t metadata_src = bcast_buffer_addr + activation_size_bytes;
+
+            uint32_t rmsnorm_buffer_addr = get_read_ptr(rmsnorm_input_cb);
+            uint32_t metadata_src = rmsnorm_buffer_addr + activation_size_bytes;
+
             uint64_t metadata_dst = get_noc_addr(argmax_noc_x, argmax_noc_y, verify_output_staging_addr);
             noc_async_write(metadata_src, metadata_dst, metadata_size);
             noc_async_write_barrier();
-            DPRINT << "vm<" << ENDL();
+
+            uint64_t sem_addr = get_noc_addr(
+                argmax_noc_x,
+                argmax_noc_y,
+                get_semaphore(get_named_compile_time_arg_val("metadata_ready_semaphore_id")));
+            noc_semaphore_inc(sem_addr, 1);
+            noc_async_atomic_barrier();
         }
 #endif
 
@@ -735,18 +748,17 @@ void kernel_main() {
                 mtp_input_core_noc_y,
                 get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
             noc_semaphore_inc(sem_addr, 1);
+            noc_async_atomic_barrier();
             DPRINT << "tt<" << ENDL();
         }
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_input_core) {
-            DPRINT << ">mtp ready sem" << ENDL();
             volatile tt_l1_ptr uint32_t* mtp_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
             noc_semaphore_wait(mtp_ready_sem, 1);
             noc_semaphore_set(mtp_ready_sem, 0);
-            DPRINT << "<mtp ready sem" << ENDL();
         }
 #endif
 
@@ -865,22 +877,27 @@ void kernel_main() {
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (
             Core::is_argmax_final_core && ArgmaxCTArgs::defer_socket_output && ArgmaxCTArgs::socket_mode != 0) {
-            constexpr uint32_t argmax_socket_cb = ArgmaxCTArgs::socket_cb_id;
+            DeviceZoneScopedN("MTP_VERIFY_SEND");
 
-            DPRINT << ">ax us wait cb" << ENDL();
+            // Wait for metadata to be ready to read from unicast coming from input core
+            volatile tt_l1_ptr uint32_t* metadata_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(get_named_compile_time_arg_val("metadata_ready_semaphore_id")));
+            noc_semaphore_wait(metadata_ready_sem, 1);
+            noc_semaphore_set(metadata_ready_sem, 0);
+
+            // Read the speculative token from the argmax socket CB
+            constexpr uint32_t argmax_socket_cb = ArgmaxCTArgs::socket_cb_id;
             cb_wait_front(argmax_socket_cb, 1);
-            DPRINT << "<ax us wait cb" << ENDL();
             uint32_t speculative_token =
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
             invalidate_l1_cache();
-            auto meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_verify_output_staging_addr);
-            uint32_t base_token = meta[1];
-            DPRINT << ">ax base_token=" << base_token << ENDL();
+            auto metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_verify_output_staging_addr);
+            uint32_t base_token = metadata[1];
             cb_pop_front(argmax_socket_cb, 1);
-            DeviceZoneScopedN("MTP_VERIFY_SEND");
+
+            // Push the base and speculative tokens to the argmax socket CB that will be written to the socket later
             write_token_metadata_to_socket_cb(
                 argmax_socket_cb, 1, base_token, TOKEN_TYPE_BASE, 0, speculative_token, TOKEN_TYPE_SPEC, 1);
-            DPRINT << "<ax us write cb" << ENDL();
         }
 #endif
     };
@@ -947,24 +964,20 @@ void kernel_main() {
                     ArgmaxCTArgs::socket_page_size_bytes);
                 DPRINT << "sS<" << ENDL();
             }
-            // DPRINT << ">ni" << ENDL();
             size_t fabric_arg_idx = sampling_op.persistent_fabric_arg_idx;
             sampling_op.send_persistent_next_iter_inc_via_fabric_brisc(sampling_args, fabric_arg_idx);
-            // DPRINT << "ni<" << ENDL();
         }
 #endif
 
 #if defined(COMPILE_FOR_BRISC)
         // Device-local fabric gate (post-sampling release back to bcast side).
         if constexpr (Core::is_argmax_final_core && !Core::skip_ccl) {
-            DPRINT << ">b turn_sem" << ENDL();
             auto bcast_turn_sem_noc_addr = get_noc_addr(
                 Core::fabric_gate_bcast_noc_x,
                 Core::fabric_gate_bcast_noc_y,
                 get_semaphore(Core::fabric_gate_bcast_turn_semaphore_id));
             noc_semaphore_inc(bcast_turn_sem_noc_addr, 1);
             noc_async_atomic_barrier();
-            DPRINT << "<b turn_sem" << ENDL();
         }
 #endif
 

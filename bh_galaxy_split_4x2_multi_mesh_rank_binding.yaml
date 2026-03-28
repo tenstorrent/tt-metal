@@ -19,7 +19,4 @@ rank_bindings:
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 8,9,10,11,12,13,14,15
-    TT_METAL_DPRINT_ONE_FILE_PER_RISC: "1"
-    TT_METAL_DPRINT_CORES: all
-    TT_METAL_DPRINT_CHIPS: all
 mesh_graph_desc_path: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto

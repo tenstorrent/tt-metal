@@ -539,6 +539,8 @@ class LMHeadSampling:
         mtp_done_semaphore_id = 9
         eh_matmul_done_semaphore_id = 10
         eh_gather_receiver_semaphore_id = 11
+        # [MTP] Semaphore IDs for singalling metadata unicast in spec stage
+        metadata_ready_semaphore_id = 12
 
         bcast_config = DeepseekMinimalBroadcast.configure(
             mesh_device=mesh_device,
@@ -943,6 +945,7 @@ class LMHeadSampling:
                     ("rmsnorm_e_output_cb", mcast_eh_src_cb),
                     # [MTP] semaphores
                     ("mtp_ready_semaphore_id", mtp_ready_semaphore_id),
+                    ("metadata_ready_semaphore_id", metadata_ready_semaphore_id),
                     (
                         "mcast_eh_data_sender_semaphore",
                         mcast_eh_data_sender_semaphore_id if enable_mtp_on_device else 0,
@@ -1044,6 +1047,7 @@ class LMHeadSampling:
                     ("argmax_core_noc_y", argmax_core_noc_y if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("eh_matmul_num_cores", eh_matmul_num_cores if enable_mtp_on_device else 0),
                     ("mtp_ready_semaphore_id", mtp_ready_semaphore_id),
+                    ("metadata_ready_semaphore_id", metadata_ready_semaphore_id),
                     # [MTP] Output gather receiver args (BRISC on argmax_final_core)
                     ("gather_noc0_num_senders", eh_matmul_num_cores if enable_mtp_on_device else 0),
                     ("gather_noc1_num_senders", 0),
@@ -1161,7 +1165,10 @@ class LMHeadSampling:
                     brisc_bcast_common_args += [
                         int(ref_token_dev.buffer_address()),  # [13] verify_output_staging_addr
                     ]
-
+                    print(
+                        f"[OP:{device_idx}:J] verify_output_staging_addr={int(ref_token_dev.buffer_address())}",
+                        flush=True,
+                    )
                 # ================================================================
                 # Circular buffer descriptors
                 # ================================================================
@@ -1214,7 +1221,7 @@ class LMHeadSampling:
                 )
                 mcast_dst_cb_descriptor = ttnn.CBDescriptor(
                     total_size=num_tiles_k * input_tile_size,
-                    core_ranges=mcast_receiver_grid,
+                    core_ranges=all_cores,
                     format_descriptors=[mcast_dst_cb_format],
                 )
 
@@ -1289,7 +1296,7 @@ class LMHeadSampling:
                     )
                     mcast_eh_dst_cb_descriptor = ttnn.CBDescriptor(
                         total_size=eh_num_tiles_k * input_tile_size,
-                        core_ranges=mcast_receiver_grid,
+                        core_ranges=all_cores,
                         format_descriptors=[mcast_eh_dst_cb_format],
                     )
 
@@ -1434,7 +1441,7 @@ class LMHeadSampling:
                         ]
                     )
                 # Semaphores for MTP in Base Stage
-                if enable_mtp_on_device:
+                if is_mtp_base_stage and enable_mtp_on_device:
                     semaphore_descriptors.extend(
                         [
                             ttnn.SemaphoreDescriptor(
@@ -1464,14 +1471,23 @@ class LMHeadSampling:
                             ),
                         ]
                     )
-
+                if is_mtp_verify_stage and is_exit_device:
+                    semaphore_descriptors.extend(
+                        [
+                            ttnn.SemaphoreDescriptor(
+                                id=metadata_ready_semaphore_id,
+                                core_ranges=all_cores,
+                                initial_value=0,
+                            ),
+                        ]
+                    )
                 # ================================================================
                 # Additional BRISC runtime args for mcast dst CB addresses
                 # ================================================================
                 # Append mcast receiver data addresses as BRISC runtime args
                 # [14]/[15] when verify (verify_output_staging at [13]), [13]/[14] otherwise
-                mcast_receiver_data_addr = 73920
-                mcast_eh_receiver_data_addr = 88256
+                mcast_receiver_data_addr = 0
+                mcast_eh_receiver_data_addr = 0
                 brisc_bcast_common_args.append(mcast_receiver_data_addr)
                 brisc_bcast_common_args.append(mcast_eh_receiver_data_addr if enable_mtp_on_device else 0)
 
