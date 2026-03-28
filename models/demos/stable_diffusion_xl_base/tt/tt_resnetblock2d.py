@@ -4,6 +4,7 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import RefinerModelOptimisationsBase
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params, prepare_linear_params
 
@@ -146,6 +147,11 @@ class TtResnetBlock2D(LightweightModule):
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+
+        if is_blackhole() and "up_blocks.2.resnets.0" in self.module_path:
+            hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+            hidden_states = ttnn.move(hidden_states, memory_config=None)
+
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -161,6 +167,7 @@ class TtResnetBlock2D(LightweightModule):
         hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+
         [hidden_states, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv1_weights,
