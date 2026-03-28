@@ -26,7 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     initialize_predictable_test_inputs,
     initialize_test_inputs,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoERoutingSetup
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 
 # from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table
@@ -170,27 +170,23 @@ def test_prep_dispatch_combine(
         experts_per_chip,
         seq_len_per_chip,
         num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
     )
 
-    tt_gate_outputs = MoERoutingSetup(
+    tt_gate_outputs = TtMoERoutingSetup(
         mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
     )
 
     tt_expert_offsets, tt_expert_token_counts, tt_per_device_expert_counter = tt_gate_outputs(
         ttnn_top_k_experts_indices=tt_indices,
-        dispatch_group_size=dispatch_group_size,
         num_routed_experts=num_routed_experts,
-        experts_per_chip=experts_per_chip,
         seq_len_per_chip=seq_len_per_chip,
         num_experts_per_tok=num_experts_per_tok,
     )
 
-    # tt_expert_offsets and tt_expert_token_counts are replicated across columns; and sparse across rows;
-    # expert_offsets, and expert_token_counts on torch are dense acrros rows;
-
-    # Compose across cols and rows
-    # - Validate replication on cols
-    # - Sparse -> dense on rows to validate everything
+    # Both TTNN and reference outputs are now in sparse format:
+    # Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
+    # Compose across cols (dispatch groups) and rows (dispatch_group_size)
     tt_expert_offsets = ttnn.unsqueeze_to_4D(tt_expert_offsets)
     tt_expert_token_counts = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
 
@@ -203,33 +199,22 @@ def test_prep_dispatch_combine(
         ("expert_token_counts", host_expert_token_counts, expert_token_counts),
     ]
 
-    # Validate replication within dispatch groups (across cols)
+    # Validate replication of expert_token_counts within dispatch groups (all chips see same totals)
     for name, host_tensor, _ in tensors_to_validate:
-        for i in range(num_dispatch_groups):
-            ref = host_tensor[i][0]
-            for j in range(1, dispatch_group_size):
-                if not torch.allclose(host_tensor[i][j], ref, atol=0, rtol=0):
-                    raise AssertionError(
-                        f"Replication mismatch in {name} for dispatch group {i}, row {j}. "
-                        f"Expected {ref}, got {host_tensor[i][j]}"
-                    )
+        if name == "expert_token_counts":
+            for i in range(num_dispatch_groups):
+                ref = host_tensor[i][0]
+                for j in range(1, dispatch_group_size):
+                    if not torch.allclose(host_tensor[i][j].int(), ref.int(), atol=0, rtol=0):
+                        raise AssertionError(
+                            f"Replication mismatch in {name} for dispatch group {i}, row {j}. "
+                            f"Expected {ref}, got {host_tensor[i][j]}"
+                        )
 
-    # Validate values match torch reference
-    # Since indices are replicated across dispatch groups, all groups should have identical values
+    # Validate values match torch reference (both 3D sparse format)
     for name, host_tensor, expected in tensors_to_validate:
-        # Take first dispatch group (verified identical above)
-        tt_values = host_tensor[0].squeeze()  # Remove singleton dims
-
-        if name == "expert_offsets":
-            # expected shape: (dispatch_group_size, num_routed_experts)
-            # tt_values shape: (dispatch_group_size, num_routed_experts)
-            if not torch.allclose(tt_values.int(), expected.int(), atol=0, rtol=0):
-                raise AssertionError(f"Value mismatch for {name}. Expected {expected}, got {tt_values}")
-        elif name == "expert_token_counts":
-            # expected shape: (num_dispatch_groups, num_routed_experts) - all rows identical
-            # tt_values shape: (dispatch_group_size, num_routed_experts) - all rows identical
-            # Compare first row of each
-            expected_single = expected[0] if expected.dim() > 1 else expected
-            tt_single = tt_values[0] if tt_values.dim() > 1 else tt_values
-            if not torch.allclose(tt_single.int().flatten(), expected_single.int().flatten(), atol=0, rtol=0):
-                raise AssertionError(f"Value mismatch for {name}. Expected {expected_single}, got {tt_single}")
+        # host_tensor: (num_dispatch_groups, dispatch_group_size, 1, num_routed_experts) from composer
+        # expected: (num_dispatch_groups, dispatch_group_size, num_routed_experts) from get_gate_outputs
+        tt_values = host_tensor.squeeze()  # Remove singleton dims -> 3D
+        if not torch.allclose(tt_values.int(), expected.int(), atol=0, rtol=0):
+            raise AssertionError(f"Value mismatch for {name}. Expected shape {expected.shape}, got {tt_values.shape}")

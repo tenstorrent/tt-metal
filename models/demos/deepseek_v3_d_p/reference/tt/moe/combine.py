@@ -83,7 +83,7 @@ class TorchCombineModule(torch.nn.Module):
                         num_dispatch_groups=self.num_dispatch_groups,
                         is_col_major=True,
                     )
-                    for i in range(expert_token_counts[group, global_expert_idx]):
+                    for i in range(expert_token_counts[group, 0, global_expert_idx]):
                         group_from_meta = int(metadata[group, chip, expert, i, 0]) % self.num_dispatch_groups
                         if group != group_from_meta:
                             continue

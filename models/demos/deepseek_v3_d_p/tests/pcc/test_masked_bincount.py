@@ -175,19 +175,20 @@ def test_masked_bincount(
     # Trim to n_routed_experts in case of padding
     composed = composed[..., :n_routed_experts]
 
-    result = validate_composed(
-        composed,
-        reference,
-        num_dispatch_groups,
-        dispatch_group_size,
-        compare_exact,
-        name="masked_bincount",
-    )
-    log_validation_results(
-        results=[result],
-        num_dispatch_groups=num_dispatch_groups,
-        dispatch_group_size=dispatch_group_size,
-        title="Masked Bincount Validation",
-    )
-    result.assert_passed("masked_bincount output does not match torch reference")
+        ref_hist = torch_histograms[(col, row)]
+
+        matches = torch.equal(tt_hist[:n_routed_experts], ref_hist)
+        if not matches:
+            diff_mask = tt_hist[:n_routed_experts] != ref_hist
+            num_diff = diff_mask.sum().item()
+            logger.error(
+                f"Device {device_id} (row={row_idx}, col={group_idx}): {num_diff}/{n_routed_experts} bins differ"
+            )
+            logger.error(f"  tt:  {tt_hist[:n_routed_experts]}")
+            logger.error(f"  ref: {ref_hist}")
+            all_passed = False
+        else:
+            logger.info(f"Device {device_id} (row={row_idx}, col={group_idx}): PASS (sum={ref_hist.sum().item()})")
+
+    assert all_passed, "masked_bincount output does not match torch reference on one or more chips"
     logger.info("masked_bincount matches torch reference!")

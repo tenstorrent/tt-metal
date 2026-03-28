@@ -170,10 +170,22 @@ def test_ttnn_moe(
 
     gate_weights = create_gate_weights(num_routed_experts, emb_dim)
 
+    # Create expert dispatch table
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
+    )
+
+    # Compute gate outputs (offsets and token counts)
+    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+        indices,
+        dispatch_group_size,
+        num_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
     )
 
     visualize_expert_dispatch_table(

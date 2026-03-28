@@ -13,8 +13,6 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as Refe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     create_fabric_router_config,
-    create_gate_weights,
-    get_ep_mesh_composer,
     get_gate_outputs,
     get_max_payload_size,
     get_sp_mesh_composer,
@@ -96,7 +94,6 @@ def test_forward_pass(
     random.seed(42)
     torch.manual_seed(42)
 
-    # Create reference gate
     config = TtMoEGateConfig()
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
@@ -112,7 +109,8 @@ def test_forward_pass(
         norm_topk_prob=True,
         hidden_size=config.dim,
     )
-    reference_model = ReferenceMoEGate(ref_config, use_bitonic_sort=True)
+    reference_model = ReferenceMoEGate(ref_config, use_bitonic_sort=False)
+    tt_model = TtMoEGatePrefill(config, mesh_device)
 
     # Create dummy weights and bias
     gate_w = create_gate_weights(config.n_routed_experts, config.dim)
@@ -154,34 +152,16 @@ def test_forward_pass(
         dispatch_group_size=n_sp_devices,
         num_dispatch_groups=n_tp_devices,
     )
-    tt_model = TtMoEGatePrefill(
-        config,
-        mesh_device,
-        dispatch_table=dispatch_table,
-        weight=gate_w["weight"],
-        bias=gate_w["e_score_correction_bias"],
-        fallback_mode=gate_fallback_mode,
-    )
-    # TT forward pass
-    tt_topk_scores, tt_topk_indices, tt_logits, tt_dispatch_offsets, tt_total_counts_per_expert = tt_model(tt_input)
-
-    # Validation
-    seq_len_per_device = reference_logits.shape[0] // mesh_device.shape[0]
-    sp_composer = get_sp_mesh_composer(mesh_device)
-
-    # SP-replicated checks: compose into [1, n_sp_devices, ...] for validate_composed
-    host_tt_topk_indices = ttnn.to_torch(tt_topk_indices, mesh_composer=sp_composer)
-    host_tt_topk_indices = host_tt_topk_indices.view(1, n_sp_devices, seq_len_per_device, -1).sort(dim=-1).values
-    reference_topk_indices = reference_topk_indices.view(1, n_sp_devices, seq_len_per_device, -1).sort(dim=-1).values
-
-    recall_topk_indices = validate_composed(
-        host_tt_topk_indices,
-        reference_topk_indices,
-        1,
-        n_sp_devices,
-        compare_recall(0.997),
-        name="recall_topk_indices",
-        broadcast_groups=n_tp_devices,
+    tt_model.routing_setup.experts_in_dispatch_group = ttnn.from_torch(
+        dispatch_table,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 0),
+            mesh_shape=mesh_device.shape,
+        ),
     )
 
     host_tt_logits = ttnn.to_torch(tt_logits, mesh_composer=sp_composer)
@@ -266,6 +246,7 @@ def test_forward_pass(
         per_group_offsets[group] = offsets.long()
         per_group_totals[group] = cum_sum[-1:].long()
 
+    experts_per_chip = n_routed_experts // (n_sp_devices * n_tp_devices)
     expert_offsets, expert_token_counts, _ = get_gate_outputs(
         indices=indices_for_gate,
         dispatch_group_size=n_sp_devices,
@@ -273,24 +254,25 @@ def test_forward_pass(
         experts_per_chip=experts_per_chip,
         seq_len_per_chip=seq_len_per_device,
         num_experts_per_tok=config.n_activated_experts,
+        expert_dispatch_table=dispatch_table,
     )
 
     reference_offsets = expert_offsets.long()
-    reference_totals = expert_token_counts.squeeze(0).long()  # Shape: (num_routed_experts,)
+    reference_totals = expert_token_counts[:, 0, :].long()  # Shape: (num_dispatch_groups, num_routed_experts)
 
     per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
     for device_id in range(len(per_device_dispatch_offsets)):
         tt_offsets_torch = ttnn.to_torch(per_device_dispatch_offsets[device_id]).long()
         row = device_id // n_tp_devices
         col = device_id % n_tp_devices
-        reference_offsets = per_group_offsets[col][row : row + 1, :]
+        ref_offsets = expert_offsets[col, row : row + 1, :].long()
 
-        offsets_match = torch.equal(tt_offsets_torch, reference_offsets)
+        offsets_match = torch.equal(tt_offsets_torch, ref_offsets)
         status_char = "✅" if offsets_match else "❌"
         if offsets_match:
             logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Dispatch offsets match exactly")
         else:
-            diff = (tt_offsets_torch - reference_offsets).abs()
+            diff = (tt_offsets_torch - ref_offsets).abs()
             max_diff = diff.max().item()
             num_mismatches = (diff > 0).sum().item()
             total_elements = diff.numel()
@@ -310,14 +292,14 @@ def test_forward_pass(
         tt_totals_torch = ttnn.to_torch(per_device_totals[device_id]).long()
         row = device_id // n_tp_devices
         col = device_id % n_tp_devices
-        reference_totals = per_group_totals[col]
+        ref_totals = reference_totals[col : col + 1, :].long()
 
-        totals_match = torch.equal(tt_totals_torch, reference_totals)
+        totals_match = torch.equal(tt_totals_torch, ref_totals)
         status_char = "✅" if totals_match else "❌"
         if totals_match:
             logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Total counts match exactly")
         else:
-            diff = (tt_totals_torch - reference_totals).abs()
+            diff = (tt_totals_torch - ref_totals).abs()
             max_diff = diff.max().item()
             num_mismatches = (diff > 0).sum().item()
             total_elements = diff.numel()

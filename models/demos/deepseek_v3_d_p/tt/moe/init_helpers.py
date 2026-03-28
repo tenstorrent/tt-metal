@@ -296,13 +296,12 @@ def get_gate_outputs(
             Shape: (num_dispatch_groups, num_routed_experts). If None, computed internally.
 
     Returns:
-        expert_offsets: Base offset for each expert from each chip
-            Shape: (dispatch_group_size, num_routed_experts)
-        expert_token_counts: Total tokens per expert (replicated across dispatch groups)
-            Shape: (num_dispatch_groups, num_routed_experts)
-        expert_counter: Per-chip token counts for each expert (debug only).
-            Shows how many tokens from each chip route to each expert.
-            Shape: (dispatch_group_size, num_routed_experts)
+        expert_offsets: Base offset for each expert from each chip (sparse per group)
+            Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
+        expert_token_counts: Total tokens per expert (sparse per group, replicated across dispatch_group_size)
+            Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
+        expert_counter: Per-chip token counts for each expert (sparse per group).
+            Shape: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
     """
     num_dispatch_groups = num_routed_experts // experts_per_chip // dispatch_group_size
 
@@ -322,12 +321,21 @@ def get_gate_outputs(
                 routed_expert = indices[chip, token, topk_idx]
                 expert_counter_dense[chip, routed_expert] += 1
 
-    # Compute cumulative offsets
-    cum_sum = torch.cumsum(expert_counter, dim=0)
-    expert_offsets = torch.vstack([torch.zeros([1, num_routed_experts], dtype=torch.int32), cum_sum[:-1]])
-    num_dispatch_groups = num_routed_experts // experts_per_chip // dispatch_group_size
-    expert_token_counts = cum_sum[-1].unsqueeze(0).expand(num_dispatch_groups, -1).contiguous().to(torch.int32)
-    # expert_token_counts = expert_token_counts.permute(1, 0, 2)
+    # Create group masks from dispatch table: (num_dispatch_groups, 1, num_routed_experts)
+    group_masks = (expert_dispatch_table >= 0).unsqueeze(1).to(torch.int32)
+
+    # Sparse expert_counter: (num_dispatch_groups, dispatch_group_size, num_routed_experts)
+    expert_counter = expert_counter_dense.unsqueeze(0).expand(num_dispatch_groups, -1, -1) * group_masks
+
+    # Cumsum along dispatch_group_size (dim=1) per group
+    cum_sum = torch.cumsum(expert_counter, dim=1)
+    expert_offsets = torch.cat(
+        [torch.zeros((num_dispatch_groups, 1, num_routed_experts), dtype=torch.int32), cum_sum[:, :-1, :]], dim=1
+    )
+
+    # Token counts: last row of cumsum, replicated across dispatch_group_size
+    expert_token_counts = cum_sum[:, -1:, :].expand(-1, dispatch_group_size, -1).contiguous()
+
     logger.debug(f"[get_gate_outputs] OUTPUT SHAPES:")
     logger.debug(f"  expert_counter.shape={expert_counter.shape}")
     logger.debug(f"  expert_offsets.shape={expert_offsets.shape}")
@@ -558,16 +566,16 @@ def get_expert_token_counts_mesh_mapper(mesh_device):
     """
     Create mesh mapper for expert_token_counts tensor.
 
-    Shape: [num_dispatch_groups, num_routed_experts]
+    Shape: [num_dispatch_groups, dispatch_group_size, num_routed_experts]
 
-    Shards dimension 0 (num_dispatch_groups) across mesh columns and
-    replicates across mesh rows. Each device receives [1, num_routed_experts]
-    containing the token counts for its dispatch group.
+    Shards dimension 1 (dispatch_group_size) across mesh rows and
+    dimension 0 (num_dispatch_groups) across mesh columns.
+    Each device receives [1, 1, num_routed_experts].
     """
     return ttnn.ShardTensor2dMesh(
         mesh_device,
         mesh_shape=mesh_device.shape,
-        dims=(None, 0),  # Replicate across rows, shard dim 0 across cols
+        dims=(1, 0),  # Shard dim 1 across rows, shard dim 0 across cols
     )
 
 
