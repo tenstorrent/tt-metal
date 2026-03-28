@@ -62,8 +62,9 @@ jobs:
             ./.github/sku_config.yaml
       - name: Apply model filter
         id: apply-model-filter
+        env:
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
           if [ "${{ inputs.model }}" = "all" ]; then
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
