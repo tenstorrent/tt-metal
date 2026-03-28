@@ -1004,11 +1004,13 @@ class WhisperGenerator:
                 # For KV cache mode without prefill, start with just the first token
                 input_ids = input_ids[:, :1]
 
-        # Generation loop start: if prefill ran, first transcription token was already sampled
-        # during prefill. The decode loop feeds it to the decoder at position prefix_len
-        # (= transcription_start_pos) to generate the next token.
+        # Generation loop start: if prefill ran, the first transcription token was already sampled
+        # during prefill and sits at position transcription_start_pos in the KV cache. The decode
+        # loop must start at transcription_start_pos + 1 to generate the next token; starting at
+        # transcription_start_pos would overwrite the KV cache slot written by prefill and corrupt
+        # all subsequent generation.
         if self.kv_cache_per_batch_size[trace_key] and prompt is not None:
-            generation_start = transcription_start_pos
+            generation_start = transcription_start_pos + 1
         else:
             generation_start = 0
 
