@@ -9,6 +9,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_downblock2d import TtDownEncoderBlock2D
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
+from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_slice_config
 
 
 class TtEncoder(LightweightModule):
@@ -76,7 +77,7 @@ class TtEncoder(LightweightModule):
             conv_in_bias,
             self.conv_in_config.weights_dtype,
         )
-        self.conv_in_slice_config = None
+        self.conv_in_slice_config = get_DRAM_conv_slice_config(module_path="encoder.conv_in")
 
         self.compute_out_config = model_config.get_conv_compute_config(module_path="encoder.conv_out")
         self.conv_out_config = model_config.get_conv_config(conv_path="encoder.conv_out")
@@ -89,7 +90,7 @@ class TtEncoder(LightweightModule):
             conv_out_bias,
             self.conv_out_config.weights_dtype,
         )
-        self.conv_out_slice_config = None
+        self.conv_out_slice_config = get_DRAM_conv_slice_config(module_path="encoder.conv_out")
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def forward(self, sample, input_shape):

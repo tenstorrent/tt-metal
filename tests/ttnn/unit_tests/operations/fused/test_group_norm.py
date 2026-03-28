@@ -514,7 +514,7 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=F
     # ALL other inputs have ROW_MAJOR_LAYOUT and inplace True
     N, C, H, W = input_shape
     layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
-    inplace = C != 512
+    inplace = layout != ttnn.TILE_LAYOUT
     run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode)
 
 
@@ -527,13 +527,14 @@ def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, perf_
     # ALL other inputs have ROW_MAJOR_LAYOUT and inplace False
     N, C, H, W = input_shape
     layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
-    inplace = C == 512
+    inplace = layout != ttnn.TILE_LAYOUT
     run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode)
 
 
 @pytest.mark.parametrize(
     "input_shape",
     [
+        # UNet
         (1, 1280, 64, 64),
         (1, 1280, 32, 32),
         (1, 1920, 64, 64),
@@ -544,6 +545,8 @@ def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, perf_
         (1, 640, 64, 64),
         (1, 640, 32, 32),
         (1, 960, 64, 64),
+        # VAE
+        (1, 512, 128, 128),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
@@ -555,6 +558,8 @@ def test_sdxl_base_group_norm_bh(device, input_shape, perf_test_mode=False):
     N, C, H, W = input_shape
 
     core_grid = ttnn.CoreGrid(y=8, x=8)
+    layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
+    inplace = layout != ttnn.TILE_LAYOUT
 
     # Generate torch tensor
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
@@ -569,7 +574,7 @@ def test_sdxl_base_group_norm_bh(device, input_shape, perf_test_mode=False):
     tt_input_tensor = ttnn.from_torch(
         dummy_tensor,
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=layout,
         memory_config=ttnn.create_sharded_memory_config(
             shape=dummy_tensor.shape,
             core_grid=core_grid,
@@ -590,7 +595,7 @@ def test_sdxl_base_group_norm_bh(device, input_shape, perf_test_mode=False):
         input_mask=input_mask_tensor,
         memory_config=tt_input_tensor.memory_config(),
         core_grid=core_grid,
-        inplace=tt_input_tensor.layout != ttnn.TILE_LAYOUT,
+        inplace=inplace,
         use_welford=False,
     )
     ttnn.synchronize_device(device)
