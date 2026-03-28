@@ -82,58 +82,116 @@ def resolve_config(name):
 # SHAPE TABLE
 # ============================================================================
 
-# (M, K, N, core_grid_x, core_grid_y, is_agmm)
+# (M, K, N, core_grid_x, core_grid_y, is_agmm, use_case)
 # M, K, N are the matmul dimensions as seen by the kernel (per-device).
 # Core grid matches what the model passes to get_matmul_config at runtime.
 # For is_agmm=False: calls ttnn.experimental.minimal_matmul
 # For is_agmm=True: calls ttnn.experimental.all_gather_minimal_matmul_async
+#
+# use_case controls per-shape configuration to match model behavior:
+#   "plain"     - no fused activation or addcmul
+#   "ff2"       - RowParallelLinear (no fused activation, label only)
+#   "qkv"       - attention QKV projection (chunks=3, math_approx_mode=True)
+#   "to_out"    - attention to_out projection (addcmul fused, math_approx_mode=True)
+#   "ff1_gelu"  - FFN first linear (fused GELU activation)
+#   "cross_attn_kv" - cross-attention to_kv (minimal_matmul_split, chunks=2, math_approx_mode=True)
 SHAPES = [
-    (96, 96, 192, 11, 10, False),
-    (64, 192, 384, 11, 10, False),
-    (64, 96, 192, 11, 10, False),
-    (32, 96, 192, 11, 10, False),
-    (32, 192, 384, 11, 10, False),
-    (32, 256, 5120, 11, 10, False),
-    (32, 32, 32, 11, 10, False),
-    (32, 1280, 30720, 11, 10, False),
-    (32, 3072, 10240, 11, 10, False),
-    (32, 5120, 1280, 11, 10, False),
-    (32, 10240, 10240, 11, 10, False),
-    (128, 5120, 2560, 11, 10, False),
-    (512, 4096, 5120, 11, 10, False),
-    (512, 5120, 5120, 11, 10, False),
-    (6144, 384, 384, 11, 10, False),
-    (6144, 384, 1152, 11, 10, False),
-    (6144, 3456, 5120, 11, 10, False),
-    (6144, 5120, 64, 11, 10, False),
-    (6144, 5120, 1280, 12, 9, False),
-    (6144, 5120, 3456, 11, 10, False),
-    (6144, 5120, 3840, 12, 9, False),
-    (6240, 384, 384, 11, 10, False),
-    (6240, 384, 1152, 11, 10, False),
-    (6240, 3456, 5120, 11, 10, False),
-    (6240, 5120, 64, 11, 10, False),
-    (6240, 5120, 1280, 12, 9, False),
-    (6240, 5120, 3456, 11, 10, False),
-    (6240, 5120, 3840, 12, 9, False),
-    (14400, 384, 384, 11, 10, False),
-    (14400, 384, 1152, 11, 10, False),
-    (14400, 3456, 5120, 11, 10, False),
-    (14400, 5120, 64, 11, 10, False),
-    (14400, 5120, 1280, 12, 9, False),
-    (14400, 5120, 3456, 11, 10, False),
-    (14400, 5120, 3840, 12, 9, False),
+    (96, 96, 192, 11, 10, False, "plain"),
+    (64, 192, 384, 11, 10, False, "plain"),
+    (64, 96, 192, 11, 10, False, "plain"),
+    (32, 96, 192, 11, 10, False, "plain"),
+    (32, 192, 384, 11, 10, False, "plain"),
+    (32, 256, 5120, 11, 10, False, "plain"),
+    (32, 32, 32, 11, 10, False, "plain"),
+    (32, 1280, 30720, 11, 10, False, "plain"),
+    (32, 3072, 10240, 11, 10, False, "plain"),
+    (32, 5120, 1280, 11, 10, False, "plain"),
+    (32, 10240, 10240, 11, 10, False, "plain"),
+    (128, 5120, 2560, 11, 10, False, "cross_attn_kv"),
+    (512, 4096, 5120, 11, 10, False, "plain"),
+    (512, 5120, 5120, 11, 10, False, "plain"),
+    (6144, 384, 384, 11, 10, False, "plain"),
+    (6144, 384, 1152, 11, 10, False, "plain"),
+    (6144, 3456, 5120, 11, 10, False, "ff2"),
+    (6144, 5120, 64, 11, 10, False, "plain"),
+    (6144, 5120, 1280, 12, 9, True, "to_out"),
+    (6144, 5120, 3456, 11, 10, False, "plain"),
+    (6144, 5120, 3456, 12, 9, True, "ff1_gelu"),
+    (6144, 5120, 3840, 12, 9, True, "qkv"),
+    (6240, 384, 384, 11, 10, False, "plain"),
+    (6240, 384, 1152, 11, 10, False, "plain"),
+    (6240, 3456, 5120, 11, 10, False, "ff2"),
+    (6240, 5120, 64, 11, 10, False, "plain"),
+    (6240, 5120, 1280, 12, 9, True, "to_out"),
+    (6240, 5120, 3456, 11, 10, False, "plain"),
+    (6240, 5120, 3456, 12, 9, True, "ff1_gelu"),
+    (6240, 5120, 3840, 12, 9, True, "qkv"),
+    (14400, 384, 384, 11, 10, False, "plain"),
+    (14400, 384, 1152, 11, 10, False, "plain"),
+    (14400, 3456, 5120, 11, 10, False, "ff2"),
+    (14400, 5120, 64, 11, 10, False, "plain"),
+    (14400, 5120, 1280, 12, 9, True, "to_out"),
+    (14400, 5120, 3456, 11, 10, False, "plain"),
+    (14400, 5120, 3456, 12, 9, True, "ff1_gelu"),
+    (14400, 5120, 3840, 12, 9, True, "qkv"),
 ]
 
-SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}" for M, K, N, cgx, cgy, agmm in SHAPES]
+SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
+
+# Per-use-case configuration overrides applied in the worker.
+USE_CASE_CONFIGS = {
+    "plain": {},
+    "ff2": {},
+    "qkv": {
+        "chunks": 3,
+        "math_approx_mode": True,
+    },
+    "to_out": {
+        "scalar": 1.0,
+        "use_addcmul": True,
+        "math_approx_mode": True,
+    },
+    "ff1_gelu": {
+        "fused_activation": (ttnn.UnaryOpType.GELU, True),
+    },
+    "cross_attn_kv": {
+        "chunks": 2,
+        "math_approx_mode": True,
+        "use_matmul_split": True,
+    },
+}
 
 # Block sweep range
 MAX_BLOCK = 64
+
+# Base block sizes to always include (union with divisors).
+# Covers powers of 2 plus common non-power-of-2 values found in known-best configs.
+BASE_BLOCK_SIZES = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20]
+
+# AGMM-specific restricted candidate sets to reduce profiler overhead.
+# K: divisors only (all known-best K_blocks divide K_tiles on 12x9 grid).
+# N: restricted set covering all known-best N_block values (includes 3, 6 from configs).
+AGMM_N_BLOCK_CANDIDATES = [1, 2, 3, 4, 6, 8, 12, 16]
+
+# L1 budget for pre-filtering block combos (KB).
+# BH L1 usable ~1464 KB; conservative threshold accounts for kernel/firmware overhead.
+# CB allocation: 2*M*K + 2*K*N + 2*M*N tiles (all double-buffered, bf16 = 2KB/tile)
+#              + M*N tiles intermediate (single-buffered, f32 = 4KB/tile)
+#              + N tiles bias (single-buffered, bf16 = 2KB/tile)
+# to_out adds: M*N tiles ternary_a (bf16) + N tiles ternary_c (bf16)
+L1_BUDGET_KB = 1400
+
+# Max combos per profiler subprocess to avoid DRAM profiler buffer overflow.
+# AGMM ops generate many more profiler markers per op (fabric, all-gather, etc.)
+# so need smaller batches. Non-AGMM can handle more.
+PROFILER_BATCH_SIZE_AGMM = 8
+PROFILER_BATCH_SIZE_MM = 256
 
 CSV_FILE = "sweep_results_mm.csv"
 CSV_COLUMNS = [
     "device_config",
     "op_type",
+    "use_case",
     "M",
     "K",
     "N",
@@ -158,6 +216,46 @@ def get_divisors(n, max_val=MAX_BLOCK):
     if n <= 0:
         return [1]
     return sorted(i for i in range(1, min(n, max_val) + 1) if n % i == 0)
+
+
+def get_block_candidates(n_tiles, max_val=MAX_BLOCK):
+    """Return sorted candidate block sizes: divisors of n_tiles union BASE_BLOCK_SIZES, each <= min(n_tiles, max_val)."""
+    cap = min(n_tiles, max_val)
+    divisors = set(i for i in range(1, cap + 1) if n_tiles % i == 0)
+    base = set(b for b in BASE_BLOCK_SIZES if b <= cap)
+    return sorted(divisors | base)
+
+
+def estimate_l1_kb(m_blk, k_blk, n_blk, use_case="plain"):
+    """Estimate L1 circular buffer footprint in KB for a given block config.
+
+    Based on minimal_matmul_program_factory.cpp CB allocation:
+      c_0 (in0):   2 * M * K tiles  (double-buffered, bf16 = 2 KB/tile)
+      c_1 (in1):   2 * K * N tiles  (double-buffered, bf16)
+      c_2 (out):   2 * M * N tiles  (double-buffered, bf16)
+      c_3 (interm): M * N tiles     (single-buffered, f32 = 4 KB/tile)
+      c_4 (bias):   N tiles         (single-buffered, bf16)
+    to_out adds:
+      c_5 (ternary_a): M * N tiles  (single-buffered, bf16)
+      c_6 (ternary_c): N tiles      (single-buffered, bf16)
+    """
+    bf16_kb = 2  # KB per bf16 tile (32x32x2 bytes)
+    f32_kb = 4  # KB per f32 tile (32x32x4 bytes)
+
+    kb = (
+        2 * m_blk * k_blk * bf16_kb  # c_0: in0
+        + 2 * k_blk * n_blk * bf16_kb  # c_1: in1
+        + 2 * m_blk * n_blk * bf16_kb  # c_2: out
+        + m_blk * n_blk * f32_kb  # c_3: intermediate (f32 accumulator)
+        + n_blk * bf16_kb  # c_4: bias
+    )
+
+    uc_cfg = USE_CASE_CONFIGS.get(use_case, {})
+    if uc_cfg.get("use_addcmul", False):
+        kb += m_blk * n_blk * bf16_kb  # c_5: ternary_a
+        kb += n_blk * bf16_kb  # c_6: ternary_c
+
+    return kb
 
 
 def pick_subblock(m_block, n_block, max_dest_volume=4):
@@ -190,11 +288,26 @@ def generate_subblock_combos(m_block, n_block, max_dest_volume=4):
     return combos
 
 
-def generate_kn_combos(K_tiles, N_tiles):
-    """Generate all valid (K_block, N_block) divisor combos in [1, MAX_BLOCK]."""
-    k_divs = get_divisors(K_tiles)
-    n_divs = get_divisors(N_tiles)
-    return [(k, n) for k in k_divs for n in n_divs]
+def generate_kn_combos(K_tiles, N_tiles, m_block=1, use_case="plain", is_agmm=False):
+    """Generate (K_block, N_block) combos filtered by L1 budget.
+
+    For non-AGMM: divisors union BASE_BLOCK_SIZES for both K and N.
+    For AGMM: K divisors only (no BASE union), N from AGMM_N_BLOCK_CANDIDATES.
+    This reduces AGMM combos to avoid profiler DRAM buffer overflow.
+    """
+    if is_agmm:
+        k_candidates = get_divisors(K_tiles)
+        cap = min(N_tiles, MAX_BLOCK)
+        n_candidates = sorted(b for b in AGMM_N_BLOCK_CANDIDATES if b <= cap)
+    else:
+        k_candidates = get_block_candidates(K_tiles)
+        n_candidates = get_block_candidates(N_tiles)
+    combos = []
+    for k in k_candidates:
+        for n in n_candidates:
+            if estimate_l1_kb(m_block, k, n, use_case) <= L1_BUDGET_KB:
+                combos.append((k, n))
+    return combos
 
 
 def compute_tile_counts(M, K, N):
@@ -308,21 +421,30 @@ def test_mm_sweep_worker(device_config, shape, m_block):
     Emits start/stop signposts around the measured region.
     """
     cfg = resolve_config(device_config)
-    M, K, N, cgx, cgy, is_agmm = shape
+    M, K, N, cgx, cgy, is_agmm, use_case = shape
+    uc_cfg = USE_CASE_CONFIGS[use_case]
 
     M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
 
-    if M_tiles % m_block != 0:
-        pytest.skip(f"m_block={m_block} doesn't divide M_tiles={M_tiles}")
+    m_candidates = get_block_candidates(M_tiles)
+    if m_block not in m_candidates:
+        pytest.skip(f"m_block={m_block} not a candidate for M_tiles={M_tiles}")
 
-    kn_combos = generate_kn_combos(K_tiles, N_tiles)
+    kn_combos = generate_kn_combos(K_tiles, N_tiles, m_block=m_block, use_case=use_case, is_agmm=is_agmm)
     if not kn_combos:
-        pytest.skip("No valid (K_block, N_block) combos")
+        pytest.skip("No valid (K_block, N_block) combos after L1 filter")
+
+    # Optional batch slicing to avoid profiler DRAM buffer overflow on AGMM
+    batch_start = int(os.environ.get("MM_SWEEP_BATCH_START", 0))
+    batch_end = int(os.environ.get("MM_SWEEP_BATCH_END", len(kn_combos)))
+    kn_combos = kn_combos[batch_start:batch_end]
+    if not kn_combos:
+        pytest.skip(f"Empty batch [{batch_start}:{batch_end}]")
 
     op_type = "agmm" if is_agmm else "mm"
     logger.info(
-        f"Worker [{device_config}] {op_type}: M={M} K={K} N={N} grid={cgx}x{cgy} "
-        f"m_block={m_block}, {len(kn_combos)} K/N combos"
+        f"Worker [{device_config}] {op_type} ({use_case}): M={M} K={K} N={N} grid={cgx}x{cgy} "
+        f"m_block={m_block}, {len(kn_combos)} K/N combos (batch [{batch_start}:{batch_end}])"
     )
 
     mesh_device = open_mesh(cfg)
@@ -333,10 +455,14 @@ def test_mm_sweep_worker(device_config, shape, m_block):
         compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_approx_mode=uc_cfg.get("math_approx_mode", False),
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+
+        fused_activation = uc_cfg.get("fused_activation", None)
+        chunks = uc_cfg.get("chunks", 1)
+        scalar = uc_cfg.get("scalar", None)
 
         if is_agmm:
             # ----- AGMM path: sharded input + CCL infrastructure -----
@@ -381,6 +507,29 @@ def test_mm_sweep_worker(device_config, shape, m_block):
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
             )
 
+            # Allocate dummy addcmul tensors if needed (to_out use case)
+            addcmul_tensor1 = None
+            addcmul_tensor2 = None
+            if uc_cfg.get("use_addcmul", False):
+                addcmul_tensor1 = ttnn.from_torch(
+                    torch.randn((M, N), dtype=torch.float32),
+                    dtype=dtype,
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]
+                    ),
+                )
+                addcmul_tensor2 = ttnn.from_torch(
+                    torch.randn((M, N), dtype=torch.float32),
+                    dtype=dtype,
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]
+                    ),
+                )
+
             def run_op(k_blk, n_blk):
                 sb_h, sb_w = pick_subblock(m_block, n_blk)
                 matmul_config = ttnn.MinimalMatmulConfig(
@@ -395,7 +544,7 @@ def test_mm_sweep_worker(device_config, shape, m_block):
                     tt_input,
                     tt_weight,
                     bias_tensor=tt_bias,
-                    fused_activation=None,
+                    fused_activation=fused_activation,
                     compute_kernel_config=compute_config,
                     config=matmul_config,
                     persistent_output_buffer=persistent_output_buffer,
@@ -407,15 +556,17 @@ def test_mm_sweep_worker(device_config, shape, m_block):
                     force_transpose=True,
                     num_workers_per_link=cfg["num_workers_per_link"],
                     num_buffers_per_channel=48,
-                    scalar=None,
-                    addcmul_input_tensor1=None,
-                    addcmul_input_tensor2=None,
-                    chunks=1,
+                    scalar=scalar,
+                    addcmul_input_tensor1=addcmul_tensor1,
+                    addcmul_input_tensor2=addcmul_tensor2,
+                    chunks=chunks,
                 )
                 ttnn.synchronize_device(mesh_device)
 
         else:
             # ----- Non-AGMM path: replicated tensors + minimal_matmul -----
+            use_matmul_split = uc_cfg.get("use_matmul_split", False)
+
             tt_input = ttnn.from_torch(
                 torch.randn((M, K), dtype=torch.float32),
                 dtype=dtype,
@@ -438,25 +589,51 @@ def test_mm_sweep_worker(device_config, shape, m_block):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
 
-            def run_op(k_blk, n_blk):
-                sb_h, sb_w = pick_subblock(m_block, n_blk)
-                matmul_config = ttnn.MinimalMatmulConfig(
-                    M_block_size=m_block,
-                    K_block_size=k_blk,
-                    N_block_size=n_blk,
-                    subblock_h=sb_h,
-                    subblock_w=sb_w,
-                    compute_with_storage_grid_size=core_grid,
-                )
-                ttnn.experimental.minimal_matmul(
-                    input_tensor=tt_input,
-                    weight_tensor=tt_weight,
-                    bias_tensor=tt_bias,
-                    config=matmul_config,
-                    fused_activation=None,
-                    compute_kernel_config=compute_config,
-                )
-                ttnn.synchronize_device(mesh_device)
+            if use_matmul_split:
+
+                def run_op(k_blk, n_blk):
+                    sb_h, sb_w = pick_subblock(m_block, n_blk)
+                    matmul_config = ttnn.MinimalMatmulConfig(
+                        M_block_size=m_block,
+                        K_block_size=k_blk,
+                        N_block_size=n_blk,
+                        subblock_h=sb_h,
+                        subblock_w=sb_w,
+                        compute_with_storage_grid_size=core_grid,
+                    )
+                    ttnn.experimental.minimal_matmul_split(
+                        tt_input,
+                        tt_weight,
+                        chunks=chunks,
+                        dim=-1,
+                        bias_tensor=tt_bias,
+                        fused_activation=fused_activation,
+                        compute_kernel_config=compute_config,
+                        config=matmul_config,
+                    )
+                    ttnn.synchronize_device(mesh_device)
+
+            else:
+
+                def run_op(k_blk, n_blk):
+                    sb_h, sb_w = pick_subblock(m_block, n_blk)
+                    matmul_config = ttnn.MinimalMatmulConfig(
+                        M_block_size=m_block,
+                        K_block_size=k_blk,
+                        N_block_size=n_blk,
+                        subblock_h=sb_h,
+                        subblock_w=sb_w,
+                        compute_with_storage_grid_size=core_grid,
+                    )
+                    ttnn.experimental.minimal_matmul(
+                        input_tensor=tt_input,
+                        weight_tensor=tt_weight,
+                        bias_tensor=tt_bias,
+                        config=matmul_config,
+                        fused_activation=fused_activation,
+                        compute_kernel_config=compute_config,
+                    )
+                    ttnn.synchronize_device(mesh_device)
 
         # Warmup: compile all programs, skip combos that OOM
         valid_combos = []
@@ -515,14 +692,15 @@ def test_mm_subblock_sweep_worker(device_config, shape):
     n_block = int(os.environ["MM_SWEEP_N_BLOCK"])
 
     cfg = resolve_config(device_config)
-    M, K, N, cgx, cgy, is_agmm = shape
+    M, K, N, cgx, cgy, is_agmm, use_case = shape
+    uc_cfg = USE_CASE_CONFIGS[use_case]
 
     sb_combos = generate_subblock_combos(m_block, n_block)
     if len(sb_combos) <= 1:
         pytest.skip("Only one valid subblock combo")
 
     logger.info(
-        f"Subblock worker [{device_config}]: M={M} K={K} N={N} "
+        f"Subblock worker [{device_config}] ({use_case}): M={M} K={K} N={N} "
         f"blocks=({m_block},{k_block},{n_block}), {len(sb_combos)} subblock combos"
     )
 
@@ -534,10 +712,14 @@ def test_mm_subblock_sweep_worker(device_config, shape):
         compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_approx_mode=uc_cfg.get("math_approx_mode", False),
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+
+        fused_activation = uc_cfg.get("fused_activation", None)
+        chunks = uc_cfg.get("chunks", 1)
+        scalar = uc_cfg.get("scalar", None)
 
         if is_agmm:
             sp_axis = cfg["sp_axis"]
@@ -580,6 +762,28 @@ def test_mm_subblock_sweep_worker(device_config, shape):
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
             )
 
+            addcmul_tensor1 = None
+            addcmul_tensor2 = None
+            if uc_cfg.get("use_addcmul", False):
+                addcmul_tensor1 = ttnn.from_torch(
+                    torch.randn((M, N), dtype=torch.float32),
+                    dtype=dtype,
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]
+                    ),
+                )
+                addcmul_tensor2 = ttnn.from_torch(
+                    torch.randn((M, N), dtype=torch.float32),
+                    dtype=dtype,
+                    device=mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]
+                    ),
+                )
+
             def run_op(sb_h, sb_w):
                 matmul_config = ttnn.MinimalMatmulConfig(
                     M_block_size=m_block,
@@ -593,7 +797,7 @@ def test_mm_subblock_sweep_worker(device_config, shape):
                     tt_input,
                     tt_weight,
                     bias_tensor=tt_bias,
-                    fused_activation=None,
+                    fused_activation=fused_activation,
                     compute_kernel_config=compute_config,
                     config=matmul_config,
                     persistent_output_buffer=persistent_output_buffer,
@@ -605,14 +809,16 @@ def test_mm_subblock_sweep_worker(device_config, shape):
                     force_transpose=True,
                     num_workers_per_link=cfg["num_workers_per_link"],
                     num_buffers_per_channel=48,
-                    scalar=None,
-                    addcmul_input_tensor1=None,
-                    addcmul_input_tensor2=None,
-                    chunks=1,
+                    scalar=scalar,
+                    addcmul_input_tensor1=addcmul_tensor1,
+                    addcmul_input_tensor2=addcmul_tensor2,
+                    chunks=chunks,
                 )
                 ttnn.synchronize_device(mesh_device)
 
         else:
+            use_matmul_split = uc_cfg.get("use_matmul_split", False)
+
             tt_input = ttnn.from_torch(
                 torch.randn((M, K), dtype=torch.float32),
                 dtype=dtype,
@@ -635,24 +841,49 @@ def test_mm_subblock_sweep_worker(device_config, shape):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
 
-            def run_op(sb_h, sb_w):
-                matmul_config = ttnn.MinimalMatmulConfig(
-                    M_block_size=m_block,
-                    K_block_size=k_block,
-                    N_block_size=n_block,
-                    subblock_h=sb_h,
-                    subblock_w=sb_w,
-                    compute_with_storage_grid_size=core_grid,
-                )
-                ttnn.experimental.minimal_matmul(
-                    input_tensor=tt_input,
-                    weight_tensor=tt_weight,
-                    bias_tensor=tt_bias,
-                    config=matmul_config,
-                    fused_activation=None,
-                    compute_kernel_config=compute_config,
-                )
-                ttnn.synchronize_device(mesh_device)
+            if use_matmul_split:
+
+                def run_op(sb_h, sb_w):
+                    matmul_config = ttnn.MinimalMatmulConfig(
+                        M_block_size=m_block,
+                        K_block_size=k_block,
+                        N_block_size=n_block,
+                        subblock_h=sb_h,
+                        subblock_w=sb_w,
+                        compute_with_storage_grid_size=core_grid,
+                    )
+                    ttnn.experimental.minimal_matmul_split(
+                        tt_input,
+                        tt_weight,
+                        chunks=chunks,
+                        dim=-1,
+                        bias_tensor=tt_bias,
+                        fused_activation=fused_activation,
+                        compute_kernel_config=compute_config,
+                        config=matmul_config,
+                    )
+                    ttnn.synchronize_device(mesh_device)
+
+            else:
+
+                def run_op(sb_h, sb_w):
+                    matmul_config = ttnn.MinimalMatmulConfig(
+                        M_block_size=m_block,
+                        K_block_size=k_block,
+                        N_block_size=n_block,
+                        subblock_h=sb_h,
+                        subblock_w=sb_w,
+                        compute_with_storage_grid_size=core_grid,
+                    )
+                    ttnn.experimental.minimal_matmul(
+                        input_tensor=tt_input,
+                        weight_tensor=tt_weight,
+                        bias_tensor=tt_bias,
+                        config=matmul_config,
+                        fused_activation=fused_activation,
+                        compute_kernel_config=compute_config,
+                    )
+                    ttnn.synchronize_device(mesh_device)
 
         # Warmup — skip combos that OOM
         valid_combos = []
@@ -691,7 +922,7 @@ def test_mm_subblock_sweep_worker(device_config, shape):
 # ============================================================================
 
 
-@pytest.mark.timeout(3000)
+@pytest.mark.timeout(21600)  # 6 hours — AGMM sweeps with batching are slow (mesh open + compile per batch)
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance sweep - skip on CI")
 @pytest.mark.parametrize("device_config", list(DEVICE_CONFIGS.keys()))
 @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
@@ -704,123 +935,168 @@ def test_mm_sweep(device_config, shape):
     from tracy.process_model_log import run_device_profiler
 
     cfg = resolve_config(device_config)
-    M, K, N, cgx, cgy, is_agmm = shape
+    M, K, N, cgx, cgy, is_agmm, use_case = shape
     M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
     op_type = "agmm" if is_agmm else "mm"
-    shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}"
+    shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
     core_grid_str = f"{cgx}x{cgy}"
 
-    m_blocks = get_divisors(M_tiles)
-    kn_combos = generate_kn_combos(K_tiles, N_tiles)
+    m_blocks = get_block_candidates(M_tiles)
 
-    if not kn_combos:
+    # Log total combo counts (K/N combos vary per m_block due to L1 filter)
+    sample_kn = generate_kn_combos(K_tiles, N_tiles, m_block=m_blocks[0], use_case=use_case, is_agmm=is_agmm)
+    if not sample_kn and not any(
+        generate_kn_combos(K_tiles, N_tiles, m_block=m, use_case=use_case, is_agmm=is_agmm) for m in m_blocks
+    ):
         pytest.skip(f"No valid (K_block, N_block) combos for K_tiles={K_tiles}, N_tiles={N_tiles}")
 
     logger.info(
-        f"Sweep [{device_config}] {op_type} {shape_id}: M_tiles={M_tiles}, K_tiles={K_tiles}, N_tiles={N_tiles}, "
-        f"{len(m_blocks)} M_blocks, {len(kn_combos)} K/N combos each"
+        f"Sweep [{device_config}] {op_type} ({use_case}) {shape_id}: "
+        f"M_tiles={M_tiles}, K_tiles={K_tiles}, N_tiles={N_tiles}, "
+        f"{len(m_blocks)} M_blocks (divisors+base), L1-filtered K/N combos"
     )
 
     write_csv_header(CSV_FILE)
     all_results = []
 
+    batch_size = PROFILER_BATCH_SIZE_AGMM if is_agmm else PROFILER_BATCH_SIZE_MM
+
     for m_block in m_blocks:
-        subdir = f"mm_sweep_{device_config}_{shape_id}_m{m_block}"
-        combos_file = f"valid_combos_{device_config}_{shape_id}_m{m_block}.json"
-        os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
-        command = (
-            f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
-            f"::test_mm_sweep_worker[m{m_block}-{shape_id}-{device_config}] -x"
-        )
+        kn_combos = generate_kn_combos(K_tiles, N_tiles, m_block=m_block, use_case=use_case, is_agmm=is_agmm)
+        if not kn_combos:
+            logger.info(f"  M_block={m_block}: all K/N combos exceed L1 budget, skipping")
+            continue
 
-        logger.info(f"  M_block={m_block}: profiling {len(kn_combos)} combos...")
+        # Split into batches to avoid profiler DRAM buffer overflow
+        batches = [
+            (b_start, min(b_start + batch_size, len(kn_combos))) for b_start in range(0, len(kn_combos), batch_size)
+        ]
+        n_batches = len(batches)
+        batch_label = f" ({n_batches} batches)" if n_batches > 1 else ""
 
-        try:
-            run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-            durations = parse_ops_log(subdir)
+        logger.info(f"  M_block={m_block}: profiling {len(kn_combos)} combos (L1-filtered){batch_label}...")
 
-            # Read valid combos from worker (may be subset of kn_combos due to L1 OOM)
-            if os.path.exists(combos_file):
-                with open(combos_file) as f:
-                    valid_combos = [tuple(c) for c in json.load(f)]
-                os.remove(combos_file)
-            else:
-                valid_combos = kn_combos
+        m_block_durations = []
+        m_block_valid_combos = []
+        m_block_failed = False
 
-            if len(durations) != len(valid_combos):
-                logger.warning(
-                    f"  M_block={m_block}: expected {len(valid_combos)} ops, " f"got {len(durations)} in profiler log"
-                )
+        for batch_idx, (b_start, b_end) in enumerate(batches):
+            batch_combos = kn_combos[b_start:b_end]
+            batch_suffix = f"_b{batch_idx}" if n_batches > 1 else ""
+            subdir = f"mm_sweep_{device_config}_{shape_id}_m{m_block}{batch_suffix}"
+            combos_file = f"valid_combos_{device_config}_{shape_id}_m{m_block}{batch_suffix}.json"
+            os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
+            os.environ["MM_SWEEP_BATCH_START"] = str(b_start)
+            os.environ["MM_SWEEP_BATCH_END"] = str(b_end)
+            command = (
+                f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
+                f"::test_mm_sweep_worker[m{m_block}-{shape_id}-{device_config}] -x"
+            )
 
-            skipped = len(kn_combos) - len(valid_combos)
-            if skipped:
-                logger.info(f"  M_block={m_block}: {skipped} combos skipped (L1 OOM)")
+            if n_batches > 1:
+                logger.info(f"    batch {batch_idx + 1}/{n_batches}: combos [{b_start}:{b_end}]")
 
-            for i, (k_blk, n_blk) in enumerate(valid_combos):
-                sb_h, sb_w = pick_subblock(m_block, n_blk)
-                if i < len(durations):
-                    duration_ns = durations[i]
-                    status = "OK"
-                    all_results.append(
-                        {
-                            "M_block": m_block,
-                            "K_block": k_blk,
-                            "N_block": n_blk,
-                            "subblock_h": sb_h,
-                            "subblock_w": sb_w,
-                            "duration_ns": duration_ns,
-                        }
-                    )
+            try:
+                run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+                durations = parse_ops_log(subdir)
+
+                # Read valid combos from worker (may be subset due to runtime L1 OOM)
+                if os.path.exists(combos_file):
+                    with open(combos_file) as f:
+                        valid_combos = [tuple(c) for c in json.load(f)]
+                    os.remove(combos_file)
                 else:
-                    duration_ns = -1
-                    status = "MISSING"
+                    valid_combos = batch_combos
 
-                append_csv_row(
-                    CSV_FILE,
-                    [
-                        device_config,
-                        op_type,
-                        M,
-                        K,
-                        N,
-                        core_grid_str,
-                        m_block,
-                        k_blk,
-                        n_blk,
-                        sb_h,
-                        sb_w,
-                        f"{duration_ns:.0f}",
-                        status,
-                    ],
+                if len(durations) != len(valid_combos):
+                    logger.warning(
+                        f"  M_block={m_block}{batch_suffix}: expected {len(valid_combos)} ops, "
+                        f"got {len(durations)} in profiler log"
+                    )
+
+                m_block_durations.extend(durations)
+                m_block_valid_combos.extend(valid_combos)
+
+            except Exception as e:
+                err_msg = str(e)
+                if len(err_msg) > 200:
+                    err_msg = err_msg[:200] + "..."
+                logger.warning(f"  M_block={m_block}{batch_suffix}: FAILED - {err_msg}")
+                # Record failures for this batch
+                for k_blk, n_blk in batch_combos:
+                    sb_h, sb_w = pick_subblock(m_block, n_blk)
+                    append_csv_row(
+                        CSV_FILE,
+                        [
+                            device_config,
+                            op_type,
+                            use_case,
+                            M,
+                            K,
+                            N,
+                            core_grid_str,
+                            m_block,
+                            k_blk,
+                            n_blk,
+                            sb_h,
+                            sb_w,
+                            -1,
+                            f"FAIL: {err_msg[:80]}",
+                        ],
+                    )
+                m_block_failed = True
+
+        # Clean up batch env vars
+        os.environ.pop("MM_SWEEP_BATCH_START", None)
+        os.environ.pop("MM_SWEEP_BATCH_END", None)
+
+        # Record results for all successful batches
+        skipped = len(kn_combos) - len(m_block_valid_combos)
+        if skipped and not m_block_failed:
+            logger.info(f"  M_block={m_block}: {skipped} combos skipped (runtime L1 OOM)")
+
+        for i, (k_blk, n_blk) in enumerate(m_block_valid_combos):
+            sb_h, sb_w = pick_subblock(m_block, n_blk)
+            if i < len(m_block_durations):
+                duration_ns = m_block_durations[i]
+                status = "OK"
+                all_results.append(
+                    {
+                        "M_block": m_block,
+                        "K_block": k_blk,
+                        "N_block": n_blk,
+                        "subblock_h": sb_h,
+                        "subblock_w": sb_w,
+                        "duration_ns": duration_ns,
+                    }
                 )
+            else:
+                duration_ns = -1
+                status = "MISSING"
 
-            logger.info(f"  M_block={m_block}: done, " f"{min(len(durations), len(valid_combos))} results recorded")
+            append_csv_row(
+                CSV_FILE,
+                [
+                    device_config,
+                    op_type,
+                    use_case,
+                    M,
+                    K,
+                    N,
+                    core_grid_str,
+                    m_block,
+                    k_blk,
+                    n_blk,
+                    sb_h,
+                    sb_w,
+                    f"{duration_ns:.0f}",
+                    status,
+                ],
+            )
 
-        except Exception as e:
-            err_msg = str(e)
-            if len(err_msg) > 200:
-                err_msg = err_msg[:200] + "..."
-            logger.warning(f"  M_block={m_block}: FAILED - {err_msg}")
-            for k_blk, n_blk in kn_combos:
-                sb_h, sb_w = pick_subblock(m_block, n_blk)
-                append_csv_row(
-                    CSV_FILE,
-                    [
-                        device_config,
-                        op_type,
-                        M,
-                        K,
-                        N,
-                        core_grid_str,
-                        m_block,
-                        k_blk,
-                        n_blk,
-                        sb_h,
-                        sb_w,
-                        -1,
-                        f"FAIL: {err_msg[:80]}",
-                    ],
-                )
+        logger.info(
+            f"  M_block={m_block}: done, " f"{min(len(m_block_durations), len(m_block_valid_combos))} results recorded"
+        )
 
     # Pass 1 summary
     if not all_results:
@@ -884,6 +1160,7 @@ def test_mm_sweep(device_config, shape):
                         [
                             device_config,
                             op_type,
+                            use_case,
                             M,
                             K,
                             N,
@@ -970,92 +1247,141 @@ def main():
         f"sp_axis={cfg['sp_axis']}, links={cfg['num_links']})"
     )
 
-    for M, K, N, cgx, cgy, is_agmm in shapes:
+    for M, K, N, cgx, cgy, is_agmm, use_case in shapes:
         M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
         op_type = "agmm" if is_agmm else "mm"
-        shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}"
+        shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
         core_grid_str = f"{cgx}x{cgy}"
 
-        m_blocks = get_divisors(M_tiles, args.max_block)
-        kn_combos = generate_kn_combos(K_tiles, N_tiles)
+        m_blocks = get_block_candidates(M_tiles, args.max_block)
 
-        if not kn_combos:
-            print(f"Skipping {shape_id}: no valid K/N combos")
+        # Check if any M_block has valid K/N combos
+        has_combos = any(
+            generate_kn_combos(K_tiles, N_tiles, m_block=m, use_case=use_case, is_agmm=is_agmm) for m in m_blocks
+        )
+        if not has_combos:
+            print(f"Skipping {shape_id}: no valid K/N combos after L1 filter")
             continue
 
         print(f"\n{'='*80}")
         print(
-            f"[{device_config}] {op_type} Shape {M}_{K}_{N} grid={core_grid_str}: "
+            f"[{device_config}] {op_type} ({use_case}) Shape {M}_{K}_{N} grid={core_grid_str}: "
             f"M_tiles={M_tiles} K_tiles={K_tiles} N_tiles={N_tiles}"
         )
-        print(f"  {len(m_blocks)} M_blocks x {len(kn_combos)} K/N combos")
+        print(f"  {len(m_blocks)} M_blocks (divisors+base), L1-filtered K/N combos")
         print(f"{'='*80}")
 
         shape_results = []
 
+        batch_size = PROFILER_BATCH_SIZE_AGMM if is_agmm else PROFILER_BATCH_SIZE_MM
+
         for m_block in m_blocks:
-            subdir = f"mm_sweep_{device_config}_{shape_id}_m{m_block}"
-            combos_file = f"valid_combos_{device_config}_{shape_id}_m{m_block}.json"
-            os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
-            command = (
-                f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
-                f"::test_mm_sweep_worker[m{m_block}-{shape_id}-{device_config}] -x"
-            )
+            kn_combos = generate_kn_combos(K_tiles, N_tiles, m_block=m_block, use_case=use_case, is_agmm=is_agmm)
+            if not kn_combos:
+                print(f"  M_block={m_block}: all K/N combos exceed L1 budget, skipping")
+                continue
 
-            print(f"  M_block={m_block}: profiling {len(kn_combos)} combos...", end=" ", flush=True)
+            # Split into batches to avoid profiler DRAM buffer overflow
+            batches = [
+                (b_start, min(b_start + batch_size, len(kn_combos))) for b_start in range(0, len(kn_combos), batch_size)
+            ]
+            n_batches = len(batches)
+            batch_label = f" ({n_batches} batches)" if n_batches > 1 else ""
 
-            try:
-                run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-                durations = parse_ops_log(subdir)
+            print(f"  M_block={m_block}: profiling {len(kn_combos)} combos{batch_label}...", end=" ", flush=True)
 
-                # Read valid combos from worker (may be subset due to L1 OOM)
-                if os.path.exists(combos_file):
-                    with open(combos_file) as f:
-                        valid_combos = [tuple(c) for c in json.load(f)]
-                    os.remove(combos_file)
-                else:
-                    valid_combos = kn_combos
+            m_block_results = 0
 
-                skipped = len(kn_combos) - len(valid_combos)
-                matched = min(len(durations), len(valid_combos))
-                for i, (k_blk, n_blk) in enumerate(valid_combos):
-                    sb_h, sb_w = pick_subblock(m_block, n_blk)
-                    if i < len(durations):
-                        duration_ns = durations[i]
-                        shape_results.append(
-                            {
-                                "M_block": m_block,
-                                "K_block": k_blk,
-                                "N_block": n_blk,
-                                "subblock_h": sb_h,
-                                "subblock_w": sb_w,
-                                "duration_ns": duration_ns,
-                            }
-                        )
-                        append_csv_row(
-                            args.csv,
-                            [
-                                device_config,
-                                op_type,
-                                M,
-                                K,
-                                N,
-                                core_grid_str,
-                                m_block,
-                                k_blk,
-                                n_blk,
-                                sb_h,
-                                sb_w,
-                                f"{duration_ns:.0f}",
-                                "OK",
-                            ],
-                        )
+            for batch_idx, (b_start, b_end) in enumerate(batches):
+                batch_combos = kn_combos[b_start:b_end]
+                batch_suffix = f"_b{batch_idx}" if n_batches > 1 else ""
+                subdir = f"mm_sweep_{device_config}_{shape_id}_m{m_block}{batch_suffix}"
+                combos_file = f"valid_combos_{device_config}_{shape_id}_m{m_block}{batch_suffix}.json"
+                os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
+                os.environ["MM_SWEEP_BATCH_START"] = str(b_start)
+                os.environ["MM_SWEEP_BATCH_END"] = str(b_end)
+                command = (
+                    f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
+                    f"::test_mm_sweep_worker[m{m_block}-{shape_id}-{device_config}] -x"
+                )
+
+                try:
+                    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+                    durations = parse_ops_log(subdir)
+
+                    # Read valid combos from worker (may be subset due to runtime L1 OOM)
+                    if os.path.exists(combos_file):
+                        with open(combos_file) as f:
+                            valid_combos = [tuple(c) for c in json.load(f)]
+                        os.remove(combos_file)
                     else:
+                        valid_combos = batch_combos
+
+                    for i, (k_blk, n_blk) in enumerate(valid_combos):
+                        sb_h, sb_w = pick_subblock(m_block, n_blk)
+                        if i < len(durations):
+                            duration_ns = durations[i]
+                            shape_results.append(
+                                {
+                                    "M_block": m_block,
+                                    "K_block": k_blk,
+                                    "N_block": n_blk,
+                                    "subblock_h": sb_h,
+                                    "subblock_w": sb_w,
+                                    "duration_ns": duration_ns,
+                                }
+                            )
+                            append_csv_row(
+                                args.csv,
+                                [
+                                    device_config,
+                                    op_type,
+                                    use_case,
+                                    M,
+                                    K,
+                                    N,
+                                    core_grid_str,
+                                    m_block,
+                                    k_blk,
+                                    n_blk,
+                                    sb_h,
+                                    sb_w,
+                                    f"{duration_ns:.0f}",
+                                    "OK",
+                                ],
+                            )
+                            m_block_results += 1
+                        else:
+                            append_csv_row(
+                                args.csv,
+                                [
+                                    device_config,
+                                    op_type,
+                                    use_case,
+                                    M,
+                                    K,
+                                    N,
+                                    core_grid_str,
+                                    m_block,
+                                    k_blk,
+                                    n_blk,
+                                    sb_h,
+                                    sb_w,
+                                    -1,
+                                    "MISSING",
+                                ],
+                            )
+
+                except Exception as e:
+                    print(f"batch {batch_idx} FAILED: {str(e)[:100]}...", end=" ", flush=True)
+                    for k_blk, n_blk in batch_combos:
+                        sb_h, sb_w = pick_subblock(m_block, n_blk)
                         append_csv_row(
                             args.csv,
                             [
                                 device_config,
                                 op_type,
+                                use_case,
                                 M,
                                 K,
                                 N,
@@ -1066,35 +1392,14 @@ def main():
                                 sb_h,
                                 sb_w,
                                 -1,
-                                "MISSING",
+                                "FAIL",
                             ],
                         )
 
-                suffix = f" ({skipped} skipped L1 OOM)" if skipped else ""
-                print(f"{matched} results OK{suffix}")
-
-            except Exception as e:
-                print(f"FAILED: {str(e)[:100]}")
-                for k_blk, n_blk in kn_combos:
-                    sb_h, sb_w = pick_subblock(m_block, n_blk)
-                    append_csv_row(
-                        args.csv,
-                        [
-                            device_config,
-                            op_type,
-                            M,
-                            K,
-                            N,
-                            core_grid_str,
-                            m_block,
-                            k_blk,
-                            n_blk,
-                            sb_h,
-                            sb_w,
-                            -1,
-                            "FAIL",
-                        ],
-                    )
+            # Clean up batch env vars
+            os.environ.pop("MM_SWEEP_BATCH_START", None)
+            os.environ.pop("MM_SWEEP_BATCH_END", None)
+            print(f"{m_block_results} results OK")
 
         if shape_results:
             shape_results.sort(key=lambda r: r["duration_ns"])
@@ -1156,6 +1461,7 @@ def main():
                                 [
                                     device_config,
                                     op_type,
+                                    use_case,
                                     M,
                                     K,
                                     N,
@@ -1192,27 +1498,27 @@ def main():
                 f"  FINAL BEST: M={best['M_block']} K={best['K_block']} N={best['N_block']} "
                 f"sb=({best['subblock_h']},{best['subblock_w']}) -> {best['duration_ns']:.0f} ns"
             )
-            all_best[(M, K, N, cgx, cgy, op_type)] = best
+            all_best[(M, K, N, cgx, cgy, op_type, use_case)] = best
 
     # Print summary
     if all_best:
-        print(f"\n{'='*100}")
+        print(f"\n{'='*110}")
         print(f"SWEEP SUMMARY [{device_config}] - Best configs per shape")
-        print(f"{'='*100}")
+        print(f"{'='*110}")
         print(
-            f"{'type':>4} {'M':>6} {'K':>6} {'N':>6} {'grid':>7} | "
+            f"{'type':>4} {'use_case':>10} {'M':>6} {'K':>6} {'N':>6} {'grid':>7} | "
             f"{'M_blk':>5} {'K_blk':>5} {'N_blk':>5} {'sb_h':>4} {'sb_w':>4} | "
             f"{'duration_ns':>12}"
         )
-        print("-" * 100)
-        for (M, K, N, cgx, cgy, op_type), best in sorted(all_best.items()):
+        print("-" * 110)
+        for (M, K, N, cgx, cgy, op_type, use_case), best in sorted(all_best.items()):
             print(
-                f"{op_type:>4} {M:>6} {K:>6} {N:>6} {cgx}x{cgy:>2} | "
+                f"{op_type:>4} {use_case:>10} {M:>6} {K:>6} {N:>6} {cgx}x{cgy:>2} | "
                 f"{best['M_block']:>5} {best['K_block']:>5} {best['N_block']:>5} "
                 f"{best['subblock_h']:>4} {best['subblock_w']:>4} | "
                 f"{best['duration_ns']:>12.0f}"
             )
-        print(f"{'='*100}")
+        print(f"{'='*110}")
         print(f"\nFull results written to: {args.csv}")
 
 
