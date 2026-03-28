@@ -2,7 +2,7 @@
 
 ## Session: 2026-03-28
 
-### Status: 8K/16K ~67% reliability, TLB cleanup added
+### Status: 8K 30%, 16K 20%, 32K 0% reliability - CCL warmup deadlocks
 
 ### Summary
 
@@ -10,13 +10,13 @@
 2. Added TLB leak prevention via `TT_CCL.cleanup()` method
 3. 8K coherency issue traced to complex summarization prompt (16K uses simpler prompt)
 
-### ISL Results (batch=1, 3 runs each)
+### ISL Results (batch=1, 10 runs each)
 
 | ISL | Pass Rate | TTFT | Notes |
 |-----|-----------|------|-------|
-| 8K | 2/3 (67%) | ~2.7s | First run often times out |
-| 16K | 2/3 (67%) | ~5.0s | Same pattern |
-| 32K | 0/3 (0%) | - | Consistently hangs |
+| 8K | 3/10 (30%) | ~2.8s | Hangs at random layers (L55, L62) during warmup |
+| 16K | 2/10 (20%) | ~5.7s | Hangs at random layers (L14, L31, L48) during warmup |
+| 32K | 0/10 (0%) | - | Consistently hangs during warmup |
 
 ### TLB Leak Fix
 Added `cleanup()` method to `TT_CCL` class (`llama_ccl.py`) that deallocates:
