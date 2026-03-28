@@ -10,6 +10,7 @@ set(FABRIC_JIT_API_HEADERS
     hw/inc/edm_fabric/fabric_connection_manager.hpp
     hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp
     hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
+    hw/inc/edm_fabric/fabric_router_eth_handshake.hpp
     hw/inc/edm_fabric/fabric_txq_setup.h
     hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
     hw/inc/fabric_direction_table_interface.h
