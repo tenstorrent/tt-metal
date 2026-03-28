@@ -22,6 +22,7 @@ template <
     uint32_t interm_cb,
     matmul_block_config::InitUninitMode init_uninit_mode,
     matmul_block_config::ReconfigureRegisterDatatypeMode reconfig_mode,
+    matmul_block_config::WaitPopMode wait_pop_mode,
     bool transpose,
     typename PostComputeFn>
 ALWI void matmul_block(
@@ -85,8 +86,10 @@ ALWI void matmul_block(
             bool last_out = block == (num_blocks - 1);
 
             // Wait for full input blocks
-            cb_wait_front(in0_cb, in0.block_num_tiles);
-            cb_wait_front(in1_cb, in1.block_num_tiles);
+            if constexpr (wait_pop_mode == matmul_block_config::WaitPopMode::WaitAndPop) {
+                cb_wait_front(in0_cb, in0.block_num_tiles);
+                cb_wait_front(in1_cb, in1.block_num_tiles);
+            }
 
             int in0_index_subblock_offset = 0;
             for (uint32_t in0_subblock = 0; in0_subblock < in0.num_subblocks; in0_subblock++) {
@@ -165,8 +168,10 @@ ALWI void matmul_block(
                 enable_reload = true;
             }
 
-            cb_pop_front(in0_cb, in0.block_num_tiles);
-            cb_pop_front(in1_cb, in1.block_num_tiles);
+            if constexpr (wait_pop_mode == matmul_block_config::WaitPopMode::WaitAndPop) {
+                cb_pop_front(in0_cb, in0.block_num_tiles);
+                cb_pop_front(in1_cb, in1.block_num_tiles);
+            }
         }
     }
 }

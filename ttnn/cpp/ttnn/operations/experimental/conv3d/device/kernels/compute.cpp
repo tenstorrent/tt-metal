@@ -14,63 +14,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-
-// Slightly modified from compute_common.hpp
-void matmul_blocks(
-    const uint32_t in0_cb,
-    const uint32_t in1_cb,
-    const uint32_t out_cb,
-    const uint32_t M,
-    const uint32_t N,
-    const uint32_t K,
-    const uint32_t in0_num_subblocks,
-    const uint32_t in1_num_subblocks,
-    const uint32_t in0_block_w,
-    const uint32_t subblock_h,
-    const uint32_t subblock_w,
-    const bool transpose) {
-    // precondition: in0_cb has M*K produced
-    // precondition: in1_cb has K*N produced
-    // postcondition: in0_cb is full, in1_cb is empty
-    // postcondition: out_cb has M*N produced
-    mm_block_init_short(
-        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
-
-    uint32_t output_num_tiles = M * N;
-    uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
-    uint32_t in0_index_offset = 0;
-
-    reconfig_data_format(in1_cb, in0_cb);
-
-    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
-        uint32_t in1_index_offset = 0;
-        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
-            tile_regs_acquire();
-
-            uint32_t dst_index = 0;
-            uint32_t in0_index = in0_index_offset;
-            uint32_t in1_index = in1_index_offset;
-
-            for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                matmul_block(
-                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
-                in0_index++;
-                in1_index += N;
-            }
-            tile_regs_commit();
-
-            cb_reserve_back(out_cb, out_subblock_num_tiles);
-            tile_regs_wait();
-            for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                pack_tile(i, out_cb);
-            }
-            tile_regs_release();
-            cb_push_back(out_cb, out_subblock_num_tiles);
-            in1_index_offset += subblock_w;
-        }
-        in0_index_offset += subblock_h * in0_block_w;
-    }
-}
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 
 template <uint32_t rows, uint32_t cols>
 void add_bias_inplace(uint32_t in0_cb, uint32_t in1_cb) {
@@ -220,26 +164,32 @@ void kernel_main() {
 
                             if constexpr (use_fp32_partials) {
                                 // Reconfigure packer for fp32 output after tilize left it in bf16.
-                                // mm_block_init_short_with_both_dt is not needed: matmul_blocks()
-                                // calls mm_block_init_short() + reconfig_data_format() internally.
+                                // mm_block_init_short_with_both_dt is not needed: the matmul_block
+                                // helper calls mm_block_init() internally.
                                 pack_reconfig_data_format(cb_matmul_interm_tiled);
                             }
 
-                            // Apply matmul blocks
+                            // Apply matmul blocks using library helper.
+                            // NoWaitNoPop: we manage input CBs externally — vol2col is
+                            // waited/popped here, weights persist across spatial patches.
                             cb_wait_front(cb_vol2col_tiled, patch_tiles);
-                            matmul_blocks(
+                            compute_kernel_lib::matmul_block<
                                 cb_vol2col_tiled,
                                 cb_weight_tiled,
                                 cb_matmul_interm_tiled,
-                                matmul_M_t,
-                                matmul_N_t,
-                                matmul_K_t,
-                                in0_num_subblocks,
-                                in1_num_subblocks,
-                                in0_block_w,
-                                subblock_h,
-                                subblock_w,
-                                false /* transpose */);
+                                cb_matmul_interm_tiled,
+                                compute_kernel_lib::matmul_block_config::InitUninitMode::InitAndUninit,
+                                compute_kernel_lib::matmul_block_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
+                                compute_kernel_lib::matmul_block_config::WaitPopMode::NoWaitNoPop>(
+                                {.block_w = in0_block_w,
+                                 .num_subblocks = in0_num_subblocks,
+                                 .block_num_tiles = matmul_M_t * in0_block_w,
+                                 .subblock_num_tiles = subblock_h * in0_block_w},
+                                {.num_subblocks = in1_num_subblocks,
+                                 .block_num_tiles = in0_block_w * matmul_N_t,
+                                 .per_core_w = matmul_N_t},
+                                1,  // num_blocks (single K-block, no spill/reload)
+                                {.h = subblock_h, .w = subblock_w, .num_tiles = subblock_h * subblock_w});
                             cb_pop_front(cb_vol2col_tiled, patch_tiles);
 
                             // Stall on matmul/bias to finish

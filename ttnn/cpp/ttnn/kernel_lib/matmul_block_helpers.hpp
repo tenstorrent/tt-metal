@@ -47,6 +47,15 @@ struct OutSubblockParams {
     uint32_t num_tiles;  // Tiles per output sub-block (= h * w)
 };
 
+// Input CB synchronization mode.
+enum class WaitPopMode : uint8_t {
+    WaitAndPop,  // Default — cb_wait_front before each K-block, cb_pop_front after.
+    NoWaitNoPop  // Caller manages all CB synchronization externally. Use when
+                 // inputs are pre-waited or persistent (e.g., weight reuse across
+                 // multiple matmul calls). When using this mode, the caller must
+                 // ensure both in0 and in1 tiles are available before calling.
+};
+
 // Default no-op post-compute functor.
 struct NoPostCompute {
     ALWI void operator()(uint32_t /* out_subblock_num_tiles */) const {}
@@ -79,6 +88,11 @@ struct NoPostCompute {
  *                space) to avoid wasting L1 — the output only needs space once the
  *                final block is ready.
  *   transpose  — If true, transpose B tiles before multiplication (default: false).
+ *   wait_pop_mode — Input CB synchronization (default: WaitAndPop).
+ *                   WaitAndPop: helper calls cb_wait_front/cb_pop_front per K-block.
+ *                   NoWaitNoPop: caller manages all input CB sync externally.
+ *                   Use NoWaitNoPop when inputs are pre-waited or persistent
+ *                   (e.g., weight CB reused across multiple matmul calls).
  *
  * ── PostComputeFn ────────────────────────────────────────────────────────
  *
@@ -114,6 +128,7 @@ template <
     matmul_block_config::InitUninitMode init_uninit_mode = matmul_block_config::InitUninitMode::InitAndUninit,
     matmul_block_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         matmul_block_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+    matmul_block_config::WaitPopMode wait_pop_mode = matmul_block_config::WaitPopMode::WaitAndPop,
     bool transpose = false,
     typename PostComputeFn = matmul_block_config::NoPostCompute>
 ALWI void matmul_block(
