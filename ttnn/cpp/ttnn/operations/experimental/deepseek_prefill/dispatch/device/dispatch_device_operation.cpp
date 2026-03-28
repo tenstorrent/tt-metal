@@ -44,8 +44,9 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         "Indices tensor must be INT32 or UINT32, got {}",
         tensor_args.indices_tensor.dtype());
     TT_FATAL(
-        tensor_args.expert_offsets_tensor.dtype() == DataType::INT32,
-        "Expert offsets tensor must be INT32, got {}",
+        tensor_args.expert_offsets_tensor.dtype() == DataType::INT32 ||
+            tensor_args.expert_offsets_tensor.dtype() == DataType::UINT32,
+        "Expert offsets tensor must be INT32 or UINT32, got {}",
         tensor_args.expert_offsets_tensor.dtype());
     TT_FATAL(
         tensor_args.expert_dispatch_table_tensor.dtype() == DataType::INT32,

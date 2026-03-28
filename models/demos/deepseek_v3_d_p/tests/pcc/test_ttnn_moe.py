@@ -25,13 +25,13 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_fabric_router_config,
     extract_mesh_config,
     get_ep_mesh_composer,
-    get_expert_token_counts_mesh_mapper,
     get_gate_outputs,
     get_tp_mesh_composer,
     initialize_test_inputs,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     log_combine_mismatch_details,
     log_per_chip_statistics,
@@ -354,18 +354,20 @@ def test_ttnn_moe(
         indices, mesh_mapper=mesh_mapper_sp_only, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
     )
 
-    # Expert offsets and dispatch table
-    tt_expert_offsets = TtDispatchModule.shard_expert_offsets(mesh_device, expert_offsets)
-    tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
-
-    # Expert token counts
-    tt_expert_token_counts = ttnn.from_torch(
-        expert_token_counts,
-        mesh_mapper=get_expert_token_counts_mesh_mapper(mesh_device),
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        dtype=ttnn.int32,
+    # Run TtMoERoutingSetup for TTNN execution path
+    tt_moe_routing_setup = TtMoERoutingSetup(
+        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
     )
+    tt_dispatch_offsets, tt_expert_token_counts, _ = tt_moe_routing_setup(
+        ttnn_top_k_experts_indices=indices,
+        num_routed_experts=num_routed_experts,
+        seq_len_per_chip=seq_len_per_chip,
+        num_experts_per_tok=num_experts_per_tok,
+    )
+
+    # Expert offsets and dispatch table
+    tt_expert_offsets = tt_dispatch_offsets
+    tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
     ttnn.synchronize_device(mesh_device)
     profiler.end("ttnn_input_creation")
 
