@@ -5,12 +5,17 @@
 #pragma once
 
 #include "api/compute/common.h"
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) && (defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE))
 #include "experimental/llk_math_matmul_custom_api.h"
 #endif
 #ifdef TRISC_UNPACK
-#include "experimental/llk_unpack_AB_matmul_custom_api.h"
 #include "llk_unpack_AB_matmul_api.h"
+#endif
+#if defined(TRISC_UNPACK) && defined(ARCH_BLACKHOLE)
+#include "experimental/llk_unpack_AB_matmul_custom_api.h"
+#endif
+#if defined(TRISC_UNPACK) && defined(ARCH_WORMHOLE)
+#include "experimental/llk_unpack_AB_matmul_custom_api.h"
 #endif
 #ifdef TRISC_PACK
 #include "llk_pack_api.h"
@@ -23,6 +28,7 @@
 
 namespace ckernel {
 
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 // clang-format off
 /**
  * Short initialization for the no-MOP matmul block operation. Configures only the unpacker and math
@@ -102,9 +108,14 @@ ALWI void mm_no_mop_reinit_short(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(transpose)));
+#ifdef ARCH_BLACKHOLE
+    MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(transpose, ct_dim, rt_dim)));
+#else
+    MATH((llk_math_matmul_reinit_no_mop<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+#endif
 }
 
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 // Lightweight matmul reinit after sub_exp custom: only restores ADDR_MOD_5 (MATH)
 // and UNPACK config (haloize, x_end, kt_dim) without UNPACK MOP reprogramming.
 ALWI void mm_no_mop_reinit_after_sub(
@@ -114,8 +125,15 @@ ALWI void mm_no_mop_reinit_after_sub(
     uint32_t ct_dim = 1,
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
+#ifdef ARCH_BLACKHOLE
     UNPACK((llk_unpack_AB_matmul_reinit_after_sub(in0_cb_id, in1_cb_id, transpose, kt_dim)));
-    MATH((llk_math_matmul_reinit_no_mop_after_sub<MATH_FIDELITY, MM_THROTTLE>()));
+#else
+    UNPACK((llk_unpack_AB_matmul_reinit_after_sub(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+#endif
+    MATH((llk_math_matmul_reinit_no_mop_after_sub<MATH_FIDELITY, MM_THROTTLE>(ct_dim, rt_dim)));
 }
+#endif
+
+#endif
 
 }  // namespace ckernel

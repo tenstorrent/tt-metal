@@ -10,14 +10,11 @@
 
 #include <type_traits>
 
-#ifdef ARCH_BLACKHOLE
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
-// BH has ample code size headroom; allow normal inlining and GCC IPA-CP cloning (no noinline/noclone).
+#ifdef ARCH_BLACKHOLE
 #define SDPA_NOINLINE
 #else
-// WH/T3000: Mochi leaves little headroom as ARCH_BLACKHOLE vs non-ARCH_BLACKHOLE
-// code paths used below are different — for now, prevent inlining and cloning.
 #define SDPA_NOINLINE __attribute__((noinline, noclone))
 #endif
 #include "tools/profiler/kernel_profiler.hpp"
@@ -96,12 +93,8 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
-#ifdef ARCH_BLACKHOLE
         matmul_block_no_mop(
             in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
-#else
-        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
-#endif
         in0_index++;
         in1_index += in1_stride;
     }
@@ -109,16 +102,14 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
 
     tile_regs_wait();
     uint32_t dst_idx = 0;
-#ifdef ARCH_BLACKHOLE
     if constexpr (blocked_pack) {
+        PACK((llk_pack_mop_config<false, false, false>(out_cb, subblock_w)));
         for (uint32_t r = 0; r < subblock_h; r++) {
             uint32_t out_row_offset = (r + row_subblock_idx * subblock_h) * out_num_cols;
             pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
             dst_idx += subblock_w;
         }
-    } else
-#endif
-    {
+    } else {
         for (uint32_t r = 0; r < subblock_h; r++) {
             uint32_t out_row_offset = (r + row_subblock_idx * subblock_h) * out_num_cols;
             for (uint32_t c = 0; c < subblock_w; c++) {
@@ -219,41 +210,29 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
     const uint32_t tiles_per_column = sbw;
     const uint32_t max_row_base = q_subblock * tiles_per_row;
 
-    {
-        MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
-#ifdef ARCH_BLACKHOLE
-        sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
-#else
-        sub_bcast_cols_init_short(inout_cb, max_cb);
-#endif
-        PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
-    }
-
     // inout_cb assumed ready (max_cb was already computed from it)
     // cb_wait_front(inout_cb, (q_subblock + 1) * tiles_per_row * cols_in_row);
     cb_wait_front(max_cb, (q_subblock + 1) * tiles_per_row);
 
     tile_regs_acquire();
     {
+        MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
+        sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
+    }
+    {
         MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
-#ifdef ARCH_BLACKHOLE
             uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base;
             sub_tiles_bcast_cols_custom(
                 inout_cb, max_cb, in0_tile_index, max_row_base + i, dst_index, tiles_per_column);
             dst_index += tiles_per_column;
-#else
-            for (uint32_t j = 0; j < tiles_per_column; j++) {
-                uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base + j;
-                sub_tiles_bcast_cols(inout_cb, max_cb, in0_tile_index, max_row_base + i, dst_index++);
-            }
-#endif
         }
     }
     tile_regs_commit();
 
     tile_regs_wait();
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
         uint32_t dst_index = 0;
@@ -272,16 +251,14 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
         MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
         // Pack back to inout_cb at the same absolute positions
         uint32_t dst_index = 0;
-#ifdef ARCH_BLACKHOLE
         if constexpr (blocked_pack) {
+            PACK((llk_pack_mop_config<false, false, false>(inout_cb, tiles_per_column)));
             for (uint32_t i = 0; i < tiles_per_row; i++) {
                 uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base;
                 pack_tile<true>(dst_index, inout_cb, in0_tile_index);
                 dst_index += tiles_per_column;
             }
-        } else
-#endif
-        {
+        } else {
 #pragma GCC unroll 1
             for (uint32_t i = 0; i < tiles_per_row; i++) {
 #pragma GCC unroll 1
@@ -293,11 +270,9 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
         }
 
         // Reduce to reduce_cb: first tile of first kt_subblock overwrites, rest accumulate
-#ifdef ARCH_BLACKHOLE
         if constexpr (blocked_pack) {
             PACK((llk_pack_mop_config<false, false, false>(reduce_cb, 1)));
         }
-#endif
         dst_index = 0;
 #pragma GCC unroll 1
         for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -320,11 +295,9 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
 
     // Restore packer ReLU config after all exp operations complete
     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
-#ifdef ARCH_BLACKHOLE
     if constexpr (blocked_pack) {
         PACK((llk_pack_mop_config<false, false, false>(reduce_cb, tiles_per_column)));
     }
-#endif
     PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
@@ -428,32 +401,19 @@ void salad_correct_fused(
         tile_regs_commit();
         tile_regs_wait();
         dst_index = 0;
-#ifdef ARCH_BLACKHOLE
         PACK((llk_pack_mop_config<false, false, false>(out_out_cb, cur_cols)));
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + col_base;
             pack_tile<true>(dst_index, out_out_cb, out_tile_index);
             dst_index += cur_cols;
         }
-#else
-        for (uint32_t i = 0; i < tiles_per_row; i++) {
-            for (uint32_t j = 0; j < cur_cols; j++) {
-                uint32_t out_tile_index = (write_row_base + i) * tiles_per_column + col_base + j;
-                pack_tile<true>(dst_index++, out_out_cb, out_tile_index);
-            }
-        }
-#endif
         if (fuse_sum_here) {
-#ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(sum_out_cb, 1)));
-#endif
             for (uint32_t i = 0; i < tiles_per_row; i++) {
                 pack_tile<true>(dst_index++, sum_out_cb, write_row_base + i);
             }
         }
-#ifdef ARCH_BLACKHOLE
         PACK((llk_pack_mop_config<false, false, false>(out_out_cb, 1)));
-#endif
         tile_regs_release();
     }
 
@@ -464,9 +424,7 @@ void salad_correct_fused(
         }
         tile_regs_commit();
         tile_regs_wait();
-#ifdef ARCH_BLACKHOLE
         PACK((llk_pack_mop_config<false, false, false>(sum_out_cb, 1)));
-#endif
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             pack_tile<true>(i, sum_out_cb, write_row_base + i);
         }
@@ -716,9 +674,7 @@ static void sdpa_inner_loop_step(
     // ========== PHASE 1: Q@KT directly into cb_qkt_im ==========
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
-#ifdef ARCH_BLACKHOLE
     PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, actual_sbw)));
-#endif
     cb_wait_front(cb_kt_in, DHt * KT_stride);
 
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
@@ -732,11 +688,7 @@ static void sdpa_inner_loop_step(
         if constexpr (!uniform_unpack_format) {
             reconfig_data_format(cb_kt_in, cb_q_in);
         }
-#ifdef ARCH_BLACKHOLE
         mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
-#else
-        mm_block_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
-#endif
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
@@ -759,11 +711,7 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_kt_in, cb_q_in);
                 }
-#ifdef ARCH_BLACKHOLE
                 mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
-#else
-                mm_block_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
-#endif
             }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
@@ -820,9 +768,7 @@ static void sdpa_inner_loop_step(
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
             cb_reserve_back(cur.max, qkt_subblock_h);
-#ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur.max, 1)));
-#endif
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
             // When reduce_trigger=true, the packer signals the unpacker via semaphore after partial output.
             reduce_c_row_group<cb_qkt_im, cb_identity_scale_in, KT_stride>(
@@ -838,9 +784,7 @@ static void sdpa_inner_loop_step(
             if (save_max_cb != INVALID_CB) {
                 cb_push_back(save_max_cb, qkt_subblock_h);
             }
-#ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur.max, actual_sbw)));
-#endif
         }
 
         q_index_offset += qkt_subblock_h * in0_block_w;
@@ -893,9 +837,7 @@ static void sdpa_inner_loop_step(
         cb_reserve_back(out_cb, qktv_output_num_tiles);
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
-#ifdef ARCH_BLACKHOLE
         PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
-#endif
         {
             MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
             // Split-drain: interleave per-column-subblock sub_exp with partial V matmul.
@@ -903,7 +845,7 @@ static void sdpa_inner_loop_step(
             // with the corresponding V rows; partial products accumulate via L1.
             const uint32_t matmul_inner = actual_sbw;
             for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32, false /*blocked_pack*/>(
                     cb_qkt_im,
                     cur.max,
                     cur.sum,
@@ -927,11 +869,7 @@ static void sdpa_inner_loop_step(
                     if constexpr (!uniform_unpack_format) {
                         reconfig_data_format(out_cb, cb_v_in, out_cb, cb_qkt_im);
                     }
-#ifdef ARCH_BLACKHOLE
                     mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, matmul_inner);
-#else
-                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, matmul_inner);
-#endif
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         blocked_matmul_and_pack<false, vDHt, vDHt>(
                             cb_qkt_im,
@@ -1035,11 +973,11 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(out_cb, cb_v_in, out_cb, cb_qkt_im);
                 }
-#ifdef ARCH_BLACKHOLE
-                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, active_Sk);
-#else
-                mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, active_Sk);
-#endif
+                if (!is_first_iter) {
+                    mm_no_mop_reinit_after_sub(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, active_Sk);
+                } else {
+                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, active_Sk);
+                }
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     blocked_matmul_and_pack<false, vDHt, vDHt>(
                         cb_qkt_im,

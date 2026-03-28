@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "llk_math_common_api.h"
+
 #include "experimental/llk_math_matmul_custom_no_mop.h"
+#include "llk_math_common_api.h"
 
 /*************************************************************************
  * LLK MATMUL NO MOP
@@ -33,12 +34,14 @@ inline void llk_math_matmul_init_no_mop(
 
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void llk_math_matmul_no_mop(
-    const uint dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
+    const std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
     _llk_math_matmul_no_mop_<math_fidelity, THROTTLE_LEVEL>(dst_index, ct_dim, rt_dim);
 }
 
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void llk_math_matmul_reinit_no_mop(
+    [[maybe_unused]] const std::uint32_t operandA,
+    [[maybe_unused]] const std::uint32_t operandB,
     const bool transpose = false,
     [[maybe_unused]] const std::uint32_t ct_dim = 1,
     [[maybe_unused]] const std::uint32_t rt_dim = 1) {
