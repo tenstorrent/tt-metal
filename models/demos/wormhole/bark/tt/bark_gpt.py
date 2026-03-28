@@ -273,7 +273,6 @@ class TtBarkAttention:
         # - Prefill mode (seq_q>=32): use chunked SDPA on device
         # - Decode/small seq: PyTorch SDPA (TTNN SDPA requires chunk_size >= 32)
         q_seq_len = query.shape[-2]
-        key.shape[-2]
 
         if q_seq_len >= 32:
             # Prefill mode: process full sequence with chunked SDPA
@@ -305,7 +304,9 @@ class TtBarkAttention:
             # Q: [B, heads, q_seq, head_dim]
             # K: [B, heads, kv_seq, head_dim] (may be large from KV cache)
             # V: [B, heads, kv_seq, head_dim]
-            attn_scores = ttnn.matmul(query, ttnn.transpose(key, -2, -1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            key_t = ttnn.transpose(key, -2, -1)
+            attn_scores = ttnn.matmul(query, key_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(key_t)  # Free transposed key immediately to reduce L1 pressure
             attn_scores = ttnn.multiply(attn_scores, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             # Causal masking is not needed during decode with KV cache

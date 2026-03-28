@@ -48,10 +48,15 @@ pytest models/demos/wormhole/bark/tests/test_bark_model.py::TestBarkThroughput -
 ```
 models/demos/wormhole/bark/
 ├── README.md                    # This file
+├── PERFORMANCE_REPORT.md        # Throughput, RTF, PCC results
+├── MEMORY_BUDGET.md             # L1/DRAM memory budget per operation
 ├── tt/
 │   ├── bark_gpt.py              # Core GPT block (attention + MLP + LN)
 │   ├── bark_fine.py             # Coarse-to-Fine (non-causal, multi-codebook)
-│   └── bark_model.py            # Pipeline orchestrator & On-device loops
+│   ├── bark_model.py            # Pipeline orchestrator & generation loops
+│   ├── bark_long_text.py        # Long text support (500+ chars, chunking)
+│   ├── bark_voice_presets.py    # Voice preset loading & caching
+│   └── bark_batch.py            # Batch audio generation
 ├── reference/
 │   └── bark_reference.py        # PyTorch reference for PCC comparison
 ├── demo/
@@ -64,17 +69,17 @@ models/demos/wormhole/bark/
 
 ### Optimization Details (Stages 2 & 3)
 
-The implementation has been fully optimized for Tenstorrent hardware:
-- **Full TTNN Attention**: Eliminated all `to_torch` calls in the transformer blocks. All attention masking and scaling occur on-device.
-- **On-Device KV Caching**: Integrated persistent KV caches for stages 1 and 2, drastically reducing the compute requirements for autoregressive generation.
-- **Host-Side Logits Suppression**: Generation loops transfer logits to host each step for vocab masking (semantic range / alternating-codebook), greedy argmax, and EOS check. This is required for pipeline correctness.
-- **Stage 3 Persistent Tokens**: The fine acoustics stage maintains all 8 codebooks on-device as a list of tensors, with on-device `ttnn.argmax` for codebook prediction.
-- **Compute Grid Tuning**: Configured to utilize the available compute grid on Wormhole (e.g., 8x8 on N150).
-- **LoFi Math Fidelity**: Optimized math fidelity settings for increased throughput with negligible accuracy loss.
+The implementation uses TTNN ops for all transformer computation:
+- **Full TTNN Attention**: All attention masking and scaling occur on-device via `ttnn.transformer.scaled_dot_product_attention` (prefill) or explicit matmul (decode). No `to_torch` calls inside transformer blocks.
+- **On-Device KV Caching**: Persistent KV caches in DRAM for stages 1 and 2, with explicit deallocation after generation completes.
+- **Host-Side Logits Suppression**: Generation loops transfer logits to host each step for vocab masking (semantic range / alternating-codebook), greedy argmax, and EOS check. This is an intentional trade-off required for pipeline correctness.
+- **Stage 3 Persistent Tokens**: The fine acoustics stage maintains all 8 codebooks on-device, with on-device `ttnn.argmax` for codebook prediction.
+- **Compute Grid Tuning**: Configured to utilize the available compute grid on Wormhole (8×7 on N300, 8×8 on N150).
+- **Intermediate Tensor Cleanup**: Transposed key tensors, pre-norm hidden states, and KV cache are explicitly deallocated to minimize L1/DRAM pressure.
 - **Operator Fusion**: MLP projections via `ttnn.linear`, GELU_NEW activation decomposed on-device (`x * 0.5 * (1 + tanh(√(2/π) * (x + 0.044715x³)))`).
 
 ### TTNN Operations Used
-- `ttnn.linear` — Projections and Fused MLP transformations
+- `ttnn.linear` — Projections and fused MLP transformations
 - `ttnn.transformer.scaled_dot_product_attention` — On-device attention
 - `ttnn.layer_norm` — Pre-norm in each block + final norm
 - `ttnn.embedding` — On-device lookups for tokens and positions

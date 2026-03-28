@@ -341,3 +341,67 @@ class TestBarkThroughput:
         print(f"RTF: {rtf:.3f} (total={total:.2f}s, audio={duration:.2f}s)")
 
         assert rtf < 0.8, f"RTF {rtf:.3f} exceeds target 0.8"
+
+
+class TestBarkEdgeCases:
+    """Edge case tests for robustness."""
+
+    def test_empty_semantic_tokens(self, device, hf_model, tt_bark_model):
+        """Coarse generation handles empty semantic tokens gracefully."""
+        model = tt_bark_model
+
+        empty_tokens = torch.zeros((1, 0), dtype=torch.long)
+        result = model.generate_coarse_tokens(empty_tokens)
+
+        assert result is not None, "Coarse returned None for empty input"
+        assert result.shape[0] == 1, f"Expected batch=1, got {result.shape[0]}"
+        assert result.shape[1] >= 2, f"Expected at least 2 tokens (silence), got {result.shape[1]}"
+        print(f"Empty semantic → silence: shape={result.shape}  ✓")
+
+
+class TestBarkLongText:
+    """Long text chunking tests (CPU-only, no TT hardware required)."""
+
+    def test_split_long_text_preserves_short(self):
+        """Short text should not be split."""
+        from models.demos.wormhole.bark.tt.bark_long_text import split_long_text
+
+        chunks = split_long_text("Hello, world!")
+        assert len(chunks) == 1
+        assert chunks[0] == "Hello, world!"
+
+    def test_split_long_text_500_chars(self):
+        """500+ character text should be split into multiple chunks."""
+        from models.demos.wormhole.bark.tt.bark_long_text import split_long_text
+
+        long_text = (
+            "The quick brown fox jumps over the lazy dog. "
+            "This sentence is repeated to create a long text input "
+            "that exceeds five hundred characters in total length. "
+        ) * 5
+
+        assert len(long_text) >= 500, f"Test text only {len(long_text)} chars"
+        chunks = split_long_text(long_text, max_chars=250)
+
+        assert len(chunks) > 1, "Long text should be split into multiple chunks"
+        for chunk in chunks:
+            assert len(chunk) <= 250, f"Chunk exceeds max: {len(chunk)} chars"
+        # Verify no content was lost
+        reconstructed = " ".join(chunks)
+        assert len(reconstructed) >= len(long_text) * 0.9, "Lost too much content in split"
+        print(f"Split {len(long_text)} chars → {len(chunks)} chunks  ✓")
+
+    def test_crossfade_segments(self):
+        """Audio crossfade produces correct length output."""
+        from models.demos.wormhole.bark.tt.bark_long_text import crossfade_segments
+
+        seg1 = np.random.randn(24000).astype(np.float32)  # 1s
+        seg2 = np.random.randn(24000).astype(np.float32)  # 1s
+
+        result = crossfade_segments([seg1, seg2], crossfade_ms=50, sample_rate=24000)
+        crossfade_samples = int(50 * 24000 / 1000)
+        expected_len = len(seg1) + len(seg2) - crossfade_samples
+
+        assert len(result) == expected_len, f"Expected {expected_len}, got {len(result)}"
+        assert np.isfinite(result).all(), "Crossfade produced NaN/Inf"
+        print(f"Crossfade: 2×1s → {len(result)/24000:.3f}s  ✓")
