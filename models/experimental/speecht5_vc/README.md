@@ -93,6 +93,7 @@ Example:
 ```bash
 MESH_DEVICE=N150 python models/experimental/speecht5_vc/validate_stage1.py \
   --input_wavs /path/a.wav /path/b.wav \
+  --target_speaker_wavs /path/target_speaker.wav \
   --output_dir ./vc_stage1_outputs \
   --l1_small_size 24576 \
   --num_command_queues 2 \
@@ -109,6 +110,16 @@ MESH_DEVICE=N150 python models/experimental/speecht5_vc/validate_stage1.py \
   --report_json ./vc_stage1_report.json
 ```
 
+ASR language control (helps stabilize WER for English samples):
+
+```bash
+MESH_DEVICE=N150 python models/experimental/speecht5_vc/validate_stage1.py \
+  --input_wavs /path/a.wav \
+  --asr_language en \
+  --asr_task transcribe \
+  --report_json ./vc_stage1_report.json
+```
+
 Report includes:
 
 - throughput (`token_per_sec`)
@@ -117,6 +128,11 @@ Report includes:
 - speaker similarity (`speaker_cosine`)
 - content preservation (`wer_percent`)
 - threshold checks + overall pass flag
+
+Speaker similarity note:
+
+- For reliable speaker cosine, provide `--target_speaker_wavs` so both vectors are measured in the same speaker-encoder space.
+- If `--target_speaker_wavs` is omitted, the script falls back to comparing output-audio embedding to the target x-vector, which can under-report cosine due to embedding-space mismatch.
 
 Useful stability flags on cloud:
 
