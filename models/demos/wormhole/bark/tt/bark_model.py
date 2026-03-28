@@ -219,6 +219,18 @@ class TtBarkModel:
         if tt_next_token is not None:
             ttnn.deallocate(tt_next_token)
 
+        # Deallocate KV cache tensors to free device memory
+        if layer_past is not None:
+            for past_k, past_v in layer_past:
+                try:
+                    ttnn.deallocate(past_k)
+                except Exception:
+                    pass
+                try:
+                    ttnn.deallocate(past_v)
+                except Exception:
+                    pass
+
         if not generated_tokens:
             return torch.zeros((1, 1), dtype=torch.long)
         return torch.cat(generated_tokens, dim=-1)
@@ -241,6 +253,11 @@ class TtBarkModel:
         """
         if semantic_tokens.shape[0] != 1:
             raise ValueError("Bark TTNN implementation currently only supports batch size 1")
+
+        # Guard: empty semantic tokens → return silence (2 codebooks, 1 frame)
+        if semantic_tokens.numel() == 0:
+            print("WARNING: Empty semantic tokens received. Returning silence tokens.")
+            return torch.zeros((1, 2), dtype=torch.long)
 
         # --- Upstream contract: offset semantic tokens and append infer token ---
         input_ids = semantic_tokens.to(torch.long) + SEMANTIC_VOCAB_SIZE
@@ -296,6 +313,22 @@ class TtBarkModel:
 
         if tt_next_token is not None:
             ttnn.deallocate(tt_next_token)
+
+        # Deallocate KV cache tensors to free device memory
+        if layer_past is not None:
+            for past_k, past_v in layer_past:
+                try:
+                    ttnn.deallocate(past_k)
+                except Exception:
+                    pass
+                try:
+                    ttnn.deallocate(past_v)
+                except Exception:
+                    pass
+
+        if not generated_tokens:
+            print("WARNING: Coarse generation produced no tokens. Returning silence.")
+            return torch.zeros((1, 2), dtype=torch.long)
 
         coarse_output = torch.cat(generated_tokens, dim=-1)  # [1, n_tokens]
         # Remap to [0, CODEBOOK_SIZE) — fine model embedding tables expect this range
@@ -378,13 +411,18 @@ class TtBarkModel:
         ), f"EnCodec input shape wrong: expected [8, batch, seq], got {fine_output.shape}"
 
         with torch.no_grad():
-            # Step 1: Decode codebook indices to continuous embeddings
-            emb = self.codec_model.quantizer.decode(fine_output)
-            # Step 2: Decode embeddings to audio waveform
-            audio_values = self.codec_model.decoder(emb)
+            try:
+                # Primary path: quantizer.decode + decoder (older transformers)
+                emb = self.codec_model.quantizer.decode(fine_output)
+                audio_values = self.codec_model.decoder(emb)
+            except AttributeError:
+                # Fallback: newer transformers restructured the API
+                audio_codes = fine_output.permute(1, 0, 2).unsqueeze(0)  # [1, batch, 8, seq]
+                out = self.codec_model.decode(audio_codes=audio_codes, audio_scales=[None])
+                audio_values = out.audio_values
 
-        # audio_values: [batch, 1, samples] -> squeeze to [samples]
-        audio = audio_values.squeeze().cpu().numpy()
+        # audio_values: [batch, 1, samples] -> squeeze explicit dims (batch-safe)
+        audio = audio_values.squeeze(1).squeeze(0).cpu().numpy()
         return audio
 
     def generate(
