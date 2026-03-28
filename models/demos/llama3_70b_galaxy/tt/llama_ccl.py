@@ -1550,6 +1550,48 @@ class TT_CCL:
     def close(self):
         self.mesh_device.reset_sub_device_stall_group()
 
+    def _deallocate_tensor_safe(self, tensor):
+        """Safely deallocate a tensor, ignoring errors."""
+        if tensor is not None:
+            try:
+                ttnn.deallocate(tensor)
+            except Exception:
+                pass
+
+    def _deallocate_buffers_recursive(self, buffers):
+        """Recursively deallocate tensors from nested buffer structures."""
+        if buffers is None:
+            return
+        if isinstance(buffers, list):
+            for item in buffers:
+                self._deallocate_buffers_recursive(item)
+        elif isinstance(buffers, dict):
+            for value in buffers.values():
+                self._deallocate_buffers_recursive(value)
+        else:
+            self._deallocate_tensor_safe(buffers)
+
+    def cleanup(self):
+        """Deallocate all CCL buffers. Call this on model destruction to prevent TLB leaks."""
+        for attr_name in [
+            "persistent_buffers",
+            "all_gather_buffers",
+            "reduce_scatter_buffers",
+            "rs_create_heads_buffers",
+            "agmm_ff2_intermediate_buffers",
+        ]:
+            if hasattr(self, attr_name):
+                buffers = getattr(self, attr_name)
+                if buffers:
+                    self._deallocate_buffers_recursive(buffers)
+                    if isinstance(buffers, dict):
+                        setattr(self, attr_name, {})
+                    elif isinstance(buffers, list):
+                        setattr(self, attr_name, [])
+                    else:
+                        setattr(self, attr_name, None)
+        self.mesh_device.reset_sub_device_stall_group()
+
 
 def tt_distributed_rmsnorm(
     inp,

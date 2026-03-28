@@ -803,7 +803,25 @@ class TtTransformer(LightweightModule):
             layer.enable_trace = enable
 
     def __del__(self):
-        self.tt_ccl.close()
+        # Cleanup all CCL objects to prevent TLB leaks
+        # Use cleanup() instead of close() for proper buffer deallocation
+        ccl_objects = set()
+        for attr in ["tt_ccl", "tt_ccl_prefill", "tt_ccl_decode"]:
+            if hasattr(self, attr):
+                ccl = getattr(self, attr)
+                if ccl is not None and ccl not in ccl_objects:
+                    ccl_objects.add(ccl)
+                    try:
+                        ccl.cleanup()
+                    except Exception:
+                        pass
+
+        # Deallocate rotation matrices
+        if hasattr(self, "tt_rot_mats_prefill") and self.tt_rot_mats_prefill is not None:
+            try:
+                ttnn.deallocate(self.tt_rot_mats_prefill)
+            except Exception:
+                pass
 
         # clear global saved addresses
         global global_tt_tensor_address

@@ -1,5 +1,47 @@
 # OLMo-3.1-32B Bring-up Log
 
+## Session: 2026-03-28
+
+### Status: 8K/16K ~67% reliability, TLB cleanup added
+
+### Summary
+
+1. Re-verified ISL results - 8K/16K work but have ~33% first-run failure rate
+2. Added TLB leak prevention via `TT_CCL.cleanup()` method
+3. 8K coherency issue traced to complex summarization prompt (16K uses simpler prompt)
+
+### ISL Results (batch=1, 3 runs each)
+
+| ISL | Pass Rate | TTFT | Notes |
+|-----|-----------|------|-------|
+| 8K | 2/3 (67%) | ~2.7s | First run often times out |
+| 16K | 2/3 (67%) | ~5.0s | Same pattern |
+| 32K | 0/3 (0%) | - | Consistently hangs |
+
+### TLB Leak Fix
+Added `cleanup()` method to `TT_CCL` class (`llama_ccl.py`) that deallocates:
+- `persistent_buffers` (prefill reduce scatter buffers)
+- `all_gather_buffers` (prefill all gather buffers)
+- `reduce_scatter_buffers` (decode mode)
+- `rs_create_heads_buffers` (decode mode)
+- `agmm_ff2_intermediate_buffers` (OLMo decode mode)
+
+`TtTransformer.__del__()` now calls `cleanup()` on all CCL objects to prevent TLB exhaustion after timeouts.
+
+### Configuration
+```bash
+DEBUG_PREFILL_LAYERS=1 pytest ... -k "isl-8k-b1"
+DEBUG_PREFILL_LAYERS=1 pytest ... -k "isl-16k-b1"
+```
+
+### Notes
+- First run after `tt-smi -glx_reset` often fails (~33% failure rate)
+- Subsequent runs more reliable
+- 32K consistently hangs during prefill - CCL ordering issue at scale
+- 8K uses complex literary summarization prompt; 16K uses simple factoid prompt
+
+---
+
 ## Session: 2026-03-27 (evening)
 
 ### Status: 8K WORKING, 16K/32K need DEBUG_PREFILL_LAYERS=1
