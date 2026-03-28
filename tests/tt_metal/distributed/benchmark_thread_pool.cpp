@@ -4,7 +4,7 @@
 
 #include <benchmark/benchmark.h>
 #include "tt_metal/common/env_lib.hpp"
-#include "tt_metal/impl/context/thread_pool.hpp"
+#include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "impl/context/context_types.hpp"
 
