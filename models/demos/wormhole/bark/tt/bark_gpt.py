@@ -501,7 +501,11 @@ class TtBarkGPT:
             else:
                 tok_ids = ttnn.to_torch(input_ids).to(torch.long)
 
-            tok_emb = self.input_embeds(tok_ids.long())
+            # Safety clamp: prevent index-out-of-range from bfloat16→uint32 rounding
+            vocab_size = self.input_embeds.weight.shape[0]
+            tok_ids = tok_ids.long().clamp(0, vocab_size - 1)
+
+            tok_emb = self.input_embeds(tok_ids)
             seq_len = tok_ids.shape[-1]
 
             if layer_past is not None:
@@ -509,6 +513,10 @@ class TtBarkGPT:
                 position_ids = torch.arange(past_len, past_len + seq_len, dtype=torch.long)
             else:
                 position_ids = torch.arange(0, seq_len, dtype=torch.long)
+
+            # Clamp position to block_size to prevent overflow on long sequences
+            max_pos = self.position_embeds.weight.shape[0] - 1
+            position_ids = position_ids.clamp(0, max_pos)
 
             pos_emb = self.position_embeds(position_ids)
             hidden = (tok_emb + pos_emb).float()
