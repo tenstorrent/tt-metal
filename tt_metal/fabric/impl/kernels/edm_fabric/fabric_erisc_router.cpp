@@ -11,7 +11,7 @@
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_eth_handshake.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_adapter.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
@@ -2021,9 +2021,7 @@ FORCE_INLINE bool run_receiver_channel_step(
     return false;
 }
 
-template<
-    typename OutboundReceiverChannelPointers,
-    typename RemoteEthReceiverChannels>
+template <typename OutboundReceiverChannelPointers, typename RemoteEthReceiverChannels>
 FORCE_INLINE void configure_outbound_to_receiver_channel_pointers(
     OutboundReceiverChannelPointers& outbound_to_receiver_channel_pointers,
     RemoteEthReceiverChannels& remote_receiver_channels) {
@@ -2172,7 +2170,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
     auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
-    *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
     const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
     auto* state_manager_l1 = const_cast<tt_l1_ptr RouterStateManager*>(&routing_table_l1->state_manager);
@@ -2669,6 +2666,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     }
 }
 
+static constexpr uint32_t CONTEXT_SWITCH_TIMEOUT_SHORT = 100000;
 template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>
 void
 #ifdef FABRIC_2D
@@ -2676,13 +2674,27 @@ void
 #endif
     wait_for_static_connection_to_ready(
         EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
-        std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
+        std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
+        volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
     auto establish_static_connection_from_receiver_side = [&](auto& interface, size_t sender_channel_idx) {
         if (!sender_ch_live_check_skip[sender_channel_idx]) {
             return;
         }
-        while (!connect_is_requested(*interface.connection_live_semaphore)) {
+        uint32_t count = 0;
+        while (!connect_is_requested(*interface.connection_live_semaphore)
+#ifndef ARCH_WORMHOLE
+               && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)
+#endif
+        ) {
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+#ifndef ARCH_WORMHOLE
+            if constexpr (MY_ERISC_ID == 0) {
+                if (count++ == CONTEXT_SWITCH_TIMEOUT_SHORT) {
+                    count = 0;
+                    run_routing();
+                }
+            }
+#endif
         }
         establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
     };
@@ -2751,6 +2763,7 @@ typename std::enable_if<(I >= NUM_SENDER_CHANNELS), void>::type init_sender_chan
 }
 
 template <size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
+__attribute__((optimize("Os")))
 void
 #ifdef FABRIC_2D
     __attribute__((noinline))
@@ -2803,7 +2816,12 @@ void populate_local_sender_channel_free_slots_stream_id_ordered_map(
 
 constexpr bool IS_TEARDOWN_MASTER() { return MY_ERISC_ID == 0; }
 
-void wait_for_other_local_erisc() {
+// Note: No termination check is added here intentionally. Both local ERISCs share
+// the same termination signal, so both will see it and exit their respective wait
+// loops naturally. Adding a termination check here would be unsafe — if one ERISC
+// broke out of the sync early and skipped its scratch register write, the other
+// could spin forever waiting for a value that never arrives.
+__attribute__((optimize("Os"))) void wait_for_other_local_erisc() {
     constexpr uint32_t multi_erisc_sync_start_value = 0x0fed;
     constexpr uint32_t multi_erisc_sync_step2_value = 0x1bad;
     if constexpr (IS_TEARDOWN_MASTER()) {
@@ -2822,7 +2840,7 @@ void wait_for_other_local_erisc() {
     }
 }
 
-FORCE_INLINE void teardown(
+__attribute__((optimize("Os"))) void teardown(
     volatile tt_l1_ptr tt::tt_fabric::TerminationSignal* termination_signal_ptr,
     volatile tt_l1_ptr tt::tt_fabric::EDMStatus* edm_status_ptr,
     WriteTransactionIdTracker<
@@ -2903,7 +2921,7 @@ FORCE_INLINE void teardown(
     }
 }
 
-void initialize_state_for_txq1_active_mode() {
+__attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode() {
     eth_enable_packet_mode(receiver_txq_id);
     for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
         reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)[i] = 0;
@@ -2911,7 +2929,7 @@ void initialize_state_for_txq1_active_mode() {
     }
     eth_txq_reg_write(receiver_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
 }
-void initialize_state_for_txq1_active_mode_sender_side() {
+__attribute__((optimize("Os"))) void initialize_state_for_txq1_active_mode_sender_side() {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address)[i] = 0;
         reinterpret_cast<volatile uint32_t*>(to_sender_remote_completion_counters_base_address)[i] = 0;
@@ -3504,16 +3522,18 @@ void kernel_main() {
     }
     if constexpr (enable_ethernet_handshake) {
         if constexpr (is_handshake_sender) {
-            erisc::datamover::handshake::sender_side_handshake(
+            erisc::datamover::handshake::fabric_sender_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
                 handshake_addr,
                 routing_table_l1->my_mesh_id,
                 routing_table_l1->my_device_id,
+                termination_signal_ptr,
                 DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
-            erisc::datamover::handshake::receiver_side_handshake(
+            erisc::datamover::handshake::fabric_receiver_side_handshake<ENABLE_RISC_CPU_DATA_CACHE>(
                 handshake_addr,
                 routing_table_l1->my_mesh_id,
                 routing_table_l1->my_device_id,
+                termination_signal_ptr,
                 DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }
 
@@ -3533,7 +3553,8 @@ void kernel_main() {
 
         if constexpr (wait_for_host_signal) {
             if constexpr (is_local_handshake_master) {
-                wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
+                wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
+                    (uint32_t)edm_local_sync_ptr, num_local_edms - 1, termination_signal_ptr);
                 // This master sends notification to self for multi risc in single eth core case,
                 // This still send to self even though with single risc core case, but no side effects
                 constexpr uint32_t exclude_eth_chan = std::numeric_limits<uint32_t>::max();
@@ -3541,7 +3562,8 @@ void kernel_main() {
                     edm_channels_mask, exclude_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
             } else {
                 notify_master_router(local_handshake_master_eth_chan, (uint32_t)edm_local_sync_ptr);
-                wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_local_sync_ptr, num_local_edms);
+                wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
+                    (uint32_t)edm_local_sync_ptr, num_local_edms, termination_signal_ptr);
             }
 
             *edm_status_ptr = tt::tt_fabric::EDMStatus::LOCAL_HANDSHAKE_COMPLETE;
@@ -3550,7 +3572,8 @@ void kernel_main() {
             // 2. All risc cores in master eth core receive signal from host and exits from this wait
             //    Other subordinate risc cores wait for this signal
             // 4. The other subordinate risc cores receive the READY_FOR_TRAFFIC signal and exit from this wait
-            wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+            wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
+                (uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC, termination_signal_ptr);
 
             if constexpr (is_local_handshake_master) {
                 // 3. Only master risc core notifies all subordinate risc cores (except subordinate riscs in master eth
@@ -3573,7 +3596,8 @@ void kernel_main() {
     // if enable the tensix extension, then before open downstream connection, need to wait for downstream tensix ready
     // for connection.
     if constexpr (num_ds_or_local_tensix_connections) {
-        wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_local_tensix_sync_ptr_addr, num_ds_or_local_tensix_connections);
+        wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(
+            (uint32_t)edm_local_tensix_sync_ptr_addr, num_ds_or_local_tensix_connections, termination_signal_ptr);
     }
 
     if constexpr (is_2d_fabric) {
@@ -3683,7 +3707,7 @@ void kernel_main() {
 
     WAYPOINT("FSCW");
     wait_for_static_connection_to_ready(
-        local_sender_channel_worker_interfaces, local_sender_channel_free_slots_stream_ids);
+        local_sender_channel_worker_interfaces, local_sender_channel_free_slots_stream_ids, termination_signal_ptr);
     WAYPOINT("FSCD");
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
