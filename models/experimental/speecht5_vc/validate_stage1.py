@@ -267,16 +267,51 @@ def _open_ttnn_device(
     trace_region_size: int,
     num_command_queues: int,
     enable_program_cache: bool,
+    open_device_retries: int = 3,
+    open_device_retry_sleep_s: float = 5.0,
 ):
-    device = ttnn.open_device(
-        device_id=device_id,
-        l1_small_size=l1_small_size,
-        trace_region_size=trace_region_size,
-        num_command_queues=num_command_queues,
-    )
-    if enable_program_cache:
-        device.enable_program_cache()
-    return device
+    last_error: Optional[Exception] = None
+    retries = max(1, int(open_device_retries))
+    sleep_s = max(0.0, float(open_device_retry_sleep_s))
+
+    for attempt in range(1, retries + 1):
+        try:
+            device = ttnn.open_device(
+                device_id=device_id,
+                l1_small_size=l1_small_size,
+                trace_region_size=trace_region_size,
+                num_command_queues=num_command_queues,
+            )
+            if enable_program_cache:
+                device.enable_program_cache()
+            return device
+        except RuntimeError as err:
+            last_error = err
+            err_text = str(err)
+            transient_open_failure = any(
+                marker in err_text
+                for marker in (
+                    "failed to start",
+                    "NoAccess error",
+                    "ARC core",
+                    "run_mailbox",
+                )
+            )
+
+            can_retry = transient_open_failure and attempt < retries
+            if not can_retry:
+                raise
+
+            print(
+                f"Device open failed (attempt {attempt}/{retries}): {err_text}. "
+                f"Retrying in {sleep_s:.1f}s..."
+            )
+            if sleep_s > 0:
+                time.sleep(sleep_s)
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Failed to open TT device")
 
 
 def parse_args():
@@ -320,6 +355,18 @@ def parse_args():
         type=int,
         default=2,
         help="Number of command queues",
+    )
+    parser.add_argument(
+        "--open_device_retries",
+        type=int,
+        default=3,
+        help="Retry count for transient TT device open failures (ARC/no-access startup races)",
+    )
+    parser.add_argument(
+        "--open_device_retry_sleep_s",
+        type=float,
+        default=5.0,
+        help="Sleep duration between open-device retries in seconds",
     )
     parser.add_argument(
         "--disable_program_cache",
@@ -418,6 +465,8 @@ def main():
         trace_region_size=args.trace_region_size,
         num_command_queues=args.num_command_queues,
         enable_program_cache=not args.disable_program_cache,
+        open_device_retries=args.open_device_retries,
+        open_device_retry_sleep_s=args.open_device_retry_sleep_s,
     )
 
     try:
@@ -483,6 +532,8 @@ def main():
                         trace_region_size=args.trace_region_size,
                         num_command_queues=args.num_command_queues,
                         enable_program_cache=not args.disable_program_cache,
+                        open_device_retries=args.open_device_retries,
+                        open_device_retry_sleep_s=args.open_device_retry_sleep_s,
                     )
                     ttnn_encoder, ttnn_decoder, ttnn_postnet, decoder_config = _build_ttnn_modules(
                         hf_model=hf_model,
@@ -675,6 +726,8 @@ def main():
                 "l1_small_size": current_l1_small_size,
                 "trace_region_size": args.trace_region_size,
                 "num_command_queues": args.num_command_queues,
+                "open_device_retries": args.open_device_retries,
+                "open_device_retry_sleep_s": args.open_device_retry_sleep_s,
                 "program_cache_enabled": not args.disable_program_cache,
                 "strict_stage1": args.strict_stage1,
                 "asr_model_id": None if args.skip_wer else args.asr_model_id,
