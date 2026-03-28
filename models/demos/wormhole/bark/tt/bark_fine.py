@@ -120,7 +120,14 @@ class TtBarkFineModel:
         else:
             input_ids_torch = None
 
-        for i in range(codebook_idx + 1):
+        # When input_ids is a list (growing during generation), only iterate
+        # over available codebooks. When it's a tensor, all codebooks are present.
+        if isinstance(input_ids, list):
+            n_available = min(codebook_idx + 1, len(input_ids))
+        else:
+            n_available = codebook_idx + 1
+
+        for i in range(n_available):
             # Extract i-th codebook tokens on host, upload as uint32
             if isinstance(input_ids, list):
                 tokens_torch = input_ids[i] if isinstance(input_ids[i], torch.Tensor) else ttnn.to_torch(input_ids[i])
