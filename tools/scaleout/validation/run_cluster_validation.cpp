@@ -8,6 +8,7 @@
 #include <optional>
 #include <chrono>
 #include <sstream>
+#include <regex>
 #include <unordered_map>
 
 #include <cxxopts.hpp>
@@ -322,6 +323,124 @@ void print_usage_info(CommandMode mode = CommandMode::VALIDATE) {
     }
 }
 
+// BH UBB QSFP port mapping from board.cpp: (asic_location, chan_id) -> QSFP port_id
+// ch8 ports: 7 (asic 1,2), 8 (asic 5,6), 9 (asic 3,4), 10 (asic 7,8)
+// ch9 ports: 11 (asic 1,2), 12 (asic 5,6), 13 (asic 3,4), 14 (asic 7,8)
+std::optional<uint32_t> get_bh_ubb_qsfp_port(uint32_t asic_location, uint32_t chan_id) {
+    if (chan_id != 8 && chan_id != 9) {
+        return std::nullopt;
+    }
+    uint32_t base = (chan_id == 8) ? 7 : 11;
+    switch (asic_location) {
+        case 1:
+        case 2: return base + 0;
+        case 5:
+        case 6: return base + 1;
+        case 3:
+        case 4: return base + 2;
+        case 7:
+        case 8: return base + 3;
+        default: return std::nullopt;
+    }
+}
+
+void print_fsd_cable_report(const InputArgs& input_args, const std::string& error_msg) {
+    if (!input_args.fsd_path.has_value()) {
+        return;
+    }
+
+    try {
+        auto fsd_proto = get_factory_system_descriptor(std::nullopt, std::nullopt, input_args.fsd_path, {});
+
+        std::vector<std::string> hostnames;
+        for (const auto& host : fsd_proto.hosts()) {
+            hostnames.push_back(host.hostname());
+        }
+
+        // Parse failing endpoints from the error message: "tray N, asic_loc M"
+        // Pattern: (host '<HOST>', tray <T>, asic_loc <A>)
+        std::regex endpoint_re(R"(\(host '([^']+)', tray (\d+), asic_loc (\d+)\))");
+        // Pattern for the channel: "eth ch<X> -> ch<Y>"
+        std::regex chan_re(R"(eth ch(\d+) -> ch(\d+))");
+
+        struct FailingEndpoint {
+            std::string host;
+            uint32_t tray;
+            uint32_t asic_loc;
+            uint32_t chan;
+        };
+
+        struct FailingLink {
+            FailingEndpoint src;
+            FailingEndpoint dst;
+        };
+
+        std::vector<FailingLink> failing_links;
+
+        // Each error line has two endpoint matches and one channel match
+        // Split error_msg by "[N]" markers to get individual errors
+        std::regex error_split_re(R"(\[\d+\]\s*)");
+        std::sregex_token_iterator it(error_msg.begin(), error_msg.end(), error_split_re, -1);
+        std::sregex_token_iterator end;
+
+        for (; it != end; ++it) {
+            std::string err = it->str();
+            if (err.empty()) {
+                continue;
+            }
+
+            std::vector<std::smatch> ep_matches;
+            auto ep_begin = std::sregex_iterator(err.begin(), err.end(), endpoint_re);
+            auto ep_end = std::sregex_iterator();
+            for (auto i = ep_begin; i != ep_end; ++i) {
+                ep_matches.push_back(*i);
+            }
+
+            std::smatch chan_match;
+            bool has_chan = std::regex_search(err, chan_match, chan_re);
+
+            if (ep_matches.size() >= 2 && has_chan) {
+                FailingLink link;
+                link.src = {
+                    ep_matches[0][1].str(),
+                    static_cast<uint32_t>(std::stoul(ep_matches[0][2].str())),
+                    static_cast<uint32_t>(std::stoul(ep_matches[0][3].str())),
+                    static_cast<uint32_t>(std::stoul(chan_match[1].str()))};
+                link.dst = {
+                    ep_matches[1][1].str(),
+                    static_cast<uint32_t>(std::stoul(ep_matches[1][2].str())),
+                    static_cast<uint32_t>(std::stoul(ep_matches[1][3].str())),
+                    static_cast<uint32_t>(std::stoul(chan_match[2].str()))};
+                failing_links.push_back(link);
+            }
+        }
+
+        if (failing_links.empty()) {
+            return;
+        }
+
+        std::cerr << "\n=== CABLES TO INSPECT ===" << std::endl;
+        for (size_t i = 0; i < failing_links.size(); i++) {
+            const auto& link = failing_links[i];
+            auto src_port = get_bh_ubb_qsfp_port(link.src.asic_loc, link.src.chan);
+            auto dst_port = get_bh_ubb_qsfp_port(link.dst.asic_loc, link.dst.chan);
+
+            std::cerr << "Error " << (i + 1) << ": " << link.src.host << " tray " << link.src.tray << " asic_loc "
+                      << link.src.asic_loc << " ch" << link.src.chan << " -> " << link.dst.host << " tray "
+                      << link.dst.tray << " asic_loc " << link.dst.asic_loc << " ch" << link.dst.chan << std::endl;
+
+            if (src_port.has_value() && dst_port.has_value()) {
+                std::cerr << "  Cable: " << link.src.host << " tray " << link.src.tray << " QSFP port "
+                          << src_port.value() << " <-> " << link.dst.host << " tray " << link.dst.tray << " QSFP port "
+                          << dst_port.value() << std::endl;
+            }
+        }
+        std::cerr << "=========================\n" << std::endl;
+    } catch (...) {
+        // FSD lookup is best-effort; don't mask the original error
+    }
+}
+
 void set_config_vars() {
     // This tool must be run with slow dispatch mode, since
     // it writes custom kernels to ethernet cores, which shouldn't
@@ -357,7 +476,16 @@ int main(int argc, char* argv[]) {
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 
     // Create physical system descriptor and discover the system
-    auto physical_system_descriptor = generate_physical_system_descriptor(input_args);
+    PhysicalSystemDescriptor* psd_ptr = nullptr;
+    std::optional<PhysicalSystemDescriptor> physical_system_descriptor_opt;
+    try {
+        physical_system_descriptor_opt.emplace(generate_physical_system_descriptor(input_args));
+        psd_ptr = &physical_system_descriptor_opt.value();
+    } catch (const std::exception& e) {
+        print_fsd_cable_report(input_args, e.what());
+        throw;
+    }
+    auto& physical_system_descriptor = *psd_ptr;
 
     // Handle link_reset subcommand
     if (input_args.mode == CommandMode::LINK_RETRAIN) {

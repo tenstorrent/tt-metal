@@ -242,6 +242,34 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
     auto& system_graph = psd.get_system_graph();
     std::vector<std::string> errors;
 
+    auto asic_label = [&](AsicID id) -> std::string {
+        if (asic_descriptors.contains(id)) {
+            const auto& d = asic_descriptors.at(id);
+            return fmt::format("{} (host '{}', tray {}, asic_loc {})", id, d.host_name, *d.tray_id, *d.asic_location);
+        }
+        return fmt::format("{}", id);
+    };
+
+    auto exit_conn_label = [&](const ExitNodeConnection& enc) -> std::string {
+        std::string src_loc, dst_loc;
+        if (asic_descriptors.contains(enc.src_exit_node)) {
+            const auto& d = asic_descriptors.at(enc.src_exit_node);
+            src_loc = fmt::format(" T{}A{}", *d.tray_id, *d.asic_location);
+        }
+        if (asic_descriptors.contains(enc.dst_exit_node)) {
+            const auto& d = asic_descriptors.at(enc.dst_exit_node);
+            dst_loc = fmt::format(" T{}A{}", *d.tray_id, *d.asic_location);
+        }
+        return fmt::format(
+            "[{}{} ch{} -> {}{} ch{}]",
+            enc.src_exit_node,
+            src_loc,
+            enc.eth_conn.src_chan,
+            enc.dst_exit_node,
+            dst_loc,
+            enc.eth_conn.dst_chan);
+    };
+
     for (auto& [host, asic_group] : system_graph.asic_connectivity_graph) {
         for (auto& [src_asic, edges] : asic_group) {
             if (!asic_descriptors.contains(src_asic)) {
@@ -251,7 +279,9 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
 
             if (!system_graph.host_connectivity_graph.contains(src_host)) {
                 errors.push_back(fmt::format(
-                    "Host '{}' (has ASIC {}) is missing entirely from host_connectivity_graph", src_host, src_asic));
+                    "Host '{}' (has {}) is missing entirely from host_connectivity_graph",
+                    src_host,
+                    asic_label(src_asic)));
                 continue;
             }
             const auto& src_host_edges = system_graph.host_connectivity_graph.at(src_host);
@@ -270,34 +300,28 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
 
                 if (!(all_local || all_global)) {
                     errors.push_back(fmt::format(
-                        "ASIC {} -> ASIC {}: ethernet connections have mixed local/global flags ({} conns, "
-                        "host '{}' -> host '{}')",
-                        src_asic,
-                        dst_asic,
-                        eth_conns.size(),
-                        src_host,
-                        dst_host));
+                        "{} -> {}: ethernet connections have mixed local/global flags ({} conns)",
+                        asic_label(src_asic),
+                        asic_label(dst_asic),
+                        eth_conns.size()));
                     continue;
                 }
 
                 if (all_local) {
                     if (src_host != dst_host) {
                         errors.push_back(fmt::format(
-                            "ASIC {} -> ASIC {}: marked as local but spans different hosts ('{}' vs '{}')",
-                            src_asic,
-                            dst_asic,
-                            src_host,
-                            dst_host));
+                            "{} -> {}: marked as local but spans different hosts",
+                            asic_label(src_asic),
+                            asic_label(dst_asic)));
                     }
                     continue;
                 }
 
                 if (src_host == dst_host) {
                     errors.push_back(fmt::format(
-                        "ASIC {} -> ASIC {}: marked as global but both on same host '{}'",
-                        src_asic,
-                        dst_asic,
-                        src_host));
+                        "{} -> {}: marked as global but both on same host",
+                        asic_label(src_asic),
+                        asic_label(dst_asic)));
                     continue;
                 }
 
@@ -316,13 +340,11 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                             available_hosts += fmt::format("'{}' ({} exit conns)", edge.first, edge.second.size());
                         }
                         errors.push_back(fmt::format(
-                            "ASIC {} (host '{}') -> ASIC {} (host '{}'): "
+                            "{} -> {}: "
                             "no host_connectivity_graph edge from '{}' to '{}'. "
                             "Available host edges from '{}': [{}]",
-                            src_asic,
-                            src_host,
-                            dst_asic,
-                            dst_host,
+                            asic_label(src_asic),
+                            asic_label(dst_asic),
                             src_host,
                             dst_host,
                             src_host,
@@ -345,21 +367,14 @@ void validate_graphs(PhysicalSystemDescriptor& psd) {
                             if (!available_exit_conns.empty()) {
                                 available_exit_conns += ", ";
                             }
-                            available_exit_conns += fmt::format(
-                                "[{} ch{} -> {} ch{}]",
-                                enc.src_exit_node,
-                                enc.eth_conn.src_chan,
-                                enc.dst_exit_node,
-                                enc.eth_conn.dst_chan);
+                            available_exit_conns += exit_conn_label(enc);
                         }
                         errors.push_back(fmt::format(
-                            "ASIC {} -> ASIC {} (host '{}' -> host '{}'): "
+                            "{} -> {}: "
                             "exit node connection not found for eth ch{} -> ch{}. "
                             "Exit node connections present for '{}'->'{}': [{}]",
-                            src_asic,
-                            dst_asic,
-                            src_host,
-                            dst_host,
+                            asic_label(src_asic),
+                            asic_label(dst_asic),
                             eth_conn.src_chan,
                             eth_conn.dst_chan,
                             src_host,
