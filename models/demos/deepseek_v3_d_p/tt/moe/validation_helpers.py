@@ -55,7 +55,7 @@ def trace_token_source(
     local_expert_in_group = expert_id % experts_per_group
     local_expert = local_expert_in_group % experts_per_chip
 
-    total_tokens = expert_token_counts[dispatch_group_idx, expert_id].item()
+    total_tokens = expert_token_counts[dispatch_group_idx, 0, expert_id].item()
 
     # Find send order by counting tokens sent before this one
     # This mirrors the kernel's iteration order: for each token routed to this expert
@@ -497,7 +497,7 @@ def validate_dispatch_data(
                     num_dispatch_groups=num_dispatch_groups,
                     is_col_major=True,
                 )
-                count = expert_token_counts[r, global_expert_idx].item()
+                count = expert_token_counts[r, 0, global_expert_idx].item()
 
                 torch_slot = torch_data[r, dst_chip_id, expert_id, :count]
                 ttnn_slot = ttnn_data[r, dst_chip_id, expert_id, :count]
@@ -708,7 +708,7 @@ def validate_dispatch_metadata(
                     num_dispatch_groups=num_dispatch_groups,
                     is_col_major=True,
                 )
-                count = expert_token_counts[r, global_expert_idx].item()
+                count = expert_token_counts[r, 0, global_expert_idx].item()
 
                 # Compare fields 1-3 directly
                 out = ttnn_metadata[r, dst_chip_id, expert_id, :count, 1:4]

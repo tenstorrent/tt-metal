@@ -11,8 +11,12 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, create_fabric_router_config
-from models.demos.deepseek_v3_d_p.tt.moe.moe_gate_prefill2d import MoEGateConfig, MoEGatePrefill
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    ExpertMapping,
+    create_fabric_router_config,
+    get_gate_outputs,
+)
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     adjust_shapes_for_testing,
     calculate_average_recall,
@@ -79,7 +83,7 @@ def test_forward_pass(
     random.seed(42)
     torch.manual_seed(42)
 
-    config = MoEGateConfig()
+    config = TtMoEGateConfig()
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 
@@ -95,7 +99,7 @@ def test_forward_pass(
         hidden_size=config.dim,
     )
     reference_model = ReferenceMoEGate(ref_config, use_bitonic_sort=False)
-    tt_model = MoEGatePrefill(config, mesh_device)
+    tt_model = TtMoEGatePrefill(config, mesh_device)
 
     torch_input = torch.randn(config.max_seq_len, config.dim, dtype=torch.bfloat16)
 
@@ -156,10 +160,9 @@ def test_forward_pass(
         dispatch_group_size=n_sp_devices,
         num_dispatch_groups=n_tp_devices,
     )
-    tt_model.expert_dispatch_table = ttnn.from_torch(
+    tt_model.routing_setup.experts_in_dispatch_group = ttnn.from_torch(
         dispatch_table,
         device=mesh_device,
-        dtype=ttnn.int32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(
@@ -258,6 +261,7 @@ def test_forward_pass(
         per_group_offsets[group] = offsets.long()
         per_group_totals[group] = cum_sum[-1:].long()
 
+    experts_per_chip = n_routed_experts // (n_sp_devices * n_tp_devices)
     expert_offsets, expert_token_counts, _ = get_gate_outputs(
         indices=indices_for_gate,
         dispatch_group_size=n_sp_devices,
@@ -265,24 +269,25 @@ def test_forward_pass(
         experts_per_chip=experts_per_chip,
         seq_len_per_chip=seq_len_per_device,
         num_experts_per_tok=config.n_activated_experts,
+        expert_dispatch_table=dispatch_table,
     )
 
     reference_offsets = expert_offsets.long()
-    reference_totals = expert_token_counts.squeeze(0).long()  # Shape: (num_routed_experts,)
+    reference_totals = expert_token_counts[:, 0, :].long()  # Shape: (num_dispatch_groups, num_routed_experts)
 
     per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
     for device_id in range(len(per_device_dispatch_offsets)):
         tt_offsets_torch = ttnn.to_torch(per_device_dispatch_offsets[device_id]).long()
         row = device_id // n_tp_devices
         col = device_id % n_tp_devices
-        reference_offsets = per_group_offsets[col][row : row + 1, :]
+        ref_offsets = expert_offsets[col, row : row + 1, :].long()
 
-        offsets_match = torch.equal(tt_offsets_torch, reference_offsets)
+        offsets_match = torch.equal(tt_offsets_torch, ref_offsets)
         status_char = "✅" if offsets_match else "❌"
         if offsets_match:
             logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Dispatch offsets match exactly")
         else:
-            diff = (tt_offsets_torch - reference_offsets).abs()
+            diff = (tt_offsets_torch - ref_offsets).abs()
             max_diff = diff.max().item()
             num_mismatches = (diff > 0).sum().item()
             total_elements = diff.numel()
@@ -302,14 +307,14 @@ def test_forward_pass(
         tt_totals_torch = ttnn.to_torch(per_device_totals[device_id]).long()
         row = device_id // n_tp_devices
         col = device_id % n_tp_devices
-        reference_totals = per_group_totals[col]
+        ref_totals = reference_totals[col : col + 1, :].long()
 
-        totals_match = torch.equal(tt_totals_torch, reference_totals)
+        totals_match = torch.equal(tt_totals_torch, ref_totals)
         status_char = "✅" if totals_match else "❌"
         if totals_match:
             logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Total counts match exactly")
         else:
-            diff = (tt_totals_torch - reference_totals).abs()
+            diff = (tt_totals_torch - ref_totals).abs()
             max_diff = diff.max().item()
             num_mismatches = (diff > 0).sum().item()
             total_elements = diff.numel()

@@ -176,12 +176,14 @@ def test_masked_bincount(
         if not matches:
             diff_mask = tt_hist[:n_routed_experts] != ref_hist
             num_diff = diff_mask.sum().item()
-            logger.error(f"Device {device_id} (row={row}, col={col}): {num_diff}/{n_routed_experts} bins differ")
+            logger.error(
+                f"Device {device_id} (row={row_idx}, col={group_idx}): {num_diff}/{n_routed_experts} bins differ"
+            )
             logger.error(f"  tt:  {tt_hist[:n_routed_experts]}")
             logger.error(f"  ref: {ref_hist}")
             all_passed = False
         else:
-            logger.info(f"Device {device_id} (row={row}, col={col}): PASS (sum={ref_hist.sum().item()})")
+            logger.info(f"Device {device_id} (row={row_idx}, col={group_idx}): PASS (sum={ref_hist.sum().item()})")
 
     assert all_passed, "masked_bincount output does not match torch reference on one or more chips"
     logger.info("masked_bincount matches torch reference!")

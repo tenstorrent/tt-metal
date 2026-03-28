@@ -313,16 +313,6 @@ def test_ttnn_dispatch_combine(
         topology=topology,
     )
 
-    # Compute gate outputs (offsets and token counts) before dispatch
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
-        indices,
-        dispatch_group_size,
-        num_routed_experts,
-        experts_per_chip,
-        seq_len_per_chip,
-        num_experts_per_tok,
-    )
-
     # Create expert dispatch table
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
@@ -334,6 +324,17 @@ def test_ttnn_dispatch_combine(
         num_dispatch_groups=num_dispatch_groups,
         dispatch_group_size=dispatch_group_size,
         num_routed_experts=num_routed_experts,
+    )
+
+    # Compute gate outputs (offsets and token counts) before dispatch
+    expert_offsets, expert_token_counts, _ = get_gate_outputs(
+        indices,
+        dispatch_group_size,
+        num_routed_experts,
+        experts_per_chip,
+        seq_len_per_chip,
+        num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
     )
 
     # Run TTNN dispatch

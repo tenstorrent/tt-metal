@@ -321,6 +321,7 @@ def test_moe_reference_pcc(seed: int):
         experts_per_chip=experts_per_chip,
         seq_len_per_chip=seq_len,
         num_experts_per_tok=num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
     )
 
     # 8. Run tt_ref_moe

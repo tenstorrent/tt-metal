@@ -120,6 +120,7 @@ def test_moe(
         experts_per_chip,
         seq_len_per_chip,
         num_experts_per_tok,
+        expert_dispatch_table=expert_dispatch_table,
     )
 
     # Create weights for random-weights mode

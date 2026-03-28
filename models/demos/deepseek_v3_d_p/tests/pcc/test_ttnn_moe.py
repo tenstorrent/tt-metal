@@ -258,6 +258,13 @@ def test_ttnn_moe(
         f"Input shapes: x={x.shape if x is not None else None}, weights={weights.shape}, indices={indices.shape}"
     )
 
+    # Create expert dispatch table
+    expert_dispatch_table = ExpertMapping.create_dispatch_table(
+        num_routed_experts=num_routed_experts,
+        dispatch_group_size=dispatch_group_size,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+
     # Compute gate outputs (offsets and token counts)
     expert_offsets, expert_token_counts, _ = get_gate_outputs(
         indices,
@@ -266,13 +273,7 @@ def test_ttnn_moe(
         experts_per_chip,
         seq_len_per_chip,
         num_experts_per_tok,
-    )
-
-    # Create expert dispatch table
-    expert_dispatch_table = ExpertMapping.create_dispatch_table(
-        num_routed_experts=num_routed_experts,
-        dispatch_group_size=dispatch_group_size,
-        num_dispatch_groups=num_dispatch_groups,
+        expert_dispatch_table=expert_dispatch_table,
     )
     profiler.end("torch_input_creation")
 
