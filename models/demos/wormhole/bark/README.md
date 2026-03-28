@@ -56,7 +56,8 @@ models/demos/wormhole/bark/
 │   ├── bark_model.py            # Pipeline orchestrator & generation loops
 │   ├── bark_long_text.py        # Long text support (500+ chars, chunking)
 │   ├── bark_voice_presets.py    # Voice preset loading & caching
-│   └── bark_batch.py            # Batch audio generation
+│   ├── bark_batch.py            # Batch audio generation
+│   └── bark_pipeline_overlap.py # Streaming pipeline overlap analysis
 ├── reference/
 │   └── bark_reference.py        # PyTorch reference for PCC comparison
 ├── demo/
@@ -64,7 +65,10 @@ models/demos/wormhole/bark/
 └── tests/
     ├── test_bark_model.py       # Forward pass, PCC, pipeline, throughput tests
     ├── test_bark_reference_parity.py  # CPU-only token pipeline validation
-    └── profile_bark.py          # Per-stage throughput profiler
+    ├── run_bark_e2e.py          # End-to-end text→audio test suite
+    ├── validate_token_accuracy.py # PCC + top-1 validation per stage
+    ├── profile_bark.py          # Per-stage throughput profiler
+    └── debug_pcc.py             # Per-layer PCC divergence debugger
 ```
 
 ### Optimization Details (Stages 2 & 3)
