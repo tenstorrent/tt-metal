@@ -31,6 +31,11 @@ on:
         required: false
         type: boolean
         default: false
+      changed-ops:
+        required: false
+        type: string
+        default: ""
+        description: "Comma-separated TTNN op families that changed (from find-changed-files.sh), or 'all'. Empty = run all (no filtering)."
       ref:
         required: false
         type: string
@@ -47,6 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.filter-matrix.outputs.matrix }}
+      has-tests: ${{ steps.filter-matrix.outputs.has-tests }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn-tests.yaml
     steps:
@@ -80,23 +86,61 @@ jobs:
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
 
-      - name: Filter matrix by merge_gate
+      - name: Filter matrix by merge_gate and changed-ops
         id: filter-matrix
+        env:
+          CHANGED_OPS: "${{ inputs.changed-ops }}"
         run: |
+          set -euo pipefail
           merge_gate="${{ inputs.merge-gate-call }}"
           matrix='${{ steps.build-matrix.outputs.matrix }}'
-          filtered=$(echo "$matrix" | jq -c --argjson mg "$merge_gate" 'map(select((.merge_gate // false) == $mg))')
+
+          # Step 1: Filter by merge_gate flag.
+          # - merge-gate-call=true  → keep only entries with merge_gate: true (selective)
+          # - merge-gate-call=false → run ALL entries (post-commit runs the full suite)
+          if [[ "$merge_gate" == "true" ]]; then
+            filtered=$(echo "$matrix" | jq -c 'map(select(.merge_gate == true))')
+          else
+            filtered="$matrix"
+          fi
+
+          # Step 2: If changed-ops is provided and not empty, filter by ops_filter.
+          # This enables change-aware test routing: only run test groups whose
+          # ops_filter overlaps with the changed operation families.
+          # - "all" in changed-ops means run everything (skip this filter)
+          # - Empty changed-ops means run everything (backwards compatible)
+          if [[ -n "$CHANGED_OPS" && "$CHANGED_OPS" != "all" ]]; then
+            echo "Filtering by changed-ops: $CHANGED_OPS"
+            # Convert changed-ops CSV to a JSON array for jq
+            changed_ops_json=$(echo "$CHANGED_OPS" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$"; ""))')
+            # Filter: keep tests where ops_filter has any overlap with changed ops,
+            # or where ops_filter contains "all" (these always run).
+            filtered=$(echo "$filtered" | jq -c --argjson cops "$changed_ops_json" '
+              map(select(
+                (.ops_filter // "all") as $of |
+                ($of | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $filters |
+                (($filters | index("all")) != null) or
+                ([$filters[] as $f | $cops[] as $c | select($f == $c)] | length > 0)
+              ))
+            ')
+            echo "After ops_filter: $(echo "$filtered" | jq 'length') test(s) remaining"
+          fi
+
           len=$(echo "$filtered" | jq 'length')
           if [ "$len" -eq 0 ]; then
-            echo "::error::No tests left after filtering for merge_gate=$merge_gate"
-            exit 1
+            echo "::warning::No tests left after filtering (merge_gate=$merge_gate, changed-ops=$CHANGED_OPS)"
+            echo "has-tests=false" >> "$GITHUB_OUTPUT"
+            echo "matrix=[]" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          echo "has-tests=true" >> "$GITHUB_OUTPUT"
           echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
           echo "$filtered" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
   ttnn:
     needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.has-tests == 'true' }}
     strategy:
       fail-fast: false
       matrix:
