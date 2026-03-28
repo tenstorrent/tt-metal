@@ -595,7 +595,7 @@ def get_sp_mesh_composer(mesh_device):
     """
     Create mesh composer for tensors replicated across TP columns.
 
-    Composes along SP axis (column) only, taking column 0 from each row.
+    Composes along SP axis (rows) only, taking column 0 from each row.
     Use for gate outputs that are replicated across TP after all_reduce_async
     (e.g., logits, topk_indices, topk_weights).
     """

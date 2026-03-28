@@ -10,7 +10,6 @@ PyTorch reference implementation when dispatching tokens to experts.
 """
 
 import pytest
-import torch
 from loguru import logger
 from tracy import signpost
 
@@ -22,6 +21,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_fabric_router_config,
     extract_mesh_config,
+    get_ep_mesh_composer,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
@@ -29,7 +29,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 
 # from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
-from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_replication
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
+    compare_exact,
+    validate_composed,
+    validate_replication,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
@@ -191,28 +195,38 @@ def test_prep_dispatch_combine(
     tt_expert_offsets = ttnn.unsqueeze_to_4D(tt_expert_offsets)
     tt_expert_token_counts = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
 
-    composer = ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
-    host_expert_offsets = ttnn.to_torch(tt_expert_offsets, mesh_composer=composer)
-    host_expert_token_counts = ttnn.to_torch(tt_expert_token_counts, mesh_composer=composer)
-
-    tensors_to_validate = [
-        ("expert_offsets", host_expert_offsets, expert_offsets),
-        ("expert_token_counts", host_expert_token_counts, expert_token_counts),
-    ]
+    ep_composer = get_ep_mesh_composer(mesh_device)
+    # squeeze(2) removes only the singleton dim from unsqueeze_to_4D, preserving [groups, chips, experts]
+    host_expert_offsets = ttnn.to_torch(tt_expert_offsets, mesh_composer=ep_composer).squeeze(2)
+    host_expert_token_counts = ttnn.to_torch(tt_expert_token_counts, mesh_composer=ep_composer).squeeze(2)
 
     # Validate replication of expert_token_counts within dispatch groups (all chips see same totals)
-    replication_result = validate_replication(host_expert_token_counts, name="expert_token_counts")
+    replication_result = validate_replication(host_expert_token_counts, name="counts_replication")
+
+    # Validate values match torch reference
+    offsets_result = validate_composed(
+        host_expert_offsets.int(),
+        expert_offsets.int(),
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
+        name="expert_offsets",
+    )
+    counts_result = validate_composed(
+        host_expert_token_counts.int(),
+        expert_token_counts.int(),
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
+        name="expert_token_counts",
+    )
+
     log_validation_results(
-        results=[replication_result],
+        results=[offsets_result, counts_result],
         num_dispatch_groups=num_dispatch_groups,
         dispatch_group_size=dispatch_group_size,
         title="Routing Setup Validation",
     )
-    replication_result.assert_passed("Replication mismatch in expert_token_counts")
 
-    # Validate values match torch reference (both 3D sparse format)
-    for name, host_tensor, expected in tensors_to_validate:
-        # host_tensor: (num_dispatch_groups, dispatch_group_size, 1, num_routed_experts) from composer
-        # expected: (num_dispatch_groups, dispatch_group_size, num_routed_experts) from get_gate_outputs
-        tt_values = host_tensor.squeeze()  # Remove singleton dims -> 3D
-        assert torch.allclose(tt_values.int(), expected.int(), atol=0, rtol=0), f"Value mismatch for {name}"
+    for r in [replication_result, offsets_result, counts_result]:
+        r.assert_passed(f"{r.name} validation failed")

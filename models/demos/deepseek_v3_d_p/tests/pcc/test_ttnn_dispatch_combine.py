@@ -351,6 +351,38 @@ def test_ttnn_dispatch_combine(
         expert_dispatch_table=expert_dispatch_table,
     )
 
+    # Validate routing setup outputs against torch reference
+    ep_composer = get_ep_mesh_composer(mesh_device)
+    host_offsets = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_dispatch_offsets), mesh_composer=ep_composer).squeeze(2)
+    host_token_counts = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_expert_token_counts), mesh_composer=ep_composer).squeeze(
+        2
+    )
+
+    offsets_result = validate_composed(
+        host_offsets.int(),
+        expert_offsets.int(),
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
+        name="expert_offsets",
+    )
+    counts_result = validate_composed(
+        host_token_counts.int(),
+        expert_token_counts.int(),
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
+        name="expert_token_counts",
+    )
+    log_validation_results(
+        results=[offsets_result, counts_result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Routing Setup Validation",
+    )
+    offsets_result.assert_passed("Dispatch offsets mismatch before dispatch")
+    counts_result.assert_passed("Expert token counts mismatch before dispatch")
+
     # Run TTNN dispatch
     logger.debug("Running TTNN dispatch...")
     tt_expert_offsets = tt_dispatch_offsets
