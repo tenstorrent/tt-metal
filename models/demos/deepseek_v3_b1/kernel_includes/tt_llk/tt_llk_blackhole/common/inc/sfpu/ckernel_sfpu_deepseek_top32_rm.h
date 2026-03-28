@@ -207,16 +207,10 @@ inline void bitonic_top32_step_N(bool dir) {
     }
 }
 
-inline void bitonic_top32_inc_x8_dest(std::uint32_t inc, bool cr) {
+inline void bitonic_top32_inc_x8_dest(std::uint32_t inc) {
     std::uint32_t inc_grp8 = inc >> 3;
-    if (cr) {
-        for (std::uint32_t i = 0; i < inc_grp8; i++) {
-            TTI_INCRWC(0b100, 8, 0, 0);
-        }
-    } else {
-        for (std::uint32_t i = 0; i < inc_grp8; i++) {
-            TTI_INCRWC(0, 8, 0, 0);
-        }
+    for (std::uint32_t i = 0; i < inc_grp8; i++) {
+        TTI_INCRWC(0, 8, 0, 0);
     }
 }
 
@@ -262,37 +256,31 @@ inline void _bitonic_top32_phases_steps_(const int idir) {
         // Steps N to 5
         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         dir = idir;
-        std::uint32_t dist = (ss == 5) ? 16 : 32;
+        std::uint32_t dist = 16;
         std::uint32_t inner_d =
             dist >> 3;  // How many loops to sort the sequence of length (2^ss / 16). Each loop sorts 16
-        datums_compared = 0;
-        while (datums_compared < total_datums_to_compare) {
+        for (std::uint32_t d = 0; d < 2; d++) {
             for (std::uint32_t ii = 0; ii < inner_d; ii++) {
                 bitonic_top32_load16<is_fp32_dest_acc_en>(4, dist);
                 bitonic_top32_step_N(dir);
                 bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, dist);
-                std::uint32_t dst_inc = 8;
-                bool dst_cr = false;
-                if (ii == (inner_d - 1)) {
-                    dst_cr = true;
-                    dst_inc = 2 * dist;
-                }
-                bitonic_top32_inc_x8_dest(dst_inc, dst_cr);
-                datums_compared += 16;
+                bitonic_top32_inc_x8_dest(8);
             }
-            dir = (datums_compared == sorted_seq_length) ? !dir : dir;
+            bitonic_top32_inc_x8_dest(16);
+            dir = !dir;
         }
     }
     // steps 4 to 1
     dir = idir;
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    datums_compared = 0;
-    while (datums_compared < total_datums_to_compare) {
+    for (int d = 0; d < 2; d++) {
         bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
         bitonic_top32_ph3_st4_to_1(dir);
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
-        datums_compared += 16;
-        dir = (datums_compared == sorted_seq_length) ? !dir : dir;
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
+        bitonic_top32_ph3_st4_to_1(dir);
+        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
+        dir = !dir;
     }
 }
 
@@ -305,49 +293,314 @@ inline void _bitonic_top32_merge_(const bool across_tiles) {
         bitonic_top32_load16<is_fp32_dest_acc_en>(4, dist);
         bitonic_top32_step_N(top_min);
         bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, dist);
-        bitonic_top32_inc_x8_dest(8, false);
+        bitonic_top32_inc_x8_dest(8);
     }
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _bitonic_top32_rebuild_(const bool idir, const bool skip_second) {
-    std::uint32_t total_datums_to_compare = 64 >> (skip_second ? 1 : 0);
-    std::uint32_t datums_compared = 0;
-    constexpr std::uint32_t start_step = 5;
-    constexpr std::uint32_t end_step = 4;
-    constexpr std::uint32_t sorted_seq_length = 32;
-
-    bool dir = idir;
     // Step 5
+    bool dir = idir;
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     constexpr std::uint32_t dist = 16;
     constexpr std::uint32_t inner_d = dist >> 3;
-    while (datums_compared < total_datums_to_compare) {
+    for (std::uint32_t d = 0; d < (skip_second ? 1 : 2); d++) {
         for (std::uint32_t ii = 0; ii < inner_d; ii++) {
             bitonic_top32_load16<is_fp32_dest_acc_en>(4, dist);
             bitonic_top32_step_N(dir);
             bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, dist);
-            std::uint32_t dst_inc = 8;
-            bool dst_cr = false;
-            if (ii == (inner_d - 1)) {
-                dst_cr = true;
-                dst_inc = 2 * dist;
-            }
-            bitonic_top32_inc_x8_dest(dst_inc, dst_cr);
-            datums_compared += 16;
+            bitonic_top32_inc_x8_dest(8);
         }
-        dir = (datums_compared == sorted_seq_length) ? !dir : dir;
+        bitonic_top32_inc_x8_dest(16);
+        dir = !dir;
     }
     // steps 4 to 1
     dir = idir;
-    datums_compared = 0;
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
-    while (datums_compared < total_datums_to_compare) {
+    for (std::uint32_t d = 0; d < (skip_second ? 1 : 2); d++) {
         bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
         bitonic_top32_ph3_st4_to_1(dir);
         bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
-        datums_compared += 16;
-        dir = (datums_compared == sorted_seq_length) ? !dir : dir;
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
+        bitonic_top32_ph3_st4_to_1(dir);
+        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
+        dir = !dir;
+    }
+}
+
+// clang-format off
+/**
+ * Produces bitonic top32 on 16 independent columns of 1024 elements
+ * Input data must be in row major (RM) layout and pre-sorted to len 32 sub arrays
+ * The data needs to be loaded into the DST register transposed, as the sorting happens on columns
+ * The indices need to be loaded into the DST register in the same way, but with offset of 2 tiles
+ *
+ * Algorithm:
+ * 1. Reduild len 32 bitonic sequences from the pre-sorted data
+ *    - do on both even and odd cols
+ * 2. Merge and rebuild F0/F1 sequences with F2/F3 sequences
+ *    - do on both even and odd cols
+ *    - even and odd cols alternate in sort direction
+ */
+// clang-format on
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, bool top_min>
+inline void _bitonic_top32_of_1024_rm_pre_sorted_prep_(std::uint32_t dst_index) {
+    constexpr std::uint32_t odd_col_offset = 2;
+    constexpr bool decreasing = false;
+    const std::uint32_t tile_offset = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+
+    /// Step 1
+    // Build len 32 bitonic sequences from the pre-sorted data
+    bool dir = decreasing;
+    for (int col = 0; col < 2; col++) {
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+        for (int d = 0; d < 4; d++) {
+            bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
+            bitonic_top32_ph3_st4_to_1(dir);
+            bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
+            dir = !dir;
+        }
+        _bitonic_top32_rebuild_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(
+            /* idir */ decreasing, /* skip_second */ false);
+        set_dst_write_addr_offset(tile_offset + odd_col_offset);
+    }
+    set_dst_write_addr_offset(tile_offset);
+
+    /// Step 2
+    // Merge and rebuild F0/F1 sequences with F2/F3 sequences
+    dir = top_min;
+    for (int col = 0; col < 2; col++) {
+        _bitonic_top32_merge_<APPROXIMATION_MODE, is_fp32_dest_acc_en, decreasing>(/* across_tiles */ false);
+        _bitonic_top32_rebuild_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(/* idir */ dir, /* skip_second */ true);
+        dir = !dir;
+        set_dst_write_addr_offset(tile_offset + odd_col_offset);
+    }
+    set_dst_write_addr_offset(tile_offset);
+}
+
+// clang-format off
+/**
+ * Combines top32 sequences across F0/F1 of 2 adjacent tiles independently on 16 columns
+ * Implemented with simple merge and rebuild steps
+ */
+// clang-format on
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void _bitonic_top32_of_1024_rm_pre_sorted_combine_(std::uint32_t dst_index) {
+    constexpr std::uint32_t odd_col_offset = 2;
+    constexpr bool decreasing = false;
+    constexpr bool increasing = true;
+    const std::uint32_t tile_offset = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+    _bitonic_top32_merge_<APPROXIMATION_MODE, is_fp32_dest_acc_en, decreasing>(/* across_tiles */ true);
+    _bitonic_top32_rebuild_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(/* idir */ decreasing, /* skip_second */ true);
+    set_dst_write_addr_offset(tile_offset + odd_col_offset);
+    _bitonic_top32_merge_<APPROXIMATION_MODE, is_fp32_dest_acc_en, decreasing>(/* across_tiles */ true);
+    _bitonic_top32_rebuild_<APPROXIMATION_MODE, is_fp32_dest_acc_en>(/* idir */ increasing, /* skip_second */ true);
+    set_dst_write_addr_offset(tile_offset);
+}
+
+// clang-format off
+/**
+ * Produces final top32 from sequences in F0/F1 with data pre-sorted to len 32 sub arrays
+ * Odd cols start with decreasing, even cols increasing
+ * Final output is in even col 0 of F0/F1
+ *
+ * Algorithm:
+ * 1. Merge even and odd cols and rebuild, then store to odd cols
+ *    - alternate SFPU instances with increasing/decreasing
+ *    - after this step, there are 8 cols remaining (all odd cols)
+ * 2. Shift odd cols by 1 SFPU instance right, and store to even cols
+ * 3. Merge even and odd cols and rebuild, then store to odd cols
+ *    - alternate every 2nd SFPU instance with increasing/decreasing
+ *    - after this step, there are 4 cols remaining (every 2nd odd col)
+ * 4. Shift odd cols by 2 SFPU instances right, and store to even cols
+ * 5. Merge even and odd cols and rebuild, then store to odd cols
+ *    - alternate every 4th SFPU instance with increasing/decreasing
+ *    - after this step, there are 2 cols remaining (every 4th odd col)
+ * 6. Shift odd cols by 4 SFPU instances right, and store to even cols
+ * 7. Merge even and odd cols and rebuild, then store to even cols
+ *    - after this step, final col is produced in even col 0 of F0/F1
+ */
+// clang-format on
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void _bitonic_top32_of_1024_rm_pre_sorted_final_(std::uint32_t dst_index) {
+    constexpr bool decreasing = false;
+    constexpr bool increasing = true;
+    constexpr std::uint32_t odd_col_offset = 2;
+    const std::uint32_t tile_offset = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
+
+    /// Step 1
+    // Merge even and odd cols and rebuild, then store to odd cols
+    std::uint32_t dist = odd_col_offset;
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    for (int d = 0; d < 4; d++) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, dist);
+        bitonic_top32_step_N(decreasing);
+        bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, dist);
+        bitonic_top32_inc_x8_dest(8);
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    // set every SFPU instance to alternate SWAP direction
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0104);
+    TTI_SFPCONFIG(0x4444, 0xF, 8);
+    for (int d = 0; d < 2; d++) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 16);
+        bitonic_top32_step_N(decreasing);
+        bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, 16);
+        bitonic_top32_inc_x8_dest(8);
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    for (int d = 0; d < 2; d++) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
+        bitonic_top32_ph3_st4_to_1(decreasing);
+        set_dst_write_addr_offset(tile_offset + odd_col_offset);
+        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
+        set_dst_write_addr_offset(tile_offset);
+    }
+
+    /// Step 2
+    // Shift odd cols by 1 SFPU instance right, and store to even cols
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    TTI_SFPCONFIG(0x0000, 0xF, 1);  // disable SFPU config for shifting
+    for (int d = 0; d < 2; d++) {
+        set_dst_write_addr_offset(tile_offset + odd_col_offset);
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
+        TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        TTI_SFPSHFT2(0, p_sfpu::LREG7, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        set_dst_write_addr_offset(tile_offset);
+        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
+    }
+    TTI_SFPCONFIG(0x0004, 0xF, 1);  // Restore index tracking mode
+
+    /// Step 3
+    // Merge even and odd cols and rebuild, then store to odd cols
+    dist = odd_col_offset;
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    for (int d = 0; d < 4; d++) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, dist);
+        bitonic_top32_step_N(decreasing);
+        bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, dist);
+        bitonic_top32_inc_x8_dest(8);
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    // set every 2 SFPU instances to alternate SWAP direction
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0104);
+    TTI_SFPCONFIG(0x5050, 0xF, 8);
+    for (int d = 0; d < 2; d++) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 16);
+        bitonic_top32_step_N(decreasing);
+        bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, 16);
+        bitonic_top32_inc_x8_dest(8);
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    for (int d = 0; d < 2; d++) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
+        bitonic_top32_ph3_st4_to_1(decreasing);
+        set_dst_write_addr_offset(tile_offset + odd_col_offset);
+        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
+        set_dst_write_addr_offset(tile_offset);
+    }
+
+    /// Step 4
+    // Shift odd cols by 2 SFPU instances right, and store to even cols
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    TTI_SFPCONFIG(0x0000, 0xF, 1);  // disable SFPU config for shifting
+    for (int d = 0; d < 2; d++) {
+        set_dst_write_addr_offset(tile_offset + odd_col_offset);
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
+        for (int i = 0; i < 2; i++) {
+            TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG7, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        }
+        set_dst_write_addr_offset(tile_offset);
+        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
+    }
+    TTI_SFPCONFIG(0x0004, 0xF, 1);  // Restore index tracking mode
+
+    /// Step 5
+    // Merge even and odd cols and rebuild, then store to odd cols
+    dist = odd_col_offset;
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    for (int d = 0; d < 4; d++) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, dist);
+        bitonic_top32_step_N(decreasing);
+        bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, dist);
+        bitonic_top32_inc_x8_dest(8);
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    // set every 4 SFPU instances to alternate SWAP direction
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0x0104);
+    TTI_SFPCONFIG(0x5500, 0xF, 8);
+    for (int d = 0; d < 2; d++) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 16);
+        bitonic_top32_step_N(decreasing);
+        bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, 16);
+        bitonic_top32_inc_x8_dest(8);
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    for (int d = 0; d < 2; d++) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
+        bitonic_top32_ph3_st4_to_1(decreasing);
+        set_dst_write_addr_offset(tile_offset + odd_col_offset);
+        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
+        set_dst_write_addr_offset(tile_offset);
+    }
+
+    /// Step 6
+    // Shift odd cols by 4 SFPU instances right, and store to even cols
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    TTI_SFPCONFIG(0x0000, 0xF, 1);  // disable SFPU config for shifting
+    for (int d = 0; d < 2; d++) {
+        set_dst_write_addr_offset(tile_offset + odd_col_offset);
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
+        for (int i = 0; i < 4; i++) {
+            TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG4, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG6, p_sfpu::LREG6, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+            TTI_SFPSHFT2(0, p_sfpu::LREG7, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
+        }
+        set_dst_write_addr_offset(tile_offset);
+        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
+    }
+    TTI_SFPCONFIG(0x0004, 0xF, 1);  // Restore index tracking mode
+
+    /// Step 7
+    // Merge even and odd cols and rebuild, then store to even cols
+    dist = odd_col_offset;
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    for (int d = 0; d < 4; d++) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, dist);
+        bitonic_top32_step_N(decreasing);
+        bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, dist);
+        bitonic_top32_inc_x8_dest(8);
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    for (int d = 0; d < 2; d++) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 16);
+        bitonic_top32_step_N(decreasing);
+        bitonic_top32_store16<is_fp32_dest_acc_en, false>(4, 16);
+        bitonic_top32_inc_x8_dest(8);
+    }
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+    for (int d = 0; d < 2; d++) {
+        bitonic_top32_load16<is_fp32_dest_acc_en>(4, 8);
+        bitonic_top32_ph3_st4_to_1(decreasing);
+        bitonic_top32_store16<is_fp32_dest_acc_en, true>(4, 8);
     }
 }
 

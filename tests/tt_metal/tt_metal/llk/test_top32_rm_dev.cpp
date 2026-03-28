@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <random>
 #include <string>
 #include <vector>
 
@@ -41,54 +40,88 @@ uint32_t num_input_tiles_for_row(uint32_t row_elements) { return (row_elements +
 
 constexpr uint32_t kTopK = 32;
 
-// Build row-major DRAM: scores are a shuffled decreasing sequence; indices[i] is the original index
-// (0..L-1) of the score at row-major position i after the same shuffle.
+// Build row-major DRAM: consecutive groups of kTopK (32) scores are monotonically decreasing;
+// indices[i] = i (original index at row-major position i).
 struct ShuffledInputs {
     std::vector<uint32_t> packed_scores;
     std::vector<uint32_t> indices_u32;
 };
 
-ShuffledInputs make_shuffled_inputs_row_major(uint32_t row_elements, uint32_t seed) {
+ShuffledInputs make_shuffled_inputs_row_major(uint32_t row_elements, [[maybe_unused]] uint32_t seed) {
     const uint32_t nt = num_input_tiles_for_row(row_elements);
     const uint32_t total_bf16 = nt * 1024;
     const uint32_t n_el = nt * 1024;
 
-    struct Pair {
-        bfloat16 score;
-        uint32_t orig_idx;
-    };
-    std::vector<Pair> pairs(row_elements);
-    for (uint32_t i = 0; i < row_elements; i++) {
-        pairs[i] = {bfloat16(static_cast<float>(row_elements - 1 - i)), i};
-    }
-    std::mt19937 rng(seed);
-    std::shuffle(pairs.begin(), pairs.end(), rng);
-
     std::vector<bfloat16> scores(total_bf16, bfloat16(0.0f));
     std::vector<uint32_t> indices(n_el, 0u);
     for (uint32_t i = 0; i < row_elements; i++) {
-        scores[i] = pairs[i].score;
-        indices[i] = pairs[i].orig_idx;
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        // for pre-sorted
+        // Add to j a random value in range 0 to 1
+        const uint32_t j = kTopK - (i % kTopK);
+        std::uniform_real_distribution<> dis(0.0, 16.0);
+        float rand0_1 = dis(gen);  // random value in [0,1]
+        const float val = static_cast<float>(j << 4) + rand0_1 - 256.0f;
+        // // for non-pre-sorted
+        // std::uniform_real_distribution<> dis(0.0, 20.0);
+        // float rand0_20 = dis(gen);  // random value in [0,20]
+        // const float val = rand0_20 - 10.0f;
+        scores[i] = bfloat16(val);
+        indices[i] = i;
     }
     return {pack_vector<uint32_t, bfloat16>(scores), std::move(indices)};
 }
 
-// Expect output slot k to match unshuffled rank k: score (L-1-k), index k (strict descending order in DRAM).
+// Reference: unpack input scores, sort by value descending with input indices, top-k must match device output.
 bool verify_top32_outputs(
-    const std::vector<uint32_t>& packed_scores_out, const std::vector<uint32_t>& indices_out, uint32_t row_elements) {
+    const std::vector<uint32_t>& packed_scores_in,
+    const std::vector<uint32_t>& indices_in,
+    const std::vector<uint32_t>& packed_scores_out,
+    const std::vector<uint32_t>& indices_out,
+    uint32_t row_elements) {
+    auto in_scores = unpack_vector<bfloat16, uint32_t>(packed_scores_in);
     auto out_scores = unpack_vector<bfloat16, uint32_t>(packed_scores_out);
+    if (in_scores.size() < row_elements || indices_in.size() < row_elements) {
+        log_error(
+            LogTest,
+            "Top32 verify: input too small (scores={}, indices={}, need {})",
+            in_scores.size(),
+            indices_in.size(),
+            row_elements);
+        return false;
+    }
     if (out_scores.size() < kTopK || indices_out.size() < kTopK) {
         log_error(
             LogTest,
-            "Top32 verify: buffer too small (scores={}, indices={}, need {})",
+            "Top32 verify: output too small (scores={}, indices={}, need {})",
             out_scores.size(),
             indices_out.size(),
             kTopK);
         return false;
     }
 
+    struct ScoredIdx {
+        bfloat16 score;
+        uint32_t orig_idx;
+    };
+    std::vector<ScoredIdx> ranked;
+    ranked.reserve(row_elements);
+    for (uint32_t i = 0; i < row_elements; i++) {
+        ranked.push_back({in_scores[i], indices_in[i]});
+    }
+    std::sort(ranked.begin(), ranked.end(), [](const ScoredIdx& a, const ScoredIdx& b) {
+        const float fa = static_cast<float>(a.score);
+        const float fb = static_cast<float>(b.score);
+        if (fa != fb) {
+            return fa > fb;
+        }
+        return a.orig_idx < b.orig_idx;
+    });
+
     std::string table;
-    table += fmt::format("Top32 L={} — expected: slot k has score (L-1-k) and index k\n", row_elements);
+    table +=
+        fmt::format("Top32 L={} — expected: top-{} by sorted input scores + paired indices\n", row_elements, kTopK);
     table += fmt::format("{:-^86}\n", "");
     table += fmt::format(
         "{:>4} | {:>12} | {:>12} | {:^5} | {:>8} | {:>8} | {:^5}\n",
@@ -103,8 +136,8 @@ bool verify_top32_outputs(
 
     bool all_ok = true;
     for (uint32_t k = 0; k < kTopK; k++) {
-        const bfloat16 want_score = bfloat16(static_cast<float>(row_elements - 1 - k));
-        const uint32_t want_idx = k;
+        const bfloat16 want_score = ranked[k].score;
+        const uint32_t want_idx = ranked[k].orig_idx;
         const bfloat16 got_score = out_scores[k];
         const uint32_t got_idx = indices_out[k];
         const bool s_ok = (want_score == got_score);
@@ -221,13 +254,13 @@ bool run_top32_rm_dev(
     std::vector<uint32_t> out1;
     detail::ReadFromBuffer(buf_out0, out0);
     detail::ReadFromBuffer(buf_out1, out1);
-    return verify_top32_outputs(out0, out1, row_elements);
+    return verify_top32_outputs(in.packed_scores, in.indices_u32, out0, out1, row_elements);
 }
 
 }  // namespace unit_tests::compute::top32_rm_dev
 
 TEST_F(MeshDeviceFixture, Top32RmDevPipelineCompletes) {
-    for (uint32_t row : {160u, 3232u}) {
+    for (uint32_t row : {64u, 128u, 160u, 3232u}) {
         log_info(LogTest, "Top32 RM dev row_elements={}", row);
         EXPECT_TRUE(unit_tests::compute::top32_rm_dev::run_top32_rm_dev(this->devices_.at(0), row, 12345u));
     }

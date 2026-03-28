@@ -5,7 +5,6 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
-#include "api/compute/transpose_wh.h"
 #include "experimental/circular_buffer.h"
 
 // DeepSeek Top32 headers (repo-relative; JIT adds -I only for this file's directory).
@@ -78,6 +77,8 @@ void kernel_main() {
     uint32_t increasing = 1;
     MATH((llk_math_deepseek_top32_rm_init<false>()));
     MATH((llk_math_deepseek_top32_rm_local_sort<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing)));
+    // MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
+    //     value_offset_tiles, decreasing, /*skip_second*/ false)));
     MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, /*across_tiles*/ false)));
     MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
         value_offset_tiles, decreasing, /*skip_second*/ true)));
@@ -107,6 +108,8 @@ void kernel_main() {
 
         // step 4
         MATH((llk_math_deepseek_top32_rm_local_sort<false, DST_ACCUM_MODE>(value_offset_tiles + 1, decreasing)));
+        // MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
+        //     value_offset_tiles + 1, decreasing, /*skip_second*/ false)));
         MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles + 1, /*across_tiles*/ false)));
         MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(
             value_offset_tiles + 1, increasing, /*skip_second*/ true)));
