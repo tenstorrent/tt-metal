@@ -199,6 +199,8 @@ echo ""
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
+FAILED_ITERATIONS=()
+
 # Main testing loop
 for ((i=1; i<=ITERATIONS; i++)); do
     echo "Starting iteration $i of $ITERATIONS..."
@@ -212,17 +214,45 @@ for ((i=1; i<=ITERATIONS; i++)); do
         echo "=========================================="
         echo ""
 
-        echo "Running tt-smi -glx_reset..."
-        mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
+        echo "Running tt-smi -r..."
+        mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -r
 
         sleep 5
 
         echo ""
         echo "Running cluster validation..."
         run_cluster_validation
+        VALIDATION_EXIT_CODE=${PIPESTATUS[0]:-$?}
+        echo "VALIDATION_EXIT_CODE=$VALIDATION_EXIT_CODE"
         echo "Iteration $i completed at $(date)"
         echo "=========================================="
     } 2>&1 | tee "$LOG_FILE"
+
+    if grep -q "FAULTY LINKS REPORT" "$LOG_FILE"; then
+        echo ""
+        echo "*** ITERATION $i: FAULTY CONNECTIONS DETECTED ***"
+        # Extract the faulty links summary table from the log
+        sed -n '/FAULTY LINKS REPORT/,/^$/p' "$LOG_FILE"
+        echo ""
+    fi
+
+    if grep -q "Workload execution timed out" "$LOG_FILE"; then
+        echo ""
+        echo "*** ITERATION $i: WORKLOAD TIMED OUT - cluster in unhealthy state ***"
+        grep "timed out" "$LOG_FILE"
+        echo ""
+    fi
+
+    if grep -q "Total Faulty Links:" "$LOG_FILE"; then
+        FAULTY_COUNT=$(grep "Total Faulty Links:" "$LOG_FILE" | head -1 | grep -o '[0-9]\+')
+        echo "*** Iteration $i: $FAULTY_COUNT faulty link(s) detected. See $LOG_FILE for full details. ***"
+        FAILED_ITERATIONS+=("$i")
+    fi
+
+    if grep -q "missing" "$LOG_FILE" 2>/dev/null || grep -q "MISSING" "$LOG_FILE" 2>/dev/null; then
+        echo "*** Iteration $i: Missing connections detected during connectivity validation. ***"
+        grep -i "missing" "$LOG_FILE" | head -20
+    fi
 
     if [[ "$RERUN_ON_RETRAIN" == true ]] && grep -q "Ethernet Links were Retrained" "$LOG_FILE"; then
         OUTPUT_DIR_RETRY="${OUTPUT_DIR}_retry"
@@ -240,9 +270,23 @@ for ((i=1; i<=ITERATIONS; i++)); do
 
             echo "Re-running cluster validation..."
             run_cluster_validation
+            VALIDATION_EXIT_CODE=${PIPESTATUS[0]:-$?}
+            echo "VALIDATION_EXIT_CODE=$VALIDATION_EXIT_CODE"
             echo "Iteration $i retry completed at $(date)"
             echo "=========================================="
         } 2>&1 | tee "$LOG_FILE_RETRY"
+
+        if grep -q "FAULTY LINKS REPORT" "$LOG_FILE_RETRY"; then
+            echo ""
+            echo "*** ITERATION $i RETRY: FAULTY CONNECTIONS DETECTED ***"
+            sed -n '/FAULTY LINKS REPORT/,/^$/p' "$LOG_FILE_RETRY"
+            echo ""
+        fi
+
+        if grep -q "Total Faulty Links:" "$LOG_FILE_RETRY"; then
+            FAULTY_COUNT=$(grep "Total Faulty Links:" "$LOG_FILE_RETRY" | head -1 | grep -o '[0-9]\+')
+            echo "*** Iteration $i retry: $FAULTY_COUNT faulty link(s) detected. See $LOG_FILE_RETRY for full details. ***"
+        fi
     fi
 
     echo "Iteration $i logged to $LOG_FILE"
@@ -250,3 +294,22 @@ for ((i=1; i<=ITERATIONS; i++)); do
 done
 
 echo "All $ITERATIONS iterations completed!"
+
+if [[ ${#FAILED_ITERATIONS[@]} -gt 0 ]]; then
+    echo ""
+    echo "=========================================="
+    echo "FAILURE SUMMARY"
+    echo "=========================================="
+    echo "${#FAILED_ITERATIONS[@]} of $ITERATIONS iterations had faulty links: ${FAILED_ITERATIONS[*]}"
+    echo ""
+    echo "Faulty connection details per failed iteration:"
+    for fail_iter in "${FAILED_ITERATIONS[@]}"; do
+        FAIL_LOG="$OUTPUT_DIR/cluster_validation_iteration_${fail_iter}.log"
+        echo ""
+        echo "--- Iteration $fail_iter ($FAIL_LOG) ---"
+        sed -n '/FAULTY LINKS REPORT/,/^-\+$/p' "$FAIL_LOG"
+    done
+    echo "=========================================="
+else
+    echo "All iterations passed with no faulty links detected."
+fi
