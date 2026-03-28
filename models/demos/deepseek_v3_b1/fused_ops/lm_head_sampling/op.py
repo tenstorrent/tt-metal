@@ -91,7 +91,7 @@ class LMHeadSampling:
         4. Look up token embedding from embedding_tensor using sampled index
         5. RMSNorm on hidden states using h_gamma_tensor
         6. RMSNorm on token embedding using e_gamma_tensor
-        7. Concatenate normalized hidden states and embedding
+        7. Concatenate normalized embedding and hidden states
         8. Project through eh_projection_tensor to get MTP input
 
         When fuse_mtp_verification=True, performs speculative decoding verification:
@@ -115,7 +115,7 @@ class LMHeadSampling:
             embedding_tensor: Token embedding table (torch.Tensor) [vocab_size, embedding_dim]
             h_gamma_tensor: RMSNorm gamma for hidden states in MTP (torch.Tensor) [hidden_dim]
             e_gamma_tensor: RMSNorm gamma for embeddings in MTP (torch.Tensor) [embedding_dim]
-            eh_projection_tensor: Projection matrix for concatenated [h, e] (torch.Tensor) [hidden_dim + embedding_dim, output_dim]
+            eh_projection_tensor: Projection matrix for concatenated [e, h] (torch.Tensor) [embedding_dim + hidden_dim, output_dim]
 
         Returns:
             - If neither fuse_mtp nor fuse_mtp_verification: (sampled_index [1,1], None)
@@ -182,8 +182,9 @@ class LMHeadSampling:
         e_normalized = token_embedding * torch.rsqrt(e_variance + epsilon)
         e_rmsnorm_out = e_normalized * e_gamma_tensor  # [1, embedding_dim]
 
-        # Step 7: Concatenate normalized hidden states and embedding
-        concat_he = torch.cat([h_rmsnorm_out, e_rmsnorm_out], dim=-1)
+        # Step 7: Concatenate normalized embedding then hidden states.
+        # The MTP checkpoint projection expects the [e_norm | h_norm] layout.
+        concat_he = torch.cat([e_rmsnorm_out, h_rmsnorm_out], dim=-1)
 
         # Step 8: Project through eh_projection_tensor
         mtp_output = concat_he @ eh_projection_tensor
