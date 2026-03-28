@@ -3,16 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Unit tests for the Metal 2.0 Host API: ProgramSpec and MakeProgramFromSpec
+// These tests validate the ProgramSpec validation logic and helper/utility functions.
 //
-// These tests validate the ProgramSpec collection, validation, and Program creation logic
-// WITHOUT requiring actual hardware. Tests use ArchOverrideGuard to simulate Quasar.
+// Program creation tests are disabled (need HAL / actual hardware)
 //
 // Test categories:
-//   1. Structural validation (CollectSpecData) - duplicate names, dangling references
-//   2. Semantic validation (ValidateProgramSpec) - architecture rules, resource limits
-//   3. WorkerSpec validation - overlap, coverage, resource budgets
-//   4. DFB validation - endpoints, bindings, format requirements
-//   5. Happy path tests - valid ProgramSpecs that should succeed
+//   1. ProgramSpec "structural" validation (CollectSpecData)
+//   2. ProgramSpec semantic validation (ValidateProgramSpec)
+//   3. WorkerSpec validation
+//   4. DFB validation
+//   5. Program creation (currently disabled)
 
 #include <gtest/gtest.h>
 
@@ -29,37 +29,41 @@ namespace {
 // Test Utilities
 // ============================================================================
 
+// These helper utilities are used to create minimal valid Spec objects for testing.
+// This enables very concise tests that alter just one thing about the minimal spec.
+// These utilities (or their equivalents) are not meant to be used in production code.
+
 // Helper to create a minimal valid KernelSpec for data movement
 KernelSpec MakeMinimalDMKernel(
     const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
-    KernelSpec kernel;
-    kernel.unique_id = name;
-    kernel.source = "test_kernel.cpp";
-    kernel.source_type = KernelSpec::SourceType::FILE_PATH;
-    kernel.target_nodes = nodes;
-    kernel.num_threads = num_threads;
-
-    DataMovementConfiguration dm_config;
-    dm_config.gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{};
-    kernel.config_spec = dm_config;
-
-    return kernel;
+    return KernelSpec{
+        .unique_id = name,
+        .source = "test_kernel.cpp",
+        .source_type = KernelSpec::SourceType::FILE_PATH,
+        .target_nodes = nodes,
+        .num_threads = num_threads,
+        // Fields with defaults skipped: thread_node_map, compiler_options, dfb_bindings,
+        // semaphore_bindings, compile_time_arg_bindings, runtime_arguments_schema
+        .config_spec =
+            DataMovementConfiguration{
+                .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+            },
+    };
 }
 
 // Helper to create a minimal valid KernelSpec for compute
 KernelSpec MakeMinimalComputeKernel(
     const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
-    KernelSpec kernel;
-    kernel.unique_id = name;
-    kernel.source = "test_compute_kernel.cpp";
-    kernel.source_type = KernelSpec::SourceType::FILE_PATH;
-    kernel.target_nodes = nodes;
-    kernel.num_threads = num_threads;
-
-    ComputeConfiguration compute_config;
-    kernel.config_spec = compute_config;
-
-    return kernel;
+    return KernelSpec{
+        .unique_id = name,
+        .source = "test_compute_kernel.cpp",
+        .source_type = KernelSpec::SourceType::FILE_PATH,
+        .target_nodes = nodes,
+        .num_threads = num_threads,
+        // Fields with defaults skipped: thread_node_map, compiler_options, dfb_bindings,
+        // semaphore_bindings, compile_time_arg_bindings, runtime_arguments_schema
+        .config_spec = ComputeConfiguration{},
+    };
 }
 
 // Helper to create a minimal valid DataflowBufferSpec
@@ -68,12 +72,12 @@ DataflowBufferSpec MakeMinimalDFB(
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
     uint32_t entry_size = 1024,
     uint32_t num_entries = 2) {
-    DataflowBufferSpec dfb;
-    dfb.unique_id = name;
-    dfb.target_nodes = nodes;
-    dfb.entry_size = entry_size;
-    dfb.num_entries = num_entries;
-    return dfb;
+    return DataflowBufferSpec{
+        .unique_id = name,
+        .target_nodes = nodes,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+    };
 }
 
 // Helper to create a minimal valid WorkerSpec
@@ -82,12 +86,12 @@ WorkerSpec MakeMinimalWorker(
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
     const std::vector<KernelSpecName>& kernels,
     const std::vector<DFBSpecName>& dfbs = {}) {
-    WorkerSpec worker;
-    worker.unique_id = name;
-    worker.target_nodes = nodes;
-    worker.kernels = kernels;
-    worker.dataflow_buffers = dfbs;
-    return worker;
+    return WorkerSpec{
+        .unique_id = name,
+        .kernels = kernels,
+        .dataflow_buffers = dfbs,
+        .target_nodes = nodes,
+    };
 }
 
 // Helper to bind a DFB to a kernel as producer or consumer
@@ -97,12 +101,12 @@ void BindDFBToKernel(
     const std::string& accessor_name,
     KernelSpec::DFBEndpointType endpoint_type,
     DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED) {
-    KernelSpec::DFBBinding binding;
-    binding.dfb_spec_name = dfb_name;
-    binding.local_accessor_name = accessor_name;
-    binding.endpoint_type = endpoint_type;
-    binding.access_pattern = access_pattern;
-    kernel.dfb_bindings.push_back(binding);
+    kernel.dfb_bindings.push_back(KernelSpec::DFBBinding{
+        .dfb_spec_name = dfb_name,
+        .local_accessor_name = accessor_name,
+        .endpoint_type = endpoint_type,
+        .access_pattern = access_pattern,
+    });
 }
 
 // Helper to create a minimal valid ProgramSpec with one kernel and one DFB
@@ -138,7 +142,8 @@ ProgramSpec MakeMinimalValidProgramSpec() {
 // Test Fixtures
 // ============================================================================
 
-// Base fixture for validation tests - uses arch override to simulate Quasar
+// Base fixture for validation tests - uses arch override to "fake" Quasar
+// TODO: This is gross. Replace with a Quasar mock device.
 class ProgramSpecTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -154,6 +159,7 @@ private:
 
 // Fixture for tests that need actual Program creation (requires Quasar hardware)
 // These tests are skipped when not running on Quasar
+// TODO: This is gross. Unnecessary after adding a Quasar mock device.
 class ProgramSpecHappyPathTest : public ProgramSpecTest {
 protected:
     void SetUp() override {
@@ -366,7 +372,7 @@ TEST_F(ProgramSpecTest, DMKernelExceedingMaxThreadsFails) {
     ProgramSpec spec;
     spec.program_id = "test_program";
 
-    // Quasar has 8 DM cores per node
+    // Quasar has 8 DM cores per node (we reserve 2 for internal use)
     auto kernel = MakeMinimalDMKernel("kernel", node, 9);  // Too many threads!
     spec.kernels = {kernel};
     spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
@@ -388,6 +394,7 @@ TEST_F(ProgramSpecTest, ComputeKernelExceedingMaxThreadsFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+// Remove once WH/BH is implemented
 TEST_F(ProgramSpecTest, DMKernelWithoutGen2ConfigFails) {
     NodeCoord node{0, 0};
 
@@ -423,6 +430,7 @@ TEST_F(ProgramSpecTest, DMKernelWithNoConfigAtAllFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+// Remove once implemented
 TEST_F(ProgramSpecTest, RemoteDFBFails) {
     // Remote DFBs are not yet implemented
     NodeCoord node{0, 0};
@@ -445,6 +453,7 @@ TEST_F(ProgramSpecTest, RemoteDFBFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+// Remove once implemented
 TEST_F(ProgramSpecTest, BorrowedMemoryDFBFails) {
     // Borrowed memory DFBs are not yet implemented
     NodeCoord node{0, 0};
@@ -467,6 +476,7 @@ TEST_F(ProgramSpecTest, BorrowedMemoryDFBFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+// Remove once implemented
 TEST_F(ProgramSpecTest, DFBAliasingFails) {
     // DFB aliasing is not yet implemented
     NodeCoord node{0, 0};
@@ -489,6 +499,7 @@ TEST_F(ProgramSpecTest, DFBAliasingFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+// Remove once implemented
 TEST_F(ProgramSpecTest, SemaphoresFail) {
     // Semaphores are not yet implemented for Quasar
     ProgramSpec spec = MakeMinimalValidProgramSpec();
@@ -501,6 +512,7 @@ TEST_F(ProgramSpecTest, SemaphoresFail) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+// Remove once implemented
 TEST_F(ProgramSpecTest, KernelSemaphoreBindingsFail) {
     // Semaphore bindings are not yet implemented
     ProgramSpec spec = MakeMinimalValidProgramSpec();
@@ -732,16 +744,15 @@ TEST_F(ProgramSpecTest, DFBNotInAnyWorkerSpecFails) {
 }
 
 // ============================================================================
-// SECTION 4: Happy Path Tests
+// SECTION 4: Programs Creation Tests
 // ============================================================================
 // These verify that valid configurations succeed.
-// NOTE: These tests require Quasar hardware because Program creation
-// needs full HAL support. They are skipped on other architectures.
+// NOTE: Program creation needs full HAL support.
+// TODO: Enable these tests with a Quasar mock device.
 
 TEST_F(ProgramSpecHappyPathTest, MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
-    // Should not throw
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
@@ -809,14 +820,14 @@ TEST_F(ProgramSpecHappyPathTest, MultipleWorkersOnDifferentNodesSucceeds) {
 }
 
 TEST_F(ProgramSpecHappyPathTest, MaxDMThreadsSucceeds) {
-    // Use exactly 8 DM threads (the maximum)
+    // Use exactly 6 DM threads (the maximum available to the user)
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.program_id = "max_dm_threads";
 
-    auto producer = MakeMinimalDMKernel("producer", node, 4);
-    auto consumer = MakeMinimalDMKernel("consumer", node, 4);  // Total: 8
+    auto producer = MakeMinimalDMKernel("producer", node, 3);
+    auto consumer = MakeMinimalDMKernel("consumer", node, 3);  // Total: 6
     auto dfb = MakeMinimalDFB("dfb", node);
 
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
@@ -830,7 +841,7 @@ TEST_F(ProgramSpecHappyPathTest, MaxDMThreadsSucceeds) {
 }
 
 TEST_F(ProgramSpecHappyPathTest, MaxComputeThreadsSucceeds) {
-    // Use exactly 4 compute threads (the maximum)
+    // Use exactly 4 compute threads (the maximum available)
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -879,14 +890,6 @@ TEST_F(ProgramSpecHappyPathTest, MultipleDFBsSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, SkipValidationSucceeds) {
-    // Even an invalid spec should succeed if skip_validation is true
-    // (This tests the skip_validation flag, not that we should use it with invalid specs)
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-
-    EXPECT_NO_THROW(MakeProgramFromSpec(spec, /*skip_validation=*/true));
-}
-
 TEST_F(ProgramSpecHappyPathTest, CompilerOptionsDefinesSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
@@ -920,6 +923,7 @@ TEST_F(ProgramSpecHappyPathTest, RuntimeArgsSchemaSucceeds) {
 // SECTION 5: Edge Cases and Boundary Tests
 // ============================================================================
 // NOTE: These also require Quasar hardware for Program creation.
+// TODO: Enable these tests with a Quasar mock device.
 
 TEST_F(ProgramSpecHappyPathTest, NodeRangeSetTargetNodesSucceeds) {
     // Test with NodeRangeSet (multiple disjoint ranges)
@@ -980,6 +984,192 @@ TEST_F(ProgramSpecHappyPathTest, ValidUnpackToDestModeSucceeds) {
     }
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+}
+
+// ============================================================================
+// SECTION 6: Processor Assignment Edge Cases
+// ============================================================================
+// These tests document cases that expose limitations in our current processor
+// assignment implementation. There are two categories:
+//
+// A) GREEDY ALGORITHM FAILURES
+//    These are solvable with the simplifying assumption intact, but our naive
+//    greedy algorithm fails. A smarter algorithm (constraint propagation, or
+//    "assign multi-node kernels first") would handle these.
+//    TODO: Fix the algorithm to handle these cases.
+//
+// B) TRUE SIMPLIFYING ASSUMPTION VIOLATIONS
+//    These are fundamentally unsolvable while maintaining the assumption that
+//    "a kernel uses the same processor indices on all nodes it runs on."
+//    When we encounter these in production, the assumption must be removed.
+//
+// Our plan is to keep the simplifying assumption for now.
+// But, with Op development on Quasar soon underway, we need a clear message
+// if the assumption is ever violated.
+
+// Category A: Greedy Algorithm Failure
+// This test IS solvable with the simplifying assumption - a smarter algorithm would work.
+// TODO: Once this test passes, remove this TODO. The algorithm has been fixed!
+TEST_F(ProgramSpecHappyPathTest, GreedyAlgorithmFailure_OrderDependentAssignment) {
+    // This test constructs a valid ProgramSpec that SHOULD work, but MAY fail
+    // with our naive greedy processor assignment algorithm.
+    //
+    // Scenario:
+    //   - K_shared: A DM kernel spanning nodes (0,0) and (1,0), using 2 threads
+    //   - K_node0_only: A DM kernel on node (0,0) only, using 4 threads
+    //   - K_node1_only: A DM kernel on node (1,0) only, using 4 threads
+    //   - Two WorkerSpecs, one per node
+    //
+    // SOLUTION EXISTS:
+    //   K_shared gets processors 6-7 on both nodes
+    //   K_node0_only gets processors 2-5 on node (0,0)
+    //   K_node1_only gets processors 2-5 on node (1,0)
+    //
+    // A smarter algorithm (e.g., assign multi-node kernels first, or use
+    // constraint propagation) would find this solution.
+
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+    NodeRangeSet both_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
+
+    ProgramSpec spec;
+    spec.program_id = "simplifying_assumption_test";
+
+    // K_shared spans both nodes, needs 2 DM threads
+    auto k_shared = MakeMinimalDMKernel("k_shared", both_nodes, 2);
+
+    // K_node0_only runs only on node (0,0), needs 6 DM threads
+    // This will "claim" processors 0-5 on node (0,0)
+    auto k_node0_only = MakeMinimalDMKernel("k_node0_only", node0, 4);
+
+    // K_node1_only runs only on node (1,0), needs 6 DM threads
+    // This will "claim" processors 0-5 on node (1,0)
+    auto k_node1_only = MakeMinimalDMKernel("k_node1_only", node1, 4);
+
+    // DFB for the shared kernel (needs producer + consumer)
+    auto dfb_shared = MakeMinimalDFB("dfb_shared", both_nodes);
+    BindDFBToKernel(k_shared, "dfb_shared", "shared_out", KernelSpec::DFBEndpointType::PRODUCER);
+
+    // Need a consumer for dfb_shared - let's add a simple consumer kernel
+    auto k_consumer = MakeMinimalDMKernel("k_consumer", both_nodes, 1);
+    BindDFBToKernel(k_consumer, "dfb_shared", "shared_in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    // DFBs for the node-specific kernels
+    auto dfb_node0 = MakeMinimalDFB("dfb_node0", node0);
+    BindDFBToKernel(k_node0_only, "dfb_node0", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    // Need consumer - reuse k_shared as consumer on node0
+    auto k_node0_consumer = MakeMinimalDMKernel("k_node0_consumer", node0, 1);
+    BindDFBToKernel(k_node0_consumer, "dfb_node0", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    auto dfb_node1 = MakeMinimalDFB("dfb_node1", node1);
+    BindDFBToKernel(k_node1_only, "dfb_node1", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    auto k_node1_consumer = MakeMinimalDMKernel("k_node1_consumer", node1, 1);
+    BindDFBToKernel(k_node1_consumer, "dfb_node1", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {k_shared, k_consumer, k_node0_only, k_node0_consumer, k_node1_only, k_node1_consumer};
+    spec.dataflow_buffers = {dfb_shared, dfb_node0, dfb_node1};
+
+    // Two WorkerSpecs, one per node
+    // Worker 0 handles node (0,0)
+    spec.workers = std::vector<WorkerSpec>{
+        MakeMinimalWorker(
+            "worker_node0",
+            node0,
+            {"k_shared", "k_consumer", "k_node0_only", "k_node0_consumer"},
+            {"dfb_shared", "dfb_node0"}),
+        MakeMinimalWorker(
+            "worker_node1",
+            node1,
+            {"k_shared", "k_consumer", "k_node1_only", "k_node1_consumer"},
+            {"dfb_shared", "dfb_node1"}),
+    };
+
+    // EXPECTED BEHAVIOR with current implementation: FAILS (greedy algorithm)
+    // Update this test to use EXPECT_NO_THROW after the algorithm is fixed.
+    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+}
+
+// Category B: True Simplifying Assumption Violation
+// This test is UNSOLVABLE with the simplifying assumption - no algorithm can help.
+// When this case arises in production, the assumption must be removed from the codebase.
+TEST_F(ProgramSpecHappyPathTest, SimplifyingAssumptionViolation_OverlappingMultiNodeKernels) {
+    // This test constructs a valid ProgramSpec that CANNOT work with the
+    // simplifying assumption, regardless of how clever the solver is.
+    //
+    // Scenario (the "triangle of doom"):
+    //   - Kernel A (3 threads) runs on nodes (0,0) and (0,1)
+    //   - Kernel B (3 threads) runs on nodes (0,0) and (0,2)
+    //   - Kernel C (3 threads) runs on nodes (0,1) and (0,2)
+    //
+    // Per-node requirements (6 DM cores available per node):
+    //   Node (0,0): A + B = 6 threads
+    //   Node (0,1): A + C = 6 threads
+    //   Node (0,2): B + C = 6 threads
+    //
+    // With simplifying assumption (same processors on all nodes per kernel):
+    //   Node (0,0): A and B must partition [2-7]. Say A=[2-4], B=[5-7].
+    //   Node (0,1): A must be [2-4] (from above). So C=[5-7].
+    //   Node (0,2): B must be [5-7], C must be [5-7]. CONFLICT!
+    //
+    // No assignment algorithm can solve this. The simplifying assumption
+    // must be removed to handle this case.
+
+    NodeCoord node_00{0, 0};
+    NodeCoord node_01{0, 1};
+    NodeCoord node_02{0, 2};
+
+    // Create NodeRangeSets for each kernel's target nodes
+    NodeRangeSet nodes_A(std::set<NodeRange>{NodeRange{node_00, node_00}, NodeRange{node_01, node_01}});
+    NodeRangeSet nodes_B(std::set<NodeRange>{NodeRange{node_00, node_00}, NodeRange{node_02, node_02}});
+    NodeRangeSet nodes_C(std::set<NodeRange>{NodeRange{node_01, node_01}, NodeRange{node_02, node_02}});
+    NodeRangeSet all_nodes(
+        std::set<NodeRange>{NodeRange{node_00, node_00}, NodeRange{node_01, node_01}, NodeRange{node_02, node_02}});
+
+    ProgramSpec spec;
+    spec.program_id = "triangle_of_doom";
+
+    // Three kernels, each spanning two nodes with 4 DM threads
+    auto kernel_a = MakeMinimalDMKernel("kernel_a", nodes_A, 4);
+    auto kernel_b = MakeMinimalDMKernel("kernel_b", nodes_B, 4);
+    auto kernel_c = MakeMinimalDMKernel("kernel_c", nodes_C, 4);
+
+    // We need DFBs with producer/consumer pairs. Create minimal dataflow.
+    // Each kernel produces to its own DFB, consumed by a shared sink kernel.
+    auto dfb_a = MakeMinimalDFB("dfb_a", nodes_A);
+    auto dfb_b = MakeMinimalDFB("dfb_b", nodes_B);
+    auto dfb_c = MakeMinimalDFB("dfb_c", nodes_C);
+
+    BindDFBToKernel(kernel_a, "dfb_a", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(kernel_b, "dfb_b", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(kernel_c, "dfb_c", "out", KernelSpec::DFBEndpointType::PRODUCER);
+
+    // Consumer kernels for each DFB (1 thread each, same node coverage as DFB)
+    auto consumer_a = MakeMinimalDMKernel("consumer_a", nodes_A, 1);
+    auto consumer_b = MakeMinimalDMKernel("consumer_b", nodes_B, 1);
+    auto consumer_c = MakeMinimalDMKernel("consumer_c", nodes_C, 1);
+
+    BindDFBToKernel(consumer_a, "dfb_a", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer_b, "dfb_b", "in", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer_c, "dfb_c", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {kernel_a, kernel_b, kernel_c, consumer_a, consumer_b, consumer_c};
+    spec.dataflow_buffers = {dfb_a, dfb_b, dfb_c};
+
+    // Three WorkerSpecs, one per node
+    spec.workers = std::vector<WorkerSpec>{
+        MakeMinimalWorker(
+            "worker_00", node_00, {"kernel_a", "kernel_b", "consumer_a", "consumer_b"}, {"dfb_a", "dfb_b"}),
+        MakeMinimalWorker(
+            "worker_01", node_01, {"kernel_a", "kernel_c", "consumer_a", "consumer_c"}, {"dfb_a", "dfb_c"}),
+        MakeMinimalWorker(
+            "worker_02", node_02, {"kernel_b", "kernel_c", "consumer_b", "consumer_c"}, {"dfb_b", "dfb_c"}),
+    };
+
+    // EXPECTED BEHAVIOR with current implementation: FAILS (simplifying assumption)
+    //
+    // Note: If GreedyAlgorithmFailure test passes but this test still fails,
+    // that's the expected intermediate state (smarter algorithm, assumption intact).
+    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
 }  // namespace
