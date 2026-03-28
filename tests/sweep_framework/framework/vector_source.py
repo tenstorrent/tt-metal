@@ -105,22 +105,27 @@ class VectorExportSource(VectorSource):
             self.export_dir = export_dir
 
     def _find_module_files(self, module_name: str) -> list[pathlib.Path]:
-        """Find all JSON files for a given module (including mesh variants)"""
+        """Find all JSON files for a given module (including grouped variants)."""
         all_files = []
 
-        # First try exact match (backward compatibility)
+        # First try exact match
         exact_match = list(self.export_dir.glob(f"{module_name}.json"))
         if exact_match:
             all_files.extend(exact_match)
 
-        # Also look for mesh-suffixed variants (e.g., module__mesh_2x4.json)
-        mesh_variants = list(self.export_dir.glob(f"{module_name}__mesh_*.json"))
+        # Also look for grouped variants using the dotted suffix format.
+        mesh_variants = list(self.export_dir.glob(f"{module_name}.mesh_*.json"))
         if mesh_variants:
             logger.info(f"Found {len(mesh_variants)} mesh variant file(s) for module '{module_name}'")
             all_files.extend(sorted(mesh_variants))  # Sort for consistent ordering
 
+        hardware_variants = list(self.export_dir.glob(f"{module_name}.hw_*.json"))
+        if hardware_variants:
+            logger.info(f"Found {len(hardware_variants)} hardware variant file(s) for module '{module_name}'")
+            all_files.extend(sorted(hardware_variants))
+
         if all_files:
-            return all_files
+            return sorted(set(all_files))
 
         logger.warning(f"No vector file found for module '{module_name}' in {self.export_dir}")
         try:
@@ -167,7 +172,7 @@ class VectorExportSource(VectorSource):
             return None
 
     def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
-        """Load test vectors from vectors_export directory (including mesh variants)
+        """Load test vectors from vectors_export directory (including grouped variants)
 
         If MESH_DEVICE_SHAPE environment variable is set, filters vectors to only load
         those matching the current machine's configuration.
@@ -416,12 +421,12 @@ class VectorExportSource(VectorSource):
         return all_vectors
 
     def get_available_suites(self, module_name: str) -> list[str]:
-        """Get list of available suites for a module from vectors_export directory (including mesh variants)"""
+        """Get list of available suites for a module from vectors_export directory (including grouped variants)."""
         module_files = self._find_module_files(module_name)
         if not module_files:
             return []
 
-        # Collect unique suite names across all mesh variant files
+        # Collect unique suite names across all grouped variant files
         all_suites = set()
         for module_file in module_files:
             try:

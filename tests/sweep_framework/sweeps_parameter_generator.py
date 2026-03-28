@@ -14,7 +14,7 @@ import sys
 import ast
 from collections import defaultdict
 
-from framework.constants import format_mesh_suffix
+from framework.constants import format_hardware_suffix, format_mesh_suffix
 from framework.permutations import permutations
 from framework.serialize import serialize_structured
 from framework.statuses import VectorStatus, VectorValidity
@@ -27,6 +27,7 @@ SWEEP_SOURCES_DIR = SWEEPS_DIR / "sweeps"
 # Shuffle control (set in __main__ when --randomize is provided)
 SHUFFLE_SEED = None
 DO_RANDOMIZE = False
+VECTOR_GROUPING_MODE = "mesh"
 
 
 def get_mesh_shape_from_vector(vector):
@@ -102,6 +103,50 @@ def group_vectors_by_mesh_shape(vectors):
     for vector in vectors:
         mesh_shape = get_mesh_shape_from_vector(vector)
         grouped[mesh_shape].append(vector)
+
+    return grouped
+
+
+def _get_traced_machine_entries(vector):
+    """Normalize traced_machine_info to a list of dict entries."""
+    machine_info = vector.get("traced_machine_info")
+    if isinstance(machine_info, dict):
+        return [machine_info]
+    if isinstance(machine_info, list):
+        return [entry for entry in machine_info if isinstance(entry, dict)]
+    return []
+
+
+def get_hardware_from_vector(vector):
+    """Extract a hardware tuple from traced_machine_info when present."""
+    for entry in _get_traced_machine_entries(vector):
+        board_type = entry.get("board_type")
+        device_series = entry.get("device_series")
+        card_count = entry.get("card_count")
+
+        if isinstance(device_series, list):
+            device_series = device_series[0] if device_series else None
+
+        if not board_type and not device_series and card_count is None:
+            continue
+
+        if card_count is not None:
+            try:
+                card_count = int(card_count)
+            except (TypeError, ValueError):
+                card_count = 0
+
+        return (board_type or "unknown", device_series or "unknown", card_count)
+
+    return None
+
+
+def group_vectors_by_hardware(vectors):
+    """Group vectors by their traced hardware tuple."""
+    grouped = defaultdict(list)
+    for vector in vectors:
+        hardware = get_hardware_from_vector(vector)
+        grouped[hardware].append(vector)
 
     return grouped
 
@@ -272,53 +317,53 @@ def validate_exported_vectors(export_path, module_name, suite_name):
 
 
 def export_suite_vectors_json(module_name, suite_name, vectors):
-    """Export test vectors to JSON files grouped by mesh shape with atomic writes and deduplication.
+    """Export test vectors to grouped JSON files with atomic writes and deduplication.
 
-    Vectors are grouped by mesh_device_shape and written to separate files:
-    - model_traced.op__mesh_2x4.json (for [2, 4] mesh)
-    - model_traced.op.json (for unknown mesh — no suffix, runs on any machine)
+    Supported grouping modes:
+    - mesh: vectors are grouped by mesh_device_shape and written to files like
+      model_traced.op.mesh_2x4.json
+    - hw: vectors are grouped by traced hardware and written to files like
+      model_traced.op.hw_wormhole_n300_1c.json
 
-    IMPORTANT: The mesh suffix is used ONLY for filename routing, NOT for modifying
-    the sweep_name field. This ensures stable full_test_name and input_hash values
-    for historical comparison in Superset dashboards. The mesh configuration is
-    already captured in traced_machine_info within the vector data.
+    IMPORTANT: The grouping suffix is used ONLY for filename routing, NOT for
+    modifying the sweep_name field. This ensures stable full_test_name and
+    input_hash values for historical comparison in Superset dashboards. The
+    routing metadata is already captured in traced_machine_info within the vector data.
 
     Args:
         module_name: Name of the test module
         suite_name: Name of the test suite
         vectors: List of vector dictionaries to export
     """
-    # Group vectors by mesh shape
-    grouped_vectors = group_vectors_by_mesh_shape(vectors)
+    if VECTOR_GROUPING_MODE == "hw":
+        grouped_vectors = group_vectors_by_hardware(vectors)
+        format_group_suffix = lambda group_key: format_hardware_suffix(*group_key)
+    else:
+        grouped_vectors = group_vectors_by_mesh_shape(vectors)
+        format_group_suffix = format_mesh_suffix
 
-    # Export each mesh group to a separate file
-    for mesh_shape, mesh_vectors in grouped_vectors.items():
-        # Skip empty groups
-        if not mesh_vectors:
+    # Export each group to a separate file
+    for group_key, grouped_subset in grouped_vectors.items():
+        if not grouped_subset:
             continue
 
-        # Generate mesh-specific filename (NOT sweep_name).
-        # None mesh_shape means no routing restriction - export without mesh suffix
-        # so any runner can pick up the file.
-        if mesh_shape is not None:
-            mesh_suffix = format_mesh_suffix(mesh_shape)
-            mesh_module_name = f"{module_name}{mesh_suffix}"
-        else:
-            mesh_module_name = module_name
+        # A None group means the vector has no routing restriction, so keep the
+        # base module name and let any compatible runner pick up the file.
+        grouped_module_name = module_name if group_key is None else f"{module_name}{format_group_suffix(group_key)}"
 
-        # Export vectors WITHOUT modifying sweep_name
-        # The mesh info is already in traced_machine_info; sweep_name stays stable
-        # for historical comparison (full_test_name in Superset)
-        _export_mesh_vectors_to_file(mesh_module_name, suite_name, mesh_vectors)
+        # Export vectors WITHOUT modifying sweep_name.
+        # Routing info is already present in traced_machine_info; sweep_name stays
+        # stable for historical comparison (full_test_name in Superset).
+        _export_grouped_vectors_to_file(grouped_module_name, suite_name, grouped_subset)
 
 
-def _export_mesh_vectors_to_file(module_name, suite_name, vectors):
-    """Internal function to export vectors for a specific mesh shape to JSON file.
+def _export_grouped_vectors_to_file(module_name, suite_name, vectors):
+    """Internal function to export one grouped vector file.
 
     Args:
-        module_name: Name including mesh suffix (e.g., 'model_traced.gelu__mesh_2x4')
+        module_name: Name including any grouping suffix
         suite_name: Name of the test suite
-        vectors: List of vector dictionaries for this mesh shape
+        vectors: List of vector dictionaries for this group
     """
     EXPORT_DIR_PATH = SWEEPS_DIR / "vectors_export"
     EXPORT_PATH = EXPORT_DIR_PATH / f"{module_name}.json"
@@ -411,10 +456,15 @@ def _export_mesh_vectors_to_file(module_name, suite_name, vectors):
                 f"If issues persist, delete the file and regenerate."
             )
 
-        # Extract mesh shape from module name for logging
-        if "__mesh_" in module_name:
-            mesh_info = module_name.split("__mesh_")[1]
+        # Extract grouping suffix from module name for logging.
+        if ".mesh_" in module_name:
+            mesh_info = module_name.split(".mesh_")[1]
             logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name} (mesh {mesh_info}).")
+        elif ".hw_" in module_name:
+            hardware_info = module_name.split(".hw_")[1]
+            logger.info(
+                f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name} (hardware {hardware_info})."
+            )
         else:
             logger.info(f"SWEEPS: Generated {len(vectors)} test vectors for suite {suite_name}.")
     except (IOError, OSError) as e:
@@ -436,9 +486,6 @@ def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name
     if skip_modules:
         skip_modules_set = {name.strip() for name in skip_modules.split(",")}
         logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
-
-    if suite_name:
-        logger.info(f"Filtering to suite: {suite_name}")
 
     if not module_name:
         # Determine which directory to search based on model_traced_only flag
@@ -476,29 +523,6 @@ def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name
 
 
 if __name__ == "__main__":
-    # Parse --model-traced argument FIRST to set environment variable
-    # This must happen BEFORE any other imports so sweep modules see the filter setting
-    import sys
-
-    model_traced_arg = None
-    for i, arg in enumerate(sys.argv):
-        if arg == "--model-traced" and i + 1 < len(sys.argv):
-            model_traced_arg = sys.argv[i + 1]
-            break
-        elif arg.startswith("--model-traced="):
-            model_traced_arg = arg.split("=", 1)[1]
-            break
-
-    # Set environment variable BEFORE any sweep modules are imported
-    if model_traced_arg == "lead":
-        os.environ["TTNN_LEAD_MODELS_ONLY"] = "1"
-        logger.info("=" * 80)
-        logger.info("LEAD MODELS FILTER ENABLED: Only loading DeepSeek V3 configurations")
-        logger.info(f"Environment variable set: TTNN_LEAD_MODELS_ONLY={os.environ.get('TTNN_LEAD_MODELS_ONLY')}")
-        logger.info("=" * 80)
-    else:
-        os.environ["TTNN_LEAD_MODELS_ONLY"] = "0"
-
     parser = argparse.ArgumentParser(
         prog="Sweep Test Vector Generator",
         description="Generate test vector suites for the specified module.",
@@ -556,18 +580,37 @@ if __name__ == "__main__":
         help="Path to a master trace JSON file (e.g., ttnn_operations_master_*.json). "
         "Overrides the default file resolution in MasterConfigLoader.",
     )
+    parser.add_argument(
+        "--group-by",
+        required=False,
+        type=str,
+        default="mesh",
+        choices=["mesh", "hw"],
+        help="Group exported vector files by 'mesh' (default) or 'hw'.",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
-    # Log filter status (env var was already set at the start of __main__)
+    # Set environment variable before importing MasterConfigLoader or any sweep module
     if args.model_traced == "lead":
-        logger.info("Lead models filter enabled: Only loading DeepSeek V3 configurations")
+        os.environ["TTNN_LEAD_MODELS_ONLY"] = "1"
+        logger.info("=" * 80)
+        logger.info("Lead models filter enabled.")
+        logger.info(
+            "Set TTNN_LEAD_MODELS_ONLY=%s for tests.sweep_framework.master_config_loader_v2 "
+            "to filter traced configs to lead-model sources from model_tracer/sweep_manifest.yaml",
+            os.environ.get("TTNN_LEAD_MODELS_ONLY"),
+        )
+        logger.info("=" * 80)
+    else:
+        os.environ["TTNN_LEAD_MODELS_ONLY"] = "0"
 
-    global SWEEPS_TAG
     SWEEPS_TAG = args.tag
+    VECTOR_GROUPING_MODE = args.group_by
 
     logger.info(f"Running current generation with tag: {SWEEPS_TAG}.")
     logger.info("Vectors will be exported to: tests/sweep_framework/vectors_export/")
+    logger.info(f"Vector export grouping mode: {VECTOR_GROUPING_MODE}")
 
     # Enable reproducible shuffling only when --randomize is provided
     if args.randomize is not None:
@@ -578,10 +621,13 @@ if __name__ == "__main__":
         DO_RANDOMIZE = False
         SHUFFLE_SEED = None
 
-    # Import MasterConfigLoader NOW (after env var is set)
+    # Import MasterConfigLoader only after TTNN_LEAD_MODELS_ONLY is set.
+    # This module snapshots the env var into shared filter state at import time,
+    # and sweep modules use that state immediately when they build parameters on import.
     from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 
     # Configure database mode if --use-db flag is provided
+    # DEPRECATE TO REMOVE COMPLEXITY. ALWAYS RELY ON PRE-GENERATION OF CONFIGS.
     if args.use_db:
         MasterConfigLoader.set_database_mode(True)
         logger.info("Database mode enabled: Loading configurations from PostgreSQL")
