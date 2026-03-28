@@ -404,7 +404,6 @@ class LMHeadSampling:
         )
         print("[lm_head_sampling] semaphore addrs done", flush=True)
         # Calculate packet size and page info for CCL broadcast
-        packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
 
         # Get tile info from input tensor (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
@@ -425,7 +424,7 @@ class LMHeadSampling:
         rms_interpreted_tile = half_16x32_tile if is_16x32_tile else full_32x32_tile
         rms_tile_height, rms_tile_width = rms_interpreted_tile.tile_shape
         rms_tile_size = rms_interpreted_tile.get_tile_size(data_format)
-        rms_num_tiles = (input_shape[0] * input_shape[1]) // (rms_tile_height * rms_tile_width)
+        rms_num_tiles = 7  # (input_shape[0] * input_shape[1]) // (rms_tile_height * rms_tile_width)
         print(f"[lm_head_sampling] rms_num_tiles={rms_num_tiles}", flush=True)
         # Get output tile info
         output_tensor_sample = output_tensors_per_device[0]
@@ -1147,7 +1146,6 @@ class LMHeadSampling:
                         int(ref_token_dev.buffer_address()),
                     ]
 
-                # bcast_socket_page_size = verify_socket_page_size if is_mtp_verify_stage else packet_size_bytes
                 brisc_bcast_common_args = bcast_config.get_brisc_common_rt_args(coord) + [
                     int(final_core_phys.x),
                     int(final_core_phys.y),
@@ -1396,7 +1394,9 @@ class LMHeadSampling:
                         cbs_list.append(argmax_socket_cb_descriptor)
 
                 bcast_pkt_cb_descriptor = bcast_config.get_cb_descriptor(coord)
-                # if bcast_pkt_cb_descriptor is not None:
+                if bcast_pkt_cb_descriptor is not None:
+                    cbs_list.append(bcast_pkt_cb_descriptor)
+
                 # CB 30: CCL broadcast packet buffer (only in multi-device mode)
 
                 print(f"[OP:{device_idx}:J] semaphore descriptors", flush=True)

@@ -273,9 +273,7 @@ bool socket_wait_for_pages(
     const SocketReceiverInterface& socket, uint32_t num_pages, uint32_t early_exit_iter_count = 0) {
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t num_bytes = num_pages * socket.page_size;
-    DPRINT << ">swfpt num_bytes: " << num_bytes << ENDL();
-    DPRINT << "fifo_curr_size: " << socket.fifo_curr_size << ENDL();
-    DPRINT << "bytes_acked: " << socket.bytes_acked << ENDL();
+
     ASSERT(num_bytes <= socket.fifo_curr_size);
     if (socket.read_ptr + num_bytes >= socket.fifo_curr_size + socket.fifo_addr) {
         num_bytes += socket.fifo_total_size - socket.fifo_curr_size;

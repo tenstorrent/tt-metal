@@ -150,10 +150,11 @@ struct Broadcast {
             // ================================================================
             if constexpr (IsWorkerCore) {
                 PacketHeaderPool::reset();
-
+                DPRINT << ">fc3d 0" << ENDL();
                 std::array<tt::tt_fabric::WorkerToFabricEdmSender, CTArgs::num_connections> connections;
                 std::array<volatile PACKET_HEADER_TYPE*, CTArgs::num_connections> headers;
                 size_t arg_idx = args.per_core_rta_arg_idx_offset;
+                DPRINT << ">fc3d 1" << ENDL();
                 for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
                     const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
                     const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
@@ -168,7 +169,7 @@ struct Broadcast {
                         connections[connection_idx].open_finish();
                     }
                 }
-
+                DPRINT << ">fc3d 2" << ENDL();
                 const uint64_t dst_noc_base = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address0, 0);
                 std::array<uint64_t, CTArgs::num_links> sem_nocs;
                 std::array<volatile tt_l1_ptr uint32_t*, CTArgs::num_links> sem_ptrs;
@@ -177,7 +178,7 @@ struct Broadcast {
                         safe_get_noc_addr(args.my_noc_x, args.my_noc_y, args.sem_bank_addrs[link_idx], 0);
                     sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
                 }
-
+                DPRINT << ">fc3d 3" << ENDL();
                 auto send_chunk = [&](uint32_t connection_idx,
                                       uint32_t link_idx,
                                       uint32_t src_base_addr,
@@ -194,7 +195,7 @@ struct Broadcast {
                     connections[connection_idx].send_payload_flush_non_blocking_from_address(
                         reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
                 };
-
+                DPRINT << ">fc3d 4" << ENDL();
                 std::array<uint32_t, CTArgs::num_links> link_counters = {};
                 auto forward_chunks = [&](uint32_t src_base_addr, auto&& wait_for_link_chunk) {
                     uint32_t current_link = 0;
@@ -230,9 +231,10 @@ struct Broadcast {
                 //   * leaf node (num_neighbors == 0), where forwarding loops are no-ops.
                 // In the leaf case, num_links remains configured (> 0), wait/reset semantics are still
                 // preserved for non-root nodes, and no fabric send occurs due to zero neighbors.
-
                 if constexpr (CTArgs::is_root) {
+                    DPRINT << ">fc3d 5" << ENDL();
                     cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                    DPRINT << ">fc3d 6" << ENDL();
                     const uint32_t src = get_read_ptr(CTArgs::cb0_id);
                     constexpr uint32_t tensor_size_bytes = CTArgs::tensor0_page_size * CTArgs::num_pages_to_read;
                     noc_async_write(src, dst_noc_base, tensor_size_bytes);
@@ -240,6 +242,7 @@ struct Broadcast {
                     forward_chunks(src, no_wait);
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                 } else {
+                    DPRINT << ">fc3d 7" << ENDL();
                     const uint32_t src = args.tensor_address0;
                     auto sem_wait = [&](uint32_t link_idx, uint32_t link_threshold) {
                         noc_semaphore_wait_min(sem_ptrs[link_idx], link_threshold);
@@ -250,14 +253,15 @@ struct Broadcast {
                             unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
                         }
                     }
-                    DPRINT << "<fc3d" << ENDL();
+                    DPRINT << ">fc3d 8" << ENDL();
                 }
-
+                DPRINT << ">fc3d 9" << ENDL();
                 for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
                     connections[i].close();
                 }
-
+                DPRINT << ">fc3d 10" << ENDL();
                 noc_async_full_barrier();
+                DPRINT << ">fc3d 11" << ENDL();
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

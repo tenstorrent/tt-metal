@@ -9,9 +9,11 @@ rank_bindings:
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 24,25,26,27,28,29,30,31
-    TT_METAL_DPRINT_FILE: "rank_1.txt"
+    TT_METAL_DPRINT_FILE: "base_stage.txt"
+    TT_METAL_INSPECTOR_RPC: "1"
+    TT_METAL_INSPECTOR: "1"
     TT_METAL_DPRINT_CORES: all
-    TT_METAL_DPRINT_CHIPS: all
+    TT_METAL_DPRINT_CHIPS: "3"
 - rank: 2
   mesh_id: 2
   mesh_host_rank: 0
@@ -22,7 +24,7 @@ rank_bindings:
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 8,9,10,11,12,13,14,15
-    TT_METAL_DPRINT_FILE: "rank_3.txt"
+    TT_METAL_DPRINT_FILE: "spec_stage.txt"
     TT_METAL_DPRINT_CORES: all
     TT_METAL_DPRINT_CHIPS: all
 mesh_graph_desc_path: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_split_4x2_multi_mesh.textproto

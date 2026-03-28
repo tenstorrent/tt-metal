@@ -119,19 +119,24 @@ FORCE_INLINE void mcast_send_with_state(uint32_t src_local_addr, uint32_t dst_lo
             noc_nonposted_writes_acked[noc] += num_dests * num_packets;
         }
     }
-    if constexpr (set_size && set_addresses) {
-        if (len_bytes > NOC_MAX_BURST_SIZE) {
-            while (!noc_cmd_buf_ready(noc, cmd_buf));
-            NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, NOC_MAX_BURST_SIZE);
-            while (len_bytes > NOC_MAX_BURST_SIZE) {
-                while (!noc_cmd_buf_ready(noc, cmd_buf));
-                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
-                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
-                NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-                src_local_addr += NOC_MAX_BURST_SIZE;
-                dst_local_addr += NOC_MAX_BURST_SIZE;
-                len_bytes -= NOC_MAX_BURST_SIZE;
-            }
+
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
+
+    if constexpr (set_size) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, len_bytes);
+    }
+    if constexpr (set_addresses) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_addr);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_local_addr);
+    }
+    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        if constexpr (posted) {
+            noc_posted_writes_num_issued[noc] += 1;
+        } else {
+            noc_nonposted_writes_num_issued[noc] += 1;
+            noc_nonposted_writes_acked[noc] += num_dests;
         }
     }
 }
@@ -303,15 +308,18 @@ struct Mcast {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
                 // Compute multicast NOC address and store for later use
+                DPRINT << ">mcast i" << ENDL();
                 uint64_t mcast_flag_noc_addr = get_noc_multicast_addr<noc_index>(
                     args.dest_noc_start_x,
                     args.dest_noc_start_y,
                     args.dest_noc_end_x,
                     args.dest_noc_end_y,
                     (uint64_t)(args.data_receiver_semaphore_addr));
+                DPRINT << ">mcast j" << ENDL();
                 volatile tt_l1_ptr uint32_t* data_sender_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)args.data_sender_semaphore_addr;
                 if constexpr (init_noc) {
+                    DPRINT << ">mcast k" << ENDL();
                     noc_semaphore_set(data_sender_semaphore_addr_ptr, INVALID);
                     // Initialize persistent mcast sender
                     init_persistent_mcast_sender<
@@ -320,9 +328,12 @@ struct Mcast {
                         CTArgsT::is_part_of_receiver_grid,
                         linked,
                         posted>(mcast_flag_noc_addr, args.data_sender_semaphore_addr);
+                    DPRINT << ">mcast l" << ENDL();
                     noc_async_posted_writes_flushed();
                 }
+                DPRINT << ">mcast m" << ENDL();
                 noc_semaphore_set(data_sender_semaphore_addr_ptr, VALID);
+                DPRINT << ">mcast n" << ENDL();
             }
 #endif
         }
@@ -403,13 +414,6 @@ struct Mcast {
                 DPRINT << ">mcast 5 wp=" << get_write_ptr(args.dst_cb) << ENDL();
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
-                invalidate_l1_cache();
-                {
-                    auto _p = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(args.dst_cb));
-                    DPRINT << "mrcv @" << get_write_ptr(args.dst_cb) << " [0]=" << (uint32_t)_p[0]
-                           << " [1]=" << (uint32_t)_p[1] << " [2]=" << (uint32_t)_p[2] << " [3]=" << (uint32_t)_p[3]
-                           << ENDL();
-                }
                 cb_push_back(args.dst_cb, args.dst_num_pages);
                 DPRINT << ">mcast 7" << ENDL();
             } else if constexpr (IsMcastGridCore) {

@@ -134,11 +134,12 @@ struct Matmul {
                 cb_wait_front(args.in1, args.k_num_tiles * out_w);
             }
 
+            DPRINT << ">mm reserve" << ENDL();
             // Reserve output tiles
             cb_reserve_back(args.out, out_w);
-
+            DPRINT << "<mm reserve" << ENDL();
             custom_mm_block_init_short<transpose, split_acc, dense_packing>(args.in0, args.in1, args.out, out_w);
-
+            DPRINT << "<mm init" << ENDL();
             if constexpr (CTArgs::fuse_sigmoid || CTArgs::fuse_silu) {
                 // Initialize activation on PACK thread
                 if constexpr (CTArgs::fuse_sigmoid) {
@@ -179,30 +180,40 @@ struct Matmul {
                 }
             } else {
                 // Batch processing - all tiles at once
+                DPRINT << ">mm batch" << ENDL();
                 tile_regs_acquire();
 
+                DPRINT << ">mm batch custom_mm_block" << ENDL();
                 custom_mm_block<finalize, read_transposed>(args.in0, args.in1, 0, 0, 0, args.k_num_tiles, out_w);
 
                 tile_regs_commit();
 
+                DPRINT << ">mm batch tile_regs_wait" << ENDL();
                 tile_regs_wait();
+                DPRINT << ">mm batch pack_tile" << ENDL();
                 for (uint32_t dst_idx = 0; dst_idx < out_w; dst_idx++) {
                     pack_tile(dst_idx, args.out, dst_idx);
                 }
+                DPRINT << ">mm batch trr" << ENDL();
                 tile_regs_release();
+                DPRINT << ">mm batch done" << ENDL();
             }
 
             custom_mm_block_uninit<dense_packing>();
-
+            DPRINT << "<mm uninit" << ENDL();
             // Pop inputs
             if constexpr (pop_in0) {
                 cb_pop_front(args.in0, args.k_num_tiles);
             }
+            DPRINT << "<mm popin0" << ENDL();
+
             if constexpr (pop_in1) {
                 cb_pop_front(args.in1, args.k_num_tiles * out_w);
             }
 
             cb_push_back(args.out, out_w);
+            DPRINT << "<mm pushout" << ENDL();
+
 #endif
         }
     };  // class Op

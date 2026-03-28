@@ -394,23 +394,8 @@ struct Sampling {
                             args.scratch_addr + CTArgs::stage1_local_slot_offset, global_best_score, global_best_index);
                         auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
                         wait_and_reset_semaphore(global_sem_ptr, CTArgs::stage1_expected_remote_incs);
-                        DPRINT << ">s1 wsrt" << ENDL();
-                        invalidate_l1_cache();
-                        for (uint32_t _s = 0; _s < CTArgs::stage1_num_slots; ++_s) {
-                            uint32_t _sa =
-                                args.scratch_addr + CTArgs::stage1_slot_base_offset + _s * CTArgs::winner_page_bytes;
-                            auto _u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(_sa);
-                            auto _u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(_sa);
-                        }
                         uint16_t stage1_best_score = NEG_INF_BFLOAT16;
                         uint32_t stage1_best_index = 0xFFFFFFFF;
-                        for (uint32_t _ds = 0; _ds < CTArgs::stage1_num_slots; ++_ds) {
-                            uint32_t _dsa =
-                                args.scratch_addr + CTArgs::stage1_slot_base_offset + _ds * CTArgs::winner_page_bytes;
-                            auto _ds16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(_dsa);
-                            auto _ds32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(_dsa);
-                            DPRINT << "s1[" << _ds << "] s=" << (uint32_t)_ds16[0] << " i=" << _ds32[1] << ENDL();
-                        }
                         DPRINT << ">s1 reduce" << ENDL();
                         phase3_reduce_mesh_stage_slots(
                             args.scratch_addr,
@@ -440,6 +425,7 @@ struct Sampling {
                     }
                 } else {
                     if constexpr (IsMeshSenderCore && (CTArgs::stage1_sender || CTArgs::stage2_sender)) {
+                        DPRINT << ">ax s1 ws" << ENDL();
                         write_winner_slot(
                             args.scratch_addr + CTArgs::mesh_local_send_slot_offset,
                             global_best_score,
@@ -459,14 +445,6 @@ struct Sampling {
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_stage2_sem_addr);
                         wait_and_reset_semaphore(global_stage2_sem_ptr, CTArgs::stage2_expected_remote_incs);
                         DPRINT << ">s2 wsrt" << ENDL();
-                        invalidate_l1_cache();
-                        for (uint32_t _s = 0; _s < CTArgs::stage2_num_slots; ++_s) {
-                            uint32_t _sa =
-                                args.scratch_addr + CTArgs::stage2_slot_base_offset + _s * CTArgs::winner_page_bytes;
-                            auto _u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(_sa);
-                            auto _u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(_sa);
-                            DPRINT << "s2[" << _s << "] s=" << (uint32_t)_u16[0] << " i=" << _u32[1] << ENDL();
-                        }
                         uint16_t stage2_best_score = NEG_INF_BFLOAT16;
                         uint32_t stage2_best_index = 0xFFFFFFFF;
                         phase3_reduce_mesh_stage_slots(
@@ -475,15 +453,20 @@ struct Sampling {
                             CTArgs::stage2_num_slots,
                             stage2_best_score,
                             stage2_best_index);
+                        DPRINT << ">s2 reduce done" << ENDL();
                         auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                         output_ptr[0] = stage2_best_index;
                         DPRINT << "ax=" << stage2_best_index << ENDL();
+                        DPRINT << "socket_mode=" << CTArgs::socket_mode << ENDL();
                         if constexpr (CTArgs::socket_mode != 0) {
+                            DPRINT << ">ax d2h" << ENDL();
                             cb_reserve_back(CTArgs::socket_cb_id, 1);
+                            DPRINT << ">ax d2h got cb" << ENDL();
                             auto d2h_ptr =
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
                             d2h_ptr[0] = stage2_best_index;
                             cb_push_back(CTArgs::socket_cb_id, 1);
+                            DPRINT << "<ax d2h cb" << ENDL();
                         }
                     }
                 }
@@ -500,7 +483,7 @@ struct Sampling {
                 }
             }
             if constexpr (IsFinalCore && IsMeshSenderCore) {
-                DPRINT << ">ax s1 ws" << ENDL();
+                DPRINT << ">ax s1 str" << ENDL();
                 auto local_ready_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(CTArgs::local_ready_semaphore_id));
                 noc_semaphore_wait(local_ready_sem_ptr, 1);
@@ -508,10 +491,10 @@ struct Sampling {
                 DPRINT << ">ax s1 wsrt" << ENDL();
                 const BriscMeshSendMetadata metadata = load_mesh_send_metadata(arg_idx);
                 const uint32_t local_slot_addr = args.scratch_addr + metadata.local_slot_offset;
-                DPRINT << ">ax s1 ws send" << ENDL();
+                DPRINT << ">ax s1 send" << ENDL();
                 send_mesh_winner_via_fabric_brisc(
                     args.final_noc_x, args.final_noc_y, local_slot_addr, metadata, arg_idx);
-                DPRINT << ">ax s1 ws sent" << ENDL();
+                DPRINT << ">ax s1 sent" << ENDL();
             }
             if constexpr (IsFinalCore) {
                 persistent_fabric_arg_idx = arg_idx;

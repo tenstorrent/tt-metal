@@ -341,6 +341,7 @@ void kernel_main() {
     //   └──────────────────────┴─────────┴────────────────────────────────────┘
     // ========================================================================
     uint32_t brisc_rt_arg_idx = 0;
+    DPRINT << "brisc_rt_arg_idx" << ENDL();
     // --- BRISC: CCL broadcast reader + optional socket-reader path + mcast sender ---
 #if !defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
@@ -362,6 +363,7 @@ void kernel_main() {
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
     using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
+    DPRINT << "rmsnorm_args" << ENDL();
 
     // ── Argmax writer (matmul cores, argmax_final_core) ─────────────
     using ArgmaxCTArgs = deepseek_b1_ops::Sampling::WriterCTArgs<
@@ -371,6 +373,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("argmax_socket_cb"),
         get_named_compile_time_arg_val("argmax_socket_page_size_bytes"),
         get_named_compile_time_arg_val("argmax_defer_socket_output")>;
+    DPRINT << "argmax_args" << ENDL();
 
     deepseek_b1_ops::Sampling::WriterArgs sampling_args{
         .final_noc_x = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
@@ -386,7 +389,7 @@ void kernel_main() {
     };
     const uint32_t persistent_next_iter_global_sem_addr = sampling_args.persistent_dst_sem_addr;
 
-    DPRINT << "persistent_next_iter_global_sem_addr=" << persistent_next_iter_global_sem_addr << ENDL();
+    DPRINT << "psr=" << persistent_next_iter_global_sem_addr << ENDL();
 
     // ── Verify stage runtime arg (BRISC, for reading base token metadata)
     uint32_t brisc_verify_output_staging_addr = 0;
@@ -418,7 +421,7 @@ void kernel_main() {
         Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
         mcast_dst_addr_override != 0 ? mcast_dst_addr_override : get_write_ptr(mcast_dst_cb),
     };
-
+    DPRINT << "mcast_args" << ENDL();
     // ── MTP: EH mcast sender (input_core, enable_mtp) ──────────────
     using McastEhCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_eh_num_cores"),
@@ -430,7 +433,7 @@ void kernel_main() {
     if constexpr (Core::is_spec_stage && Core::enable_mtp) {
         mcast_eh_dst_addr_override = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++);
     }
-
+    DPRINT << "mcast_eh_args" << ENDL();
     deepseek_b1_ops::Mcast::SenderArgs mcast_eh_args{
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_x"),
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_y"),
@@ -444,7 +447,7 @@ void kernel_main() {
         Core::is_input_core ? get_read_ptr(mcast_eh_src_cb) : 0,
         mcast_eh_dst_addr_override != 0 ? mcast_eh_dst_addr_override : get_write_ptr(mcast_eh_dst_cb),
     };
-
+    DPRINT << "eh_logits_gather_args" << ENDL();
     // Output gather receiver args
     deepseek_b1_ops::Gather::ReceiverArgs eh_logits_gather_args{
         get_named_compile_time_arg_val("gather_noc0_num_senders"),
@@ -645,12 +648,6 @@ void kernel_main() {
             constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
             DPRINT << ">sb np=" << rmsnorm_num_tiles << ENDL();
             unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
-            invalidate_l1_cache();
-            auto cb0_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(rmsnorm_input_cb));
-            DPRINT << "cb0 @" << get_read_ptr(rmsnorm_input_cb) << " [0]=" << (uint32_t)cb0_ptr[0]
-                   << " [1]=" << (uint32_t)cb0_ptr[1] << " [2]=" << (uint32_t)cb0_ptr[2]
-                   << " [3]=" << (uint32_t)cb0_ptr[3] << ENDL();
-            DPRINT << "sb<" << ENDL();
         }
 
         if constexpr (Core::is_spec_stage && Core::is_input_core && Core::is_exit_device) {
@@ -695,8 +692,12 @@ void kernel_main() {
         if constexpr (Core::is_argmax_final_core && !Core::skip_ccl) {
             auto* argmax_turn_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(Core::fabric_gate_argmax_turn_semaphore_id));
+
+            DPRINT << ">ax turn_sem" << ENDL();
             noc_semaphore_wait(argmax_turn_sem, 1);
+            DPRINT << ">ax turn_sem set" << ENDL();
             noc_semaphore_set(argmax_turn_sem, 0);
+            DPRINT << "<ax turn_sem" << ENDL();
         }
 #endif
 
@@ -730,10 +731,12 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_input_core) {
+            DPRINT << ">mtp ready sem" << ENDL();
             volatile tt_l1_ptr uint32_t* mtp_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
             noc_semaphore_wait(mtp_ready_sem, 1);
             noc_semaphore_set(mtp_ready_sem, 0);
+            DPRINT << "<mtp ready sem" << ENDL();
         }
 #endif
 
@@ -773,12 +776,16 @@ void kernel_main() {
             {
                 deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, Core::is_rmsnorm_core, true> h_rmsnorm;
                 DeviceZoneScopedN("MTP_H_RMSNORM");
+                DPRINT << ">h rmsnorm" << ENDL();
                 h_rmsnorm(rmsnorm_args);
+                DPRINT << "<h rmsnorm" << ENDL();
             }
             {
                 DeviceZoneScopedN("MTP_E_RMSNORM");
                 deepseek_b1_ops::RMSNorm::Op<ERMSNormCTArgs, Core::is_rmsnorm_core, true> e_rmsnorm;
+                DPRINT << ">e rmsnorm" << ENDL();
                 e_rmsnorm(rmsnorm_args);
+                DPRINT << "<e rmsnorm" << ENDL();
             }
         }
 #endif
