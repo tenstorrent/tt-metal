@@ -395,7 +395,9 @@ inline void read_batched_rows_with_padding(
 
 void print_tile(const uint32_t cb_idx, const uint32_t tile_idx, const bool untilize = false) {
     DPRINT << "cb_idx: " << cb_idx << " tile_idx: " << tile_idx << ENDL();
+    DEVICE_PRINT("cb_idx: {} tile_idx: {}\n", cb_idx, tile_idx);
     DPRINT << "======" << ENDL();
+    DEVICE_PRINT("=====\n");
     for (uint16_t r = 0; r < 32; ++r) {
         DPRINT << (uint)r << " : "
                << TileSlice(
@@ -411,8 +413,24 @@ void print_tile(const uint32_t cb_idx, const uint32_t tile_idx, const bool until
                       true,
                       untilize)
                << ENDL();
+        DEVICE_PRINT(
+            "{} : {}\n",
+            (uint)r,
+            TileSlice(
+                cb_idx,
+                tile_idx,
+                SliceRange{
+                    .h0 = (uint8_t)r,
+                    .h1 = (uint8_t)(r + 1),
+                    .hs = (uint8_t)1,
+                    .w0 = (uint8_t)0,
+                    .w1 = (uint8_t)32,
+                    .ws = (uint8_t)1},
+                true,
+                untilize));
     }
     DPRINT << "++++++" << ENDL();
+    DEVICE_PRINT("++++++\n");
 }
 
 // ----- Multicast synchronization helper functions -----

@@ -36,6 +36,7 @@ void kernel_main() {
         auto page = pages.begin();
         for (; page != pages.end(); page += BIG_STEP) {
             DPRINT << "write " << page->page_id() << " to " << page->noc_addr() << ENDL();
+            DEVICE_PRINT("write page {} to {}\n", page->page_id(), page->noc_addr());
             process_pages(*page);
         }
     }
@@ -44,6 +45,7 @@ void kernel_main() {
     auto pages = tensor_accessor_dst.pages(start_page_id, end_page_id);
     for (const auto& page : pages) {
         DPRINT << "write " << page.page_id() << " to " << page.noc_addr() << ENDL();
+        DEVICE_PRINT("write page {} to {}\n", page.page_id(), page.noc_addr());
         process_pages(page);
     }
 #endif
