@@ -134,12 +134,19 @@ def validate_fine_stage(tt_fine_model, ref_fine_model, device, seq_len=32):
             head_idx = codebook_idx - n_codes_given
             ref_logits = ref_fine_model.lm_heads[head_idx](ref_hidden)
 
-        # TTNN forward
+        # TTNN forward — TtBarkFineModel expects ttnn.Tensor with shape [1, B, S, n_codes]
+        tt_input = ttnn.from_torch(
+            input_tokens.unsqueeze(0).to(torch.int32),  # [1, 1, seq, n_codes]
+            dtype=ttnn.uint32,
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
         tt_logits = tt_fine_model(
             codebook_idx=codebook_idx,
-            input_ids=input_tokens,
+            input_ids=tt_input,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        ttnn.deallocate(tt_input)
         tt_logits_torch = ttnn.to_torch(tt_logits)
         ttnn.deallocate(tt_logits)
 
