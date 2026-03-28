@@ -126,6 +126,7 @@ void FabricTensixDatamoverConfig::build_per_device_channel_mappings(
         // Create round-robin mapping using the actual ethernet channel IDs from active_channels
         // Skip dispatch link channels - they don't get tensix builders
         size_t channel_index = 0;
+
         for (auto [eth_chan_id, eth_chan_dir] : active_channels) {
             routing_plane_id_t routing_plane_id = control_plane.get_routing_plane_id(fabric_node_id, eth_chan_id);
             eth_chan_to_core_index_[dev_id][eth_chan_id] = channel_index;

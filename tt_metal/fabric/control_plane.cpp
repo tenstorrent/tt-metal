@@ -2344,7 +2344,9 @@ void fill_connection_info_fields(
     const CoreCoord& virtual_core,
     const FabricEriscDatamoverConfig& config,
     uint32_t sender_channel,
-    uint16_t worker_free_slots_stream_id) {
+    uint16_t worker_free_slots_stream_id,
+    bool is_worker_router_pairing,
+    const tt::tt_metal::Hal& hal) {
     auto* channel_allocator = config.channel_allocator.get();
     auto* const static_channel_allocator =
         dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(channel_allocator);
@@ -2354,12 +2356,22 @@ void fill_connection_info_fields(
     connection_info.edm_buffer_base_addr = static_channel_allocator->get_sender_channel_base_address(sender_channel);
     connection_info.num_buffers_per_channel =
         static_channel_allocator->get_sender_channel_number_of_slots(sender_channel);
-    connection_info.edm_connection_handshake_addr = config.sender_channels_connection_semaphore_address[sender_channel];
+    
+    // Conditional handshake address assignment based on worker-router pairing
+    if (is_worker_router_pairing) {
+        // Direct worker-router pairing: use overlay stream 0's scratch register
+        connection_info.edm_connection_handshake_addr = hal.get_stream_scratch_register_address(0);
+    } else {
+        // Mux/relay intermediary: use pre-allocated L1 address
+        connection_info.edm_connection_handshake_addr = config.sender_channels_connection_semaphore_address[sender_channel];
+    }
+    
     connection_info.edm_worker_location_info_addr =
         config.sender_channels_worker_conn_info_base_address[sender_channel];
     connection_info.buffer_size_bytes = config.channel_buffer_size_bytes;
     connection_info.buffer_index_semaphore_id = config.sender_channels_buffer_index_semaphore_address[sender_channel];
     connection_info.worker_free_slots_stream_id = worker_free_slots_stream_id;
+    connection_info.is_worker_router_pairing = is_worker_router_pairing ? 1 : 0;
 }
 
 // Helper function to fill tensix connection info with tensix-specific configuration
@@ -2368,19 +2380,31 @@ void fill_tensix_connection_info_fields(
     const CoreCoord& mux_core_virtual,
     const tt::tt_fabric::FabricTensixDatamoverConfig& tensix_config,
     uint32_t sender_channel,
-    tt::tt_fabric::FabricTensixCoreType core_id) {
+    tt::tt_fabric::FabricTensixCoreType core_id,
+    bool is_worker_router_pairing,
+    const tt::tt_metal::Hal& hal) {
     connection_info.edm_noc_x = static_cast<uint8_t>(mux_core_virtual.x);
     connection_info.edm_noc_y = static_cast<uint8_t>(mux_core_virtual.y);
     connection_info.edm_buffer_base_addr = tensix_config.get_channels_base_address(core_id, sender_channel);
     connection_info.num_buffers_per_channel = tensix_config.get_num_buffers_per_channel();
     connection_info.buffer_size_bytes = tensix_config.get_buffer_size_bytes_full_size_channel();
-    connection_info.edm_connection_handshake_addr =
-        tensix_config.get_connection_semaphore_address(sender_channel, core_id);
+    
+    // Conditional handshake address assignment based on worker-router pairing
+    if (is_worker_router_pairing) {
+        // Direct worker-router pairing: use overlay stream 0's scratch register
+        connection_info.edm_connection_handshake_addr = hal.get_stream_scratch_register_address(0);
+    } else {
+        // Mux/relay intermediary: use pre-allocated L1 address
+        connection_info.edm_connection_handshake_addr =
+            tensix_config.get_connection_semaphore_address(sender_channel, core_id);
+    }
+    
     connection_info.edm_worker_location_info_addr =
         tensix_config.get_worker_conn_info_base_address(sender_channel, core_id);
     connection_info.buffer_index_semaphore_id =
         tensix_config.get_buffer_index_semaphore_address(sender_channel, core_id);
     connection_info.worker_free_slots_stream_id = tensix_config.get_channel_credits_stream_id(sender_channel, core_id);
+    connection_info.is_worker_router_pairing = is_worker_router_pairing ? 1 : 0;
 }
 
 void ControlPlane::populate_fabric_connection_info(
@@ -2397,14 +2421,19 @@ void ControlPlane::populate_fabric_connection_info(
     // Sender channel 0 is always for local worker in the new design
     const auto sender_channel = 0;
 
+    // Detect if mux/relay is involved based on fabric tensix configuration
     const auto& fabric_tensix_config = this->get_fabric_tensix_config();
+    
+    // Use FabricBuilderContext to determine if this is a direct worker-to-router pairing
+    const bool is_worker_router_pairing = 
+        tt::tt_fabric::FabricBuilderContext::is_worker_router_pairing(fabric_tensix_config);
     // Always populate fabric router config for normal workers
     const auto& edm_config = builder_context.get_fabric_router_config(
         fabric_tensix_config, static_cast<eth_chan_directions>(sender_channel));
     CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
 
     fill_connection_info_fields(
-        worker_connection_info, fabric_router_virtual_core, edm_config, sender_channel, WORKER_FREE_SLOTS_STREAM_ID);
+        worker_connection_info, fabric_router_virtual_core, edm_config, sender_channel, WORKER_FREE_SLOTS_STREAM_ID, is_worker_router_pairing, this->hal_.get());
 
     // Check if fabric tensix config is enabled, if so populate different configs for dispatcher and tensix
     if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
@@ -2415,7 +2444,9 @@ void ControlPlane::populate_fabric_connection_info(
             fabric_router_virtual_core,
             default_edm_config,
             sender_channel,
-            WORKER_FREE_SLOTS_STREAM_ID);
+            WORKER_FREE_SLOTS_STREAM_ID,
+            is_worker_router_pairing,
+            this->hal_.get());
 
         const auto& tensix_config = builder_context.get_tensix_config();
         CoreCoord mux_core_logical = tensix_config.get_core_for_channel(physical_chip_id, eth_channel_id);
@@ -2428,7 +2459,7 @@ void ControlPlane::populate_fabric_connection_info(
         uint32_t tensix_sender_channel = sender_channel;
 
         fill_tensix_connection_info_fields(
-            tensix_connection_info, mux_core_virtual, tensix_config, tensix_sender_channel, core_id);
+            tensix_connection_info, mux_core_virtual, tensix_config, tensix_sender_channel, core_id, is_worker_router_pairing, this->hal_.get());
     } else {
         dispatcher_connection_info = worker_connection_info;
     }
@@ -2477,7 +2508,9 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
                     tensix_info.tensix_core,
                     tensix_config,
                     tensix_info.channel_index,
-                    FabricTensixCoreType::MUX);
+                    FabricTensixCoreType::MUX,
+                    false,
+                    this->hal_.get());
             }
 
             data_to_write = &worker_connections;

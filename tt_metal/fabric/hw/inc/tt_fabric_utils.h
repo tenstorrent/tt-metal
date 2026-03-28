@@ -35,10 +35,9 @@ FORCE_INLINE bool connect_is_requested(uint32_t cached) {
            cached == tt::tt_fabric::connection_interface::close_connection_request_value;
 }
 
-template <uint8_t MY_ETH_CHANNEL, bool RISC_CPU_DATA_CACHE_ENABLED, uint8_t SENDER_NUM_BUFFERS>
+template <uint8_t MY_ETH_CHANNEL, bool RISC_CPU_DATA_CACHE_ENABLED, class WorkerInterfaceT>
 FORCE_INLINE void establish_worker_connection(
-    tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
-        local_sender_channel_worker_interface) {
+    WorkerInterfaceT& local_sender_channel_worker_interface) {
     local_sender_channel_worker_interface.template cache_producer_noc_addr<RISC_CPU_DATA_CACHE_ENABLED, MY_ETH_CHANNEL>();
     local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
 }
