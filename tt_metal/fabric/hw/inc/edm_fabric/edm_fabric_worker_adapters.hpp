@@ -108,28 +108,14 @@ struct WorkerToFabricEdmSenderBase {
         // remove redundant nested constructor to avoid copy
         volatile uint32_t* worker_teardown_sem_addr;
         if constexpr (my_core_type == ProgrammableCoreType::TENSIX && VC_ID == 0) {
-            // VC0: connection info is populated into the L1 conn table by device-init;
-            // read it by eth channel index.
-            tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
-                reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+            // VC0: delegate to build_from_eth_channel, which reads from L1 conn table.
             uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
-            const auto conn = &connection_info->read_only[eth_channel];
-            const auto aligned_conn = &connection_info->read_write[eth_channel];
-            direction = conn->edm_direction;
-            edm_worker_x = conn->edm_noc_x;
-            edm_worker_y = conn->edm_noc_y;
-            edm_buffer_base_addr = conn->edm_buffer_base_addr;
-            num_buffers_per_channel = conn->num_buffers_per_channel;
-            edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
-            edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
-            buffer_size_bytes = conn->buffer_size_bytes;
-            edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
-            writer_send_sem_addr = reinterpret_cast<volatile uint32_t*>(
-                reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
-            worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
-            // Teardown semaphore is reserved in the L1 connection table (16-byte aligned)
-            worker_teardown_sem_addr = reinterpret_cast<volatile uint32_t*>(
-                reinterpret_cast<uintptr_t>(&aligned_conn->worker_teardown_semaphore));
+            auto sender = build_from_eth_channel(eth_channel);
+            // Still consume the dead buffer_index RT arg for compat
+            const auto worker_buffer_index_semaphore_addr =
+                get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
+            (void)worker_buffer_index_semaphore_addr;
+            return sender;
         } else {
             // VC2 (TENSIX or ETH): addresses are passed directly as runtime args — no L1 conn table.
             // TODO: will be deprecated. currently for ethernet dispatch case
