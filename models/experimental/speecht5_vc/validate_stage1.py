@@ -161,8 +161,19 @@ def _build_asr_pipeline(asr_model_id: str):
     )
 
 
-def _transcribe(asr_pipe, wav_path: str) -> str:
-    result = asr_pipe(wav_path)
+def _transcribe(asr_pipe, wav_path: str, language: Optional[str], task: Optional[str]) -> str:
+    generate_kwargs = {}
+    if language:
+        generate_kwargs["language"] = language
+    if task:
+        generate_kwargs["task"] = task
+
+    try:
+        result = asr_pipe(wav_path, generate_kwargs=generate_kwargs if generate_kwargs else None)
+    except TypeError:
+        # Backward compatibility for older transformers pipeline signatures.
+        result = asr_pipe(wav_path)
+
     text = result["text"] if isinstance(result, dict) else str(result)
     return _normalize_text(text)
 
@@ -279,6 +290,15 @@ def parse_args():
     )
     parser.add_argument("--speaker_embedding", default=None, help="Target speaker x-vector path (.npy/.pt)")
     parser.add_argument("--speaker_index", type=int, default=7306, help="Default CMU-Arctic x-vector index")
+    parser.add_argument(
+        "--target_speaker_wavs",
+        nargs="*",
+        default=None,
+        help=(
+            "Optional target speaker reference wav(s) for speaker similarity. "
+            "Use one path (applies to all inputs) or one path per input wav."
+        ),
+    )
     parser.add_argument("--output_dir", default="./vc_stage1_outputs", help="Directory for converted wav outputs")
     parser.add_argument("--report_json", default="./vc_stage1_report.json", help="Output report JSON path")
 
@@ -321,6 +341,8 @@ def parse_args():
     parser.add_argument("--skip_wer", action="store_true")
     parser.add_argument("--skip_speaker_similarity", action="store_true")
     parser.add_argument("--asr_model_id", default="openai/whisper-small")
+    parser.add_argument("--asr_language", default="en")
+    parser.add_argument("--asr_task", default="transcribe")
     parser.add_argument("--speaker_model_id", default="microsoft/wavlm-base-plus-sv")
 
     parser.add_argument("--min_token_per_sec", type=float, default=30.0)
@@ -336,6 +358,8 @@ def main():
     args = parse_args()
     if args.reference_texts is not None and len(args.reference_texts) not in (0, len(args.input_wavs)):
         raise ValueError("--reference_texts must be omitted or have exactly one entry per input wav")
+    if args.target_speaker_wavs is not None and len(args.target_speaker_wavs) not in (0, 1, len(args.input_wavs)):
+        raise ValueError("--target_speaker_wavs must be omitted, a single path, or one path per input wav")
 
     thresholds = Thresholds(
         min_token_per_sec=args.min_token_per_sec,
@@ -367,6 +391,17 @@ def main():
     if not args.skip_speaker_similarity:
         print(f"Loading speaker model: {args.speaker_model_id}")
         speaker_extractor, speaker_model = _build_speaker_embedder(args.speaker_model_id)
+
+    target_reference_vectors: Optional[List[torch.Tensor]] = None
+    speaker_metric_mode = "cross_space_xvector_vs_audio_encoder"
+    if not args.skip_speaker_similarity and args.target_speaker_wavs:
+        # Compute target speaker vectors in the same embedding space as output-audio vectors.
+        target_reference_vectors = []
+        for target_wav in args.target_speaker_wavs:
+            target_audio = load_audio_16khz_mono(target_wav)
+            target_vec = _extract_xvector(speaker_extractor, speaker_model, target_audio, sample_rate=16000)
+            target_reference_vectors.append(target_vec)
+        speaker_metric_mode = "same_space_audio_encoder"
 
     current_l1_small_size = int(args.l1_small_size)
     device = _open_ttnn_device(
@@ -484,8 +519,8 @@ def main():
             wer_ratio = None
             wer_percent = None
             if asr_pipe is not None:
-                source_asr_text = _transcribe(asr_pipe, wav_path)
-                output_asr_text = _transcribe(asr_pipe, output_path)
+                source_asr_text = _transcribe(asr_pipe, wav_path, args.asr_language, args.asr_task)
+                output_asr_text = _transcribe(asr_pipe, output_path, args.asr_language, args.asr_task)
 
                 reference_text = (
                     _normalize_text(args.reference_texts[idx])
@@ -508,7 +543,13 @@ def main():
             if speaker_extractor is not None and speaker_model is not None:
                 out_audio = load_audio_16khz_mono(output_path)
                 out_vec = _extract_xvector(speaker_extractor, speaker_model, out_audio, sample_rate=16000)
-                speaker_cosine = float(F.cosine_similarity(out_vec, target_spk_norm, dim=0).item())
+                if target_reference_vectors is not None:
+                    ref_idx = idx if len(target_reference_vectors) == len(args.input_wavs) else 0
+                    target_vec = target_reference_vectors[ref_idx]
+                    speaker_cosine = float(F.cosine_similarity(out_vec, target_vec, dim=0).item())
+                else:
+                    # Legacy fallback: target x-vector and output-audio encoder spaces may differ.
+                    speaker_cosine = float(F.cosine_similarity(out_vec, target_spk_norm, dim=0).item())
 
             sample_report = {
                 "input_wav": wav_path,
@@ -593,12 +634,16 @@ def main():
                 "input_wavs": args.input_wavs,
                 "speaker_embedding": args.speaker_embedding,
                 "speaker_index": args.speaker_index,
+                "target_speaker_wavs": args.target_speaker_wavs,
+                "speaker_metric_mode": speaker_metric_mode,
                 "device_id": args.device_id,
                 "l1_small_size": current_l1_small_size,
                 "trace_region_size": args.trace_region_size,
                 "num_command_queues": args.num_command_queues,
                 "program_cache_enabled": not args.disable_program_cache,
                 "asr_model_id": None if args.skip_wer else args.asr_model_id,
+                "asr_language": None if args.skip_wer else args.asr_language,
+                "asr_task": None if args.skip_wer else args.asr_task,
                 "speaker_model_id": None if args.skip_speaker_similarity else args.speaker_model_id,
                 "token_cosine_threshold": args.token_cosine_threshold,
                 "max_steps": args.max_steps,
@@ -618,6 +663,7 @@ def main():
         print(f"Avg token accuracy (%): {avg_token_accuracy:.2f}")
         if not args.skip_speaker_similarity:
             print(f"Avg speaker cosine: {avg_speaker_cosine if avg_speaker_cosine is not None else 'N/A'}")
+            print(f"Speaker metric mode: {speaker_metric_mode}")
         if not args.skip_wer:
             print(f"Avg WER (%): {avg_wer_percent if avg_wer_percent is not None else 'N/A'}")
         print(f"Overall pass: {overall_pass}")
