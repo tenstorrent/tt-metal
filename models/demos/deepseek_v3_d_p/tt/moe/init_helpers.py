@@ -579,6 +579,23 @@ def get_tp_mesh_composer(mesh_device):
     )
 
 
+def get_sp_mesh_composer(mesh_device):
+    """
+    Create mesh composer for tensors replicated across TP columns.
+
+    Composes along SP axis (rows) only, taking column 0 from each row.
+    Use for gate outputs that are replicated across TP after all_reduce_async
+    (e.g., logits, topk_indices, topk_weights).
+    """
+    return ttnn.create_mesh_composer(
+        mesh_device,
+        ttnn.MeshComposerConfig(
+            [0, 1],
+            ttnn.MeshShape(mesh_device.shape[0], 1),
+        ),
+    )
+
+
 def get_ep_mesh_composer(mesh_device):
     """
     Create mesh composer for expert-parallel tensors.

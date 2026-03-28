@@ -13,14 +13,17 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as Refe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     create_fabric_router_config,
+    get_ep_mesh_composer,
     get_gate_outputs,
+    get_sp_mesh_composer,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     ValidationResult,
-    validate_per_device_exact,
-    validate_per_device_pcc,
-    validate_per_device_recall,
+    compare_exact,
+    compare_pcc,
+    compare_recall,
+    validate_composed,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
@@ -173,49 +176,57 @@ def test_forward_pass(
         ),
     )
 
-    # Reshape reference outputs to match device mesh structure upfront
     seq_len_per_device = reference_logits.shape[0] // mesh_device.shape[0]
-    reference_logits_reshaped = reference_logits.view(mesh_device.shape[0], seq_len_per_device, -1)
-    reference_topk_weights_reshaped = reference_topk_weights.view(mesh_device.shape[0], seq_len_per_device, -1)
-    reference_topk_indices_reshaped = reference_topk_indices.view(mesh_device.shape[0], seq_len_per_device, -1)
 
     tt_topk_weights, tt_topk_indices, tt_logits, dispatch_offsets, total_counts_per_expert = tt_model(tt_input)
-    per_device_topk_weight = ttnn.get_device_tensors(tt_topk_weights)
-    per_device_topk_indices = ttnn.get_device_tensors(tt_topk_indices)
-    per_device_topk_logits = ttnn.get_device_tensors(tt_logits)
 
-    num_devices = mesh_device.shape[0] * mesh_device.shape[1]
+    sp_composer = get_sp_mesh_composer(mesh_device)
 
-    recall_result = validate_per_device_recall(
-        get_actual=lambda i: ttnn.to_torch(per_device_topk_indices[i]),
-        get_expected=lambda i: reference_topk_indices_reshaped[i // n_tp_devices],
-        num_devices=num_devices,
-        threshold=0.999,
+    # SP-replicated checks: compose into [1, n_sp_devices, ...] for validate_composed
+    composed_indices = ttnn.to_torch(tt_topk_indices, mesh_composer=sp_composer)
+    composed_indices_2d = composed_indices.view(1, n_sp_devices, seq_len_per_device, -1)
+    ref_indices_2d = reference_topk_indices.view(1, n_sp_devices, seq_len_per_device, -1)
+
+    recall_result = validate_composed(
+        composed_indices_2d,
+        ref_indices_2d,
+        1,
+        n_sp_devices,
+        compare_recall(0.999),
         name="indices_recall",
-        mesh_shape=mesh_device.shape,
-    )
-    logits_result = validate_per_device_pcc(
-        get_actual=lambda i: ttnn.to_torch(per_device_topk_logits[i]),
-        get_expected=lambda i: reference_logits_reshaped[i // n_tp_devices],
-        num_devices=num_devices,
-        threshold=0.99,
-        name="topk_logits",
-        mesh_shape=mesh_device.shape,
-    )
-    weights_result = validate_per_device_pcc(
-        get_actual=lambda i: ttnn.to_torch(per_device_topk_weight[i]),
-        get_expected=lambda i: reference_topk_weights_reshaped[i // n_tp_devices],
-        num_devices=num_devices,
-        threshold=0.98,
-        name="topk_scores",
-        mesh_shape=mesh_device.shape,
+        broadcast_groups=n_tp_devices,
     )
 
-    # Compute reference dispatch offsets from tt_topk_indices, masked by dispatch table
-    indices_for_gate = torch.zeros(n_sp_devices, seq_len_per_device, config.n_activated_experts, dtype=torch.int32)
-    for row in range(n_sp_devices):
-        device_id = row * n_tp_devices
-        indices_for_gate[row] = ttnn.to_torch(per_device_topk_indices[device_id]).int()
+    composed_logits = ttnn.to_torch(tt_logits, mesh_composer=sp_composer)
+    composed_logits_2d = composed_logits.view(1, n_sp_devices, seq_len_per_device, -1)
+    ref_logits_2d = reference_logits.view(1, n_sp_devices, seq_len_per_device, -1)
+
+    logits_result = validate_composed(
+        composed_logits_2d,
+        ref_logits_2d,
+        1,
+        n_sp_devices,
+        compare_pcc(0.99),
+        name="topk_logits",
+        broadcast_groups=n_tp_devices,
+    )
+
+    composed_weights = ttnn.to_torch(tt_topk_weights, mesh_composer=sp_composer)
+    composed_weights_2d = composed_weights.view(1, n_sp_devices, seq_len_per_device, -1)
+    ref_weights_2d = reference_topk_weights.view(1, n_sp_devices, seq_len_per_device, -1)
+
+    weights_result = validate_composed(
+        composed_weights_2d,
+        ref_weights_2d,
+        1,
+        n_sp_devices,
+        compare_pcc(0.98),
+        name="topk_scores",
+        broadcast_groups=n_tp_devices,
+    )
+
+    # EP-sharded checks: offsets and totals
+    indices_for_gate = composed_indices.view(n_sp_devices, seq_len_per_device, -1).int()
 
     experts_per_chip = n_routed_experts // (n_sp_devices * n_tp_devices)
     expert_offsets, expert_token_counts, _ = get_gate_outputs(
@@ -228,26 +239,32 @@ def test_forward_pass(
         expert_dispatch_table=dispatch_table,
     )
 
-    reference_totals = expert_token_counts[:, 0, :].long()
+    ep_composer = get_ep_mesh_composer(mesh_device)
 
-    per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
-    offsets_result = validate_per_device_exact(
-        get_actual=lambda i: ttnn.to_torch(per_device_dispatch_offsets[i]).long(),
-        get_expected=lambda i: expert_offsets[
-            i % n_tp_devices, (i // n_tp_devices) : (i // n_tp_devices) + 1, :
-        ].long(),
-        num_devices=len(per_device_dispatch_offsets),
+    dispatch_offsets_4d = ttnn.unsqueeze_to_4D(dispatch_offsets)
+    composed_offsets = ttnn.to_torch(dispatch_offsets_4d, mesh_composer=ep_composer).squeeze(2).long()
+
+    offsets_result = validate_composed(
+        composed_offsets,
+        expert_offsets.long(),
+        n_tp_devices,
+        n_sp_devices,
+        compare_exact,
         name="dispatch_offsets",
-        mesh_shape=mesh_device.shape,
     )
 
-    per_device_totals = ttnn.get_device_tensors(total_counts_per_expert)
-    totals_result = validate_per_device_exact(
-        get_actual=lambda i: ttnn.to_torch(per_device_totals[i]).long(),
-        get_expected=lambda i: reference_totals[(i % n_tp_devices) : (i % n_tp_devices) + 1, :].long(),
-        num_devices=len(per_device_totals),
+    total_counts_4d = ttnn.unsqueeze_to_4D(total_counts_per_expert)
+    composed_totals = ttnn.to_torch(total_counts_4d, mesh_composer=ep_composer).squeeze(2).long()
+    # Totals replicated across chips — broadcast row 0 reference to all chips
+    reference_totals = expert_token_counts[:, 0, :].unsqueeze(1).expand(-1, n_sp_devices, -1).long()
+
+    totals_result = validate_composed(
+        composed_totals,
+        reference_totals,
+        n_tp_devices,
+        n_sp_devices,
+        compare_exact,
         name="total_counts",
-        mesh_shape=mesh_device.shape,
     )
 
     all_results = [recall_result, logits_result, weights_result, offsets_result, totals_result]

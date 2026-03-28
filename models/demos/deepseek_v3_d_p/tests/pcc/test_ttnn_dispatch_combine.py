@@ -33,8 +33,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
+    compare_exact,
     log_combine_mismatch_details,
     validate_combine_output,
+    validate_composed,
     validate_roundtrip_output,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
@@ -348,6 +350,38 @@ def test_ttnn_dispatch_combine(
         expert_dispatch_table=expert_dispatch_table,
     )
 
+    # Validate routing setup outputs against torch reference
+    ep_composer = get_ep_mesh_composer(mesh_device)
+    host_offsets = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_dispatch_offsets), mesh_composer=ep_composer).squeeze(2)
+    host_token_counts = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_expert_token_counts), mesh_composer=ep_composer).squeeze(
+        2
+    )
+
+    offsets_result = validate_composed(
+        host_offsets.int(),
+        expert_offsets.int(),
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
+        name="expert_offsets",
+    )
+    counts_result = validate_composed(
+        host_token_counts.int(),
+        expert_token_counts.int(),
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
+        name="expert_token_counts",
+    )
+    log_validation_results(
+        results=[offsets_result, counts_result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Routing Setup Validation",
+    )
+    offsets_result.assert_passed("Dispatch offsets mismatch before dispatch")
+    counts_result.assert_passed("Expert token counts mismatch before dispatch")
+
     # Run TTNN dispatch
     logger.debug("Running TTNN dispatch...")
     tt_expert_offsets = tt_dispatch_offsets
@@ -405,9 +439,7 @@ def test_ttnn_dispatch_combine(
     logger.debug("Combine complete!")
 
     # Convert TTNN output back to torch
-    mesh_composer = get_ep_mesh_composer(mesh_device)
-
-    y = ttnn.to_torch(tt_output, mesh_composer=mesh_composer, dtype=torch.bfloat16)
+    y = ttnn.to_torch(tt_output, mesh_composer=ep_composer, dtype=torch.bfloat16)
 
     # Host-side reduction: remove extra dimension added for 2D mesh composition
     y = y.squeeze(-4)

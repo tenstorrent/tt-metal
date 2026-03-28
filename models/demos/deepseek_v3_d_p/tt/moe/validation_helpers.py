@@ -430,117 +430,90 @@ def log_per_chip_statistics(
 # Returns (match: bool, error_detail: Optional[str])
 DispatchComparator = Callable[[torch.Tensor, torch.Tensor, int, int, int], Tuple[bool, Optional[str]]]
 
-# Type for per-device validation comparators
-# (actual, expected, device_idx) -> (match, error_detail)
-PerDeviceComparator = Callable[[torch.Tensor, torch.Tensor, int], Tuple[bool, Optional[str]]]
+# Type for composed tensor comparators
+# (actual_chip, expected_chip, group, chip) -> (match, error_detail)
+ComposedComparator = Callable[[torch.Tensor, torch.Tensor, int, int], Tuple[bool, Optional[str]]]
 
 
-def validate_per_device(
-    get_actual: Callable[[int], torch.Tensor],
-    get_expected: Callable[[int], torch.Tensor],
-    num_devices: int,
-    compare_fn: PerDeviceComparator,
-    name: str = "per_device",
-    mesh_shape: Optional[Tuple[int, int]] = None,
+def compare_exact(actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int) -> Tuple[bool, Optional[str]]:
+    """Exact element-wise comparison."""
+    if torch.equal(actual, expected):
+        return True, None
+    diff = (actual != expected).sum().item()
+    return False, f"{diff}/{actual.numel()} elements differ"
+
+
+def compare_pcc(threshold: float = 0.99) -> ComposedComparator:
+    """Return a PCC comparator with the given threshold."""
+
+    def _compare(actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int) -> Tuple[bool, Optional[str]]:
+        _, pcc = comp_pcc(actual.float(), expected.float())
+        return (True, None) if pcc >= threshold else (False, f"PCC={pcc:.4f} < {threshold}")
+
+    return _compare
+
+
+def compare_recall(threshold: float = 0.999) -> ComposedComparator:
+    """Return a recall comparator with the given threshold."""
+
+    def _compare(actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int) -> Tuple[bool, Optional[str]]:
+        r = calculate_average_recall(actual, expected)
+        return (True, None) if r >= threshold else (False, f"recall={r:.4f} < {threshold}")
+
+    return _compare
+
+
+def validate_composed(
+    actual: torch.Tensor,
+    expected: torch.Tensor,
+    num_groups: int,
+    group_size: int,
+    compare_fn: ComposedComparator,
+    name: str = "composed",
+    broadcast_groups: int = 0,
 ) -> ValidationResult:
     """
-    Generic per-device validation. Mirrors validate_dispatch_data but for per-device iteration.
+    Validate a composed tensor per (group, chip) cell.
+
+    Iterates over actual[group, chip] vs expected[group, chip], calling compare_fn
+    for each cell. Populates validated_cells for the grid visualizer.
 
     Args:
-        get_actual: (device_idx) -> actual tensor for that device
-        get_expected: (device_idx) -> expected tensor for that device
-        num_devices: number of devices to iterate over
-        compare_fn: (actual, expected, device_idx) -> (match, error_detail)
-        name: name for logging/result
-        mesh_shape: (rows, cols) - if provided, maps device_idx to (dispatch_group, chip)
-                    for validated_cells and mismatch format compatible with log_validation_results
+        actual: Composed TTNN output, shape [num_groups, group_size, ...]
+        expected: Reference tensor, shape [num_groups, group_size, ...]
+        num_groups: Number of dispatch groups to iterate over
+        group_size: Number of chips per group (mesh rows)
+        compare_fn: (actual_chip, expected_chip, group, chip) -> (match, error_detail)
+        name: Name for logging/result
+        broadcast_groups: If > 0, broadcast validated_cells and mismatches across this many
+            groups in the visualizer. Use for SP-replicated tensors where num_groups=1 but
+            the grid has multiple dispatch group columns.
     """
-    matches, total, mismatches = 0, 0, []
+    display_groups = broadcast_groups if broadcast_groups > 0 else num_groups
+    matches, mismatches = 0, []
     validated_cells = set()
-    for i in range(num_devices):
-        total += 1
-        actual = get_actual(i)
-        expected = get_expected(i)
-
-        if mesh_shape:
-            n_cols = mesh_shape[1]
-            row, col = i // n_cols, i % n_cols
-            validated_cells.add((col, row))
-
-        match, error_detail = compare_fn(actual, expected, i)
-        if match:
-            matches += 1
-            logger.debug(f"✅ Device {i}: {name} PASS")
-        else:
-            logger.error(f"❌ Device {i}: {name} - {error_detail}")
-            if mesh_shape:
-                mismatches.append((col, row, error_detail))
+    for g in range(num_groups):
+        for c in range(group_size):
+            # Mark all display columns as validated for this chip
+            for dg in range(display_groups) if broadcast_groups > 0 else [g]:
+                validated_cells.add((dg, c))
+            match, error_detail = compare_fn(actual[g, c], expected[g, c], g, c)
+            if match:
+                matches += 1
             else:
-                mismatches.append((i, error_detail))
+                if broadcast_groups > 0:
+                    for dg in range(display_groups):
+                        mismatches.append((dg, c, error_detail or "mismatch"))
+                else:
+                    mismatches.append((g, c, error_detail or "mismatch"))
     return ValidationResult(
         passed=len(mismatches) == 0,
         matches=matches,
-        total=total,
+        total=num_groups * group_size,
         mismatches=mismatches,
         name=name,
         validated_cells=validated_cells,
     )
-
-
-def validate_per_device_exact(
-    get_actual: Callable[[int], torch.Tensor],
-    get_expected: Callable[[int], torch.Tensor],
-    num_devices: int,
-    name: str = "exact",
-    mesh_shape: Optional[Tuple[int, int]] = None,
-) -> ValidationResult:
-    """Per-device torch.equal() validation."""
-
-    def compare_exact(actual, expected, device_idx):
-        if torch.equal(actual, expected):
-            return True, None
-        diff = (actual != expected).sum().item()
-        return False, f"{diff}/{actual.numel()} elements differ"
-
-    return validate_per_device(get_actual, get_expected, num_devices, compare_exact, name, mesh_shape)
-
-
-def validate_per_device_pcc(
-    get_actual: Callable[[int], torch.Tensor],
-    get_expected: Callable[[int], torch.Tensor],
-    num_devices: int,
-    threshold: float = 0.99,
-    name: str = "pcc",
-    mesh_shape: Optional[Tuple[int, int]] = None,
-) -> ValidationResult:
-    """Per-device PCC validation."""
-
-    def compare_pcc(actual, expected, device_idx):
-        _, pcc = comp_pcc(actual.float(), expected.float())
-        if pcc >= threshold:
-            return True, None
-        return False, f"PCC={pcc:.4f} < {threshold}"
-
-    return validate_per_device(get_actual, get_expected, num_devices, compare_pcc, name, mesh_shape)
-
-
-def validate_per_device_recall(
-    get_actual: Callable[[int], torch.Tensor],
-    get_expected: Callable[[int], torch.Tensor],
-    num_devices: int,
-    threshold: float = 0.999,
-    name: str = "recall",
-    mesh_shape: Optional[Tuple[int, int]] = None,
-) -> ValidationResult:
-    """Per-device recall validation."""
-
-    def compare_recall(actual, expected, device_idx):
-        recall = calculate_average_recall(actual, expected)
-        if recall >= threshold:
-            return True, None
-        return False, f"recall={recall:.4f} < {threshold}"
-
-    return validate_per_device(get_actual, get_expected, num_devices, compare_recall, name, mesh_shape)
 
 
 def validate_replication(

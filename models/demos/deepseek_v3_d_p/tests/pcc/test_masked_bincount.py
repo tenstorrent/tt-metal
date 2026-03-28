@@ -14,8 +14,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extract_mesh_config
-from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_per_device_exact
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extract_mesh_config, get_ep_mesh_composer
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import compare_exact, validate_composed
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
 
 
@@ -161,16 +161,27 @@ def test_masked_bincount(
         tt_indices, tt_dispatch_table, n_routed_experts, topk
     )
 
-    # Compare per-device
-    device_tensors = ttnn.get_device_tensors(tt_histograms)
-    n_cols = mesh_device.shape[1]
+    # Build reference as (num_dispatch_groups, dispatch_group_size, n_routed_experts)
+    reference = torch.zeros(num_dispatch_groups, dispatch_group_size, n_routed_experts, dtype=torch.int32)
+    for group in range(num_dispatch_groups):
+        for chip in range(dispatch_group_size):
+            reference[group, chip] = torch_histograms[(group, chip)]
 
-    result = validate_per_device_exact(
-        get_actual=lambda i: ttnn.to_torch(device_tensors[i]).flatten().to(torch.int32)[:n_routed_experts],
-        get_expected=lambda i: torch_histograms[(i % n_cols, i // n_cols)],
-        num_devices=len(device_tensors),
+    # Compose TTNN output using EP mesh composer
+    tt_histograms_4d = ttnn.unsqueeze_to_4D(tt_histograms)
+    composer = get_ep_mesh_composer(mesh_device)
+    composed = ttnn.to_torch(tt_histograms_4d, mesh_composer=composer).squeeze(2).to(torch.int32)
+
+    # Trim to n_routed_experts in case of padding
+    composed = composed[..., :n_routed_experts]
+
+    result = validate_composed(
+        composed,
+        reference,
+        num_dispatch_groups,
+        dispatch_group_size,
+        compare_exact,
         name="masked_bincount",
-        mesh_shape=mesh_device.shape,
     )
     log_validation_results(
         results=[result],
