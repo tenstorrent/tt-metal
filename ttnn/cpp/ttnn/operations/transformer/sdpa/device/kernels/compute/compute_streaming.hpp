@@ -110,7 +110,6 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
     tile_regs_wait();
     uint32_t dst_idx = 0;
     if constexpr (blocked_pack) {
-        PACK((llk_pack_mop_config<false, false, false>(out_cb, subblock_w)));
         for (uint32_t r = 0; r < subblock_h; r++) {
             uint32_t out_row_offset = (r + row_subblock_idx * subblock_h) * out_num_cols;
             pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
@@ -271,7 +270,6 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
         // Pack back to inout_cb at the same absolute positions
         uint32_t dst_index = 0;
         if constexpr (blocked_pack) {
-            PACK((llk_pack_mop_config<false, false, false>(inout_cb, tiles_per_column)));
             for (uint32_t i = 0; i < tiles_per_row; i++) {
                 uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base;
                 pack_tile<true>(dst_index, inout_cb, in0_tile_index);
