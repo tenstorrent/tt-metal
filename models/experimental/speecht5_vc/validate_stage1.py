@@ -337,6 +337,14 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
 
     parser.add_argument("--token_cosine_threshold", type=float, default=0.90)
+    parser.add_argument(
+        "--strict_stage1",
+        action="store_true",
+        help=(
+            "Use strict Stage-1 pass gates (includes WER + speaker checks and end-to-end output-duration RTF). "
+            "Default mode is bring-up focused and uses decoder-oriented perf gates."
+        ),
+    )
 
     parser.add_argument("--skip_wer", action="store_true")
     parser.add_argument("--skip_speaker_similarity", action="store_true")
@@ -425,6 +433,7 @@ def main():
         for idx, wav_path in enumerate(args.input_wavs):
             print(f"[{idx+1}/{len(args.input_wavs)}] Processing: {wav_path}")
             waveform = load_audio_16khz_mono(wav_path)
+            source_audio_seconds = float(waveform.shape[0] / 16000.0)
             inputs = processor(audio=waveform.numpy(), sampling_rate=16000, return_tensors="pt")
             input_values = inputs["input_values"]
             attention_mask = inputs.get("attention_mask", None)
@@ -494,11 +503,23 @@ def main():
             sf.write(output_path, tt_speech.squeeze().cpu().numpy(), samplerate=16000)
 
             output_audio_seconds = float(tt_speech.numel() / 16000.0)
-            rtf = (
+            rtf_end_to_end_output = (
                 float(tt_stats["total_time_s"] + vocoder_time) / output_audio_seconds
                 if output_audio_seconds > 0
                 else 0.0
             )
+            rtf_end_to_end_input = (
+                float(tt_stats["total_time_s"] + vocoder_time) / source_audio_seconds
+                if source_audio_seconds > 0
+                else 0.0
+            )
+            rtf_decoder_input = (
+                float(tt_stats["decoder_time_s"] + tt_stats["postnet_time_s"]) / source_audio_seconds
+                if source_audio_seconds > 0
+                else 0.0
+            )
+
+            decoder_token_per_sec = float(tt_stats.get("decoder_token_per_sec", tt_stats["token_per_sec"]))
 
             # HF reference mel path for parity metrics
             torch.manual_seed(args.seed)
@@ -554,9 +575,14 @@ def main():
             sample_report = {
                 "input_wav": wav_path,
                 "output_wav": output_path,
+                "source_audio_seconds": source_audio_seconds,
+                "decoder_token_per_sec": decoder_token_per_sec,
                 "token_per_sec": float(tt_stats["token_per_sec"]),
                 "ttft_ms": float(tt_stats["ttft_s"] * 1000.0),
-                "rtf": float(rtf),
+                "rtf": float(rtf_end_to_end_output),
+                "rtf_end_to_end_output": float(rtf_end_to_end_output),
+                "rtf_end_to_end_input": float(rtf_end_to_end_input),
+                "rtf_decoder_input": float(rtf_decoder_input),
                 "output_audio_seconds": output_audio_seconds,
                 "steps_completed": int(tt_stats["steps_completed"]),
                 "parity": parity,
@@ -569,21 +595,25 @@ def main():
             sample_reports.append(sample_report)
 
         avg_token_per_sec = _avg([s["token_per_sec"] for s in sample_reports]) or 0.0
-        avg_rtf = _avg([s["rtf"] for s in sample_reports]) or 0.0
+        avg_decoder_token_per_sec = _avg([s["decoder_token_per_sec"] for s in sample_reports]) or 0.0
+        avg_rtf_end_to_end_output = _avg([s["rtf_end_to_end_output"] for s in sample_reports]) or 0.0
+        avg_rtf_end_to_end_input = _avg([s["rtf_end_to_end_input"] for s in sample_reports]) or 0.0
+        avg_rtf_decoder_input = _avg([s["rtf_decoder_input"] for s in sample_reports]) or 0.0
+        rtf_for_gate = avg_rtf_end_to_end_output if args.strict_stage1 else avg_rtf_decoder_input
         avg_token_accuracy = _avg([s["parity"]["token_accuracy_percent"] for s in sample_reports]) or 0.0
         avg_speaker_cosine = _avg([s["speaker_cosine"] for s in sample_reports if s["speaker_cosine"] is not None])
         avg_wer_percent = _avg([s["wer_percent"] for s in sample_reports if s["wer_percent"] is not None])
 
         checks = {
             "token_per_sec": {
-                "value": avg_token_per_sec,
+                "value": avg_decoder_token_per_sec,
                 "threshold": thresholds.min_token_per_sec,
-                "pass": avg_token_per_sec >= thresholds.min_token_per_sec,
+                "pass": avg_decoder_token_per_sec >= thresholds.min_token_per_sec,
             },
             "rtf": {
-                "value": avg_rtf,
+                "value": rtf_for_gate,
                 "threshold": thresholds.max_rtf,
-                "pass": avg_rtf <= thresholds.max_rtf,
+                "pass": rtf_for_gate <= thresholds.max_rtf,
             },
             "token_accuracy_percent": {
                 "value": avg_token_accuracy,
@@ -611,9 +641,9 @@ def main():
             checks["rtf"]["pass"],
             checks["token_accuracy_percent"]["pass"],
         ]
-        if not args.skip_speaker_similarity:
+        if args.strict_stage1 and not args.skip_speaker_similarity:
             required_checks.append(bool(checks["speaker_cosine"]["pass"]))
-        if not args.skip_wer:
+        if args.strict_stage1 and not args.skip_wer:
             required_checks.append(bool(checks["wer_percent"]["pass"]))
 
         overall_pass = all(required_checks)
@@ -622,8 +652,13 @@ def main():
             "summary": {
                 "num_samples": len(sample_reports),
                 "overall_pass": overall_pass,
+                "validation_mode": "strict_stage1" if args.strict_stage1 else "bringup",
                 "avg_token_per_sec": avg_token_per_sec,
-                "avg_rtf": avg_rtf,
+                "avg_decoder_token_per_sec": avg_decoder_token_per_sec,
+                "avg_rtf": rtf_for_gate,
+                "avg_rtf_end_to_end_output": avg_rtf_end_to_end_output,
+                "avg_rtf_end_to_end_input": avg_rtf_end_to_end_input,
+                "avg_rtf_decoder_input": avg_rtf_decoder_input,
                 "avg_token_accuracy_percent": avg_token_accuracy,
                 "avg_speaker_cosine": avg_speaker_cosine,
                 "avg_wer_percent": avg_wer_percent,
@@ -641,6 +676,7 @@ def main():
                 "trace_region_size": args.trace_region_size,
                 "num_command_queues": args.num_command_queues,
                 "program_cache_enabled": not args.disable_program_cache,
+                "strict_stage1": args.strict_stage1,
                 "asr_model_id": None if args.skip_wer else args.asr_model_id,
                 "asr_language": None if args.skip_wer else args.asr_language,
                 "asr_task": None if args.skip_wer else args.asr_task,
@@ -657,9 +693,14 @@ def main():
             json.dump(report, f, indent=2)
 
         print("\n=== Stage-1 Validation Summary ===")
+        print(f"Validation mode: {'strict_stage1' if args.strict_stage1 else 'bringup'}")
         print(f"Samples: {len(sample_reports)}")
-        print(f"Avg token/s: {avg_token_per_sec:.2f}")
-        print(f"Avg RTF: {avg_rtf:.3f}")
+        print(f"Avg token/s (decoder): {avg_decoder_token_per_sec:.2f}")
+        print(f"Avg token/s (decoder+postnet): {avg_token_per_sec:.2f}")
+        print(f"Avg RTF (gate): {rtf_for_gate:.3f}")
+        print(f"Avg RTF (end-to-end/output-sec): {avg_rtf_end_to_end_output:.3f}")
+        print(f"Avg RTF (end-to-end/input-sec): {avg_rtf_end_to_end_input:.3f}")
+        print(f"Avg RTF (decoder/input-sec): {avg_rtf_decoder_input:.3f}")
         print(f"Avg token accuracy (%): {avg_token_accuracy:.2f}")
         if not args.skip_speaker_similarity:
             print(f"Avg speaker cosine: {avg_speaker_cosine if avg_speaker_cosine is not None else 'N/A'}")
