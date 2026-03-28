@@ -93,6 +93,8 @@ def _append_registry_entries(entries, path):
                 f"card_count: {hw.get('card_count', 1)}",
             ]
             f.write("    hardware: {" + ", ".join(hw_parts) + "}\n")
+            if entry.get("trace_uid"):
+                f.write(f"    trace_uid: {entry['trace_uid']}\n")
             f.write(f"    tt_metal_sha: {entry.get('tt_metal_sha') or 'null'}\n")
             f.write(f"    config_count: {entry.get('config_count', 0)}\n")
             loaded_at = str(entry.get("loaded_at", ""))
@@ -105,7 +107,7 @@ def _append_registry_entries(entries, path):
             f.write("\n")
 
 
-DEFAULT_SCHEMA = "ttnn_ops_v5"
+DEFAULT_SCHEMA = "ttnn_ops_v6"
 
 # Connection string from environment (supports both CI and local env var names)
 NEON_URL = os.environ.get("TTNN_OPS_DATABASE_URL") or os.environ.get("NEON_CONNECTION_STRING")
@@ -449,39 +451,105 @@ def parse_mesh_from_machine_info(machine_info, arguments=None):
     return mesh_shape, device_count, placement_type, shard_dim, distribution_shape
 
 
-def get_or_create_trace_run(cur, trace_run_cache, hardware_id, tt_metal_sha=None, schema=DEFAULT_SCHEMA):
-    """Get or create a trace_run for this hardware + SHA combination.
-
-    v5: no model_id on trace_run — models are tracked via trace_run_model.
-    """
+def get_or_create_trace_run(cur, trace_run_cache, trace_uid, hardware_id, tt_metal_sha=None, schema=DEFAULT_SCHEMA):
+    """Create and cache a trace_run for a unique trace_uid."""
     _validate_schema(schema)
-    tr_key = (hardware_id, tt_metal_sha)
-    if tr_key not in trace_run_cache:
+    if trace_uid not in trace_run_cache:
         cur.execute(
             f"""
-            INSERT INTO {schema}.trace_run (hardware_id, tt_metal_sha)
-            VALUES (%s, %s)
+            INSERT INTO {schema}.trace_run (trace_uid, hardware_id, tt_metal_sha)
+            VALUES (%s, %s, %s)
             RETURNING trace_run_id
             """,
-            (hardware_id, tt_metal_sha),
+            (trace_uid, hardware_id, tt_metal_sha),
         )
-        trace_run_cache[tr_key] = cur.fetchone()[0]
+        trace_run_cache[trace_uid] = cur.fetchone()[0]
 
-    return trace_run_cache[tr_key]
+    return trace_run_cache[trace_uid]
 
 
-def link_trace_run_config(cur, trace_run_id, config_id, execution_count, schema=DEFAULT_SCHEMA):
-    """Link a configuration to a trace_run via trace_run_config."""
+def link_trace_run_configuration_model(cur, trace_run_id, config_id, model_id, execution_count, schema=DEFAULT_SCHEMA):
+    """Insert canonical per-trace per-config per-model execution counts."""
     _validate_schema(schema)
     cur.execute(
         f"""
-        INSERT INTO {schema}.trace_run_config (trace_run_id, configuration_id, execution_count)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (trace_run_id, configuration_id) DO UPDATE
-        SET execution_count = {schema}.trace_run_config.execution_count + EXCLUDED.execution_count
+        INSERT INTO {schema}.trace_run_configuration_model
+            (trace_run_id, configuration_id, model_id, execution_count)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (trace_run_id, configuration_id, model_id) DO UPDATE
+        SET last_seen_ts = NOW(),
+            execution_count = {schema}.trace_run_configuration_model.execution_count + EXCLUDED.execution_count
         """,
-        (trace_run_id, config_id, execution_count),
+        (trace_run_id, config_id, model_id, execution_count),
     )
+
+
+def refresh_trace_aggregates(cur, trace_run_ids, configuration_ids, schema=DEFAULT_SCHEMA):
+    """Refresh derived aggregate tables from canonical trace_run_configuration_model rows."""
+    _validate_schema(schema)
+    trace_run_ids = sorted(set(trace_run_ids or []))
+    configuration_ids = sorted(set(configuration_ids or []))
+
+    if trace_run_ids:
+        cur.execute(f"DELETE FROM {schema}.trace_run_config WHERE trace_run_id = ANY(%s)", (trace_run_ids,))
+        cur.execute(
+            f"""
+            INSERT INTO {schema}.trace_run_config (trace_run_id, configuration_id, execution_count)
+            SELECT trace_run_id, configuration_id, SUM(execution_count)
+            FROM {schema}.trace_run_configuration_model
+            WHERE trace_run_id = ANY(%s)
+            GROUP BY trace_run_id, configuration_id
+            """,
+            (trace_run_ids,),
+        )
+
+        cur.execute(f"DELETE FROM {schema}.trace_run_model WHERE trace_run_id = ANY(%s)", (trace_run_ids,))
+        cur.execute(
+            f"""
+            INSERT INTO {schema}.trace_run_model (trace_run_id, model_id)
+            SELECT DISTINCT trace_run_id, model_id
+            FROM {schema}.trace_run_configuration_model
+            WHERE trace_run_id = ANY(%s)
+            """,
+            (trace_run_ids,),
+        )
+
+        cur.execute(
+            f"""
+            UPDATE {schema}.trace_run tr
+            SET config_count = agg.config_count
+            FROM (
+                SELECT trace_run_id, COUNT(DISTINCT configuration_id) AS config_count
+                FROM {schema}.trace_run_configuration_model
+                WHERE trace_run_id = ANY(%s)
+                GROUP BY trace_run_id
+            ) agg
+            WHERE tr.trace_run_id = agg.trace_run_id
+            """,
+            (trace_run_ids,),
+        )
+
+    if configuration_ids:
+        cur.execute(
+            f"DELETE FROM {schema}.ttnn_configuration_model WHERE configuration_id = ANY(%s)",
+            (configuration_ids,),
+        )
+        cur.execute(
+            f"""
+            INSERT INTO {schema}.ttnn_configuration_model
+                (configuration_id, model_id, execution_count, first_seen_ts, last_seen_ts)
+            SELECT
+                configuration_id,
+                model_id,
+                SUM(execution_count),
+                MIN(first_seen_ts),
+                MAX(last_seen_ts)
+            FROM {schema}.trace_run_configuration_model
+            WHERE configuration_id = ANY(%s)
+            GROUP BY configuration_id, model_id
+            """,
+            (configuration_ids,),
+        )
 
 
 def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_SCHEMA):
@@ -504,6 +572,22 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
     operations = data.get("operations", {})
     print(f"Found {len(operations)} operations")
 
+    default_trace_uid = data.get("metadata", {}).get("trace_uid")
+    file_trace_uids = set()
+    for op_data in operations.values():
+        for config in op_data.get("configurations", []):
+            executions = config.get("executions", [])
+            if not executions:
+                continue
+            for execution in executions:
+                trace_uid = execution.get("trace_uid", default_trace_uid)
+                if not trace_uid:
+                    raise ValueError(
+                        "Missing execution.trace_uid in input JSON. "
+                        "Re-trace with generic_ops_tracer.py to produce v6-compatible trace metadata."
+                    )
+                file_trace_uids.add(trace_uid)
+
     conn = psycopg2.connect(NEON_URL)
     cur = conn.cursor()
 
@@ -513,8 +597,8 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
     hardware_cache = {}
     mesh_config_cache = {}
     config_cache = {}  # config_hash -> config_id
-    trace_run_cache = {}  # (hardware_id, sha) -> trace_run_id
-    print("  Populating trace_run, trace_run_config, trace_run_model + ttnn_configuration_model")
+    trace_run_cache = {}  # trace_uid -> trace_run_id
+    print("  Populating trace_run_configuration_model + derived aggregate tables")
 
     # Auto-detect tt_metal_sha if not provided
     if tt_metal_sha is None:
@@ -528,9 +612,24 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
         except Exception as e:
             print(f"  Warning: failed to auto-detect tt-metal SHA via git: {e}")
 
+    if file_trace_uids:
+        cur.execute(
+            f"SELECT trace_uid FROM {schema}.trace_run WHERE trace_uid = ANY(%s)",
+            (list(file_trace_uids),),
+        )
+        existing_trace_uids = sorted(row[0] for row in cur.fetchall())
+        if existing_trace_uids:
+            conn.close()
+            joined = ", ".join(existing_trace_uids)
+            print(f"Trace upload aborted: the following trace_uid values already exist in {schema}.trace_run: {joined}")
+            print("This trace was already uploaded, so no data population was performed.")
+            return
+
     new_configs = 0  # configs inserted for the first time this load
     total_model_links = 0
-    total_trace_run_links = 0  # all configs linked to trace_runs (new + pre-existing)
+    trace_run_ids_touched = set()
+    configuration_ids_touched = set()
+    trace_config_pairs = set()
 
     for op_name, op_data in operations.items():
         # Insert operation
@@ -595,11 +694,14 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
                 source = execution.get("source")
                 machine_info = execution.get("machine_info", {})
                 execution_count = execution.get("count", 1)
+                trace_uid = execution.get("trace_uid", default_trace_uid)
 
                 # Validate required fields
                 missing = []
                 if not source:
                     missing.append("execution.source")
+                if not trace_uid:
+                    missing.append("execution.trace_uid")
                 if not machine_info.get("board_type"):
                     missing.append("machine_info.board_type")
                 if not machine_info.get("device_series"):
@@ -675,62 +777,32 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
                             config_id = result[0]
                             config_cache[config_hash] = config_id
 
-                # Link this execution's model to the config via junction table (even if config existed)
-                if model_id is not None:
-                    cur.execute(
-                        f"""
-                        INSERT INTO {schema}.ttnn_configuration_model (configuration_id, model_id, execution_count)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (configuration_id, model_id) DO UPDATE
-                        SET last_seen_ts = NOW(),
-                            execution_count = {schema}.ttnn_configuration_model.execution_count + EXCLUDED.execution_count
-                    """,
-                        (config_id, model_id, execution_count),
-                    )
-                    total_model_links += 1
+                configuration_ids_touched.add(config_id)
 
-                    # Link via trace_run (keyed by hardware_id + sha, no model_id)
+                # Link this execution canonically via trace + config + model
+                if model_id is not None:
                     if hardware_id:
                         trace_run_id = get_or_create_trace_run(
                             cur,
                             trace_run_cache,
+                            trace_uid,
                             hardware_id,
                             tt_metal_sha,
                             schema=schema,
                         )
-                        link_trace_run_config(cur, trace_run_id, config_id, execution_count, schema=schema)
-                        total_trace_run_links += 1
+                        trace_run_ids_touched.add(trace_run_id)
+                        trace_config_pairs.add((trace_run_id, config_id))
+                        link_trace_run_configuration_model(
+                            cur, trace_run_id, config_id, model_id, execution_count, schema=schema
+                        )
+                        total_model_links += 1
 
         if not dry_run:
             conn.commit()
         print(f"  Loaded {op_name}: {len(op_data.get('configurations', []))} JSON configs")
 
-    # Update config_count and populate trace_run_model for each new trace_run
-    if trace_run_cache:
-        for tr_id in trace_run_cache.values():
-            cur.execute(
-                f"""
-                UPDATE {schema}.trace_run
-                SET config_count = (
-                    SELECT COUNT(*) FROM {schema}.trace_run_config
-                    WHERE trace_run_id = %s
-                )
-                WHERE trace_run_id = %s
-                """,
-                (tr_id, tr_id),
-            )
-            cur.execute(
-                f"""
-                INSERT INTO {schema}.trace_run_model (trace_run_id, model_id)
-                SELECT DISTINCT %s, cm.model_id
-                FROM {schema}.trace_run_config trc
-                JOIN {schema}.ttnn_configuration_model cm
-                    ON cm.configuration_id = trc.configuration_id
-                WHERE trc.trace_run_id = %s
-                ON CONFLICT DO NOTHING
-                """,
-                (tr_id, tr_id),
-            )
+    if trace_run_ids_touched or configuration_ids_touched:
+        refresh_trace_aggregates(cur, trace_run_ids_touched, configuration_ids_touched, schema=schema)
 
     def _fetch_db_totals(cur):
         counts = {}
@@ -742,6 +814,7 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
             ("ttnn_configuration", "Configurations"),
             ("ttnn_configuration_model", "Config-Model links"),
             ("trace_run", "Trace runs"),
+            ("trace_run_configuration_model", "Trace-Config-Model links"),
             ("trace_run_config", "Trace-Config links"),
             ("trace_run_model", "Trace-Model links"),
         ]:
@@ -757,12 +830,12 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
         conn.commit()
 
     print(
-        f"\n{'Would load' if dry_run else '✅ Loaded'} {total_trace_run_links} configurations "
-        f"({new_configs} new, {total_trace_run_links - new_configs} pre-existing), {total_model_links} model links"
+        f"\n{'Would load' if dry_run else '✅ Loaded'} {len(trace_config_pairs)} trace/config links "
+        f"({new_configs} new configs), {total_model_links} canonical trace/config/model links"
     )
     print(
         f"   Trace runs {'that would be ' if dry_run else ''}created: {len(trace_run_cache)}, "
-        f"total configs tied to traces: {total_trace_run_links}"
+        f"total configs tied to traces: {len(trace_config_pairs)}"
     )
 
     if dry_run:
@@ -799,7 +872,15 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
         cur = conn.cursor()
         hw_map = {}
         trace_models_map = {}  # trace_run_id -> sorted list of model_names
-        for (hardware_id, _sha), trace_run_id in trace_run_cache.items():
+        for trace_run_id in trace_run_cache.values():
+            cur.execute(
+                f"SELECT hardware_id, tt_metal_sha, trace_uid FROM {schema}.trace_run WHERE trace_run_id = %s",
+                (trace_run_id,),
+            )
+            tr_row = cur.fetchone()
+            if not tr_row:
+                continue
+            hardware_id, sha, trace_uid = tr_row
             if hardware_id and hardware_id not in hw_map:
                 cur.execute(
                     f"SELECT board_type, device_series, card_count FROM {schema}.ttnn_hardware WHERE ttnn_hardware_id = %s",
@@ -827,7 +908,15 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
     existing_ids = {entry.get("trace_id") for entry in data["registry"]}
     added = 0
 
-    for (hardware_id, sha), trace_run_id in trace_run_cache.items():
+    for trace_run_id in trace_run_cache.values():
+        cur.execute(
+            f"SELECT hardware_id, tt_metal_sha, trace_uid FROM {schema}.trace_run WHERE trace_run_id = %s",
+            (trace_run_id,),
+        )
+        tr_row = cur.fetchone()
+        if not tr_row:
+            continue
+        hardware_id, sha, trace_uid = tr_row
         if trace_run_id in existing_ids:
             continue
 
@@ -843,6 +932,7 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
                 "device_series": device_series,
                 "card_count": card_count,
             },
+            "trace_uid": trace_uid,
             "tt_metal_sha": sha,
             "config_count": None,  # updated after commit
             "loaded_at": str(date.today()),
@@ -886,6 +976,54 @@ def format_source(source_file, hf_model):
     return source_file
 
 
+def _fetch_trace_run_ids_map(cur, config_ids, schema=DEFAULT_SCHEMA):
+    """Return a mapping of configuration_id -> sorted trace_run_ids."""
+    if not config_ids:
+        return {}
+
+    cur.execute(
+        f"""
+        SELECT configuration_id, ARRAY_AGG(DISTINCT trace_run_id ORDER BY trace_run_id)
+        FROM {schema}.trace_run_config
+        WHERE configuration_id = ANY(%s)
+        GROUP BY configuration_id
+        """,
+        (list(config_ids),),
+    )
+    return {config_id: list(trace_run_ids or []) for config_id, trace_run_ids in cur.fetchall()}
+
+
+def _merge_trace_run_ids(existing_ids, incoming_ids):
+    """Merge two trace_run_ids collections deterministically."""
+    return sorted(set(existing_ids or []) | set(incoming_ids or []))
+
+
+def _machine_info_key(machine_info):
+    """Stable key for merging execution buckets with identical machine info."""
+    return json.dumps(machine_info or {}, sort_keys=True, default=str)
+
+
+def _merge_execution_lists(existing_executions, incoming_executions):
+    """Merge execution buckets by (source, machine_info), summing counts and provenance."""
+    merged = {}
+    for execution in list(existing_executions or []) + list(incoming_executions or []):
+        source = execution.get("source")
+        machine_info = execution.get("machine_info", {})
+        key = (source, _machine_info_key(machine_info))
+        if key not in merged:
+            merged[key] = {
+                "source": source,
+                "machine_info": machine_info,
+                "count": 0,
+                "trace_run_ids": [],
+            }
+        merged[key]["count"] += execution.get("count", 0)
+        merged[key]["trace_run_ids"] = _merge_trace_run_ids(
+            merged[key]["trace_run_ids"], execution.get("trace_run_ids")
+        )
+    return list(merged.values())
+
+
 def _validate_schema(schema):
     """Validate schema name to prevent SQL injection (used in f-string queries)."""
     if not re.match(r"^[a-zA-Z_]\w*$", schema):
@@ -897,7 +1035,7 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
 
     Args:
         output_path: Path to write the reconstructed JSON
-        schema: Database schema to use (default: "ttnn_ops_v5")
+        schema: Database schema to use (default: "ttnn_ops_v6")
         model_filter: List of model patterns to filter by (e.g., ["deepseek_v3"]).
                       Only configurations linked to models whose source_file contains
                       one of these patterns (case-insensitive) will be included.
@@ -1023,11 +1161,16 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
 
             cur.execute(
                 f"""
-                SELECT m.source_file, m.hf_model_identifier, cm.execution_count
-                FROM {schema}.ttnn_configuration_model cm
-                JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
-                WHERE cm.configuration_id = %s
+                SELECT
+                    m.source_file,
+                    m.hf_model_identifier,
+                    SUM(trcm.execution_count) AS execution_count,
+                    ARRAY_AGG(DISTINCT trcm.trace_run_id ORDER BY trcm.trace_run_id) AS trace_run_ids
+                FROM {schema}.trace_run_configuration_model trcm
+                JOIN {schema}.ttnn_model m ON m.ttnn_model_id = trcm.model_id
+                WHERE trcm.configuration_id = %s
                 {source_filter_clause}
+                GROUP BY m.source_file, m.hf_model_identifier
                 ORDER BY m.source_file, m.hf_model_identifier
             """,
                 [config_id] + source_filter_params,
@@ -1052,12 +1195,17 @@ def reconstruct_from_db(output_path=None, schema=DEFAULT_SCHEMA, model_filter=No
             config_dict["config_hash"] = config_hash
 
             executions = []
-            for source_file, hf_model, exec_count in source_rows:
+            for source_file, hf_model, exec_count, trace_run_ids in source_rows:
                 source_str = format_source(source_file, hf_model)
                 if not source_str:
                     continue
 
-                execution = {"source": source_str, "machine_info": {}, "count": exec_count}
+                execution = {
+                    "source": source_str,
+                    "machine_info": {},
+                    "count": exec_count,
+                    "trace_run_ids": list(trace_run_ids or []),
+                }
 
                 if board_type:
                     execution["machine_info"]["board_type"] = board_type
@@ -1104,7 +1252,7 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
     Args:
         trace_run_id: ID of the trace_run to reconstruct.
         output_path: Path to write the reconstructed JSON.
-        schema: Database schema to read from (default: "ttnn_ops_v5").
+        schema: Database schema to read from (default: "ttnn_ops_v6").
         model_names: Optional set/list of model_name values to include. When provided,
             only configs belonging to those models are reconstructed. None = all models.
 
@@ -1177,24 +1325,22 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
             h.card_count,
             mc.mesh_shape,
             mc.device_count,
-            cm.execution_count,
+            trcm.execution_count,
             m.source_file,
             m.hf_model_identifier
-        FROM {schema}.trace_run_config trc
+        FROM {schema}.trace_run_configuration_model trcm
         JOIN {schema}.ttnn_configuration c
-            ON c.ttnn_configuration_id = trc.configuration_id
+            ON c.ttnn_configuration_id = trcm.configuration_id
         JOIN {schema}.ttnn_operation o
             ON o.ttnn_operation_id = c.operation_id
         LEFT JOIN {schema}.ttnn_hardware h
             ON h.ttnn_hardware_id = c.hardware_id
         LEFT JOIN {schema}.ttnn_mesh_config mc
             ON mc.ttnn_mesh_config_id = c.mesh_config_id
-        JOIN {schema}.ttnn_configuration_model cm
-            ON cm.configuration_id = trc.configuration_id
         JOIN {schema}.ttnn_model m
-            ON m.ttnn_model_id = cm.model_id
+            ON m.ttnn_model_id = trcm.model_id
            AND m.ttnn_model_id = ANY(%s)
-        WHERE trc.trace_run_id = %s
+        WHERE trcm.trace_run_id = %s
         ORDER BY o.operation_name, c.config_hash, m.source_file, m.hf_model_identifier
         """,
         (list(trace_model_ids), trace_run_id),
@@ -1258,6 +1404,7 @@ def reconstruct_from_trace_run(trace_run_id, output_path=None, schema=DEFAULT_SC
                 "source": source,
                 "machine_info": exec_machine_info,
                 "count": execution_count,
+                "trace_run_ids": [trace_run_id],
             }
         )
 
@@ -1527,7 +1674,7 @@ def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, 
         manifest_path: Path to sweep_manifest.yaml (optional).
         output_path: Path to write the merged JSON (optional).
         scope: 'lead_models' or 'model_traced' (None = all targets).
-        schema: Database schema to read from (default: "ttnn_ops_v5").
+        schema: Database schema to read from (default: "ttnn_ops_v6").
 
     Returns:
         Merged dict in the tracer's master JSON format.
@@ -1556,7 +1703,7 @@ def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, 
     # Merge: union operations, deduplicate configs by config_hash
     merged = {"operations": {}, "metadata": {"trace_run_ids": sorted(trace_model_map.keys()), "models": []}}
 
-    seen_hashes = {}  # config_hash -> True (global dedup across all traces)
+    seen_hashes = {}  # config_hash -> merged config dict (global dedup across all traces)
     total_configs = 0
     total_deduped = 0
 
@@ -1575,10 +1722,15 @@ def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, 
                 ch = config.get("config_hash")
                 total_configs += 1
                 if ch and ch in seen_hashes:
+                    seen_hashes[ch]["executions"] = _merge_execution_lists(
+                        seen_hashes[ch].get("executions"),
+                        config.get("executions"),
+                    )
                     total_deduped += 1
                     continue
                 if ch:
-                    seen_hashes[ch] = True
+                    config["executions"] = _merge_execution_lists([], config.get("executions"))
+                    seen_hashes[ch] = config
                 merged["operations"][op_name]["configurations"].append(config)
 
     # Sort configs within each operation by config_hash for deterministic output
@@ -1659,10 +1811,15 @@ def reconstruct_single_operation(operation_name, output_path=None, schema=DEFAUL
         # Get sources
         cur.execute(
             f"""
-            SELECT m.source_file, m.hf_model_identifier, cm.execution_count
-            FROM {schema}.ttnn_configuration_model cm
-            JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
-            WHERE cm.configuration_id = %s
+            SELECT
+                m.source_file,
+                m.hf_model_identifier,
+                SUM(trcm.execution_count) AS execution_count,
+                ARRAY_AGG(DISTINCT trcm.trace_run_id ORDER BY trcm.trace_run_id) AS trace_run_ids
+            FROM {schema}.trace_run_configuration_model trcm
+            JOIN {schema}.ttnn_model m ON m.ttnn_model_id = trcm.model_id
+            WHERE trcm.configuration_id = %s
+            GROUP BY m.source_file, m.hf_model_identifier
             ORDER BY m.source_file, m.hf_model_identifier
         """,
             (config_id,),
@@ -1685,11 +1842,16 @@ def reconstruct_single_operation(operation_name, output_path=None, schema=DEFAUL
         config_dict["config_hash"] = config_hash
 
         executions = []
-        for source_file, hf_model, exec_count in source_rows:
+        for source_file, hf_model, exec_count, trace_run_ids in source_rows:
             source_str = format_source(source_file, hf_model)
             if not source_str:
                 continue
-            execution = {"source": source_str, "machine_info": {}, "count": exec_count}
+            execution = {
+                "source": source_str,
+                "machine_info": {},
+                "count": exec_count,
+                "trace_run_ids": list(trace_run_ids or []),
+            }
             if board_type:
                 execution["machine_info"]["board_type"] = board_type
                 execution["machine_info"]["device_series"] = device_series
@@ -1937,7 +2099,7 @@ def delete_trace_run(trace_run_id, yes=False, schema=DEFAULT_SCHEMA):
         SELECT COUNT(*) FROM {schema}.trace_run_config trc
         WHERE trc.trace_run_id = %s
           AND NOT EXISTS (
-              SELECT 1 FROM {schema}.trace_run_config other
+              SELECT 1 FROM {schema}.trace_run_configuration_model other
               WHERE other.configuration_id = trc.configuration_id
                 AND other.trace_run_id != %s
           )
@@ -1960,29 +2122,43 @@ def delete_trace_run(trace_run_id, yes=False, schema=DEFAULT_SCHEMA):
 
     cur.execute(
         f"""
-        SELECT trc.configuration_id FROM {schema}.trace_run_config trc
-        WHERE trc.trace_run_id = %s
+        SELECT DISTINCT trcm.configuration_id
+        FROM {schema}.trace_run_configuration_model trcm
+        WHERE trcm.trace_run_id = %s
           AND NOT EXISTS (
-              SELECT 1 FROM {schema}.trace_run_config other
-              WHERE other.configuration_id = trc.configuration_id
+              SELECT 1 FROM {schema}.trace_run_configuration_model other
+              WHERE other.configuration_id = trcm.configuration_id
                 AND other.trace_run_id != %s
           )
         """,
         (trace_run_id, trace_run_id),
     )
     exclusive_ids = [r[0] for r in cur.fetchall()]
+    cur.execute(
+        f"""
+        SELECT DISTINCT configuration_id
+        FROM {schema}.trace_run_configuration_model
+        WHERE trace_run_id = %s
+        """,
+        (trace_run_id,),
+    )
+    affected_config_ids = [r[0] for r in cur.fetchall()]
+
+    cur.execute(f"DELETE FROM {schema}.trace_run_configuration_model WHERE trace_run_id = %s", (trace_run_id,))
+
+    cur.execute(f"DELETE FROM {schema}.trace_run_config WHERE trace_run_id = %s", (trace_run_id,))
+
+    cur.execute(f"DELETE FROM {schema}.trace_run_model WHERE trace_run_id = %s", (trace_run_id,))
+
+    remaining_config_ids = [config_id for config_id in affected_config_ids if config_id not in exclusive_ids]
+    if remaining_config_ids:
+        refresh_trace_aggregates(cur, [], remaining_config_ids, schema=schema)
 
     if exclusive_ids:
         cur.execute(
             f"DELETE FROM {schema}.ttnn_configuration_model WHERE configuration_id = ANY(%s)",
             (exclusive_ids,),
         )
-
-    cur.execute(f"DELETE FROM {schema}.trace_run_config WHERE trace_run_id = %s", (trace_run_id,))
-
-    cur.execute(f"DELETE FROM {schema}.trace_run_model WHERE trace_run_id = %s", (trace_run_id,))
-
-    if exclusive_ids:
         cur.execute(
             f"DELETE FROM {schema}.ttnn_configuration WHERE ttnn_configuration_id = ANY(%s)",
             (exclusive_ids,),
@@ -2102,7 +2278,7 @@ if __name__ == "__main__":
             )
         else:
             print(f"Unknown command: {cmd}")
-            print("Usage (all commands accept --schema <name>, default: ttnn_ops_v5):")
+            print("Usage (all commands accept --schema <name>, default: ttnn_ops_v6):")
             print("  python load_ttnn_ops_data_v2.py load [json_path] [sha] [--dry-run]           # Load JSON to DB")
             print(
                 "  python load_ttnn_ops_data_v2.py reconstruct [output] [models]                # Reconstruct JSON from DB"

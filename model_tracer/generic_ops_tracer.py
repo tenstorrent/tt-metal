@@ -31,6 +31,7 @@ import json
 import copy
 import hashlib
 import re
+import uuid
 from tqdm import tqdm
 import argparse
 from datetime import datetime
@@ -535,7 +536,7 @@ def _compute_config_hash(op_name, op_args, machine_info):
     return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
 
 
-def update_master_file(master_file_path, operations, test_source):
+def update_master_file(master_file_path, operations, test_source, trace_uid=None):
     """Update master JSON file with operations"""
     import hashlib
 
@@ -604,6 +605,7 @@ def update_master_file(master_file_path, operations, test_source):
                         "source": test_source,
                         "machine_info": machine_info,
                         "count": operation.get("execution_count", 1),
+                        "trace_uid": trace_uid or operation.get("trace_uid"),
                     }
                 ],
             }
@@ -667,6 +669,7 @@ def update_master_file(master_file_path, operations, test_source):
                 new_source = test_source
                 new_machine_info = operation.get("machine_info")
                 new_count = operation.get("execution_count", 1)
+                new_trace_uid = trace_uid or operation.get("trace_uid")
 
                 found_execution = None
                 for execution in matching_config["executions"]:
@@ -688,6 +691,8 @@ def update_master_file(master_file_path, operations, test_source):
                 if found_execution:
                     # Update existing execution - take max count
                     found_execution["count"] = max(found_execution.get("count", 1), new_count)
+                    if new_trace_uid:
+                        found_execution["trace_uid"] = new_trace_uid
                 else:
                     # Add new execution entry
                     matching_config["executions"].append(
@@ -695,6 +700,7 @@ def update_master_file(master_file_path, operations, test_source):
                             "source": new_source,
                             "machine_info": new_machine_info,
                             "count": new_count,
+                            "trace_uid": new_trace_uid,
                         }
                     )
 
@@ -862,6 +868,7 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     metadata = {
         "test_source": test_path,
         "timestamp": datetime.now().isoformat(),
+        "trace_uid": str(uuid.uuid4()),
         "machine_info": get_machine_info(),
         "trace_count": len(json_files),
     }
@@ -885,6 +892,7 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         "exit_code": result.returncode,
         "trace_files": json_files,
         "trace_dir": trace_dir,
+        "trace_uid": metadata["trace_uid"],
         "keep_traces": keep_traces,
         "output_dir": output_dir,
         "test_stats": test_stats,
@@ -1231,6 +1239,7 @@ Examples (Import existing traces):
             valid_operations = load_valid_operations()
             excluded_operations = get_excluded_operations()
             machine_info = get_machine_info()
+            trace_uid = result.get("trace_uid")
 
             # Extract test source name and possibly override machine_info from metadata
             if args.load:
@@ -1260,8 +1269,11 @@ Examples (Import existing traces):
                         # Use machine_info from metadata if present
                         if "machine_info" in metadata:
                             machine_info = metadata["machine_info"]
+                            trace_uid = metadata.get("trace_uid", trace_uid)
                             print(f"📋 Loaded metadata from trace directory")
                             print(f"   Original source: {metadata.get('test_source')}")
+                            if metadata.get("trace_uid"):
+                                print(f"   Trace UID: {metadata.get('trace_uid')}")
                             if "machine_info" in metadata and metadata["machine_info"]:
                                 machine_desc = (
                                     metadata["machine_info"][0]
@@ -1367,7 +1379,10 @@ Examples (Import existing traces):
             else:
                 os.makedirs(args.output_dir, exist_ok=True)
                 master_file = os.path.join(args.output_dir, "ttnn_operations_master.json")
-            new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source)
+            if trace_uid:
+                new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source, trace_uid)
+            else:
+                new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source)
 
             print(f"📝 Added {new_configs_added} new unique configurations to {master_file}")
             print(f"   Source: {test_source}")
