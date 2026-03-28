@@ -1,0 +1,277 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+Unit tests for ReduceToAllB1 operation.
+
+This test validates the 3-round hypercube all-reduce for a 4x2 mesh,
+checking that every device holds the correct sum of all 8 inputs.
+"""
+
+import pytest
+import torch
+from loguru import logger
+from tracy import signpost
+
+import ttnn
+from models.common.utility_functions import skip_for_wormhole_b0
+from models.demos.deepseek_v3_b1.micro_ops.reduce_to_all_b1.op import ReduceToAllB1
+from models.perf.benchmarking_utils import BenchmarkProfiler
+
+
+def create_fabric_router_config(max_payload_size):
+    """Helper to create FabricRouterConfig with custom max payload size."""
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
+def setup_reduce_to_all_test(mesh_device):
+    """Common setup for reduce_to_all tests. Returns test configuration."""
+    logger.info(f"mesh_device shape: {mesh_device.shape}")
+    logger.info(f"mesh_device num_devices: {mesh_device.get_num_devices()}")
+
+    mesh_rows, mesh_cols = mesh_device.shape
+    if mesh_rows * mesh_cols < 8:
+        pytest.skip(f"Need at least 8 devices, got {mesh_rows * mesh_cols}")
+    logger.info(f"Mesh is {mesh_rows}x{mesh_cols} = {mesh_rows * mesh_cols} devices")
+
+    num_devices = 8
+    submesh_device = mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    logger.info(f"Created submesh with shape: {submesh_device.shape}")
+    assert submesh_device.shape == ttnn.MeshShape((4, 2)), f"Expected 4x2 mesh, got {submesh_device.shape}"
+
+    # Same tensor shape/sharding as reduce_to_one_b1
+    tensor_shape = [1, 7168]
+    dtype = ttnn.bfloat16
+    layout = ttnn.TILE_LAYOUT
+    tile = ttnn.Tile((1, 32))
+
+    compute_cores = submesh_device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_cores = len(compute_cores)
+    logger.info(f"Using {num_cores} optimal DRAM cores: {compute_cores[:8]}")
+
+    num_shard_cores = 8
+    shard_cores_list = compute_cores[:num_shard_cores]
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in shard_cores_list})
+
+    shard_shape = [1, 896]
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    mem_config = ttnn.MemoryConfig(ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec)
+
+    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(1)], submesh_device.shape)
+    mesh_mapper = ttnn.create_mesh_mapper(submesh_device, mesh_mapper_config)
+
+    # Intermediate tensor: 3× shard width (3-page CB for received data)
+    intermediate_shard_shape = [1, shard_shape[1] * 3]
+    intermediate_tensor_shape = [1, tensor_shape[1] * 3]
+    intermediate_shard_spec = ttnn.ShardSpec(shard_grid, intermediate_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, intermediate_shard_spec
+    )
+    intermediate_data = torch.zeros([4, 2] + intermediate_tensor_shape, dtype=torch.bfloat16)
+    intermediate_tensor = ttnn.from_torch(
+        intermediate_data,
+        device=submesh_device,
+        layout=layout,
+        tile=tile,
+        dtype=dtype,
+        memory_config=intermediate_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Output tensor: SAME sharding as input (all devices get the result)
+    output_data = torch.zeros([4, 2] + tensor_shape, dtype=torch.bfloat16)
+    output_tensor = ttnn.from_torch(
+        output_data,
+        device=submesh_device,
+        layout=layout,
+        tile=tile,
+        dtype=dtype,
+        memory_config=mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+    logger.info("Created output tensor with same sharding as input (all devices)")
+
+    # Random input data
+    data_per_device = []
+    torch.manual_seed(42)
+    for _ in range(num_devices):
+        data = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        data_per_device.append(data)
+
+    data_all = torch.stack(data_per_device, dim=0).reshape(4, 2, *tensor_shape)
+
+    input_tensor = ttnn.from_torch(
+        data_all,
+        device=submesh_device,
+        layout=layout,
+        tile=tile,
+        dtype=dtype,
+        memory_config=mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    ref_output = ReduceToAllB1.golden(data_per_device)
+
+    # 3 semaphores (one per reduction round)
+    compute_grid = submesh_device.compute_with_storage_grid_size()
+    available_cores = ttnn.num_cores_to_corerangeset(compute_grid.x * compute_grid.y, compute_grid, row_wise=True)
+    ttnn.synchronize_device(submesh_device)
+    semaphores = [ttnn.create_global_semaphore(submesh_device, available_cores, 0) for _ in range(3)]
+    ttnn.synchronize_device(submesh_device)
+
+    return {
+        "submesh_device": submesh_device,
+        "input_tensor": input_tensor,
+        "intermediate_tensor": intermediate_tensor,
+        "output_tensor": output_tensor,
+        "ref_output": ref_output,
+        "semaphores": semaphores,
+    }
+
+
+def verify_output(output_tensor, submesh_device, ref_output):
+    """Verify output matches reference on ALL devices."""
+    output_torch = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(submesh_device, dim=0))
+
+    num_devices = submesh_device.shape[0] * submesh_device.shape[1]
+    rtol = 0.01
+    atol = 0.05
+    ref_flat = ref_output.flatten()
+
+    all_match = True
+    for device_idx in range(num_devices):
+        output_device = output_torch[device_idx].flatten()
+        match = torch.allclose(output_device, ref_flat, rtol=rtol, atol=atol)
+
+        row = device_idx // submesh_device.shape[1]
+        col = device_idx % submesh_device.shape[1]
+        if not match:
+            diff = torch.abs(output_device - ref_flat)
+            print(
+                f"Device ({row},{col}) idx={device_idx}: MISMATCH  max_diff={diff.max():.6f}  mean_diff={diff.mean():.6f}"
+            )
+            print(f"  ref[:8]   = {ref_flat[:8]}")
+            print(f"  got[:8]   = {output_device[:8]}")
+            all_match = False
+        else:
+            print(f"Device ({row},{col}) idx={device_idx}: OK")
+
+    return all_match
+
+
+def run_reduce_to_all(mesh_device, num_iterations=1):
+    """Run reduce_to_all test."""
+    print(f"\n=== Testing reduce_to_all (num_iterations={num_iterations}) ===")
+
+    config = setup_reduce_to_all_test(mesh_device)
+
+    print(f"Running reduce_to_all with {num_iterations} iterations...")
+    output_tensor = ReduceToAllB1.op(
+        config["input_tensor"],
+        config["intermediate_tensor"],
+        config["output_tensor"],
+        config["semaphores"],
+        num_iterations=num_iterations,
+    )
+    ttnn.synchronize_device(config["submesh_device"])
+
+    print("\nVerifying output on all devices...")
+    match = verify_output(
+        output_tensor,
+        config["submesh_device"],
+        config["ref_output"],
+    )
+
+    assert match, "Output tensor does not match reference on one or more devices"
+    print("Test passed — all 8 devices hold the correct sum!")
+
+
+def run_reduce_to_all_with_trace(mesh_device):
+    """Run reduce_to_all test with trace capture and replay."""
+    print(f"\n=== Testing reduce_to_all with trace ===")
+
+    config = setup_reduce_to_all_test(mesh_device)
+    submesh_device = config["submesh_device"]
+    input_tensor = config["input_tensor"]
+    intermediate_tensor = config["intermediate_tensor"]
+    output_tensor = config["output_tensor"]
+    ref_output = config["ref_output"]
+    semaphores = config["semaphores"]
+
+    # Compile run
+    print("Running reduce_to_all (compiling)...")
+    output_tensor = ReduceToAllB1.op(input_tensor, intermediate_tensor, output_tensor, semaphores)
+    ttnn.synchronize_device(submesh_device)
+
+    profiler = BenchmarkProfiler()
+
+    def run_iterations(num_iters):
+        for _ in range(num_iters):
+            ReduceToAllB1.op(input_tensor, intermediate_tensor, output_tensor, semaphores)
+
+    # Capture warmup trace
+    logger.info("Capturing warmup trace")
+    trace_id_warmup = ttnn.begin_trace_capture(submesh_device, cq_id=0)
+    run_iterations(15)
+    ttnn.end_trace_capture(submesh_device, trace_id_warmup, cq_id=0)
+    ttnn.synchronize_device(submesh_device)
+
+    # Capture main trace
+    logger.info("Capturing main trace")
+    trace_id = ttnn.begin_trace_capture(submesh_device, cq_id=0)
+    run_iterations(30)
+    ttnn.end_trace_capture(submesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(submesh_device)
+
+    # Execute warmup
+    logger.info("Execute warmup trace")
+    profiler.start("warmup-trace")
+    ttnn.execute_trace(submesh_device, trace_id_warmup, blocking=False)
+    ttnn.release_trace(submesh_device, trace_id_warmup)
+    ttnn.synchronize_device(submesh_device)
+    profiler.end("warmup-trace")
+
+    # Execute main
+    logger.info("Execute main trace")
+    signpost("start")
+    profiler.start("main-trace")
+    ttnn.execute_trace(submesh_device, trace_id, blocking=False)
+    ttnn.release_trace(submesh_device, trace_id)
+    ttnn.synchronize_device(submesh_device)
+    profiler.end("main-trace")
+    signpost("stop")
+
+    # Verify
+    print("\nVerifying trace output on all devices...")
+    match = verify_output(output_tensor, submesh_device, ref_output)
+
+    assert match, "Output tensor does not match reference after trace execution"
+    print("Trace test passed!")
+
+
+# === Tests ===
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(15232)})],
+    indirect=["device_params"],
+    ids=["fabric_2d"],
+)
+def test_reduce_to_all_2d(bh_2d_mesh_device):
+    """Test reduce_to_all with 2D fabric."""
+    run_reduce_to_all(bh_2d_mesh_device)
+
+
+@skip_for_wormhole_b0("This test is for blackhole")
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "fabric_router_config": create_fabric_router_config(15232)})],
+    indirect=["device_params"],
+    ids=["fabric_2d"],
+)
+def test_reduce_to_all_2d_multi_iter(bh_2d_mesh_device):
+    """Test reduce_to_all with 2D fabric and multiple iterations."""
+    run_reduce_to_all(bh_2d_mesh_device, num_iterations=100)
