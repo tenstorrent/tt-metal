@@ -1,0 +1,1408 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "b9b1e972",
+   "metadata": {},
+   "source": [
+    "# TT-NN Introduction\n",
+    "\n",
+    "Welcome to TT-NN, a high-performance deep learning framework optimized for Tenstorrent's AI accelerators. This tutorial will guide you through the fundamental concepts and operations needed to get started with TT-NN.\n",
+    "\n",
+    "## What You'll Learn\n",
+    "\n",
+    "- **Basic Setup**: Device initialization and library importing\n",
+    "- **Tensor Management**: Creating, moving, and manipulating tensors\n",
+    "- **PyTorch Integration**: Seamless interoperability with PyTorch\n",
+    "- **Memory Optimization**: Leveraging SRAM (L1) and DRAM for performance\n",
+    "- **Neural Network Operations**: Building blocks for AI models\n",
+    "- **Advanced Features**: Tensor sharding, compilation, and multi-device support\n",
+    "\n",
+    "We recommend downloading and running this tutorial on your device! It's available [here](https://github.com/tenstorrent/tt-metal/blob/main/ttnn/tutorials/ttnn_intro.ipynb)."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "23ca195b",
+   "metadata": {},
+   "source": [
+    "## 1. Getting Started\n",
+    "\n",
+    "TT-NN is implemented in C++ for optimal performance while providing Python bindings for ease of development and prototyping. This hybrid approach gives you the best of both worlds: high performance and developer productivity.\n",
+    "\n",
+    "### Importing the Library\n",
+    "\n",
+    "Let's start by importing TT-NN:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "06ff7b63",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Import the TT-NN library\n",
+    "import ttnn\n",
+    "\n",
+    "# Display version information\n",
+    "print(\"TT-NN successfully imported!\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "f67a4d40",
+   "metadata": {},
+   "source": [
+    "### Device Initialization\n",
+    "\n",
+    "Before performing any computations, we need to initialize a Tenstorrent device. The device ID (0) refers to the first available Tenstorrent device in your system:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "d124c302",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Initialize the first Tenstorrent device (device_id=0)\n",
+    "device = ttnn.open_device(device_id=0)\n",
+    "\n",
+    "print(f\"Device initialized successfully: {device}\")\n",
+    "print(f\"Device ID: {device.id()}\")\n",
+    "print(f\"Available compute cores: {device.compute_with_storage_grid_size()}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "ca9f649c",
+   "metadata": {},
+   "source": [
+    "## 2. Tensor Creation and Management\n",
+    "\n",
+    "TT-NN tensors can exist in two locations:\n",
+    "\n",
+    "- **Host (CPU)**: For data preparation and post-processing\n",
+    "- **Device (Tenstorrent hardware)**: For high-performance computation\n",
+    "\n",
+    "### Creating Host Tensors\n",
+    "\n",
+    "Let's start by creating a tensor on the host (CPU memory):"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "44c8d56b",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Create a tensor filled with 1.0 values on the host (CPU)\n",
+    "# Shape: [10, 15] - 10 rows, 15 columns\n",
+    "host_tensor = ttnn.full([10, 15], 1.0)\n",
+    "\n",
+    "print(f\"Host tensor created:\")\n",
+    "print(f\"  Shape: {host_tensor.shape}\")\n",
+    "print(f\"  Data type: {host_tensor.dtype}\")\n",
+    "print(f\"  Device: {host_tensor.device()}\")  # Should show None (host)\n",
+    "print(f\"  Layout: {host_tensor.layout}\")\n",
+    "print(f\"  Memory config: {host_tensor.memory_config()}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "79fe3ac7",
+   "metadata": {},
+   "source": [
+    "### Moving Tensors to Device\n",
+    "\n",
+    "To perform computations on Tenstorrent hardware, we need to transfer tensors from host to device:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "075425e8",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Transfer the host tensor to the device\n",
+    "device_tensor = ttnn.to_device(host_tensor, device)\n",
+    "\n",
+    "print(f\"Device tensor created:\")\n",
+    "print(f\"  Shape: {device_tensor.shape}\")\n",
+    "print(f\"  Device: {device_tensor.device()}\")  # Should show the device ID\n",
+    "print(f\"  Layout: {device_tensor.layout}\")    # Same layout as host tensor\n",
+    "print(f\"  Memory config: {device_tensor.memory_config()}\")  # Default DRAM"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "8bb2cf13",
+   "metadata": {},
+   "source": [
+    "### Creating Tensors Directly on Device\n",
+    "\n",
+    "For efficiency, you can also create tensors directly on the device without going through the host:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "0406f592",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Create a tensor with random values directly on the device\n",
+    "# This is more efficient as it avoids host->device transfer\n",
+    "device_tensor_2 = ttnn.rand([10, 15], device=device)\n",
+    "\n",
+    "print(f\"Direct device tensor created:\")\n",
+    "print(f\"  Shape: {device_tensor_2.shape}\")\n",
+    "print(f\"  Device: {device_tensor_2.device()}\")\n",
+    "print(f\"  Layout: {device_tensor_2.layout}\")  # May default to different layout"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "7f667726",
+   "metadata": {},
+   "source": [
+    "## 3. PyTorch Interoperability\n",
+    "\n",
+    "One of TT-NN's key strengths is seamless integration with PyTorch, allowing you to leverage existing PyTorch code and models. You can easily convert between PyTorch tensors and TT-NN tensors."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "cea36f17",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Import PyTorch for interoperability demonstrations\n",
+    "import torch\n",
+    "\n",
+    "print(f\"PyTorch version: {torch.__version__}\")\n",
+    "print(\"Ready for PyTorch <-> TT-NN conversions!\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "237fdb97",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Create a PyTorch tensor with random values\n",
+    "torch_tensor = torch.rand([10, 15])\n",
+    "print(f\"Original PyTorch tensor shape: {torch_tensor.shape}\")\n",
+    "print(f\"Original PyTorch tensor dtype: {torch_tensor.dtype}\")\n",
+    "\n",
+    "# Convert PyTorch tensor to TT-NN tensor on host\n",
+    "host_ttnn_from_torch = ttnn.from_torch(torch_tensor)\n",
+    "print(f\"\\nTT-NN tensor from PyTorch (host):\")\n",
+    "print(f\"  Shape: {host_ttnn_from_torch.shape}\")\n",
+    "print(f\"  Layout: {host_ttnn_from_torch.layout}\")\n",
+    "print(f\"  Device: {host_ttnn_from_torch.device()}\")\n",
+    "\n",
+    "# Convert PyTorch tensor to TT-NN tensor directly on device with tile layout\n",
+    "# Tile layout is optimized for Tenstorrent hardware operations\n",
+    "device_ttnn_from_torch = ttnn.from_torch(\n",
+    "    torch_tensor, \n",
+    "    device=device, \n",
+    "    layout=ttnn.TILE_LAYOUT\n",
+    ")\n",
+    "print(f\"\\nTT-NN tensor from PyTorch (device, tiled):\")\n",
+    "print(f\"  Shape: {device_ttnn_from_torch.shape}\")\n",
+    "print(f\"  Layout: {device_ttnn_from_torch.layout}\")\n",
+    "print(f\"  Device: {device_ttnn_from_torch.device()}\")\n",
+    "print(f\"  Memory config: {device_ttnn_from_torch.memory_config()}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "21967f23",
+   "metadata": {},
+   "source": [
+    "### Moving Tensors Back to Host\n",
+    "\n",
+    "After performing computations on the device, you often need to transfer results back to the host for further processing or analysis:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "cac32eac",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Create a device tensor for demonstration\n",
+    "device_tensor = ttnn.rand([10, 15], device=device)\n",
+    "print(f\"Original device tensor: {device_tensor.device()}\")\n",
+    "\n",
+    "# Method 1: Transfer device tensor back to host using ttnn.from_device\n",
+    "host_tensor = ttnn.from_device(device_tensor)\n",
+    "print(f\"Transferred to host using from_device(): {host_tensor.device()}\")\n",
+    "\n",
+    "# Method 2: Alternative syntax using .cpu() method (similar to PyTorch)\n",
+    "host_tensor_alt = device_tensor.cpu()\n",
+    "print(f\"Transferred to host using .cpu(): {host_tensor_alt.device()}\")\n",
+    "\n",
+    "# Both methods produce equivalent results\n",
+    "print(f\"Shapes match: {host_tensor.shape == host_tensor_alt.shape}\")\n",
+    "print(f\"Host tensor shape: {host_tensor.shape}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "0775d4fb",
+   "metadata": {},
+   "source": [
+    "### Converting Back to PyTorch\n",
+    "\n",
+    "TT-NN tensors can be seamlessly converted back to PyTorch tensors for further processing or integration with PyTorch-based pipelines:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "bfe7c91f",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Convert TT-NN tensor (device or host) back to PyTorch tensor\n",
+    "# Note: Device tensors are automatically transferred to host during conversion\n",
+    "torch_tensor_result = ttnn.to_torch(device_tensor)\n",
+    "\n",
+    "print(f\"Converted back to PyTorch:\")\n",
+    "print(f\"  PyTorch tensor shape: {torch_tensor_result.shape}\")\n",
+    "print(f\"  PyTorch tensor dtype: {torch_tensor_result.dtype}\")\n",
+    "print(f\"  PyTorch tensor device: {torch_tensor_result.device}\")\n",
+    "\n",
+    "# Display tensor properties for comparison\n",
+    "print(f\"\\nTensor Properties Comparison:\")\n",
+    "print(f\"Host TT-NN tensor:\")\n",
+    "print(f\"  Shape: {host_tensor.shape}\")\n",
+    "print(f\"  Layout: {host_tensor.layout}\")\n",
+    "print(f\"  Data type: {host_tensor.dtype}\")\n",
+    "print(f\"  Memory config: {host_tensor.memory_config()}\")\n",
+    "print(f\"  Device: {host_tensor.device()}\")\n",
+    "\n",
+    "print(f\"\\nDevice TT-NN tensor:\")\n",
+    "print(f\"  Shape: {device_tensor.shape}\")\n",
+    "print(f\"  Layout: {device_tensor.layout}\")\n",
+    "print(f\"  Data type: {device_tensor.dtype}\")\n",
+    "print(f\"  Memory config: {device_tensor.memory_config()}\")\n",
+    "print(f\"  Device: {device_tensor.device()}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "e40c4c0b",
+   "metadata": {},
+   "source": [
+    "## 4. Understanding Tensor Layouts\n",
+    "\n",
+    "[📖 **Documentation**: Tensor Layouts](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/tensor.html#layout)\n",
+    "\n",
+    "TT-NN supports two primary tensor layouts that affect how data is stored in memory and how operations are performed:\n",
+    "\n",
+    "### Layout Types\n",
+    "\n",
+    "**🔲 ROW_MAJOR_LAYOUT** - Traditional row-by-row data storage\n",
+    "![Row Major Layout](../../images/tensor_with_row_major_layout.png)\n",
+    "\n",
+    "**🟦 TILE_LAYOUT** - Optimized 32×32 tile-based storage\n",
+    "![Tile Layout](../../images/tensor_with_tile_layout.png)\n",
+    "\n",
+    "### Why Tile Layout Matters\n",
+    "\n",
+    "Tenstorrent hardware is specifically optimized for tiled data layouts. Most high-performance operations require tensors in tile layout for efficient execution. When converting to tile layout:\n",
+    "\n",
+    "- Tensors are automatically **padded** to fill complete 32×32 tiles\n",
+    "- This padding is handled **transparently** - you don't need to worry about it\n",
+    "- Operations run **significantly faster** on tiled data\n",
+    "\n",
+    "### Default Behavior\n",
+    "\n",
+    "By default, most tensor creation functions use row-major layout, but this can vary:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "0f68af54",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Check default layouts for different tensor creation methods\n",
+    "host_tensor = ttnn.full([3,4], 1.0)\n",
+    "device_tensor = ttnn.full([3,4], 1.0, device=device)\n",
+    "\n",
+    "print(f\"Host tensor layout: {host_tensor.layout}\")        # ROW_MAJOR_LAYOUT\n",
+    "print(f\"Device tensor layout: {device_tensor.layout}\")    # ROW_MAJOR_LAYOUT\n",
+    "\n",
+    "# Note: ttnn.full() uses ROW_MAJOR_LAYOUT by default for both host and device"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "e7a748d5",
+   "metadata": {},
+   "source": [
+    "### Functions with Different Default Layouts\n",
+    "\n",
+    "However, some operations create tensors directly in tile layout for performance reasons:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "24bf3c7f",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# ttnn.rand() defaults to TILE_LAYOUT for device tensors\n",
+    "rand_tensor = ttnn.rand([10,15], device=device)\n",
+    "\n",
+    "print(f\"Random tensor layout: {rand_tensor.layout}\")  # TILE_LAYOUT\n",
+    "print(f\"This is because ttnn.rand() optimizes for device operations\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "5feadb10",
+   "metadata": {},
+   "source": [
+    "### Layout Preservation During Transfer\n",
+    "\n",
+    "When you transfer tensors between host and device, the layout is preserved:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "05c6d02e",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Create a host tensor (row-major by default)\n",
+    "host_tensor = ttnn.full([3, 4], 1.0)\n",
+    "print(f\"Host tensor layout: {host_tensor.layout}\")\n",
+    "\n",
+    "# Transfer to device - layout is preserved\n",
+    "device_tensor = ttnn.to_device(host_tensor, device)\n",
+    "print(f\"Device tensor layout: {device_tensor.layout}\")\n",
+    "\n",
+    "# The layout remains ROW_MAJOR_LAYOUT even on device\n",
+    "print(\"Layout preserved during host->device transfer\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "d53593d6",
+   "metadata": {},
+   "source": [
+    "### Converting Between Layouts\n",
+    "\n",
+    "You can explicitly convert between layouts using `ttnn.to_layout()`. This is often necessary to optimize performance:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "3d1b5d56",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Start with row-major layout\n",
+    "print(f\"Original layout: {device_tensor.layout}\")\n",
+    "\n",
+    "# Convert to tile layout for optimized operations\n",
+    "device_tensor = ttnn.to_layout(device_tensor, ttnn.TILE_LAYOUT)\n",
+    "print(f\"After conversion: {device_tensor.layout}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "18e28a8a",
+   "metadata": {},
+   "source": [
+    "When converting from PyTorch tensors, you can specify the desired layout:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "eafb772b",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "torch_tensor = torch.rand([10,15])\n",
+    "print(ttnn.from_torch(torch_tensor).layout)\n",
+    "print(ttnn.from_torch(torch_tensor, device=device).layout)\n",
+    "print(ttnn.from_torch(torch_tensor, device=device, layout=ttnn.TILE_LAYOUT).layout)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "b8a4f4c5",
+   "metadata": {},
+   "source": [
+    "## 5. Data Types and Precision\n",
+    "\n",
+    "TT-NN supports various data types optimized for AI workloads, ranging from high precision (float32) to ultra-compact formats (bfloat4_b) that maximize throughput and memory efficiency."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "d77e1caa",
+   "metadata": {},
+   "source": [
+    "### Supported Data Types\n",
+    "\n",
+    "TT-NN supports the following data types, each optimized for different use cases:\n",
+    "\n",
+    "| **Data Type** | **Bits** | **Use Case** | **Trade-off** |\n",
+    "|---------------|----------|--------------|---------------|\n",
+    "| **uint16**    | 16       | Integer operations | Standard integer precision |\n",
+    "| **uint32**    | 32       | Integer operations | Higher integer precision |\n",
+    "| **float32**   | 32       | High precision float | Standard accuracy, more memory |\n",
+    "| **bfloat16**  | 16       | Neural networks | Good accuracy, 2x memory savings |\n",
+    "| **bfloat8_b** | 8        | Inference, large models | 4x memory savings, reduced accuracy |\n",
+    "| **bfloat4_b** | 4        | Ultra-efficient inference | 8x memory savings, lowest accuracy |\n",
+    "\n",
+    "### Performance vs. Accuracy Trade-offs\n",
+    "\n",
+    "- **Lower precision** formats (bfloat8_b, bfloat4_b) provide:\n",
+    "  - **Better memory bandwidth** and computational efficiency  \n",
+    "  - **Faster operations** due to reduced data movement\n",
+    "  - **Reduced numerical accuracy** - may impact model quality\n",
+    "  \n",
+    "- **Higher precision** formats (float32, bfloat16) provide:\n",
+    "  - **Higher accuracy** for numerical computations\n",
+    "  - **More memory usage** and potentially slower operations"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "aa6ac994",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Create a tensor with bfloat16 precision (common for neural networks)\n",
+    "x_bf16 = ttnn.rand([1000, 1000], device=device, dtype=ttnn.bfloat16)\n",
+    "print(f\"BFloat16 tensor: {x_bf16.dtype}, Shape: {x_bf16.shape}\")\n",
+    "\n",
+    "# Convert to different data types using ttnn.typecast()\n",
+    "print(\"\\n=== Data Type Conversions ===\")\n",
+    "\n",
+    "# Convert to float32 (higher precision)\n",
+    "x_float32 = ttnn.typecast(x_bf16, ttnn.float32)\n",
+    "print(f\"Float32 tensor: {x_float32.dtype}\")\n",
+    "\n",
+    "# Convert to uint16 (integer type)\n",
+    "x_uint16 = ttnn.typecast(x_bf16, ttnn.uint16)\n",
+    "print(f\"UInt16 tensor: {x_uint16.dtype}\")\n",
+    "\n",
+    "# Convert to bfloat8_b (reduced precision for efficiency)\n",
+    "x_bf8_b = ttnn.typecast(x_bf16, ttnn.bfloat8_b)\n",
+    "print(f\"BFloat8_b tensor: {x_bf8_b.dtype}\")\n",
+    "\n",
+    "# Convert to bfloat4_b (ultra-low precision)\n",
+    "x_bf4_b = ttnn.typecast(x_bf16, ttnn.bfloat4_b)\n",
+    "print(f\"BFloat4_b tensor: {x_bf4_b.dtype}\")\n",
+    "\n",
+    "print(\"\\nTip: Use lower precision types for inference to maximize throughput!\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "35bba8c4",
+   "metadata": {},
+   "source": [
+    "## 6. Basic Tensor Operations\n",
+    "\n",
+    "TT-NN provides a comprehensive set of tensor operations similar to PyTorch, but optimized for Tenstorrent hardware. Most operations are performed on device tensors for maximum performance."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "644331ab",
+   "metadata": {},
+   "source": [
+    "### Important Operation Requirements\n",
+    "\n",
+    "- **Device-only operations**: Most TT-NN operations are only supported on **device tensors**, not host tensors\n",
+    "- **Layout considerations**: Many operations perform better on **TILE_LAYOUT** tensors\n",
+    "- **Matrix multiplication**: For advanced control over math fidelity and performance, see the [Matrix Engine documentation](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/matrix_engine/matrix_engine.md)\n",
+    "\n",
+    "### Creating Test Data\n",
+    "\n",
+    "Let's create some tensors for demonstrating operations:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "baeea33e",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Create a range tensor from 0 to 99, then normalize it to [0, 1]\n",
+    "x = ttnn.arange(start=0, end=100, device=device, layout=ttnn.TILE_LAYOUT)\n",
+    "print(f\"Created range tensor: shape={x.shape}, layout={x.layout}\")\n",
+    "\n",
+    "# Normalize to range [0, 1] by dividing by 100\n",
+    "x = ttnn.divide(x, 100)\n",
+    "print(f\"Normalized tensor to [0, 1] range\")\n",
+    "\n",
+    "# Reshape to a row vector for operations\n",
+    "x = x.reshape([1, 100])\n",
+    "print(f\"Reshaped to: {x.shape}\")\n",
+    "print(f\"Values range from ~0 to ~1\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "ebea2035",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Create a second random tensor for binary operations\n",
+    "y = ttnn.rand([1, 100], device=device)\n",
+    "print(f\"Created random tensor y: shape={y.shape}\")\n",
+    "print(f\"Ready for element-wise operations!\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "87b471ec",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Arithmetic Operations (Element-wise)\n",
+    "print(\"=== Arithmetic Operations ===\")\n",
+    "\n",
+    "# Addition - both operators work\n",
+    "result_add = x + y  # Operator overloading\n",
+    "print(f\"Addition (x + y): shape={result_add.shape}\")\n",
+    "\n",
+    "# Multiplication \n",
+    "result_mul = x * y\n",
+    "print(f\"Multiplication (x * y): shape={result_mul.shape}\")\n",
+    "\n",
+    "# Subtraction\n",
+    "result_sub = x - y  \n",
+    "print(f\"Subtraction (x - y): shape={result_sub.shape}\")\n",
+    "\n",
+    "# Division - using function call\n",
+    "result_div = ttnn.divide(x, y)\n",
+    "print(f\"Division ttnn.divide(x, y): shape={result_div.shape}\")\n",
+    "\n",
+    "print(\"\\nAll arithmetic operations completed successfully!\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "157c2063",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Mathematical Functions (Unary operations)\n",
+    "print(\"=== Mathematical Functions ===\")\n",
+    "\n",
+    "# Trigonometric functions\n",
+    "sin_x = ttnn.sin(x)\n",
+    "cos_x = ttnn.cos(x) \n",
+    "print(f\"sin(x) and cos(x): computed\")\n",
+    "\n",
+    "# Exponential and logarithmic functions\n",
+    "exp_x = ttnn.exp(x)    # e^x\n",
+    "log_x = ttnn.log(x)    # natural logarithm\n",
+    "print(f\"exp(x) and log(x): computed\")\n",
+    "\n",
+    "# Power and root functions  \n",
+    "sqrt_x = ttnn.sqrt(x)        # square root\n",
+    "pow_x = ttnn.pow(x, 2)       # x^2 (square)\n",
+    "print(f\"sqrt(x) and pow(x, 2): computed\")\n",
+    "\n",
+    "print(f\"\\nAll mathematical functions applied to tensor of shape {x.shape}\")\n",
+    "print(\"These functions work element-wise on the entire tensor\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "955aa0cb",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Data movement functions\n",
+    "ttnn.sort(y)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "8bd58bc9",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Tensor manipulation functions\n",
+    "ttnn.concat([x, y], dim=1)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "024cc364",
+   "metadata": {},
+   "source": [
+    "Tensor slicing is also supported:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "e449635c",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "x[:, 50:100]"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "4f0ecb8a",
+   "metadata": {},
+   "source": [
+    "The full set of supported operations is available in the [TT-NN API documentation](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/api.html#operations)."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "7d3d5780",
+   "metadata": {},
+   "source": [
+    "### Neural Network Operations\n",
+    "\n",
+    "TT-NN provides neural network operations as pure functions (similar to `torch.nn.functional`), giving you flexibility in structuring your model classes:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "eb9d90e6",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "input_ids = ttnn.from_torch(\n",
+    "    torch.randint(0, 1000, (2, 32)), dtype=ttnn.uint32, device=device\n",
+    ")\n",
+    "emb_weight = ttnn.rand((1, 1, 1000, 512), dtype=ttnn.bfloat16, device=device)\n",
+    "\n",
+    "x = ttnn.embedding(input_ids, emb_weight, layout=ttnn.TILE_LAYOUT)  # [2, 32, 512]\n",
+    "x = ttnn.reshape(x, (2, 1, 32, 512))\n",
+    "\n",
+    "# LayerNorm\n",
+    "x = ttnn.layer_norm(x, epsilon=1e-5)\n",
+    "\n",
+    "# Linear: 512 -> 2048 -> 512\n",
+    "w1 = ttnn.rand(\n",
+    "    (1, 1, 512, 2048), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device\n",
+    ")\n",
+    "x = ttnn.relu(ttnn.linear(x, w1))\n",
+    "w2 = ttnn.rand(\n",
+    "    (1, 1, 2048, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device\n",
+    ")\n",
+    "x = ttnn.linear(x, w2)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "47e08ea6",
+   "metadata": {},
+   "source": [
+    "For a comprehensive list of neural network operations, refer to the [TT-NN API documentation](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/api.html)."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "889cbc65",
+   "metadata": {},
+   "source": [
+    "## 7. Just-In-Time Compilation and Caching\n",
+    "\n",
+    "TT-NN uses **just-in-time (JIT) compilation** to generate optimized kernels for Tenstorrent hardware. This means:\n",
+    "\n",
+    "### First Run vs. Subsequent Runs\n",
+    "- **First execution**: Slow due to kernel compilation\n",
+    "- **Subsequent executions**: Fast using cached compiled kernels  \n",
+    "\n",
+    "### What Affects Compilation?\n",
+    "- **Tensor shapes**: Different shapes trigger new compilation\n",
+    "- **Operation types**: Each operation type needs compilation\n",
+    "- **Data types**: Different precisions require different kernels\n",
+    "- **Memory layouts**: ROW_MAJOR vs TILE_LAYOUT use different kernels\n",
+    "\n",
+    "Let's demonstrate this compilation behavior:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "f03d1f4b",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import time\n",
+    "\n",
+    "# Create a test tensor \n",
+    "x = ttnn.rand([1000, 1000], device=device)\n",
+    "print(f\"Testing compilation with tensor shape: {x.shape}\")\n",
+    "\n",
+    "# === FIRST EXECUTION (includes compilation time) ===\n",
+    "print(\"\\n=== First Execution (Compilation + Execution) ===\")\n",
+    "start = time.time()\n",
+    "y = ttnn.softmax(x, dim=1)\n",
+    "# IMPORTANT: ttnn.synchronize_device() ensures the operation completes\n",
+    "# Without it, we only measure dispatch time, not actual execution time\n",
+    "ttnn.synchronize_device(device)\n",
+    "first_time = time.time() - start\n",
+    "print(f\"Time: {first_time:.4f} seconds (includes compilation)\")\n",
+    "\n",
+    "# === SECOND EXECUTION (cached, no compilation) ===\n",
+    "print(\"\\n=== Second Execution (Cached) ===\")\n",
+    "start = time.time()\n",
+    "y = ttnn.softmax(x, dim=1)\n",
+    "ttnn.synchronize_device(device)\n",
+    "cached_time = time.time() - start\n",
+    "print(f\"Time: {cached_time:.4f} seconds (cached)\")\n",
+    "\n",
+    "# Show the speedup from caching\n",
+    "speedup = first_time / cached_time if cached_time > 0 else float('inf')\n",
+    "print(f\"\\nSpeedup from caching: {speedup:.1f}x faster!\")\n",
+    "print(f\"Compilation overhead: {(first_time - cached_time)*1000:.1f}ms\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "0524b1a5",
+   "metadata": {},
+   "source": [
+    "The compilation cache is tied to compile-time parameters such as tensor shape. When these parameters change, a new compilation is triggered:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "ca9a71e0",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Same operation, different shape\n",
+    "x = ttnn.rand([1337, 1337], device=device)\n",
+    "start = time.time()\n",
+    "y = ttnn.softmax(x, dim=1)\n",
+    "ttnn.synchronize_device(device)\n",
+    "end = time.time()\n",
+    "print(f\"First iteration: {end - start} seconds\")\n",
+    "start = time.time()\n",
+    "y = ttnn.softmax(x, dim=1)\n",
+    "ttnn.synchronize_device(device)\n",
+    "end = time.time()\n",
+    "print(f\"Time taken: {end - start} seconds\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "d0669b82",
+   "metadata": {},
+   "source": [
+    "## Direct SRAM (L1) control"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "d8d28a9c",
+   "metadata": {},
+   "source": [
+    "TT-Metal and TT-NN provide explicit control over tensor placement in device memory hierarchy, allowing you to optimize data movement between slower DRAM and faster SRAM (L1 cache).\n",
+    "\n",
+    "**Available SRAM per device:**\n",
+    "- Wormhole n150: 108 MB\n",
+    "- Wormhole n300: 192 MB  \n",
+    "- Blackhole p100a: 180 MB\n",
+    "- Blackhole p150a: 210 MB"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "816ee381",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "dram_tensor = ttnn.rand([4096, 4096], device=device)\n",
+    "dram_tensor.memory_config()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "bb902ecd",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "sram_tensor = ttnn.to_memory_config(dram_tensor, ttnn.L1_MEMORY_CONFIG)\n",
+    "sram_tensor.memory_config()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "0775fa55",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# warmup, compilation\n",
+    "ttnn.sum(dram_tensor, dim=0)\n",
+    "ttnn.sum(sram_tensor, dim=0)\n",
+    "ttnn.synchronize_device(device)\n",
+    "start = time.time()\n",
+    "for _ in range(10):\n",
+    "    ttnn.sum(dram_tensor, dim=0)\n",
+    "ttnn.synchronize_device(device)\n",
+    "end = time.time()\n",
+    "print(f\"DRAM Time taken: {end - start} seconds\")\n",
+    "start = time.time()\n",
+    "for _ in range(10):\n",
+    "    ttnn.sum(sram_tensor, dim=0)\n",
+    "ttnn.synchronize_device(device)\n",
+    "end = time.time()\n",
+    "print(f\"SRAM Time taken: {end - start} seconds\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "6af21707",
+   "metadata": {},
+   "source": [
+    "**Memory Management Best Practice:**\n",
+    "\n",
+    "When performing sequences of operations, manually deallocate intermediate tensors to free memory. This is particularly important for L1 memory due to its limited capacity:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "e62f528c",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "ttnn.deallocate(sram_tensor)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "de803470",
+   "metadata": {},
+   "source": [
+    "### Advanced: Tensor Sharding\n",
+    "\n",
+    "For optimal performance, you can shard tensors across compute cores to minimize data movement. This keeps data closer to the cores processing it.\n",
+    "\n",
+    "Learn more:\n",
+    "- [Tensor Sharding Documentation](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/tensor.html#tensor-sharding)\n",
+    "- [Technical Report on Tensor Sharding](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/tensor_sharding/tensor_sharding.md)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "7b7a19b0",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "sharded_tensor = ttnn.to_memory_config(dram_tensor, ttnn.L1_MEMORY_CONFIG)\n",
+    "ttnn.sum(sharded_tensor, dim=0)\n",
+    "ttnn.synchronize_device(device)\n",
+    "\n",
+    "start = time.time()\n",
+    "for _ in range(10):\n",
+    "    res = ttnn.sum(sharded_tensor, dim=0)\n",
+    "ttnn.synchronize_device(device)\n",
+    "end = time.time()\n",
+    "\n",
+    "interleaved_l1_time = end - start\n",
+    "print(f\"Interleaved L1 Time taken: {interleaved_l1_time * 1000} ms\")\n",
+    "ttnn.deallocate(sharded_tensor)\n",
+    "\n",
+    "sharded_config = ttnn.create_sharded_memory_config(\n",
+    "    shape=dram_tensor.shape,\n",
+    "    core_grid=ttnn.CoreGrid(x=8, y=8),\n",
+    "    strategy=ttnn.ShardStrategy.WIDTH,\n",
+    ")\n",
+    "\n",
+    "sharded_tensor = ttnn.to_memory_config(dram_tensor, sharded_config)\n",
+    "ttnn.sum(sharded_tensor, dim=0)\n",
+    "ttnn.synchronize_device(device)\n",
+    "\n",
+    "start = time.time()\n",
+    "for _ in range(10):\n",
+    "    res = ttnn.sum(sharded_tensor, dim=0)\n",
+    "ttnn.synchronize_device(device)\n",
+    "end = time.time()\n",
+    "\n",
+    "width_sharded_time = end - start\n",
+    "print(f\"Width sharded Time taken: {width_sharded_time * 1000} ms\")\n",
+    "ttnn.deallocate(sharded_tensor)\n",
+    "\n",
+    "sharded_config = ttnn.create_sharded_memory_config(\n",
+    "    shape=dram_tensor.shape,\n",
+    "    core_grid=ttnn.CoreGrid(x=8, y=8),\n",
+    "    strategy=ttnn.ShardStrategy.HEIGHT,\n",
+    ")\n",
+    "sharded_tensor = ttnn.to_memory_config(dram_tensor, sharded_config)\n",
+    "ttnn.sum(sharded_tensor, dim=0)\n",
+    "ttnn.synchronize_device(device)\n",
+    "\n",
+    "start = time.time()\n",
+    "for _ in range(10):\n",
+    "    res = ttnn.sum(sharded_tensor, dim=0)\n",
+    "ttnn.synchronize_device(device)\n",
+    "end = time.time()\n",
+    "\n",
+    "height_sharded_time = end - start\n",
+    "print(f\"Height sharded Time taken: {height_sharded_time * 1000} ms\")\n",
+    "ttnn.deallocate(sharded_tensor)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "e4825bb2",
+   "metadata": {},
+   "source": [
+    "### Preserving Intermediate Results in L1\n",
+    "\n",
+    "Explicit L1 control allows you to keep intermediate results in fast memory without fusing operations:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "ed31cdcd",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "x = ttnn.rand([32, 128], device=device, memory_config=ttnn.L1_MEMORY_CONFIG)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "9bb36fb1",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "w1 = ttnn.rand([128, 128], device=device, memory_config=ttnn.L1_MEMORY_CONFIG)\n",
+    "w2 = ttnn.rand([128, 128], device=device, memory_config=ttnn.L1_MEMORY_CONFIG)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "f0360ae0",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "x1 = ttnn.linear(x, w1, memory_config=ttnn.L1_MEMORY_CONFIG)\n",
+    "print(x1.memory_config())\n",
+    "\n",
+    "x2 = ttnn.relu(x1) # automatically maintains L1 config\n",
+    "print(x2.memory_config())\n",
+    "\n",
+    "x3 = ttnn.linear(x2, w2, memory_config=ttnn.L1_MEMORY_CONFIG)\n",
+    "print(x3.memory_config())\n",
+    "\n",
+    "ttnn.deallocate(x1)\n",
+    "ttnn.deallocate(x2)\n",
+    "ttnn.deallocate(x3)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "82f81bd8",
+   "metadata": {},
+   "source": [
+    "## Inference Focus\n",
+    "\n",
+    "TT-NN is optimized for inference workloads and does not include automatic differentiation (autograd).\n",
+    "\n",
+    "For training support, see our separate training framework [tt-train](https://github.com/tenstorrent/tt-metal/tree/main/tt-train)."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "ef9e3b68",
+   "metadata": {},
+   "source": [
+    "## Development Tools\n",
+    "\n",
+    "TT-NN includes comprehensive tooling for development and debugging:\n",
+    "\n",
+    "- [ttnn-visualizer](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/tutorials/2025_dx_rework/ttnn_visualizer.html) - Visual debugging and analysis\n",
+    "- [Tracy Profiler](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html) - Host and device profiling\n",
+    "- [TT-NN Graph Trace](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md) - Operation graph visualization"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "bf352d1c",
+   "metadata": {},
+   "source": [
+    "## Advanced Topics"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "c8398353",
+   "metadata": {},
+   "source": [
+    "## 8. Exercise: Implement Scaled Dot-Product Attention\n",
+    "\n",
+    "Now let's put your TT-NN knowledge to the test! Implement a composite version of **Scaled Dot-Product Attention** (the core operation in Transformers) using basic TT-NN operations.\n",
+    "\n",
+    "### Background\n",
+    "\n",
+    "Scaled Dot-Product Attention is defined as:\n",
+    "\n",
+    "```\n",
+    "SDPA(Q, K, V) = softmax((Q × K^T) / √d_k) × V\n",
+    "```\n",
+    "\n",
+    "Where:\n",
+    "\n",
+    "- **Q**: Query matrix\n",
+    "- **K**: Key matrix  \n",
+    "- **V**: Value matrix\n",
+    "- **d_k**: Dimension of the key vectors (for scaling)\n",
+    "\n",
+    "### Your Task\n",
+    "\n",
+    "Complete the `composite_sdpa` function below using basic TT-NN operations:"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "9cf155f2",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import math\n",
+    "\n",
+    "def composite_sdpa(q, k, v, causal_mask, scale=None):\n",
+    "    \"\"\"\n",
+    "    Implement Scaled Dot-Product Attention using basic TT-NN operations.\n",
+    "    \n",
+    "    Args:\n",
+    "        q: Query tensor [batch, num_heads, seq_len, head_dim]\n",
+    "        k: Key tensor [batch, num_heads, seq_len, head_dim] \n",
+    "        v: Value tensor [batch, num_heads, seq_len, head_dim]\n",
+    "        causal_mask: Mask tensor for autoregressive attention\n",
+    "        scale: Optional scaling factor (defaults to 1/sqrt(head_dim))\n",
+    "    \n",
+    "    Returns:\n",
+    "        Attention output tensor [batch, num_heads, seq_len, head_dim]\n",
+    "    \"\"\"\n",
+    "    \n",
+    "    # TODO: Implement the following steps:\n",
+    "    \n",
+    "    # Step 1: Scale the queries (Q × scale)\n",
+    "    # If no scale provided, use 1/sqrt(head_dim)\n",
+    "    if scale is None:\n",
+    "        head_dim = q.shape[-1]\n",
+    "        scale = 1.0 / math.sqrt(head_dim)\n",
+    "    \n",
+    "    # YOUR CODE HERE: Scale the queries\n",
+    "    q_scaled = ...  # HINT: Use ttnn.multiply()\n",
+    "    \n",
+    "    # Step 2: Transpose the keys (K^T)  \n",
+    "    # YOUR CODE HERE: Transpose the last two dimensions of k\n",
+    "    k_t = ...  # HINT: Use ttnn.permute()\n",
+    "    \n",
+    "    # Step 3: Compute attention scores (Q_scaled × K^T)\n",
+    "    # YOUR CODE HERE: Matrix multiply q_scaled and k_t\n",
+    "    attn_scores = ...  # HINT: Use ttnn.matmul()\n",
+    "    \n",
+    "    # Step 4: Apply causal mask (add mask to scores)\n",
+    "    # YOUR CODE HERE: Add the causal_mask to attention scores  \n",
+    "    masked_scores = ...  # HINT: Use ttnn.add()\n",
+    "    \n",
+    "    # Step 5: Apply softmax along the last dimension\n",
+    "    # YOUR CODE HERE: Apply softmax to get attention weights\n",
+    "    attn_weights = ...  # HINT: Use ttnn.softmax()\n",
+    "    \n",
+    "    # Step 6: Apply attention weights to values (attn_weights × V)\n",
+    "    # YOUR CODE HERE: Matrix multiply attention weights and values\n",
+    "    output = ...  # HINT: Use ttnn.matmul()\n",
+    "    \n",
+    "    # return output # Replace once your implementation is complete\n",
+    "    return ttnn.rand([1, 32, 1024, 128], device=device)  # Placeholder return\n",
+    "\n",
+    "print(\"SDPA function template ready!\")\n",
+    "print(\"Replace the placeholder operations above to complete the implementation\")"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "14a13578",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import time\n",
+    "\n",
+    "batch, num_heads, seq_len, head_dim = 1, 32, 1024, 128\n",
+    "num_iterations, warmup_iterations = 50, 1\n",
+    "\n",
+    "print(f\"Config: B={batch}, H={num_heads}, S={seq_len}, D={head_dim}, Causal=True\")\n",
+    "\n",
+    "torch.manual_seed(42)\n",
+    "Q_torch = torch.randn(batch, num_heads, seq_len, head_dim)\n",
+    "K_torch = torch.randn(batch, num_heads, seq_len, head_dim)\n",
+    "V_torch = torch.randn(batch, num_heads, seq_len, head_dim)\n",
+    "\n",
+    "Q_tt = ttnn.from_torch(Q_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)\n",
+    "K_tt = ttnn.from_torch(K_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)\n",
+    "V_tt = ttnn.from_torch(V_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)\n",
+    "\n",
+    "causal_mask = torch.triu(torch.ones(seq_len, seq_len) * float('-inf'), diagonal=1).unsqueeze(0).unsqueeze(0)\n",
+    "causal_mask_tt = ttnn.from_torch(causal_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)\n",
+    "\n",
+    "print(\"\\n=== Accuracy Test ===\")\n",
+    "output_composite = composite_sdpa(Q_tt, K_tt, V_tt, causal_mask_tt)\n",
+    "output_composite_torch = ttnn.to_torch(output_composite)[:, :, :seq_len, :head_dim]\n",
+    "\n",
+    "output_optimized = ttnn.transformer.scaled_dot_product_attention(Q_tt, K_tt, V_tt, is_causal=True)\n",
+    "output_optimized_torch = ttnn.to_torch(output_optimized)[:, :, :seq_len, :head_dim]\n",
+    "\n",
+    "output_torch = torch.nn.functional.scaled_dot_product_attention(Q_torch, K_torch, V_torch, is_causal=True)\n",
+    "\n",
+    "pcc_composite = torch.corrcoef(torch.stack([output_composite_torch.flatten(), output_torch.flatten()]))[0, 1].item()\n",
+    "pcc_optimized = torch.corrcoef(torch.stack([output_optimized_torch.flatten(), output_torch.flatten()]))[0, 1].item()\n",
+    "rmse_composite = torch.sqrt(((output_composite_torch - output_torch) ** 2).mean()).item()\n",
+    "rmse_optimized = torch.sqrt(((output_optimized_torch - output_torch) ** 2).mean()).item()\n",
+    "\n",
+    "print(f\"Composite vs PyTorch:  PCC={pcc_composite:.6f}, RMSE={rmse_composite:.6f}\")\n",
+    "print(f\"Optimized vs PyTorch:  PCC={pcc_optimized:.6f}, RMSE={rmse_optimized:.6f}\")\n",
+    "print(\"\\n=== Speed Test ===\")\n",
+    "print(\"Warming up (compiling kernels)...\")\n",
+    "for _ in range(warmup_iterations):\n",
+    "    out = composite_sdpa(Q_tt, K_tt, V_tt, causal_mask_tt)\n",
+    "    out = ttnn.transformer.scaled_dot_product_attention(Q_tt, K_tt, V_tt, is_causal=True)\n",
+    "\n",
+    "start = time.perf_counter()\n",
+    "for _ in range(num_iterations):\n",
+    "    output = composite_sdpa(Q_tt, K_tt, V_tt, causal_mask_tt)\n",
+    "ttnn.synchronize_device(device)\n",
+    "composite_time = (time.perf_counter() - start) / num_iterations * 1000\n",
+    "\n",
+    "start = time.perf_counter()\n",
+    "for _ in range(num_iterations):\n",
+    "    output = ttnn.transformer.scaled_dot_product_attention(Q_tt, K_tt, V_tt, is_causal=True)\n",
+    "ttnn.synchronize_device(device)\n",
+    "optimized_time = (time.perf_counter() - start) / num_iterations * 1000\n",
+    "\n",
+    "speedup = composite_time / optimized_time\n",
+    "\n",
+    "print(f\"Composite SDPA: {composite_time:.3f} ms\")\n",
+    "print(f\"Optimized SDPA: {optimized_time:.3f} ms\")\n",
+    "print(f\"Speedup:        {speedup:.2f}x\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "0e0d90a9",
+   "metadata": {},
+   "source": [
+    "## Math Fidelity Control\n",
+    "\n",
+    "TT-NN provides fine-grained control over computational precision for performance tuning. The matrix engine supports multiple math fidelity modes that trade accuracy for speed.\n",
+    "\n",
+    "**Available Fidelity Modes:**\n",
+    "- **LoFi** - Lowest precision, highest performance\n",
+    "- **HiFi2** - Medium precision with FP32 accumulation\n",
+    "- **HiFi3** - Higher precision  \n",
+    "- **HiFi4** - Highest precision with full FP32 accumulation\n",
+    "\n",
+    "Additional resources:\n",
+    "- [Matrix Engine Technical Report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/matrix_engine/matrix_engine.md)\n",
+    "- [Data Format Documentation](https://docs.tenstorrent.com/pybuda/latest/dataformats.html)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "cc180acf",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import torch\n",
+    "import time\n",
+    "\n",
+    "M, K, N = 2048, 2048, 2048\n",
+    "print(f\"> Matrix dimensions: {M}x{K} @ {K}x{N}\")\n",
+    "\n",
+    "torch.manual_seed(42)\n",
+    "a = torch.randn((M, K), dtype=torch.bfloat16)\n",
+    "b = torch.randn((K, N), dtype=torch.bfloat16)\n",
+    "reference = torch.matmul(a.float(), b.float()) \n",
+    "\n",
+    "tt_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)\n",
+    "tt_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)\n",
+    "\n",
+    "print(\"\\n\" + \"-\" * 80)\n",
+    "print(f\"{'Fidelity':<10} {'Time (ms)':<12} {'Mean Error':<12}\")\n",
+    "print(\"-\" * 80)\n",
+    "\n",
+    "# Test different fidelities\n",
+    "fidelities = [\n",
+    "    (ttnn.MathFidelity.LoFi, \"LoFi\"),\n",
+    "    (ttnn.MathFidelity.HiFi2, \"HiFi2\"),\n",
+    "    (ttnn.MathFidelity.HiFi3, \"HiFi3\"),\n",
+    "    (ttnn.MathFidelity.HiFi4, \"HiFi4\"),\n",
+    "]\n",
+    "\n",
+    "for fidelity, name in fidelities:\n",
+    "    # Configure compute kernel\n",
+    "    # Note: Enable FP32 accumulation for HiFi2/HiFi4 to see accuracy benefits\n",
+    "    # With BF16 accumulation and large values, LSB corrections can introduce noise\n",
+    "    use_fp32_acc = (fidelity != ttnn.MathFidelity.LoFi)\n",
+    "    \n",
+    "    config = ttnn.WormholeComputeKernelConfig(\n",
+    "        math_fidelity=fidelity,\n",
+    "        math_approx_mode=False,\n",
+    "        fp32_dest_acc_en=use_fp32_acc,  # FP32 for HiFi2/HiFi4\n",
+    "        packer_l1_acc=use_fp32_acc,     # L1 accumulation for better precision\n",
+    "    )\n",
+    "    \n",
+    "    # Warm-up\n",
+    "    _ = ttnn.matmul(tt_a, tt_b, compute_kernel_config=config)\n",
+    "    \n",
+    "    # Time the operation\n",
+    "    start = time.time()\n",
+    "    for _ in range(50):\n",
+    "        result_tt = ttnn.matmul(tt_a, tt_b, compute_kernel_config=config)\n",
+    "    ttnn.synchronize_device(device)\n",
+    "    elapsed = (time.time() - start) / 50 * 1000  # Convert to ms\n",
+    "    \n",
+    "    # Get result\n",
+    "    result = ttnn.to_torch(result_tt).float()\n",
+    "    \n",
+    "    # Compute errors and PCC\n",
+    "    error = torch.abs(reference - result)\n",
+    "    mean_err = error.mean().item()\n",
+    "    \n",
+    "    print(f\"{name:<10} {elapsed:>10.4f}   {mean_err:>10.8f}\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "154b5ca5",
+   "metadata": {},
+   "source": [
+    "## Metal Trace\n",
+    "\n",
+    "Metal trace allows you to record and replay sequences of operations for improved performance:\n",
+    "\n",
+    "```python\n",
+    "# Begin recording operations\n",
+    "tid = ttnn.begin_trace_capture(device, cq_id=0)  \n",
+    "output = run_model(input)  \n",
+    "ttnn.end_trace_capture(device, tid, cq_id=0)  \n",
+    "\n",
+    "# Replay the traced operations\n",
+    "ttnn.execute_trace(device, tid, cq_id=0)\n",
+    "```\n",
+    "\n",
+    "This is particularly useful for eliminating Python overhead in production inference."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "09721b7b",
+   "metadata": {},
+   "source": [
+    "## Multi-device"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "7ad7759f",
+   "metadata": {},
+   "source": [
+    "TT-NN supports distributed computing across multiple devices using collective communication operations (CCL):"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "ff2de820",
+   "metadata": {},
+   "source": [
+    "**Example: Tensor Sharding Across Devices**\n",
+    "\n",
+    "```python\n",
+    "# Open a 1x2 mesh of devices\n",
+    "mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 2))  \n",
+    "  \n",
+    "# Create a torch tensor\n",
+    "torch_tensor = torch.zeros(1, 1, 32, 64)  \n",
+    "torch_tensor[..., 0:32] = 1.0  \n",
+    "torch_tensor[..., 32:64] = 2.0  \n",
+    "  \n",
+    "# Shard the tensor across devices along dimension 3\n",
+    "mesh_tensor = ttnn.from_torch(  \n",
+    "    torch_tensor,  \n",
+    "    layout=ttnn.TILE_LAYOUT,  \n",
+    "    device=mesh_device,  \n",
+    "    mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=3),  \n",
+    ")\n",
+    "\n",
+    "# Perform collective operations\n",
+    "output_tensor = ttnn.all_gather(mesh_tensor, dim=3, num_links=1)\n",
+    "```\n",
+    "\n",
+    "This enables efficient model parallelism and data parallelism across multiple Tenstorrent devices."
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "python_env",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.10.18"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 5
+}
