@@ -5,7 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include "sd_mesh_command_queue.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/common/thread_pool.hpp"
+#include "tt_metal/impl/context/thread_pool.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>

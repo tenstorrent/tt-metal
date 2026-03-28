@@ -39,7 +39,7 @@
 #include "shape_base.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
-#include "common/thread_pool.hpp"
+#include "impl/context/thread_pool.hpp"
 #include "device/device_manager.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/fabric/fabric_types.hpp>

@@ -10,7 +10,7 @@
 #include <distributed.hpp>
 #include "llrt/hal.hpp"
 #include "mesh_device.hpp"
-#include "thread_pool.hpp"
+#include "impl/context/thread_pool.hpp"
 #include "tools/profiler/event_metadata.hpp"
 #include "distributed/fd_mesh_command_queue.hpp"
 #include <host_api.hpp>

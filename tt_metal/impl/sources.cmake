@@ -4,6 +4,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/sub_device/sub_device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/context/metal_env.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/context/thread_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/firmware_initializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/fabric_firmware_initializer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/firmware/dispatch_kernel_initializer.cpp

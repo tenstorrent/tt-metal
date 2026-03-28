@@ -6,7 +6,7 @@
 
 #include "mesh_command_queue.hpp"
 
-#include "tt_metal/common/thread_pool.hpp"
+#include "tt_metal/impl/context/thread_pool.hpp"
 #include "tt_target_device.hpp"
 
 #include <mutex>

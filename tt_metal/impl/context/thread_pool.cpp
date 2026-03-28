@@ -15,7 +15,7 @@
 #include <tt_stl/tt_pause.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
-#include "tt_metal/common/thread_pool.hpp"
+#include "impl/context/thread_pool.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
