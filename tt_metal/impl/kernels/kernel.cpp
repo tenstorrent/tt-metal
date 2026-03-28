@@ -144,19 +144,30 @@ Kernel::Kernel(
 }
 
 void Kernel::register_kernel_with_watcher() {
+    // Watcher server may not exist yet if MetalContext hasn't been fully initialized
+    // (e.g., during mock device testing or before devices are opened)
+    auto& watcher = MetalContext::instance().watcher_server();
+    if (!watcher) {
+        this->watcher_kernel_id_ = -1;
+        return;
+    }
     if (this->kernel_src_.source_type_ == KernelSource::FILE_PATH) {
-        this->watcher_kernel_id_ =
-            MetalContext::instance().watcher_server()->register_kernel(this->kernel_src_.source_);
+        this->watcher_kernel_id_ = watcher->register_kernel(this->kernel_src_.source_);
     } else {
         TT_FATAL(this->kernel_src_.source_type_ == KernelSource::SOURCE_CODE, "Unsupported kernel source type!");
-        this->watcher_kernel_id_ = MetalContext::instance().watcher_server()->register_kernel(this->name());
+        this->watcher_kernel_id_ = watcher->register_kernel(this->name());
     }
 }
 
 void Kernel::register_kernel_elf_paths_with_watcher(IDevice& device) const {
+    // Skip if watcher server not available (e.g., during mock device testing)
+    auto& watcher = MetalContext::instance().watcher_server();
+    if (!watcher) {
+        return;
+    }
     TT_ASSERT(!this->kernel_full_name_.empty(), "Kernel full name not set!");
     auto paths = this->file_paths(device);
-    MetalContext::instance().watcher_server()->register_kernel_elf_paths(this->watcher_kernel_id_, paths);
+    watcher->register_kernel_elf_paths(this->watcher_kernel_id_, paths);
 }
 
 std::string Kernel::name() const { return this->kernel_src_.name(); }
