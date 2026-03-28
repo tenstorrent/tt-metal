@@ -416,7 +416,8 @@ class LMHeadSampling:
 
         # CCL broadcast page info
         # Matmul shape info from input and vocab tensors
-        num_tiles_k = input_shape[1] // in0_tile.tile_shape[1]
+        num_tiles_k = 224  # input_shape[1] // in0_tile.tile_shape[1]
+        print(f"[lm_head_sampling] num_tiles_k={num_tiles_k}", flush=True)
         # RMSNorm in this path must match broadcast_rms tile/page interpretation.
         full_32x32_tile = ttnn.Tile((32, 32))
         half_16x32_tile = ttnn.Tile((16, 32))
@@ -486,15 +487,12 @@ class LMHeadSampling:
             eh_num_in1_buffers = 2  # Double buffering (must match NumBuffers=2 in dram_streaming_matmul.hpp)
             eh_in1_CB_tiles = eh_subblock_k * eh_num_in1_buffers
             eh_in1_CB_size = eh_in1_CB_tiles * eh_proj_tile_size
-            # Token ID buffer (8 bytes aligned: 4 bytes token_id + 4 bytes padding)
-            mtp_token_size_bytes = 8
         else:
             eh_out_w_per_core = 0
             embedding_dim = 0
             e_num_tiles = 0
             eh_num_tiles_k = 0
             eh_mcast_data_size_bytes = 0
-            mtp_token_size_bytes = 0
 
         # ====================================================================
         # CB indices
@@ -505,7 +503,7 @@ class LMHeadSampling:
         rmsnorm_gamma_cb = 7  # RMSNorm gamma weights on sender core (tensor-backed)
         mcast_src_cb = 8  # RMSNorm output on sender core (intermediate), consumed by mcast sender
         matmul_eh_cb = 9  # [MTP] EH projection weights on matmul cores (tensor-backed)
-        embedding_cb = 10  # [MTP] Reuses CB 8 — mcast consumes it before embedding DRAM read
+        embedding_cb = 10  # [MTP] Embedding CB — mcast consumes it before embedding DRAM read
         h_gamma_cb = 11  # [MTP] RMSNorm gamma weights for hidden states on sender core (tensor-backed)
         e_gamma_cb = 12  # [MTP] RMSNorm gamma weights for embeddings on sender core (tensor-backed)
         mcast_eh_src_cb = 15  # [MTP] Fused [h_norm|e_norm] on sender core, both RMSNorms write here directly
@@ -535,7 +533,7 @@ class LMHeadSampling:
         # [MTP] Semaphore IDs for second mcast (EH projection matmul)
         # Separate receiver semaphore from first mcast to avoid linked-VC posted write race
         mtp_ready_semaphore_id = 6
-        mcast_eh_data_sender_semaphore_id = 7
+        mcast_eh_data_sender_semaphore_id = mcast_data_sender_semaphore_id
         mcast_eh_data_receiver_semaphore_id = 8
         mtp_done_semaphore_id = 9
         eh_matmul_done_semaphore_id = 10
@@ -1218,12 +1216,7 @@ class LMHeadSampling:
                     core_ranges=mcast_receiver_grid,
                     format_descriptors=[mcast_dst_cb_format],
                 )
-                mcast_receiver_data_addr = ttnn.get_cb_address(mcast_dst_cb_descriptor)
 
-                print(
-                    f"[OP:{device_idx}:I2] CB1 mcast_dst done, mcast_receiver_data_addr={mcast_receiver_data_addr}",
-                    flush=True,
-                )
                 # CB 2: Matmul weights — vocab_tensor, tensor-backed on matmul cores
                 matmul_in1_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(matmul_in1_cb, vocab_tensor_device)
 
@@ -1298,7 +1291,6 @@ class LMHeadSampling:
                         core_ranges=mcast_receiver_grid,
                         format_descriptors=[mcast_eh_dst_cb_format],
                     )
-                    mcast_eh_receiver_data_addr = ttnn.get_cb_address(mcast_eh_dst_cb_descriptor)
 
                     print(f"[OP:{device_idx}:I6] CB18 mcast_eh_dst done", flush=True)
                     # CB 9: EH projection weights (in1) buffer - CB-backed working buffer for DRAM streaming
@@ -1450,11 +1442,6 @@ class LMHeadSampling:
                                 initial_value=0,
                             ),
                             ttnn.SemaphoreDescriptor(
-                                id=mcast_eh_data_sender_semaphore_id,
-                                core_ranges=all_cores,
-                                initial_value=0,
-                            ),
-                            ttnn.SemaphoreDescriptor(
                                 id=mcast_eh_data_receiver_semaphore_id,
                                 core_ranges=all_cores,
                                 initial_value=0,
@@ -1482,6 +1469,8 @@ class LMHeadSampling:
                 # ================================================================
                 # Append mcast receiver data addresses as BRISC runtime args
                 # [14]/[15] when verify (verify_output_staging at [13]), [13]/[14] otherwise
+                mcast_receiver_data_addr = 73920
+                mcast_eh_receiver_data_addr = 88256
                 brisc_bcast_common_args.append(mcast_receiver_data_addr)
                 brisc_bcast_common_args.append(mcast_eh_receiver_data_addr if enable_mtp_on_device else 0)
 

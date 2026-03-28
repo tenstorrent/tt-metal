@@ -352,11 +352,6 @@ struct Sampling {
             if constexpr (IsActiveCore) {
                 auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_addr);
                 auto indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.indices_addr);
-                if constexpr (IsFinalCore) {
-                    DPRINT << "sc @" << scores_addr << " ix @" << args.indices_addr
-                           << " s[0]=" << (uint32_t)scores_ptr[0] << " s[1]=" << (uint32_t)scores_ptr[1]
-                           << " i[0]=" << indices_ptr[0] << " i[1]=" << indices_ptr[1] << ENDL();
-                }
                 uint16_t best_score = NEG_INF_BFLOAT16;
                 uint32_t best_index = 0xFFFFFFFF;
                 phase1_reduce_local_values(scores_ptr, indices_ptr, best_score, best_index);
@@ -383,7 +378,6 @@ struct Sampling {
                 uint16_t global_best_score = NEG_INF_BFLOAT16;
                 uint32_t global_best_index = 0xFFFFFFFF;
                 phase2_reduce_intra_device_winners(gather_addr, global_best_score, global_best_index);
-                DPRINT << "p2 s=" << (uint32_t)global_best_score << " i=" << global_best_index << ENDL();
 
                 // Phase 3: mesh-only inter-device reductions (stage-1 then stage-2).
                 if constexpr (CTArgs::mesh_mode) {
@@ -393,10 +387,11 @@ struct Sampling {
                         write_winner_slot(
                             args.scratch_addr + CTArgs::stage1_local_slot_offset, global_best_score, global_best_index);
                         auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
+                        DPRINT << ">s1 wait" << ENDL();
                         wait_and_reset_semaphore(global_sem_ptr, CTArgs::stage1_expected_remote_incs);
+                        DPRINT << ">s1 reduce" << ENDL();
                         uint16_t stage1_best_score = NEG_INF_BFLOAT16;
                         uint32_t stage1_best_index = 0xFFFFFFFF;
-                        DPRINT << ">s1 reduce" << ENDL();
                         phase3_reduce_mesh_stage_slots(
                             args.scratch_addr,
                             CTArgs::stage1_slot_base_offset,
@@ -412,16 +407,12 @@ struct Sampling {
                 if constexpr (!CTArgs::mesh_mode) {
                     auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                     output_ptr[0] = global_best_index;
-                    DPRINT << "ax=" << global_best_index << ENDL();
                     if constexpr (CTArgs::socket_mode != 0) {
-                        DPRINT << ">ax d2h" << ENDL();
                         cb_reserve_back(CTArgs::socket_cb_id, 1);
-                        DPRINT << ">ax d2h cb" << ENDL();
                         auto d2h_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
                         d2h_ptr[0] = global_best_index;
                         cb_push_back(CTArgs::socket_cb_id, 1);
-                        DPRINT << "<ax d2h cb" << ENDL();
                     }
                 } else {
                     if constexpr (IsMeshSenderCore && (CTArgs::stage1_sender || CTArgs::stage2_sender)) {
@@ -432,6 +423,7 @@ struct Sampling {
                             global_best_index);
                         auto local_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                             get_semaphore(CTArgs::local_ready_semaphore_id));
+                        DPRINT << ">ax s1 set sem" << ENDL();
                         noc_semaphore_set(local_ready_sem_ptr, 1);
                     }
 

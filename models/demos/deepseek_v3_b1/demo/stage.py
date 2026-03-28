@@ -611,7 +611,7 @@ class BaseLMHeadStage(StageKind):
         winner_page_bytes = 16
         scratch_shape_per_device = (
             1,
-            ((mesh_rows + mesh_cols) * winner_page_bytes + (256 + 8 if self._enable_mtp else 0)) // 4,
+            ((mesh_rows + mesh_cols) * winner_page_bytes) // 4,
         )
         scratch_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
