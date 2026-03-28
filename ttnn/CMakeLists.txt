@@ -134,6 +134,8 @@ target_sources(
             cpp/ttnn/kernel_lib/l1_helpers.hpp
             cpp/ttnn/kernel_lib/matmul_block_helpers.hpp
             cpp/ttnn/kernel_lib/matmul_block_helpers.inl
+            cpp/ttnn/kernel_lib/matmul_block_fused_bias_helpers.hpp
+            cpp/ttnn/kernel_lib/matmul_block_fused_bias_helpers.inl
             cpp/ttnn/kernel_lib/matmul_tile_helpers.hpp
             cpp/ttnn/kernel_lib/matmul_tile_helpers.inl
             cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp
