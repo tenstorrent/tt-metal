@@ -64,6 +64,7 @@ void kernel_main() {
                     // every 32 C's acquire a new output tile address
                     //    DPRINT << "8B h=" << h << " ct=" << ct << " wt=" << wt << " W=" << W << " HW2=" << HW2 <<
                     //    ENDL();
+                    //    DEVICE_PRINT("8B h={} ct={} wt={} W={} HW2={}\n", h, ct, wt, W, HW2);
 
                     cb_reserve_back(operand0, onetile);
 

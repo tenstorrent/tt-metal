@@ -37,6 +37,12 @@ void kernel_main() {
 
         DPRINT << "Read the value " << val << " from L1 address " << buf_a_addr << " and wrote the value " << new_val
                << " to L1 address " << buf_b_addr << ENDL();
+        DEVICE_PRINT(
+            "Read the value {} from L1 address {} and wrote the value {} to L1 address {}\n",
+            val,
+            buf_a_addr,
+            new_val,
+            buf_b_addr);
 
 #if defined(OUTGOING_SEM)
         sem_out.up(1);

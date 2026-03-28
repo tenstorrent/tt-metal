@@ -136,6 +136,7 @@ void kernel_main() {
         for (uint32_t block_in1_w = 0; block_in1_w < num_blocks_in1_w; block_in1_w++) {
             enable_reload = false;
             // DPRINT << 'B' << ENDL();
+            // DEVICE_PRINT("B\n");
             for (uint32_t block_in0_w = 0; block_in0_w < num_blocks_in0_w; block_in0_w++) {
                 bool last_out = block_in0_w == (num_blocks_in0_w - 1);
                 if (tilize_in) {

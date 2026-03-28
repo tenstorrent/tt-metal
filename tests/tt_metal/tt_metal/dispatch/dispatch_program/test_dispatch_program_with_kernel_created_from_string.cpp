@@ -27,6 +27,8 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
 
         DPRINT_DATA0(DPRINT << "Hello, I am running a void data movement kernel on NOC 0." << ENDL());
         DPRINT_DATA1(DPRINT << "Hello, I am running a void data movement kernel on NOC 1." << ENDL());
+        DEVICE_PRINT_DATA0("Hello, I am running a void data movement kernel on NOC 0.\n");
+        DEVICE_PRINT_DATA1("Hello, I am running a void data movement kernel on NOC 1.\n");
 
     }
     )";
@@ -56,6 +58,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
     void kernel_main() {
 
         DPRINT_MATH(DPRINT << "Hello, I am running a void compute kernel." << ENDL());
+        DEVICE_PRINT_MATH("Hello, I am running a void compute kernel.\n");
 
     }
 
@@ -89,6 +92,7 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, ActiveEthEthernetKernel) {
     void kernel_main() {
 
         DPRINT << "Hello, I am running a void ethernet kernel." << ENDL();
+        DEVICE_PRINT("Hello, I am running a void ethernet kernel.\n");
 
     }
     )";

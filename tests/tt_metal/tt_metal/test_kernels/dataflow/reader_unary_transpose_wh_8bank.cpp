@@ -35,6 +35,7 @@ void kernel_main() {
         } u;
         u.u = scaler;
         // DPRINT << "TWH Scaler = " << F32(u.f) << ENDL();
+        // DEVICE_PRINT("TWH Scaler = {}\n", u.f);
         constexpr uint32_t cb_in_2 = 2;
         experimental::CircularBuffer cb2(cb_in_2);
         cb2.reserve_back(1);

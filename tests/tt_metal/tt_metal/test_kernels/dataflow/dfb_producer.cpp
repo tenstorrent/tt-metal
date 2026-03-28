@@ -26,12 +26,15 @@ void kernel_main() {
 
     // DPRINT << "producer_idx: " << producer_idx << " num_entries_per_producer: " << num_entries_per_producer <<
     // ENDL();
+    // DEVICE_PRINT("producer_idx: {} num_entries_per_producer: {}\n", producer_idx, num_entries_per_producer);
 
     uint32_t entry_size = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
-        // DPRINT << "producer tile id " << tile_id << " page id " << ((tile_id * num_producers) + producer_idx) << ENDL();
+        // DPRINT << "producer tile id " << tile_id << " page id " << ((tile_id * num_producers) + producer_idx) <<
+        // ENDL(); DEVICE_PRINT("producer tile id {} page id {}\n", tile_id, ((tile_id * num_producers) +
+        // producer_idx));
         if constexpr (implicit_sync) {
             dfb.read_in(noc, tensor_accessor, {.page_id = tile_id * num_producers + producer_idx});
         } else {
@@ -42,6 +45,8 @@ void kernel_main() {
         }
     }
     DPRINT << "PFW" << ENDL();
+    DEVICE_PRINT("PFW\n");
     dfb.finish();
     DPRINT << "PFD" << ENDL();
+    DEVICE_PRINT("PFD\n");
 }

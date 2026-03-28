@@ -22,6 +22,16 @@ void kernel_main() {
            << "\n\tnum_pages_to_read_total=" << num_pages_to_read_total
            << "\n\tpages_per_edm_buffer=" << pages_per_edm_buffer << "\n\tpage_size=" << page_size
            << "\n\twrite_scatter_mode=" << (write_scatter_mode ? "T" : "F") << "\n";
+    DEVICE_PRINT(
+        "swr: args "
+        "\n\tsrc_addr={}\n\tsrc_is_dram={}\n\tnum_pages_to_read_total={}\n\tpages_per_edm_buffer={}\n\tpage_size={}"
+        "\n\twrite_scatter_mode={}\n",
+        src_addr,
+        src_args.is_dram,
+        num_pages_to_read_total,
+        pages_per_edm_buffer,
+        page_size,
+        write_scatter_mode);
 
     for (uint32_t num_pages_read = 0; num_pages_read < num_pages_to_read_total;
          num_pages_read += pages_per_edm_buffer) {

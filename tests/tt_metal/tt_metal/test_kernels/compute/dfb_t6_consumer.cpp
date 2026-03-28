@@ -18,18 +18,25 @@ void kernel_main() {
 
     // DPRINT << "consumer_idx: " << consumer_idx << " num_entries_per_consumer: " << num_entries_per_consumer <<
     // ENDL();
+    // DEVICE_PRINT("consumer_idx: {} num_entries_per_consumer: {}\n", consumer_idx, num_entries_per_consumer);
 
     // uint32_t dst_addr_base = get_arg_val<uint32_t>(0);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_consumer; tile_id++) {
         // DPRINT << "wfw" << ENDL();
+        // DEVICE_PRINT("wfw\n");
         dfb.wait_front(1);
         // in blocked case maybe each consumer can modify the data so host knows that each have consumed it
         // DPRINT << "wfd" << ENDL();
+        // DEVICE_PRINT("wfd\n");
         // DPRINT << "pfw" << ENDL();
+        // DEVICE_PRINT("pfw\n");
         DPRINT << "consumer tile id " << tile_id << ENDL();
+        DEVICE_PRINT("consumer tile id {}\n", tile_id);
         dfb.pop_front(1);
         // DPRINT << "pfd" << ENDL();
+        // DEVICE_PRINT("pfd\n");
     }
     DPRINT << "CBWD" << ENDL();
+    DEVICE_PRINT("CBWD\n");
 }
