@@ -37,7 +37,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.tests.models.wan2_2.test_all_gather_minimal_matmul_async import create_global_semaphores
 
 # ============================================================================
 # DEVICE CONFIGURATIONS
@@ -49,7 +48,7 @@ DEVICE_CONFIGS = {
     "bh_4x8": {
         "mesh_shape": (4, 8),
         "fabric_config": "FABRIC_1D_RING",
-        "fabric_router_config_payload": 4096,  # max_packet_payload_size_bytes
+        "fabric_router_config_payload": None,  # use default (4352) to match model
         "topology": "Ring",
         "num_links": 2,
         "num_workers_per_link": 6,
@@ -325,7 +324,7 @@ def create_fabric_router_config(max_payload_size):
     return config
 
 
-def open_mesh(cfg):
+def open_mesh(cfg, trace_region_size=None):
     """Open a mesh device with the given resolved config."""
     fabric_kwargs = [
         cfg["fabric_config"],
@@ -340,7 +339,10 @@ def open_mesh(cfg):
     ttnn.set_fabric_config(*fabric_kwargs)
 
     rows, cols = cfg["mesh_shape"]
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols))
+    device_kwargs = {}
+    if trace_region_size is not None:
+        device_kwargs["trace_region_size"] = trace_region_size
+    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(rows, cols), **device_kwargs)
 
 
 def close_mesh(mesh_device):
@@ -364,12 +366,19 @@ def append_csv_row(csv_path, row):
         writer.writerow(row)
 
 
-def parse_ops_log(subdir):
+def parse_ops_log(subdir, expected_ops=None):
     """Parse device profiler ops log between start/stop signposts.
 
-    Returns list of per-op max device kernel durations (ns), one per op dispatch.
+    Returns list of per-op mean device kernel durations (ns), one per op dispatch.
     Groups by GLOBAL CALL COUNT to handle multi-device rows.
+    Uses mean to match tt-perf-report behavior for collective ops (AllGather*).
+
+    With trace mode, each device gets its own GLOBAL CALL COUNT, so grouping by
+    GLOBAL CALL COUNT produces N*num_devices entries instead of N. When
+    expected_ops is provided and len(results) is a multiple of it, results are
+    chunked into groups and averaged to collapse per-device rows.
     """
+    import numpy as np
     import pandas as pd
     from tracy.process_model_log import get_latest_ops_log_filename
 
@@ -399,10 +408,19 @@ def parse_ops_log(subdir):
 
     # Group by GLOBAL CALL COUNT to collapse multi-device rows into one per op
     if "GLOBAL CALL COUNT" in df.columns:
-        per_op = df.groupby("GLOBAL CALL COUNT", sort=False)["DEVICE KERNEL DURATION [ns]"].max()
-        return per_op.values.tolist()
+        per_op = df.groupby("GLOBAL CALL COUNT", sort=False)["DEVICE KERNEL DURATION [ns]"].mean()
+        durations = per_op.values.tolist()
     else:
-        return df["DEVICE KERNEL DURATION [ns]"].values.tolist()
+        durations = df["DEVICE KERNEL DURATION [ns]"].values.tolist()
+
+    # Trace mode: each device gets its own GLOBAL CALL COUNT, producing
+    # expected_ops * num_devices entries.  Collapse by chunking and averaging.
+    if expected_ops is not None and len(durations) > expected_ops and expected_ops > 0:
+        if len(durations) % expected_ops == 0:
+            chunk_size = len(durations) // expected_ops
+            durations = np.array(durations).reshape(expected_ops, chunk_size).mean(axis=1).tolist()
+
+    return durations
 
 
 # ============================================================================
@@ -426,28 +444,46 @@ def test_mm_sweep_worker(device_config, shape, m_block):
 
     M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
 
-    m_candidates = get_block_candidates(M_tiles)
-    if m_block not in m_candidates:
-        pytest.skip(f"m_block={m_block} not a candidate for M_tiles={M_tiles}")
+    # Explicit combos override: JSON list of [k_blk, n_blk, sb_h, sb_w] tuples
+    # When set, m_block must match the expected value and we skip normal generation.
+    explicit_combos_str = os.environ.get("MM_SWEEP_EXPLICIT_COMBOS")
+    if explicit_combos_str:
+        explicit_combos = json.loads(explicit_combos_str)
+        # Each entry is [k_blk, n_blk, sb_h, sb_w]; we only use k_blk/n_blk here,
+        # sb is passed separately via the run_op closure below.
+        kn_combos = [(c[0], c[1]) for c in explicit_combos]
+        # Override pick_subblock with explicit subblocks
+        _explicit_subblocks = {(c[0], c[1]): (c[2], c[3]) for c in explicit_combos}
+    else:
+        _explicit_subblocks = None
+        m_candidates = get_block_candidates(M_tiles)
+        if m_block not in m_candidates:
+            pytest.skip(f"m_block={m_block} not a candidate for M_tiles={M_tiles}")
 
-    kn_combos = generate_kn_combos(K_tiles, N_tiles, m_block=m_block, use_case=use_case, is_agmm=is_agmm)
-    if not kn_combos:
-        pytest.skip("No valid (K_block, N_block) combos after L1 filter")
+        kn_combos = generate_kn_combos(K_tiles, N_tiles, m_block=m_block, use_case=use_case, is_agmm=is_agmm)
+        if not kn_combos:
+            pytest.skip("No valid (K_block, N_block) combos after L1 filter")
 
-    # Optional batch slicing to avoid profiler DRAM buffer overflow on AGMM
-    batch_start = int(os.environ.get("MM_SWEEP_BATCH_START", 0))
-    batch_end = int(os.environ.get("MM_SWEEP_BATCH_END", len(kn_combos)))
-    kn_combos = kn_combos[batch_start:batch_end]
-    if not kn_combos:
-        pytest.skip(f"Empty batch [{batch_start}:{batch_end}]")
+        # Optional batch slicing to avoid profiler DRAM buffer overflow on AGMM
+        batch_start = int(os.environ.get("MM_SWEEP_BATCH_START", 0))
+        batch_end = int(os.environ.get("MM_SWEEP_BATCH_END", len(kn_combos)))
+        kn_combos = kn_combos[batch_start:batch_end]
+        if not kn_combos:
+            pytest.skip(f"Empty batch [{batch_start}:{batch_end}]")
 
     op_type = "agmm" if is_agmm else "mm"
-    logger.info(
-        f"Worker [{device_config}] {op_type} ({use_case}): M={M} K={K} N={N} grid={cgx}x{cgy} "
-        f"m_block={m_block}, {len(kn_combos)} K/N combos (batch [{batch_start}:{batch_end}])"
-    )
+    if explicit_combos_str:
+        logger.info(
+            f"Worker [{device_config}] {op_type} ({use_case}): M={M} K={K} N={N} grid={cgx}x{cgy} "
+            f"m_block={m_block}, {len(kn_combos)} EXPLICIT combos"
+        )
+    else:
+        logger.info(
+            f"Worker [{device_config}] {op_type} ({use_case}): M={M} K={K} N={N} grid={cgx}x{cgy} "
+            f"m_block={m_block}, {len(kn_combos)} K/N combos (batch [{batch_start}:{batch_end}])"
+        )
 
-    mesh_device = open_mesh(cfg)
+    mesh_device = open_mesh(cfg, trace_region_size=90112 if is_agmm else None)
     try:
         core_grid = ttnn.CoreCoord(cgx, cgy)
         dtype = ttnn.bfloat16
@@ -493,18 +529,25 @@ def test_mm_sweep_worker(device_config, shape, m_block):
                 layout=ttnn.TILE_LAYOUT,
             )
 
+            # Use full compute grid for semaphores (matching model's CCLManager)
+            full_grid = mesh_device.compute_with_storage_grid_size()
             ccl_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
             )
-            ccl_semaphore_handles = create_global_semaphores(mesh_device, mesh_device.get_num_devices(), ccl_cores, 0)
 
+            # Create 2 semaphores (matching model's CCLManager ag_ping_pong pattern)
+            ccl_semaphore_handles = [
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+            ]
+
+            # 4D buffer without mesh_mapper (matching model's CCLManager)
             persistent_output_buffer = ttnn.from_torch(
-                torch.zeros((M, K), dtype=torch.float32),
-                device=mesh_device,
+                torch.empty((1, 1, M, K), dtype=torch.float32),
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
-                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=mesh_device,
             )
 
             # Allocate dummy addcmul tensors if needed (to_out use case)
@@ -530,8 +573,11 @@ def test_mm_sweep_worker(device_config, shape, m_block):
                     ),
                 )
 
-            def run_op(k_blk, n_blk):
-                sb_h, sb_w = pick_subblock(m_block, n_blk)
+            def run_op(k_blk, n_blk, sync=True):
+                if _explicit_subblocks and (k_blk, n_blk) in _explicit_subblocks:
+                    sb_h, sb_w = _explicit_subblocks[(k_blk, n_blk)]
+                else:
+                    sb_h, sb_w = pick_subblock(m_block, n_blk)
                 matmul_config = ttnn.MinimalMatmulConfig(
                     M_block_size=m_block,
                     K_block_size=k_blk,
@@ -561,7 +607,8 @@ def test_mm_sweep_worker(device_config, shape, m_block):
                     addcmul_input_tensor2=addcmul_tensor2,
                     chunks=chunks,
                 )
-                ttnn.synchronize_device(mesh_device)
+                if sync:
+                    ttnn.synchronize_device(mesh_device)
 
         else:
             # ----- Non-AGMM path: replicated tensors + minimal_matmul -----
@@ -592,7 +639,10 @@ def test_mm_sweep_worker(device_config, shape, m_block):
             if use_matmul_split:
 
                 def run_op(k_blk, n_blk):
-                    sb_h, sb_w = pick_subblock(m_block, n_blk)
+                    if _explicit_subblocks and (k_blk, n_blk) in _explicit_subblocks:
+                        sb_h, sb_w = _explicit_subblocks[(k_blk, n_blk)]
+                    else:
+                        sb_h, sb_w = pick_subblock(m_block, n_blk)
                     matmul_config = ttnn.MinimalMatmulConfig(
                         M_block_size=m_block,
                         K_block_size=k_blk,
@@ -616,7 +666,10 @@ def test_mm_sweep_worker(device_config, shape, m_block):
             else:
 
                 def run_op(k_blk, n_blk):
-                    sb_h, sb_w = pick_subblock(m_block, n_blk)
+                    if _explicit_subblocks and (k_blk, n_blk) in _explicit_subblocks:
+                        sb_h, sb_w = _explicit_subblocks[(k_blk, n_blk)]
+                    else:
+                        sb_h, sb_w = pick_subblock(m_block, n_blk)
                     matmul_config = ttnn.MinimalMatmulConfig(
                         M_block_size=m_block,
                         K_block_size=k_blk,
@@ -662,10 +715,32 @@ def test_mm_sweep_worker(device_config, shape, m_block):
         # Measured run — only valid combos
         from tracy import signpost
 
-        signpost("start")
-        for k_blk, n_blk in valid_combos:
-            run_op(k_blk, n_blk)
-        signpost("stop")
+        if is_agmm:
+            # Capture a trace per combo (ops already compiled from warmup).
+            # Trace execution synchronizes all devices before dispatching,
+            # eliminating host dispatch skew that can stall fabric transfers.
+            trace_ids = []
+            for k_blk, n_blk in valid_combos:
+                trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                run_op(k_blk, n_blk, sync=False)
+                ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+                ttnn.synchronize_device(mesh_device)
+                trace_ids.append(trace_id)
+
+            # Only trace executions appear between signposts
+            signpost("start")
+            for trace_id in trace_ids:
+                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+                ttnn.synchronize_device(mesh_device)
+            signpost("stop")
+
+            for trace_id in trace_ids:
+                ttnn.release_trace(mesh_device, trace_id)
+        else:
+            signpost("start")
+            for k_blk, n_blk in valid_combos:
+                run_op(k_blk, n_blk)
+            signpost("stop")
 
         logger.info(f"Worker done: {len(valid_combos)} combos measured")
 
@@ -748,18 +823,25 @@ def test_mm_subblock_sweep_worker(device_config, shape):
                 layout=ttnn.TILE_LAYOUT,
             )
 
+            # Use full compute grid for semaphores (matching model's CCLManager)
+            full_grid = mesh_device.compute_with_storage_grid_size()
             ccl_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
             )
-            ccl_semaphore_handles = create_global_semaphores(mesh_device, mesh_device.get_num_devices(), ccl_cores, 0)
 
+            # Create 2 semaphores (matching model's CCLManager ag_ping_pong pattern)
+            ccl_semaphore_handles = [
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+            ]
+
+            # 4D buffer without mesh_mapper (matching model's CCLManager)
             persistent_output_buffer = ttnn.from_torch(
-                torch.zeros((M, K), dtype=torch.float32),
-                device=mesh_device,
+                torch.empty((1, 1, M, K), dtype=torch.float32),
                 layout=ttnn.TILE_LAYOUT,
                 dtype=dtype,
-                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, None]),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                device=mesh_device,
             )
 
             addcmul_tensor1 = None
@@ -941,20 +1023,36 @@ def test_mm_sweep(device_config, shape):
     shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
     core_grid_str = f"{cgx}x{cgy}"
 
-    m_blocks = get_block_candidates(M_tiles)
+    # Explicit combos mode: set MM_SWEEP_EXPLICIT_COMBOS='[[m,k,n,sb_h,sb_w],...]'
+    # to test only specific configs. Skips normal sweep and pass 2.
+    explicit_combos_env = os.environ.get("MM_SWEEP_EXPLICIT_COMBOS")
+    if explicit_combos_env:
+        explicit_list = json.loads(explicit_combos_env)
+        # Group by m_block
+        from collections import defaultdict
 
-    # Log total combo counts (K/N combos vary per m_block due to L1 filter)
-    sample_kn = generate_kn_combos(K_tiles, N_tiles, m_block=m_blocks[0], use_case=use_case, is_agmm=is_agmm)
-    if not sample_kn and not any(
-        generate_kn_combos(K_tiles, N_tiles, m_block=m, use_case=use_case, is_agmm=is_agmm) for m in m_blocks
-    ):
-        pytest.skip(f"No valid (K_block, N_block) combos for K_tiles={K_tiles}, N_tiles={N_tiles}")
+        by_m = defaultdict(list)
+        for combo in explicit_list:
+            by_m[combo[0]].append(combo)
+        m_blocks = sorted(by_m.keys())
+        logger.info(f"EXPLICIT COMBOS MODE: {len(explicit_list)} combos across {len(m_blocks)} M_blocks for {shape_id}")
+    else:
+        explicit_list = None
+        by_m = None
+        m_blocks = get_block_candidates(M_tiles)
 
-    logger.info(
-        f"Sweep [{device_config}] {op_type} ({use_case}) {shape_id}: "
-        f"M_tiles={M_tiles}, K_tiles={K_tiles}, N_tiles={N_tiles}, "
-        f"{len(m_blocks)} M_blocks (divisors+base), L1-filtered K/N combos"
-    )
+        # Log total combo counts (K/N combos vary per m_block due to L1 filter)
+        sample_kn = generate_kn_combos(K_tiles, N_tiles, m_block=m_blocks[0], use_case=use_case, is_agmm=is_agmm)
+        if not sample_kn and not any(
+            generate_kn_combos(K_tiles, N_tiles, m_block=m, use_case=use_case, is_agmm=is_agmm) for m in m_blocks
+        ):
+            pytest.skip(f"No valid (K_block, N_block) combos for K_tiles={K_tiles}, N_tiles={N_tiles}")
+
+        logger.info(
+            f"Sweep [{device_config}] {op_type} ({use_case}) {shape_id}: "
+            f"M_tiles={M_tiles}, K_tiles={K_tiles}, N_tiles={N_tiles}, "
+            f"{len(m_blocks)} M_blocks (divisors+base), L1-filtered K/N combos"
+        )
 
     write_csv_header(CSV_FILE)
     all_results = []
@@ -962,10 +1060,24 @@ def test_mm_sweep(device_config, shape):
     batch_size = PROFILER_BATCH_SIZE_AGMM if is_agmm else PROFILER_BATCH_SIZE_MM
 
     for m_block in m_blocks:
-        kn_combos = generate_kn_combos(K_tiles, N_tiles, m_block=m_block, use_case=use_case, is_agmm=is_agmm)
-        if not kn_combos:
-            logger.info(f"  M_block={m_block}: all K/N combos exceed L1 budget, skipping")
-            continue
+        if explicit_list is not None:
+            # Explicit mode: use the combos for this m_block, pass as env var to worker
+            m_combos = by_m[m_block]
+            # kn_combos for orchestrator tracking: (k, n) pairs
+            kn_combos = [(c[1], c[2]) for c in m_combos]
+            # Explicit subblock lookup: (k, n) -> (sb_h, sb_w)
+            explicit_sb = {(c[1], c[2]): (c[3], c[4]) for c in m_combos}
+            # Worker needs [k, n, sb_h, sb_w] format
+            worker_explicit = [[c[1], c[2], c[3], c[4]] for c in m_combos]
+            os.environ["MM_SWEEP_EXPLICIT_COMBOS"] = json.dumps(worker_explicit)
+            logger.info(f"  M_block={m_block}: {len(kn_combos)} explicit combos")
+        else:
+            explicit_sb = None
+            os.environ.pop("MM_SWEEP_EXPLICIT_COMBOS", None)
+            kn_combos = generate_kn_combos(K_tiles, N_tiles, m_block=m_block, use_case=use_case, is_agmm=is_agmm)
+            if not kn_combos:
+                logger.info(f"  M_block={m_block}: all K/N combos exceed L1 budget, skipping")
+                continue
 
         # Split into batches to avoid profiler DRAM buffer overflow
         batches = [
@@ -986,8 +1098,9 @@ def test_mm_sweep(device_config, shape):
             subdir = f"mm_sweep_{device_config}_{shape_id}_m{m_block}{batch_suffix}"
             combos_file = f"valid_combos_{device_config}_{shape_id}_m{m_block}{batch_suffix}.json"
             os.environ["MM_SWEEP_VALID_COMBOS_FILE"] = combos_file
-            os.environ["MM_SWEEP_BATCH_START"] = str(b_start)
-            os.environ["MM_SWEEP_BATCH_END"] = str(b_end)
+            if explicit_list is None:
+                os.environ["MM_SWEEP_BATCH_START"] = str(b_start)
+                os.environ["MM_SWEEP_BATCH_END"] = str(b_end)
             command = (
                 f"pytest models/tt_dit/tests/models/wan2_2/sweep_mm_block_sizes.py"
                 f"::test_mm_sweep_worker[m{m_block}-{shape_id}-{device_config}] -x"
@@ -998,15 +1111,16 @@ def test_mm_sweep(device_config, shape):
 
             try:
                 run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-                durations = parse_ops_log(subdir)
 
-                # Read valid combos from worker (may be subset due to runtime L1 OOM)
+                # Read valid combos from worker first (may be subset due to runtime L1 OOM)
                 if os.path.exists(combos_file):
                     with open(combos_file) as f:
                         valid_combos = [tuple(c) for c in json.load(f)]
                     os.remove(combos_file)
                 else:
                     valid_combos = batch_combos
+
+                durations = parse_ops_log(subdir, expected_ops=len(valid_combos))
 
                 if len(durations) != len(valid_combos):
                     logger.warning(
@@ -1024,7 +1138,11 @@ def test_mm_sweep(device_config, shape):
                 logger.warning(f"  M_block={m_block}{batch_suffix}: FAILED - {err_msg}")
                 # Record failures for this batch
                 for k_blk, n_blk in batch_combos:
-                    sb_h, sb_w = pick_subblock(m_block, n_blk)
+                    sb_h, sb_w = (
+                        explicit_sb[(k_blk, n_blk)]
+                        if explicit_sb and (k_blk, n_blk) in explicit_sb
+                        else pick_subblock(m_block, n_blk)
+                    )
                     append_csv_row(
                         CSV_FILE,
                         [
@@ -1049,6 +1167,7 @@ def test_mm_sweep(device_config, shape):
         # Clean up batch env vars
         os.environ.pop("MM_SWEEP_BATCH_START", None)
         os.environ.pop("MM_SWEEP_BATCH_END", None)
+        os.environ.pop("MM_SWEEP_EXPLICIT_COMBOS", None)
 
         # Record results for all successful batches
         skipped = len(kn_combos) - len(m_block_valid_combos)
@@ -1056,7 +1175,11 @@ def test_mm_sweep(device_config, shape):
             logger.info(f"  M_block={m_block}: {skipped} combos skipped (runtime L1 OOM)")
 
         for i, (k_blk, n_blk) in enumerate(m_block_valid_combos):
-            sb_h, sb_w = pick_subblock(m_block, n_blk)
+            sb_h, sb_w = (
+                explicit_sb[(k_blk, n_blk)]
+                if explicit_sb and (k_blk, n_blk) in explicit_sb
+                else pick_subblock(m_block, n_blk)
+            )
             if i < len(m_block_durations):
                 duration_ns = m_block_durations[i]
                 status = "OK"
@@ -1118,8 +1241,9 @@ def test_mm_sweep(device_config, shape):
         )
 
     # Pass 2: subblock sweep on best (M_block, K_block, N_block)
+    # Skip if explicit combos were provided (subblocks already specified).
     best_m, best_k, best_n = best["M_block"], best["K_block"], best["N_block"]
-    sb_combos = generate_subblock_combos(best_m, best_n)
+    sb_combos = generate_subblock_combos(best_m, best_n) if not explicit_list else []
 
     if len(sb_combos) > 1:
         logger.info(f"Pass 2: sweeping {len(sb_combos)} subblock combos for " f"blocks=({best_m},{best_k},{best_n})...")
@@ -1138,7 +1262,6 @@ def test_mm_sweep(device_config, shape):
 
         try:
             run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-            durations = parse_ops_log(subdir)
 
             if os.path.exists(combos_file):
                 with open(combos_file) as f:
@@ -1146,6 +1269,8 @@ def test_mm_sweep(device_config, shape):
                 os.remove(combos_file)
             else:
                 valid_sb_combos = sb_combos
+
+            durations = parse_ops_log(subdir, expected_ops=len(valid_sb_combos))
 
             if len(durations) != len(valid_sb_combos):
                 logger.warning(f"  Subblock sweep: expected {len(valid_sb_combos)} ops, got {len(durations)}")
@@ -1307,15 +1432,16 @@ def main():
 
                 try:
                     run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-                    durations = parse_ops_log(subdir)
 
-                    # Read valid combos from worker (may be subset due to runtime L1 OOM)
+                    # Read valid combos from worker first (may be subset due to runtime L1 OOM)
                     if os.path.exists(combos_file):
                         with open(combos_file) as f:
                             valid_combos = [tuple(c) for c in json.load(f)]
                         os.remove(combos_file)
                     else:
                         valid_combos = batch_combos
+
+                    durations = parse_ops_log(subdir, expected_ops=len(valid_combos))
 
                     for i, (k_blk, n_blk) in enumerate(valid_combos):
                         sb_h, sb_w = pick_subblock(m_block, n_blk)
@@ -1439,7 +1565,6 @@ def main():
 
                 try:
                     run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
-                    durations = parse_ops_log(subdir)
 
                     if os.path.exists(combos_file):
                         with open(combos_file) as f:
@@ -1447,6 +1572,8 @@ def main():
                         os.remove(combos_file)
                     else:
                         valid_sb_combos = sb_combos
+
+                    durations = parse_ops_log(subdir, expected_ops=len(valid_sb_combos))
 
                     if len(durations) != len(valid_sb_combos):
                         print(f"  Subblock sweep: expected {len(valid_sb_combos)} ops, got {len(durations)}")
