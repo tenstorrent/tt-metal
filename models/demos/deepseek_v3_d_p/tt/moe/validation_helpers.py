@@ -14,6 +14,16 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 
 
+def calculate_average_recall(predicted_experts: torch.Tensor, reference_experts: torch.Tensor) -> float:
+    """Calculate average recall of predicted expert selections vs reference."""
+    recall = 0
+    for i in range(predicted_experts.shape[0]):
+        pred_set = set(e.item() for e in predicted_experts[i])
+        ref_set = set(e.item() for e in reference_experts[i])
+        recall += len(pred_set & ref_set) / len(ref_set) if ref_set else 0
+    return recall / predicted_experts.shape[0]
+
+
 def trace_token_source(
     dispatch_group_idx: int,
     chip_id: int,
@@ -117,6 +127,17 @@ class ValidationResult:
             else:
                 # Generic fallback
                 logger.error(f"  [{i}] {mismatch}")
+
+    @classmethod
+    def merge(cls, results: List["ValidationResult"], name: str = "merged") -> "ValidationResult":
+        """Combine multiple ValidationResults into one."""
+        passed = all(r.passed for r in results)
+        matches = sum(r.matches for r in results)
+        total = sum(r.total for r in results)
+        mismatches = []
+        for r in results:
+            mismatches.extend(r.mismatches)
+        return cls(passed=passed, matches=matches, total=total, mismatches=mismatches, name=name)
 
     def assert_passed(self, msg: Optional[str] = None):
         """Assert validation passed, with detailed error on failure."""
@@ -408,6 +429,143 @@ def log_per_chip_statistics(
 # Type for dispatch validation comparators
 # Returns (match: bool, error_detail: Optional[str])
 DispatchComparator = Callable[[torch.Tensor, torch.Tensor, int, int, int], Tuple[bool, Optional[str]]]
+
+# Type for per-device validation comparators
+# (actual, expected, device_idx) -> (match, error_detail)
+PerDeviceComparator = Callable[[torch.Tensor, torch.Tensor, int], Tuple[bool, Optional[str]]]
+
+
+def validate_per_device(
+    get_actual: Callable[[int], torch.Tensor],
+    get_expected: Callable[[int], torch.Tensor],
+    num_devices: int,
+    compare_fn: PerDeviceComparator,
+    name: str = "per_device",
+    mesh_shape: Optional[Tuple[int, int]] = None,
+) -> ValidationResult:
+    """
+    Generic per-device validation. Mirrors validate_dispatch_data but for per-device iteration.
+
+    Args:
+        get_actual: (device_idx) -> actual tensor for that device
+        get_expected: (device_idx) -> expected tensor for that device
+        num_devices: number of devices to iterate over
+        compare_fn: (actual, expected, device_idx) -> (match, error_detail)
+        name: name for logging/result
+        mesh_shape: (rows, cols) - if provided, maps device_idx to (dispatch_group, chip)
+                    for validated_cells and mismatch format compatible with log_validation_results
+    """
+    matches, total, mismatches = 0, 0, []
+    validated_cells = set()
+    for i in range(num_devices):
+        total += 1
+        actual = get_actual(i)
+        expected = get_expected(i)
+
+        if mesh_shape:
+            n_cols = mesh_shape[1]
+            row, col = i // n_cols, i % n_cols
+            validated_cells.add((col, row))
+
+        match, error_detail = compare_fn(actual, expected, i)
+        if match:
+            matches += 1
+            logger.debug(f"✅ Device {i}: {name} PASS")
+        else:
+            logger.error(f"❌ Device {i}: {name} - {error_detail}")
+            if mesh_shape:
+                mismatches.append((col, row, error_detail))
+            else:
+                mismatches.append((i, error_detail))
+    return ValidationResult(
+        passed=len(mismatches) == 0,
+        matches=matches,
+        total=total,
+        mismatches=mismatches,
+        name=name,
+        validated_cells=validated_cells,
+    )
+
+
+def validate_per_device_exact(
+    get_actual: Callable[[int], torch.Tensor],
+    get_expected: Callable[[int], torch.Tensor],
+    num_devices: int,
+    name: str = "exact",
+    mesh_shape: Optional[Tuple[int, int]] = None,
+) -> ValidationResult:
+    """Per-device torch.equal() validation."""
+
+    def compare_exact(actual, expected, device_idx):
+        if torch.equal(actual, expected):
+            return True, None
+        diff = (actual != expected).sum().item()
+        return False, f"{diff}/{actual.numel()} elements differ"
+
+    return validate_per_device(get_actual, get_expected, num_devices, compare_exact, name, mesh_shape)
+
+
+def validate_per_device_pcc(
+    get_actual: Callable[[int], torch.Tensor],
+    get_expected: Callable[[int], torch.Tensor],
+    num_devices: int,
+    threshold: float = 0.99,
+    name: str = "pcc",
+    mesh_shape: Optional[Tuple[int, int]] = None,
+) -> ValidationResult:
+    """Per-device PCC validation."""
+
+    def compare_pcc(actual, expected, device_idx):
+        _, pcc = comp_pcc(actual.float(), expected.float())
+        if pcc >= threshold:
+            return True, None
+        return False, f"PCC={pcc:.4f} < {threshold}"
+
+    return validate_per_device(get_actual, get_expected, num_devices, compare_pcc, name, mesh_shape)
+
+
+def validate_per_device_recall(
+    get_actual: Callable[[int], torch.Tensor],
+    get_expected: Callable[[int], torch.Tensor],
+    num_devices: int,
+    threshold: float = 0.999,
+    name: str = "recall",
+    mesh_shape: Optional[Tuple[int, int]] = None,
+) -> ValidationResult:
+    """Per-device recall validation."""
+
+    def compare_recall(actual, expected, device_idx):
+        recall = calculate_average_recall(actual, expected)
+        if recall >= threshold:
+            return True, None
+        return False, f"recall={recall:.4f} < {threshold}"
+
+    return validate_per_device(get_actual, get_expected, num_devices, compare_recall, name, mesh_shape)
+
+
+def validate_replication(
+    tensor: torch.Tensor,
+    name: str = "replication",
+) -> ValidationResult:
+    """Validate tensor is replicated across dim 1 (chips) within each group (dim 0)."""
+    num_groups = tensor.shape[0]
+    group_size = tensor.shape[1]
+    matches, total, mismatches = 0, 0, []
+    for g in range(num_groups):
+        ref = tensor[g, 0]
+        for j in range(1, group_size):
+            total += 1
+            if torch.allclose(tensor[g, j].int(), ref.int(), atol=0, rtol=0):
+                matches += 1
+            else:
+                mismatches.append((g, j, f"group {g} row {j} differs from row 0"))
+    return ValidationResult(
+        passed=len(mismatches) == 0,
+        matches=matches,
+        total=total,
+        mismatches=mismatches,
+        name=name,
+    )
 
 
 def _get_valid_slots(

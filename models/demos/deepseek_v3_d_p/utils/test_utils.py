@@ -24,12 +24,3 @@ def get_input_mem_config(config, mesh_shape):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-
-
-def calculate_average_recall(predicted_experts, reference_experts):
-    recall = 0
-    for i in range(predicted_experts.shape[0]):
-        pred_set = set(e.item() for e in predicted_experts[i])
-        ref_set = set(e.item() for e in reference_experts[i])
-        recall += len(pred_set & ref_set) / len(ref_set) if ref_set else 0
-    return recall / predicted_experts.shape[0]

@@ -29,7 +29,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 
 # from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
-from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_replication
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
 
 
 @pytest.mark.parametrize(
@@ -200,21 +201,18 @@ def test_prep_dispatch_combine(
     ]
 
     # Validate replication of expert_token_counts within dispatch groups (all chips see same totals)
-    for name, host_tensor, _ in tensors_to_validate:
-        if name == "expert_token_counts":
-            for i in range(num_dispatch_groups):
-                ref = host_tensor[i][0]
-                for j in range(1, dispatch_group_size):
-                    if not torch.allclose(host_tensor[i][j].int(), ref.int(), atol=0, rtol=0):
-                        raise AssertionError(
-                            f"Replication mismatch in {name} for dispatch group {i}, row {j}. "
-                            f"Expected {ref}, got {host_tensor[i][j]}"
-                        )
+    replication_result = validate_replication(host_expert_token_counts, name="expert_token_counts")
+    log_validation_results(
+        results=[replication_result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Routing Setup Validation",
+    )
+    replication_result.assert_passed("Replication mismatch in expert_token_counts")
 
     # Validate values match torch reference (both 3D sparse format)
     for name, host_tensor, expected in tensors_to_validate:
         # host_tensor: (num_dispatch_groups, dispatch_group_size, 1, num_routed_experts) from composer
         # expected: (num_dispatch_groups, dispatch_group_size, num_routed_experts) from get_gate_outputs
         tt_values = host_tensor.squeeze()  # Remove singleton dims -> 3D
-        if not torch.allclose(tt_values.int(), expected.int(), atol=0, rtol=0):
-            raise AssertionError(f"Value mismatch for {name}. Expected shape {expected.shape}, got {tt_values.shape}")
+        assert torch.allclose(tt_values.int(), expected.int(), atol=0, rtol=0), f"Value mismatch for {name}"

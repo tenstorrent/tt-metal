@@ -7,7 +7,6 @@ from types import SimpleNamespace
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
@@ -17,12 +16,14 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_gate_outputs,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGateConfig, TtMoEGatePrefill
-from models.demos.deepseek_v3_d_p.utils.test_utils import (
-    adjust_shapes_for_testing,
-    calculate_average_recall,
-    get_input_mem_config,
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
+    ValidationResult,
+    validate_per_device_exact,
+    validate_per_device_pcc,
+    validate_per_device_recall,
 )
-from tests.ttnn.utils_for_testing import comp_pcc
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
+from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
 
 
 @pytest.mark.parametrize(
@@ -183,83 +184,38 @@ def test_forward_pass(
     per_device_topk_indices = ttnn.get_device_tensors(tt_topk_indices)
     per_device_topk_logits = ttnn.get_device_tensors(tt_logits)
 
-    all_passed = True
-    assert_msgs = []
-    for device_id in range(mesh_device.shape[0] * mesh_device.shape[1]):
-        # Convert output back to torch
-        tt_topk_weights_torch = ttnn.to_torch(per_device_topk_weight[device_id])
-        tt_topk_indices_torch = ttnn.to_torch(per_device_topk_indices[device_id])
-        tt_logits_torch = ttnn.to_torch(per_device_topk_logits[device_id])
+    num_devices = mesh_device.shape[0] * mesh_device.shape[1]
 
-        # Calculate device position in mesh
-        row = device_id // mesh_device.shape[1]
-        col = device_id % mesh_device.shape[1]
-
-        # Get the corresponding reference slice (same across columns due to reduction)
-        ref_logits = reference_logits_reshaped[row, :, :]
-        ref_weights = reference_topk_weights_reshaped[row, :, :]
-        ref_indices = reference_topk_indices_reshaped[row, :, :]
-
-        # Test recall with individual logging
-        recall = calculate_average_recall(tt_topk_indices_torch, ref_indices)
-        recall_passed = recall > 0.999
-        status_char = "✅" if recall_passed else "❌"
-        logger.info(
-            f"{status_char} Device {device_id} (row={row}, col={col}): Recall = {recall:.4f} (threshold: 0.999)"
-        )
-        if not recall_passed:
-            all_passed = False
-            assert_msgs.append(f"Device {device_id} (row={row}, col={col}): Recall is {recall:.4f}, expected > 0.999")
-
-        # Test logits PCC with individual logging
-        logits_passed, logits_pcc = comp_pcc(tt_logits_torch, ref_logits, 0.99)
-        status_char = "✅" if logits_passed else "❌"
-        logger.info(
-            f"{status_char} Device {device_id} (row={row}, col={col}): Logits PCC = {logits_pcc:.4f} (threshold: 0.99)"
-        )
-        if not logits_passed:
-            all_passed = False
-            assert_msgs.append(
-                f"Device {device_id} (row={row}, col={col}): Logits PCC is {logits_pcc:.4f}, expected > 0.99"
-            )
-
-        # Test weights PCC with individual logging
-        weights_passed, weights_pcc = comp_pcc(tt_topk_weights_torch, ref_weights, 0.98)
-        status_char = "✅" if weights_passed else "❌"
-        logger.info(
-            f"{status_char} Device {device_id} (row={row}, col={col}): Weights PCC = {weights_pcc:.4f} (threshold: 0.98)"
-        )
-        if not weights_passed:
-            all_passed = False
-            assert_msgs.append(
-                f"Device {device_id} (row={row}, col={col}): Weights PCC is {weights_pcc:.4f}, expected > 0.99"
-            )
+    recall_result = validate_per_device_recall(
+        get_actual=lambda i: ttnn.to_torch(per_device_topk_indices[i]),
+        get_expected=lambda i: reference_topk_indices_reshaped[i // n_tp_devices],
+        num_devices=num_devices,
+        threshold=0.999,
+        name="indices_recall",
+        mesh_shape=mesh_device.shape,
+    )
+    logits_result = validate_per_device_pcc(
+        get_actual=lambda i: ttnn.to_torch(per_device_topk_logits[i]),
+        get_expected=lambda i: reference_logits_reshaped[i // n_tp_devices],
+        num_devices=num_devices,
+        threshold=0.99,
+        name="topk_logits",
+        mesh_shape=mesh_device.shape,
+    )
+    weights_result = validate_per_device_pcc(
+        get_actual=lambda i: ttnn.to_torch(per_device_topk_weight[i]),
+        get_expected=lambda i: reference_topk_weights_reshaped[i // n_tp_devices],
+        num_devices=num_devices,
+        threshold=0.98,
+        name="topk_scores",
+        mesh_shape=mesh_device.shape,
+    )
 
     # Compute reference dispatch offsets from tt_topk_indices, masked by dispatch table
     indices_for_gate = torch.zeros(n_sp_devices, seq_len_per_device, config.n_activated_experts, dtype=torch.int32)
     for row in range(n_sp_devices):
         device_id = row * n_tp_devices
         indices_for_gate[row] = ttnn.to_torch(per_device_topk_indices[device_id]).int()
-
-    # Unmasked expert counter: same for all dispatch groups (all groups see the same tokens)
-    expert_counter = torch.zeros((n_sp_devices, n_routed_experts), dtype=torch.int32)
-    for chip in range(n_sp_devices):
-        for token in range(seq_len_per_device):
-            for k in range(config.n_activated_experts):
-                expert_id = indices_for_gate[chip, token, k].item()
-                expert_counter[chip, expert_id] += 1
-
-    # Per-dispatch-group masked offsets and totals
-    per_group_offsets = {}
-    per_group_totals = {}
-    for group in range(n_tp_devices):
-        group_mask = dispatch_table[group] >= 0
-        masked_counter = expert_counter.clone()
-        masked_counter[:, ~group_mask] = 0
-        cum_sum = torch.cumsum(masked_counter, dim=0)
-        offsets = torch.vstack([torch.zeros([1, n_routed_experts], dtype=torch.int32), cum_sum[:-1]])
-        per_group_offsets[group] = offsets.long()
-        per_group_totals[group] = cum_sum[-1:].long()
 
     experts_per_chip = n_routed_experts // (n_sp_devices * n_tp_devices)
     expert_offsets, expert_token_counts, _ = get_gate_outputs(
@@ -272,64 +228,37 @@ def test_forward_pass(
         expert_dispatch_table=dispatch_table,
     )
 
-    reference_offsets = expert_offsets.long()
-    reference_totals = expert_token_counts[:, 0, :].long()  # Shape: (num_dispatch_groups, num_routed_experts)
+    reference_totals = expert_token_counts[:, 0, :].long()
 
     per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
-    for device_id in range(len(per_device_dispatch_offsets)):
-        tt_offsets_torch = ttnn.to_torch(per_device_dispatch_offsets[device_id]).long()
-        row = device_id // n_tp_devices
-        col = device_id % n_tp_devices
-        ref_offsets = expert_offsets[col, row : row + 1, :].long()
-
-        offsets_match = torch.equal(tt_offsets_torch, ref_offsets)
-        status_char = "✅" if offsets_match else "❌"
-        if offsets_match:
-            logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Dispatch offsets match exactly")
-        else:
-            diff = (tt_offsets_torch - ref_offsets).abs()
-            max_diff = diff.max().item()
-            num_mismatches = (diff > 0).sum().item()
-            total_elements = diff.numel()
-            logger.info(
-                f"{status_char} Device {device_id} (row={row}, col={col}): "
-                f"Dispatch offsets MISMATCH - max_diff={max_diff}, "
-                f"mismatches={num_mismatches}/{total_elements}"
-            )
-            all_passed = False
-            assert_msgs.append(
-                f"Device {device_id} (row={row}, col={col}): "
-                f"Dispatch offsets mismatch (max_diff={max_diff}, mismatches={num_mismatches}/{total_elements})"
-            )
+    offsets_result = validate_per_device_exact(
+        get_actual=lambda i: ttnn.to_torch(per_device_dispatch_offsets[i]).long(),
+        get_expected=lambda i: expert_offsets[
+            i % n_tp_devices, (i // n_tp_devices) : (i // n_tp_devices) + 1, :
+        ].long(),
+        num_devices=len(per_device_dispatch_offsets),
+        name="dispatch_offsets",
+        mesh_shape=mesh_device.shape,
+    )
 
     per_device_totals = ttnn.get_device_tensors(total_counts_per_expert)
-    for device_id in range(len(per_device_totals)):
-        tt_totals_torch = ttnn.to_torch(per_device_totals[device_id]).long()
-        row = device_id // n_tp_devices
-        col = device_id % n_tp_devices
-        ref_totals = reference_totals[col : col + 1, :].long()
+    totals_result = validate_per_device_exact(
+        get_actual=lambda i: ttnn.to_torch(per_device_totals[i]).long(),
+        get_expected=lambda i: reference_totals[(i % n_tp_devices) : (i % n_tp_devices) + 1, :].long(),
+        num_devices=len(per_device_totals),
+        name="total_counts",
+        mesh_shape=mesh_device.shape,
+    )
 
-        totals_match = torch.equal(tt_totals_torch, ref_totals)
-        status_char = "✅" if totals_match else "❌"
-        if totals_match:
-            logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Total counts match exactly")
-        else:
-            diff = (tt_totals_torch - ref_totals).abs()
-            max_diff = diff.max().item()
-            num_mismatches = (diff > 0).sum().item()
-            total_elements = diff.numel()
-            logger.info(
-                f"{status_char} Device {device_id} (row={row}, col={col}): "
-                f"Total counts MISMATCH - max_diff={max_diff}, "
-                f"mismatches={num_mismatches}/{total_elements}"
-            )
-            all_passed = False
-            assert_msgs.append(
-                f"Device {device_id} (row={row}, col={col}): "
-                f"Total counts mismatch (max_diff={max_diff}, mismatches={num_mismatches}/{total_elements})"
-            )
-
-    assert all_passed, "\n".join(assert_msgs)
+    all_results = [recall_result, logits_result, weights_result, offsets_result, totals_result]
+    log_validation_results(
+        results=all_results,
+        num_dispatch_groups=n_tp_devices,
+        dispatch_group_size=n_sp_devices,
+        title="Gate Prefill2D Validation",
+    )
+    merged = ValidationResult.merge(all_results, name="gate_prefill2d")
+    merged.assert_passed("Gate prefill2d validation failed")
 
     ttnn.deallocate(tt_input)
     ttnn.deallocate(tt_topk_weights)

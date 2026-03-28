@@ -15,6 +15,8 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import validate_per_device_exact
+from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
 
 
 def torch_masked_bincount(
@@ -162,28 +164,19 @@ def test_masked_bincount(
     # Compare per-device
     device_tensors = ttnn.get_device_tensors(tt_histograms)
     n_cols = mesh_device.shape[1]
-    all_passed = True
 
-    for device_id in range(len(device_tensors)):
-        tt_hist = ttnn.to_torch(device_tensors[device_id]).flatten().to(torch.int32)
-
-        row = device_id // n_cols
-        col = device_id % n_cols
-
-        ref_hist = torch_histograms[(col, row)]
-
-        matches = torch.equal(tt_hist[:n_routed_experts], ref_hist)
-        if not matches:
-            diff_mask = tt_hist[:n_routed_experts] != ref_hist
-            num_diff = diff_mask.sum().item()
-            logger.error(
-                f"Device {device_id} (row={row_idx}, col={group_idx}): {num_diff}/{n_routed_experts} bins differ"
-            )
-            logger.error(f"  tt:  {tt_hist[:n_routed_experts]}")
-            logger.error(f"  ref: {ref_hist}")
-            all_passed = False
-        else:
-            logger.info(f"Device {device_id} (row={row_idx}, col={group_idx}): PASS (sum={ref_hist.sum().item()})")
-
-    assert all_passed, "masked_bincount output does not match torch reference on one or more chips"
+    result = validate_per_device_exact(
+        get_actual=lambda i: ttnn.to_torch(device_tensors[i]).flatten().to(torch.int32)[:n_routed_experts],
+        get_expected=lambda i: torch_histograms[(i % n_cols, i // n_cols)],
+        num_devices=len(device_tensors),
+        name="masked_bincount",
+        mesh_shape=mesh_device.shape,
+    )
+    log_validation_results(
+        results=[result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Masked Bincount Validation",
+    )
+    result.assert_passed("masked_bincount output does not match torch reference")
     logger.info("masked_bincount matches torch reference!")
