@@ -426,6 +426,7 @@ class TextAttention(LightweightModule):
         transformation_mat: ttnn.Tensor,
         kv_cache: Tuple[ttnn.Tensor, ttnn.Tensor],
         current_pos: ttnn.Tensor,
+        page_table: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Decode-mode forward pass with KV cache update and tensor parallelism.
@@ -439,6 +440,8 @@ class TextAttention(LightweightModule):
             kv_cache: Tuple of (k_cache, v_cache) pre-allocated tensors
                       Shape per device: [batch, num_kv_heads_per_device, max_seq_len, head_dim]
             current_pos: Current decode position tensor [batch]
+            page_table: Optional page table for paged attention (vLLM)
+                Shape: [batch, max_num_blocks_per_req] mapping positions to block IDs
 
         Returns:
             Output tensor [1, 1, 1, hidden_dim]
@@ -480,22 +483,21 @@ class TextAttention(LightweightModule):
         if k.dtype != ttnn.bfloat16:
             k = ttnn.typecast(k, dtype=ttnn.bfloat16)
 
-        # Get current position as integer for rotary_embedding
-        int_current_pos = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
-
         # Apply RoPE using TTNN rotary embedding
+        # Note: rot_mats already contain cos/sin for the current position, so we pass 0
+        # This avoids reading current_pos from device during traced execution
         q = ttnn.experimental.rotary_embedding(
             q,
             rot_mats[0],  # cos
             rot_mats[1],  # sin
-            int_current_pos,
+            0,  # Position is already embedded in rot_mats
         )
 
         k = ttnn.experimental.rotary_embedding(
             k,
             rot_mats[0],  # cos
             rot_mats[1],  # sin
-            int_current_pos,
+            0,  # Position is already embedded in rot_mats
         )
 
         # Reshape to handle padding from rotary_embedding (pads to 32 heads)
@@ -522,23 +524,41 @@ class TextAttention(LightweightModule):
         # Get KV cache references
         k_cache, v_cache = kv_cache
 
-        # Get update position as integer
-        update_idx = int(ttnn.to_torch(ttnn.get_device_tensors(current_pos)[0])[0])
-
-        # Convert K, V to match cache shape [batch, kv_heads, seq_len, head_dim]
+        # Convert K, V to DRAM for permute operation
         k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
         v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
 
-        # Reshape K, V for cache
-        # K is [1, B, H, d] -> [B, H, 1, d]
-        # V is [1, H, B, d] -> [B, H, 1, d]
-        k = ttnn.permute(k, (1, 2, 0, 3))  # [1, B, H, d] -> [B, H, 1, d]
-        v = ttnn.permute(v, (2, 1, 0, 3))  # [1, H, B, d] -> [B, H, 1, d]
+        # Reshape V for cache - K is already in correct format [1, B, H, d]
+        # V is [1, H, B, d] -> [1, B, H, d] to match K format
+        # paged_update_cache expects input_tensor.shape[1] == page_table.shape[0] (batch_size)
+        v = ttnn.permute(v, (0, 2, 1, 3))  # [1, H, B, d] -> [1, B, H, d]
 
-        # Update KV cache at current position
-        # update_cache updates the cache at a specific index
-        ttnn.update_cache(k_cache, k, update_idx)
-        ttnn.update_cache(v_cache, v, update_idx)
+        # Create sharded memory config for paged_update_cache
+        # paged_update_cache requires HEIGHT sharded input tensors in [1, B, H, d] format
+        # Shard across batch dimension (1 core per batch element)
+        grid_size = ttnn.CoreCoord(8, 8)
+        kv_num_cores = batch_size  # 1 core per batch
+        kv_core_grid = ttnn.num_cores_to_corerangeset(kv_num_cores, grid_size, row_wise=True)
+        # For [1, B, H, d], HEIGHT = B * H (padded), WIDTH = head_dim
+        # Shard height must be tile-aligned (multiple of 32)
+        kv_shard_height = ((self.num_kv_heads_per_device + 31) // 32) * 32  # Tile-aligned
+        kv_shard_width = self.head_dim
+        kv_mem_cfg = ttnn.create_sharded_memory_config(
+            shape=(kv_shard_height, kv_shard_width),
+            core_grid=kv_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # Convert K, V to sharded memory config for paged_update_cache
+        k = ttnn.to_memory_config(k, kv_mem_cfg)
+        v = ttnn.to_memory_config(v, kv_mem_cfg)
+
+        # Update KV cache at current position using tensor-based indexing
+        # paged_update_cache expects [1, B, K, D] format where B is batch_size
+        # This matches the format used by tt_transformers (k_heads_1BKD)
+        ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=page_table)
+        ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=page_table)
 
         ttnn.deallocate(k)
         ttnn.deallocate(v)
@@ -556,16 +576,31 @@ class TextAttention(LightweightModule):
             k_chunk_size=256,
         )
 
-        attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
-            q,
-            k_cache,
-            v_cache,
-            cur_pos_tensor=current_pos,
-            scale=self.scale,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            program_config=sdpa_program_config,
-        )  # Output: [1, B, H, d]
+        if page_table is not None:
+            # Paged attention: use paged SDPA decode
+            attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q,
+                k_cache,
+                v_cache,
+                page_table_tensor=page_table,
+                cur_pos_tensor=current_pos,
+                scale=self.scale,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=sdpa_program_config,
+            )  # Output: [1, B, H, d]
+        else:
+            # Non-paged attention: use standard SDPA decode
+            attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
+                q,
+                k_cache,
+                v_cache,
+                cur_pos_tensor=current_pos,
+                scale=self.scale,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=sdpa_program_config,
+            )  # Output: [1, B, H, d]
 
         ttnn.deallocate(q)
 
