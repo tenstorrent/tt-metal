@@ -55,6 +55,7 @@ from models.demos.deepseek_v3_b1.utils import generate_mm_weights
         pytest.param(6644, marks=pytest.mark.skip_post_commit),  # (2,2,1 + partial,1): partial into dev2 (if SP = 4)
         pytest.param(9916, marks=pytest.mark.skip_post_commit),  # (3,2 + partial,2,2): partial into dev1 (if SP = 4)
         pytest.param(11664, marks=pytest.mark.skip_post_commit),  # (3,3,3,2 + partial): partial into dev3 (if SP = 4)
+        pytest.param(8191, marks=pytest.mark.skip_post_commit),  # For benchmarking 8K seq len
     ],
 )  # Must test 128 chunk aligned decode positions, add other tests when causal masks are in for SDPA
 @pytest.mark.parametrize(
@@ -189,10 +190,10 @@ def test_attention_block(
     )
 
     # SDPA output intermediate tensor declared here to overlap with remaining pre-SDPA CBs.
-    # Matches flash_mla's cb_out_im sizing: 51 tiles of [8, 32] at bfloat16 = 26112 B per core.
-    # Shard shape (24, 544) = 3 tile-rows x 17 tile-cols = 51 tiles per core.
+    # Matches flash_mla's cb_out_im sizing: 85 tiles of [8, 32] at bfloat16 = 43520 B per core.
+    # Shard shape (40, 544) = 5 tile-rows x 17 tile-cols = 85 tiles per core.
     sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
-    sdpa_out_interm_num_slots = 3
+    sdpa_out_interm_num_slots = 5
     sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8  # 3 tile-rows of [8, 32]
     sdpa_out_interm_shard_width = 17 * 32  # 17 tile-cols of [8, 32]
     sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores
