@@ -64,7 +64,7 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`optional_rs_output_tensor` (Optional[ttnn.Tensor]): Pre-allocated RS output.
 
         )doc",
-        &ttnn::experimental::minimal_matmul_strided_reduce_scatter_async,
+        &ExecuteMinimalMatmulStridedReduceScatterAsync::invoke,
         nb::arg("input_tensor"),
         nb::arg("weight_tensor"),
         nb::arg("dim"),

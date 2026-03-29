@@ -53,7 +53,7 @@ void bind_strided_reduce_scatter_async(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the output tensor.
         )doc",
-        &ttnn::experimental::strided_reduce_scatter_async,
+        &ExecuteStridedReduceScatterAsync::invoke,
         nb::arg("input_tensor"),
         nb::arg("persistent_output_buffers") = nb::none(),
         nb::arg("dim"),
