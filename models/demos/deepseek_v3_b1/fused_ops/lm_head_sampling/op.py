@@ -859,6 +859,9 @@ class LMHeadSampling:
                 )
                 if enable_mtp_on_device and eh_gather_output_tensor is not None:
                     eh_gather_receiver_data_addr = int(eh_gather_output_tensor.buffer_address())
+                    print(
+                        f"[OP:{device_idx}:C] eh_gather_receiver_data_addr={eh_gather_receiver_data_addr}", flush=True
+                    )
 
                 # ================================================================
                 # NCRISC compile-time args
@@ -970,6 +973,7 @@ class LMHeadSampling:
                     ("gather_receiver_semaphore_id", eh_gather_receiver_semaphore_id),
                     ("gather_src_cb", matmul_out_eh_cb if enable_mtp_on_device else 0),
                     ("gather_src_num_pages", eh_gather_src_num_pages),
+                    # NOTE: these grid coords are not used since we use per-core sender indices
                     ("gather_sender_grid_start_x", 0),
                     ("gather_sender_grid_start_y", 0),
                     ("gather_sender_grid_end_x", 0),

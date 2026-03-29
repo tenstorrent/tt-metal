@@ -357,15 +357,14 @@ class SpecLMHeadStage(StageKind):
 
         # Base token tensors — all on argmax_final_core.
         # base_token_tensor is 64 bytes (TOKEN_META landing buffer for NCRISC NOC write).
-        _SENTINEL = 0xFFFFFFFF
-        _TOKEN_META_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
+        TOKEN_META_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
         token_meta_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(argmax_final_core_grid, (1, _TOKEN_META_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(argmax_final_core_grid, (1, TOKEN_META_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
         )
         base_token_tensor = ttnn.from_torch(
-            torch.full((num_devices, 1, _TOKEN_META_ELEMS), _SENTINEL, dtype=torch.uint32),
+            torch.zeros((num_devices, 1, TOKEN_META_ELEMS), dtype=torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,

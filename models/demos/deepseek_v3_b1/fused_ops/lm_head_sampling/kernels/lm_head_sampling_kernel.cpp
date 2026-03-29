@@ -276,11 +276,7 @@ void kernel_main() {
         constexpr uint32_t in1_cb = get_named_compile_time_arg_val("matmul_in1");
         constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("matmul_k_num_tiles");
         constexpr uint32_t out_w = get_named_compile_time_arg_val("matmul_out_w");
-        DPRINT << ">mm setup sharded buffer" << ENDL();
-        DPRINT << ">mm num_tiles_k=" << num_tiles_k << " out_w=" << out_w << ENDL();
-        DPRINT << ">mm fp=" << get_local_cb_interface(in1_cb).fifo_num_pages << ENDL();
         unified_kernels::setup_sharded_buffer(in1_cb, num_tiles_k * out_w);
-        DPRINT << "<mm setup sharded buffer" << ENDL();
     }
 
     // ── MTP: EH mcast receiver (all cores, enable_mtp) ─────────────
@@ -787,23 +783,19 @@ void kernel_main() {
             {
                 deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, Core::is_rmsnorm_core, true> h_rmsnorm;
                 DeviceZoneScopedN("MTP_H_RMSNORM");
-                DPRINT << ">h rmsnorm" << ENDL();
                 PACK(({
-                    uint32_t eh_src_base = 0;
                     uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("rmsnorm_h_output_cb");
-                    eh_src_base = get_local_cb_interface(mcast_eh_src_cb).fifo_wr_ptr << cb_addr_shift;
+                    auto& iface = get_local_cb_interface(mcast_eh_src_cb);
+                    uint32_t eh_src_base = (iface.fifo_limit - iface.fifo_size) << cb_addr_shift;
                     unified_kernels::override_cb_wr_ptr(
                         mcast_eh_src_cb, eh_src_base + 14336);  // 14k bytes offset for h_norm
                 }));
                 h_rmsnorm(rmsnorm_args);
-                DPRINT << "<h rmsnorm" << ENDL();
             }
             {
                 DeviceZoneScopedN("MTP_E_RMSNORM");
                 deepseek_b1_ops::RMSNorm::Op<ERMSNormCTArgs, Core::is_rmsnorm_core, true> e_rmsnorm;
-                DPRINT << ">e rmsnorm" << ENDL();
                 e_rmsnorm(rmsnorm_args);
-                DPRINT << "<e rmsnorm" << ENDL();
             }
         }
 #endif
@@ -850,7 +842,6 @@ void kernel_main() {
             constexpr uint32_t argmax_socket_cb = get_named_compile_time_arg_val("argmax_socket_cb");
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
-            DPRINT << ">ax token_id=" << token_id << ENDL();
             write_token_metadata_to_socket_cb(eh_gather_dst_cb, 1, token_id, TOKEN_TYPE_BASE, 0);
             cb_pop_front(argmax_socket_cb, 1);
         }
@@ -881,12 +872,14 @@ void kernel_main() {
             noc_semaphore_wait(metadata_ready_sem, 1);
             noc_semaphore_set(metadata_ready_sem, 0);
 
-            // Read the speculative token from the argmax socket CB
+            // Read the speculative token from the argmax socket CB (produced by spec stage argmax)
             constexpr uint32_t argmax_socket_cb = ArgmaxCTArgs::socket_cb_id;
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t speculative_token =
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
             invalidate_l1_cache();
+
+            // Read the base token from metadata L1 (transferred by NCRISC during the broadcast phase)
             auto metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_verify_output_staging_addr);
             uint32_t base_token = metadata[1];
             cb_pop_front(argmax_socket_cb, 1);
@@ -906,22 +899,16 @@ void kernel_main() {
 
         // Base Stage: run LM head sampling and MTP ops
         if constexpr (Core::is_base_stage) {
-            // DPRINT << ">BS" << ENDL();
             lm_head_sampling();
             if constexpr (Core::enable_mtp) {
-                // DPRINT << ">MP" << ENDL();
                 mtp();
-                // DPRINT << "MP<" << ENDL();
             }
-            // DPRINT << "BS<" << ENDL();
         }
 
-        // Spec Stage: run LM head sampling and update speculative state
+        // Spec Stage: run MTP LM head sampling and update speculative state
         if constexpr (Core::is_spec_stage) {
-            DPRINT << ">SP" << ENDL();
             lm_head_sampling();
             update_speculative_state();
-            DPRINT << "SP<" << ENDL();
         }
 
         // ====================================================================
@@ -933,7 +920,6 @@ void kernel_main() {
             Core::persistent_mode) {
             if constexpr (Core::is_base_stage) {
                 if constexpr (Core::enable_mtp) {
-                    DPRINT << ">sM" << ENDL();
                     constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
                     constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages") + 1;
                     constexpr uint32_t eh_gather_total_bytes =
@@ -941,24 +927,19 @@ void kernel_main() {
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                         sampling_args.socket_config_addr, eh_gather_dst_cb, eh_gather_num_pages, eh_gather_total_bytes);
                 } else {
-                    DPRINT << ">sS" << ENDL();
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                         sampling_args.socket_config_addr,
                         ArgmaxCTArgs::socket_cb_id,
                         1,
                         ArgmaxCTArgs::socket_page_size_bytes);
-
-                    DPRINT << "sS<" << ENDL();
                 }
 
             } else if constexpr (Core::is_spec_stage) {
-                DPRINT << ">sS" << ENDL();
                 unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                     sampling_args.socket_config_addr,
                     ArgmaxCTArgs::socket_cb_id,
                     1,
                     ArgmaxCTArgs::socket_page_size_bytes);
-                DPRINT << "sS<" << ENDL();
             }
             size_t fabric_arg_idx = sampling_op.persistent_fabric_arg_idx;
             sampling_op.send_persistent_next_iter_inc_via_fabric_brisc(sampling_args, fabric_arg_idx);

@@ -609,16 +609,43 @@ _REAL_WEIGHTS_PERSISTENT_INPUT_TOKEN_SEED = 42
 class _SyntheticWeightProvider:
     """Provider that creates deterministic synthetic embedding and LM head weights (one-hot / winner_per_row)."""
 
-    def load_embedding(self, device):
+    @staticmethod
+    def make_embedding_torch():
+        """Raw one-hot embedding table in HF format (vocab_size, hidden)."""
         w = torch.zeros((_VOCAB_SIZE, _EMBED_HIDDEN), dtype=torch.bfloat16)
         w[torch.arange(_VOCAB_SIZE), torch.arange(_VOCAB_SIZE, dtype=torch.int64) % _EMBED_HIDDEN] = 1
+        return w
+
+    @staticmethod
+    def make_lm_head_torch():
+        """Raw LM head + norm weights. Returns (lm_w, norm_w) in HF format (vocab_size, hidden)."""
+        lm_w = torch.full((_VOCAB_SIZE, _EMBED_HIDDEN), -1.0, dtype=torch.bfloat16)
+        lm_w[torch.arange(_EMBED_HIDDEN, dtype=torch.int64) % _LM_HEAD_N_SYNTHETIC, torch.arange(_EMBED_HIDDEN)] = 1
+        norm_w = torch.ones(_EMBED_HIDDEN, dtype=torch.bfloat16)
+        return lm_w, norm_w
+
+    @staticmethod
+    def make_mtp_torch(num_devices):
+        """Raw MTP torch tensors (embedding, h_gamma, e_gamma, eh_proj) with seed=42."""
+        K = _EMBED_HIDDEN
+        embedding_dim = _EMBED_HIDDEN
+        mtp_output_dim = _EMBED_HIDDEN
+        n_total = 101 * 160
+        torch.manual_seed(42)
+        embedding = torch.randn((num_devices * n_total, embedding_dim), dtype=torch.bfloat16)
+        h_gamma = torch.randn((1, K), dtype=torch.bfloat16)
+        e_gamma = torch.randn((1, embedding_dim), dtype=torch.bfloat16)
+        eh_proj = torch.randn((K + embedding_dim, mtp_output_dim), dtype=torch.bfloat16)
+        return embedding, h_gamma, e_gamma, eh_proj
+
+    def load_embedding(self, device):
+        w = self.make_embedding_torch()
         return prepare_embedding_weights({"model.embed_tokens.weight": w}, device, move_to_device=True)
 
     def load_lm_head(self, device):
-        lm_w = torch.full((_VOCAB_SIZE, _EMBED_HIDDEN), -1.0, dtype=torch.bfloat16)
-        lm_w[torch.arange(_EMBED_HIDDEN, dtype=torch.int64) % _LM_HEAD_N_SYNTHETIC, torch.arange(_EMBED_HIDDEN)] = 1
+        lm_w, norm_w = self.make_lm_head_torch()
         return prepare_lm_head_weights(
-            {"lm_head.weight": lm_w, "model.norm.weight": torch.ones(_EMBED_HIDDEN, dtype=torch.bfloat16)},
+            {"lm_head.weight": lm_w, "model.norm.weight": norm_w},
             device,
             move_to_device=True,
         )
@@ -632,9 +659,7 @@ class _SyntheticWeightProvider:
         num_dram_banks = 8
         mtp_n_per_core = mtp_output_dim // num_dram_banks
         mtp_padded_dim = num_dram_banks * mtp_n_per_core
-        num_matmul_cores = 101
-        n_per_core = 160
-        n_total = num_matmul_cores * n_per_core
+        n_total = 101 * 160
         num_devices = device.shape[0] * device.shape[1]
 
         a_tile = ttnn.Tile([1, 32])
@@ -648,11 +673,7 @@ class _SyntheticWeightProvider:
             ttnn.ShardSpec(mcast_core_grid, (M, K), ttnn.ShardOrientation.ROW_MAJOR),
         )
 
-        torch.manual_seed(42)
-        torch_embedding = torch.randn((num_devices * n_total, embedding_dim), dtype=torch.bfloat16)
-        torch_h_gamma = torch.randn((M, K), dtype=torch.bfloat16)
-        torch_e_gamma = torch.randn((M, embedding_dim), dtype=torch.bfloat16)
-        torch_eh_proj = torch.randn((K + embedding_dim, mtp_output_dim), dtype=torch.bfloat16)
+        torch_embedding, torch_h_gamma, torch_e_gamma, torch_eh_proj = self.make_mtp_torch(num_devices)
         torch_eh_proj_padded = torch.zeros((K + embedding_dim, mtp_padded_dim), dtype=torch.bfloat16)
         torch_eh_proj_padded[:, :mtp_output_dim] = torch_eh_proj
 
@@ -946,30 +967,19 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
     n_total = _LM_HEAD_N_SYNTHETIC
     num_devices = 8
 
-    # Base stage weights (same as _SyntheticWeightProvider)
-    torch_gamma = torch.ones((1, K), dtype=torch.bfloat16)
-    winner_per_row = torch.arange(K, dtype=torch.int64) % n_total
-    torch_b = torch.full((K, n_total), fill_value=-1.0, dtype=torch.bfloat16)
-    torch_b[torch.arange(K), winner_per_row] = 1
+    lm_w, norm_w = _SyntheticWeightProvider.make_lm_head_torch()
+    torch_gamma = norm_w.unsqueeze(0)
+    torch_b = lm_w[:n_total, :].T
     torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
 
-    # MTP weights (seed=42, same as _SyntheticWeightProvider.load_mtp_weights)
-    embedding_dim = K
-    mtp_output_dim = K
-    torch.manual_seed(42)
-    torch_embedding = torch.randn((num_devices * n_total, embedding_dim), dtype=torch.bfloat16)
-    torch_h_gamma = torch.randn((1, K), dtype=torch.bfloat16)
-    torch_e_gamma = torch.randn((1, embedding_dim), dtype=torch.bfloat16)
-    torch_eh_proj = torch.randn((K + embedding_dim, mtp_output_dim), dtype=torch.bfloat16)
+    torch_embedding, torch_h_gamma, torch_e_gamma, torch_eh_proj = _SyntheticWeightProvider.make_mtp_torch(num_devices)
 
     results = []
     for iteration in range(iterations):
-        # Step 1: Embedding lookup (one-hot table: token_id → row with 1.0 at position token_id % K)
         row_idx = iteration % K
         torch_input = torch.zeros((1, K), dtype=torch.bfloat16)
         torch_input[0, row_idx] = 1
 
-        # Step 2: Base stage LM head sampling + MTP fusion → base_token + mtp_logits
         base_token_tensor, mtp_logits = LMHeadSampling.golden(
             torch_input.float(),
             torch_gamma.float(),
@@ -985,7 +995,6 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
         )
         base_token = base_token_tensor.to(torch.uint32).item()
 
-        # Step 3: Verify stage LM head sampling on MTP logits → spec_token
         spec_token_tensor, _ = LMHeadSampling.golden(
             mtp_logits,
             torch_gamma.float(),
