@@ -24,6 +24,8 @@ public:
 TEST_F(DevicePrintOutputFixture, PrintSimpleString) {
     std::vector<std::string> messages = {
         "Hello world!",
+        "First line.",
+        "Second line.",
     };
 
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_simple_string.cpp", messages);

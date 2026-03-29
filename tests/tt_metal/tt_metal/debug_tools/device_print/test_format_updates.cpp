@@ -68,6 +68,7 @@ public:
 TEST_F(DevicePrintFormatUpdatesFixture, PrintSimpleString) {
     std::vector<std::string_view> messages = {
         "Hello world!\n"sv,
+        "First line.\nSecond line.\n"sv,
     };
 
     TestFormatUpdate(
