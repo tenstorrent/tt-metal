@@ -310,6 +310,10 @@ class Molmo2ProcessorWrapper:
     def always_start_with_space(self) -> bool:
         return True
 
+    def get_video_string(self, video_grid, timestamps):
+        """Delegate to underlying processor's get_video_string method."""
+        return self.processor.get_video_string(video_grid, timestamps)
+
     @property
     def max_crops(self) -> int:
         return getattr(self.image_processor, "max_crops", 8)
@@ -928,10 +932,51 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
             def get_replacement_video(item_idx: int) -> list:
                 """Generate replacement tokens for video at item_idx.
 
-                Video: 8 frames × 196 tokens each = 1568 tokens total.
-                Each frame is 14×14 pooled patches.
+                CRITICAL: Video tokens need proper structure with timestamps and frame markers!
+                Format: "0.0 <im_start><im_patch>*196<im_end> 1.0 <im_start>..."
+
+                This matches what HuggingFace processor.get_video_string() produces.
+                Without this structure, the model produces garbled output.
                 """
+                import numpy as np
+
                 nonlocal video_grid_info
+
+                def generate_video_tokens(n_frames: int, pooled_h: int, pooled_w: int) -> list:
+                    """Generate properly structured video tokens with timestamps and frame markers.
+
+                    CRITICAL: Molmo2 uses <frame_start>/<frame_end> for video frames (NOT <im_start>/<im_end>).
+                    This matches demo.py's get_video_tokens() format which works correctly.
+                    """
+                    # Generate timestamps (evenly spaced, ~0.5 sec apart)
+                    timestamps = np.arange(n_frames, dtype=float) * 0.5
+
+                    # Build video string using correct tokens (matching demo.py)
+                    # Token format: "{timestamp} <frame_start><im_patch>*N<im_col><frame_end>"
+                    FRAME_START = "<frame_start>"
+                    FRAME_END = "<frame_end>"
+                    IM_PATCH = "<im_patch>"
+                    IM_COL = "<im_col>"
+
+                    video_string = ""
+                    for frame_idx, frame_time in enumerate(timestamps):
+                        prev_space = " " if frame_idx > 0 else ""
+                        frame_prefix = prev_space + f"{frame_time:.1f} "
+                        video_string += frame_prefix
+
+                        # Each row: <im_patch>*pooled_w + <im_col>
+                        per_row = IM_PATCH * pooled_w + IM_COL
+                        # Full frame: <frame_start> + (per_row * pooled_h) + <frame_end>
+                        video_string += FRAME_START + (per_row * pooled_h) + FRAME_END
+
+                    # Tokenize the video string to get proper token IDs
+                    token_ids = tokenizer.encode(video_string, add_special_tokens=False)
+
+                    logger.info(
+                        f"  get_replacement_video[{item_idx}]: Generated {len(token_ids)} tokens "
+                        f"(n_frames={n_frames}, pooled={pooled_h}x{pooled_w}, using <frame_start>/<frame_end>)"
+                    )
+                    return token_ids
 
                 # Try to get video data from out_mm_kwargs first
                 video_data = out_mm_kwargs.get("video", [])
@@ -939,40 +984,27 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
 
                 if len(video_data) > 0 and item_idx < len(video_data):
                     video_item = video_data[item_idx]
-                    # video_item is a MultiModalKwargsItem containing MultiModalFieldElem objects
-                    # Access the data via get_data() or directly via elem.data
                     try:
-                        # Try to get video_grid_thw data
                         video_grid = None
                         if hasattr(video_item, "get_data"):
-                            # MultiModalKwargsItem has get_data() method
                             item_data = video_item.get_data()
                             video_grid = item_data.get("video_grid_thw")
                         elif hasattr(video_item, "__getitem__"):
-                            # Access as dict-like
                             video_grid_elem = video_item.get("video_grid_thw")
                             if video_grid_elem is not None:
                                 video_grid = getattr(video_grid_elem, "data", video_grid_elem)
 
                         if video_grid is not None:
-                            logger.info(
-                                f"  get_replacement_video[{item_idx}]: video_grid type={type(video_grid)}, value={video_grid}"
-                            )
+                            logger.info(f"  get_replacement_video[{item_idx}]: video_grid={video_grid}")
                             if hasattr(video_grid, "tolist"):
                                 grid = video_grid.tolist()
                             else:
                                 grid = list(video_grid)
-                            # Handle nested list [[n_frames, pooled_h, pooled_w]]
                             if len(grid) > 0 and isinstance(grid[0], (list, tuple)):
                                 grid = grid[0]
                             if len(grid) >= 3:
                                 n_frames, pooled_h, pooled_w = int(grid[0]), int(grid[1]), int(grid[2])
-                                total_tokens = n_frames * pooled_h * pooled_w
-                                logger.info(
-                                    f"  get_replacement_video[{item_idx}]: "
-                                    f"n_frames={n_frames}, pooled={pooled_h}x{pooled_w}, total={total_tokens}"
-                                )
-                                return [hf_processor.image_patch_id] * total_tokens
+                                return generate_video_tokens(n_frames, pooled_h, pooled_w)
                     except Exception as e:
                         logger.warning(f"  get_replacement_video[{item_idx}]: Error accessing video_item: {e}")
 
@@ -983,26 +1015,17 @@ class Molmo2MultiModalProcessor(BaseMultiModalProcessor["TT_MolmoProcessingInfo"
                             grid = video_grid_info.tolist()
                         else:
                             grid = list(video_grid_info)
-                        # Handle nested list [[n_frames, pooled_h, pooled_w]]
                         if isinstance(grid[0], (list, tuple)):
                             grid = grid[0]
                         if len(grid) >= 3:
                             n_frames, pooled_h, pooled_w = int(grid[0]), int(grid[1]), int(grid[2])
-                            total_tokens = n_frames * pooled_h * pooled_w
-                            logger.info(
-                                f"  get_replacement_video[{item_idx}]: from video_grid_info "
-                                f"n_frames={n_frames}, pooled={pooled_h}x{pooled_w}, total={total_tokens}"
-                            )
-                            return [hf_processor.image_patch_id] * total_tokens
+                            return generate_video_tokens(n_frames, pooled_h, pooled_w)
                     except Exception as e:
                         logger.warning(f"  Error parsing video_grid_info: {e}")
 
-                # Default: 8 frames × 196 tokens (14×14 pooled) = 1568 tokens
-                num_frames = 8
-                tokens_per_frame = 196  # 14×14 pooled
-                total_tokens = num_frames * tokens_per_frame
-                logger.info(f"  get_replacement_video[{item_idx}]: using default {total_tokens} tokens")
-                return [hf_processor.image_patch_id] * total_tokens
+                # Default: 8 frames × 14×14 pooled
+                logger.info(f"  get_replacement_video[{item_idx}]: using default 8 frames × 14×14")
+                return generate_video_tokens(8, 14, 14)
 
             prompt_replacements.append(
                 PromptReplacement(
@@ -1727,12 +1750,16 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 )
 
                 # Run vision + prefill using generator's run_prefill
+                # CRITICAL: Disable traces for video - traces captured during warmup (text-only)
+                # don't work with vision input due to device write restrictions during trace execution.
+                # Demo.py confirms video works without traces.
+                logger.info(f"  VIDEO: Running prefill WITHOUT traces (traces incompatible with vision)")
                 logits_ttnn, prefill_timing = self._run_prefill(
                     input_ids=user_tokens,
                     pixel_values=pv_tensor,
                     pooled_patches_idx=pooling,
-                    use_trace=enable_trace,
-                    use_vision_trace=enable_trace,
+                    use_trace=False,  # DISABLED for video
+                    use_vision_trace=False,
                     page_table=page_table_tt,
                 )
 
@@ -1886,11 +1913,15 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     logger.warning(f"  No image_token_pooling available - vision features may not work correctly")
 
                 # Run prefill with pre-processed image/video
+                # CRITICAL: Disable traces for vision input - traces captured during warmup (text-only)
+                # don't work correctly with vision-fused embeddings, producing garbled output.
+                # Video path already uses use_trace=False and produces coherent output.
+                logger.info(f"  IMAGE: Running prefill WITHOUT traces (vision incompatible with text traces)")
                 logits_ttnn, prefill_timing = self._run_prefill(
                     input_ids=tokens[user_id : user_id + 1, : prompt_lens[user_id]],
                     pixel_values=pv_tensor,
                     pooled_patches_idx=pooling,
-                    use_trace=enable_trace,  # Re-enabled: traces work after tensor conversion fixes
+                    use_trace=False,  # DISABLED for images - same as video path
                     use_vision_trace=False,  # Disabled for vLLM: variable multi-crop sizes
                     use_unified_trace=False,
                     page_table=page_table_tt,
