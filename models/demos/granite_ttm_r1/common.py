@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
-from transformers import AutoConfig, AutoModel
+from tsfm_public import TinyTimeMixerConfig, TinyTimeMixerForPrediction
 
 DEFAULT_MODEL_NAME = "ibm-granite/granite-timeseries-ttm-r1"
 DEFAULT_CONTEXT_LENGTH = 512
@@ -26,7 +26,7 @@ class GraniteTTMExample:
 
 
 def load_granite_ttm_config(model_name: str = DEFAULT_MODEL_NAME, cache_dir: str | None = None):
-    return AutoConfig.from_pretrained(model_name, cache_dir=cache_dir, trust_remote_code=True)
+    return TinyTimeMixerConfig.from_pretrained(model_name, cache_dir=cache_dir)
 
 
 def load_granite_ttm_reference_model(
@@ -39,11 +39,10 @@ def load_granite_ttm_reference_model(
     if local_files_only is None:
         local_files_only = os.getenv("CI") == "true"
 
-    model = AutoModel.from_pretrained(
+    model = TinyTimeMixerForPrediction.from_pretrained(
         model_name,
         cache_dir=cache_dir,
         local_files_only=local_files_only,
-        trust_remote_code=True,
         torch_dtype=torch_dtype,
     )
     return model.eval()
