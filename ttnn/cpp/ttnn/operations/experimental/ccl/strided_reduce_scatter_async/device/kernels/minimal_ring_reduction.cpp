@@ -126,20 +126,29 @@ void kernel_main() {
 
                                 // -------------------------------------------------------
                                 // Step 2: scalar * acc * b -> pack back to addcmul_temp_cb
-                                // b has 1 row per tile, broadcast across acc's rows.
+                                // When ADDCMUL_B_BROADCAST: b has 1 row per tile, broadcast across acc's rows.
+                                // Otherwise: b has full rows (per-token), element-wise multiply.
                                 // -------------------------------------------------------
                                 cb_wait_front(addcmul_temp_cb, tile_granularity);
                                 cb_wait_front(addcmul_b_cb, tile_granularity);
 
+#ifdef ADDCMUL_B_BROADCAST
                                 mul_bcast_rows_init_short(addcmul_temp_cb, addcmul_b_cb);
+#else
+                                mul_tiles_init(addcmul_temp_cb, addcmul_b_cb, false);
+#endif
                                 reconfig_data_format(addcmul_temp_cb, addcmul_b_cb);
                                 pack_reconfig_data_format(addcmul_temp_cb);
                                 binop_with_scalar_tile_init();
 
                                 for (uint32_t tile_id = 0; tile_id < tiles_to_read_in_this_step; tile_id++) {
                                     tile_regs_acquire();
+#ifdef ADDCMUL_B_BROADCAST
                                     mul_tiles_bcast<BroadcastType::ROW>(
                                         addcmul_temp_cb, addcmul_b_cb, tile_id, tile_id, 0);
+#else
+                                    mul_tiles(addcmul_temp_cb, addcmul_b_cb, tile_id, tile_id, 0);
+#endif
                                     mul_unary_tile(0, fused_ternary_scalar_uint);
                                     tile_regs_commit();
                                     tile_regs_wait();

@@ -641,6 +641,13 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
     if (fuse_rs_addcmul) {
         reader_compute_defines["FUSE_RS_ADDCMUL"] = "1";
         reduce_compute_defines["FUSE_RS_ADDCMUL"] = "1";
+        // Check if gate tensor b has a single row (broadcast) or full rows (per-token).
+        // Logical shape dim -2 == 1 means broadcast; otherwise per-token indexing is needed.
+        auto b_logical_shape = addcmul_input_tensor2->logical_shape();
+        if (b_logical_shape[-2] <= 1) {
+            reader_compute_defines["ADDCMUL_B_BROADCAST"] = "1";
+            reduce_compute_defines["ADDCMUL_B_BROADCAST"] = "1";
+        }
     }
 
     // KERNEL CREATION

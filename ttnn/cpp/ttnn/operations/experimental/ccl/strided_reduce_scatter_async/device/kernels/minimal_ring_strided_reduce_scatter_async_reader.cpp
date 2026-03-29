@@ -126,7 +126,8 @@ void kernel_main() {
     auto addcmul_a_addrgen = TensorAccessor(addcmul_a_tensor_args, addcmul_a_address, page_size);
     auto addcmul_b_addrgen = TensorAccessor(addcmul_b_tensor_args, addcmul_b_address, page_size);
     // a tile index: batch * (mm_cores_y * slice_Ht_per_core * slice_Wt) + slice_row * slice_Wt + col_in_slice
-    // b tile index: batch * slice_Wt + col_in_slice  (b has 1 row per batch)
+    // b tile index (broadcast):     batch * slice_Wt + col_in_slice  (b has 1 row per batch)
+    // b tile index (non-broadcast): same as a  (b has full N rows per batch)
 #endif
 
     /**
@@ -269,7 +270,12 @@ void kernel_main() {
                                     if (is_final_ring_step) {
                                         const uint32_t a_tile_idx =
                                             b * addcmul_a_batch_pages + slice_row * slice_Wt + col_in_slice;
+#ifdef ADDCMUL_B_BROADCAST
                                         const uint32_t b_gate_idx = b * slice_Wt + col_in_slice;
+#else
+                                        const uint32_t b_gate_idx =
+                                            b * addcmul_a_batch_pages + slice_row * slice_Wt + col_in_slice;
+#endif
                                         noc_async_read(
                                             get_noc_addr(a_tile_idx, addcmul_a_addrgen),
                                             addcmul_a_l1_write_addr,
