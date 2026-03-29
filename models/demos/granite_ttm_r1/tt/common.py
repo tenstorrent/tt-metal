@@ -94,9 +94,15 @@ def resolve_module(root_module: torch.nn.Module, candidates: list[str]) -> torch
 class TorchModuleFallback:
     def __init__(self, module: torch.nn.Module):
         self.module = module.eval()
+        # Detect the dtype of the module's parameters so we can cast inputs.
+        _params = [p for p in module.parameters()]
+        self._module_dtype: torch.dtype | None = _params[0].dtype if _params else None
 
     def __call__(self, *inputs, device=None, output_selector: str | None = None, **kwargs):
         torch_inputs = [to_torch_tensor(value) for value in inputs]
+        # Cast inputs to match the module's parameter dtype to avoid mixed-dtype errors.
+        if self._module_dtype is not None:
+            torch_inputs = [t.to(self._module_dtype) if isinstance(t, torch.Tensor) else t for t in torch_inputs]
         torch_kwargs = {
             key: to_torch_tensor(value) if isinstance(value, ttnn.Tensor) else value for key, value in kwargs.items()
         }
