@@ -16,8 +16,8 @@ from models.demos.granite_ttm_r1.common import (
 )
 from models.demos.granite_ttm_r1.reference.eval import summarize_regression_metrics
 from models.demos.granite_ttm_r1.reference.model import GraniteTTMReferenceModel
-from models.demos.granite_ttm_r1.ttnn.common import preprocess_inputs
-from models.demos.granite_ttm_r1.ttnn.ttnn_granite_ttm_model import TtnnGraniteTTMModel
+from models.demos.granite_ttm_r1.tt.common import preprocess_inputs
+from models.demos.granite_ttm_r1.tt.ttnn_granite_ttm_model import TtnnGraniteTTMModel
 
 
 def run_granite_ttm_reference_demo(

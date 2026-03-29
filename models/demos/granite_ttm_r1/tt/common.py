@@ -10,9 +10,23 @@ import torch
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
-
 from models.demos.granite_ttm_r1.reference.model import extract_prediction_tensor
 from models.demos.granite_ttm_r1.reference.preprocess import build_reference_inputs
+
+
+def preprocess_parameters(hf_model: torch.nn.Module, device) -> Any:
+    """Pre-process all model weights for TTNN.
+
+    Returns a nested attribute-dict compatible with ttnn.model_preprocessing's
+    output format, ready for use in TtnnGraniteTTMModel.
+    """
+    from ttnn.model_preprocessing import preprocess_model_parameters
+
+    return preprocess_model_parameters(
+        init_model=lambda: hf_model,
+        custom_preprocessor=custom_preprocessor,
+        device=device,
+    )
 
 
 def to_ttnn_tensor(
