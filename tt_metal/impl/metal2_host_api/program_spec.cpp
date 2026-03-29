@@ -6,6 +6,7 @@
 #include <functional>
 #include <set>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -143,6 +144,8 @@ std::set<tt::tt_metal::experimental::quasar::QuasarComputeProcessor> GetComputeP
 // ============================================================================
 
 Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
+    log_info(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.program_id);
+
     // Collect derived data (builds lookup tables, checks structural invariants)
     CollectedSpecData collected = CollectSpecData(spec);
 
