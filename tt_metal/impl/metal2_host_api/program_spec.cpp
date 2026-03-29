@@ -91,19 +91,6 @@ using ComputeEngineMaskMap = std::unordered_map<const KernelSpec*, ComputeEngine
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
 
 // ============================================================================
-// Test Hook: Architecture Override (Implementation)
-// ============================================================================
-// See test_utils.hpp for documentation and usage.
-
-std::optional<tt::ARCH>& arch_override() {
-    thread_local std::optional<tt::ARCH> override_value = std::nullopt;
-    return override_value;
-}
-
-ArchOverrideGuard::ArchOverrideGuard(tt::ARCH arch) { arch_override() = arch; }
-ArchOverrideGuard::~ArchOverrideGuard() { arch_override() = std::nullopt; }
-
-// ============================================================================
 // Helper Function Forward Declarations
 // ============================================================================
 
@@ -225,12 +212,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation) {
 // IMPLEMENTATION: Utilities
 // ============================================================================
 
-inline tt::ARCH get_arch() {
-    if (auto& override = arch_override(); override.has_value()) {
-        return *override;
-    }
-    return tt::tt_metal::hal::get_arch();
-}
+inline tt::ARCH get_arch() { return tt::tt_metal::hal::get_arch(); }
 
 inline bool is_gen2_arch() { return get_arch() == tt::ARCH::QUASAR; }
 
@@ -238,10 +220,6 @@ inline bool is_gen1_arch() {
     tt::ARCH arch = get_arch();
     return arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE;
 }
-
-// TODO: Are these NodeRangeSet helpers really needed?
-//       I'm sure a convert-to-CoreRangeSet helper already exists.
-//       Everything is converted to CoreRangeSet upfront in the iterative API.
 
 NodeRangeSet to_node_range_set(const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes) {
     return std::visit(
