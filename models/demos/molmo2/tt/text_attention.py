@@ -437,6 +437,7 @@ class TextAttention(LightweightModule):
         kv_cache: Tuple[ttnn.Tensor, ttnn.Tensor],
         current_pos: ttnn.Tensor,
         page_table: Optional[ttnn.Tensor] = None,
+        page_table: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Decode-mode forward pass with KV cache update and tensor parallelism.
@@ -643,6 +644,31 @@ class TextAttention(LightweightModule):
             k_chunk_size=256,
         )
 
+        if page_table is not None:
+            # Paged attention: use paged SDPA decode
+            attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                q,
+                k_cache,
+                v_cache,
+                page_table_tensor=page_table,
+                cur_pos_tensor=current_pos,
+                scale=self.scale,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=sdpa_program_config,
+            )  # Output: [1, B, H, d]
+        else:
+            # Non-paged attention: use standard SDPA decode
+            attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
+                q,
+                k_cache,
+                v_cache,
+                cur_pos_tensor=current_pos,
+                scale=self.scale,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=sdpa_program_config,
+            )  # Output: [1, B, H, d]
         if page_table is not None:
             # Paged attention: use paged SDPA decode
             attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
