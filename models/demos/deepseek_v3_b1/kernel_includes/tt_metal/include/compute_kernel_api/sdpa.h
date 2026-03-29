@@ -251,6 +251,7 @@ void compute_sdpa_chunk(
     bool first_chunk,
     bool last_chunk,
     bool mask_chunk) {
+    static_assert(DST_ACCUM_MODE == false, "FP32 destination accumulation mode is not supported");
     PACK((ckernel::sfpu::_init_sdpa_reduce_max_row_8x32_replay_buffers_()));
     sdpa_custom_mm_block_init_short<transpose_k>(cb_q, cb_k, cb_out, chunk_size);
     cb_wait_front(cb_k, num_tiles_k * chunk_size);
