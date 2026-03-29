@@ -137,7 +137,7 @@ jobs:
                 echo "is-bypass-command=false" >> $GITHUB_OUTPUT
                 echo "bypass-authorized=false" >> $GITHUB_OUTPUT
                 echo "Command: new comment"
-              elif echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping(\s|$)" > /dev/null; then
+              elif echo "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping(\s|$)|^/ping\s+codeowners?(\s|$)" > /dev/null; then
                 echo "create-new-comment=false" >> $GITHUB_OUTPUT
                 echo "ping-pending-owners=true" >> $GITHUB_OUTPUT
                 echo "send-slack-notification=true" >> $GITHUB_OUTPUT
