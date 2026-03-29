@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
+    DeepSeekV3MTPWeights,
     DenseRoutedExpertWeights,
     MoERoutedExpertWeights,
     SharedExpertWeights,
@@ -36,17 +37,20 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     load_embedding_weights,
     load_lm_head_weights,
     load_moe_decoder_layer,
+    load_mtp_weights,
     prepare_attention_weights,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
+    prepare_mtp_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
     save_attention_weights,
     save_decoder_layer,
     save_embedding_weights,
     save_lm_head_weights,
+    save_mtp_weights,
     save_routed_expert_weights,
     save_shared_expert_weights,
 )
@@ -1102,3 +1106,110 @@ def test_load_4_layers_across_4_submeshes_4x2(bh_2d_mesh_device, tmp_path):
     assert loaded[3].shared_down_proj is not None
     for i in range(num_layers):
         _assert_layer_on_device_with_topology(loaded[i])
+
+
+# ---------------------------------------------------------------------------
+# MTP weight tests
+# ---------------------------------------------------------------------------
+
+_MTP_LAYER_IDX = 61
+
+
+def _mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX, seed: int = 44) -> dict[str, torch.Tensor]:
+    """Build a synthetic state dict with the 6 MTP HF keys."""
+    g = torch.Generator().manual_seed(seed)
+    dtype = torch.bfloat16
+    H = 7168
+    return {
+        f"model.layers.{mtp_layer_idx}.embed_tokens.weight": torch.randn(129280, H, generator=g, dtype=dtype),
+        f"model.layers.{mtp_layer_idx}.hnorm.weight": torch.randn(H, generator=g, dtype=dtype),
+        f"model.layers.{mtp_layer_idx}.enorm.weight": torch.randn(H, generator=g, dtype=dtype),
+        f"model.layers.{mtp_layer_idx}.eh_proj.weight": torch.randn(H, 2 * H, generator=g, dtype=dtype),
+        f"model.layers.{mtp_layer_idx}.shared_head.norm.weight": torch.randn(H, generator=g, dtype=dtype),
+        f"model.layers.{mtp_layer_idx}.shared_head.head.weight": torch.randn(129280, H, generator=g, dtype=dtype),
+    }
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_mtp_weights_4x2(bh_2d_mesh_device):
+    """Prepare MTP weights on 4x2 mesh; verify type and shapes."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    state = _mtp_state_dict()
+    t0 = time.perf_counter()
+    weights = prepare_mtp_weights(state, submesh)
+    elapsed = time.perf_counter() - t0
+    logger.info("prepare_mtp_weights (4x2 mesh): {:.3f} s", elapsed)
+    assert isinstance(weights, DeepSeekV3MTPWeights)
+    assert weights.embedding.shape == (129280, 7168)
+    assert weights.h_gamma.shape == (1, 7168)
+    assert weights.e_gamma.shape == (1, 7168)
+    assert weights.eh_projection.shape == (14336, 7168)
+    assert weights.shared_head_norm.shape == (1, 7168)
+    assert weights.shared_head.shape == (7168, 16160)
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_save_load_mtp_weights_4x2(bh_2d_mesh_device, tmp_path):
+    """Save MTP weights to disk, load back, verify shapes match and tensors are on device."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    if not is_slow_dispatch():
+        pytest.skip("load_mtp_weights requires slow dispatch")
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    state = _mtp_state_dict()
+    weights = prepare_mtp_weights(state, submesh)
+    expected_shapes = {
+        "embedding": weights.embedding.shape,
+        "h_gamma": weights.h_gamma.shape,
+        "e_gamma": weights.e_gamma.shape,
+        "eh_projection": weights.eh_projection.shape,
+        "shared_head_norm": weights.shared_head_norm.shape,
+        "shared_head": weights.shared_head.shape,
+    }
+
+    save_mtp_weights(
+        weights,
+        tmp_path,
+        hf_model_name="test-mtp-model-4x2",
+        hf_state_dict_name="test-mtp.safetensors",
+        device_mesh_shape=(4, 2),
+    )
+
+    mtp_dir = tmp_path / "mtp"
+    assert (mtp_dir / "manifest.json").exists()
+    assert (mtp_dir / "embedding.tensorbin").exists()
+    assert (mtp_dir / "h_gamma.tensorbin").exists()
+    assert (mtp_dir / "e_gamma.tensorbin").exists()
+    assert (mtp_dir / "eh_projection.tensorbin").exists()
+    assert (mtp_dir / "shared_head_norm.tensorbin").exists()
+    assert (mtp_dir / "shared_head.tensorbin").exists()
+
+    ttnn.deallocate(weights.embedding, force=True)
+    ttnn.deallocate(weights.h_gamma, force=True)
+    ttnn.deallocate(weights.e_gamma, force=True)
+    ttnn.deallocate(weights.eh_projection, force=True)
+    ttnn.deallocate(weights.shared_head_norm, force=True)
+    ttnn.deallocate(weights.shared_head, force=True)
+
+    loaded = load_mtp_weights(tmp_path, submesh)
+    assert isinstance(loaded, DeepSeekV3MTPWeights)
+    assert loaded.embedding.shape == expected_shapes["embedding"]
+    assert loaded.h_gamma.shape == expected_shapes["h_gamma"]
+    assert loaded.e_gamma.shape == expected_shapes["e_gamma"]
+    assert loaded.eh_projection.shape == expected_shapes["eh_projection"]
+    assert loaded.shared_head_norm.shape == expected_shapes["shared_head_norm"]
+    assert loaded.shared_head.shape == expected_shapes["shared_head"]
+    _assert_on_device(loaded.embedding)
+    _assert_on_device(loaded.h_gamma)
+    _assert_on_device(loaded.e_gamma)
+    _assert_on_device(loaded.eh_projection)
+    _assert_on_device(loaded.shared_head_norm)
+    _assert_on_device(loaded.shared_head)

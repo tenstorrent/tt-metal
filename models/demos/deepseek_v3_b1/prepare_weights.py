@@ -9,7 +9,8 @@ Takes full HuggingFace state dict tensors (full logical shapes for the target
 mesh), applies key mapping, transpose, and kv_b split, then passes to
 BlitzDecodeWeights which fuses and shards onto the mesh.
 
-Supports per-layer save/load (save_decoder_layer, load_dense_decoder_layer, load_moe_decoder_layer) and embedding/lm_head save/load for offline preparation and runtime load.
+Supports per-layer save/load (save_decoder_layer, load_dense_decoder_layer, load_moe_decoder_layer),
+embedding/lm_head save/load, and MTP weight save/load for offline preparation and runtime load.
 """
 
 from __future__ import annotations
@@ -245,8 +246,31 @@ class DeepSeekV3LMHeadWeights:
     final_norm: ttnn.Tensor  # model.norm.weight, (1, 7168)
 
 
+@dataclass
+class DeepSeekV3MTPWeights:
+    """Weights for the MTP (Multi-Token Prediction) speculative decode layer.
+
+    HF state dict keys live under ``model.layers.{mtp_layer_idx}.*`` (layer 61 for DeepSeek V3).
+    """
+
+    embedding: ttnn.Tensor  # model.layers.61.embed_tokens.weight
+    h_gamma: ttnn.Tensor  # model.layers.61.hnorm.weight
+    e_gamma: ttnn.Tensor  # model.layers.61.enorm.weight
+    eh_projection: ttnn.Tensor  # model.layers.61.eh_proj.weight
+    shared_head_norm: ttnn.Tensor  # model.layers.61.shared_head.norm.weight
+    shared_head: ttnn.Tensor  # model.layers.61.shared_head.head.weight
+
+
+# MTP layer constants
+_MTP_LAYER_IDX = 61
+_MTP_HIDDEN_SIZE = 7168
+_MTP_EH_PROJ_K = 2 * _MTP_HIDDEN_SIZE  # 14336 = embedding_dim + hidden_size
+_MTP_NUM_DRAM_BANKS = 8
+_MTP_B_TILE = ttnn.Tile([32, 32])
+
 # Constants for kv_b_proj split (HF stores one matrix; we split into kv_b1 and kv_b2).
 _NUM_HEADS = 64
+
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
 NUM_ROUTED_EXPERTS = 256
 _QK_NOPE_HEAD_DIM = 128
@@ -925,6 +949,150 @@ def load_lm_head_weights(path: str | Path, device) -> DeepSeekV3LMHeadWeights:
     lm_head = ttnn.load_tensor(lm_dir / "lm_head.tensorbin", device=device)
     final_norm = ttnn.load_tensor(lm_dir / "final_norm.tensorbin", device=device)
     return DeepSeekV3LMHeadWeights(lm_head=lm_head, final_norm=final_norm)
+
+
+def _to_tt_mtp_eh_proj(eh_proj_torch: torch.Tensor, device, *, move_to_device: bool = False) -> ttnn.Tensor:
+    """Convert transposed eh_proj (K+embedding_dim, hidden) to TT WIDTH_SHARDED DRAM with tile shuffle.
+
+    eh_proj_torch: already transposed to (K, N) = (14336, 7168).
+    Pads N to align with _MTP_NUM_DRAM_BANKS, shuffles tiles for DRAM streaming,
+    and creates a WIDTH_SHARDED DRAM tensor.
+    """
+    K, N = eh_proj_torch.shape
+    n_per_bank = N // _MTP_NUM_DRAM_BANKS
+    padded_N = _MTP_NUM_DRAM_BANKS * n_per_bank
+
+    eh_padded = torch.zeros((K, padded_N), dtype=eh_proj_torch.dtype)
+    eh_padded[:, :N] = eh_proj_torch
+
+    eh_shuffled = BlitzDecodeWeights._shuffle_dram_tiles(eh_padded, 32, _MTP_NUM_DRAM_BANKS)
+
+    eh_shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(_MTP_NUM_DRAM_BANKS - 1, 0),
+            )
+        }
+    )
+    eh_proj_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(eh_shard_grid, (K, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return ttnn.from_torch(
+        eh_shuffled.contiguous(),
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device if move_to_device else None,
+        memory_config=eh_proj_mem_config,
+        tile=_MTP_B_TILE,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+
+def prepare_mtp_weights(
+    state_dict: dict[str, torch.Tensor],
+    device,
+    *,
+    mtp_layer_idx: int = _MTP_LAYER_IDX,
+    move_to_device: bool = False,
+) -> DeepSeekV3MTPWeights:
+    """Prepare MTP weights from state dict (model.layers.{mtp_layer_idx}.*).
+
+    Extracts 6 tensors: embedding, hnorm, enorm, eh_proj, shared_head.norm, shared_head.head.
+    """
+    logger.info("Preparing MTP weights (layer {})...", mtp_layer_idx)
+    t0 = time.perf_counter()
+
+    embedding_w = state_dict[_key(mtp_layer_idx, "embed_tokens.weight")]
+    embedding_tt = _to_tt_embedding(embedding_w, device, move_to_device=move_to_device)
+
+    h_gamma_w = state_dict[_key(mtp_layer_idx, "hnorm.weight")].unsqueeze(0)
+    h_gamma_tt = _to_tt_lm_head_final_norm(h_gamma_w, device, move_to_device=move_to_device)
+
+    e_gamma_w = state_dict[_key(mtp_layer_idx, "enorm.weight")].unsqueeze(0)
+    e_gamma_tt = _to_tt_lm_head_final_norm(e_gamma_w, device, move_to_device=move_to_device)
+
+    eh_proj_w = state_dict[_key(mtp_layer_idx, "eh_proj.weight")].T.contiguous()
+    eh_proj_tt = _to_tt_mtp_eh_proj(eh_proj_w, device, move_to_device=move_to_device)
+
+    shared_head_norm_w = state_dict[_key(mtp_layer_idx, "shared_head.norm.weight")].unsqueeze(0)
+    shared_head_norm_tt = _to_tt_lm_head_final_norm(shared_head_norm_w, device, move_to_device=move_to_device)
+
+    shared_head_w = state_dict[_key(mtp_layer_idx, "shared_head.head.weight")]
+    shared_head_tt = _to_tt_lm_head_matrix(
+        shared_head_w.T, device, mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1), move_to_device=move_to_device
+    )
+
+    logger.info("  MTP weights prepared in {:.3f}s", time.perf_counter() - t0)
+    return DeepSeekV3MTPWeights(
+        embedding=embedding_tt,
+        h_gamma=h_gamma_tt,
+        e_gamma=e_gamma_tt,
+        eh_projection=eh_proj_tt,
+        shared_head_norm=shared_head_norm_tt,
+        shared_head=shared_head_tt,
+    )
+
+
+def save_mtp_weights(
+    weights: DeepSeekV3MTPWeights,
+    path: str | Path,
+    *,
+    hf_model_name: str = "",
+    hf_state_dict_name: str = "",
+    device_mesh_shape: tuple[int, int] = (1, 1),
+) -> None:
+    """Save MTP weights to <path>/mtp/."""
+    path = Path(path)
+    mtp_dir = path / "mtp"
+    mtp_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Saving MTP weights...")
+    t0 = time.perf_counter()
+    ttnn.dump_tensor(mtp_dir / "embedding.tensorbin", weights.embedding)
+    ttnn.dump_tensor(mtp_dir / "h_gamma.tensorbin", weights.h_gamma)
+    ttnn.dump_tensor(mtp_dir / "e_gamma.tensorbin", weights.e_gamma)
+    ttnn.dump_tensor(mtp_dir / "eh_projection.tensorbin", weights.eh_projection)
+    ttnn.dump_tensor(mtp_dir / "shared_head_norm.tensorbin", weights.shared_head_norm)
+    ttnn.dump_tensor(mtp_dir / "shared_head.tensorbin", weights.shared_head)
+    manifest = {
+        "version": _MANIFEST_VERSION,
+        "hf_model_name": hf_model_name,
+        "hf_state_dict_name": hf_state_dict_name,
+        "device_mesh_shape": list(device_mesh_shape),
+    }
+    with open(mtp_dir / "manifest.json", "w") as f:
+        json.dump(manifest, f, indent=2)
+    logger.info("  MTP weights saved in {:.3f}s", time.perf_counter() - t0)
+
+
+def load_mtp_weights(path: str | Path, device) -> DeepSeekV3MTPWeights:
+    """Load MTP weights from <path>/mtp/.
+
+    device must be the mesh device (same shape as used for prepare_mtp_weights).
+    """
+    path = Path(path)
+    mtp_dir = path / "mtp"
+    if not mtp_dir.is_dir():
+        raise FileNotFoundError(f"MTP dir not found: {mtp_dir}")
+    logger.info("Loading MTP weights from {}...", mtp_dir)
+    t0 = time.perf_counter()
+    embedding = ttnn.load_tensor(mtp_dir / "embedding.tensorbin", device=device)
+    h_gamma = ttnn.load_tensor(mtp_dir / "h_gamma.tensorbin", device=device)
+    e_gamma = ttnn.load_tensor(mtp_dir / "e_gamma.tensorbin", device=device)
+    eh_projection = ttnn.load_tensor(mtp_dir / "eh_projection.tensorbin", device=device)
+    shared_head_norm = ttnn.load_tensor(mtp_dir / "shared_head_norm.tensorbin", device=device)
+    shared_head = ttnn.load_tensor(mtp_dir / "shared_head.tensorbin", device=device)
+    logger.info("  MTP weights loaded in {:.3f}s", time.perf_counter() - t0)
+    return DeepSeekV3MTPWeights(
+        embedding=embedding,
+        h_gamma=h_gamma,
+        e_gamma=e_gamma,
+        eh_projection=eh_projection,
+        shared_head_norm=shared_head_norm,
+        shared_head=shared_head,
+    )
 
 
 def _core_range_set_to_list(crs: ttnn.CoreRangeSet) -> list[list[list[int]]]:
