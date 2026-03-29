@@ -12,7 +12,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -21,109 +21,9 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace {
-
-template <typename ccl_operation_t>
-void bind_minimal_matmul_strided_reduce_scatter_async_op(
-    nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               const uint32_t dim,
-               const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-               const CoreCoord reduce_scatter_core_grid_offset,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config_mm,
-               const std::optional<ttnn::MemoryConfig>& rs_output_mem_config,
-               const std::optional<ttnn::MemoryConfig>& rs_intermediate_mem_config,
-               const ttnn::ccl::Topology topology,
-               std::optional<uint32_t> cluster_axis,
-               const std::optional<const Tensor>& bias,
-               const std::optional<unary::UnaryWithParam>& fused_activation,
-               const std::optional<const ttnn::experimental::prim::MinimalMatmulConfig>& config,
-               const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               const std::optional<GlobalSemaphore>& barrier_semaphore,
-               bool using_persistent_buffers,
-               std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-               std::optional<uint32_t> chunks_per_sync,
-               std::optional<uint32_t> num_workers_per_link,
-               std::optional<uint32_t> num_buffers_per_channel,
-               std::optional<uint32_t> chunk_width_in_mm_blocks,
-               const std::optional<Tensor>& optional_rs_intermediate_tensor,
-               const std::optional<Tensor>& optional_rs_output_tensor,
-               std::optional<float> fused_ternary_scalar,
-               const std::optional<const Tensor>& addcmul_input_tensor1,
-               const std::optional<const Tensor>& addcmul_input_tensor2) -> std::vector<ttnn::Tensor> {
-                return self(
-                    input_tensor,
-                    weight_tensor,
-                    dim,
-                    multi_device_global_semaphore,
-                    reduce_scatter_core_grid_offset,
-                    num_links,
-                    memory_config_mm,
-                    rs_output_mem_config,
-                    rs_intermediate_mem_config,
-                    topology,
-                    cluster_axis,
-                    bias,
-                    fused_activation,
-                    config,
-                    compute_kernel_config,
-                    barrier_semaphore,
-                    using_persistent_buffers,
-                    sub_device_id,
-                    chunks_per_sync,
-                    num_workers_per_link,
-                    num_buffers_per_channel,
-                    chunk_width_in_mm_blocks,
-                    optional_rs_intermediate_tensor,
-                    optional_rs_output_tensor,
-                    fused_ternary_scalar,
-                    addcmul_input_tensor1,
-                    addcmul_input_tensor2);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("weight_tensor"),
-            nb::arg("dim"),
-            nb::arg("multi_device_global_semaphore"),
-            nb::arg("reduce_scatter_core_grid_offset"),
-            nb::kw_only(),
-            nb::arg("num_links") = 1,
-            nb::arg("memory_config_mm") = nb::none(),
-            nb::arg("rs_output_mem_config") = nb::none(),
-            nb::arg("rs_intermediate_mem_config") = nb::none(),
-            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("bias") = nb::none(),
-            nb::arg("fused_activation") = nb::none(),
-            nb::arg("config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("barrier_semaphore") = nb::none(),
-            nb::arg("using_persistent_buffers") = false,
-            nb::arg("sub_device_id") = nb::none(),
-            nb::arg("chunks_per_sync") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none(),
-            nb::arg("chunk_width_in_mm_blocks") = nb::none(),
-            nb::arg("optional_rs_intermediate_tensor") = nb::none(),
-            nb::arg("optional_rs_output_tensor") = nb::none(),
-            nb::arg("fused_ternary_scalar") = nb::none(),
-            nb::arg("addcmul_input_tensor1") = nb::none(),
-            nb::arg("addcmul_input_tensor2") = nb::none()});
-}
-
-}  // namespace
-
 void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
-    bind_minimal_matmul_strided_reduce_scatter_async_op(
+    ttnn::bind_function<"minimal_matmul_strided_reduce_scatter_async", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::minimal_matmul_strided_reduce_scatter_async,
         R"doc(minimal_matmul_strided_reduce_scatter_async(input_tensor: ttnn.Tensor, weight_tensor: ttnn.Tensor, dim: int, ...) -> (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor)
 
         Performs a fused matmul followed by strided reduce-scatter operation.
@@ -163,7 +63,36 @@ void bind_minimal_matmul_strided_reduce_scatter_async(nb::module_& mod) {
             * :attr:`optional_rs_intermediate_tensor` (Optional[ttnn.Tensor]): Pre-allocated RS intermediate.
             * :attr:`optional_rs_output_tensor` (Optional[ttnn.Tensor]): Pre-allocated RS output.
 
-        )doc");
+        )doc",
+        &ttnn::experimental::minimal_matmul_strided_reduce_scatter_async,
+        nb::arg("input_tensor"),
+        nb::arg("weight_tensor"),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("reduce_scatter_core_grid_offset"),
+        nb::kw_only(),
+        nb::arg("num_links") = 1,
+        nb::arg("memory_config_mm") = nb::none(),
+        nb::arg("rs_output_mem_config") = nb::none(),
+        nb::arg("rs_intermediate_mem_config") = nb::none(),
+        nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("fused_activation") = nb::none(),
+        nb::arg("config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("barrier_semaphore") = nb::none(),
+        nb::arg("using_persistent_buffers") = false,
+        nb::arg("sub_device_id") = nb::none(),
+        nb::arg("chunks_per_sync") = nb::none(),
+        nb::arg("num_workers_per_link") = nb::none(),
+        nb::arg("num_buffers_per_channel") = nb::none(),
+        nb::arg("chunk_width_in_mm_blocks") = nb::none(),
+        nb::arg("optional_rs_intermediate_tensor") = nb::none(),
+        nb::arg("optional_rs_output_tensor") = nb::none(),
+        nb::arg("fused_ternary_scalar") = nb::none(),
+        nb::arg("addcmul_input_tensor1") = nb::none(),
+        nb::arg("addcmul_input_tensor2") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl

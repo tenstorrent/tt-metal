@@ -12,7 +12,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/strided_reduce_scatter_async/strided_reduce_scatter_async.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -20,84 +20,9 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace {
-
-template <typename ccl_operation_t>
-void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
-               const int32_t dim,
-               const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-               uint32_t mm_block_ht,
-               uint32_t mm_block_wt,
-               const std::optional<GlobalSemaphore>& barrier_semaphore,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::MemoryConfig>& intermediate_memory_config,
-               const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               std::optional<uint32_t> cluster_axis,
-               std::optional<uint32_t> chunks_per_sync,
-               std::optional<uint32_t> num_workers_per_link,
-               std::optional<uint32_t> num_buffers_per_channel,
-               std::optional<uint32_t> mm_cores_y,
-               std::optional<uint32_t> mm_N_full_block_wt,
-               std::optional<uint32_t> chunk_width_in_mm_blocks) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    persistent_output_buffers,
-                    dim,
-                    multi_device_global_semaphore,
-                    mm_block_ht,
-                    mm_block_wt,
-                    barrier_semaphore,
-                    num_links,
-                    memory_config,
-                    intermediate_memory_config,
-                    topology,
-                    subdevice_id,
-                    cluster_axis,
-                    chunks_per_sync,
-                    num_workers_per_link,
-                    num_buffers_per_channel,
-                    mm_cores_y,
-                    mm_N_full_block_wt,
-                    chunk_width_in_mm_blocks);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("persistent_output_buffers") = nb::none(),
-            nb::arg("dim"),
-            nb::arg("multi_device_global_semaphore"),
-            nb::kw_only(),
-            nb::arg("mm_block_ht"),
-            nb::arg("mm_block_wt"),
-            nb::arg("barrier_semaphore") = nb::none(),
-            nb::arg("num_links") = 1,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("intermediate_memory_config") = nb::none(),
-            nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("chunks_per_sync") = nb::none(),
-            nb::arg("num_workers_per_link") = nb::none(),
-            nb::arg("num_buffers_per_channel") = nb::none(),
-            nb::arg("mm_cores_y") = nb::none(),
-            nb::arg("mm_N_full_block_wt") = nb::none(),
-            nb::arg("chunk_width_in_mm_blocks") = nb::none()});
-}
-
-}  // namespace
-
 void bind_strided_reduce_scatter_async(nb::module_& mod) {
-    bind_strided_reduce_scatter_async(
+    ttnn::bind_function<"strided_reduce_scatter_async", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::strided_reduce_scatter_async,
         R"doc(
         Performs a strided reduce-scatter operation on multi-device :attr:`input_tensor` across all devices.
         This variant uses a strided access pattern optimized for matmul output layouts.
@@ -127,7 +52,28 @@ void bind_strided_reduce_scatter_async(nb::module_& mod) {
 
         Returns:
             ttnn.Tensor: the output tensor.
-        )doc");
+        )doc",
+        &ttnn::experimental::strided_reduce_scatter_async,
+        nb::arg("input_tensor"),
+        nb::arg("persistent_output_buffers") = nb::none(),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::kw_only(),
+        nb::arg("mm_block_ht"),
+        nb::arg("mm_block_wt"),
+        nb::arg("barrier_semaphore") = nb::none(),
+        nb::arg("num_links") = 1,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("intermediate_memory_config") = nb::none(),
+        nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("chunks_per_sync") = nb::none(),
+        nb::arg("num_workers_per_link") = nb::none(),
+        nb::arg("num_buffers_per_channel") = nb::none(),
+        nb::arg("mm_cores_y") = nb::none(),
+        nb::arg("mm_N_full_block_wt") = nb::none(),
+        nb::arg("chunk_width_in_mm_blocks") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::ccl
