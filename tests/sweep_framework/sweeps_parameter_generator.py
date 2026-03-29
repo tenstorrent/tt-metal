@@ -14,6 +14,7 @@ import sys
 import ast
 from collections import defaultdict
 
+from model_tracer.mesh_metadata import infer_mesh_shape, parse_int_sequence
 from framework.constants import format_hardware_suffix, format_mesh_suffix
 from framework.permutations import permutations
 from framework.serialize import serialize_structured
@@ -44,8 +45,14 @@ def get_mesh_shape_from_vector(vector):
 
     # Handle dict format (current V2 format)
     if machine_info and isinstance(machine_info, dict):
-        mesh_shape = machine_info.get("mesh_device_shape")
-        if mesh_shape and isinstance(mesh_shape, list) and len(mesh_shape) == 2:
+        mesh_shape = infer_mesh_shape(
+            mesh_shape=machine_info.get("mesh_device_shape"),
+            device_ids=machine_info.get("device_ids"),
+            device_count=machine_info.get("device_count"),
+            device_series=machine_info.get("device_series"),
+            card_count=machine_info.get("card_count"),
+        )
+        if mesh_shape and len(mesh_shape) == 2:
             return tuple(mesh_shape)
 
     # Handle list format (legacy format)
@@ -55,36 +62,26 @@ def get_mesh_shape_from_vector(vector):
         if mesh_shape and isinstance(mesh_shape, list) and len(mesh_shape) == 2:
             return tuple(mesh_shape)
 
-        # Check if mesh_device_shape is inside tensor_placements (new format)
-        tensor_placements = machine_info[0].get("tensor_placements")
-        if tensor_placements and isinstance(tensor_placements, list) and len(tensor_placements) > 0:
-            # Parse mesh_device_shape from string format "[2, 4]" to list
-            mesh_shape_str = tensor_placements[0].get("mesh_device_shape", "")
-            if isinstance(mesh_shape_str, str):
-                # Parse "[2, 4]" format
-                try:
-                    mesh_shape = ast.literal_eval(mesh_shape_str)
-                    if isinstance(mesh_shape, list) and len(mesh_shape) == 2:
-                        return tuple(mesh_shape)
-                except (ValueError, SyntaxError) as e:
-                    logger.debug(f"Failed to parse mesh_device_shape '{mesh_shape_str}': {e}")
-            elif isinstance(mesh_shape_str, list) and len(mesh_shape_str) == 2:
-                return tuple(mesh_shape_str)
-
-        # Infer mesh_device_shape from device_series + card_count when not explicitly present.
-        # This handles V1 machine_info which lacks mesh_device_shape but records device_series.
-        # Iterate all entries so we find the galaxy entry even if it isn't first.
-        _DEVICE_SERIES_MESH_MAP = {
-            ("tt-galaxy-wh", 32): (4, 8),
-        }
         for entry in machine_info:
             if not isinstance(entry, dict):
                 continue
-            device_series = entry.get("device_series", "")
-            card_count = entry.get("card_count", 0)
-            inferred = _DEVICE_SERIES_MESH_MAP.get((device_series, card_count))
-            if inferred:
-                return inferred
+            tensor_placements = entry.get("tensor_placements")
+            placement_mesh_shape = None
+            distribution_shape = None
+            if tensor_placements and isinstance(tensor_placements, list) and len(tensor_placements) > 0:
+                placement_mesh_shape = tensor_placements[0].get("mesh_device_shape")
+                distribution_shape = tensor_placements[0].get("distribution_shape")
+
+            mesh_shape = infer_mesh_shape(
+                mesh_shape=entry.get("mesh_device_shape") or placement_mesh_shape,
+                distribution_shape=distribution_shape,
+                device_ids=entry.get("device_ids"),
+                device_count=entry.get("device_count"),
+                device_series=entry.get("device_series"),
+                card_count=entry.get("card_count"),
+            )
+            if mesh_shape and len(mesh_shape) == 2:
+                return tuple(mesh_shape)
 
     return None  # Unknown mesh shape: no routing restriction
 
@@ -151,7 +148,7 @@ def group_vectors_by_hardware(vectors):
     return grouped
 
 
-# Generate vectors from module parameters
+# Generate vectors for each suite in test module parameters
 def generate_vectors(module_name, model_traced, suite_name=None):
     # Import or reload the module to pick up the filter setting
     # Note: Reload is still needed because sweep modules define parameters at import time
@@ -317,7 +314,7 @@ def validate_exported_vectors(export_path, module_name, suite_name):
 
 
 def export_suite_vectors_json(module_name, suite_name, vectors):
-    """Export test vectors to grouped JSON files with atomic writes and deduplication.
+    """Group suite test vectors by routing target and export each group to its JSON file.
 
     Supported grouping modes:
     - mesh: vectors are grouped by mesh_device_shape and written to files like
@@ -358,7 +355,7 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
 
 
 def _export_grouped_vectors_to_file(module_name, suite_name, vectors):
-    """Internal function to export one grouped vector file.
+    """Export one grouped vector file with deduplication and atomic writes.
 
     Args:
         module_name: Name including any grouping suffix
@@ -480,7 +477,7 @@ def _export_grouped_vectors_to_file(module_name, suite_name, vectors):
                 pass
 
 
-# Generate one or more sets of test vectors depending on module_name
+# Generate vectors for selected modules
 def generate_tests(module_name, skip_modules=None, model_traced=None, suite_name=None):
     skip_modules_set = set()
     if skip_modules:

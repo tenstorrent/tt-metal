@@ -24,6 +24,8 @@ try:
 except ImportError:
     yaml = None
 
+from model_tracer.mesh_metadata import normalize_machine_info
+
 # Default manifest path (relative to repo root)
 _DEFAULT_MANIFEST = "model_tracer/sweep_manifest.yaml"
 
@@ -426,12 +428,13 @@ def parse_mesh_from_machine_info(machine_info, arguments=None):
 
     Returns: (mesh_shape, device_count, placement_type, shard_dim, distribution_shape)
     """
-    mesh_shape = parse_array_value(machine_info.get("mesh_device_shape"))
+    normalized_machine_info = normalize_machine_info(machine_info, arguments=arguments)
+    mesh_shape = parse_array_value(normalized_machine_info.get("mesh_device_shape"))
 
     if not mesh_shape:
         return None, None, None, None, None
 
-    device_count = machine_info.get("device_count")
+    device_count = normalized_machine_info.get("device_count")
     if device_count is None:
         device_count = 1
         for dim in mesh_shape:
@@ -692,7 +695,7 @@ def load_data(json_path=None, tt_metal_sha=None, dry_run=False, schema=DEFAULT_S
 
             for exec_idx, execution in enumerate(executions):
                 source = execution.get("source")
-                machine_info = execution.get("machine_info", {})
+                machine_info = normalize_machine_info(execution.get("machine_info", {}), arguments=arguments)
                 execution_count = execution.get("count", 1)
                 trace_uid = execution.get("trace_uid", default_trace_uid)
 

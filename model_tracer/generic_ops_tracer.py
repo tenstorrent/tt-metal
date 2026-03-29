@@ -37,6 +37,8 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
+from model_tracer.mesh_metadata import infer_device_count, infer_mesh_shape
+
 
 def get_base_dir():
     """Get the tt-metal base directory.
@@ -265,12 +267,27 @@ def collect_operation_jsons(trace_dir):
 
 def _extract_mesh_device_info(mesh_data):
     """Build machine-level mesh metadata from serialized mesh_device info."""
+    inferred_mesh_shape = infer_mesh_shape(
+        mesh_shape=mesh_data.get("shape"),
+        distribution_shape=mesh_data.get("distribution_shape"),
+        device_ids=mesh_data.get("device_ids"),
+    )
+    inferred_device_count = infer_device_count(
+        device_ids=mesh_data.get("device_ids"),
+        device_count=None,
+        mesh_shape=inferred_mesh_shape,
+        distribution_shape=mesh_data.get("distribution_shape"),
+    )
+
+    result = {}
     device_ids = mesh_data.get("device_ids", []) or []
-    return {
-        "device_ids": device_ids,
-        "device_count": len(device_ids),
-        "mesh_device_shape": mesh_data.get("shape", []),
-    }
+    if device_ids:
+        result["device_ids"] = device_ids
+    if inferred_device_count:
+        result["device_count"] = inferred_device_count
+    if inferred_mesh_shape:
+        result["mesh_device_shape"] = inferred_mesh_shape
+    return result or None
 
 
 def _clean_serialized_trace_value(value, mesh_device_info_ref):
@@ -289,12 +306,17 @@ def _clean_serialized_trace_value(value, mesh_device_info_ref):
     mesh_data = value.get("mesh_device") if isinstance(value.get("mesh_device"), dict) else None
 
     if mesh_data:
-        if mesh_device_info_ref[0] is None:
-            mesh_device_info_ref[0] = _extract_mesh_device_info(mesh_data)
+        extracted_mesh_info = _extract_mesh_device_info(mesh_data)
+        if mesh_device_info_ref[0] is None and extracted_mesh_info is not None:
+            mesh_device_info_ref[0] = extracted_mesh_info
 
         placements = mesh_data.get("placements", [])
         distribution_shape = mesh_data.get("distribution_shape", [])
-        mesh_shape = mesh_data.get("shape", [])
+        mesh_shape = infer_mesh_shape(
+            mesh_shape=mesh_data.get("shape"),
+            distribution_shape=distribution_shape,
+            device_ids=mesh_data.get("device_ids"),
+        ) or (mesh_data.get("shape", []) or [])
 
         for key, nested_value in value.items():
             if key == "mesh_device":
