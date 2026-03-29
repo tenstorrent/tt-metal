@@ -329,6 +329,57 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype):
 
 @skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
+    "kv_dtype, q_dtype",
+    [
+        [ttnn.bfloat8_b, ttnn.bfloat16],
+    ],
+    ids=[
+        "kv_bfp8_q_bf16",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, cur_pos_tensor, sliding_window_size",
+    (
+        # Llama-3.2-1B decode: b=32 on Blackhole (10x11=110 cores) triggers bad
+        # integer division in core allocation: 110/32=3 cores_per_batch_uncapped,
+        # ceil(8/3)=3 heads_per_core, but 8%3!=0 so active_cores/cores_per_batch
+        # exceeds B and the output loop overflows with TT_FATAL "Output spatial
+        # index 32 out of bounds (max 32)".
+        [32, 32, 8, 128, 64, (10, 11), True, None],
+    ),
+    ids=["llama3.2-1b-b32-blackhole"],
+)
+@pytest.mark.parametrize("block_size", (32,), ids=["paged_32"])
+@pytest.mark.timeout(120)
+def test_sdpa_decode_paged_attention_batch32(
+    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, sliding_window_size, block_size, reset_seeds
+):
+    """Regression test for core allocation overflow with batch=32 on large grids.
+
+    When num_cores_available / B produces a num_heads_per_core that doesn't evenly
+    divide num_kv_heads, the integer division cascade causes num_active_cores to be
+    inconsistent with num_cores_per_batch * B.
+    """
+    run_test_sdpa_decode_paged_attention(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        kv_dtype,
+        grid_size,
+        q_dtype,
+        cur_pos_tensor,
+        block_size=block_size,
+        sharded_in=False,
+        sharded_out=False,
+        sliding_window_size=sliding_window_size,
+    )
+
+
+@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
+@pytest.mark.parametrize(
     "dtype, q_dtype",
     [
         [ttnn.bfloat8_b, ttnn.bfloat16],
