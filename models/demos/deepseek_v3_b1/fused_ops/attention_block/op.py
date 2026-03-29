@@ -2626,13 +2626,14 @@ class AttentionBlock:
         )
         matmul4_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             matmul4_in0_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset_post_sdpa,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=matmul4_k_num_tiles * tile_1x32_size,
             core_ranges=full_device_grid,
         )
         matmul4_in0_cb_descriptor.format_descriptors = [matmul4_in0_cb_format]
-        sdpa_kv_cache_running_offset_post_sdpa += matmul4_in0_cb_descriptor.total_size
+        input_running_offset += matmul4_in0_cb_descriptor.total_size
+        scatter_dest_l1_addr = ttnn.get_cb_address(matmul4_in0_cb_descriptor)
 
         # CB 2: Matmul4 output (4 tiles of 1x32 per core, kv_b2 grid)
         # When kv_cache buffer is available, overlap into it. Otherwise standalone.
@@ -2644,15 +2645,17 @@ class AttentionBlock:
             tile=matmul4_out_tile_descriptor,
         )
 
+        # Overlapping matmul4 output with input tensor, but it's likely safe to have this overlap with kv cache buffer
+        # Only matmul4 input is unsafe to overlap with kv cache buffer
         matmul4_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             matmul4_out_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset_post_sdpa,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=matmul4_out_w_per_core * tile_1x32_size,
             core_ranges=full_device_grid,
         )
         matmul4_out_cb_descriptor.format_descriptors = [matmul4_out_cb_format]
-        sdpa_kv_cache_running_offset_post_sdpa += matmul4_out_cb_descriptor.total_size
+        input_running_offset += matmul4_out_cb_descriptor.total_size
 
         # CB 3: Gather2 output = Mcast3 source (from sharded tensor, gather core)
         gather2_dst_cb_format = ttnn.CBFormatDescriptor(
@@ -3297,7 +3300,6 @@ class AttentionBlock:
         # ========================================================================
         # Pre-compute device-invariant SDPA addresses
         # ========================================================================
-        scatter_dest_l1_addr = ref_sdpa_kv_cache_buffer.buffer_address() + matmul4_in0_cb_descriptor.address_offset
         forwarder_buffer_base = ref_sdpa_forwarder_scratch.buffer_address()
         ncrisc_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size * 2  # After BRISC R1+R2
         r1_recv_buffer_addr = ref_sdpa_intermediate_recv.buffer_address()

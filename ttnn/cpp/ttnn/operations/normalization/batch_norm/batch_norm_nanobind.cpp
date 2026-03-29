@@ -41,7 +41,7 @@ void bind_batch_norm_operation(nb::module_& mod) {
             weight (ttnn.Tensor, optional): the weight or gamma value of shape `[1, C, 1, 1]`. Defaults to `None`.
             bias (ttnn.Tensor, optional): the bias or beta value of shape `[1, C, 1, 1]`. Defaults to `None`.
             training (bool, optional): Selection between training mode and inference (evaluation) mode. Defaults to `False` (Inference mode).
-            output (ttnn.Tensor, optional): Preallocated output tensor to store batch norm result of shape `[N, C, H, W]`. Defaults to `None`.
+            output (ttnn.Tensor, optional): Preallocated output tensor to store batch norm result of shape `[N, C, H, W]`. Must have the same dtype as :attr:`input_tensor`. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): device compute kernel configuration for the operation. Defaults to `None`.
 
@@ -63,7 +63,9 @@ void bind_batch_norm_operation(nb::module_& mod) {
 
             These apply for all the tensor inputs to this operation, including the optional :attr:`output` tensor.
 
-            The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
+            Mixed precision is supported: ``input`` (and ``output``, if provided) may use a different dtype from the
+            parameter tensors (``running_mean``, ``running_var``, ``weight``, ``bias``). The output dtype always
+            matches the input dtype. All parameter tensors must share the same dtype with each other.
 
         Memory Support:
             - Interleaved: DRAM and L1
