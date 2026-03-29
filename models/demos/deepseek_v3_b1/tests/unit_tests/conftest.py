@@ -27,6 +27,21 @@ _REF_HF_SHARED_GATE_UP = (2048, 7168)
 _REF_K = 7168
 
 
+# This is a workaround to avoid hanging when crashing during tests since __repr__ is called on traceback, which causes
+# tensors to be brought back to host which is very slow in slow-dispatch mode.
+def _safe_tensor_repr(self):
+    try:
+        return f"ttnn.Tensor(shape={self.shape}, dtype={self.dtype}, layout={self.layout})"
+    except Exception:
+        return object.__repr__(self)
+
+
+try:
+    ttnn.Tensor.__repr__ = _safe_tensor_repr
+except (TypeError, AttributeError):
+    pass
+
+
 def _scaled_randn(*shape, generator, dtype=torch.bfloat16):
     """Generate random weights scaled by 1/sqrt(inner_dim), matching generate_mm_weights convention."""
     return (torch.randn(*shape, generator=generator, dtype=torch.float32) / (shape[-1] ** 0.5)).to(dtype)
