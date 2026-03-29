@@ -43,7 +43,7 @@ using test_helpers::MINIMAL_DM_KERNEL_SOURCE;
 class ProgramSpecTestQuasar : public ::testing::Test {
 protected:
     void SetUp() override {
-        // GTEST_SKIP() << "Re-enable tests after Quasar mock device support is checked in";
+        GTEST_SKIP() << "Re-enable tests after Quasar mock device support is checked in";
         //  Configure global mock mode for Quasar
         //  This way, the HAL is initialized for arch check and Program creation.
         experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);

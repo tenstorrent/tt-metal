@@ -45,6 +45,7 @@ using test_helpers::MakeMinimalWorker;
 class ProgramRunParamsTestQuasar : public ::testing::Test {
 protected:
     void SetUp() override {
+        GTEST_SKIP() << "Re-enable tests after Quasar mock device support is checked in";
         // Configure global mock mode for Quasar
         experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
     }
