@@ -875,6 +875,7 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
         cur = conn.cursor()
         hw_map = {}
         trace_models_map = {}  # trace_run_id -> sorted list of model_names
+        trace_details_map = {}  # trace_run_id -> (hardware_id, sha, trace_uid)
         for trace_run_id in trace_run_cache.values():
             cur.execute(
                 f"SELECT hardware_id, tt_metal_sha, trace_uid FROM {schema}.trace_run WHERE trace_run_id = %s",
@@ -884,6 +885,7 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
             if not tr_row:
                 continue
             hardware_id, sha, trace_uid = tr_row
+            trace_details_map[trace_run_id] = (hardware_id, sha, trace_uid)
             if hardware_id and hardware_id not in hw_map:
                 cur.execute(
                     f"SELECT board_type, device_series, card_count FROM {schema}.ttnn_hardware WHERE ttnn_hardware_id = %s",
@@ -907,16 +909,13 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
         print(f"  Warning: could not fetch hardware/model details for manifest: {e}")
         hw_map = {}
         trace_models_map = {}
+        trace_details_map = {}
 
     existing_ids = {entry.get("trace_id") for entry in data["registry"]}
     added = 0
 
     for trace_run_id in trace_run_cache.values():
-        cur.execute(
-            f"SELECT hardware_id, tt_metal_sha, trace_uid FROM {schema}.trace_run WHERE trace_run_id = %s",
-            (trace_run_id,),
-        )
-        tr_row = cur.fetchone()
+        tr_row = trace_details_map.get(trace_run_id)
         if not tr_row:
             continue
         hardware_id, sha, trace_uid = tr_row
