@@ -90,6 +90,7 @@ def _name(exp):
     rt = "memeff" if exp.get("runner_type", "default") == "memory_efficient" else "default"
     prof = exp.get("profiler", True)
     suffix = "_noprof" if prof is False else "_naive" if prof == "naive" else ""
+    sq = f"_sq{exp['seq_len']}" if "seq_len" in exp else ""
     return (
         f"p{exp['phase']}"
         f"_b{exp['local_batch']}"
@@ -97,6 +98,7 @@ def _name(exp):
         f"_tp{exp.get('tp', 1)}"
         f"_ddp{exp.get('ddp', 1)}"
         f"_ga{exp.get('grad_accum', 1)}"
+        f"{sq}"
         f"_{rt}"
         f"{suffix}"
     )
@@ -302,11 +304,108 @@ _ALL_EXPERIMENTS = [
     ),
 ]
 
-# Deduplicate by name (last occurrence wins)
-_seen = {}
-for _e in _ALL_EXPERIMENTS:
-    _seen[_e["name"]] = _e
-EXPERIMENTS = list(_seen.values())
+_ALL_EXPERIMENTS_TINYLLAMA = [
+    # =================================================================
+    # Phase 1 — Single-device baselines (TP=1, DDP=1)
+    #   Profiled: fwd/bwd/opt at 4, 11, 22 blocks
+    #   Checkpointing: compare default vs memeff at 22 blocks (full model)
+    # =================================================================
+    _exp(phase="1", local_batch=1, num_blocks=4, runner_type="default"),
+    _exp(phase="1", local_batch=1, num_blocks=11, runner_type="default"),
+    _exp(phase="1", local_batch=1, num_blocks=22, runner_type="default"),
+    _exp(phase="1", local_batch=1, num_blocks=22, runner_type="memory_efficient"),
+    _exp(phase="1", local_batch=1, num_blocks=4, runner_type="default", profiler="naive"),
+    _exp(phase="1", local_batch=1, num_blocks=11, runner_type="default", profiler="naive"),
+    _exp(phase="1", local_batch=1, num_blocks=22, runner_type="default", profiler="naive"),
+    # =================================================================
+    # Phase 2 — TP characterization (differential method)
+    #   Profiled: TP=2,4,8 at 4, 11, 22 blocks, batch=1
+    # =================================================================
+    _exp(phase="2", local_batch=1, num_blocks=4, tp=2, runner_type="default"),
+    _exp(phase="2", local_batch=1, num_blocks=11, tp=2, runner_type="default"),
+    _exp(phase="2", local_batch=1, num_blocks=22, tp=2, runner_type="default"),
+    _exp(phase="2", local_batch=1, num_blocks=4, tp=4, runner_type="default"),
+    _exp(phase="2", local_batch=1, num_blocks=11, tp=4, runner_type="default"),
+    _exp(phase="2", local_batch=1, num_blocks=22, tp=4, runner_type="default"),
+    _exp(phase="2", local_batch=1, num_blocks=4, tp=8, runner_type="default"),
+    _exp(phase="2", local_batch=1, num_blocks=11, tp=8, runner_type="default"),
+    _exp(phase="2", local_batch=1, num_blocks=22, tp=8, runner_type="default"),
+    # =================================================================
+    # Phase 3 — DDP characterization (naive profiler, TP=1 only)
+    #   DDP = 2, 4, 8, 32 at full model (22 blocks)
+    # =================================================================
+    _exp(phase="3", local_batch=1, num_blocks=22, ddp=2, runner_type="default", profiler="naive"),
+    _exp(phase="3", local_batch=1, num_blocks=22, ddp=4, runner_type="default", profiler="naive"),
+    _exp(phase="3", local_batch=1, num_blocks=22, ddp=8, runner_type="default", profiler="naive"),
+    _exp(phase="3", local_batch=1, num_blocks=22, ddp=32, runner_type="default", profiler="naive"),
+    # =================================================================
+    # Phase 5 — Scaling verification
+    # =================================================================
+    # 5.1: Compute + optimizer vs batch size (blocks=11, memeff, naive)
+    _exp(phase="5", local_batch=1, num_blocks=11, runner_type="memory_efficient", profiler="naive"),
+    _exp(phase="5", local_batch=2, num_blocks=11, runner_type="memory_efficient", profiler="naive"),
+    _exp(phase="5", local_batch=4, num_blocks=11, runner_type="memory_efficient", profiler="naive"),
+    _exp(phase="5", local_batch=8, num_blocks=11, runner_type="memory_efficient", profiler="naive"),
+    _exp(phase="5", local_batch=16, num_blocks=11, runner_type="memory_efficient", profiler="naive"),
+    # 5.2: Compute vs num_blocks (batch=1, memeff, naive)
+    _exp(phase="5", local_batch=1, num_blocks=4, runner_type="memory_efficient", profiler="naive"),
+    _exp(phase="5", local_batch=1, num_blocks=11, runner_type="memory_efficient", profiler="naive"),
+    _exp(phase="5", local_batch=1, num_blocks=22, runner_type="memory_efficient", profiler="naive"),
+    # =================================================================
+    # Phase 6 — End-to-end validation (naive profiler)
+    # =================================================================
+    _exp(phase="6", local_batch=1, num_blocks=22, tp=8, ddp=4, grad_accum=1, runner_type="default", profiler="naive"),
+    _exp(phase="6", local_batch=1, num_blocks=22, tp=4, ddp=8, grad_accum=1, runner_type="default", profiler="naive"),
+    # =================================================================
+    # Phase 7 — Sequence length characterization
+    #   seq_len=512..16384, full model (22 blocks), batch=1, memeff, naive
+    #   NOTE: very long sequences (8192+) may OOM on single device;
+    #   re-run with TP if needed.
+    # =================================================================
+    _exp(phase="7", local_batch=1, num_blocks=22, seq_len=512, runner_type="memory_efficient", profiler="naive"),
+    _exp(phase="7", local_batch=1, num_blocks=22, seq_len=1024, runner_type="memory_efficient", profiler="naive"),
+    _exp(phase="7", local_batch=1, num_blocks=22, seq_len=2048, runner_type="memory_efficient", profiler="naive"),
+    _exp(phase="7", local_batch=1, num_blocks=22, seq_len=4096, runner_type="memory_efficient", profiler="naive"),
+    _exp(phase="7", local_batch=1, num_blocks=22, seq_len=8192, runner_type="memory_efficient", profiler="naive"),
+    _exp(phase="7", local_batch=1, num_blocks=22, seq_len=16384, runner_type="memory_efficient", profiler="naive"),
+]
+
+
+def _dedup(experiments):
+    """Deduplicate by name (last occurrence wins)."""
+    seen = {}
+    for e in experiments:
+        seen[e["name"]] = e
+    return list(seen.values())
+
+
+_EXPERIMENT_SETS = {
+    "llama_8b": _dedup(_ALL_EXPERIMENTS),
+    "tinyllama": _dedup(_ALL_EXPERIMENTS_TINYLLAMA),
+}
+
+_EXPERIMENT_SET_DEFAULTS = {
+    "llama_8b": {
+        "name": "llama_8b",
+        "model_template": TT_TRAIN_HOME / "configs" / "model_configs" / "llama8b.yaml",
+        "training_template": TT_TRAIN_HOME
+        / "configs"
+        / "training_configs"
+        / "llama8b"
+        / "training_shakespeare_llama_8b_galaxy.yaml",
+    },
+    "tinyllama": {
+        "name": "tinyllama",
+        "model_template": TT_TRAIN_HOME / "configs" / "model_configs" / "tinyllama.yaml",
+        "training_template": TT_TRAIN_HOME
+        / "configs"
+        / "training_configs"
+        / "training_shakespeare_tinyllama_tp_galaxy.yaml",
+    },
+}
+
+# Backward compatibility
+EXPERIMENTS = _EXPERIMENT_SETS["llama_8b"]
 
 # =============================================================================
 # Helpers
@@ -339,11 +438,13 @@ def config_batch_size(exp):
 # =============================================================================
 
 
-def generate_model_config(num_blocks, runner_type, out_path):
+def generate_model_config(num_blocks, runner_type, out_path, seq_len=None):
     with open(MODEL_TEMPLATE) as f:
         cfg = yaml.safe_load(f)
     cfg["transformer_config"]["num_blocks"] = num_blocks
     cfg["transformer_config"]["runner_type"] = runner_type
+    if seq_len is not None:
+        cfg["transformer_config"]["max_sequence_length"] = seq_len
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, "w") as f:
         yaml.dump(cfg, f, Dumper=_Dumper, default_flow_style=False, sort_keys=False)
@@ -417,13 +518,14 @@ def generate_all_configs(experiments, run_dir):
     model_cfgs = {}
     textprotos = {}
 
-    # Unique model configs keyed by (num_blocks, runner_type)
+    # Unique model configs keyed by (num_blocks, runner_type, seq_len)
     for exp in experiments:
-        key = (exp["num_blocks"], exp.get("runner_type", "default"))
+        key = (exp["num_blocks"], exp.get("runner_type", "default"), exp.get("seq_len"))
         if key not in model_cfgs:
-            fname = f"{EXPERIMENT_NAME}_{key[0]}blocks_{key[1]}.yaml"
+            seq_part = f"_sq{key[2]}" if key[2] is not None else ""
+            fname = f"{EXPERIMENT_NAME}_{key[0]}blocks_{key[1]}{seq_part}.yaml"
             path = run_dir / "model_configs" / fname
-            generate_model_config(key[0], key[1], path)
+            generate_model_config(key[0], key[1], path, seq_len=key[2])
             model_cfgs[key] = path
 
     # Unique mesh descriptors keyed by (dim0, dim1)
@@ -438,7 +540,7 @@ def generate_all_configs(experiments, run_dir):
 
     # Per-experiment training configs
     for exp in experiments:
-        mkey = (exp["num_blocks"], exp.get("runner_type", "default"))
+        mkey = (exp["num_blocks"], exp.get("runner_type", "default"), exp.get("seq_len"))
         model_path = str(model_cfgs[mkey].resolve())
         out = run_dir / exp["name"] / "training_config.yaml"
         generate_training_config(exp, model_path, out)
@@ -575,22 +677,29 @@ def main():
 
     parser = argparse.ArgumentParser(description="Run profiling experiments")
     parser.add_argument(
+        "--experiment-set",
+        type=str,
+        default="llama_8b",
+        choices=list(_EXPERIMENT_SETS.keys()),
+        help=f"Experiment set (default: llama_8b). Auto-sets --name, --model-template, --training-template.",
+    )
+    parser.add_argument(
         "--name",
         type=str,
-        default=DEFAULT_NAME,
-        help=f"Experiment set name (used in filenames and logs, default: {DEFAULT_NAME})",
+        default=None,
+        help=f"Experiment set name (used in filenames and logs, default: auto from --experiment-set)",
     )
     parser.add_argument(
         "--model-template",
         type=str,
         default=None,
-        help=f"Model config YAML template (default: {DEFAULT_MODEL_TEMPLATE})",
+        help=f"Model config YAML template (default: auto from --experiment-set)",
     )
     parser.add_argument(
         "--training-template",
         type=str,
         default=None,
-        help=f"Training config YAML template (default: {DEFAULT_TRAINING_TEMPLATE})",
+        help=f"Training config YAML template (default: auto from --experiment-set)",
     )
     parser.add_argument(
         "--binary",
@@ -624,27 +733,35 @@ def main():
     parser.add_argument("--run-dir", type=str, help="Output directory (default: timestamped)")
     args = parser.parse_args()
 
-    # Apply overrides
-    EXPERIMENT_NAME = args.name
+    # Resolve experiment set defaults, then apply explicit overrides
+    set_defaults = _EXPERIMENT_SET_DEFAULTS.get(args.experiment_set, {})
+    EXPERIMENT_NAME = args.name if args.name is not None else set_defaults.get("name", DEFAULT_NAME)
     MAX_STEPS = args.max_steps
+
     if args.model_template:
         MODEL_TEMPLATE = Path(args.model_template)
-        if not MODEL_TEMPLATE.exists():
-            print(f"Model template not found: {MODEL_TEMPLATE}")
-            sys.exit(1)
+    elif "model_template" in set_defaults:
+        MODEL_TEMPLATE = set_defaults["model_template"]
+    if not MODEL_TEMPLATE.exists():
+        print(f"Model template not found: {MODEL_TEMPLATE}")
+        sys.exit(1)
+
     if args.training_template:
         TRAINING_TEMPLATE = Path(args.training_template)
-        if not TRAINING_TEMPLATE.exists():
-            print(f"Training template not found: {TRAINING_TEMPLATE}")
-            sys.exit(1)
+    elif "training_template" in set_defaults:
+        TRAINING_TEMPLATE = set_defaults["training_template"]
+    if not TRAINING_TEMPLATE.exists():
+        print(f"Training template not found: {TRAINING_TEMPLATE}")
+        sys.exit(1)
+
     if args.binary:
         NANO_GPT_BIN = Path(args.binary)
         if not NANO_GPT_BIN.exists():
             print(f"Binary not found: {NANO_GPT_BIN}")
             sys.exit(1)
 
-    # Filter experiments
-    exps = list(EXPERIMENTS)
+    # Select experiments from the chosen set
+    exps = list(_EXPERIMENT_SETS[args.experiment_set])
     if args.phases:
         exps = [e for e in exps if e["phase"] in args.phases]
     if args.experiments:

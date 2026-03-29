@@ -17,6 +17,7 @@ COLUMNS = [
     "tp",
     "dp",
     "grad_acc",
+    "seq_len",
     "dram_peak_mb",
     "runner_type",
     "fwd_ms",
@@ -124,6 +125,7 @@ def process_entry(entry: dict) -> dict:
     tp = exp.get("tp") or _parse_name(name, "tp") or 1
     dp = exp.get("ddp") or _parse_name(name, "ddp") or 1
     grad_acc = exp.get("grad_acc") or _parse_name(name, "ga") or 1
+    seq_len = exp.get("seq_len") or _parse_name(name, "sq")
 
     step_time = _step_time(entry, avg)
 
@@ -141,6 +143,7 @@ def process_entry(entry: dict) -> dict:
         "tp": tp,
         "dp": dp,
         "grad_acc": grad_acc,
+        "seq_len": seq_len,
         "dram_peak_mb": memory.get("overall_dram_peak_mb"),
         "runner_type": exp.get("runner_type"),
         "fwd_ms": avg.get("forward_ms"),

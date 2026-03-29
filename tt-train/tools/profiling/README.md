@@ -128,7 +128,7 @@ python3 tt-train/tools/profiling/results_json/extract_results.py \
   --csv /path/to/ops_perf_results.csv
 ```
 
-Important flag: `--seq-len <n>` (default 2048).
+Sequence length for throughput calculation is read automatically from each experiment's metadata (`experiment.seq_len`), falling back to 2048 for older runs.
 
 ## Step 3 (Optional): Roofline Analysis
 
@@ -331,6 +331,7 @@ python3 tt-train/tools/profiling/results_visualization/results_to_csv.py results
 python3 tt-train/tools/profiling/results_visualization/plot_batch_scaling.py results.csv output_dir/
 python3 tt-train/tools/profiling/results_visualization/plot_ddp_scaling.py results.csv output_dir/
 python3 tt-train/tools/profiling/results_visualization/plot_tp_scaling.py results.csv output_dir/
+python3 tt-train/tools/profiling/results_visualization/plot_seq_scaling.py results.csv output_dir/
 ```
 
 | Script | Plots |
@@ -338,6 +339,7 @@ python3 tt-train/tools/profiling/results_visualization/plot_tp_scaling.py result
 | `plot_batch_scaling.py` | Tokens/s, fwd/bwd/opt/step time vs batch size (with ideal lines + MFU) |
 | `plot_ddp_scaling.py` | Tokens/s, tokens/s/device, step time, gradient sync vs DDP degree |
 | `plot_tp_scaling.py` | Tokens/s, tokens/s/device, fwd/bwd/opt/step time vs TP (per block count, with CCL overlay) |
+| `plot_seq_scaling.py` | Tokens/s, fwd/bwd/opt/step time, DRAM peak vs sequence length (log2 x-axis, with ideal lines + MFU) |
 
 ## Experiment Phases
 
@@ -348,3 +350,4 @@ python3 tt-train/tools/profiling/results_visualization/plot_tp_scaling.py result
 | 3 | DDP characterization (DDP=2,4,8,32 with TP=1) | Naive |
 | 5 | Scaling verification (batch size, block count) | Naive |
 | 6 | End-to-end validation (TP+DDP, grad_accum sweep) | Naive |
+| 7 | Sequence length characterization (seq_len=512..16384, single device) | Naive |

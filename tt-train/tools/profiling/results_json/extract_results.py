@@ -584,7 +584,8 @@ def main_run_dir(
         ddp = exp.get("ddp", 1)
         grad_accum = exp.get("grad_accum", 1)
         total_devices = meta.get("total_devices", 1)
-        tokens_per_step = local_batch * seq_len * ddp * grad_accum
+        effective_seq_len = exp.get("seq_len", seq_len)
+        tokens_per_step = local_batch * effective_seq_len * ddp * grad_accum
 
         # Best available step time for throughput.
         best_step_ms = None
@@ -702,12 +703,6 @@ def main():
         type=str,
         help="Merge new results into this existing JSON (updates matching names, adds new ones)",
     )
-    parser.add_argument(
-        "--seq-len",
-        type=int,
-        default=2048,
-        help="Sequence length for throughput calculation (default: 2048)",
-    )
     args = parser.parse_args()
 
     if args.csv:
@@ -715,7 +710,7 @@ def main():
     elif args.run_dirs:
         output = Path(args.output) if args.output else None
         merge_from = Path(args.merge) if args.merge else None
-        main_run_dir([Path(d) for d in args.run_dirs], output, merge_from, seq_len=args.seq_len)
+        main_run_dir([Path(d) for d in args.run_dirs], output, merge_from)
     else:
         parser.error("Provide run_dir(s) or --csv <path>")
 

@@ -31,7 +31,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 DP_VALUES = [1, 2, 4, 8, 32]
-N_BLOCKS = 8
+DEFAULT_N_BLOCKS = 8
 
 PLOT_SPECS = [
     ("t/s", "Tokens / s", "ts_vs_dp.png", "multiply"),
@@ -45,10 +45,11 @@ MFU_COL = "total_mfu_perc"
 MFU_COLOR = "#9467bd"
 
 
-def filter_ddp_scaling(df: pd.DataFrame) -> pd.DataFrame:
+def filter_ddp_scaling(df: pd.DataFrame, n_blocks=None) -> pd.DataFrame:
+    n_blocks = n_blocks or DEFAULT_N_BLOCKS
     mask = (
         (df["tp"] == 1)
-        & (df["n_blocks"] == N_BLOCKS)
+        & (df["n_blocks"] == n_blocks)
         & df["dp"].isin(DP_VALUES)
         & (df["runner_type"] == "default")
         & (df["profiler"] == "naive")
@@ -83,7 +84,7 @@ def make_plot(
         color=COLOR,
         linewidth=2,
         markersize=7,
-        label=f"{N_BLOCKS} blocks",
+        label=f"{subset['n_blocks'].iloc[0]} blocks",
     )
 
     if scaling is not None:
@@ -140,9 +141,14 @@ def make_plot(
         print(f"  saved {out_path}")
 
 
-def plot_all(df: pd.DataFrame, output_dir: Path | None = None, show: bool = False) -> pd.DataFrame:
+def plot_all(
+    df: pd.DataFrame,
+    output_dir: Path | None = None,
+    show: bool = False,
+    n_blocks=None,
+) -> pd.DataFrame:
     """Filter and plot all DDP scaling charts. Returns the filtered subset."""
-    subset = filter_ddp_scaling(df)
+    subset = filter_ddp_scaling(df, n_blocks)
     if subset.empty:
         print("No DDP-scaling rows found.")
         return subset
@@ -156,6 +162,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Plot DDP-scaling results.")
     parser.add_argument("input_csv", type=Path, help="Full results CSV")
     parser.add_argument("output_dir", type=Path, help="Directory for outputs")
+    parser.add_argument(
+        "--n-blocks",
+        type=int,
+        default=DEFAULT_N_BLOCKS,
+        help=f"Block count to filter on (default: {DEFAULT_N_BLOCKS})",
+    )
     args = parser.parse_args()
 
     if not args.input_csv.exists():
@@ -164,7 +176,7 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(args.input_csv)
-    subset = plot_all(df, output_dir=args.output_dir)
+    subset = plot_all(df, output_dir=args.output_dir, n_blocks=args.n_blocks)
 
     if not subset.empty:
         csv_out = args.output_dir / "ddp_scaling.csv"

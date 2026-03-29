@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 TP_VALUES = [1, 2, 4, 8]
-BLOCK_VALUES = [2, 4, 8]
+DEFAULT_BLOCK_VALUES = [2, 4, 8]
 
 PLOT_SPECS = [
     ("t/s", "Tokens / s", "ts_vs_tp.png", "multiply", None),
@@ -51,16 +51,23 @@ PLOT_SPECS = [
     ),
 ]
 
-COLORS = {2: "#1f77b4", 4: "#ff7f0e", 8: "#2ca02c"}
-MARKERS = {2: "o", 4: "s", 8: "^"}
+_COLOR_CYCLE = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
+_MARKER_CYCLE = ["o", "s", "^", "D", "v", "P"]
 CCL_COLOR = "#d62728"
 
 
-def filter_tp_scaling(df: pd.DataFrame) -> pd.DataFrame:
+def _block_style(block_values):
+    colors = {b: _COLOR_CYCLE[i % len(_COLOR_CYCLE)] for i, b in enumerate(block_values)}
+    markers = {b: _MARKER_CYCLE[i % len(_MARKER_CYCLE)] for i, b in enumerate(block_values)}
+    return colors, markers
+
+
+def filter_tp_scaling(df: pd.DataFrame, block_values=None) -> pd.DataFrame:
+    block_values = block_values or DEFAULT_BLOCK_VALUES
     mask = (
         (df["dp"] == 1)
         & df["tp"].isin(TP_VALUES)
-        & df["n_blocks"].isin(BLOCK_VALUES)
+        & df["n_blocks"].isin(block_values)
         & (df["runner_type"] == "default")
         & (df["profiler"] == "tracy")
     )
@@ -90,7 +97,11 @@ def make_plot(
     scaling: str,
     ccl_col: str | None = None,
     show: bool = False,
+    block_values=None,
 ) -> None:
+    block_values = block_values or DEFAULT_BLOCK_VALUES
+    colors, markers = _block_style(block_values)
+
     fig, ax = plt.subplots(figsize=(8, 4.5))
     tp_dense = np.linspace(TP_VALUES[0], TP_VALUES[-1], 200)
     ideal_drawn = False
@@ -102,8 +113,8 @@ def make_plot(
         ax.plot(
             grp["tp"],
             grp[col],
-            marker=MARKERS.get(blk, "o"),
-            color=COLORS.get(blk, None),
+            marker=markers.get(blk, "o"),
+            color=colors.get(blk, None),
             linewidth=2,
             markersize=7,
             label=f"{blk} blocks",
@@ -116,7 +127,7 @@ def make_plot(
             ax.plot(
                 tp_dense,
                 _ideal_y(base_val, tp_dense, scaling),
-                color=COLORS.get(blk, None),
+                color=colors.get(blk, None),
                 linestyle="--",
                 linewidth=1.2,
                 alpha=0.5,
@@ -135,7 +146,7 @@ def make_plot(
                     valid["tp"],
                     valid[ccl_col],
                     marker="d",
-                    color=COLORS.get(blk, None),
+                    color=colors.get(blk, None),
                     linewidth=1.2,
                     markersize=6,
                     alpha=0.7,
@@ -196,8 +207,12 @@ def make_ccl_util_plot(
     subset: pd.DataFrame,
     out_path: Path | None,
     show: bool = False,
+    block_values=None,
 ) -> None:
     """Plot TP CCL utilization and TP overhead vs TP."""
+    block_values = block_values or DEFAULT_BLOCK_VALUES
+    colors, markers = _block_style(block_values)
+
     df = subset.copy()
     has_util = CCL_UTIL_COL in df.columns and df[CCL_UTIL_COL].notna().any()
     has_ccl_ms = "total_ccl_ms" in df.columns and "step_time_ms" in df.columns
@@ -220,8 +235,8 @@ def make_ccl_util_plot(
             ax.plot(
                 valid["tp"],
                 valid[CCL_UTIL_COL],
-                marker=MARKERS.get(blk, "o"),
-                color=COLORS.get(blk, None),
+                marker=markers.get(blk, "o"),
+                color=colors.get(blk, None),
                 linewidth=2,
                 markersize=7,
                 label=lbl,
@@ -240,7 +255,7 @@ def make_ccl_util_plot(
                 valid["tp"],
                 valid[CCL_OVERHEAD_COL],
                 marker="d",
-                color=COLORS.get(blk, None),
+                color=colors.get(blk, None),
                 linewidth=1.5,
                 markersize=6,
                 linestyle=":",
@@ -266,19 +281,26 @@ def make_ccl_util_plot(
         print(f"  saved {out_path}")
 
 
-def plot_all(df: pd.DataFrame, output_dir: Path | None = None, show: bool = False) -> pd.DataFrame:
+def plot_all(
+    df: pd.DataFrame,
+    output_dir: Path | None = None,
+    show: bool = False,
+    block_values=None,
+) -> pd.DataFrame:
     """Filter and plot all TP scaling charts. Returns the filtered subset."""
-    subset = filter_tp_scaling(df)
+    block_values = block_values or DEFAULT_BLOCK_VALUES
+    subset = filter_tp_scaling(df, block_values)
     if subset.empty:
         print("No TP-scaling rows found.")
         return subset
     for col, ylabel, fname, scaling, ccl_col in PLOT_SPECS:
         out = output_dir / fname if output_dir else None
-        make_plot(subset, col, ylabel, out, scaling, ccl_col, show=show)
+        make_plot(subset, col, ylabel, out, scaling, ccl_col, show=show, block_values=block_values)
     make_ccl_util_plot(
         subset,
         output_dir / "ccl_util_vs_tp.png" if output_dir else None,
         show=show,
+        block_values=block_values,
     )
     return subset
 
@@ -287,6 +309,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Plot TP-scaling results.")
     parser.add_argument("input_csv", type=Path, help="Full results CSV")
     parser.add_argument("output_dir", type=Path, help="Directory for outputs")
+    parser.add_argument(
+        "--block-values",
+        type=int,
+        nargs="+",
+        default=DEFAULT_BLOCK_VALUES,
+        help=f"Block counts to include (default: {DEFAULT_BLOCK_VALUES})",
+    )
     args = parser.parse_args()
 
     if not args.input_csv.exists():
@@ -295,7 +324,7 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(args.input_csv)
-    subset = plot_all(df, output_dir=args.output_dir)
+    subset = plot_all(df, output_dir=args.output_dir, block_values=args.block_values)
 
     if not subset.empty:
         csv_out = args.output_dir / "tp_scaling.csv"
