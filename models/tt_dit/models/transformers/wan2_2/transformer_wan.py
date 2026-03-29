@@ -630,8 +630,3 @@ class WanTransformer3DModel(Module):
         )
 
         return spatial_1BNI
-
-    @staticmethod
-    def device_to_host(tt_tensor: ttnn.Tensor) -> torch.Tensor:
-        """Move a ttnn device tensor to a torch host tensor."""
-        return ttnn.to_torch(ttnn.get_device_tensors(tt_tensor)[0])
