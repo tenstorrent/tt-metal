@@ -13,7 +13,6 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
-#include "impl/metal2_host_api/test_utils.hpp"
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
