@@ -10,9 +10,9 @@
 #include "../accumulation_common.hpp"
 
 void kernel_main() {
-    uint32_t output_base_addr = get_arg_val<uint32_t>(0);
-
     constexpr auto output_addrg_args = TensorAccessorArgs<0>();
+
+    uint32_t output_base_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_rows_per_core = get_arg_val<uint32_t>(1);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(2);
     const uint32_t input_tile_offset = get_arg_val<uint32_t>(3);
@@ -25,7 +25,6 @@ void kernel_main() {
     const uint32_t flip = get_arg_val<uint32_t>(7);
 
     const uint32_t ublock_size_bytes = get_tile_size(cb_out);
-
     const uint32_t output_tile_bytes = ublock_size_bytes;
 
     const auto output_addrg = TensorAccessor(output_addrg_args, output_base_addr, output_tile_bytes);
@@ -50,4 +49,5 @@ void kernel_main() {
             ++low_rank_offset;
         }
     }
+    DPRINT << "done" << ENDL();
 }

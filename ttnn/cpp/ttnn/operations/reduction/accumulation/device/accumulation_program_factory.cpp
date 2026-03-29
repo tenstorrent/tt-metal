@@ -2,13 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "accumulation/device/accumulation_device_operation_types.hpp"
 #include "accumulation_device_operation.hpp"
 
 #include "tt-metalium/base_types.hpp"
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/host_api.hpp"
 #include "tt-metalium/kernel_types.hpp"
+#include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/tensor/types.hpp"
+#include <bit>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -50,9 +53,6 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     auto* dst_buffer{output_tensor.buffer()};
 
     const auto dst_cb_data_format{datatype_to_dataformat_converter(output_tensor.dtype())};
-    const bool fp32_dest_acc_en{
-        (dst_cb_data_format == DataFormat::Float32) || (dst_cb_data_format == DataFormat::Int32) ||
-        (dst_cb_data_format == DataFormat::UInt32)};
 
     const uint32_t input_rank{input_tensor.padded_shape().rank()};
 
@@ -78,20 +78,58 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
             tt::tt_metal::split_work_to_cores(grid, num_rows_total);
 
     constexpr uint32_t in_tiles = 4;
-    constexpr uint32_t op_tiles = 4;
-    constexpr uint32_t start_tiles = 4;
+    constexpr uint32_t op_tiles = 1;
+    // constexpr uint32_t start_tiles = 4;
     constexpr uint32_t out_tiles = 4;
 
-    create_cb(program, input_tensor.dtype(), AccumulationCB::SRC, all_cores, in_tiles);
-    create_cb(program, output_tensor.dtype(), AccumulationCB::ACC, all_cores, op_tiles);
-    create_cb(program, output_tensor.dtype(), AccumulationCB::START, all_cores, start_tiles);
-    create_cb(program, output_tensor.dtype(), AccumulationCB::DST, all_cores, out_tiles);
+    auto acc_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
+    if (!is_integer_format(acc_dataformat)) {
+        acc_dataformat = DataFormat::Float32;
+    }
+
+    const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
+    const auto output_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
+
+    create_cb(program, input_dataformat, AccumulationCB::SRC, all_cores, in_tiles);
+    create_cb(program, acc_dataformat, AccumulationCB::ACC, all_cores, op_tiles);
+    create_cb(program, output_dataformat, AccumulationCB::DST, all_cores, out_tiles);
+
+    // TODO: Unpack to Dst for all CBs
+    std::vector<UnpackToDestMode> unpack_to_dst(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    unpack_to_dst[static_cast<unsigned>(AccumulationCB::ACC)] = UnpackToDestMode::UnpackToDestFp32;
 
     std::map<std::string, std::string> defines_kernel_args = {};
+
     if (is_integer_format(dst_cb_data_format)) {
-        // Used to switch to add_tile_int32() instead of add_tiles()
-        defines_kernel_args["CUMSUM_USE_INT32"] = "1";
+        defines_kernel_args["BINARY_OP_INIT"] =
+            operation_attributes.op == AccumulationOp::CUMSUM ? "add_int_tile_init" : "mul_int_tile_init";
+        defines_kernel_args["BINARY_OP"] = operation_attributes.op == AccumulationOp::CUMSUM
+                                               ? "add_int_tile<DataFormat::Int32>"
+                                               : "mul_int_tile<DataFormat::Int32>";
+        unpack_to_dst[static_cast<unsigned>(AccumulationCB::SRC)] = UnpackToDestMode::UnpackToDestFp32;
+
+    } else if (dst_cb_data_format == DataFormat::Float32 || operation_attributes.op == AccumulationOp::CUMSUM) {
+        defines_kernel_args["BINARY_OP_INIT"] =
+            operation_attributes.op == AccumulationOp::CUMSUM ? "add_binary_tile_init" : "mul_binary_tile_init";
+        defines_kernel_args["BINARY_OP"] =
+            operation_attributes.op == AccumulationOp::CUMSUM ? "add_binary_tile" : "mul_binary_tile";
+        unpack_to_dst[static_cast<unsigned>(AccumulationCB::SRC)] = UnpackToDestMode::UnpackToDestFp32;
+    } else {
+        defines_kernel_args["USE_FPU"] = "1";
+        defines_kernel_args["BINARY_OP_INIT"] =
+            operation_attributes.op == AccumulationOp::CUMSUM ? "add_tiles_init" : "mul_tiles_init";
+        defines_kernel_args["BINARY_OP"] =
+            operation_attributes.op == AccumulationOp::CUMSUM ? "add_tiles" : "mul_tiles";
     }
+
+    float default_acc_value = 0.f;
+    if (operation_attributes.op == AccumulationOp::CUMPROD) {
+        default_acc_value = 1.f;
+        if (is_integer_format(dst_cb_data_format)) {
+            default_acc_value = std::bit_cast<float>(1U);
+        }
+    }
+    defines_kernel_args["DEFAULT_ACC_VALUE"] = fmt::format("{}", default_acc_value);
 
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
@@ -101,8 +139,9 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     const auto math_fidelity =
         (fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) ? tt::tt_metal::MathFidelity::HiFi3 : tt::tt_metal::MathFidelity::HiFi4;
     const ComputeConfig compute_config{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .math_fidelity = MathFidelity::HiFi4,
+        .fp32_dest_acc_en = true,
+        .unpack_to_dest_mode = unpack_to_dst,
         .math_approx_mode = false,
         .compile_args = {},
         .defines = defines_kernel_args};
@@ -160,18 +199,10 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
              static_cast<uint32_t>(operation_attributes.flip)});
 
         if (core_group_1.contains(core)) {
-            SetRuntimeArgs(
-                program,
-                accumulation_compute_kernel_id,
-                core,
-                {num_tiles_per_core, tiles_per_row, static_cast<uint32_t>(operation_attributes.op)});
+            SetRuntimeArgs(program, accumulation_compute_kernel_id, core, {num_tiles_per_core, tiles_per_row});
         } else if (core_group_2.contains(core)) {
             TT_ASSERT(compute_kernel_2_id.has_value());
-            SetRuntimeArgs(
-                program,
-                compute_kernel_2_id.value(),
-                core,
-                {num_tiles_per_core, tiles_per_row, static_cast<uint32_t>(operation_attributes.op)});
+            SetRuntimeArgs(program, compute_kernel_2_id.value(), core, {num_tiles_per_core, tiles_per_row});
         } else {
             TT_THROW("Core not in any predefined core range.");
         }
@@ -211,14 +242,14 @@ void AccumulationProgramFactory::override_runtime_arguments(
 
 CBHandle AccumulationProgramFactory::create_cb(
     Program& program,
-    const DataType& dtype,
+    const tt::DataFormat& data_format,
     const AccumulationCB& accumulation_cb,
     const CoreRangeSet& core_range_set,
     const uint32_t& num_tiles) {
     const uint32_t cb_id{static_cast<uint32_t>(accumulation_cb)};
-    const auto cb_data_format{datatype_to_dataformat_converter(dtype)};
-    const uint32_t single_tile_size{tt::tile_size(cb_data_format)};
-    const auto cb_config{CircularBufferConfig{num_tiles * single_tile_size, {{cb_id, cb_data_format}}}.set_page_size(
+
+    const uint32_t single_tile_size{tt::tile_size(data_format)};
+    const auto cb_config{CircularBufferConfig{num_tiles * single_tile_size, {{cb_id, data_format}}}.set_page_size(
         cb_id, single_tile_size)};
     return CreateCircularBuffer(program, core_range_set, cb_config);
 }

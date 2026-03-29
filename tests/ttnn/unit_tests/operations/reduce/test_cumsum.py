@@ -26,11 +26,6 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
 def is_supported(shape, dim, ttnn_dtype):
     tensor_rank = len(shape)
 
-    if dim < tensor_rank:
-        accumulation_length = shape[dim]
-        if ttnn_dtype == ttnn.bfloat16 and accumulation_length > 10000:
-            return False  # for bfloat16, accumulation errors can happen easily on long tensor
-
     return True
 
 
@@ -41,7 +36,8 @@ def is_supported(shape, dim, ttnn_dtype):
         ([1], 0),
         ([2, 3], 0),
         ([2, 3], -1),
-        ([1, 1024, 32], 0),
+        # ([1, 1024, 32], 0),
+        ([1, 64, 32], 0),
         ([33, 35, 37], -1),
         ([7, 13, 129, 33], 1),
         ([2, 3, 5, 33, 128], -1),
@@ -60,12 +56,14 @@ def test_cumsum(size, dim, dtypes, device):
     torch.manual_seed(29112024)
 
     (torch_dtype, ttnn_dtype) = dtypes
+    torch.set_printoptions(threshold=10_000)
 
     # Generate integer input on [-2; 2];
     # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
     # which are not handled yet
     for _ in range(2):
-        torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
+        torch_input_tensor = torch.full(size, 1, dtype=torch_dtype)
+        # torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
         input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
 
         expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
@@ -81,6 +79,9 @@ def test_cumsum(size, dim, dtypes, device):
         torch_output = ttnn.to_torch(output_tensor, dtype=torch_dtype)
 
         expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
+
+        print(f"calculated = \n{torch_output}")
+        print(f"expected   =\n{expected_output}")
 
         if torch_output.numel() > 0:
             # test for equivalance

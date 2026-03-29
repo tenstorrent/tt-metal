@@ -59,7 +59,7 @@ struct AccumulationProgramFactory {
 
     static CBHandle create_cb(
         Program& program,
-        const DataType& dtype,
+        const tt::DataFormat& dtype,
         const AccumulationCB& accumulation_cb,
         const CoreRangeSet& core_range_set,
         const uint32_t& num_tiles);
