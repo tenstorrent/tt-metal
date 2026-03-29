@@ -116,6 +116,13 @@ bool nodes_intersect(
 bool nodes_contains(
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& superset,
     const std::variant<NodeCoord, NodeRange, NodeRangeSet>& subset);
+bool nodes_equal(
+    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& a,
+    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& b);
+void accumulate_nodes(
+    std::unordered_map<std::string, NodeRangeSet>& node_map,
+    const std::string& key,
+    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes_to_add);
 
 // Phase 1: Validate ProgramSpec and collect derived data
 CollectedSpecData CollectSpecData(const ProgramSpec& spec);
@@ -265,6 +272,32 @@ bool nodes_contains(
     NodeRangeSet superset_node_range_set = to_node_range_set(superset);
     NodeRangeSet subset_node_range_set = to_node_range_set(subset);
     return superset_node_range_set.contains(subset_node_range_set);
+}
+
+// Compare two node specifications for semantic equality (same set of nodes).
+// This normalizes both sides before comparison because CoreRangeSet structural
+// equality can fail even when both sets cover identical nodes (e.g., two adjacent
+// single-node ranges vs. one merged range).
+bool nodes_equal(
+    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& a,
+    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& b) {
+    NodeRangeSet a_normalized = to_node_range_set(a).merge_ranges();
+    NodeRangeSet b_normalized = to_node_range_set(b).merge_ranges();
+    return a_normalized == b_normalized;
+}
+
+// Accumulate nodes into a map, merging with any existing entry.
+// Used to collect the union of all worker nodes for a given kernel/DFB.
+void accumulate_nodes(
+    std::unordered_map<std::string, NodeRangeSet>& node_map,
+    const std::string& key,
+    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes_to_add) {
+    NodeRangeSet nodes = to_node_range_set(nodes_to_add);
+    if (node_map.contains(key)) {
+        node_map[key] = node_map[key].merge(nodes);
+    } else {
+        node_map[key] = nodes;
+    }
 }
 
 // ============================================================================
@@ -631,22 +664,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     std::unordered_map<KernelSpecName, NodeRangeSet> kernel_node_ranges;
     for (const auto& worker : workers) {
         for (const auto& kernel_name : worker.kernels) {
-            // A kernel may belong to multiple WorkerSpecs.
-            // Merge the target nodes of all WorkerSpecs that contain this kernel.
-            kernel_node_ranges[kernel_name].merge(to_node_range_set(worker.target_nodes));
+            accumulate_nodes(kernel_node_ranges, kernel_name, worker.target_nodes);
         }
     }
     for (const auto& kernel : spec.kernels) {
         KernelSpecName kernel_name = kernel.unique_id;
-        NodeRangeSet kernel_target_nodes = to_node_range_set(kernel.target_nodes);
-
-        // The kernel must belong to at least one WorkerSpec
         TT_FATAL(kernel_node_ranges.contains(kernel_name), "Kernel '{}' is not part of any WorkerSpec", kernel_name);
-
-        // All the kernel's target nodes must be accounted for by the WorkerSpecs that contain it
-        NodeRangeSet worker_derived_target_nodes = kernel_node_ranges.at(kernel_name);
         TT_FATAL(
-            worker_derived_target_nodes == kernel_target_nodes,
+            nodes_equal(kernel_node_ranges.at(kernel_name), kernel.target_nodes),
             "Kernel '{}' has target nodes that are not accounted for by any WorkerSpec",
             kernel_name);
     }
@@ -656,22 +681,14 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     std::unordered_map<DFBSpecName, NodeRangeSet> dfb_node_ranges;
     for (const auto& worker : workers) {
         for (const auto& dfb_name : worker.dataflow_buffers) {
-            // A DFB may belong to multiple WorkerSpecs.
-            // Merge the target nodes of all WorkerSpecs that have this DFB.
-            dfb_node_ranges[dfb_name].merge(to_node_range_set(worker.target_nodes));
+            accumulate_nodes(dfb_node_ranges, dfb_name, worker.target_nodes);
         }
     }
     for (const auto& dfb : spec.dataflow_buffers) {
         DFBSpecName dfb_name = dfb.unique_id;
-        NodeRangeSet dfb_target_nodes = to_node_range_set(dfb.target_nodes);
-
-        // The DFB must belong to at least one WorkerSpec
         TT_FATAL(dfb_node_ranges.contains(dfb_name), "DFB '{}' is not part of any WorkerSpec", dfb_name);
-
-        // All the DFB's target nodes must be accounted for by the WorkerSpecs that have it
-        NodeRangeSet worker_derived_target_nodes = dfb_node_ranges.at(dfb_name);
         TT_FATAL(
-            worker_derived_target_nodes == dfb_target_nodes,
+            nodes_equal(dfb_node_ranges.at(dfb_name), dfb.target_nodes),
             "DFB '{}' has target nodes that are not accounted for by any WorkerSpec",
             dfb_name);
     }
