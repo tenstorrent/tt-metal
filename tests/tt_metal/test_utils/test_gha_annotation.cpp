@@ -5,7 +5,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <tt_stl/gha_annotation.hpp>
+#include "tt_metal/test_utils/gha_annotation.hpp"
 
 #include <array>
 #include <cstdio>

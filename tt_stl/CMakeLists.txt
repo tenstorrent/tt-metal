@@ -18,7 +18,6 @@ target_sources(
             tt_stl/cleanup.hpp
             tt_stl/concepts.hpp
             tt_stl/fmt.hpp
-            tt_stl/gha_annotation.hpp
             tt_stl/indestructible.hpp
             tt_stl/optional_reference.hpp
             tt_stl/overloaded.hpp
