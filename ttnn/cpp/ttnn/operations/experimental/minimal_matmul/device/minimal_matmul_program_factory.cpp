@@ -128,7 +128,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t N_chunks,
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& fused_ternary_input_a,
-    const std::optional<const Tensor>& fused_ternary_input_b) {
+    const std::optional<const Tensor>& fused_ternary_input_b,
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler) {
     (void)fused_ternary_scalar;  // Scalar not needed in dataflow kernel, only in compute kernel
     auto* device = input_tensor.device();
 
@@ -232,7 +233,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     // Transpose core grid if the output is wide (M > N)
     // If transpose core grid, we parallelize M on cores_x and N on cores_y and swap the NOCs and RISCVs
-    bool transpose_core_grid = M > N;
+    // When fusing with strided reduce scatter, transposing is disabled because the RS iteration
+    // structure requires mm_N_block_wt <= slice_Wt. Transposing puts N on fewer cores (grid_size.y),
+    // which can make mm_N_block_wt > slice_Wt and violate this constraint.
+    bool transpose_core_grid = M > N && !srs_fused_op_signaler.has_value();
 
     auto in0_noc = transpose_core_grid ? large_input_noc : small_input_noc;
     auto in0_risc = transpose_core_grid ? large_input_risc : small_input_risc;
@@ -396,6 +400,22 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (fused_op_signaler->read_local_slice_from_input) {
             in0_injector_defines = defines;
             in0_injector_defines["READ_FROM_LOCAL_INPUT"] = "1";
+        }
+    }
+
+    bool fuse_srs = srs_fused_op_signaler.has_value();
+    uint32_t srs_fuse_signaler_sync_semaphore_id = 0;
+    if (fuse_srs) {
+        defines["SRS_FUSE_OP_SIGNALER"] = "1";
+        srs_fuse_signaler_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, 0);
+    }
+
+    std::vector<CoreCoord> all_worker_cores_noc;
+    if (fuse_srs) {
+        all_worker_cores_noc.reserve(num_cores);
+        auto all_cores_tmp = corerange_to_cores(core_grid, num_cores, true);
+        for (const auto& c : all_cores_tmp) {
+            all_worker_cores_noc.push_back(device->worker_core_from_logical_core(c));
         }
     }
 
@@ -628,6 +648,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
     auto cores = corerange_to_cores(core_grid, num_cores, true);
 
+    uint32_t max_defer_write_k_block = 0;
+    for (const auto& c : cores) {
+        uint32_t dwk = std::min(static_cast<uint32_t>(c.y) * k_blocks_per_core, K_blocks - 1);
+        max_defer_write_k_block = std::max(max_defer_write_k_block, dwk);
+    }
+
     // NOTE: Uniform per-core M/N ranges are required for DM forward handshakes to match across links.
     // If neighboring cores along a forwarding chain iterate different (M,N) counts, the sender can wait
     // for requests that the receiver will never issue, leading to deadlock. Keep the original uniform
@@ -680,8 +706,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
 
         // Defer write to K block with same coordinate as core
         // The writer receiver cores always have core.x > 0
-        uint32_t defer_write_k_block = core.y * k_blocks_per_core;
-        defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
+        uint32_t defer_write_k_block = std::min(static_cast<uint32_t>(core.y) * k_blocks_per_core, K_blocks - 1);
 
         bool is_in0_sink = core == in0_core_order.back();
         bool is_in1_sink = core == in1_core_order.back();
@@ -700,6 +725,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            max_defer_write_k_block,
         };
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
@@ -714,6 +740,22 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
+        }
+        if (fuse_srs) {
+            in0_args.push_back(static_cast<uint32_t>(num_cores));
+            in0_args.push_back(static_cast<uint32_t>(core_id));
+            in0_args.push_back(static_cast<uint32_t>(srs_fuse_signaler_sync_semaphore_id));
+            for (const auto& noc_core : all_worker_cores_noc) {
+                in0_args.push_back(static_cast<uint32_t>(noc_core.x));
+                in0_args.push_back(static_cast<uint32_t>(noc_core.y));
+            }
+            in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_fused_op_cores_to_signal));
+            for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
+                in0_args.push_back(static_cast<uint32_t>(noc_core.x));
+                in0_args.push_back(static_cast<uint32_t>(noc_core.y));
+            }
+            in0_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
+            in0_args.push_back(1);  // mcast_signal_op_cores
         }
         if (in1_idx == 0) {
             // in0 sender
@@ -736,6 +778,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            max_defer_write_k_block,
         };
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
@@ -750,6 +793,22 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         }
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
+        }
+        if (fuse_srs) {
+            in1_args.push_back(static_cast<uint32_t>(num_cores));
+            in1_args.push_back(static_cast<uint32_t>(core_id));
+            in1_args.push_back(static_cast<uint32_t>(srs_fuse_signaler_sync_semaphore_id));
+            for (const auto& noc_core : all_worker_cores_noc) {
+                in1_args.push_back(static_cast<uint32_t>(noc_core.x));
+                in1_args.push_back(static_cast<uint32_t>(noc_core.y));
+            }
+            in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->num_fused_op_cores_to_signal));
+            for (const auto& noc_core : srs_fused_op_signaler->fused_op_receiver_cores_noc) {
+                in1_args.push_back(static_cast<uint32_t>(noc_core.x));
+                in1_args.push_back(static_cast<uint32_t>(noc_core.y));
+            }
+            in1_args.push_back(static_cast<uint32_t>(srs_fused_op_signaler->fused_op_receiver_signal_semaphore));
+            in1_args.push_back(1);  // mcast_signal_op_cores
         }
         if (in0_idx == 0) {
             // in1 sender
@@ -785,12 +844,42 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         fuse_op && fused_op_signaler->read_local_slice_from_input};
 }
 
+MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor,
+    const Tensor& weight_tensor,
+    const std::optional<const Tensor>& bias_tensor,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation,
+    const std::optional<const MinimalMatmulConfig>& config,
+    const Tensor& output_tensor,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler) {
+    std::vector<Tensor> output_tensors = {output_tensor};
+    return minimal_matmul_factory_helper_common(
+        program,
+        input_tensor,
+        weight_tensor,
+        bias_tensor,
+        fused_activation,
+        config,
+        output_tensors,
+        compute_kernel_config,
+        fused_op_signaler,
+        1,  // N_chunks = 1 for regular minimal_matmul
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        srs_fused_op_signaler);
+}
+
 MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(
     const MinimalMatmulParams& operation_attributes,
     const MinimalMatmulInputs& tensor_args,
     std::vector<Tensor>& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler> empty_fused_op_signaler;
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> empty_srs_fused_op_signaler;
 
     auto shared_vars = minimal_matmul_factory_helper_common(
         program,
@@ -805,7 +894,8 @@ MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::creat
         static_cast<uint32_t>(operation_attributes.chunks),
         operation_attributes.fused_ternary_scalar,
         tensor_args.fused_ternary_input_a,
-        tensor_args.fused_ternary_input_b);
+        tensor_args.fused_ternary_input_b,
+        empty_srs_fused_op_signaler);
 
     return {std::move(program), std::move(shared_vars)};
 }
@@ -825,28 +915,27 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
     auto& in1_receiver_runtime_args = GetRuntimeArgs(program, override_variables.in1_receiver_kernels_id);
     auto& compute_runtime_args = GetRuntimeArgs(program, override_variables.compute_kernels_id);
 
-    // RT args layout for in0: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
-    // [optional: ternary_a_addr, ternary_b_addr, broadcast_ternary_b], out_addrs(N)...]
-    // RT args layout for in1: [in1_addr, in2_addr, is_sink, noc_coords(4), tile_ranges(4), defer_k,
-    // [optional: ternary_a_addr, ternary_b_addr, broadcast_ternary_b], out_addrs(N)...]
+    // RT args layout for in0: [in0_addr, in2_addr, in3_addr, is_sink, noc_coords(4), tile_ranges(4),
+    //   defer_write_k_block, max_defer_write_k_block, [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
+    // RT args layout for in1: [in1_addr, in2_addr, is_sink, noc_coords(4), tile_ranges(4),
+    //   defer_write_k_block, max_defer_write_k_block, [optional: ternary_a_addr, ternary_b_addr], out_addrs(N)...]
     constexpr uint32_t in0_in0_addr_idx = 0;
     constexpr uint32_t in0_in2_addr_idx = 1;
     constexpr uint32_t in0_in3_addr_idx = 2;
-    constexpr uint32_t in0_ternary_a_addr_idx = 13;  // After defer_write_k_block (index 12) for in0
-    constexpr uint32_t in0_ternary_b_addr_idx = 14;
+    constexpr uint32_t in0_ternary_a_addr_idx = 14;  // After max_defer_write_k_block (index 13) for in0
+    constexpr uint32_t in0_ternary_b_addr_idx = 15;
 
     constexpr uint32_t in1_in0_addr_idx = 0;
     constexpr uint32_t in1_bias_addr_idx = 1;
-    constexpr uint32_t in1_ternary_a_addr_idx = 12;  // After defer_write_k_block (index 11)
-    constexpr uint32_t in1_ternary_b_addr_idx = 13;
+    constexpr uint32_t in1_ternary_a_addr_idx = 13;  // After max_defer_write_k_block (index 12) for in1
+    constexpr uint32_t in1_ternary_b_addr_idx = 14;
 
     // Check if ternary addresses are present
     bool has_fused_ternary =
         tensor_args.fused_ternary_input_a.has_value() && tensor_args.fused_ternary_input_b.has_value();
-    // Output addresses start after ternary addresses + broadcast flag (if present)
-    uint32_t in0_out_addr_start_idx =
-        has_fused_ternary ? 16 : 13;  // After defer_write_k_block and optional ternary addresses + broadcast flag
-    uint32_t in1_out_addr_start_idx = has_fused_ternary ? 15 : 12;
+    // Output addresses start after max_defer_write_k_block and optional ternary addresses
+    uint32_t in0_out_addr_start_idx = has_fused_ternary ? 16 : 14;
+    uint32_t in1_out_addr_start_idx = has_fused_ternary ? 15 : 13;
 
     for (uint32_t i = 0; i < override_variables.num_cores; ++i) {
         CoreCoord core = override_variables.cores.at(i);
