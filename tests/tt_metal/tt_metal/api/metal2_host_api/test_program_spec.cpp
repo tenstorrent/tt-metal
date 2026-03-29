@@ -765,6 +765,8 @@ TEST_F(ProgramSpecTestQuasar, DMOnlyProgramSucceeds) {
 
 TEST_F(ProgramSpecTestQuasar, MultiNodeProgramSucceeds) {
     // A program spanning multiple nodes
+
+    /*
     NodeRange nodes{{0, 0}, {1, 1}};  // 2x2 grid
 
     ProgramSpec spec;
@@ -780,6 +782,37 @@ TEST_F(ProgramSpecTestQuasar, MultiNodeProgramSucceeds) {
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
     spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", nodes, {"producer", "consumer"}, {"dfb"})};
+    */
+
+    // DFB currently only supports single-core.
+    // For now, we test multi-node programs using single-node DFBs with multi-node kernels.
+    // TODO: Fix this when DFB multi-core support is added.
+
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+    NodeRangeSet all_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
+
+    ProgramSpec spec;
+    spec.program_id = "multi_node_program";
+
+    // Kernels span multiple nodes
+    auto producer = MakeMinimalDMKernel("producer", all_nodes);
+    auto consumer = MakeMinimalDMKernel("consumer", all_nodes);
+
+    // DFB is per-node (current limitation)
+    auto dfb0 = MakeMinimalDFB("dfb0", node0);
+    auto dfb1 = MakeMinimalDFB("dfb1", node1);
+
+    BindDFBToKernel(producer, "dfb0", "out0", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer, "dfb1", "out1", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb0", "in0", KernelSpec::DFBEndpointType::CONSUMER);
+    BindDFBToKernel(consumer, "dfb1", "in1", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb0, dfb1};
+    spec.workers = std::vector<WorkerSpec>{
+        MakeMinimalWorker("worker0", node0, {"producer", "consumer"}, {"dfb0"}),
+        MakeMinimalWorker("worker1", node1, {"producer", "consumer"}, {"dfb1"})};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
