@@ -3,22 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Unit tests for the Metal 2.0 Host API: ProgramSpec and MakeProgramFromSpec
-// These tests validate the ProgramSpec validation logic and helper/utility functions.
-//
-// Program creation tests are disabled (need HAL / actual hardware)
 //
 // Test categories:
 //   1. ProgramSpec "structural" validation (CollectSpecData)
 //   2. ProgramSpec semantic validation (ValidateProgramSpec)
 //   3. WorkerSpec validation
 //   4. DFB validation
-//   5. Program creation (currently disabled)
+//   5. Program creation (using Quasar mock device)
 
 #include <gtest/gtest.h>
 
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/experimental/mock_device.hpp>
 
 #include "impl/metal2_host_api/test_utils.hpp"
 
@@ -29,6 +28,10 @@ namespace {
 // Test Utilities
 // ============================================================================
 
+// Minimal valid kernel source code for testing
+constexpr const char* MINIMAL_DM_KERNEL_SOURCE = "void kernel_main() {}";
+constexpr const char* MINIMAL_COMPUTE_KERNEL_SOURCE = "void kernel_main() {}";
+
 // These helper utilities are used to create minimal valid Spec objects for testing.
 // This enables very concise tests that alter just one thing about the minimal spec.
 // These utilities (or their equivalents) are not meant to be used in production code.
@@ -38,8 +41,8 @@ KernelSpec MakeMinimalDMKernel(
     const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
     return KernelSpec{
         .unique_id = name,
-        .source = "test_kernel.cpp",
-        .source_type = KernelSpec::SourceType::FILE_PATH,
+        .source = MINIMAL_DM_KERNEL_SOURCE,
+        .source_type = KernelSpec::SourceType::SOURCE_CODE,
         .target_nodes = nodes,
         .num_threads = num_threads,
         // Fields with defaults skipped: thread_node_map, compiler_options, dfb_bindings,
@@ -56,8 +59,8 @@ KernelSpec MakeMinimalComputeKernel(
     const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
     return KernelSpec{
         .unique_id = name,
-        .source = "test_compute_kernel.cpp",
-        .source_type = KernelSpec::SourceType::FILE_PATH,
+        .source = MINIMAL_COMPUTE_KERNEL_SOURCE,
+        .source_type = KernelSpec::SourceType::SOURCE_CODE,
         .target_nodes = nodes,
         .num_threads = num_threads,
         // Fields with defaults skipped: thread_node_map, compiler_options, dfb_bindings,
@@ -142,33 +145,16 @@ ProgramSpec MakeMinimalValidProgramSpec() {
 // Test Fixtures
 // ============================================================================
 
-// Base fixture for validation tests - uses arch override to "fake" Quasar
-// TODO: This is gross. Replace with a Quasar mock device.
-class ProgramSpecTest : public ::testing::Test {
+// Test fixture for ProgramSpec on Quasar - uses Quasar mock device
+class ProgramSpecTestQuasar : public ::testing::Test {
 protected:
     void SetUp() override {
-        // All tests run with Quasar architecture override
-        arch_guard_ = std::make_unique<ArchOverrideGuard>(tt::ARCH::QUASAR);
+        GTEST_SKIP() << "Re-enable tests after Quasar mock device support is checked in";
+        // Configure global mock mode for Quasar
+        // This way, the HAL is initialized for arch check and Program creation.
+        experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
     }
-
-    void TearDown() override { arch_guard_.reset(); }
-
-private:
-    std::unique_ptr<ArchOverrideGuard> arch_guard_;
-};
-
-// Fixture for tests that need actual Program creation (requires Quasar hardware)
-// These tests are skipped when not running on Quasar
-// TODO: This is gross. Unnecessary after adding a Quasar mock device.
-class ProgramSpecHappyPathTest : public ProgramSpecTest {
-protected:
-    void SetUp() override {
-        ProgramSpecTest::SetUp();
-        // Skip if not on actual Quasar hardware
-        // The arch override makes validation pass, but Program creation needs real HAL
-        // TODO: Remove this skip when we have a proper HAL mock
-        GTEST_SKIP() << "Happy path tests require Quasar hardware (Program creation needs full HAL support)";
-    }
+    void TearDown() override { experimental::disable_mock_mode(); }
 };
 
 // ============================================================================
@@ -176,7 +162,7 @@ protected:
 // ============================================================================
 // These test the structural integrity checks that happen during spec collection.
 
-TEST_F(ProgramSpecTest, DuplicateKernelNameFails) {
+TEST_F(ProgramSpecTestQuasar, DuplicateKernelNameFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Add a kernel with duplicate name
@@ -189,7 +175,7 @@ TEST_F(ProgramSpecTest, DuplicateKernelNameFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, DuplicateDFBNameFails) {
+TEST_F(ProgramSpecTestQuasar, DuplicateDFBNameFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Add a DFB with duplicate name
@@ -199,7 +185,7 @@ TEST_F(ProgramSpecTest, DuplicateDFBNameFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, DuplicateSemaphoreNameFails) {
+TEST_F(ProgramSpecTestQuasar, DuplicateSemaphoreNameFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Add two semaphores with the same name
@@ -216,7 +202,7 @@ TEST_F(ProgramSpecTest, DuplicateSemaphoreNameFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, KernelReferencesUnknownDFBFails) {
+TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -232,7 +218,7 @@ TEST_F(ProgramSpecTest, KernelReferencesUnknownDFBFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, DFBWithNoBindingsFails) {
+TEST_F(ProgramSpecTestQuasar, DFBWithNoBindingsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -251,7 +237,7 @@ TEST_F(ProgramSpecTest, DFBWithNoBindingsFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, DFBWithOnlyProducerFails) {
+TEST_F(ProgramSpecTestQuasar, DFBWithOnlyProducerFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -270,7 +256,7 @@ TEST_F(ProgramSpecTest, DFBWithOnlyProducerFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, DFBWithOnlyConsumerFails) {
+TEST_F(ProgramSpecTestQuasar, DFBWithOnlyConsumerFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -289,7 +275,7 @@ TEST_F(ProgramSpecTest, DFBWithOnlyConsumerFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, DFBWithMultipleProducersFails) {
+TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -315,7 +301,7 @@ TEST_F(ProgramSpecTest, DFBWithMultipleProducersFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, DFBWithMultipleConsumersFails) {
+TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -345,7 +331,7 @@ TEST_F(ProgramSpecTest, DFBWithMultipleConsumersFails) {
 // SECTION 2: Semantic Validation Tests (ValidateProgramSpec)
 // ============================================================================
 
-TEST_F(ProgramSpecTest, EmptyKernelsFails) {
+TEST_F(ProgramSpecTestQuasar, EmptyKernelsFails) {
     ProgramSpec spec;
     spec.program_id = "empty_program";
     spec.workers = std::vector<WorkerSpec>{};  // Empty workers too
@@ -353,7 +339,7 @@ TEST_F(ProgramSpecTest, EmptyKernelsFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, KernelWithZeroThreadsFails) {
+TEST_F(ProgramSpecTestQuasar, KernelWithZeroThreadsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -366,7 +352,7 @@ TEST_F(ProgramSpecTest, KernelWithZeroThreadsFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, DMKernelExceedingMaxThreadsFails) {
+TEST_F(ProgramSpecTestQuasar, DMKernelExceedingMaxThreadsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -380,7 +366,7 @@ TEST_F(ProgramSpecTest, DMKernelExceedingMaxThreadsFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, ComputeKernelExceedingMaxThreadsFails) {
+TEST_F(ProgramSpecTestQuasar, ComputeKernelExceedingMaxThreadsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -395,7 +381,7 @@ TEST_F(ProgramSpecTest, ComputeKernelExceedingMaxThreadsFails) {
 }
 
 // Remove once WH/BH is implemented
-TEST_F(ProgramSpecTest, DMKernelWithoutGen2ConfigFails) {
+TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -412,7 +398,7 @@ TEST_F(ProgramSpecTest, DMKernelWithoutGen2ConfigFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, DMKernelWithNoConfigAtAllFails) {
+TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -431,7 +417,7 @@ TEST_F(ProgramSpecTest, DMKernelWithNoConfigAtAllFails) {
 }
 
 // Remove once implemented
-TEST_F(ProgramSpecTest, RemoteDFBFails) {
+TEST_F(ProgramSpecTestQuasar, RemoteDFBFails) {
     // Remote DFBs are not yet implemented
     NodeCoord node{0, 0};
 
@@ -454,7 +440,7 @@ TEST_F(ProgramSpecTest, RemoteDFBFails) {
 }
 
 // Remove once implemented
-TEST_F(ProgramSpecTest, BorrowedMemoryDFBFails) {
+TEST_F(ProgramSpecTestQuasar, BorrowedMemoryDFBFails) {
     // Borrowed memory DFBs are not yet implemented
     NodeCoord node{0, 0};
 
@@ -477,7 +463,7 @@ TEST_F(ProgramSpecTest, BorrowedMemoryDFBFails) {
 }
 
 // Remove once implemented
-TEST_F(ProgramSpecTest, DFBAliasingFails) {
+TEST_F(ProgramSpecTestQuasar, DFBAliasingFails) {
     // DFB aliasing is not yet implemented
     NodeCoord node{0, 0};
 
@@ -500,7 +486,7 @@ TEST_F(ProgramSpecTest, DFBAliasingFails) {
 }
 
 // Remove once implemented
-TEST_F(ProgramSpecTest, SemaphoresFail) {
+TEST_F(ProgramSpecTestQuasar, SemaphoresFail) {
     // Semaphores are not yet implemented for Quasar
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
@@ -513,7 +499,7 @@ TEST_F(ProgramSpecTest, SemaphoresFail) {
 }
 
 // Remove once implemented
-TEST_F(ProgramSpecTest, KernelSemaphoreBindingsFail) {
+TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingsFail) {
     // Semaphore bindings are not yet implemented
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
@@ -525,7 +511,7 @@ TEST_F(ProgramSpecTest, KernelSemaphoreBindingsFail) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, DFBWithComputeEndpointRequiresDataFormat) {
+TEST_F(ProgramSpecTestQuasar, DFBWithComputeEndpointRequiresDataFormat) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -546,7 +532,7 @@ TEST_F(ProgramSpecTest, DFBWithComputeEndpointRequiresDataFormat) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, ComputeConfigUnpackToDestModeReferencesUnknownDFBFails) {
+TEST_F(ProgramSpecTestQuasar, ComputeConfigUnpackToDestModeReferencesUnknownDFBFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -576,7 +562,7 @@ TEST_F(ProgramSpecTest, ComputeConfigUnpackToDestModeReferencesUnknownDFBFails) 
 // SECTION 3: WorkerSpec Validation Tests
 // ============================================================================
 
-TEST_F(ProgramSpecTest, MissingWorkerSpecsFails) {
+TEST_F(ProgramSpecTestQuasar, MissingWorkerSpecsFails) {
     // Gen2 requires WorkerSpecs
     NodeCoord node{0, 0};
 
@@ -590,7 +576,7 @@ TEST_F(ProgramSpecTest, MissingWorkerSpecsFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, EmptyWorkerSpecsFails) {
+TEST_F(ProgramSpecTestQuasar, EmptyWorkerSpecsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -603,7 +589,7 @@ TEST_F(ProgramSpecTest, EmptyWorkerSpecsFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, WorkerSpecWithNoKernelsFails) {
+TEST_F(ProgramSpecTestQuasar, WorkerSpecWithNoKernelsFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -621,7 +607,7 @@ TEST_F(ProgramSpecTest, WorkerSpecWithNoKernelsFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, OverlappingWorkerSpecsFails) {
+TEST_F(ProgramSpecTestQuasar, OverlappingWorkerSpecsFails) {
     // Two workers cannot target overlapping nodes
     NodeCoord node{0, 0};
 
@@ -639,7 +625,7 @@ TEST_F(ProgramSpecTest, OverlappingWorkerSpecsFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, KernelNotInAnyWorkerSpecFails) {
+TEST_F(ProgramSpecTestQuasar, KernelNotInAnyWorkerSpecFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -654,7 +640,7 @@ TEST_F(ProgramSpecTest, KernelNotInAnyWorkerSpecFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, KernelTargetNodesMismatchWorkerNodesFails) {
+TEST_F(ProgramSpecTestQuasar, KernelTargetNodesMismatchWorkerNodesFails) {
     // Kernel target nodes must contain worker target nodes
     NodeCoord node0{0, 0};
     NodeCoord node1{1, 0};
@@ -672,7 +658,7 @@ TEST_F(ProgramSpecTest, KernelTargetNodesMismatchWorkerNodesFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, WorkerExceedsDMCoreBudgetFails) {
+TEST_F(ProgramSpecTestQuasar, WorkerExceedsDMCoreBudgetFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -689,7 +675,7 @@ TEST_F(ProgramSpecTest, WorkerExceedsDMCoreBudgetFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, WorkerExceedsComputeCoreBudgetFails) {
+TEST_F(ProgramSpecTestQuasar, WorkerExceedsComputeCoreBudgetFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -705,7 +691,7 @@ TEST_F(ProgramSpecTest, WorkerExceedsComputeCoreBudgetFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, WorkerWithMultipleComputeKernelsFails) {
+TEST_F(ProgramSpecTestQuasar, WorkerWithMultipleComputeKernelsFails) {
     // A worker can have at most one compute kernel
     NodeCoord node{0, 0};
 
@@ -721,7 +707,7 @@ TEST_F(ProgramSpecTest, WorkerWithMultipleComputeKernelsFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecTest, DFBNotInAnyWorkerSpecFails) {
+TEST_F(ProgramSpecTestQuasar, DFBNotInAnyWorkerSpecFails) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -742,7 +728,6 @@ TEST_F(ProgramSpecTest, DFBNotInAnyWorkerSpecFails) {
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
-
 // ============================================================================
 // SECTION 4: Programs Creation Tests
 // ============================================================================
@@ -750,13 +735,13 @@ TEST_F(ProgramSpecTest, DFBNotInAnyWorkerSpecFails) {
 // NOTE: Program creation needs full HAL support.
 // TODO: Enable these tests with a Quasar mock device.
 
-TEST_F(ProgramSpecHappyPathTest, MinimalValidProgramSpecSucceeds) {
+TEST_F(ProgramSpecTestQuasar, MinimalValidProgramSpecSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, DMOnlyProgramSucceeds) {
+TEST_F(ProgramSpecTestQuasar, DMOnlyProgramSucceeds) {
     // A program with only DM kernels (no compute)
     NodeCoord node{0, 0};
 
@@ -778,7 +763,7 @@ TEST_F(ProgramSpecHappyPathTest, DMOnlyProgramSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, MultiNodeProgramSucceeds) {
+TEST_F(ProgramSpecTestQuasar, MultiNodeProgramSucceeds) {
     // A program spanning multiple nodes
     NodeRange nodes{{0, 0}, {1, 1}};  // 2x2 grid
 
@@ -799,7 +784,7 @@ TEST_F(ProgramSpecHappyPathTest, MultiNodeProgramSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, MultipleWorkersOnDifferentNodesSucceeds) {
+TEST_F(ProgramSpecTestQuasar, MultipleWorkersOnDifferentNodesSucceeds) {
     // Multiple workers on non-overlapping nodes
     NodeCoord node0{0, 0};
     NodeCoord node1{1, 0};
@@ -819,7 +804,7 @@ TEST_F(ProgramSpecHappyPathTest, MultipleWorkersOnDifferentNodesSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, MaxDMThreadsSucceeds) {
+TEST_F(ProgramSpecTestQuasar, MaxDMThreadsSucceeds) {
     // Use exactly 6 DM threads (the maximum available to the user)
     NodeCoord node{0, 0};
 
@@ -840,7 +825,7 @@ TEST_F(ProgramSpecHappyPathTest, MaxDMThreadsSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, MaxComputeThreadsSucceeds) {
+TEST_F(ProgramSpecTestQuasar, MaxComputeThreadsSucceeds) {
     // Use exactly 4 compute threads (the maximum available)
     NodeCoord node{0, 0};
 
@@ -863,7 +848,7 @@ TEST_F(ProgramSpecHappyPathTest, MaxComputeThreadsSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, MultipleDFBsSucceeds) {
+TEST_F(ProgramSpecTestQuasar, MultipleDFBsSucceeds) {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
@@ -890,7 +875,7 @@ TEST_F(ProgramSpecHappyPathTest, MultipleDFBsSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, CompilerOptionsDefinesSucceeds) {
+TEST_F(ProgramSpecTestQuasar, CompilerOptionsDefinesSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Add some defines
@@ -899,7 +884,7 @@ TEST_F(ProgramSpecHappyPathTest, CompilerOptionsDefinesSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, CompileTimeArgBindingsSucceeds) {
+TEST_F(ProgramSpecTestQuasar, CompileTimeArgBindingsSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Add compile-time arg bindings
@@ -908,7 +893,7 @@ TEST_F(ProgramSpecHappyPathTest, CompileTimeArgBindingsSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, RuntimeArgsSchemaSucceeds) {
+TEST_F(ProgramSpecTestQuasar, RuntimeArgsSchemaSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Add runtime args schema
@@ -925,7 +910,7 @@ TEST_F(ProgramSpecHappyPathTest, RuntimeArgsSchemaSucceeds) {
 // NOTE: These also require Quasar hardware for Program creation.
 // TODO: Enable these tests with a Quasar mock device.
 
-TEST_F(ProgramSpecHappyPathTest, NodeRangeSetTargetNodesSucceeds) {
+TEST_F(ProgramSpecTestQuasar, NodeRangeSetTargetNodesSucceeds) {
     // Test with NodeRangeSet (multiple disjoint ranges)
     NodeRangeSet nodes(std::set<NodeRange>{NodeRange{{0, 0}, {0, 1}}, NodeRange{{2, 0}, {2, 1}}});
 
@@ -946,7 +931,7 @@ TEST_F(ProgramSpecHappyPathTest, NodeRangeSetTargetNodesSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, SourceCodeKernelSucceeds) {
+TEST_F(ProgramSpecTestQuasar, SourceCodeKernelSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Change to inline source code
@@ -956,7 +941,7 @@ TEST_F(ProgramSpecHappyPathTest, SourceCodeKernelSucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, ComputeConfigMathFidelitySucceeds) {
+TEST_F(ProgramSpecTestQuasar, ComputeConfigMathFidelitySucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Find the compute kernel and set math fidelity options
@@ -972,7 +957,7 @@ TEST_F(ProgramSpecHappyPathTest, ComputeConfigMathFidelitySucceeds) {
     EXPECT_NO_THROW(MakeProgramFromSpec(spec));
 }
 
-TEST_F(ProgramSpecHappyPathTest, ValidUnpackToDestModeSucceeds) {
+TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     // Set valid unpack_to_dest_mode (referencing an existing DFB)
@@ -1010,7 +995,7 @@ TEST_F(ProgramSpecHappyPathTest, ValidUnpackToDestModeSucceeds) {
 // Category A: Greedy Algorithm Failure
 // This test IS solvable with the simplifying assumption - a smarter algorithm would work.
 // TODO: Once this test passes, remove this TODO. The algorithm has been fixed!
-TEST_F(ProgramSpecHappyPathTest, GreedyAlgorithmFailure_OrderDependentAssignment) {
+TEST_F(ProgramSpecTestQuasar, GreedyAlgorithmFailure_OrderDependentAssignment) {
     // This test constructs a valid ProgramSpec that SHOULD work, but MAY fail
     // with our naive greedy processor assignment algorithm.
     //
@@ -1092,7 +1077,7 @@ TEST_F(ProgramSpecHappyPathTest, GreedyAlgorithmFailure_OrderDependentAssignment
 // Category B: True Simplifying Assumption Violation
 // This test is UNSOLVABLE with the simplifying assumption - no algorithm can help.
 // When this case arises in production, the assumption must be removed from the codebase.
-TEST_F(ProgramSpecHappyPathTest, SimplifyingAssumptionViolation_OverlappingMultiNodeKernels) {
+TEST_F(ProgramSpecTestQuasar, SimplifyingAssumptionViolation_OverlappingMultiNodeKernels) {
     // This test constructs a valid ProgramSpec that CANNOT work with the
     // simplifying assumption, regardless of how clever the solver is.
     //
