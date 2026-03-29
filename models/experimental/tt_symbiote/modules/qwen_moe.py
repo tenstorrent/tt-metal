@@ -821,11 +821,9 @@ class TTNNQwen3MoE(TTNNMoE):
         residual = x
 
         # 1. All-gather to revert tensor parallelism
-        x = ttnn.experimental.all_gather_async(
+        x = ttnn.all_gather(
             x,
             dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
             num_links=1,
             topology=ttnn.Topology.Linear,
         )
@@ -915,18 +913,13 @@ class TTNNQwen3MoE(TTNNMoE):
         routed_out = routed_output
         if n_rs > 1:
             routed_out = ttnn.mul(routed_out, 1.0 / float(n_rs))
-        routed_output = ttnn.experimental.reduce_scatter_minimal_async(
+        routed_output = ttnn.reduce_scatter(
             routed_out,
-            persistent_output_buffers=None,
             dim=3,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
             num_links=1,
             cluster_axis=1,
             topology=ttnn.Topology.Ring,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # 5. Add shared experts output with gating

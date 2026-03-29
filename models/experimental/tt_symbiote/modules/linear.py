@@ -155,20 +155,13 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
         tt_output = ttnn.linear(input_tensor, self.tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_output = ttnn.experimental.reduce_scatter_minimal_async(
+        tt_output = ttnn.reduce_scatter(
             tt_output,
-            persistent_output_buffers=None,
             dim=3,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
             num_links=1,
             cluster_axis=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Ring,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
         )
         if self.tt_bias is not None:
             tt_output += self.tt_bias

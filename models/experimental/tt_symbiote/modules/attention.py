@@ -1602,11 +1602,9 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         if not self._is_distributed:
             return tensor
         t = tensor
-        return ttnn.experimental.all_gather_async(
+        return ttnn.all_gather(
             t,
             dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
             num_links=1,
             topology=ttnn.Topology.Linear,
         )
@@ -2154,11 +2152,9 @@ class TTNNQwen3NextGatedAttention(TTNNModule):
             and hidden_states.shape[-1] != self.hidden_size
         )
         if need_reduce_scatter:
-            hidden_states = ttnn.experimental.all_gather_async(
+            hidden_states = ttnn.all_gather(
                 hidden_states,
                 dim=-1,
-                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
                 num_links=1,
                 topology=ttnn.Topology.Linear,
             )
@@ -2181,12 +2177,13 @@ class TTNNQwen3NextGatedAttention(TTNNModule):
         if need_reduce_scatter:
             # Reduce-scatter output to match sharded residual for residual add
             out = ttnn.reshape(out, (out.shape[0], 1, out.shape[1], out.shape[2]))
-            out = ttnn.experimental.reduce_scatter_minimal_async(
+            out = ttnn.reduce_scatter(
                 out,
-                persistent_output_buffers=None,
                 dim=3,
-                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
-                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                cluster_axis=1,
+                topology=ttnn.Topology.Ring,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             out = ttnn.div(out, float(self.device.get_num_devices()))
             out = ttnn.squeeze(out, 1)

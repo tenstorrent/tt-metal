@@ -395,11 +395,9 @@ class TTNNQwen3FullAttention(TTNNModule):
         if not self._is_distributed:
             return tensor
         t = tensor
-        gathered = ttnn.experimental.all_gather_async(
+        gathered = ttnn.all_gather(
             t,
             dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
             num_links=1,
             topology=ttnn.Topology.Linear,
         )
@@ -1132,11 +1130,9 @@ class TTNNQwen3LinearAttention(TTNNModule):
         if not self._is_distributed:
             return tensor
         t = tensor
-        gathered = ttnn.experimental.all_gather_async(
+        gathered = ttnn.all_gather(
             t,
             dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
             num_links=1,
             topology=ttnn.Topology.Linear,
         )

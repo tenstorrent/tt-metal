@@ -131,11 +131,9 @@ class TTNNDistributedRMSNorm(TTNNModule):
         # Run distributed rmsnorm part 1
         tt_stats = ttnn.rms_norm_pre_all_gather(inp, dtype=ttnn.bfloat16)
         # AllGather stats
-        tt_stats = ttnn.experimental.all_gather_async(
+        tt_stats = ttnn.all_gather(
             tt_stats,
             dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
             num_links=1,
             topology=ttnn.Topology.Linear,
         )
