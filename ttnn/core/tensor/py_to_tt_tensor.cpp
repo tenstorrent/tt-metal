@@ -43,6 +43,9 @@ bool can_construct_on_device(
     const std::optional<Tile>& optional_tile,
     bool enable_device_typecast,
     bool preserve_nan_values) {
+    if (device != nullptr && device->is_remote_only()) {
+        return false;
+    }
     bool res = device != nullptr &&
                // When on-device strategy is used, tensor spec needs a default alignment based on the target layout.
                // Otherwise, the tensor loses the data in the `to_layout` conversion and type conversion. But, if the
@@ -83,6 +86,9 @@ bool has_sufficient_device_memory(
     const MemoryConfig& memory_config,
     const std::optional<Tile>& optional_tile) {
     if (device == nullptr) {
+        return false;
+    }
+    if (device->is_remote_only()) {
         return false;
     }
 
@@ -146,8 +152,8 @@ Tensor create_tt_tensor_from_host_data(
         if (mesh_mapper != nullptr) {
             TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), memory_config);
 
-            const bool construct_on_device =
-                device != nullptr && enable_device_typecast && !preserve_nan_values && tensor_shape.volume() > 0;
+            const bool construct_on_device = device != nullptr && !device->is_remote_only() && enable_device_typecast &&
+                                             !preserve_nan_values && tensor_shape.volume() > 0;
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
