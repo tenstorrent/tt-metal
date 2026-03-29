@@ -20,9 +20,20 @@
 #include <tt-metalium/experimental/mock_device.hpp>
 
 #include "impl/metal2_host_api/test_utils.hpp"
+#include "test_helpers.hpp"
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 namespace {
+
+// Import shared test helpers
+using test_helpers::BindDFBToKernel;
+using test_helpers::MakeMinimalComputeKernel;
+using test_helpers::MakeMinimalDFB;
+using test_helpers::MakeMinimalDMKernel;
+using test_helpers::MakeMinimalValidProgramSpec;
+using test_helpers::MakeMinimalWorker;
+using test_helpers::MINIMAL_COMPUTE_KERNEL_SOURCE;
+using test_helpers::MINIMAL_DM_KERNEL_SOURCE;
 
 // ============================================================================
 // Test Fixtures
@@ -32,130 +43,13 @@ namespace {
 class ProgramSpecTestQuasar : public ::testing::Test {
 protected:
     void SetUp() override {
-        GTEST_SKIP() << "Re-enable tests after Quasar mock device support is checked in";
-        // Configure global mock mode for Quasar
-        // This way, the HAL is initialized for arch check and Program creation.
+        // GTEST_SKIP() << "Re-enable tests after Quasar mock device support is checked in";
+        //  Configure global mock mode for Quasar
+        //  This way, the HAL is initialized for arch check and Program creation.
         experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
     }
     void TearDown() override { experimental::disable_mock_mode(); }
 };
-
-// ============================================================================
-// Test Utilities
-// ============================================================================
-
-// Minimal valid kernel source code for testing
-constexpr const char* MINIMAL_DM_KERNEL_SOURCE = "void kernel_main() {}";
-constexpr const char* MINIMAL_COMPUTE_KERNEL_SOURCE = "void kernel_main() {}";
-
-// These helper utilities are used to create minimal valid Spec objects for testing.
-// This enables very concise tests that alter just one thing about the minimal spec.
-// These utilities (or their equivalents) are not meant to be used in production code.
-
-// Helper to create a minimal valid KernelSpec for data movement
-KernelSpec MakeMinimalDMKernel(
-    const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
-    return KernelSpec{
-        .unique_id = name,
-        .source = MINIMAL_DM_KERNEL_SOURCE,
-        .source_type = KernelSpec::SourceType::SOURCE_CODE,
-        .target_nodes = nodes,
-        .num_threads = num_threads,
-        // Fields with defaults skipped: thread_node_map, compiler_options, dfb_bindings,
-        // semaphore_bindings, compile_time_arg_bindings, runtime_arguments_schema
-        .config_spec =
-            DataMovementConfiguration{
-                .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
-            },
-    };
-}
-
-// Helper to create a minimal valid KernelSpec for compute
-KernelSpec MakeMinimalComputeKernel(
-    const std::string& name, const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes, uint8_t num_threads = 1) {
-    return KernelSpec{
-        .unique_id = name,
-        .source = MINIMAL_COMPUTE_KERNEL_SOURCE,
-        .source_type = KernelSpec::SourceType::SOURCE_CODE,
-        .target_nodes = nodes,
-        .num_threads = num_threads,
-        // Fields with defaults skipped: thread_node_map, compiler_options, dfb_bindings,
-        // semaphore_bindings, compile_time_arg_bindings, runtime_arguments_schema
-        .config_spec = ComputeConfiguration{},
-    };
-}
-
-// Helper to create a minimal valid DataflowBufferSpec
-DataflowBufferSpec MakeMinimalDFB(
-    const std::string& name,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
-    uint32_t entry_size = 1024,
-    uint32_t num_entries = 2) {
-    return DataflowBufferSpec{
-        .unique_id = name,
-        .target_nodes = nodes,
-        .entry_size = entry_size,
-        .num_entries = num_entries,
-    };
-}
-
-// Helper to create a minimal valid WorkerSpec
-WorkerSpec MakeMinimalWorker(
-    const std::string& name,
-    const std::variant<NodeCoord, NodeRange, NodeRangeSet>& nodes,
-    const std::vector<KernelSpecName>& kernels,
-    const std::vector<DFBSpecName>& dfbs = {}) {
-    return WorkerSpec{
-        .unique_id = name,
-        .kernels = kernels,
-        .dataflow_buffers = dfbs,
-        .target_nodes = nodes,
-    };
-}
-
-// Helper to bind a DFB to a kernel as producer or consumer
-void BindDFBToKernel(
-    KernelSpec& kernel,
-    const std::string& dfb_name,
-    const std::string& accessor_name,
-    KernelSpec::DFBEndpointType endpoint_type,
-    DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED) {
-    kernel.dfb_bindings.push_back(KernelSpec::DFBBinding{
-        .dfb_spec_name = dfb_name,
-        .local_accessor_name = accessor_name,
-        .endpoint_type = endpoint_type,
-        .access_pattern = access_pattern,
-    });
-}
-
-// Helper to create a minimal valid ProgramSpec with one kernel and one DFB
-ProgramSpec MakeMinimalValidProgramSpec() {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.program_id = "test_program";
-
-    // Create a DM kernel (producer) and compute kernel (consumer)
-    auto dm_kernel = MakeMinimalDMKernel("dm_kernel", node);
-    auto compute_kernel = MakeMinimalComputeKernel("compute_kernel", node);
-
-    // Create a DFB with data format (required for compute endpoint)
-    auto dfb = MakeMinimalDFB("dfb_0", node);
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    // Bind the DFB
-    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::CONSUMER);
-
-    spec.kernels = {dm_kernel, compute_kernel};
-    spec.dataflow_buffers = {dfb};
-
-    // Create a WorkerSpec
-    spec.workers =
-        std::vector<WorkerSpec>{MakeMinimalWorker("worker_0", node, {"dm_kernel", "compute_kernel"}, {"dfb_0"})};
-
-    return spec;
-}
 
 // ============================================================================
 // SECTION 1: Structural Validation Tests (CollectSpecData)
