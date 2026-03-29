@@ -5,6 +5,7 @@
 #include <cstring>
 #include <unordered_set>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
@@ -24,6 +25,8 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
 // ============================================================================
 
 void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
+    log_info(tt::LogMetal, "Setting ProgramRunParams");
+
     // Validate parameters against the schema
     ValidateProgramRunParams(program, params);
 
