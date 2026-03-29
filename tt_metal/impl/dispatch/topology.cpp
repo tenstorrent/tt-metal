@@ -407,10 +407,18 @@ DispatchTopology::DispatchTopology(
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
     bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-        std::make_unique<DispatchMemMap>(CoreType::WORKER, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster);
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-        std::make_unique<DispatchMemMap>(CoreType::ETH, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster);
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
+        CoreType::WORKER,
+        descriptor_.num_cqs(),
+        descriptor_.hal(),
+        is_galaxy_cluster,
+        descriptor_.rtoptions().get_dram_backed_cq());
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
+        CoreType::ETH,
+        descriptor_.num_cqs(),
+        descriptor_.hal(),
+        is_galaxy_cluster,
+        descriptor_.rtoptions().get_dram_backed_cq());
 }
 
 DispatchTopology::~DispatchTopology() { reset(); }
@@ -777,8 +785,16 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
                     CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
                 // Initialize completion queue write pointer and read pointer copy
                 uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
-                uint32_t completion_queue_start_addr =
-                    cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+                uint32_t completion_queue_start_addr;
+                if (device->sysmem_manager().is_dram_backed()) {
+                    completion_queue_start_addr =
+                        cq_start + issue_queue_size +
+                        get_absolute_cq_offset(
+                            channel, cq_id, cq_size, device->sysmem_manager().get_dram_region_base_addr());
+                } else {
+                    completion_queue_start_addr =
+                        cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+                }
                 uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
                 std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
                 detail::WriteToDeviceL1(

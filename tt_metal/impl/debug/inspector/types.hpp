@@ -6,10 +6,15 @@
 
 #include <chrono>
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "impl/program/program_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal {
     class Inspector;
@@ -49,17 +54,19 @@ struct MeshDeviceData {
     bool initialized = false;
 };
 
-struct MeshWorkloadRuntimeIdEntry {
+struct MeshWorkloadRuntimeEntry {
     uint64_t workload_id = 0;
     uint64_t runtime_id = 0;
+    std::string_view operation_name;
+    std::vector<TensorSpec> tensor_specs;
 };
+
+std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs);
 
 struct MeshWorkloadData {
     const distributed::MeshWorkloadImpl* mesh_workload = nullptr;
     uint64_t mesh_workload_id{};
     std::unordered_map<int, ProgramBinaryStatus> binary_status_per_device;
-    std::string name;
-    std::string parameters;
 };
 
 struct CoreInfo {

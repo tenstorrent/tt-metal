@@ -143,8 +143,10 @@ constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UP
 constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X, DOWNSTREAM_NOC_Y));
 constexpr uint32_t dispatch_s_noc_xy =
     uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
+#if !defined(IS_CQ_DRAM_BACKED) || IS_CQ_DRAM_BACKED == 0
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
+#endif
 constexpr uint32_t downstream_cb_page_size = 1 << downstream_cb_log_page_size;
 constexpr uint32_t dispatch_s_cb_page_size = 1 << dispatch_s_cb_log_page_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + (1 << downstream_cb_log_page_size) * downstream_cb_pages;
@@ -376,6 +378,9 @@ FORCE_INLINE uint32_t read_from_pcie(
 #endif
         pcie_read_ptr = pcie_base;
     }
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+    uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
+#endif
 
     const uint64_t host_src_addr = pcie_noc_xy | pcie_read_ptr;
     const uint32_t dst_addr = fence + preamble_size;
@@ -1992,13 +1997,13 @@ bool process_cmd(
             break;
 
         default:
-            //  DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " " <<
-            //                           cmddat_q_base << ENDL();
-            //  DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
-            //  DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
-            //  DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
-            //  DPRINT << HEX() << *((uint32_t*)cmd_ptr+3) << ENDL();
-            //  DPRINT << HEX() << *((uint32_t*)cmd_ptr+4) << ENDL();
+            // DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " "
+            //        << cmddat_q_base << ENDL();
+            // DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
+            // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 1) << ENDL();
+            // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 2) << ENDL();
+            // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 3) << ENDL();
+            // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 4) << ENDL();
             WAYPOINT("!CMD");
             ASSERT(0);
     }

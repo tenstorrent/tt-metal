@@ -5,11 +5,16 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc_semaphore.h"
+#include "experimental/endpoints.h"
+#include "experimental/core_local_mem.h"
 
 // split REDUCE across cores
 void kernel_main() {
-    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
-    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));
+    constexpr uint32_t reduce_receiver_semaphore_id = get_compile_time_arg_val(0);
+    constexpr uint32_t reduce_sender_semaphore_id = get_compile_time_arg_val(1);
 
     constexpr uint32_t num_mcast_cores = get_compile_time_arg_val(2);
     constexpr uint32_t num_batch_group = get_compile_time_arg_val(3);
@@ -41,7 +46,6 @@ void kernel_main() {
     uint32_t mcast_last_group_dest_noc_start_y;
     uint32_t mcast_last_group_dest_noc_end_x;
     uint32_t mcast_last_group_dest_noc_end_y;
-    // volatile tt_l1_ptr uint32_t * noc_coord;
     tt_l1_ptr uint32_t* noc_coord_x;
     tt_l1_ptr uint32_t* noc_coord_y;
 
@@ -49,11 +53,7 @@ void kernel_main() {
     uint32_t num_mcast_cores_first_group;
     uint32_t num_mcast_cores_last_group;
 
-    // noc addrs for first and last groups
-    uint64_t reduce_sender_first_group_semaphore_noc_addr;
-    uint64_t multicast_first_group_data_noc;
-    uint64_t reduce_sender_last_group_semaphore_noc_addr;
-    uint64_t multicast_last_group_data_noc;
+    // first and last group mcast coordinates passed directly in async_write_multicast calls below
 
     if (has_mcast_first_group and has_mcast_last_group) {
         mcast_first_group_dest_noc_start_x = get_arg_val<uint32_t>(7);
@@ -96,177 +96,182 @@ void kernel_main() {
         noc_coord_y = (tt_l1_ptr uint32_t*)(get_arg_addr(7 + num_mcast_cores));
     }
 
-    const uint64_t reduce_sender_semaphore_noc_addr = get_noc_multicast_addr(
-        mcast_dest_noc_start_x,
-        mcast_dest_noc_start_y,
-        mcast_dest_noc_end_x,
-        mcast_dest_noc_end_y,
-        reduce_sender_semaphore_addr);
+    experimental::Noc noc;
+    experimental::Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
+    experimental::Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
+    reduce_sender_sem.set(VALID);
 
-    const uint64_t multicast_data_noc = get_noc_multicast_addr(
-        mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y, 0);
+    constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;
+    constexpr uint32_t cb_ex_id = tt::CBIndex::c_9;
+    constexpr uint32_t cb_ex_external_id = tt::CBIndex::c_10;
+    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t cb_repack_id = tt::CBIndex::c_11;
+    constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_12;
+    constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
 
-    if (has_mcast_first_group) {
-        reduce_sender_first_group_semaphore_noc_addr = get_noc_multicast_addr(
-            mcast_first_group_dest_noc_start_x,
-            mcast_first_group_dest_noc_start_y,
-            mcast_first_group_dest_noc_end_x,
-            mcast_first_group_dest_noc_end_y,
-            reduce_sender_semaphore_addr);
+    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    experimental::CircularBuffer cb_ex(cb_ex_id);
+    experimental::CircularBuffer cb_ex_external(cb_ex_external_id);
+    experimental::CircularBuffer cb_in0(cb_in0_id);
+    experimental::CircularBuffer cb_repack(cb_repack_id);
+    experimental::CircularBuffer cb_repack_out(cb_repack_out_id);
+    experimental::CircularBuffer cb_out0(cb_out0_id);
 
-        multicast_first_group_data_noc = get_noc_multicast_addr(
-            mcast_first_group_dest_noc_start_x,
-            mcast_first_group_dest_noc_start_y,
-            mcast_first_group_dest_noc_end_x,
-            mcast_first_group_dest_noc_end_y,
-            0);
-    }
-    if (has_mcast_last_group) {
-        reduce_sender_last_group_semaphore_noc_addr = get_noc_multicast_addr(
-            mcast_last_group_dest_noc_start_x,
-            mcast_last_group_dest_noc_start_y,
-            mcast_last_group_dest_noc_end_x,
-            mcast_last_group_dest_noc_end_y,
-            reduce_sender_semaphore_addr);
-
-        multicast_last_group_data_noc = get_noc_multicast_addr(
-            mcast_last_group_dest_noc_start_x,
-            mcast_last_group_dest_noc_start_y,
-            mcast_last_group_dest_noc_end_x,
-            mcast_last_group_dest_noc_end_y,
-            0);
-    }
-
-    volatile tt_l1_ptr uint32_t* reduce_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sender_semaphore_addr);
-    *reduce_sender_semaphore_addr_ptr = VALID;
-    volatile tt_l1_ptr uint32_t* reduce_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
-
-    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;
-    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;  // sharded cb
-    constexpr uint32_t cb_repack = tt::CBIndex::c_11;
-    constexpr uint32_t cb_repack_out = tt::CBIndex::c_12;
-    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
-
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);
-    const DataFormat data_format = get_dataformat(cb_ex_partial);
+    const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
+    const DataFormat data_format = get_dataformat(cb_ex_partial_id);
     const uint32_t num_bytes_read = datum_size_bytes;
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
-    uint32_t in0_l1_read_addr = get_read_ptr(cb_in0);
-    uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
+    uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
+    uint32_t src_addr_in0 = in0_l1_read_addr;
+    experimental::UnicastEndpoint self_ep;
     for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_reserve_back(cb_repack, per_core_N);
-        uint32_t l1_write_addr_repack = get_write_ptr(cb_repack);
+        cb_repack.reserve_back(per_core_N);
+        uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
         for (uint32_t i = 0; i < tile_height; ++i) {
-            noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
-            noc_addr_in0 += per_core_N_bytes;
+            noc.async_read(
+                self_ep,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                per_core_N_bytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {});
+            src_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_repack, per_core_N);
+        noc.async_read_barrier();
+        cb_repack.push_back(per_core_N);
     }
 #endif
-
-    uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
-    volatile tt_l1_ptr uint16_t* rptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_read_addr_ex_par);
-
-    uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
-    volatile tt_l1_ptr uint16_t* wptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_external);
 
     if constexpr (num_mcast_cores > 1) {
         for (uint32_t m = 0; m < num_batch_group; ++m) {
             for (uint32_t n = 0; n < 2; ++n) {
-                // wait for local data ready
-                cb_wait_front(cb_ex_partial, 1);
+                cb_ex_partial.wait_front(1);
 
-                // read self Ex partial - read a full tile for overwriting garbabge in L1
-                uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
-                uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
-                uint64_t noc_addr_ex_par = get_noc_addr(noc_coord_x[0], noc_coord_y[0], l1_read_addr_ex_par);
-                noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, single_tile_size_bytes);
+                uint32_t l1_read_addr_ex_par = cb_ex_partial.get_read_ptr();
+                cb_ex_external.reserve_back(1);
+                uint32_t l1_write_addr_external = cb_ex_external.get_write_ptr();
+                experimental::UnicastEndpoint remote_ep;
+                noc.async_read(
+                    remote_ep,
+                    experimental::CoreLocalMem<uint32_t>(l1_write_addr_external),
+                    single_tile_size_bytes,
+                    {.noc_x = noc_coord_x[0], .noc_y = noc_coord_y[0], .addr = l1_read_addr_ex_par},
+                    {});
                 l1_write_addr_external += 16;
-                noc_async_read_barrier();
+                noc.async_read_barrier();
 
-                // wait for all other cores data ready
-                noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
-                noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-
-                // read data from other cores
-                cb_reserve_back(cb_ex_external, 1);
+                reduce_receiver_sem.wait(num_mcast_cores - 1);
+                reduce_receiver_sem.set(0);
                 for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
-                    uint64_t noc_addr_ex_par =
-                        get_noc_addr(noc_coord_x[i + 1], noc_coord_y[i + 1], l1_read_addr_ex_par);
-                    noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, num_bytes_read);
+                    experimental::UnicastEndpoint remote_ep;
+                    noc.async_read(
+                        remote_ep,
+                        experimental::CoreLocalMem<uint32_t>(l1_write_addr_external),
+                        num_bytes_read,
+                        {.noc_x = noc_coord_x[i + 1], .noc_y = noc_coord_y[i + 1], .addr = l1_read_addr_ex_par},
+                        {});
                     l1_write_addr_external += 16;
-                    noc_async_read_barrier();
+                    noc.async_read_barrier();
                 }
-                cb_push_back(cb_ex_external, 1);
+                cb_ex_external.push_back(1);
 
-                // global reduce
-                cb_wait_front(cb_ex, 1);
-                cb_pop_front(cb_ex_partial, 1);
+                cb_ex.wait_front(1);
+                cb_ex_partial.pop_front(1);
 
-                // mcast to other cores
-                uint32_t l1_read_addr_ex = get_read_ptr(cb_ex);
-                noc_async_write_multicast(
-                    l1_read_addr_ex,
-                    multicast_data_noc | l1_read_addr_ex,
+                uint32_t l1_read_addr_ex = cb_ex.get_read_ptr();
+                experimental::MulticastEndpoint mcast_dst;
+                noc.async_write_multicast(
+                    experimental::CoreLocalMem<uint32_t>(l1_read_addr_ex),
+                    mcast_dst,
                     num_bytes_read,
                     num_mcast_cores_mid_group,
+                    {},
+                    {.noc_x_start = mcast_dest_noc_start_x,
+                     .noc_y_start = mcast_dest_noc_start_y,
+                     .noc_x_end = mcast_dest_noc_end_x,
+                     .noc_y_end = mcast_dest_noc_end_y,
+                     .addr = l1_read_addr_ex},
                     true);
-                noc_semaphore_set_multicast(
-                    reduce_sender_semaphore_addr, reduce_sender_semaphore_noc_addr, num_mcast_cores_mid_group, false);
+                reduce_sender_sem.set_multicast(
+                    noc,
+                    mcast_dest_noc_start_x,
+                    mcast_dest_noc_start_y,
+                    mcast_dest_noc_end_x,
+                    mcast_dest_noc_end_y,
+                    num_mcast_cores_mid_group,
+                    false);
 
                 if (has_mcast_first_group) {
-                    noc_async_write_multicast(
-                        l1_read_addr_ex,
-                        multicast_first_group_data_noc | l1_read_addr_ex,
+                    noc.async_write_multicast(
+                        experimental::CoreLocalMem<uint32_t>(l1_read_addr_ex),
+                        mcast_dst,
                         num_bytes_read,
                         num_mcast_cores_first_group,
+                        {},
+                        {.noc_x_start = mcast_first_group_dest_noc_start_x,
+                         .noc_y_start = mcast_first_group_dest_noc_start_y,
+                         .noc_x_end = mcast_first_group_dest_noc_end_x,
+                         .noc_y_end = mcast_first_group_dest_noc_end_y,
+                         .addr = l1_read_addr_ex},
                         true);
-                    noc_semaphore_set_multicast(
-                        reduce_sender_semaphore_addr,
-                        reduce_sender_first_group_semaphore_noc_addr,
+                    reduce_sender_sem.set_multicast(
+                        noc,
+                        mcast_first_group_dest_noc_start_x,
+                        mcast_first_group_dest_noc_start_y,
+                        mcast_first_group_dest_noc_end_x,
+                        mcast_first_group_dest_noc_end_y,
                         num_mcast_cores_first_group,
                         false);
                 }
 
                 if (has_mcast_last_group) {
-                    noc_async_write_multicast(
-                        l1_read_addr_ex,
-                        multicast_last_group_data_noc | l1_read_addr_ex,
+                    noc.async_write_multicast(
+                        experimental::CoreLocalMem<uint32_t>(l1_read_addr_ex),
+                        mcast_dst,
                         num_bytes_read,
                         num_mcast_cores_last_group,
+                        {},
+                        {.noc_x_start = mcast_last_group_dest_noc_start_x,
+                         .noc_y_start = mcast_last_group_dest_noc_start_y,
+                         .noc_x_end = mcast_last_group_dest_noc_end_x,
+                         .noc_y_end = mcast_last_group_dest_noc_end_y,
+                         .addr = l1_read_addr_ex},
                         true);
-                    noc_semaphore_set_multicast(
-                        reduce_sender_semaphore_addr,
-                        reduce_sender_last_group_semaphore_noc_addr,
+                    reduce_sender_sem.set_multicast(
+                        noc,
+                        mcast_last_group_dest_noc_start_x,
+                        mcast_last_group_dest_noc_start_y,
+                        mcast_last_group_dest_noc_end_x,
+                        mcast_last_group_dest_noc_end_y,
                         num_mcast_cores_last_group,
                         false);
                 }
-                noc_async_write_barrier();
-                cb_pop_front(cb_ex, 1);
+                noc.async_write_barrier();
+                cb_ex.pop_front(1);
             }
         }
     }
 
 #if defined(READER_REPACK) and defined(UNTILIZE_OUT)
-    uint32_t l1_write_addr_repack = get_write_ptr(cb_out0);
+    uint32_t l1_write_addr_repack = cb_out0.get_write_ptr();
     for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_wait_front(cb_repack_out, per_core_N);
-        uint32_t in0_l1_read_addr = get_read_ptr(cb_repack_out);
-        uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
+        cb_repack_out.wait_front(per_core_N);
+        uint32_t in0_l1_read_addr = cb_repack_out.get_read_ptr();
+        uint32_t src_addr_in0 = in0_l1_read_addr;
+        experimental::UnicastEndpoint self_ep;
         for (uint32_t i = 0; i < tile_height; ++i) {
-            noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
-            noc_addr_in0 += per_core_N_bytes_with_stride;
+            noc.async_read(
+                self_ep,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                per_core_N_bytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {});
+            src_addr_in0 += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;
         }
-        noc_async_read_barrier();
-        cb_pop_front(cb_repack_out, per_core_N);
+        noc.async_read_barrier();
+        cb_repack_out.pop_front(per_core_N);
     }
 #endif
 }

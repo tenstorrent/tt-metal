@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <fstream>
+#include <tt-metalium/distributed.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
@@ -20,6 +21,7 @@
 #include "tokenizers/char_tokenizer.hpp"
 #include "tt-metalium/host_api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "utils/memory_utils.hpp"
 namespace {
 /*
 Nightly tests could be enabled by setting the environment variable ENABLE_NIGHTLY_TT_TRAIN_TESTS=1

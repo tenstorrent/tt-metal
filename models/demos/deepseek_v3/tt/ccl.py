@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.tt_transformers.tt.ccl import get_num_links
 
 
 class CCL:
@@ -53,9 +54,8 @@ class CCL:
     def get_max_links(self, axis):
         """
         Get the maximum number of links for the given axis.
-        Legacy TG used to have fewer links on axis 1, 6U has no such limitation
         """
-        return 4
+        return get_num_links(self.mesh_device, cluster_axis=axis)
 
     def _get_sem_and_update_counter(self, sem_list, counter_list, axis):
         """

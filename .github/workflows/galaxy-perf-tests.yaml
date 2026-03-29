@@ -72,5 +72,5 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
       # Galaxy perf runs on Wormhole Galaxy (wh_galaxy) only.
-      enabled-skus: wh_galaxy
+      enabled-skus: wh_galaxy_perf
       model: ${{ inputs.model || 'all' }}

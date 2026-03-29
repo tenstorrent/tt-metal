@@ -786,10 +786,14 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     this->receiver_channel_to_downstream_adapter =
         std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(
             *static_allocator, config.topology, direction);
-    // worker is always index 0.
-    // rest of the downstream buffer index addresses will be populated when building connections to downstream edm
-    // channels.
+    // Worker channels need their buffer-index-counter L1 address set so the EDM kernel can reset it on each launch.
+    // Channel 0 is always a worker. VC2 is also a worker channel when active.
     downstream_vcs_sender_channel_buffer_index_semaphore_id[0] = sender_channels_buffer_index_semaphore_id[0];
+    if (static_allocator->get_num_sender_channels(2) > 0) {
+        size_t vc2_flat = static_allocator->get_num_sender_channels(0) + static_allocator->get_num_sender_channels(1);
+        downstream_vcs_sender_channel_buffer_index_semaphore_id[vc2_flat] =
+            sender_channels_buffer_index_semaphore_id[vc2_flat];
+    }
 
     // Add this log right at the beginning of the constructor body
     log_debug(
@@ -1070,10 +1074,29 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         StreamRegAssignments::IncrementOnWrite::sender_channel_6_free_slots_stream_id;
     named_args["SENDER_CHANNEL_7_FREE_SLOTS_STREAM_ID"] =
         StreamRegAssignments::IncrementOnWrite::sender_channel_7_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_8_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id;
-    named_args["SENDER_CHANNEL_9_FREE_SLOTS_STREAM_ID"] =
-        StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id;
+    // Channels 8 and 9 are 0 by default (padding). The firmware array
+    // sender_channel_free_slots_stream_ids[] is sized to MAX_NUM_SENDER_CHANNELS (10) but only
+    // indices 0..NUM_SENDER_CHANNELS-1 are accessed at runtime (via is_sender_channel_serviced[] guard).
+    //
+    // Channel layout by router type:
+    //   Non-Z mesh (no VC1):  indices 0-3 = VC0 (IDs 22-25),  index 4 = VC2 (ID 30 when enabled)
+    //   Non-Z mesh (with VC1): indices 0-3 = VC0, 4-6/7 = VC1, last = VC2 (ID 30 when enabled)
+    //   Z-router:              indices 0-4 = VC0, 5-8 = VC1 (mapped but NOT serviced by firmware —
+    //                          Z-routers don't step through VC1 sender channels), index 9 = VC2
+    //
+    // For Z-routers, VC1 sender channels (5-8) exist in the flat index space for layout compatibility
+    // but is_sender_channel_serviced[5..8] is false, so their stream IDs are never read by firmware.
+    // This is why indices 8 and 9 can safely be 0 — they are only accessed when VC2 is enabled,
+    // at which point the override below sets the correct one to stream ID 30.
+    named_args["SENDER_CHANNEL_8_FREE_SLOTS_STREAM_ID"] = 0;
+    named_args["SENDER_CHANNEL_9_FREE_SLOTS_STREAM_ID"] = 0;
+    // VC2 sender is always the last used channel. Override its stream ID to 30 (VC2 flow control).
+    // The flat index varies by config: non-Z without VC1 = index 4, non-Z with VC1 = index 7/8,
+    // Z-router = index 9.
+    if (actual_sender_channels_vc2 > 0 && num_sender_channels > 0) {
+        named_args[fmt::format("SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID", num_sender_channels - 1)] =
+            StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id;
+    }
     named_args["VC2_RECEIVER_FREE_SLOTS_STREAM_ID"] =
         StreamRegAssignments::IncrementOnWrite::vc2_receiver_free_slots_stream_id;
     named_args["TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID"] =
@@ -1468,6 +1491,19 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             sender_channels_flow_control_semaphore_id[i] = 0;
             sender_channels_connection_semaphore_id[i] = 0;
             sender_channels_buffer_index_semaphore_id[i] = 0;
+        }
+        // VC2 supports a worker connection, so if it's present we'll add the relevant book-keeping
+        auto* static_allocator =
+            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
+        const auto vc2_flat =
+            static_allocator->get_num_sender_channels(0) + static_allocator->get_num_sender_channels(1);
+        if (static_allocator->get_num_sender_channels(2) > 0) {
+            sender_channels_buffer_index_semaphore_id[vc2_flat] =
+                config.sender_channels_buffer_index_semaphore_address[vc2_flat];
+            sender_channels_flow_control_semaphore_id[vc2_flat] =
+                config.sender_channels_local_flow_control_semaphore_address[vc2_flat];
+            sender_channels_connection_semaphore_id[vc2_flat] =
+                config.sender_channels_connection_semaphore_address[vc2_flat];
         }
     } else {
         const bool is_2D_routing =

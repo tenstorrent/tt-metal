@@ -168,6 +168,10 @@ private:
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
 
+    // Validates that the sub_device_manager_tracker_ is initialized before accessing it.
+    // Throws if the tracker is null (e.g., on remote-only MeshDevices).
+    void validate_sub_device_manager_tracker() const;
+
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     // Active distributed context used by mesh command queues (split from distributed_context_).
@@ -303,6 +307,10 @@ public:
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
+    // Returns true if this MeshDevice contains only remote devices (no local devices on this host).
+    // Remote-only MeshDevices cannot perform operations requiring local device access like
+    // allocator(), create_sub_device_manager(), etc. Use this to check before calling such methods.
+    bool is_remote_only() const;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.

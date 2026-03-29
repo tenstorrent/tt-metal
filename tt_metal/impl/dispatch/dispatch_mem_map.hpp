@@ -31,7 +31,12 @@ public:
     DispatchMemMap(const DispatchMemMap&) = delete;
     DispatchMemMap(DispatchMemMap&& other) noexcept = delete;
     // Create a DispatchMemMap
-    DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs, const Hal& hal, bool is_galaxy_cluster);
+    DispatchMemMap(
+        const CoreType& core_type,
+        uint32_t num_hw_cqs,
+        const Hal& hal,
+        bool is_galaxy_cluster,
+        bool are_cqs_dram_backed);
 
     uint32_t prefetch_q_entries() const;
 

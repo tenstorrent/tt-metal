@@ -110,14 +110,22 @@ class TtMixtralMLP(LightweightModule):
             ttnn.deallocate(w3_out)
             ttnn.deallocate(w1_out)
 
-            w2_out = ttnn.linear(
-                w2_in,
-                self.w2,
-                compute_kernel_config=compute_kernel_config,
-                core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
-                dtype=ttnn.bfloat8_b,
-                program_config=pc_2,
-            )
+            if seq_len > 128:
+                w2_out = ttnn.experimental.minimal_matmul(
+                    w2_in,
+                    self.w2,
+                    compute_kernel_config=compute_kernel_config,
+                    config=pc_2,
+                )
+            else:
+                w2_out = ttnn.linear(
+                    w2_in,
+                    self.w2,
+                    compute_kernel_config=compute_kernel_config,
+                    core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+                    dtype=ttnn.bfloat8_b,
+                    program_config=pc_2,
+                )
 
             ttnn.deallocate(w2_in)
 

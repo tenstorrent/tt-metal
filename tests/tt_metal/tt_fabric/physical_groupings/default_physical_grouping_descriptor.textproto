@@ -1,0 +1,57 @@
+groupings {
+  name: "2x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 1 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 2 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 3 asic_location: ASIC_LOCATION_UNSPECIFIED }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 1 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 2 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 3 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 4 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 5 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 6 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 7 asic_location: ASIC_LOCATION_UNSPECIFIED }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+groupings {
+  name: "4x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 1 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 2 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 3 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 4 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 5 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 6 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 7 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 8 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 9 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 10 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 11 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 12 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 13 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 14 asic_location: ASIC_LOCATION_UNSPECIFIED },
+    { id: 15 asic_location: ASIC_LOCATION_UNSPECIFIED }
+  ]
+  row_major_mesh {
+    dims: [4, 4]
+  }
+}

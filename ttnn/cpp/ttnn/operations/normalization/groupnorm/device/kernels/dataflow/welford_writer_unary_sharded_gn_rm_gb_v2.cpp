@@ -7,6 +7,11 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/endpoints.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     constexpr uint32_t TILE_HW = TILE_HW_VAL;
@@ -39,16 +44,20 @@ void kernel_main() {
     const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(8);
     const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(9);
 
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
-    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
-    constexpr uint32_t cb_input_mask = tt::CBIndex::c_7;
-    constexpr uint32_t cb_ones = tt::CBIndex::c_26;
+    constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
+    constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
+    constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
+    constexpr uint32_t cb_input_mask_id = tt::CBIndex::c_7;
+    constexpr uint32_t cb_ones_id = tt::CBIndex::c_26;
 
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
-    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_gamma(cb_gamma_id);
+    experimental::CircularBuffer cb_beta(cb_beta_id);
+    experimental::CircularBuffer cb_input_mask(cb_input_mask_id);
 
-    // input mask
+    const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma_id);
+    const uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask_id);
+
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);
 
     constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
@@ -57,26 +66,31 @@ void kernel_main() {
 
     uint32_t input_mask_tile_id = input_mask_tile_start_id;
     for (uint32_t i = 0; i < num_groups_per_core; ++i) {
-        cb_reserve_back(cb_input_mask, block_w);
-        uint32_t l1_write_addr_input_mask = get_write_ptr(cb_input_mask);
+        cb_input_mask.reserve_back(block_w);
+        uint32_t l1_write_addr_input_mask = cb_input_mask.get_write_ptr();
         for (uint32_t j = 0; j < block_w; ++j) {
-            noc_async_read_tile(input_mask_tile_id, mask, l1_write_addr_input_mask);
+            noc.async_read(
+                mask,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
+                input_mask_single_tile_size_bytes,
+                {.page_id = input_mask_tile_id},
+                {});
             l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
             input_mask_tile_id += 1;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_input_mask, block_w);
+        noc.async_read_barrier();
+        cb_input_mask.push_back(block_w);
     }
 
     if constexpr (fuse_gamma) {
-        constexpr uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
+        constexpr uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_id);
         constexpr uint32_t gamma_element_bytes = gamma_tile_bytes / TILE_HW;
         constexpr uint32_t gamma_face_bytes = gamma_element_bytes * tt::constants::FACE_HW;
         constexpr uint32_t gamma_face_w_bytes = gamma_element_bytes * tt::constants::FACE_WIDTH;
         const auto gamma = TensorAccessor(gamma_args, gamma_addr, size);
 
-        cb_reserve_back(cb_gamma, num_cols_tile_gamma_beta);
-        auto l1_write_addr_gamma = get_write_ptr(cb_gamma);
+        cb_gamma.reserve_back(num_cols_tile_gamma_beta);
+        auto l1_write_addr_gamma = cb_gamma.get_write_ptr();
 
         // We want this data to appear as the first row of the tile.
         // This is 32B at the start of the first face, 32B at the start of the second face
@@ -85,61 +99,97 @@ void kernel_main() {
         // Then later, copy the second set of 32 bytes into the start of the second face
         // L1-L1 NOC transactions only need 16 byte alignment on BH, so this is legal after data is loaded
         // to L1
-
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
-            uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
 
             // Read the first 64 bytes of the tile into the first face
 #ifdef ARCH_BLACKHOLE
-            noc_async_read(gamma_noc_addr, l1_write_addr_gamma, NOC_DRAM_READ_ALIGNMENT_BYTES);
-            gamma_noc_addr = get_noc_addr(l1_write_addr_gamma + gamma_face_w_bytes);
-            noc_async_read_barrier();
-#else
-            noc_async_read(gamma_noc_addr, l1_write_addr_gamma, gamma_face_w_bytes);
-            gamma_noc_addr += gamma_face_w_bytes;
-#endif
-
+            noc.async_read(
+                gamma,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_gamma),
+                gamma_face_w_bytes * 2,
+                {.page_id = tile_id},
+                {});
+            noc.async_read_barrier();
             // Copy the second set of 32 bytes into the second face
-            noc_async_read(gamma_noc_addr, l1_write_addr_gamma + gamma_face_bytes, gamma_face_w_bytes);
+            experimental::UnicastEndpoint self_ep;
+            noc.async_read(
+                self_ep,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_gamma + gamma_face_bytes),
+                gamma_face_w_bytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + gamma_face_w_bytes},
+                {});
+#else
+            noc.async_read(
+                gamma,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_gamma),
+                gamma_face_w_bytes,
+                {.page_id = tile_id},
+                {});
+            // Copy the second set of 32 bytes into the second face
+            noc.async_read(
+                gamma,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_gamma + gamma_face_bytes),
+                gamma_face_w_bytes,
+                {.page_id = tile_id, .offset_bytes = gamma_face_w_bytes},
+                {});
+#endif
             l1_write_addr_gamma += gamma_tile_bytes;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_gamma, num_cols_tile_gamma_beta);
+        noc.async_read_barrier();
+        cb_gamma.push_back(num_cols_tile_gamma_beta);
     }
 
     if constexpr (fuse_beta) {
         // Just like gamma, we read at a 64 byte granularity for Blackhole NOC compatibility
         // Then copy the second set of 32 bytes into the second face
-
-        constexpr uint32_t beta_tile_bytes = get_tile_size(cb_beta);
+        constexpr uint32_t beta_tile_bytes = get_tile_size(cb_beta_id);
         constexpr uint32_t beta_element_bytes = beta_tile_bytes / TILE_HW;
         constexpr uint32_t beta_face_bytes = beta_element_bytes * tt::constants::FACE_HW;
         constexpr uint32_t beta_face_w_bytes = beta_element_bytes * tt::constants::FACE_WIDTH;
         const auto beta = TensorAccessor(beta_args, beta_addr, size);
 
-        cb_reserve_back(cb_beta, num_cols_tile_gamma_beta);
-        auto l1_write_addr_beta = get_write_ptr(cb_beta);
+        cb_beta.reserve_back(num_cols_tile_gamma_beta);
+        auto l1_write_addr_beta = cb_beta.get_write_ptr();
 
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
             uint32_t tile_id = beta_tile_start_id + w;
-            uint64_t beta_noc_addr = get_noc_addr(tile_id, beta);
 
             // Read the first 64 bytes of the tile into the first face
 #ifdef ARCH_BLACKHOLE
-            noc_async_read(beta_noc_addr, l1_write_addr_beta, NOC_DRAM_READ_ALIGNMENT_BYTES);
-            beta_noc_addr = get_noc_addr(l1_write_addr_beta + beta_face_w_bytes);
-            noc_async_read_barrier();
-#else
-            noc_async_read(beta_noc_addr, l1_write_addr_beta, beta_face_w_bytes);
-            beta_noc_addr += beta_face_w_bytes;
-#endif
-
+            noc.async_read(
+                beta,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_beta),
+                beta_face_w_bytes * 2,
+                {.page_id = tile_id},
+                {});
+            noc.async_read_barrier();
             // Copy the second set of 32 bytes into the second face
-            noc_async_read(beta_noc_addr, l1_write_addr_beta + beta_face_bytes, beta_face_w_bytes);
+            experimental::UnicastEndpoint self_ep;
+            noc.async_read(
+                self_ep,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_beta + beta_face_bytes),
+                beta_face_w_bytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + beta_face_w_bytes},
+                {});
+#else
+            noc.async_read(
+                beta,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_beta),
+                beta_face_w_bytes,
+                {.page_id = tile_id},
+                {});
+            // Copy the second set of 32 bytes into the second face
+            noc.async_read(
+                beta,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_beta + beta_face_bytes),
+                beta_face_w_bytes,
+                {.page_id = tile_id, .offset_bytes = beta_face_w_bytes},
+                {});
+#endif
             l1_write_addr_beta += beta_tile_bytes;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_beta, num_cols_tile_gamma_beta);
+        noc.async_read_barrier();
+        cb_beta.push_back(num_cols_tile_gamma_beta);
     }
 }

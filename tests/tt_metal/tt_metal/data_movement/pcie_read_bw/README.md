@@ -10,7 +10,7 @@ This test suite uses the TT-Metal Mesh Device API, which provides a unified inte
 ## Test Flow
 The master core issues NOC read transactions to retrieve data from PCIe memory. Data is read from PCIe memory into the L1 using `noc_async_read`. The test measures the time taken and calculates the bandwidth. Results are logged with detailed performance metrics.
 
-Test attributes such as transaction sizes and number of transactions, as well as latency measures like kernel and pre-determined scope cycles, are recorded by the profiler. DeviceTimestampedData is recorded for Python wrapper compatibility.
+Test attributes such as transaction sizes and number of transactions, as well as latency measures like kernel and pre-determined scope cycles, are recorded by the profiler. DeviceTimestampedData is recorded for Python wrapper compatibility. The host test queries the real device clock frequency via `device->get_clock_rate_mhz()` and passes it to the kernel, which logs it for GB/s conversion in the reporting pipeline.
 
 Test expectations are that sufficient test attribute data is captured by the profiler for higher-level bandwidth/regression checks.
 
@@ -34,6 +34,8 @@ The tests use the Mesh Device API with fast dispatch mode:
 ## Test Cases
 Test case uses Float32 as L1 data format.
 
-1. PCIe Read Bandwidth: Tests PCIe read bandwidth with the maximum possible bandwidth on the selected device.
+1. PCIe Read Bandwidth (ID 603): Tests PCIe read bandwidth with the maximum possible bandwidth on the selected device.
+2. PCIe Read Bandwidth Sweep (ID 605): Sweeps transaction sizes from flit size up to the NOC max packet size (8 kB on Wormhole, 16 kB on Blackhole) with 1M transactions at each size. Transaction sizes increase by powers of 2.
+3. PCIe Host Read (D2H) Bandwidth Sweep (ID 607): Host-side bandwidth test using `distributed::ReadShard`. Sweeps buffer sizes from 4 KB to 16 MB, timed with `std::chrono`. No kernel involved — measures the full dispatch path including command queue and DMA overhead.
 
-**Note**: This test is based on the `test_bw_and_latency.cpp` test from the performance microbenchmark dispatch suite, specifically the PCIe read functionality (`-m 0`).
+**Note**: The original test (ID 603) is based on the `test_bw_and_latency.cpp` test from the performance microbenchmark dispatch suite, specifically the PCIe read functionality (`-m 0`).

@@ -231,6 +231,7 @@ struct DRAMStreamingMatmulCompressed {
                 cb_push_back(CTArgs::cb_in1, CTArgs::subblock_k);
                 block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
             }
+            noc_async_atomic_barrier();
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

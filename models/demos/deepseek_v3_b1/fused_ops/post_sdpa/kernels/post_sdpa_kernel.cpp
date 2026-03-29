@@ -519,7 +519,7 @@ void kernel_main() {
         DeviceZoneScopedN("MCAST3");
         mcast3(mcast3_args);
     }
-    mcast3.teardown();
+    mcast3.teardown(mcast3_args);
 
     // ========================================================================
     // Matmul5: [1, 8192] x [8192, 64] -> [1, 64] per core (112 active cores)

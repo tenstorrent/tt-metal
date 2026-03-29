@@ -99,57 +99,60 @@ class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
             return self.conv_configs["ABH_0_ADB_HS"]
         # MID BLOCK (ENCODER + DECODER) and UP BLOCK 0
         elif "mid_block.resnet" in conv_path or "decoder.up_blocks.0.resnet" in conv_path:
-            return self.conv_configs["ABH_512_NO_ADB_BS"]
+            return self.conv_configs["ABH_26T_ADB_WDB_BS"]
         elif "decoder.up_blocks.0.upsamplers" in conv_path:
-            return self.conv_configs["ABH_256_NO_ADB_BS"]
+            return self.conv_configs["ABH_26T_ADB_WDB_BS"]
         # UP BLOCK 1
         elif "decoder.up_blocks.1.resnet" in conv_path:
-            return self.conv_configs["ABH_256_NO_ADB_BS"]
+            return self.conv_configs["ABH_26T_ADB_WDB_BS"]
         elif "decoder.up_blocks.1.upsamplers" in conv_path:
-            return self.conv_configs["ABH_256_NO_ADB_BS"]
+            return self.conv_configs["ABH_26T_ADB_WDB_BS"]
         # UP BLOCK 2
         elif "decoder.up_blocks.2.resnet" in conv_path:
-            return self.conv_configs["ABH_512_NO_ADB_BS"]
+            if "conv2" in conv_path:
+                return self.conv_configs["ABH_32_ADB_HS"]
+            if "resnets.1" in conv_path or "resnets.2" in conv_path:
+                return self.conv_configs["ABH_32_ADB_HS"]
+            return self.conv_configs["ABH_26T_ADB_WDB_BS"]
         elif "decoder.up_blocks.2.upsamplers" in conv_path:
-            return self.conv_configs["ABH_512_NO_ADB_BS"]
+            if "conv2" in conv_path:
+                return self.conv_configs["ABH_64_ADB_HS"]
+            return self.conv_configs["ABH_64_ADB_HS"]
         # UP BLOCK 3
         elif "decoder.up_blocks.3.resnet" in conv_path:
-            return self.conv_configs["ABH_32_ADB_HS"]
+            return self.conv_configs["ABH_64_ADB_HS"]
         # DECODER CONV OUT
         elif "decoder.conv_out" == conv_path:
-            return self.conv_configs["ABH_256_NO_ADB_HS"]
+            return self.conv_configs["ABH_8T_ADB_HS"]
         # ENCODER DOWNSAMPLERS
         elif "downsamplers" in conv_path:
             if "down_blocks.0" in conv_path:
-                return self.conv_configs["ABH_256_NO_ADB_HS"]
+                return self.conv_configs["ABH_128_NO_ADB_HS"]
             elif "down_blocks.1" in conv_path:
-                return self.conv_configs["ABH_1024_NO_ADB_BS"]
+                return self.conv_configs["ABH_128_NO_ADB_HS"]
             elif "down_blocks.2" in conv_path:
-                return self.conv_configs["ABH_512_NO_ADB_BS"]
+                return self.conv_configs["ABH_64_ADB_WDB_BS"]
         # DOWN BLCOK 0
         elif "down_blocks.0" in conv_path:
-            return self.conv_configs["ABH_32_ADB_HS"]
+            return self.conv_configs["ABH_64_ADB_HS"]
         # DOWN BLOCK 1
         elif "down_blocks.1" in conv_path:
-            if "resnets.0" in conv_path and "conv1" in conv_path:
-                return self.conv_configs["ABH_64_NO_ADB_HS"]
-            else:
-                return self.conv_configs["ABH_512_NO_ADB_BS"]
+            return self.conv_configs["ABH_64_NO_ADB_HS"]
         # DOWN BLOCK 2
         elif "down_blocks.2" in conv_path:
             if "resnets.0" in conv_path and "conv1" in conv_path:
-                return self.conv_configs["ABH_1024_NO_ADB_BS"]
+                return self.conv_configs["ABH_26T_ADB_WDB_BS"]
             else:
-                return self.conv_configs["ABH_256_NO_ADB_BS"]
+                return self.conv_configs["ABH_26T_ADB_WDB_BS"]
         # DOWN BLOCK 3
         elif "down_blocks.3" in conv_path:
-            return self.conv_configs["ABH_512_NO_ADB_BS"]
+            return self.conv_configs["ABH_26T_ADB_WDB_BS"]
         # ENCODER CONV IN
         elif "encoder.conv_in" == conv_path:
-            return self.conv_configs["ABH_1024_NO_ADB_HS"]
+            return self.conv_configs["ABH_0_ADB_HS"]
         # ENCODER CONV OUT
         elif "encoder.conv_out" == conv_path:
-            return self.conv_configs["ABH_0_NO_ADB_HS"]
+            return self.conv_configs["ABH_64_ADB_HS"]
         else:
             return self.conv_configs["DEFAULT_DRAM"]
 

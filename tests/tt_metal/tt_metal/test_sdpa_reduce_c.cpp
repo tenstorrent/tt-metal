@@ -282,7 +282,7 @@ static bool test_sdpa_reduce_c(
 }
 
 // NIGHTLY_ prefix ensures this test only runs in nightly CI pipelines
-TEST_F(UnitMeshCQSingleCardFixture, NIGHTLY_SdpaReduceC) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, NIGHTLY_SdpaReduceC) {
     bool pass = true;
 
     /**

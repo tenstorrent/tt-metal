@@ -771,7 +771,7 @@ void kernel_main() {
     }
 #endif
     // Only need one teardown since all mcasts reuse the same semaphores
-    mcast.teardown();
+    mcast.teardown(mcast_args);
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     noc_async_write_barrier();

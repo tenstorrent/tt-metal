@@ -57,10 +57,6 @@ Tensor unary_impl(
 
 namespace ttnn {
 
-Tensor abs(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
-    return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
-}
-
 ComplexTensor reciprocal(const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     Tensor a_plus_b = ttnn::add(input[0], input[1], std::nullopt, output_mem_config);
     Tensor a_minus_b = ttnn::subtract(input[0], input[1], std::nullopt, output_mem_config);
@@ -159,7 +155,7 @@ Tensor where_tss(
 
     // Convert input tensor to float32 only if input is INT32/UINT32 and scalars are float
     if ((condition.dtype() == DataType::INT32 || condition.dtype() == DataType::UINT32) && has_float_scalar) {
-        input = ttnn::typecast(condition, DataType::FLOAT32);
+        input = ttnn::typecast(condition, DataType::FLOAT32, std::nullopt, std::nullopt, sub_core_grids);
     }
     UnaryOpType op_type = UnaryOpType::WHERE_TSS;
     auto param = std::visit(
@@ -226,14 +222,6 @@ Tensor identity(
     const std::optional<Tensor>& optional_output_tensor) {
     return ttnn::detail::unary_impl(
         input_tensor, {UnaryWithParam{UnaryOpType::IDENTITY}}, memory_config, optional_output_tensor);
-}
-
-Tensor abs(
-    const Tensor& input_tensor,
-    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    auto op_type = input_tensor.dtype() == tt::tt_metal::DataType::INT32 ? UnaryOpType::ABS_INT32 : UnaryOpType::ABS;
-    return ttnn::detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor eqz(

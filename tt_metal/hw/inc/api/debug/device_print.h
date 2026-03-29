@@ -18,6 +18,10 @@
 #include "risc_common.h"
 #include "stream_io_map.h"
 
+#if defined(KERNEL_BUILD)
+#include "dprint_tile.h"
+#endif
+
 #define DEVICE_PRINT_STRINGS_SECTION_NAME ".device_print_strings"
 #define DEVICE_PRINT_STRINGS_INFO_SECTION_NAME ".device_print_strings_info"
 
@@ -756,6 +760,60 @@ struct device_print_type<const char[N]> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
 };
 
+#if defined(KERNEL_BUILD)
+// TileSlice types
+template <uint32_t MAX_BYTES>
+struct device_print_type<TileSlice<MAX_BYTES>> {
+    static constexpr device_print_type_info value = {'t', sizeof(TileSlice<MAX_BYTES>)};
+    static void serialize(
+        device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, TileSlice<MAX_BYTES> argument) {
+        static_assert(
+            sizeof(TileSlice<MAX_BYTES>) % 4 == 0,
+            "TileSlice size must be a multiple of 4 bytes for proper serialization");
+        static_assert(MAX_BYTES < 256, "MAX_BYTES must be less than 256 to fit size in a single byte");
+        argument.pad = MAX_BYTES;  // Store the actual size in the padding field
+        TileSlice<MAX_BYTES>* argument_pointer = &argument;
+        uint32_t* argument_as_uint32_ptr = reinterpret_cast<uint32_t*>(argument_pointer);
+        for (uint32_t i = 0; i < sizeof(TileSlice<MAX_BYTES>); i += 4) {
+            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset + i) =
+                argument_as_uint32_ptr[i / 4];
+        }
+    }
+};
+template <>
+struct device_print_type<TileSlice<64>> {
+    static constexpr device_print_type_info value = {'t', sizeof(TileSlice<64>)};
+    static void serialize(
+        device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, TileSlice<64> argument) {
+        static_assert(
+            sizeof(TileSlice<64>) % 4 == 0, "TileSlice size must be a multiple of 4 bytes for proper serialization");
+        argument.pad = 64;  // Store the actual size in the padding field
+        TileSlice<64>* argument_pointer = &argument;
+        uint32_t* argument_as_uint32_ptr = reinterpret_cast<uint32_t*>(argument_pointer);
+        for (uint32_t i = 0; i < sizeof(TileSlice<64>); i += 4) {
+            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset + i) =
+                argument_as_uint32_ptr[i / 4];
+        }
+    }
+};
+template <>
+struct device_print_type<TileSlice<128>> {
+    static constexpr device_print_type_info value = {'t', sizeof(TileSlice<128>)};
+    static void serialize(
+        device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, TileSlice<128> argument) {
+        static_assert(
+            sizeof(TileSlice<128>) % 4 == 0, "TileSlice size must be a multiple of 4 bytes for proper serialization");
+        argument.pad = 128;  // Store the actual size in the padding field
+        TileSlice<128>* argument_pointer = &argument;
+        uint32_t* argument_as_uint32_ptr = reinterpret_cast<uint32_t*>(argument_pointer);
+        for (uint32_t i = 0; i < sizeof(TileSlice<128>); i += 4) {
+            *reinterpret_cast<device_print_buffer_ptr<uint32_t>>(device_print_buffer + offset + i) =
+                argument_as_uint32_ptr[i / 4];
+        }
+    }
+};
+#endif
+
 // Helper to get type character for a single type, removing cv-qualifiers and references
 template <typename T>
 constexpr device_print_type_info get_type_info() {
@@ -1025,45 +1083,50 @@ void release_lock();
 
 // Takes lock unconditionally. Prints kernel id message if needed.
 void acquire_lock() {
+    // We need to acquire lock only if we have more than 1 processor, otherwise there is no contention.
+    if constexpr (DevicePrintMemoryLayout::PROCESSOR_COUNT > 1) {
 #if defined(ARCH_WORMHOLE)
-    volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
+        volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
 
-    while (true) {
-    again:
-        // Wait until lock is free (0)
-        while (*lock_ptr != 0) {
+        while (true) {
+        again:
+            // Wait until lock is free (0)
+            while (*lock_ptr != 0) {
+                invalidate_l1_cache();
+#if defined(COMPILE_FOR_ERISC)
+                internal_::risc_context_switch();
+#endif
+            }
+
+            // Write risc_id to lock to attempt to acquire it
+            *lock_ptr = PROCESSOR_INDEX + 1;  // Use 1-based index to avoid writing 0 which is the free state
+
+            for (uint32_t repeat = 0; repeat < DevicePrintMemoryLayout::PROCESSOR_COUNT; ++repeat) {
+                // Make sure the write has propagated and other riscs see the updated value.
+                invalidate_l1_cache();
+                if (*lock_ptr != PROCESSOR_INDEX + 1) {
+                    goto again;
+                }
+            }
+
+            // One last check that we have successfully acquired the lock.
+            invalidate_l1_cache();
+            if (*lock_ptr == PROCESSOR_INDEX + 1) {
+                break;  // Successfully acquired lock
+            }
+        }
+#else
+        auto& lock_atomic = get_device_print_buffer()->aux.lock;
+
+        while (lock_atomic.exchange(1) != 0) {
+            // Failed to acquire lock, wait and try again
             invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
 #endif
         }
-
-        // Write risc_id to lock to attempt to acquire it
-        *lock_ptr = PROCESSOR_INDEX + 1;  // Use 1-based index to avoid writing 0 which is the free state
-
-        // Make sure the write has propagated and other riscs see the updated value.
-        invalidate_l1_cache();
-        if (*lock_ptr != PROCESSOR_INDEX + 1) {
-            goto again;
-        }
-
-        // One last check that we have successfully acquired the lock.
-        invalidate_l1_cache();
-        if (*lock_ptr == PROCESSOR_INDEX + 1) {
-            break;  // Successfully acquired lock
-        }
-    }
-#else
-    auto& lock_atomic = get_device_print_buffer()->aux.lock;
-
-    while (lock_atomic.exchange(1) != 0) {
-        // Failed to acquire lock, wait and try again
-        invalidate_l1_cache();
-#if defined(COMPILE_FOR_ERISC)
-        internal_::risc_context_switch();
 #endif
     }
-#endif
 
     // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
     invalidate_l1_cache();

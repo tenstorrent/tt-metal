@@ -625,8 +625,8 @@ class FlashMLADecode:
         # =========================================================================
         # Named compile-time args per RISC (for UnifiedKernelDescriptor)
         # =========================================================================
-        # NCRISC (reader) named compile-time args
-        ncrisc_named_compile_time_args = [
+        # BRISC (reader) named compile-time args
+        brisc_named_compile_time_args = [
             ("St", St),
             ("DHt", DHt),
             ("Sk_chunk_t", Sk_chunk_t),
@@ -642,10 +642,10 @@ class FlashMLADecode:
             ("cb_k_in", cb_k_in),
         ]
         # TensorAccessorArgs for K (indexed, starting at index 0)
-        ncrisc_compile_time_args = list(get_tensor_accessor_args(kv_cache_tensor))
+        brisc_compile_time_args = list(get_tensor_accessor_args(kv_cache_tensor))
 
-        # BRISC (writer) named compile-time args
-        brisc_named_compile_time_args = [
+        # NCRISC (writer) named compile-time args
+        ncrisc_named_compile_time_args = [
             ("vDHt", vDHt),
             ("Sk_chunk_t", Sk_chunk_t),
             ("num_cores_per_head", num_cores_per_head),
@@ -815,8 +815,8 @@ class FlashMLADecode:
         k_addr = kv_cache_tensor.buffer_address()
         pos_addr = cur_pos_tensor.buffer_address()
 
-        ncrisc_per_core_args = []
         brisc_per_core_args = []
+        ncrisc_per_core_args = []
         trisc_per_core_args = []
 
         for i in range(num_active_cores):
@@ -840,8 +840,8 @@ class FlashMLADecode:
             output_core_noc_x = output_core_physical_xs[cur_batch] if cur_batch < len(output_core_physical_xs) else 0
             output_core_noc_y = output_core_physical_ys[cur_batch] if cur_batch < len(output_core_physical_ys) else 0
 
-            # NCRISC per-core runtime args (common args: k_addr, pos_addr)
-            ncrisc_per_core_args.append(
+            # BRISC per-core runtime args (common args: k_addr, pos_addr)
+            brisc_per_core_args.append(
                 (
                     core,
                     [
@@ -858,8 +858,8 @@ class FlashMLADecode:
             # Tree reduction partner coordinates
             tree_reduction_info = grid.get_tree_reduction_partner_coords(device, s_block_idx, cur_batch)
 
-            # BRISC per-core runtime args (common args: pos_addr)
-            brisc_args = [
+            # NCRISC per-core runtime args (common args: pos_addr)
+            ncrisc_args = [
                 cur_batch,
                 core_num_in_reduce,
                 is_output_core,
@@ -872,8 +872,8 @@ class FlashMLADecode:
                 mcast_end_y,
             ]
             for role_code, partner_s_block_idx, partner_x, partner_y in tree_reduction_info:
-                brisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
-            brisc_per_core_args.append((core, brisc_args))
+                ncrisc_args.extend([role_code, partner_s_block_idx, partner_x, partner_y])
+            ncrisc_per_core_args.append((core, ncrisc_args))
 
             is_sender_after_reduce = 1 if (do_reduce and grid.is_tree_reduction_sender(s_block_idx)) else 0
 
@@ -895,12 +895,12 @@ class FlashMLADecode:
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/flash_mla/kernels/flash_mla_kernel.cpp",
             core_ranges=core_grid,
-            ncrisc_compile_time_args=ncrisc_compile_time_args,
-            ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+            brisc_compile_time_args=brisc_compile_time_args,
             brisc_named_compile_time_args=brisc_named_compile_time_args,
+            ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
             trisc_named_compile_time_args=trisc_named_compile_time_args,
-            ncrisc_common_runtime_args=[k_addr, pos_addr],
-            brisc_common_runtime_args=[pos_addr],
+            brisc_common_runtime_args=[k_addr, pos_addr],
+            ncrisc_common_runtime_args=[pos_addr],
             trisc_common_runtime_args=[pos_addr],
             trisc_compute_config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=math_fidelity,

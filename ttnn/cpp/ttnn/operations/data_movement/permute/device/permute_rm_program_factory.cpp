@@ -292,7 +292,9 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     std::vector<uint32_t> compute_kernel_args = {x_block_size, w_block_size};
     std::unordered_map<std::string, uint32_t> compute_named_compile_time_args = {
         {"x_block_size", x_block_size}, {"w_block_size", w_block_size}};
-    bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32;
+    bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32 ||
+                            cb_data_format_output == tt::DataFormat::Int32 ||
+                            cb_data_format_output == tt::DataFormat::UInt32;
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_rm_single_tile_size.cpp",

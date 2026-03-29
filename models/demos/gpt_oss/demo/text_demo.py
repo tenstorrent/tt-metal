@@ -347,6 +347,29 @@ def prepare_gpt_oss_generator_args(
             True,  # stop_at_eos
             True,  # run_in_ci
         ),
+        # Batch 128 with logprobs (top-5)
+        (
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            1,  # data_parallel
+            128,  # batch_size
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {
+                "temperature": 0,
+                "top_p": 0.08,
+                "enable_log_probs": True,
+                "num_logprobs": 5,
+            },  # sampling_params with logprobs
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
+            False,  # warmup_prefill
+            True,  # users_row_sharded
+            False,  # long_context_mode
+            True,  # stop_at_eos
+            False,  # run_in_ci
+        ),
         # Long-context mode: 1 user per row with 128k tokens, batch=128 for decode throughput
         (
             "models/tt_transformers/demo/sample_prompts/input_data_long_128k.json",  # input_prompts (128k prompt)
@@ -394,6 +417,7 @@ def prepare_gpt_oss_generator_args(
         "prefill_64k",
         "prefill_128k",
         "batch128",
+        "batch128_logprobs",
         "long_context_128k",
         "long_context_short_prefill_long_decode",
     ],
@@ -507,10 +531,14 @@ def test_gpt_oss_demo(
     # Create on-device sampling params
     SAMPLING_BATCH_SIZE = 32
     greedy = sampling_params["temperature"] == 0
+    enable_log_probs = sampling_params.get("enable_log_probs", False)
+    num_logprobs = sampling_params.get("num_logprobs", 0)
     device_sampling_params = SamplingParams(
         temperature=[sampling_params["temperature"]] * SAMPLING_BATCH_SIZE,
         top_k=[1] * SAMPLING_BATCH_SIZE if greedy else [40] * SAMPLING_BATCH_SIZE,
         top_p=[1.0] * SAMPLING_BATCH_SIZE if greedy else [sampling_params["top_p"]] * SAMPLING_BATCH_SIZE,
+        enable_log_probs=[enable_log_probs] * SAMPLING_BATCH_SIZE,
+        num_logprobs=[num_logprobs] * SAMPLING_BATCH_SIZE,
     )
 
     # Prepare input prompts

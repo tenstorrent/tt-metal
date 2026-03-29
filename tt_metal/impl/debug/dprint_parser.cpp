@@ -24,6 +24,7 @@
 using std::setw;
 using std::string;
 using std::to_string;
+using namespace std::literals;
 
 namespace tt::tt_metal {
 
@@ -759,6 +760,141 @@ std::string_view DevicePrintParser::format_message(
                     format,
                     std::get<bool>(buffer.argument_values[placeholder.arg_id]));
                 break;
+            case 't':  // TileSliceDynamic
+            {
+                const auto& tile_slice = std::get<TileSliceDynamic>(buffer.argument_values[placeholder.arg_id]);
+
+                // Read any error codes and handle accordingly
+                tt::CBIndex cb = static_cast<tt::CBIndex>(tile_slice.header.cb_id);
+                switch (tile_slice.header.return_code) {
+                    case DPrintOK: break;  // Continue to print the tile slice
+                    case DPrintErrorBadPointer: {
+                        uint32_t cb_ptr_val = tile_slice.header.cb_ptr;
+                        uint8_t count = tile_slice.header.data_count;
+                        fmt::format_to(
+                            std::back_inserter(buffer.buffer),
+                            "Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n",
+                            enchantum::scoped::to_string(cb),
+                            cb_ptr_val,
+                            count);
+                        continue;
+                    }
+                    case DPrintErrorUnsupportedFormat: {
+                        tt::DataFormat data_format = static_cast<tt::DataFormat>(tile_slice.header.data_format);
+                        fmt::format_to(
+                            std::back_inserter(buffer.buffer),
+                            "Tried printing {}: Unsupported data format ({})\n",
+                            enchantum::scoped::to_string(cb),
+                            data_format);
+                        continue;
+                    }
+                    case DPrintErrorMath:
+                        fmt::format_to(
+                            std::back_inserter(buffer.buffer),
+                            "Warning: MATH core does not support TileSlice printing, omitting print...\n");
+                        continue;
+                    case DPrintErrorEthernet:
+                        fmt::format_to(
+                            std::back_inserter(buffer.buffer),
+                            "Warning: Ethernet core does not support TileSlice printing, omitting print...\n");
+                        continue;
+                    default:
+                        fmt::format_to(
+                            std::back_inserter(buffer.buffer),
+                            "Warning: TileSlice printing failed with unknown return code {}, omitting print...\n",
+                            tile_slice.header.return_code);
+                        continue;
+                }
+
+                // No error codes, print the TileSlice
+                const uint8_t* data = tile_slice.data.data();
+                uint32_t i = 0;
+                bool count_exceeded = false;
+                for (int h = tile_slice.header.slice_range.h0; h < tile_slice.header.slice_range.h1;
+                     h += tile_slice.header.slice_range.hs) {
+                    for (int w = tile_slice.header.slice_range.w0; w < tile_slice.header.slice_range.w1;
+                         w += tile_slice.header.slice_range.ws) {
+                        // If the number of data specified by the SliceRange exceeds the number that was
+                        // saved in the print buffer (set by the MAX_COUNT template parameter in the
+                        // TileSlice), then break early.
+                        if (i >= tile_slice.header.data_count) {
+                            count_exceeded = true;
+                            break;
+                        }
+                        tt::DataFormat data_format = static_cast<tt::DataFormat>(tile_slice.header.data_format);
+                        switch (data_format) {
+                            case tt::DataFormat::Float16_b: {
+                                const uint16_t* float16_b_ptr = reinterpret_cast<const uint16_t*>(data);
+                                fmt::format_to(
+                                    std::back_inserter(buffer.buffer), format, bfloat16_to_float(float16_b_ptr[i]));
+                                break;
+                            }
+                            case tt::DataFormat::Float32: {
+                                const float* float32_ptr = reinterpret_cast<const float*>(data);
+                                fmt::format_to(std::back_inserter(buffer.buffer), format, float32_ptr[i]);
+                                break;
+                            }
+                            case tt::DataFormat::Bfp4_b:
+                            case tt::DataFormat::Bfp8_b: {
+                                // Saved the exponent and data together
+                                const uint16_t* data_ptr = reinterpret_cast<const uint16_t*>(data);
+                                uint8_t val = (data_ptr[i] >> 8) & 0xFF;
+                                uint8_t exponent = data_ptr[i] & 0xFF;
+                                uint32_t bit_val = convert_bfp_to_u32(data_format, val, exponent, false);
+                                fmt::format_to(
+                                    std::back_inserter(buffer.buffer), format, *reinterpret_cast<float*>(&bit_val));
+                                break;
+                            }
+                            case tt::DataFormat::Int8: {
+                                const int8_t* data_ptr = reinterpret_cast<const int8_t*>(data);
+                                fmt::format_to(std::back_inserter(buffer.buffer), format, (int)data_ptr[i]);
+                                break;
+                            }
+                            case tt::DataFormat::UInt8: {
+                                const uint8_t* data_ptr = reinterpret_cast<const uint8_t*>(data);
+                                fmt::format_to(std::back_inserter(buffer.buffer), format, (unsigned int)data_ptr[i]);
+                                break;
+                            }
+                            case tt::DataFormat::UInt16: {
+                                const uint16_t* data_ptr = reinterpret_cast<const uint16_t*>(data);
+                                fmt::format_to(std::back_inserter(buffer.buffer), format, (unsigned int)data_ptr[i]);
+                                break;
+                            }
+                            case tt::DataFormat::Int32: {
+                                const int32_t* data_ptr = reinterpret_cast<const int32_t*>(data);
+                                fmt::format_to(std::back_inserter(buffer.buffer), format, (int)data_ptr[i]);
+                                break;
+                            }
+                            case tt::DataFormat::UInt32: {
+                                const uint32_t* data_ptr = reinterpret_cast<const uint32_t*>(data);
+                                fmt::format_to(std::back_inserter(buffer.buffer), format, (unsigned int)data_ptr[i]);
+                                break;
+                            }
+                            default: break;
+                        }
+                        if (w + tile_slice.header.slice_range.ws < tile_slice.header.slice_range.w1) {
+                            buffer.buffer.append(" "sv);
+                        }
+                        i++;
+                    }
+
+                    // Break outer loop as well if MAX COUNT exceeded, also print a message to let the user
+                    // know that the slice has been truncated.
+                    if (count_exceeded) {
+                        fmt::format_to(
+                            std::back_inserter(buffer.buffer),
+                            "<TileSlice data truncated due to exceeding max count ({})>\n",
+                            tile_slice.header.data_count);
+                        break;
+                    }
+
+                    if (tile_slice.header.endl_rows) {
+                        buffer.buffer.append("\n"sv);
+                    }
+                }
+
+                break;
+            }
             default: TT_THROW("Unsupported type_id in format placeholder (format_message): {}", placeholder.type_id);
         }
     }
@@ -810,9 +946,19 @@ DevicePrintParser::ArgumentValue DevicePrintParser::read_argument_from_payload(
         }
         case 'w':  // bf16_t, but stored as float
         {
-            auto value = bfloat16_to_float(read_value_from_payload<uint16_t>(payload_bytes, offset));
-            std::cout << "Read bf16 value converted to float=" << value << std::endl;
+            uint16_t data = read_value_from_payload<uint16_t>(payload_bytes, offset);
+            auto value = bfloat16_to_float(data);
             return value;
+        }
+        case 't':  // TileSlice, but `pad` field carried info about MAX_BYTES
+        {
+            TileSliceDynamic tile_slice;
+            tile_slice.header = read_value_from_payload<TileSliceHostDev<0>>(payload_bytes, offset);
+            tile_slice.data.resize(tile_slice.header.pad);
+            for (size_t i = 0; i < tile_slice.header.pad; ++i) {
+                tile_slice.data[i] = read_value_from_payload<uint8_t>(payload_bytes, offset);
+            }
+            return tile_slice;
         }
         default: TT_THROW("Unsupported type_id in format placeholder (read_argument_from_payload): {}", type_id);
     }

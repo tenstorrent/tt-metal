@@ -13,6 +13,10 @@
 #include <filesystem>
 #include <string>
 
+namespace tt::tt_fabric {
+class ControlPlane;
+}
+
 namespace tt::tt_fabric::fabric_router_tests {
 
 bool find_device_with_neighbor_in_multi_direction(
@@ -40,5 +44,9 @@ bool compare_asic_mapping_files(const std::filesystem::path& generated_file, con
 
 // Helper function to check generated ASIC mapping files against golden files
 void check_asic_mapping_against_golden(const std::string& test_name, const std::string& golden_name = "");
+
+// Galaxy corner folding (dual/quad/triple-pod 16x8/single-galaxy ControlPlane init tests only): mesh endpoint logical
+// chips (row-major first/last) must map to tray_ids 1–4 and asic_location 1 in the physical system descriptor.
+void expect_galaxy_corner_folding_check(const ControlPlane& control_plane);
 
 }  // namespace tt::tt_fabric::fabric_router_tests

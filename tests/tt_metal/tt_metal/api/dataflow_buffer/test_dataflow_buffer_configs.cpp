@@ -26,7 +26,7 @@
 
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/hw/inc/internal/dataflow_buffer_interface.h"
+#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -88,7 +88,7 @@ void validate_dfb_tile_counters(
             uint8_t expected_tensix_id = (risc_id - 8) % 4;
             for (uint8_t tc = 0; tc < rc->config.num_tcs_to_rr; tc++) {
                 auto ptc = rc->config.packed_tile_counter[tc];
-                uint8_t actual_tensix_id = ::experimental::get_tensix_id(ptc);
+                uint8_t actual_tensix_id = dfb::get_tensix_id(ptc);
                 EXPECT_EQ(actual_tensix_id, expected_tensix_id)
                     << "Tensix producer RISC " << (int)risc_id << " TC[" << (int)tc
                     << "] must use tensix_id=" << (int)expected_tensix_id << " but has " << (int)actual_tensix_id;
@@ -102,7 +102,7 @@ void validate_dfb_tile_counters(
             uint8_t expected_tensix_id = (risc_id - 8) % 4;
             for (uint8_t tc = 0; tc < rc->config.num_tcs_to_rr; tc++) {
                 auto ptc = rc->config.packed_tile_counter[tc];
-                uint8_t actual_tensix_id = ::experimental::get_tensix_id(ptc);
+                uint8_t actual_tensix_id = dfb::get_tensix_id(ptc);
                 EXPECT_EQ(actual_tensix_id, expected_tensix_id)
                     << "Tensix consumer RISC " << (int)risc_id << " TC[" << (int)tc
                     << "] must use tensix_id=" << (int)expected_tensix_id << " but has " << (int)actual_tensix_id;
@@ -111,7 +111,7 @@ void validate_dfb_tile_counters(
     }
 
     // For BLOCKED mode, validate remapper pair indices
-    if (config.cap == ::experimental::AccessPattern::BLOCKED) {
+    if (config.cap == dfb::AccessPattern::BLOCKED) {
         std::set<uint8_t> seen_remapper_indices;
         for (const auto& [risc_id, rc] : producer_configs) {
             uint8_t remapper_idx = rc->config.remapper_pair_index;
@@ -153,11 +153,11 @@ void validate_dfb_tile_counters(
             auto producer_ptc = producer_rc->config.packed_tile_counter[producer_tc_slot];
             auto consumer_ptc = consumer_rc->config.packed_tile_counter[consumer_tc_slot];
 
-            if (config.cap == ::experimental::AccessPattern::BLOCKED) {
+            if (config.cap == dfb::AccessPattern::BLOCKED) {
                 // For BLOCKED mode, consumer TCs are different from producer TC (remapper-based)
                 // Accumulate the consumer TC IDs into expected_consumer_tcs
                 if (consumer_idx < 4) {
-                    uint8_t consumer_tc_id = ::experimental::get_counter_id(consumer_ptc);
+                    uint8_t consumer_tc_id = dfb::get_counter_id(consumer_ptc);
                     expected_consumer_tcs |= (consumer_tc_id & 0x1F) << (consumer_idx * 5);
                     consumer_idx++;
                 }
@@ -167,21 +167,21 @@ void validate_dfb_tile_counters(
                     "BLOCKED: Producer {} TC[{}]=(tensix:{}, tc:{}) -> Consumer {} TC[{}]=(tensix:{}, tc:{})",
                     producer_risc_id,
                     producer_tc_slot,
-                    ::experimental::get_tensix_id(producer_ptc),
-                    ::experimental::get_counter_id(producer_ptc),
+                    dfb::get_tensix_id(producer_ptc),
+                    dfb::get_counter_id(producer_ptc),
                     consumer_risc_id,
                     consumer_tc_slot,
-                    ::experimental::get_tensix_id(consumer_ptc),
-                    ::experimental::get_counter_id(consumer_ptc));
+                    dfb::get_tensix_id(consumer_ptc),
+                    dfb::get_counter_id(consumer_ptc));
             } else {
                 // For STRIDED mode, producer and consumer should share the exact same TC
                 EXPECT_EQ(producer_ptc, consumer_ptc)
                     << "STRIDED: Producer " << (int)producer_risc_id << " TC[" << (int)producer_tc_slot
                     << "] should share TC with Consumer " << (int)consumer_risc_id << " TC[" << (int)consumer_tc_slot
-                    << "]. Producer has (tensix:" << (int)::experimental::get_tensix_id(producer_ptc)
-                    << ", tc:" << (int)::experimental::get_counter_id(producer_ptc)
-                    << "), Consumer has (tensix:" << (int)::experimental::get_tensix_id(consumer_ptc)
-                    << ", tc:" << (int)::experimental::get_counter_id(consumer_ptc) << ")";
+                    << "]. Producer has (tensix:" << (int)dfb::get_tensix_id(producer_ptc)
+                    << ", tc:" << (int)dfb::get_counter_id(producer_ptc)
+                    << "), Consumer has (tensix:" << (int)dfb::get_tensix_id(consumer_ptc)
+                    << ", tc:" << (int)dfb::get_counter_id(consumer_ptc) << ")";
 
                 log_info(
                     tt::LogTest,
@@ -190,12 +190,12 @@ void validate_dfb_tile_counters(
                     producer_tc_slot,
                     consumer_risc_id,
                     consumer_tc_slot,
-                    ::experimental::get_tensix_id(producer_ptc),
-                    ::experimental::get_counter_id(producer_ptc));
+                    dfb::get_tensix_id(producer_ptc),
+                    dfb::get_counter_id(producer_ptc));
             }
         }
 
-        if (config.cap == ::experimental::AccessPattern::BLOCKED) {
+        if (config.cap == dfb::AccessPattern::BLOCKED) {
             uint32_t actual_consumer_tcs = producer_rc->config.consumer_tcs;
             ASSERT_EQ(actual_consumer_tcs, expected_consumer_tcs)
                 << "BLOCKED: Producer " << (int)producer_risc_id << " consumer_tcs mismatch. "
@@ -220,10 +220,10 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0x1,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -249,10 +249,10 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0x1,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -283,10 +283,10 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB4Sx1SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -315,10 +315,10 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -347,10 +347,10 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0xF0,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -379,10 +379,10 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0x3,
         .num_producers = 2,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x3C,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -417,10 +417,10 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2SConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x30,
         .num_consumers = 2,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -449,10 +449,10 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx1BConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0x1,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x2,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -478,10 +478,10 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0x1,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -512,10 +512,10 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1BConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -544,10 +544,10 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0xF0,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -600,10 +600,10 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0xF,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x30,
         .num_consumers = 2,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();
@@ -651,10 +651,10 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
         .num_entries = 16,
         .producer_risc_mask = 0x3,
         .num_producers = 2,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .consumer_risc_mask = 0x3C,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = false};
 
     Program program = CreateProgram();

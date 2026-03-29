@@ -31,7 +31,7 @@ class TtDispatchModule(LightweightModule):
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
         seq_len_per_chip: int,
-        hidden_dim: int = 7 * 1024,
+        emb_dim: int = 7 * 1024,
         cluster_axis: int = 0,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
@@ -156,7 +156,7 @@ class TtDispatchModule(LightweightModule):
         Tokens are gathered into per-expert buffers with metadata tracking their origin for later recombination.
 
         Args:
-            x: Input tensor of shape (dispatch_group_size, seq_len, hidden_dim)
+            x: Input tensor of shape (dispatch_group_size, seq_len, emb_dim)
             weights: Router weights of shape (dispatch_group_size, seq_len, num_experts_per_tok)
             indices: Expert indices of shape (dispatch_group_size, seq_len, num_experts_per_tok)
             tt_expert_offsets: Base offset for each expert from each chip (TTNN tensor)
@@ -165,7 +165,7 @@ class TtDispatchModule(LightweightModule):
                 Shape: (num_dispatch_groups, num_routed_experts) - use shard_expert_dispatch_table() to create
 
         Returns:
-            dispatched_buffer: Dispatched tokens of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
+            dispatched_buffer: Dispatched tokens of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
             metadata: Metadata tensor of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
         """
         logger.debug(f"[TtDispatchModule.forward] INPUT SHAPES:")

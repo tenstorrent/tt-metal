@@ -144,8 +144,6 @@ set(HW_JIT_API_HEADERS
     inc/internal/bit_utils.h
     inc/internal/circular_buffer_interface.h
     inc/internal/circular_buffer_init.h
-    inc/internal/dataflow_buffer_interface.h
-    inc/internal/dataflow_buffer_init.h
     inc/internal/firmware_common.h
     inc/internal/mod_div_lib.h
     inc/internal/risc_attribs.h
@@ -184,6 +182,10 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-1xx/blackhole/tdma_xmov.h
     inc/internal/tt-1xx/blackhole/tensix.h
     inc/internal/tt-1xx/blackhole/tensix_types.h
+    inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h
+    inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h
+    inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_interface.h
+    inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_isr.h
     inc/internal/tt-2xx/quasar/c_tensix_core.h
     inc/internal/tt-2xx/quasar/cfg_defines.h
     inc/internal/tt-2xx/quasar/core_config.h

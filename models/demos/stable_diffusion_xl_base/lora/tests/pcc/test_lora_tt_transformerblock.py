@@ -56,8 +56,7 @@ def test_transformerblock(
     lora_path,
 ):
     if image_resolution == (512, 512) and is_blackhole():
-        pytest.skip("512x512 not supported on Blackhole")
-
+        pytest.skip("512x512 resolution not supported on Blackhole")
     pipeline = _get_diffusers_pipeline(is_ci_env)
     pipeline.unet.eval()
 

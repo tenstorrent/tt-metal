@@ -172,7 +172,7 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
 
     /* All Gather setup */
     const auto [all_gather_async_operation_attributes, all_gather_async_tensor_args] =
-        ttnn::experimental::prim::AllGatherAsyncDeviceOperation::invoke(
+        ttnn::experimental::prim::all_gather_async_build_operation_args(
             input_tensor,
             persistent_output_buffer,
             dim,

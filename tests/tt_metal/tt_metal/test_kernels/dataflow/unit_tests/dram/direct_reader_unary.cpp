@@ -6,6 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
+#include "api/kernel_thread_globals.h"
 #include "experimental/dataflow_buffer.h"
 #include "experimental/endpoints.h"
 #include "experimental/noc.h"

@@ -5,6 +5,7 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
+from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_slice_config
 
 
 class TtUpsample2D(LightweightModule):
@@ -41,7 +42,7 @@ class TtUpsample2D(LightweightModule):
             bias,
             self.conv_config.weights_dtype,
         )
-        self.conv_slice_config = None  # auto slicing
+        self.conv_slice_config = get_DRAM_conv_slice_config(module_path)
         self.conv_output_dtype = model_config.get_conv_output_dtype()
 
     def interpolate(self, hidden_states):
@@ -59,6 +60,7 @@ class TtUpsample2D(LightweightModule):
             ttnn.deallocate(hidden_state_l1)
         else:
             hidden_states = hidden_state_l1
+
         [hidden_states, [H, W], [tt_weights, tt_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_weights,

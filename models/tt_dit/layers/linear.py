@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from ..utils.matmul import get_matmul_config
+from ..utils.matmul import get_matmul_config, get_matmul_core_grid
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
@@ -60,7 +60,7 @@ class Linear(Module):
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None) -> ttnn.Tensor:
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,
@@ -199,7 +199,7 @@ class ColParallelLinear(Module):
             weight = self.weight.data
 
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
 
         if self.chunks is not None:
@@ -316,7 +316,7 @@ class RowParallelLinear(Module):
             weight = self.weight.data
 
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
-        core_grid = self.mesh_device.compute_with_storage_grid_size()
+        core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,

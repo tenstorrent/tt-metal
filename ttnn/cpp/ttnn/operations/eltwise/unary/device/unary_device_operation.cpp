@@ -35,14 +35,15 @@ void validate_supported_arch_dtype(DataType input_datatype, DataType output_data
                 static_cast<int>(op_type));
             break;
         case UnaryOpType::FMOD:
+        case UnaryOpType::LGAMMA:
             TT_FATAL(
                 (input_datatype == DataType::BFLOAT16 || input_datatype == DataType::FLOAT32),
-                "Unsupported input data type '{}' for UnaryOpType '{}' (FMOD operation).",
+                "Unsupported input data type '{}' for UnaryOpType '{}'.",
                 static_cast<int>(input_datatype),
                 static_cast<int>(op_type));
             TT_FATAL(
                 (output_datatype == DataType::BFLOAT16 || output_datatype == DataType::FLOAT32),
-                "Unsupported output data type '{}' for UnaryOpType '{}' (FMOD operation).",
+                "Unsupported output data type '{}' for UnaryOpType '{}'.",
                 static_cast<int>(output_datatype),
                 static_cast<int>(op_type));
             break;

@@ -171,3 +171,15 @@
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: qwenimage
+
+- name: t3k_deepseek_module_tests
+  cmd: |
+    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=T3K
+    pytest models/demos/deepseek_v3/tests -m t3k_compat --durations=0
+  skus:
+    wh_llmbox:
+      timeout: 20
+  owner_id: U04N3GWH8F9 # Kartik Paigwar
+  team: models
+  model-name: deepseek-modules

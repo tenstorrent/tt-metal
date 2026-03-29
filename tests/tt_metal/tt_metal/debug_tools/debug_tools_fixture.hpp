@@ -346,6 +346,8 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(false);
         tt::tt_metal::MetalContext::instance().rtoptions().set_use_device_print(true);
 
+        ExtraSetUp();
+
         // Parent class initializes devices and any necessary flags
         DebugToolsMeshFixture::SetUp();
     }
@@ -353,10 +355,16 @@ protected:
     void TearDown() override {
         // Parent class tears down devices
         DebugToolsMeshFixture::TearDown();
+        ExtraTearDown();
 
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
         tt::tt_metal::MetalContext::instance().rtoptions().set_use_device_print(false);
     }
+
+    // Override this function in child classes for additional setup commands between DPRINT setup
+    // and device creation.
+    virtual void ExtraSetUp() {}
+    virtual void ExtraTearDown() {}
 
 public:
     std::string CompileKernel(const std::string& kernel_path, stl::Span<const uint32_t> runtime_args = {}) {
@@ -419,6 +427,56 @@ public:
         // up after running a test.
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();
+    }
+};
+
+class DevicePrintSeparateFilesFixture : public DevicePrintFixture {
+public:
+    static constexpr std::array<std::string_view, 5> suffixes = {"BRISC", "NCRISC", "TRISC0", "TRISC1", "TRISC2"};
+    static void check_output(std::span<const std::string> expected) {
+        const auto& enabled_processors = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_processors(
+            tt::llrt::RunTimeDebugFeatureDprint);
+        ASSERT_EQ(expected.size(), suffixes.size());
+        for (size_t i = 0; i < suffixes.size(); i++) {
+            if (!enabled_processors.contains(HalProgrammableCoreType::TENSIX, i)) {
+                continue;
+            }
+            auto filename = fmt::format(
+                "{}generated/dprint/device-0_worker-core-0-0_{}.txt",
+                tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir(),
+                suffixes[i]);
+            EXPECT_TRUE(FilesMatchesString(filename, expected[i]));
+        }
+    }
+
+    // A function to run a program, according to which dispatch mode is set.
+    void RunProgram(const std::shared_ptr<distributed::MeshDevice>& mesh_device, distributed::MeshWorkload& workload) {
+        // Only difference is that we need to wait for the print server to catch
+        // up after running a test.
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+    }
+
+protected:
+    bool original_one_file_per_risc_{};
+    void ExtraSetUp() override {
+        // For this test, enable one file per risc
+        original_one_file_per_risc_ = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_one_file_per_risc(
+            tt::llrt::RunTimeDebugFeatureDprint);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_one_file_per_risc(
+            tt::llrt::RunTimeDebugFeatureDprint, true);
+    }
+    void ExtraTearDown() override {
+        tt::tt_metal::MetalContext::instance().rtoptions().set_feature_one_file_per_risc(
+            tt::llrt::RunTimeDebugFeatureDprint, original_one_file_per_risc_);
+    }
+
+    void RunTestOnDevice(
+        const std::function<void(DevicePrintSeparateFilesFixture*, std::shared_ptr<distributed::MeshDevice>)>&
+            run_function,
+        const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+        DebugToolsMeshFixture::RunTestOnDevice(run_function, mesh_device);
+        MetalContext::instance().dprint_server()->clear_log_file();
     }
 };
 

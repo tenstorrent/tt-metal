@@ -19,7 +19,7 @@ ttnn::Tensor llama_reduce_scatter(
     const tt::tt_metal::SubDeviceId& subdevice_id,
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
-    uint32_t num_links,
+    std::optional<uint32_t> num_links = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
     bool use_noc1_only = false);

@@ -60,7 +60,7 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, TensorTopology{});
+    return Tensor(HostTensor(std::move(distributed_host_buffer), tensor_spec, TensorTopology{}));
 }
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
@@ -345,7 +345,8 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
                 return Tensor(view_storage, new_spec, tensor.tensor_topology());
             }
 
-            return Tensor(tensor.host_storage(), new_spec, tensor.tensor_topology());
+            const auto& buffer = tensor.host_storage().buffer();
+            return Tensor(HostTensor(buffer, new_spec, tensor.tensor_topology()));
         });
     output = tt::tt_metal::set_tensor_id(output);
     tt::tt_metal::GraphTracker::instance().track_function_end(output);

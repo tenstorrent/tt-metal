@@ -9,11 +9,14 @@
 
 namespace ttml::metal {
 
-ttnn::Tensor silu_bw(const ttnn::Tensor& input_tensor, const ttnn::Tensor& dL_dout_tensor) {
+ttnn::Tensor silu_bw(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& dL_dout_tensor,
+    const std::optional<ttnn::Tensor>& preallocated_output) {
     return ttnn::prim::ttml_silu_bw(
-        input_tensor,   // [B,1,S,C]
-        dL_dout_tensor  //[B,1,S,C]
-    );
+        input_tensor,    // [B,1,S,C]
+        dL_dout_tensor,  // [B,1,S,C]
+        preallocated_output);
 }
 
 }  // namespace ttml::metal

@@ -192,7 +192,7 @@ public:
             const auto tensor_topology =
                 tt::tt_metal::TensorTopology(distribution_shape_, config_.placements, buffer_coords);
 
-            return Tensor(tt::tt_metal::HostStorage(std::move(distributed_buffer)), tensor_spec, tensor_topology);
+            return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), tensor_spec, tensor_topology));
         }
 
         // Otherwise, use xtensor to chunk the data into shards.
@@ -362,7 +362,7 @@ private:
         const auto tensor_topology =
             tt::tt_metal::TensorTopology(actual_distribution_shape, config_.placements, buffer_coords);
 
-        return Tensor(tt::tt_metal::HostStorage(std::move(distributed_buffer)), shard_spec, tensor_topology);
+        return Tensor(tt::tt_metal::HostTensor(std::move(distributed_buffer), shard_spec, tensor_topology));
     }
 
     // MeshDevice parameters.

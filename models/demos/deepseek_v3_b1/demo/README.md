@@ -21,41 +21,78 @@ Optional overrides (all modes): `--dense-layer-id-override`, `--moe-layer-id-ove
 
 Other common flags: `--prompt`, `--max-new-tokens`, `--tokenizer`, `--fp32` / `--no-fp32`, `--persistent-mode` / `--no-persistent-mode`.
 
-## Running the demo on single galaxy
+## Host setup
 
-From the repo root (`tt-metal/`), run the following. Do this after every `tt-smi -glx_reset`:
+Before running any of the commands below, set `$HOSTS` and `$HOSTSP` for the hosts you are using. `$HOSTS` is a comma-separated list of hostnames; `$HOSTSP` appends `:4` to each hostname (slots per host for MPI). For example, for a single pod using four galaxies:
 
 ```bash
-export TT_METAL_SLOW_DISPATCH_MODE=1
-export TT_METAL_HOME=$PWD
-tt-smi -glx_reset
-python tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
-tt-run --rank-binding bh_4x2_multi_mesh_rank_binding.yaml  \
+export HOSTS=bh-glx-d05u08,bh-glx-d05u02,bh-glx-d06u02,bh-glx-d06u08
+export HOSTSP=bh-glx-d05u08:4,bh-glx-d05u02:4,bh-glx-d06u02:4,bh-glx-d06u08:4
+```
+
+For a full SP4 (16 galaxies):
+
+```bash
+export HOSTS=bh-glx-d03u02,bh-glx-d03u08,bh-glx-d04u02,bh-glx-d04u08,bh-glx-d06u08,bh-glx-d06u02,bh-glx-d05u08,bh-glx-d05u02,bh-glx-d07u02,bh-glx-d07u08,bh-glx-d08u02,bh-glx-d08u08,bh-glx-d09u02,bh-glx-d09u08,bh-glx-d10u02,bh-glx-d10u08
+export HOSTSP=bh-glx-d03u08:4,bh-glx-d03u02:4,bh-glx-d04u02:4,bh-glx-d04u08:4,bh-glx-d06u08:4,bh-glx-d06u02:4,bh-glx-d05u08:4,bh-glx-d05u02:4,bh-glx-d07u02:4,bh-glx-d07u08:4,bh-glx-d08u02:4,bh-glx-d08u08:4,bh-glx-d09u02:4,bh-glx-d09u08:4,bh-glx-d10u02:4,bh-glx-d10u08:4
+```
+
+See `source.sh` in the repo root for more host configurations.
+
+## Single galaxy demo
+
+```bash
+TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --rank-binding bh_4x2_multi_mesh_rank_binding.yaml \
     python -m models.demos.deepseek_v3_b1.demo.cli \
+    --max-new-tokens 2048 \
     --weights real \
-    --cache-path /mnt/models/deepseek-ai/deepseek_v3_b1_cache
+    --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+    --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+    --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
 ```
 
-**From HuggingFace weights on disk (no cache):**
+## Pod demo
+
+First generate the pipeline config for a single pod:
 
 ```bash
-tt-run --rank-binding bh_4x2_multi_mesh_rank_binding.yaml  \
-    python -m models.demos.deepseek_v3_b1.demo.cli \
-    --weights state_dict \
-    --model-path /path/to/DeepSeek-V3
+python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
+    models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_3_4.yaml
 ```
 
-Adjust `--cache-path` or `--model-path` to your machine. You can add `--prompt`, `--max-new-tokens`, etc.
-
-## Running the demo on single-pod
+Then run the demo:
 
 ```bash
-./tools/scaleout/exabox/recover.sh --hosts bh-glx-d06u08,bh-glx-d06u02,bh-glx-d05u08,bh-glx-d05u02 # Modify with your 4 hosts
-python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod.yaml # Generate pipeline config for 1 pod
-tt-run --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod --bind-to hwt:overload-allowed --host bh-glx-d05u02:4,bh-glx-d05u08:4,bh-glx-d06u02:4,bh-glx-d06u08:4 --tag-output" --rank-binding blitz_decode_pipeline_rank_binding_single_pod.yaml \
+TT_METAL_DPRINT_CORES=all TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
+    --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod --bind-to hwt:overload-allowed --host $HOSTSP --tag-output" \
+    --rank-binding blitz_decode_pipeline_rank_binding_single_pod.yaml \
     python -m models.demos.deepseek_v3_b1.demo.cli \
+    --max-new-tokens 2048 \
     --weights real \
-    --cache-path /mnt/models/deepseek-ai/deepseek_v3_b1_cache
+    --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+    --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+    --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
 ```
 
-Use `--weights state_dict --model-path ...` similarly if you want runtime preparation from safetensors instead of a cache.
+## Full SP4
+
+Generate the superpod pipeline config:
+
+```bash
+python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
+    models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_superpod.yaml
+```
+
+Then run the demo across all 16 galaxies:
+
+```bash
+TT_METAL_SLOW_DISPATCH_MODE=1 tt-run \
+    --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_superpod --bind-to hwt:overload-allowed --host $HOSTSP --tag-output" \
+    --rank-binding blitz_decode_pipeline_rank_binding_superpod.yaml \
+    python -m models.demos.deepseek_v3_b1.demo.cli \
+    --max-new-tokens 2048 \
+    --weights real \
+    --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
+    --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
+    --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
+```

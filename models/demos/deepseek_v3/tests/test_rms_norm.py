@@ -21,6 +21,8 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
+pytestmark = pytest.mark.t3k_compat
+
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
 

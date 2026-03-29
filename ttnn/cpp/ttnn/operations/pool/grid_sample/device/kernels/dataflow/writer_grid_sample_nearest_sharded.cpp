@@ -82,17 +82,11 @@ ALWI void process_grid_point_nearest(
         }
     }
 
-    // Boundary checks - optimized for precomputed grid with sentinel values
-    bool h_valid, w_valid;
-    if constexpr (use_precomputed_grid) {
-        // For precomputed grid, check sentinel value (-1) for invalid coordinates
-        h_valid = (nearest_h != -1);
-        w_valid = (nearest_w != -1);
-    } else {
-        // For regular grid, do full coordinate validation
-        h_valid = is_coordinate_valid(nearest_h, input_height);
-        w_valid = is_coordinate_valid(nearest_w, input_width);
-    }
+    // Full coordinate validation for both precomputed and regular grids.
+    // This catches out-of-bounds coordinates from padded shard data in addition
+    // to the precomputed grid sentinel value (-1), which fails the >= 0 check.
+    bool h_valid = is_coordinate_valid(nearest_h, input_height);
+    bool w_valid = is_coordinate_valid(nearest_w, input_width);
 
     if (h_valid && w_valid) {
         // Read the nearest neighbor pixel
@@ -149,6 +143,7 @@ void kernel_main() {
     constexpr uint32_t grid_nsticks_per_core = get_compile_time_arg_val(13);
     constexpr uint32_t is_sharded = get_compile_time_arg_val(14);
     constexpr uint32_t fill_cb_index = get_compile_time_arg_val(15);
+    constexpr uint32_t batch_size = get_compile_time_arg_val(16);
 
     uint32_t input_addr = 0;
     uint32_t global_grid_stick_start = 0;
@@ -168,7 +163,7 @@ void kernel_main() {
     }
 
     // Input tensor accessor for remote NOC reads - same as sharded reader
-    constexpr auto input_tensor_args = TensorAccessorArgs<16>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<17>();
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_addr, input_stick_nbytes);
 
     constexpr auto grid_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
@@ -222,22 +217,28 @@ void kernel_main() {
         uint32_t l1_write_output_addr =
             l1_write_output_base_addr +
             (grid_stick_idx * grid_batching_factor * input_stick_nbytes + in_grid_row_idx * input_stick_nbytes);
-        // Process nearest neighbor sampling and write directly to output
-        process_grid_point_nearest<
-            grid_dtype,
-            is_sharded,
-            use_precomputed_grid,
-            align_corners,
-            input_height,
-            input_width,
-            input_stick_nbytes,
-            output_cb_index>(
-            grid_stick_ptr,
-            in_grid_row_idx,
-            input_tensor_accessor,
-            batch_offset,
-            l1_write_output_addr,
-            fill_stick_addr);
+
+        if (curr_batch < batch_size) {
+            // Process nearest neighbor sampling and write directly to output
+            process_grid_point_nearest<
+                grid_dtype,
+                is_sharded,
+                use_precomputed_grid,
+                align_corners,
+                input_height,
+                input_width,
+                input_stick_nbytes,
+                output_cb_index>(
+                grid_stick_ptr,
+                in_grid_row_idx,
+                input_tensor_accessor,
+                batch_offset,
+                l1_write_output_addr,
+                fill_stick_addr);
+        } else {
+            // Padding stick beyond valid batches - write zeros
+            noc_async_read(get_noc_addr(fill_stick_addr), l1_write_output_addr, input_stick_nbytes);
+        }
 
         // Always advance once after processing
         advance_grid_index<is_sharded>(

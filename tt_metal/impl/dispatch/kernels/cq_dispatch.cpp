@@ -103,8 +103,10 @@ constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X
 constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
+#if !defined(IS_CQ_DRAM_BACKED) || IS_CQ_DRAM_BACKED == 0
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
+#endif
 constexpr uint32_t dispatch_cb_page_size = 1 << dispatch_cb_log_page_size;
 
 constexpr uint32_t completion_queue_end_addr = completion_queue_base_addr + completion_queue_size;
@@ -258,6 +260,9 @@ void notify_host_of_completion_queue_write_pointer() {
     volatile tt_l1_ptr uint32_t* completion_wr_ptr_addr = get_cq_completion_write_ptr();
     completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;
 #if defined(FABRIC_RELAY)
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+    uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
+#endif
     noc_async_write(dev_completion_q_wr_ptr, pcie_noc_xy | completion_queue_write_ptr_addr, 4);
 #else
     cq_noc_async_write_with_state<CQ_NOC_SnDL>(dev_completion_q_wr_ptr, completion_queue_write_ptr_addr, 4);
@@ -292,6 +297,9 @@ void process_write_host_h() {
     // DPRINT << "process_write_host_h: " << length << ENDL();
     uint32_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+    uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
+#endif
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
 #endif
     constexpr uint32_t max_batch_size = ~(dispatch_cb_page_size - 1);
@@ -314,6 +322,9 @@ void process_write_host_h() {
             if (completion_queue_write_addr + xfer_size > completion_queue_end_addr) {
                 uint32_t last_chunk_size = completion_queue_end_addr - completion_queue_write_addr;
 #if defined(FABRIC_RELAY)
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+                uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
+#endif
                 noc_async_write(data_ptr, pcie_noc_xy | completion_queue_write_addr, last_chunk_size);
 #else
                 cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, last_chunk_size);
@@ -327,6 +338,9 @@ void process_write_host_h() {
                 xfer_size -= last_chunk_size;
             }
 #if defined(FABRIC_RELAY)
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+            uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
+#endif
             noc_async_write(data_ptr, pcie_noc_xy | completion_queue_write_addr, xfer_size);
 #else
             cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, xfer_size);

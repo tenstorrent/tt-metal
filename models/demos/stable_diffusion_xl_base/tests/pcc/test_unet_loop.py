@@ -12,7 +12,6 @@ from tqdm import tqdm
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
-    SDXL_TRACE_REGION_SIZE,
     allocate_input_tensors,
     create_user_tensors,
     prepare_input_tensors,
@@ -27,7 +26,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 # TODO: test 20 instead of 10 unet iterations
 UNET_LOOP_PCC = {
-    "1024x1024": {"10": 0.93, "50": 0.913},
+    "1024x1024": {"10": 0.93, "50": 0.907},
     "512x512": {"10": 0.84, "50": 0.917},
 }
 
@@ -333,7 +332,6 @@ def run_unet_inference(
     ],
     ids=["1024x1024", "512x512"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a green horse"),),

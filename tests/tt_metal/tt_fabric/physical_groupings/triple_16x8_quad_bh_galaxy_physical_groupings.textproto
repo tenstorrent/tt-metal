@@ -134,26 +134,34 @@ groupings {
   }
 }
 
-# MESH preset groupings for different mesh sizes to cover all MGD cases
-
-groupings {
-  name: "2x4_Mesh_2tray"
-  preset_type: MESH
-  instances: [
-    { id: 0 grouping_ref { custom_type: "halftray" } },
-    { id: 1 grouping_ref { custom_type: "halftray" } }
-  ]
-  row_major_mesh {
-    dims: [2, 1]
-  }
-}
-
 # MESH: 1 tray (8 ASICs)
 groupings {
   name: "2x4_Mesh"
   preset_type: MESH
   instances: [
     { id: 0 grouping_ref { preset_type: TRAY_1 } }
+  ]
+}
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_2 } }
+  ]
+}
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_3 } }
+  ]
+}
+# MESH: 1 tray (8 ASICs)
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: TRAY_4 } }
   ]
 }
 
@@ -241,5 +249,20 @@ groupings {
   ]
   row_major_mesh {
     dims: [2, 2]
+  }
+}
+
+# MESH: 4 hosts (128 ASICs) arranged in 2x2 grid - for 16x8 quad BH galaxy
+groupings {
+  name: "4x32_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 grouping_ref { preset_type: HOSTS } },
+    { id: 1 grouping_ref { preset_type: HOSTS } },
+    { id: 2 grouping_ref { preset_type: HOSTS } },
+    { id: 3 grouping_ref { preset_type: HOSTS } }
+  ]
+  row_major_mesh {
+    dims: [1, 4]
   }
 }

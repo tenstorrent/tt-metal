@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+import ttnn
+from models.common.utility_functions import is_blackhole
 
 
 def get_DRAM_GN_shape(module_path, idx):
@@ -70,3 +72,30 @@ def get_DRAM_GN_config(module_path, idx):
                 num_out_blocks = 32
 
     return core_x, core_y, num_out_blocks
+
+
+def get_DRAM_conv_slice_config(module_path):
+    if not is_blackhole():
+        return None  # auto slicing
+    if "decoder.up_blocks.1.resnets" in module_path or "decoder.up_blocks.0.upsamplers" in module_path:
+        return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=4)
+    elif "decoder.up_blocks.2.resnets" in module_path or "decoder.up_blocks.1.upsamplers" in module_path:
+        if "conv2" in module_path or "resnets.1" in module_path or "resnets.2" in module_path:
+            return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=6)
+        return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=16)
+    elif "decoder.up_blocks.3.resnets" in module_path:
+        if "resnets.0.conv1" in module_path:
+            return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=11)
+        return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=6)
+    elif "decoder.up_blocks.2.upsamplers" in module_path:
+        return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=32)
+    elif "decoder.conv_out" in module_path:
+        return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=8)
+    elif "encoder.down_blocks.2.resnets" in module_path or "encoder.down_blocks.3.resnets" in module_path:
+        return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=4)
+    elif "encoder.conv_out" in module_path:
+        return ttnn.Conv2dL1FullSliceConfig
+    elif "encoder.conv_in" in module_path:
+        return ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceWidth, num_slices=4)
+    else:
+        return None  # auto slicing

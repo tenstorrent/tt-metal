@@ -27,19 +27,8 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::detail {
 
-// TODO: In future will uplift the op once the floor and tan has supported.
-// digamma support for the range of (1, inf)
-Tensor _lgamma_fast(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::detail::unary_impl(
-        x,
-        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::LGAMMA}},
-        output_mem_config,
-        std::nullopt,
-        std::nullopt);
-}
-
-// Existing implementation of lgamma.
-// TODO: Remove this once the lgamma kernel for float32 is supported.
+// Existing implementation of _lgamma.
+// TODO: Remove this once the multigammaln is uplifted.
 Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor result(x);
     {
@@ -536,13 +525,6 @@ namespace ttnn {
 // Global Norm
 Tensor normalize_global(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     return detail::_make_global_from_hw_impl(normalize_hw, y, output_mem_config);
-}
-
-Tensor lgamma(const Tensor& t, const std::optional<MemoryConfig>& m) {
-    if (t.dtype() == DataType::BFLOAT16) {
-        return detail::_lgamma_fast(t, m);
-    }
-    return detail::_lgamma(t, m);
 }
 
 }  // namespace ttnn

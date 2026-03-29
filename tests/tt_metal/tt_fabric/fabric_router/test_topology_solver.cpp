@@ -2956,6 +2956,59 @@ TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SplittingTar
     ASSERT_FALSE(result.success) << "Target group {1,2,3} cannot be split across global groups {10},{11},{12}";
 }
 
+// Cross-validation: same-rank feasibility vs required mappings (set_theory check in validate()).
+TEST_F(TopologySolverTest, MappingConstraints_SetSameRankRejected_WhenRequiredPinsDifferentPartitions) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1, TestGlobalNode(10)));
+    ASSERT_TRUE(constraints.add_required_constraint(2, TestGlobalNode(12)));
+    // Targets {1,2} must share one global partition; 10 is only in {10,11}, 12 only in {12,13} -> infeasible.
+    EXPECT_FALSE(constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2}}, std::vector<std::set<TestGlobalNode>>{{10, 11}, {12, 13}}))
+        << "Same-rank groups should be rejected when required mappings straddle global partitions";
+    EXPECT_TRUE(constraints.get_same_rank_target_groups().empty());
+    EXPECT_TRUE(constraints.get_same_rank_global_groups().empty());
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(12), 1u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraints_SetSameRankSucceeds_WhenRequiredSharesOnePartition) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.add_required_constraint(1, TestGlobalNode(10)));
+    ASSERT_TRUE(constraints.add_required_constraint(2, TestGlobalNode(11)));
+    EXPECT_TRUE(constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2}}, std::vector<std::set<TestGlobalNode>>{{10, 11}, {12, 13}}));
+    EXPECT_EQ(constraints.get_same_rank_target_groups().size(), 1u);
+}
+
+// Cardinality is re-checked on required adds (validate_cardinality_constraints from validate()).
+TEST_F(TopologySolverTest, MappingConstraints_AddRequiredRejected_WhenCardinalityBecomesUnsatisfiable) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    std::set<std::pair<TestTargetNode, TestGlobalNode>> pairs = {{1, 10}, {1, 11}, {2, 10}, {2, 11}};
+    ASSERT_TRUE(constraints.add_cardinality_constraint(pairs, 3));
+    ASSERT_TRUE(constraints.add_required_constraint(1, TestGlobalNode(10)));
+    // At most two pairs can be satisfied in any assignment: (1,10) and (2,11) or (1,10) and (2,10), etc. — never 3.
+    EXPECT_FALSE(constraints.add_required_constraint(2, TestGlobalNode(11)))
+        << "Required constraint that caps cardinality-satisfiable pairs below min_count should fail";
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 0u)
+        << "Failed add should not leave a partial required mapping for target 2";
+}
+
+// Forbidden-only path runs full validate(); failed add must not leave forbidden_pairs_ mutated.
+TEST_F(TopologySolverTest, MappingConstraints_ForbiddenRejectedAndRolledBack_WhenBreaksSameRank) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    ASSERT_TRUE(constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2}}, std::vector<std::set<TestGlobalNode>>{{10, 11}, {12, 13}}));
+    ASSERT_TRUE(constraints.add_required_constraint(1, TestGlobalNode(10)));
+    ASSERT_TRUE(constraints.add_required_constraint(2, std::set<TestGlobalNode>{10, 11}));
+    // Target 2 must stay in {10,11} with target 1; forbidding both globals removes every candidate in that partition.
+    std::set<TestGlobalNode> forbid_both = {10, 11};
+    EXPECT_FALSE(constraints.add_forbidden_constraint(2, forbid_both));
+    EXPECT_TRUE(constraints.get_forbidden_pairs().empty())
+        << "Forbidden inserts should roll back on validation failure";
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(10), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(11), 1u);
+}
+
 TEST_F(TopologySolverTest, MappingConstraintsManyToManyIntersection) {
     // Test many-to-many constraint intersection with existing constraints
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;

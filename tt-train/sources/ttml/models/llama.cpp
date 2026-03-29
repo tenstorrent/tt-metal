@@ -269,7 +269,6 @@ LlamaConfig read_config(const YAML::Node& config) {
     llama_config.theta = config["theta"].as<float>(500000.0F);
     llama_config.runner_type = common::transformer::read_runner_type(config);
     llama_config.weight_tying = common::transformer::read_weight_tying_type(config);
-
     // Read RoPE NTK-aware scaling parameters if they exist
     if (config["rope_scaling"]) {
         const auto& rope_scaling = config["rope_scaling"];
@@ -302,7 +301,6 @@ YAML::Node write_config(const LlamaConfig& llama_config) {
     config["vocab_size"] = llama_config.vocab_size;
     config["max_sequence_length"] = llama_config.max_sequence_length;
     config["theta"] = llama_config.theta;
-
     // Add RoPE scaling parameters if they are set
     if (llama_config.scaling_factor != 0.0F && llama_config.original_context_length != 0U) {
         YAML::Node rope_scaling;

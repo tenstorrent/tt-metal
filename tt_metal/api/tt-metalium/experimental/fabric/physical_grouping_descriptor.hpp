@@ -114,11 +114,34 @@ public:
     // Find any valid mapping of a grouping to a physical system descriptor
     // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
     // Returns empty set if no valid mapping exists
-    // errors_out can be provided to get detailed error messages (optional, can be nullptr)
+    std::unordered_set<tt::tt_metal::AsicID> find_any_in_psd(
+        const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+
+    // Find any valid mapping of a grouping to a physical system descriptor
+    // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
+    // Returns empty set if no valid mapping exists
+    // errors_out will be populated with detailed error messages if mapping fails
     std::unordered_set<tt::tt_metal::AsicID> find_any_in_psd(
         const GroupingInfo& grouping,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        std::vector<std::string>* errors_out = nullptr) const;
+        std::vector<std::string>& errors_out) const;
+
+    // Find all possible ASIC IDs that could appear in any valid mapping of the input `groupings` to the physical
+    // system descriptor.
+    // Returns a vector of unordered_sets. Each element is one complete valid mapping: the set of ASIC IDs used
+    // across all of the input groupings for that mapping (grouping type is not distinguished in the set).
+    // Returns an empty vector if no valid combined mapping exists.
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
+        const std::vector<GroupingInfo>& groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+
+    // Same semantics as the overload without `errors_out`.
+    // Additionally, `errors_out` receives detailed messages when mapping fails or no valid combined mapping can be
+    // formed.
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
+        const std::vector<GroupingInfo>& groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        std::vector<std::string>& errors_out) const;
 
     // Build flattened adjacency meshes - one per possibility based on possible groupings that can be formed
     // Returns vector of GroupingInfo objects, each with adjacency_graph populated and node metadata maps filled
@@ -196,12 +219,10 @@ private:
     static std::vector<std::string> static_validate(const proto::PhysicalGroupings& proto);
 
     // Internal validation helpers (used by static_validate)
-    static void uniquify_duplicate_names(proto::PhysicalGroupings& proto);
     static void validate_required_groupings(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_grouping_references(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_counts(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
     static void validate_grouping_structure(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
-    static void validate_unique_names(const proto::PhysicalGroupings& proto, std::vector<std::string>& errors);
 };
 
 }  // namespace tt::tt_fabric

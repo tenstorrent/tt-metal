@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 
+#include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 #include "ops/rope_op.hpp"
 
@@ -23,6 +24,10 @@ private:
     std::shared_ptr<ModuleBase> m_w3;
     std::shared_ptr<ModuleBase> m_w2;
     std::shared_ptr<ModuleBase> m_dropout;
+    std::shared_ptr<ttml::modules::LinearLayer> m_w1_linear;
+    std::shared_ptr<ttml::modules::LinearLayer> m_w2_linear;
+    std::shared_ptr<ttml::modules::LinearLayer> m_w3_linear;
+    float m_dropout_prob = 0.0F;
 };
 
 class DistributedLlamaBlock : public ModuleBase {

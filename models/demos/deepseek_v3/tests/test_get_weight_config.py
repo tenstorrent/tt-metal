@@ -23,6 +23,8 @@ from models.demos.deepseek_v3.utils.weight_config import (
     validate_weight_config_paths,
 )
 
+pytestmark = pytest.mark.t3k_compat
+
 
 @dataclass(frozen=True)
 class _FakeMeshDevice:

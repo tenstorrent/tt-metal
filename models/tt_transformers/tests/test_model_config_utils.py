@@ -4,7 +4,7 @@
 
 import pytest
 
-from models.tt_transformers.tt.model_config import compute_padded_vocab_size
+from models.tt_transformers.tt.model_config import compute_padded_vocab_size, should_pad_sampling_logits_to_power_of_2
 
 
 @pytest.mark.parametrize(
@@ -29,3 +29,20 @@ def test_compute_padded_vocab_size(vocab_size, num_devices, expected):
 def test_compute_padded_vocab_size_rejects_invalid_num_devices():
     with pytest.raises(ValueError, match="num_devices must be >= 1"):
         compute_padded_vocab_size(32000, 0)
+
+
+@pytest.mark.parametrize(
+    ("base_model_name", "padded_vocab_size", "sampling_splits", "expected"),
+    [
+        ("Llama-3.1-70B", 128256, 4, True),
+        ("Llama-3.1-70B", 131072, 4, False),
+        ("Llama-3.1-8B", 128256, 4, False),
+    ],
+)
+def test_should_pad_sampling_logits_to_power_of_2(base_model_name, padded_vocab_size, sampling_splits, expected):
+    assert should_pad_sampling_logits_to_power_of_2(base_model_name, padded_vocab_size, sampling_splits) is expected
+
+
+def test_should_pad_sampling_logits_to_power_of_2_rejects_invalid_sampling_splits():
+    with pytest.raises(ValueError, match="sampling_splits must be >= 1"):
+        should_pad_sampling_logits_to_power_of_2("Llama-3.1-70B", 128256, 0)

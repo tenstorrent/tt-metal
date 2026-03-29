@@ -767,14 +767,24 @@ void add_rank_binding_constraints(
                 }
             }
 
-            // Same-group: target_groups = one set of fabric nodes per rank; global_groups = one set per UNSET host
+            // Same-group: fabric ranks that use UNSET host pools (unclaimed_ranks); one target group per such rank.
+            // Global partitions: UNSET hosts only (unset_hosts). Claimed ranks are pinned by rank_to_asics below and
+            // are not part of this host↔rank matching. Solver assigns target groups to distinct UNSET partitions
+            // (not index-aligned).
             std::vector<std::set<FabricNodeId>> target_groups;
-            target_groups.reserve(rank_to_fabric_nodes.size());
-            for (const auto& [rank, fabric_nodes] : rank_to_fabric_nodes) {
-                target_groups.push_back(fabric_nodes);
+            for (const auto& r : unclaimed_ranks) {
+                auto it = rank_to_fabric_nodes.find(r);
+                if (it != rank_to_fabric_nodes.end() && !it->second.empty()) {
+                    target_groups.push_back(it->second);
+                }
             }
             std::vector<std::set<tt::tt_metal::AsicID>> global_groups(unset_hosts.begin(), unset_hosts.end());
-            intra_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_groups);
+            if (!intra_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_groups)) {
+                TT_THROW(
+                    "Failed to set same-rank groups constraint for mesh {} (rank/host partition matching "
+                    "infeasible with current rank bindings).",
+                    logical_mesh_id.get());
+            }
         }
     }
 

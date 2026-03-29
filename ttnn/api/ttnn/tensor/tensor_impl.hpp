@@ -126,8 +126,6 @@ void copy_to_device(
 
 Tensor to_layout(const Tensor& tensor, Layout target_layout);
 
-Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
-
 // ======================================================================================
 //                                  .pad() and .unpad()
 // ======================================================================================

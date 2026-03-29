@@ -10,7 +10,6 @@ import torch
 from diffusers.utils import export_to_video
 
 import ttnn
-from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 
 from ....utils.test import line_params, ring_params
@@ -48,19 +47,6 @@ def test_stability(
 ):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
-
-    sp_factor = tuple(mesh_device.shape)[sp_axis]
-    tp_factor = tuple(mesh_device.shape)[tp_axis]
-
-    parallel_config = DiTParallelConfig(
-        tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
-        sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=sp_factor),
-        cfg_parallel=None,
-    )
-    vae_parallel_config = VaeHWParallelConfig(
-        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
-        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
-    )
     # Test parameters
     prompts = [
         "A massive, muscular sasquatch with long dark fur shreds an electric guitar on a forest stage at night, surrounded by glowing red and blue spotlights, smoke, and flickering firelight. The sasquatch headbangs with wild energy as the camera circles around, capturing sparks flying from the guitar strings. The scene has cinematic lighting, dynamic motion, and a sense of raw power — like a heavy-metal music video filmed in the wilderness. Ultra-detailed, realistic fur and lighting, cinematic camera movement, 4K, high contrast, volumetric fog, dramatic atmosphere.",
@@ -83,13 +69,11 @@ def test_stability(
     iteration = 0
     print(f"Starting stability loop for up to {duration_seconds // 3600} hours with {len(prompts)} prompts")
 
-    pipeline = WanPipeline(
+    pipeline = WanPipeline.create_pipeline(
         mesh_device=mesh_device,
-        parallel_config=parallel_config,
-        vae_parallel_config=vae_parallel_config,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
         num_links=num_links,
-        use_cache=True,
-        boundary_ratio=0.875,
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,

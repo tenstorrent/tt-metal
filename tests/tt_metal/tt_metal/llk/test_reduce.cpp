@@ -40,6 +40,8 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -122,7 +124,7 @@ void set_math_fid_masks_binary(
     }
 }
 
-void add_reader_writer_kernels(
+std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
     distributed::MeshWorkload& workload,
     distributed::MeshCoordinateRange& device_range,
     const CoreCoord& logical_core,
@@ -139,6 +141,9 @@ void add_reader_writer_kernels(
 
     auto& program = workload.get_programs().at(device_range);
 
+    KernelHandle unary_reader_kernel;
+    KernelHandle unary_writer_kernel;
+
     switch (test_config.reduce_dim) {
         case ReduceDim::H: {
             bfloat16 bfloat_scaler_value = bfloat16(scaler);
@@ -148,28 +153,46 @@ void add_reader_writer_kernels(
             reader_compile_args.push_back(packed_scaler_value);
             std::map<std::string, std::string> reader_defines = {{"REDUCE_SCALER", "1"}};
 
-            auto unary_reader_kernel = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
-                logical_core,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = tt_metal::NOC::RISCV_1_default,
-                    .compile_args = reader_compile_args,
-                    .defines = reader_defines});
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                unary_reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
+                    logical_core,
+                    tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                        .num_threads_per_cluster = 1, .compile_args = reader_compile_args, .defines = reader_defines});
+            } else {
+                unary_reader_kernel = tt_metal::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
+                    logical_core,
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = tt_metal::NOC::RISCV_1_default,
+                        .compile_args = reader_compile_args,
+                        .defines = reader_defines});
+            }
 
             std::vector<uint32_t> writer_compile_args = {};
             tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
-            auto unary_writer_kernel = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",  // no need to transpose the
-                                                                                         // output since output Ht=1
-                logical_core,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = writer_compile_args});
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                unary_writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
+                    logical_core,
+                    tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                        .num_threads_per_cluster = 1, .compile_args = writer_compile_args});
+            } else {
+                unary_writer_kernel = tt_metal::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",  // no need to transpose the
+                                                                                            // output since output Ht=1
+                    logical_core,
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .compile_args = writer_compile_args});
+            }
 
             tt_metal::SetRuntimeArgs(
                 program, unary_reader_kernel, logical_core, {src_dram_buffer->address(), N, Ht, Wt, Ht * Wt});
@@ -184,6 +207,7 @@ void add_reader_writer_kernels(
                     num_tensor_tiles / Ht  // num tiles
                 });
 
+            return {unary_reader_kernel, unary_writer_kernel};
             break;
         }
         case ReduceDim::HW: {
@@ -193,26 +217,44 @@ void add_reader_writer_kernels(
             std::vector<uint32_t> reader_compile_args = {};
             tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_args);
 
-            auto unary_reader_kernel = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
-                logical_core,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = tt_metal::NOC::RISCV_1_default,
-                    .compile_args = reader_compile_args});
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                unary_reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
+                    logical_core,
+                    tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                        .num_threads_per_cluster = 1, .compile_args = reader_compile_args});
+            } else {
+                unary_reader_kernel = tt_metal::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
+                    logical_core,
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                        .noc = tt_metal::NOC::RISCV_1_default,
+                        .compile_args = reader_compile_args});
+            }
 
             std::vector<uint32_t> writer_compile_args = {};
             tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
-            auto unary_writer_kernel = tt_metal::CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
-                logical_core,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = writer_compile_args});
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                unary_writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
+                    logical_core,
+                    tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                        .num_threads_per_cluster = 1, .compile_args = writer_compile_args});
+            } else {
+                unary_writer_kernel = tt_metal::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
+                    logical_core,
+                    tt_metal::DataMovementConfig{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                        .noc = tt_metal::NOC::RISCV_0_default,
+                        .compile_args = writer_compile_args});
+            }
 
             tt_metal::SetRuntimeArgs(
                 program,
@@ -240,9 +282,11 @@ void add_reader_writer_kernels(
                  (uint32_t)0,  // dram bank id
                  num_tiles});
 
+            return {unary_reader_kernel, unary_writer_kernel};
             break;
         }
         default: TT_THROW("Unsupported reduce dim!");
+        return {0, 0};
     }
 }
 
@@ -335,31 +379,79 @@ void run_single_core_reduce_program(
     std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
         distributed::MeshBuffer::create(dst_buffer_config, dst_local_config, mesh_device.get());
 
-    uint32_t src0_cb_index = 0;
     uint32_t num_buffer_tiles = 32;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(
-            num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, single_tile_bytes)
-            .set_tile_dims(src0_cb_index, test_config.tile_shape);
-    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
-
-    uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_buffer_tiles = 32;
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(
-            num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(ouput_cb_index, single_tile_bytes)
-            .set_tile_dims(ouput_cb_index, test_config.tile_shape);
-    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
+    KernelHandle compute_kernel;
 
-    tt_metal::CircularBufferConfig cb_temp_reduce_tile_config =
-        tt_metal::CircularBufferConfig(2 * (2 * TILE_WIDTH * TILE_HEIGHT), {{CBIndex::c_2, tt::DataFormat::Float16_b}})
-            .set_page_size(CBIndex::c_2, single_tile_bytes)
-            .set_tile_dims(CBIndex::c_2, tt_metal::Tile({32, 32}));
-    tt_metal::CreateCircularBuffer(program_, core, cb_temp_reduce_tile_config);
+    uint32_t src0_dfb = 0;
+    uint32_t src1_dfb = 0;
+    uint32_t dst_dfb = 0;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        tt_metal::experimental::dfb::DataflowBufferConfig dfb_src0_config = {
+            .entry_size = single_tile_bytes,
+            .num_entries = num_buffer_tiles,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b,
+            .tile = test_config.tile_shape,
+        };
 
-    add_reader_writer_kernels(workload, device_range, core, test_config, src_dram_buffer, dst_dram_buffer);
+        tt_metal::experimental::dfb::DataflowBufferConfig dfb_temp_reduce_tile_config = {
+            .entry_size = 2 * TILE_WIDTH * TILE_HEIGHT,
+            .num_entries = 2,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b,
+            .tile = tt_metal::Tile({32, 32}),
+        };
+
+        tt_metal::experimental::dfb::DataflowBufferConfig dfb_output_config = {
+            .entry_size = single_tile_bytes,
+            .num_entries = num_output_buffer_tiles,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = tt::DataFormat::Float16_b,
+            .tile = test_config.tile_shape,
+        };
+
+        src0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_src0_config);
+        src1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_temp_reduce_tile_config);
+        dst_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_output_config);
+
+    } else {
+        uint32_t src0_cb_index = 0;
+        tt_metal::CircularBufferConfig cb_src0_config =
+            tt_metal::CircularBufferConfig(
+                num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(src0_cb_index, single_tile_bytes)
+                .set_tile_dims(src0_cb_index, test_config.tile_shape);
+        tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
+
+        uint32_t ouput_cb_index = tt::CBIndex::c_16;
+        tt_metal::CircularBufferConfig cb_output_config =
+            tt_metal::CircularBufferConfig(
+                num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(ouput_cb_index, single_tile_bytes)
+                .set_tile_dims(ouput_cb_index, test_config.tile_shape);
+        tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
+
+        tt_metal::CircularBufferConfig cb_temp_reduce_tile_config =
+            tt_metal::CircularBufferConfig(2 * (2 * TILE_WIDTH * TILE_HEIGHT), {{CBIndex::c_2, tt::DataFormat::Float16_b}})
+                .set_page_size(CBIndex::c_2, single_tile_bytes)
+                .set_tile_dims(CBIndex::c_2, tt_metal::Tile({32, 32}));
+        tt_metal::CreateCircularBuffer(program_, core, cb_temp_reduce_tile_config);
+    }
+
+    auto [reader_kernel, writer_kernel] = add_reader_writer_kernels(workload, device_range, core, test_config, src_dram_buffer, dst_dram_buffer);
 
     vector<uint32_t> compute_kernel_args = {
         uint(Ht),
@@ -388,23 +480,46 @@ void run_single_core_reduce_program(
 
     std::string compute_kernel_name = get_compute_kernel_name(test_config.reduce_dim);
 
-    tt_metal::CreateKernel(
-        program_,
-        compute_kernel_name,
-        core,
-        tt_metal::ComputeConfig{
-            .math_fidelity = test_config.math_fidelity,
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
-            .compile_args = compute_kernel_args,
-            .defines = reduce_defines});
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        compute_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            compute_kernel_name,
+            core,
+            tt_metal::experimental::quasar::QuasarComputeConfig{
+                .num_threads_per_cluster = 1,
+                .math_fidelity = test_config.math_fidelity,
+                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                .dst_full_sync_en = test_config.dst_full_sync_en,
+                .compile_args = compute_kernel_args,
+                .defines = reduce_defines});
+
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, src0_dfb, reader_kernel, compute_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, src1_dfb, reader_kernel, compute_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, dst_dfb, compute_kernel, writer_kernel);
+    } else {
+        compute_kernel = tt_metal::CreateKernel(
+            program_,
+            compute_kernel_name,
+            core,
+            tt_metal::ComputeConfig{
+                .math_fidelity = test_config.math_fidelity,
+                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                .dst_full_sync_en = test_config.dst_full_sync_en,
+                .compile_args = compute_kernel_args,
+                .defines = reduce_defines});
+    }
 
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
 
     distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    auto* device = mesh_device->get_devices()[0];
+    auto blocking = device->arch() == ARCH::QUASAR;
+    distributed::EnqueueMeshWorkload(cq, workload, blocking);
     distributed::Finish(cq);
 
     // The kernel will view the input as TILED_NFACES
@@ -473,7 +588,7 @@ void run_single_core_reduce_program(
 using namespace unit_tests::compute::reduce;
 
 TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
-    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+    if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
     }
@@ -487,9 +602,18 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
+                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                        continue;
+                    }
+                    if (this->arch_ == tt::ARCH::QUASAR &&
+                        !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
+                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                        // TODO (#38092): Remove when we can run back to back tests on Quasar
+                        continue;
+                    }
                     ReduceConfig test_config = {
                         .shape = shape,
-                        .reduce_dim = ReduceDim::H,
                         .reduce_type = ReduceType(reduce_type),
                         .data_gen_rand_max = 10.0f,
                         .data_gen_seed = std::chrono::system_clock::now().time_since_epoch().count(),
@@ -520,6 +644,16 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
+                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                        continue;
+                    }
+                    if (this->arch_ == tt::ARCH::QUASAR &&
+                        !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
+                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                        // TODO (#38092): Remove when we can run back to back tests on Quasar
+                        continue;
+                    }
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::W,
@@ -553,10 +687,20 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 // Currently fp32 dest unsupported with reduce scalar
-                if (fp32_dest_acc_en) {
+                if (fp32_dest_acc_en && this->arch_ != tt::ARCH::QUASAR) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
+                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                        continue;
+                    }
+                    if (this->arch_ == tt::ARCH::QUASAR &&
+                        !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
+                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                        // TODO (#38092): Remove when we can run back to back tests on Quasar
+                        continue;
+                    }
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::HW,
@@ -579,7 +723,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
 }
 
 TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
-    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+    if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
     }
@@ -593,6 +737,16 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
+                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                        continue;
+                    }
+                    if (this->arch_ == tt::ARCH::QUASAR &&
+                        !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
+                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                        // TODO (#38092): Remove when we can run back to back tests on Quasar
+                        continue;
+                    }
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::H,
@@ -626,6 +780,16 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
+                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                        continue;
+                    }
+                    if (this->arch_ == tt::ARCH::QUASAR &&
+                        !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
+                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                        // TODO (#38092): Remove when we can run back to back tests on Quasar
+                        continue;
+                    }
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::W,
@@ -659,10 +823,20 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 // Currently fp32 dest unsupported with reduce scalar
-                if (fp32_dest_acc_en) {
+                if (fp32_dest_acc_en && this->arch_ != tt::ARCH::QUASAR) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
+                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                        continue;
+                    }
+                    if (this->arch_ == tt::ARCH::QUASAR &&
+                        !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
+                          math_fid == uint8_t(MathFidelity::HiFi4))) {
+                        // TODO (#38092): Remove when we can run back to back tests on Quasar
+                        continue;
+                    }
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::HW,
@@ -689,6 +863,10 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWTinyTiles) {
     tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT / 2, TILE_WIDTH});
     std::vector<uint32_t> shape = {1, 1, 1 * tile_shape.get_tile_shape()[0], 13 * tile_shape.get_tile_shape()[1]};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], tile_shape.get_tile_shape()[1]};
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        // Tiny tiles not yet supported on Quasar
+        GTEST_SKIP();
+    }
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {

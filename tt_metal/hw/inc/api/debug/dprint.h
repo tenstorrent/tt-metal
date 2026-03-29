@@ -4,10 +4,6 @@
 
 #pragma once
 
-#if defined(USE_DEVICE_PRINT)
-#include "device_print.h"
-#endif
-
 #include "risc_common.h"
 
 /*
@@ -489,4 +485,8 @@ DebugPrinter operator<<(DebugPrinter dp, T* val) {
 // Tile printing only supported in kernels
 #if defined(KERNEL_BUILD)
 #include "dprint_tile.h"
+#endif
+
+#if defined(USE_DEVICE_PRINT)
+#include "device_print.h"
 #endif

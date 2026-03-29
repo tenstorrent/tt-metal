@@ -36,14 +36,11 @@ from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSamp
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.prepare_weights import prepare_embedding_weights, prepare_lm_head_weights
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    build_broadcast_test_inputs,
+    create_fabric_router_config,
+)
 from models.perf.benchmarking_utils import BenchmarkProfiler
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
-
 
 # Synthetic weight provider: same layout as prepare_* (state dict + move_to_device); used for pipeline tests.
 _VOCAB_SIZE = 129280
@@ -312,7 +309,7 @@ def _is_persistent_mode_enabled():
     ],
     indirect=True,
 )
-def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters):
+def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warmup_iters, device_params):
     mesh_rows, mesh_cols = 4, 2
     num_devices = mesh_rows * mesh_cols
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -396,37 +393,26 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
     )
 
     sender_coord = ttnn.MeshCoordinate(1, 0)
-    device_inputs = []
-    device_intermediate = []
-    for r in range(mesh_rows):
-        for c in range(mesh_cols):
-            if r == sender_coord[0] and c == sender_coord[1]:
-                device_inputs.append(torch_a)
-            else:
-                device_inputs.append(torch.zeros_like(torch_a))
-            device_intermediate.append(torch.zeros_like(torch_a))
-    mesh_input = torch.cat(device_inputs, dim=0)
-    mesh_intermediate = torch.cat(device_intermediate, dim=0)
-
     mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_input,
-        device=submesh,
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=sender_coord,
+        output_shape=torch_a.shape,
+        input_shard_shape=(M, K),
+        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         layout=ttnn.TILE_LAYOUT,
+        input_dtype=ttnn.bfloat16,
+        bcast_core=mcast_core,
+        create_semaphores=True,
+        num_links=1,
         tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
+        output_mesh_mapper="shard_dim0",
+        input_tensor_torch=torch_a,
     )
-    intermediate_tensor_mesh = ttnn.from_torch(
-        mesh_intermediate,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
     ttnn_gamma = ttnn.from_torch(
         torch_gamma,
         dtype=ttnn.bfloat16,
@@ -485,9 +471,6 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         for _ in range(num_iters)
     ]
 
-    out_ready_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
-    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
     stage1_semaphores = [ttnn.create_global_semaphore(submesh, final_core_grid, 0) for _ in range(2)]
     stage2_semaphores = [ttnn.create_global_semaphore(submesh, final_core_grid, 0) for _ in range(2)]
     ttnn.synchronize_device(submesh)
@@ -506,12 +489,13 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
         output_index_tensor=output_buffers[0],
         argmax_final_core_coord=final_core,
         argmax_final_mesh_coord=final_mesh_coord,
-        semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
+        bcast_semaphores=bcast_inputs.semaphores,
         global_semaphore=stage1_semaphores[0],
         global_stage2_semaphore=stage2_semaphores[0],
         fabric_scratch_tensor=scratch_buffers[0],
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,
+        fabric_config=device_params["fabric_config"],
     )
     ttnn.synchronize_device(submesh)
 
@@ -528,12 +512,13 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             output_index_tensor=output_buffers[i % num_iters],
             argmax_final_core_coord=final_core,
             argmax_final_mesh_coord=final_mesh_coord,
-            semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
+            bcast_semaphores=bcast_inputs.semaphores,
             global_semaphore=stage1_semaphores[i % 2],
             global_stage2_semaphore=stage2_semaphores[i % 2],
             fabric_scratch_tensor=scratch_buffers[i % num_iters],
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
+            fabric_config=device_params["fabric_config"],
         )
     ttnn.end_trace_capture(submesh, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -551,12 +536,13 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
             output_index_tensor=output_buffers[i],
             argmax_final_core_coord=final_core,
             argmax_final_mesh_coord=final_mesh_coord,
-            semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
+            bcast_semaphores=bcast_inputs.semaphores,
             global_semaphore=stage1_semaphores[i % 2],
             global_stage2_semaphore=stage2_semaphores[i % 2],
             fabric_scratch_tensor=scratch_buffers[i],
             fp32_dest_acc_en=use_fp32,
             skip_ccl=False,
+            fabric_config=device_params["fabric_config"],
         )
     ttnn.end_trace_capture(submesh, trace_id, cq_id=0)
     ttnn.synchronize_device(submesh)
@@ -598,6 +584,7 @@ def test_single_device(
     bh_2d_mesh_device,
     use_fp32,
     seed,
+    device_params,
 ):
     """Single-device fused LM-head + argmax sampling with pre-cached width-sharded indices."""
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, 1)))
@@ -730,7 +717,6 @@ def test_single_device(
         indices_tensor=ttnn_indices,
         output_index_tensor=ttnn_output_index,
         argmax_final_core_coord=final_core,
-        semaphores=None,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=True,
     )
@@ -750,6 +736,7 @@ def test_single_device_d2h(
     bh_2d_mesh_device,
     use_fp32,
     seed,
+    device_params,
 ):
     """Single-device fused LM-head + argmax with optional D2H token emission enabled."""
     if not is_slow_dispatch():
@@ -888,7 +875,6 @@ def test_single_device_d2h(
         indices_tensor=ttnn_indices,
         output_index_tensor=ttnn_output_index,
         argmax_final_core_coord=final_core,
-        semaphores=None,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=True,
         socket_output=d2h_socket,
@@ -941,6 +927,7 @@ def test_multidevice(
     final_mesh_coord,
     sender_coord,
     seed,
+    device_params,
 ):
     """4x2 mesh fused LM-head + k=1 sampling (argmax) with CCL enabled."""
     mesh_rows, mesh_cols = 4, 2
@@ -1026,37 +1013,26 @@ def test_multidevice(
     )
 
     sender_mesh_coord = ttnn.MeshCoordinate(sender_coord[0], sender_coord[1])
-    device_inputs = []
-    device_intermediate = []
-    for r in range(mesh_rows):
-        for c in range(mesh_cols):
-            if r == sender_mesh_coord[0] and c == sender_mesh_coord[1]:
-                device_inputs.append(torch_a)
-            else:
-                device_inputs.append(torch.zeros_like(torch_a))
-            device_intermediate.append(torch.zeros_like(torch_a))
-    mesh_input = torch.cat(device_inputs, dim=0)
-    mesh_intermediate = torch.cat(device_intermediate, dim=0)
-
     mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_input,
-        device=submesh,
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=sender_mesh_coord,
+        output_shape=torch_a.shape,
+        input_shard_shape=(M, K),
+        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         layout=ttnn.TILE_LAYOUT,
+        input_dtype=ttnn.bfloat16,
+        bcast_core=mcast_core,
+        create_semaphores=True,
+        num_links=1,
         tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
+        output_mesh_mapper="shard_dim0",
+        input_tensor_torch=torch_a,
     )
-    intermediate_tensor_mesh = ttnn.from_torch(
-        mesh_intermediate,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
     ttnn_gamma = ttnn.from_torch(
         torch_gamma,
         dtype=ttnn.bfloat16,
@@ -1109,9 +1085,6 @@ def test_multidevice(
         mesh_mapper=mesh_mapper,
     )
 
-    out_ready_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
-    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
     global_semaphore = ttnn.create_global_semaphore(submesh, final_core_grid, 0)
     global_stage2_semaphore = ttnn.create_global_semaphore(submesh, final_core_grid, 0)
 
@@ -1126,12 +1099,13 @@ def test_multidevice(
         output_index_tensor=ttnn_output_index,
         argmax_final_core_coord=final_core,
         argmax_final_mesh_coord=final_mesh_coord,
-        semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
+        bcast_semaphores=bcast_inputs.semaphores,
         global_semaphore=global_semaphore,
         global_stage2_semaphore=global_stage2_semaphore,
         fabric_scratch_tensor=ttnn_fabric_scratch,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,
+        fabric_config=device_params["fabric_config"],
     )
     ttnn.synchronize_device(submesh)
 
@@ -1163,6 +1137,7 @@ def test_d2h(
     use_fp32,
     final_mesh_coord,
     seed,
+    device_params,
 ):
     """4x2 mesh fused LM-head + argmax with optional D2H token emission on final mesh device."""
     if not is_slow_dispatch():
@@ -1251,37 +1226,26 @@ def test_d2h(
     )
 
     sender_coord = ttnn.MeshCoordinate(1, 0)
-    device_inputs = []
-    device_intermediate = []
-    for r in range(mesh_rows):
-        for c in range(mesh_cols):
-            if r == sender_coord[0] and c == sender_coord[1]:
-                device_inputs.append(torch_a)
-            else:
-                device_inputs.append(torch.zeros_like(torch_a))
-            device_intermediate.append(torch.zeros_like(torch_a))
-    mesh_input = torch.cat(device_inputs, dim=0)
-    mesh_intermediate = torch.cat(device_intermediate, dim=0)
-
     mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_input,
-        device=submesh,
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=sender_coord,
+        output_shape=torch_a.shape,
+        input_shard_shape=(M, K),
+        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         layout=ttnn.TILE_LAYOUT,
+        input_dtype=ttnn.bfloat16,
+        bcast_core=mcast_core,
+        create_semaphores=True,
+        num_links=1,
         tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
+        output_mesh_mapper="shard_dim0",
+        input_tensor_torch=torch_a,
     )
-    intermediate_tensor_mesh = ttnn.from_torch(
-        mesh_intermediate,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
     ttnn_gamma = ttnn.from_torch(
         torch_gamma,
         dtype=ttnn.bfloat16,
@@ -1334,9 +1298,6 @@ def test_d2h(
         mesh_mapper=mesh_mapper,
     )
 
-    out_ready_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
-    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
     global_semaphore = ttnn.create_global_semaphore(submesh, final_core_grid, 0)
     global_stage2_semaphore = ttnn.create_global_semaphore(submesh, final_core_grid, 0)
 
@@ -1354,13 +1315,14 @@ def test_d2h(
         output_index_tensor=ttnn_output_index,
         argmax_final_core_coord=final_core,
         argmax_final_mesh_coord=final_mesh_coord,
-        semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
+        bcast_semaphores=bcast_inputs.semaphores,
         global_semaphore=global_semaphore,
         global_stage2_semaphore=global_stage2_semaphore,
         fabric_scratch_tensor=ttnn_fabric_scratch,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,
         socket_output=d2h_socket,
+        fabric_config=device_params["fabric_config"],
     )
     ttnn.synchronize_device(submesh)
 
@@ -1404,14 +1366,14 @@ def test_d2d_to_d2h_pipeline(
     use_fp32,
     final_mesh_coord,
     seed,
+    device_params,
 ):
     """4x2 mesh fused LM-head + argmax with D2D output routed through D2D forwarding to D2H."""
     if ttnn.get_num_devices() < 32:
         pytest.skip("Test requires a full galaxy")
     if not is_slow_dispatch():
         pytest.skip("Skipping D2D/D2H pipeline test in fast dispatch mode")
-    if not is_slow_dispatch():
-        pytest.skip("Skipping D2D/D2H pipeline test in fast dispatch mode")
+
     mesh_rows, mesh_cols = 4, 2
     num_devices = mesh_rows * mesh_cols
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -1516,37 +1478,26 @@ def test_d2d_to_d2h_pipeline(
     )
 
     sender_coord = ttnn.MeshCoordinate(1, 0)
-    device_inputs = []
-    device_intermediate = []
-    for r in range(mesh_rows):
-        for c in range(mesh_cols):
-            if r == sender_coord[0] and c == sender_coord[1]:
-                device_inputs.append(torch_a)
-            else:
-                device_inputs.append(torch.zeros_like(torch_a))
-            device_intermediate.append(torch.zeros_like(torch_a))
-    mesh_input = torch.cat(device_inputs, dim=0)
-    mesh_intermediate = torch.cat(device_intermediate, dim=0)
-
     mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_input,
-        device=submesh,
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=sender_coord,
+        output_shape=torch_a.shape,
+        input_shard_shape=(M, K),
+        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         layout=ttnn.TILE_LAYOUT,
+        input_dtype=ttnn.bfloat16,
+        bcast_core=lmhead_input_core,
+        create_semaphores=True,
+        num_links=1,
         tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
+        output_mesh_mapper="shard_dim0",
+        input_tensor_torch=torch_a,
     )
-    intermediate_tensor_mesh = ttnn.from_torch(
-        mesh_intermediate,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
     ttnn_gamma = ttnn.from_torch(
         torch_gamma,
         dtype=ttnn.bfloat16,
@@ -1599,9 +1550,6 @@ def test_d2d_to_d2h_pipeline(
         mesh_mapper=mesh_mapper,
     )
 
-    out_ready_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
-    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
     global_semaphore = ttnn.create_global_semaphore(submesh, argmax_final_core_grid, 0)
     global_stage2_semaphore = ttnn.create_global_semaphore(submesh, argmax_final_core_grid, 0)
 
@@ -1676,13 +1624,14 @@ def test_d2d_to_d2h_pipeline(
         output_index_tensor=ttnn_output_index,
         argmax_final_core_coord=argmax_final_core,
         argmax_final_mesh_coord=final_mesh_coord,
-        semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
+        bcast_semaphores=bcast_inputs.semaphores,
         global_semaphore=global_semaphore,
         global_stage2_semaphore=global_stage2_semaphore,
         fabric_scratch_tensor=ttnn_fabric_scratch,
         fp32_dest_acc_en=use_fp32,
         skip_ccl=False,
         socket_output=socket_interface.get_upstream_socket(),
+        fabric_config=device_params["fabric_config"],
     )
     d2h_page_words = socket_page_size_bytes // 4
     d2h_read_tensor = ttnn.from_torch(
@@ -1722,6 +1671,7 @@ def test_4stage_galaxy_1_iteration(
     use_fp32,
     final_mesh_coord,
     seed,
+    device_params,
 ):
     """4x2 mesh lm_head pipeline with H2D ingress + D2D ingress before compute, then D2D->D2H egress."""
     if ttnn.get_num_devices() < 32:
@@ -1837,37 +1787,27 @@ def test_4stage_galaxy_1_iteration(
     )
 
     sender_coord = ttnn.MeshCoordinate(1, 0)
-    device_inputs = []
-    device_intermediate = []
-    for r in range(mesh_rows):
-        for c in range(mesh_cols):
-            if r == sender_coord[0] and c == sender_coord[1]:
-                device_inputs.append(torch_a)
-            else:
-                device_inputs.append(torch.zeros_like(torch_a))
-            device_intermediate.append(torch.zeros_like(torch_a))
-    mesh_input = torch.cat(device_inputs, dim=0)
-    mesh_intermediate = torch.cat(device_intermediate, dim=0)
-
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=sender_coord,
+        output_shape=torch_a.shape,
+        input_shard_shape=(M, K),
+        tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        layout=ttnn.TILE_LAYOUT,
+        input_dtype=ttnn.bfloat16,
+        bcast_core=lmhead_input_core,
+        input_tensor_torch=torch_a,
+        create_output_tensor_mesh=True,
+        create_semaphores=True,
+        num_links=1,
+        tile=a_tile,
+        output_mesh_mapper="shard_dim0",
+    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
     mesh_mapper = ttnn.ShardTensorToMesh(submesh, dim=0)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_input,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
-    intermediate_tensor_mesh = ttnn.from_torch(
-        mesh_intermediate,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=input_a_mem_config,
-        mesh_mapper=mesh_mapper,
-    )
     ttnn_gamma = ttnn.from_torch(
         torch_gamma,
         dtype=ttnn.bfloat16,
@@ -1920,9 +1860,6 @@ def test_4stage_galaxy_1_iteration(
         mesh_mapper=mesh_mapper,
     )
 
-    out_ready_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
-    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, worker_crs, 0)
     global_semaphore = ttnn.create_global_semaphore(submesh, argmax_final_core_grid, 0)
     global_stage2_semaphore = ttnn.create_global_semaphore(submesh, argmax_final_core_grid, 0)
     sender_mesh_coord = ttnn.MeshCoordinate(int(sender_coord[0]), int(sender_coord[1]))
@@ -2017,7 +1954,7 @@ def test_4stage_galaxy_1_iteration(
             output_index_tensor=ttnn_output_index,
             argmax_final_core_coord=argmax_final_core,
             argmax_final_mesh_coord=final_mesh_coord,
-            semaphores=[out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore],
+            bcast_semaphores=bcast_inputs.semaphores,
             global_semaphore=global_semaphore,
             global_stage2_semaphore=global_stage2_semaphore,
             fabric_scratch_tensor=ttnn_fabric_scratch,
@@ -2025,6 +1962,7 @@ def test_4stage_galaxy_1_iteration(
             skip_ccl=False,
             socket_input=ingress_d2d_link.get_downstream_socket(),
             socket_output=egress_d2d_link.get_upstream_socket(),
+            fabric_config=device_params["fabric_config"],
         )
         logger.info("Running D2H socket read")
         d2h_page_words = socket_page_size_bytes // 4
@@ -2061,7 +1999,7 @@ def test_4stage_galaxy_1_iteration(
     ],
     indirect=True,
 )
-def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32):
+def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32, device_params):
     """
     4-stage 4x2 single-galaxy pipeline:
     P1(H2D) -> P2(LMHead+Sampling) -> P3(forward) -> P4(forward) -> P1(D2H).
@@ -2128,7 +2066,7 @@ def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32):
     ],
     indirect=True,
 )
-def test_persistent_mode(mesh_device, use_fp32):
+def test_persistent_mode(mesh_device, use_fp32, device_params):
     """
     4-stage 4x2 single-galaxy pipeline:
     P1(H2D) -> P2(LMHead+Sampling) -> P3(forward) -> P4(forward) -> P1(D2H).
@@ -2297,7 +2235,7 @@ def test_persistent_mode_real_weights(mesh_device, use_fp32, hf_model_path, hf_s
     ],
     indirect=True,
 )
-def test_persistent_mode_pod(mesh_device, use_fp32):
+def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
     """
     16-stage 4x2 pod pipeline (4 galaxies):
     Stage1(H2D+Embed) -> Stage2..14(activation fwd) -> Stage15(LMHead+Sampling) -> Stage16(token fwd) -> Stage1(D2H).

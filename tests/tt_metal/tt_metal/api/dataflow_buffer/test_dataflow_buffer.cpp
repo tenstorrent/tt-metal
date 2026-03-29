@@ -24,7 +24,7 @@
 
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/hw/inc/internal/dataflow_buffer_interface.h"
+#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
@@ -140,13 +140,13 @@ void run_single_dfb_program(
             experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
     }
 
-    uint32_t num_entries_per_consumer = dfb_config.cap == ::experimental::AccessPattern::STRIDED
+    uint32_t num_entries_per_consumer = dfb_config.cap == dfb::AccessPattern::STRIDED
                                             ? dfb_config.num_entries / dfb_config.num_consumers
                                             : dfb_config.num_entries;
     std::vector<uint32_t> consumer_cta = {
         (uint32_t)out_buffer->address(),
         num_entries_per_consumer,
-        (uint32_t)dfb_config.cap == ::experimental::AccessPattern::BLOCKED,
+        (uint32_t)dfb_config.cap == dfb::AccessPattern::BLOCKED,
         (uint32_t)dfb_config.enable_implicit_sync};
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(consumer_cta);
 
@@ -234,7 +234,7 @@ void run_in_dfb_out_dfb_program(
         experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = compute_cta});
 
     uint32_t num_entries_per_consumer = tensix2dm_config.num_entries / tensix2dm_config.num_consumers;
-    std::vector<uint32_t> consumer_cta = {(uint32_t)out_buffer->address(), num_entries_per_consumer, (uint32_t)tensix2dm_config.cap == ::experimental::AccessPattern::BLOCKED};
+    std::vector<uint32_t> consumer_cta = {(uint32_t)out_buffer->address(), num_entries_per_consumer, (uint32_t)tensix2dm_config.cap == dfb::AccessPattern::BLOCKED};
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(consumer_cta);
     auto consumer_kernel = experimental::quasar::CreateKernel(
         program,
@@ -271,9 +271,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB1Sx1S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
@@ -287,9 +287,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB1Sx1S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
@@ -303,9 +303,9 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB1Sx1S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
@@ -319,18 +319,18 @@ TEST_F(MeshDeviceFixture, DMTensixDMTest2xDFB1Sx1S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     experimental::dfb::DataflowBufferConfig tensix2dm_config{
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+            .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     run_in_dfb_out_dfb_program(this->devices_.at(0), dm2tensix_config, tensix2dm_config);
@@ -344,18 +344,18 @@ TEST_F(MeshDeviceFixture, DMTensixDMTest1xDFB2Sx1S1xDFB1Sx2S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 2,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     experimental::dfb::DataflowBufferConfig tensix2dm_config{
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 2,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     run_in_dfb_out_dfb_program(this->devices_.at(0), dm2tensix_config, tensix2dm_config);
@@ -369,18 +369,18 @@ TEST_F(MeshDeviceFixture, DMTensixDMTest1xDFB4Sx1S1xDFB1Sx4S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     experimental::dfb::DataflowBufferConfig tensix2dm_config{
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = false};
 
     run_in_dfb_out_dfb_program(this->devices_.at(0), dm2tensix_config, tensix2dm_config);
@@ -394,9 +394,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB1Sx4S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
@@ -410,9 +410,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB1Sx4S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
@@ -425,9 +425,9 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB1Sx4S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
 }
@@ -440,9 +440,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx1S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
@@ -456,9 +456,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
@@ -471,9 +471,9 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx1S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
 }
@@ -486,9 +486,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx4S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
@@ -502,9 +502,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
@@ -518,9 +518,9 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx4S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
 }
@@ -533,9 +533,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB2Sx4S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 2,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
@@ -549,9 +549,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB2Sx4S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 2,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
@@ -564,9 +564,9 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB2Sx4S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 2,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
 }
@@ -579,9 +579,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx2S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 2,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
@@ -595,9 +595,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx2S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 2,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
@@ -610,9 +610,9 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx2S) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 2,
-        .cap = ::experimental::AccessPattern::STRIDED,
+        .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
 }
@@ -627,9 +627,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB1Sx4B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
@@ -643,9 +643,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB1Sx4B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
@@ -659,9 +659,9 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB1Sx4B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 1,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
 }
@@ -674,9 +674,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx1B) { // mismatching
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
@@ -690,9 +690,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
@@ -706,9 +706,9 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx1B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 1,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
@@ -722,9 +722,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx4B) { // mismatching
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
@@ -738,9 +738,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
@@ -754,9 +754,9 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx4B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
@@ -770,9 +770,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx2B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 2,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
@@ -786,9 +786,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx2B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 2,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
@@ -801,9 +801,9 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB4Sx2B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 4,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 2,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
 }
@@ -816,9 +816,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB2Sx4B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 2,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
 
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
@@ -832,9 +832,9 @@ TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB2Sx4B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 2,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::TENSIX);
 }
@@ -847,9 +847,9 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB2Sx4B) {
         .entry_size = 1024,
         .num_entries = 16,
         .num_producers = 2,
-        .pap = ::experimental::AccessPattern::STRIDED,
+        .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 4,
-        .cap = ::experimental::AccessPattern::BLOCKED,
+        .cap = dfb::AccessPattern::BLOCKED,
         .enable_implicit_sync = GetParam()};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
 }

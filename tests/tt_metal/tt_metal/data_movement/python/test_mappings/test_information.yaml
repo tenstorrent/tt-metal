@@ -25,6 +25,12 @@
 #           where wall_clock_time = max(duration) across all cores
 #           Use this for multi-core DRAM tests where cores are synchronized
 #
+# Bandwidth unit:
+#   - bandwidth_unit: Unit for bandwidth in plots and reports
+#       Values: "bpc" (default) | "gbps"
+#       - "bpc": bytes/cycle
+#       - "gbps": GB/s (requires clock frequency from device or fallback constant)
+#
 # These metadata fields are automatically injected into CSV files when using the --report flag.
 
 tests:
@@ -658,6 +664,20 @@ tests:
 
   603:
     name: "PCIe Read Bandwidth"
+
+  604:
+    name: "PCIe Write Bandwidth Sweep"
+    bandwidth_unit: "gbps"
+
+  605:
+    name: "PCIe Read Bandwidth Sweep"
+    bandwidth_unit: "gbps"
+
+  606:
+    name: "PCIe Host Write (H2D) Bandwidth Sweep"
+
+  607:
+    name: "PCIe Host Read (D2H) Bandwidth Sweep"
 
   610:
     name: "Transaction ID - Write After Read"

@@ -39,7 +39,7 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
  * @brief Gets the output L1 tile index where the tile will be packed out to, determined by out_of_order_output
  *
  * @tparam out_of_order_output: Set true to write the output tile to the tile index specified by
- * the user in `output_tile_index`, set false for pack to operqate sequentially: write to the next tile index
+ * the user in `output_tile_index`, set false for pack to operate sequentially: write to the next tile index
  * starting from index 0, and ignore the `output_tile_index` parameter
  * @tparam untilize: Selects pack or pack untilizem
  * @param output_id The output circular buffer identifier
@@ -51,7 +51,7 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
 template <bool out_of_order_output, bool untilize>
 inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t output_tile_index) {
     std::uint32_t l1_tile_index;
-    experimental::LocalDFBInterface& local_dfb_interface = g_dfb_interface[output_id];
+    LocalDFBInterface& local_dfb_interface = g_dfb_interface[output_id];
     if constexpr (out_of_order_output) {
         // Use the write tile index to track position within DFB
         l1_tile_index = local_dfb_interface.wr_entry_idx + output_tile_index;
@@ -87,6 +87,28 @@ inline void llk_pack(
     const std::uint32_t l1_tile_index = get_output_tile_index<out_of_order_output, false>(output_id, output_tile_index);
 
     _llk_pack_<p_pacr::PACK0>(tile_index, l1_tile_index);
+}
+
+/**
+ * @brief Packs a block of destination tiles into the specified output buffer
+ *
+ * @param start_tile_index Starting destination register tile index to pack out from
+ * @param pack_output Logical output dataflow buffer id
+ * @param ntiles Number of consecutive tiles to pack
+ *
+ * Packs ntiles tiles starting at start_tile_index from the destination register into the L1
+ * output buffer identified by pack_output starting from output_tile_index
+ */
+// TODO: AM; Optimize block calls by using ntiles per pack, issue #40798
+inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_output, uint32_t ntiles) {
+    std::uint8_t output_id = get_output_id(pack_output);
+
+    for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+        std::uint32_t l1_tile_index = get_output_tile_index<false /* out_of_order_output */, false /* untilize */>(
+            output_id, 0 /* output_tile_index */);
+
+        _llk_pack_<p_pacr::PACK0>(tile_index, l1_tile_index);
+    }
 }
 
 /*************************************************************************
@@ -162,3 +184,47 @@ template <bool is_fp32_dest_acc_en>
 inline void llk_pack_dest_section_done() {
     _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
+
+/**
+ * @brief Configure packer ReLU at runtime from a packed uint32.
+ * @param config Packed uint32: bits [1:0] = ReluType, bits [31:16] = threshold.
+ */
+TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
+    _llk_pack_relu_config_<p_pacr::PACK0, false>(ckernel::ReluConfig::from_packed(config));
+}
+
+TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
+    _llk_pack_relu_config_<p_pacr::PACK0, false>(relu_config);
+}
+
+/*************************************************************************
+ * LLK PACK REDUCE MASK CONFIGURATION
+ *************************************************************************/
+
+/**
+ *
+ * @brief Configures PACKER0 edge mask programming to support reduce operations
+ *
+ * @tparam reduce_dim: The reduce op dimension, values = [REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR]
+ *
+ * This function configures the packer edge masks based on the reduce dimension:
+ * - REDUCE_ROW: Preserves only datum[0] in each row, masks datums[1:15] to 0 (keeps first column)
+ * - REDUCE_COL: Preserves all datums in row 0 only, masks all other rows to 0 (keeps first row)
+ * - REDUCE_SCALAR: Preserves only datum[0] in row 0 of face 0 (keeps single element)
+ *
+ **/
+template <ReduceDim reduce_dim>
+inline void llk_pack_reduce_mask_config() {
+    _llk_pack_reduce_mask_config_<reduce_dim>();
+}
+
+/**
+ *
+ * @brief Clears PACKER0 edge mask configuration to restore normal packing behavior after reduce operations
+ *
+ * This function disables the edge mask programming for PACKER0 by resetting all masks
+ * to preserve all datums in all faces. Should be called after reduce operations to restore
+ * normal packing behavior.
+ *
+ **/
+inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }

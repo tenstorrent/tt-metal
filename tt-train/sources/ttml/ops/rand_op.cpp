@@ -22,8 +22,8 @@ uint32_t avoid_zero_seed(uint32_t seed) {
 
 autograd::TensorPtr rand(
     const ttnn::Shape& shape,
-    float low,
-    float high,
+    float a,
+    float b,
     std::optional<uint32_t> seed,
     tt::tt_metal::DataType dtype,
     tt::tt_metal::Layout layout) {
@@ -32,7 +32,7 @@ autograd::TensorPtr rand(
 
     uint32_t effective_seed = avoid_zero_seed(seed.value_or(autograd::ctx().get_generator()()));
 
-    auto t = ttnn::rand(shape, *device, dtype, layout, mem_config, low, high, effective_seed);
+    auto t = ttnn::rand(shape, *device, dtype, layout, mem_config, a, b, effective_seed);
     return ttml::autograd::create_tensor(t);
 }
 

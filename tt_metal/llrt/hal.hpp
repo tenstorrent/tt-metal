@@ -55,7 +55,13 @@ std::ostream& operator<<(std::ostream&, const HalProcessorIdentifier&);
 bool operator<(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 bool operator==(const HalProcessorIdentifier&, const HalProcessorIdentifier&);
 
-enum class HalDramMemAddrType : uint8_t { BARRIER = 0, PROFILER = 1, UNRESERVED = 2, COUNT = 3 };
+enum class HalDramMemAddrType : uint8_t {
+    BARRIER = 0,
+    PROFILER = 1,
+    DRAM_BACKED_COMMAND_QUEUES = 2,
+    UNRESERVED = 3,
+    COUNT = 4
+};
 
 enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
 
@@ -318,14 +324,18 @@ private:
     HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
     size_t max_pinned_memory_count_{};
     size_t total_pinned_memory_size_{};
+    bool has_tile_counter_registers_{};
+    bool supports_implicit_dfb_sync_{};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;
     float inf_ = 0.0f;
 
-    void initialize_wh(bool is_base_routing_fw_enabled, uint32_t profiler_dram_bank_size_per_risc_bytes);
-    void initialize_bh(bool enable_2_erisc_mode, uint32_t profiler_dram_bank_size_per_risc_bytes);
-    void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes);
+    void initialize_wh(
+        bool is_base_routing_fw_enabled, uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
+    void initialize_bh(
+        bool enable_2_erisc_mode, uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
+    void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -350,7 +360,8 @@ public:
     Hal(tt::ARCH arch,
         bool is_base_routing_fw_enabled,
         bool enable_2_erisc_mode,
-        uint32_t profiler_dram_bank_size_per_risc_bytes);
+        uint32_t profiler_dram_bank_size_per_risc_bytes,
+        bool enable_dram_backed_cq);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -379,6 +390,8 @@ public:
     }
     uint32_t get_operand_start_stream() const { return operand_start_stream_; }
     bool has_stream_registers() const { return has_stream_registers_; }
+    bool has_tile_counter_registers() const { return has_tile_counter_registers_; }
+    bool supports_implicit_dfb_sync() const { return supports_implicit_dfb_sync_; }
 
     float get_eps() const { return eps_; }
     float get_nan() const { return nan_; }

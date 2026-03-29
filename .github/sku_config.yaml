@@ -38,10 +38,24 @@ skus:
       - topology-6u
       - in-service
 
+  wh_galaxy_perf:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-perf
+      - topology-6u
+      - in-service
+
   wh_galaxy_release:
     runs_on:
       - arch-wormhole_b0
       - pipeline-functional
+      - topology-6u
+      - in-release
+
+  wh_galaxy_perf_release:
+    runs_on:
+      - arch-wormhole_b0
+      - pipeline-perf
       - topology-6u
       - in-release
 
@@ -51,6 +65,27 @@ skus:
       - pipeline-functional
       - topology-6u
       - in-service
+
+  bh_galaxy_perf:
+    runs_on:
+      - arch-blackhole
+      - pipeline-perf
+      - topology-6u
+      - in-service
+
+  bh_galaxy_release:
+    runs_on:
+      - arch-blackhole
+      - pipeline-functional
+      - topology-6u
+      - in-release
+
+  bh_galaxy_perf_release:
+    runs_on:
+      - arch-blackhole
+      - pipeline-perf
+      - topology-6u
+      - in-release
 
   wh_n150:
     runs_on:

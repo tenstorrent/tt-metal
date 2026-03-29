@@ -1,0 +1,26 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Field descriptions (per model entry):
+#   name:     Display name of model
+#   filename: Prefix for output files
+#   binary:   Name of folder/binary under build directory
+#   args:     List of args passed to model binary
+
+models:
+  - name: "NanoGPT Shakespeare"
+    filename: "nanogpt"
+    binary: "nano_gpt"
+    args:
+      - "-c"
+      - "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanogpt.yaml"
+      - "--track_memory"
+
+  - name: "NanoLlama3 Shakespeare"
+    filename: "nanollama"
+    binary: "nano_gpt"
+    args:
+      - "-c"
+      - "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/training_shakespeare_nanollama3.yaml"
+      - "--track_memory"

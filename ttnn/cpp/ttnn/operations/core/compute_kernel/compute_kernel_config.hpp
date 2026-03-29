@@ -48,6 +48,9 @@ DeviceComputeKernelConfig init_device_compute_kernel_config(
     ttnn::operations::compute_throttle_utils::ThrottleLevel default_throttle_level =
         ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
+void verify_numerical_configuration(
+    tt::ARCH arch, const std::optional<const DeviceComputeKernelConfig>& user_compute_kernel_config);
+
 bool get_fp32_dest_acc_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 bool get_dst_full_sync_en(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 MathFidelity get_math_fidelity(const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);

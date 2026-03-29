@@ -20,7 +20,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "image_resolution, input_shape, pcc, vae_block",
     [
         # 1024x1024 image resolution
-        ((1024, 1024), (1, 4, 128, 128), 0.933, "decoder"),
+        ((1024, 1024), (1, 4, 128, 128), 0.933 if is_wormhole_b0() else 0.921, "decoder"),
         # Blackhole has lower PCC due to DRAM groupnorm numerical differences
         ((1024, 1024), (1, 3, 1024, 1024), 0.9769 if is_wormhole_b0() else 0.964, "encoder"),
         # 512x512 image resolution

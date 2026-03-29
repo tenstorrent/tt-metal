@@ -212,7 +212,8 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
         all_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
+            .fp32_dest_acc_en = data_format == tt::DataFormat::Float32 || data_format == tt::DataFormat::Int32 ||
+                                data_format == tt::DataFormat::UInt32,
             .math_approx_mode = false,
             .compile_args = compile_time_args_0});
 

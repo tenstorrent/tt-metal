@@ -18,6 +18,10 @@ from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs.model_config
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs.model_configs_1024x1024 import (
     RefinerModelOptimisations1024x1024,
 )
+from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs.model_configs_1024x1024BH import (
+    RefinerModelOptimisations1024x1024BH,
+)
+from models.common.utility_functions import is_wormhole_b0, is_blackhole
 
 
 def load_refiner_model_optimisations(
@@ -28,7 +32,7 @@ def load_refiner_model_optimisations(
     ff_weights_dtype=None,
 ):
     """
-    Load the appropriate RefinerModelOptimisation object based on the provided image resolution.
+    Load the appropriate RefinerModelOptimisation object based on the provided image resolution and hardware type.
 
     Args:
         image_resolution (tuple): A tuple of (height, width) representing the image resolution.
@@ -39,14 +43,17 @@ def load_refiner_model_optimisations(
         ff_weights_dtype: Optional dtype for feedforward weights. Defaults to ttnn.bfloat8_b.
 
     Returns:
-        RefinerModelOptimisations: The appropriate RefinerModelOptimisation object based
-            on the image resolution.
+        RefinerModelOptimisations512x512, RefinerModelOptimisations1024x1024, or RefinerModelOptimisations1024x1024BH:
+            The appropriate RefinerModelOptimisation object based on the image resolution and hardware type.
+            For 1024x1024 resolution, automatically selects RefinerModelOptimisations1024x1024BH for Blackhole
+            hardware or RefinerModelOptimisations1024x1024 for Wormhole hardware.
+            For 512x512 resolution, returns RefinerModelOptimisations512x512 regardless of hardware type.
 
     Raises:
         ValueError: If the image_resolution is not supported.
 
     Example:
-        >>> model_opt = load_refiner_model_optimisations((1024, 1024))
+        >>> model_opt = load_refiner_model_optimisations((1024, 1024))  # Auto-selects based on hardware
         >>> model_opt = load_refiner_model_optimisations((512, 512))
     """
     if not isinstance(image_resolution, (tuple, list)) or len(image_resolution) != 2:
@@ -68,7 +75,15 @@ def load_refiner_model_optimisations(
     if (height, width) == (512, 512):
         return RefinerModelOptimisations512x512(**init_kwargs)
     elif (height, width) == (1024, 1024):
-        return RefinerModelOptimisations1024x1024(**init_kwargs)
+        # Check hardware type and return appropriate config
+        if is_wormhole_b0():
+            return RefinerModelOptimisations1024x1024(**init_kwargs)
+        elif is_blackhole():
+            return RefinerModelOptimisations1024x1024BH(**init_kwargs)
+        else:
+            raise ValueError(
+                "Unsupported hardware type for 1024x1024 resolution. Only Blackhole and Wormhole_B0 are supported."
+            )
     else:
         raise ValueError(
             f"Unsupported image_resolution: {image_resolution}. "

@@ -19,7 +19,7 @@
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-#include "internal/dataflow_buffer_init.h"
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_init.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
@@ -50,7 +50,7 @@ uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
+thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
 #endif
 
 namespace ckernel {
@@ -149,7 +149,7 @@ extern "C" uint32_t _start1() {
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
-        experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+        setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
 #endif
 
         // TODO: Remove MEM_L1_UNCACHED_BASE here and invalidate cache lines when PR #38124 is merged

@@ -29,6 +29,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     prepare_dense_layer_weights,
     prepare_moe_layer_weights,
 )
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_fabric_router_config
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     DENSE_LAYER_IDX,
     DENSE_SHARED_N,
@@ -42,10 +43,26 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterle
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
 
 
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
+    """Map mode string to (num_routed_experts_to_upload, rigged_group_count).
+
+    Supported modes:
+      - unrigged_all_experts
+      - rigged_groups1 ... rigged_groups8
+
+    For rigged_groupsN we upload contiguous groups [0..N-1] and rig
+    pseudo-random experts within those uploaded groups.
+    """
+    if expert_upload_mode == "unrigged_all_experts":
+        return 256, None
+    if expert_upload_mode.startswith("rigged_groups"):
+        suffix = expert_upload_mode.removeprefix("rigged_groups")
+        if suffix.isdigit():
+            rigged_group_count = int(suffix)
+            if not (1 <= rigged_group_count <= 8):
+                raise ValueError(f"Invalid expert_upload_mode: {expert_upload_mode}")
+            return rigged_group_count * 32, rigged_group_count
+    raise ValueError(f"Invalid expert_upload_mode: {expert_upload_mode}")
 
 
 # ============================================================================
@@ -66,7 +83,7 @@ def create_decoder_block_tensors(
     is_moe: bool = True,
     num_routed_experts: int = 0,
     preloaded_weights=None,
-    rigged_experts: bool = False,
+    rigged_group_count: int | None = None,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -194,7 +211,7 @@ def create_decoder_block_tensors(
         tile=ttnn.Tile([8, 32]),
     )
 
-    if rigged_experts:
+    if rigged_group_count is not None:
         # Use deterministic RMS-normalized input to avoid oversized constant-direction activations.
         # (all-ones can produce brittle saturation in downstream low-precision paths)
         torch_input_f32 = torch.randn(shape, dtype=torch.float32)
@@ -205,12 +222,29 @@ def create_decoder_block_tensors(
 
     rigged_group_ids = None
     rigged_expert_ids = None
-    if rigged_experts and is_moe and preloaded_weights is None:
-        # Deterministically pick 4 groups and 2 experts/group, then bias-rig gate selection.
+    if rigged_group_count is not None and is_moe and preloaded_weights is None:
+        # Pseudo-random rigging within uploaded groups:
+        # - pick up to 4 groups among [0 .. rigged_group_count-1]
+        # - pick exactly 8 total experts, split pseudo-randomly across selected groups
         g = torch.Generator()
         g.manual_seed(2026)
-        rigged_group_ids = torch.randperm(8, generator=g)[:4].tolist()
-        rigged_expert_ids = {grp: torch.randperm(32, generator=g)[:2].tolist() for grp in rigged_group_ids}
+        if not (1 <= rigged_group_count <= 8):
+            raise ValueError(f"rigged_group_count must be in [1, 8], got {rigged_group_count}")
+        num_selected_groups = min(4, rigged_group_count)
+        rigged_group_ids = torch.randperm(rigged_group_count, generator=g)[:num_selected_groups].tolist()
+
+        total_rigged_experts = 8
+        # Start with one expert per selected group, then randomly distribute the remainder.
+        experts_per_group = [1] * num_selected_groups
+        remaining = total_rigged_experts - num_selected_groups
+        for _ in range(remaining):
+            chosen_group = int(torch.randint(0, num_selected_groups, (1,), generator=g).item())
+            experts_per_group[chosen_group] += 1
+
+        rigged_expert_ids = {
+            grp: torch.randperm(32, generator=g)[:num_experts].tolist()
+            for grp, num_experts in zip(rigged_group_ids, experts_per_group, strict=True)
+        }
 
         rigged_bias = torch.full((8, 32), -10.0, dtype=torch.bfloat16)
         for grp in rigged_group_ids:
@@ -829,8 +863,6 @@ def create_decoder_block_tensors(
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [False])
-@pytest.mark.parametrize("bcast_cluster_axis", [0])
-@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
@@ -862,7 +894,20 @@ def create_decoder_block_tensors(
 )
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.parametrize("num_internal_iterations", [1])
-@pytest.mark.parametrize("rigged_experts", [False, True], ids=["normal_gate", "fixed_experts"])
+@pytest.mark.parametrize(
+    "expert_upload_mode",
+    [
+        pytest.param("unrigged_all_experts", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups1", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups2", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups3", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups4", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups5", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups6", marks=pytest.mark.skip_post_commit),
+        pytest.param("rigged_groups7", marks=pytest.mark.skip_post_commit),
+        "rigged_groups8",
+    ],
+)
 @pytest.mark.parametrize(
     "enable_routing, use_hardcoded_expert_index, num_routed_experts",
     [
@@ -887,21 +932,20 @@ def create_decoder_block_tensors(
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder(
     bh_2d_mesh_device,
+    device_params,
     mesh_rows,
     mesh_cols,
     sender_row,
     sender_col,
     epsilon,
     use_fp32,
-    bcast_cluster_axis,
-    bcast_secondary_cluster_axis,
     reduce_cluster_axis,
     num_iters,
     max_seq_len,
     position_id,
     noc_mode,
     num_internal_iterations,
-    rigged_experts,
+    expert_upload_mode,
     enable_routing,
     use_hardcoded_expert_index,
     num_routed_experts,
@@ -919,12 +963,22 @@ def test_decoder(
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
 
+    effective_num_routed_experts, rigged_group_count = _decode_expert_upload_mode(expert_upload_mode)
+    logger.info(f"Expert upload mode: {expert_upload_mode}")
+    if effective_num_routed_experts != num_routed_experts:
+        logger.info(
+            "Mode {}: uploading {} routed experts instead of {}",
+            expert_upload_mode,
+            effective_num_routed_experts,
+            num_routed_experts,
+        )
+
     logger.info("Preparing model state dict...")
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
         seed=RoutedExpert.SEED,
-        num_routed_experts=num_routed_experts,
+        num_routed_experts=effective_num_routed_experts,
     )
 
     logger.info("Creating decoder block tensors...")
@@ -939,8 +993,8 @@ def test_decoder(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         max_seq_len=max_seq_len,
         is_moe=True,
-        num_routed_experts=num_routed_experts,
-        rigged_experts=rigged_experts,
+        num_routed_experts=effective_num_routed_experts,
+        rigged_group_count=rigged_group_count,
     )
 
     num_cores = device_grid_size.x * device_grid_size.y
@@ -950,7 +1004,8 @@ def test_decoder(
     persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
     ttnn.synchronize_device(submesh)
 
-    attn_semaphores = AttentionBlock.create_semaphores(submesh)
+    num_links = 1
+    attn_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
     # ========================================================================
@@ -959,7 +1014,7 @@ def test_decoder(
     ttnn_attn_ref_output_torch = None
     if validate_standalone_mla:
         logger.info(f"Running standalone AttentionBlock.op with position_id={position_id}...")
-        attn_ref_semaphores = AttentionBlock.create_semaphores(submesh)
+        attn_ref_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
         ttnn_attn_ref_result = AttentionBlock.op(
             d["input_tensor_mesh"],
             d["gamma_overlapped"],
@@ -991,16 +1046,15 @@ def test_decoder(
             d["device_chunk_size"],
             d["ttnn_attn_ref_output"],
             attn_ref_semaphores,
-            bcast_cluster_axis,
-            bcast_secondary_cluster_axis,
             reduce_cluster_axis,
             0,  # sdpa_cluster_axis
-            1,  # num_links
+            num_links,
             epsilon,
             use_fp32,
             False,  # skip_ccl
             noc_mode,
             num_iterations=1,
+            fabric_config=device_params["fabric_config"],
         )
         ttnn.synchronize_device(submesh)
         ttnn_attn_ref_output_torch = ttnn.to_torch(
@@ -1012,79 +1066,79 @@ def test_decoder(
     # Run decoder operation
     # ========================================================================
     logger.info(f"Running decoder operation with position_id={position_id}...")
+    decoder_program_context = DecoderBlock.get_program_context(
+        # AttentionBlock parameters
+        d["input_tensor_mesh"],
+        d["gamma_overlapped"],
+        d["matmul_weights_overlapped"],
+        d["rmsnorm2_gamma_overlapped"],
+        d["matmul2_weights_overlapped"],
+        d["matmul3_weights_overlapped"],
+        d["ttnn_qrope_sin"],
+        d["ttnn_qrope_cos"],
+        d["ttnn_trans_mat"],
+        d["ttnn_krope_cos"],
+        d["ttnn_krope_sin"],
+        d["dkv_matmul_weights_overlapped"],
+        d["dkv_rmsnorm_gamma_overlapped"],
+        d["ttnn_kv_cache"],
+        d["ttnn_position_ids"],
+        d["scale"],
+        d["sdpa_kv_cache_buffer"],
+        d["sdpa_out_interm_buffer"],
+        d["sender_coord"],
+        # Post-SDPA parameters
+        # Post-SDPA
+        d["kv_b2_overlapped"],
+        d["o_proj_overlapped"],
+        d["ttnn_sdpa_input_l"],
+        d["ttnn_sdpa_input_ms"],
+        d["ttnn_sdpa_output_l"],
+        d["ttnn_sdpa_intermediate_recv"],
+        d["ttnn_sdpa_forwarder_scratch"],
+        d["device_chunk_size"],
+        d["ttnn_attention_block_output"],
+        attention_block_semaphores=attn_semaphores,
+        # MoE parameters
+        shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
+        gate_mm_weights_tensor=d["gate_mm_overlapped"],
+        gate_bias_tensor=d["ttnn_gate_bias"],
+        gate_indices_tensor=d["ttnn_gate_indices"],
+        gate_output_scores_tensor=d["gate_output_scores_tensor"],
+        gate_output_indices_tensor=d["gate_output_indices_tensor"],
+        gate_proj_weights_tensor=d["gate_proj_weights"],
+        up_proj_weights_tensor=d["up_proj_weights"],
+        down_proj_weights_tensor=d["down_proj_weights"],
+        moe_final_output_tensor=None,
+        rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+        shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+        shared_down_weights_tensor=d["shared_down_weights_tensor"],
+        shared_k_parallel=d["shared_k_parallel"],
+        shared_n_parallel=d["shared_n_parallel"],
+        moe_semaphores=moe_semaphores,
+        reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
+        reduce_output_tensor=d["reduce_output_tensor"],
+        reduce_semaphores=reduce_semaphores,
+        reduce_root_coord=d["reduce_root_coord"],
+        # Shared parameters
+        enable_routing=True,
+        reduce_cluster_axis=reduce_cluster_axis,
+        sdpa_cluster_axis=0,  # sdpa_cluster_axis
+        num_links=num_links,
+        epsilon=epsilon,
+        fp32_dest_acc_en=use_fp32,
+        skip_ccl=False,
+        noc_mode=noc_mode,
+        num_iterations=num_internal_iterations,
+        upstream_socket=None,
+        downstream_sockets=None,
+        fabric_config=device_params["fabric_config"],
+        persistent_next_iter_semaphore=persistent_next_iter_semaphore,
+        persistent_mode=False,
+    )
     for i in range(num_iters):
-        moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.op(
-            # AttentionBlock parameters
-            d["input_tensor_mesh"],
-            d["gamma_overlapped"],
-            d["matmul_weights_overlapped"],
-            d["rmsnorm2_gamma_overlapped"],
-            d["matmul2_weights_overlapped"],
-            d["matmul3_weights_overlapped"],
-            d["ttnn_qrope_sin"],
-            d["ttnn_qrope_cos"],
-            d["ttnn_trans_mat"],
-            d["ttnn_krope_cos"],
-            d["ttnn_krope_sin"],
-            d["dkv_matmul_weights_overlapped"],
-            d["dkv_rmsnorm_gamma_overlapped"],
-            d["ttnn_kv_cache"],
-            d["ttnn_position_ids"],
-            d["scale"],
-            d["sdpa_kv_cache_buffer"],
-            d["sdpa_out_interm_buffer"],
-            d["sender_coord"],
-            # Post-SDPA parameters
-            # Post-SDPA
-            d["kv_b2_overlapped"],
-            d["o_proj_overlapped"],
-            d["ttnn_sdpa_input_l"],
-            d["ttnn_sdpa_input_ms"],
-            d["ttnn_sdpa_output_l"],
-            d["ttnn_sdpa_intermediate_recv"],
-            d["ttnn_sdpa_forwarder_scratch"],
-            d["device_chunk_size"],
-            d["ttnn_attention_block_output"],
-            attention_block_semaphores=attn_semaphores,
-            # MoE parameters
-            shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
-            gate_mm_weights_tensor=d["gate_mm_overlapped"],
-            gate_bias_tensor=d["ttnn_gate_bias"],
-            gate_indices_tensor=d["ttnn_gate_indices"],
-            gate_output_scores_tensor=d["gate_output_scores_tensor"],
-            gate_output_indices_tensor=d["gate_output_indices_tensor"],
-            gate_proj_weights_tensor=d["gate_proj_weights"],
-            up_proj_weights_tensor=d["up_proj_weights"],
-            down_proj_weights_tensor=d["down_proj_weights"],
-            moe_final_output_tensor=None,
-            rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
-            shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
-            shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
-            shared_down_weights_tensor=d["shared_down_weights_tensor"],
-            shared_k_parallel=d["shared_k_parallel"],
-            shared_n_parallel=d["shared_n_parallel"],
-            moe_semaphores=moe_semaphores,
-            reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
-            reduce_output_tensor=d["reduce_output_tensor"],
-            reduce_semaphores=reduce_semaphores,
-            reduce_root_coord=d["reduce_root_coord"],
-            # Shared parameters
-            enable_routing=True,
-            bcast_cluster_axis=bcast_cluster_axis,
-            bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
-            reduce_cluster_axis=reduce_cluster_axis,
-            sdpa_cluster_axis=0,  # sdpa_cluster_axis
-            num_links=1,  # num_links
-            epsilon=epsilon,
-            fp32_dest_acc_en=use_fp32,
-            skip_ccl=False,
-            noc_mode=noc_mode,
-            num_iterations=num_internal_iterations,
-            upstream_socket=None,
-            downstream_sockets=None,
-            persistent_next_iter_semaphore=persistent_next_iter_semaphore,
-            persistent_mode=True,
-        )
+        moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
 
     kv_cache_output_torch = ttnn.to_torch(d["ttnn_kv_cache"], mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
@@ -1328,8 +1382,6 @@ def test_decoder(
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
 @pytest.mark.parametrize("use_fp32", [False])
-@pytest.mark.parametrize("bcast_cluster_axis", [0])
-@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])
@@ -1359,14 +1411,13 @@ def test_decoder(
 @pytest.mark.requires_grid_size((13, 10))
 def test_decoder_mlp(
     bh_2d_mesh_device,
+    device_params,
     mesh_rows,
     mesh_cols,
     sender_row,
     sender_col,
     epsilon,
     use_fp32,
-    bcast_cluster_axis,
-    bcast_secondary_cluster_axis,
     reduce_cluster_axis,
     num_iters,
     max_seq_len,
@@ -1413,83 +1464,84 @@ def test_decoder_mlp(
     persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
     ttnn.synchronize_device(submesh)
 
-    attn_semaphores = AttentionBlock.create_semaphores(submesh)
+    num_links = 1
+    attn_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
     moe_semaphores = MoeOp.create_semaphores(submesh)
 
     logger.info(f"Running dense decoder operation with position_id={position_id}...")
+    decoder_program_context = DecoderBlock.get_program_context(
+        # AttentionBlock parameters
+        d["input_tensor_mesh"],
+        d["gamma_overlapped"],
+        d["matmul_weights_overlapped"],
+        d["rmsnorm2_gamma_overlapped"],
+        d["matmul2_weights_overlapped"],
+        d["matmul3_weights_overlapped"],
+        d["ttnn_qrope_sin"],
+        d["ttnn_qrope_cos"],
+        d["ttnn_trans_mat"],
+        d["ttnn_krope_cos"],
+        d["ttnn_krope_sin"],
+        d["dkv_matmul_weights_overlapped"],
+        d["dkv_rmsnorm_gamma_overlapped"],
+        d["ttnn_kv_cache"],
+        d["ttnn_position_ids"],
+        d["scale"],
+        d["sdpa_kv_cache_buffer"],
+        d["sdpa_out_interm_buffer"],
+        d["sender_coord"],
+        # Post-SDPA parameters
+        d["kv_b2_overlapped"],
+        d["o_proj_overlapped"],
+        d["ttnn_sdpa_input_l"],
+        d["ttnn_sdpa_input_ms"],
+        d["ttnn_sdpa_output_l"],
+        d["ttnn_sdpa_intermediate_recv"],
+        d["ttnn_sdpa_forwarder_scratch"],
+        d["device_chunk_size"],
+        d["ttnn_attention_block_output"],
+        attention_block_semaphores=attn_semaphores,
+        # MoE parameters (no gate_mm / routing tensors for dense MLP)
+        shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
+        gate_mm_weights_tensor=None,
+        gate_bias_tensor=None,
+        gate_indices_tensor=None,
+        gate_output_scores_tensor=None,
+        gate_output_indices_tensor=None,
+        gate_proj_weights_tensor=d["gate_proj_weights"],
+        up_proj_weights_tensor=d["up_proj_weights"],
+        down_proj_weights_tensor=d["down_proj_weights"],
+        moe_final_output_tensor=None,
+        rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+        shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+        shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+        shared_down_weights_tensor=d["shared_down_weights_tensor"],
+        shared_k_parallel=d["shared_k_parallel"],
+        shared_n_parallel=d["shared_n_parallel"],
+        moe_semaphores=moe_semaphores,
+        reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
+        reduce_output_tensor=d["reduce_output_tensor"],
+        reduce_semaphores=reduce_semaphores,
+        reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
+        # Shared parameters
+        enable_routing=False,
+        reduce_cluster_axis=reduce_cluster_axis,
+        sdpa_cluster_axis=0,
+        num_links=num_links,
+        epsilon=epsilon,
+        fp32_dest_acc_en=use_fp32,
+        skip_ccl=False,
+        use_hardcoded_expert_index=False,
+        noc_mode=noc_mode,
+        num_iterations=num_internal_iterations,
+        upstream_socket=None,
+        downstream_sockets=None,
+        fabric_config=device_params["fabric_config"],
+        persistent_next_iter_semaphore=persistent_next_iter_semaphore,
+        persistent_mode=False,
+    )
     for i in range(num_iters):
-        moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.op(
-            # AttentionBlock parameters
-            d["input_tensor_mesh"],
-            d["gamma_overlapped"],
-            d["matmul_weights_overlapped"],
-            d["rmsnorm2_gamma_overlapped"],
-            d["matmul2_weights_overlapped"],
-            d["matmul3_weights_overlapped"],
-            d["ttnn_qrope_sin"],
-            d["ttnn_qrope_cos"],
-            d["ttnn_trans_mat"],
-            d["ttnn_krope_cos"],
-            d["ttnn_krope_sin"],
-            d["dkv_matmul_weights_overlapped"],
-            d["dkv_rmsnorm_gamma_overlapped"],
-            d["ttnn_kv_cache"],
-            d["ttnn_position_ids"],
-            d["scale"],
-            d["sdpa_kv_cache_buffer"],
-            d["sdpa_out_interm_buffer"],
-            d["sender_coord"],
-            # Post-SDPA parameters
-            d["kv_b2_overlapped"],
-            d["o_proj_overlapped"],
-            d["ttnn_sdpa_input_l"],
-            d["ttnn_sdpa_input_ms"],
-            d["ttnn_sdpa_output_l"],
-            d["ttnn_sdpa_intermediate_recv"],
-            d["ttnn_sdpa_forwarder_scratch"],
-            d["device_chunk_size"],
-            d["ttnn_attention_block_output"],
-            attention_block_semaphores=attn_semaphores,
-            # MoE parameters (no gate_mm / routing tensors for dense MLP)
-            shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
-            gate_mm_weights_tensor=None,
-            gate_bias_tensor=None,
-            gate_indices_tensor=None,
-            gate_output_scores_tensor=None,
-            gate_output_indices_tensor=None,
-            gate_proj_weights_tensor=d["gate_proj_weights"],
-            up_proj_weights_tensor=d["up_proj_weights"],
-            down_proj_weights_tensor=d["down_proj_weights"],
-            moe_final_output_tensor=None,
-            rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
-            shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
-            shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
-            shared_down_weights_tensor=d["shared_down_weights_tensor"],
-            shared_k_parallel=d["shared_k_parallel"],
-            shared_n_parallel=d["shared_n_parallel"],
-            moe_semaphores=moe_semaphores,
-            reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
-            reduce_output_tensor=d["reduce_output_tensor"],
-            reduce_semaphores=reduce_semaphores,
-            reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
-            # Shared parameters
-            enable_routing=False,
-            bcast_cluster_axis=bcast_cluster_axis,
-            bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
-            reduce_cluster_axis=reduce_cluster_axis,
-            sdpa_cluster_axis=0,
-            num_links=1,
-            epsilon=epsilon,
-            fp32_dest_acc_en=use_fp32,
-            skip_ccl=False,
-            use_hardcoded_expert_index=False,
-            noc_mode=noc_mode,
-            num_iterations=num_internal_iterations,
-            upstream_socket=None,
-            downstream_sockets=None,
-            persistent_next_iter_semaphore=persistent_next_iter_semaphore,
-            persistent_mode=True,
-        )
+        moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
     ttnn.synchronize_device(submesh)
 
     # ========================================================================

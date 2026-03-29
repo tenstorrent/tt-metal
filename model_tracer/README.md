@@ -104,24 +104,47 @@ See **[GUIDE.md](GUIDE.md)** for the full workflow: tracing, loading into the da
 
 ## Master JSON Format
 
-The `ttnn_operations_master.json` file stores traced configurations in a structured format. The loader supports both legacy and new formats for backward compatibility.
+The `ttnn_operations_master.json` file stores traced configurations in a structured format. Each configuration contains its arguments, a `config_hash` for deduplication, and one or more `executions` recording where and on what hardware it was traced.
 
-### Configuration Formats
+### Configuration Format
 
-**Legacy Format (Single Source):**
 ```json
 {
   "operations": {
     "ttnn::silu": {
       "configurations": [
         {
-          "arguments": [...],
-          "source": "models/demos/model_name/demo.py",
-          "machine_info": [
+          "config_hash": "abc123...",
+          "arguments": {
+            "arg0": {
+              "type": "ttnn.Tensor",
+              "original_shape": [1, 1, 32, 128],
+              "original_dtype": "DataType.BFLOAT16",
+              "layout": "Layout.TILE",
+              "storage_type": "StorageType.DEVICE",
+              "memory_config": {
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "buffer_type": "BufferType.DRAM",
+                "shard_spec": null
+              },
+              "tensor_placement": {
+                "placement": "['PlacementShard(2)']",
+                "distribution_shape": "[1, 2]",
+                "mesh_device_shape": "[1, 2]"
+              }
+            }
+          },
+          "executions": [
             {
-              "board_type": "Wormhole",
-              "device_series": "n300",
-              "card_count": 1
+              "source": "models/demos/deepseek_v3/demo/demo.py",
+              "machine_info": {
+                "board_type": "Wormhole",
+                "device_series": "tt-galaxy-wh",
+                "card_count": 32,
+                "mesh_device_shape": [4, 8],
+                "device_count": 32
+              },
+              "count": 128
             }
           ]
         }
@@ -131,65 +154,42 @@ The `ttnn_operations_master.json` file stores traced configurations in a structu
 }
 ```
 
-**New Format (Contexts with Multiple Sources):**
+### Required Fields for DB Loading
 
-The new format supports multiple execution contexts per configuration, enabling the same operation arguments to be traced from different models and hardware configurations:
+The loader (`load_ttnn_ops_data_v2.py`) validates every execution and rejects traces with missing fields. All of the following must be present:
 
-```json
-{
-  "operations": {
-    "ttnn::silu": {
-      "configurations": [
-        {
-          "arguments": [...],
-          "contexts": [
-            {
-              "source": ["models/demos/deepseek_v3/demo/demo.py"],
-              "machine_info": [
-                {
-                  "board_type": "Wormhole",
-                  "device_series": "tt-galaxy-wh",
-                  "card_count": 32,
-                  "tensor_placements": [
-                    {
-                      "mesh_device_shape": "[4, 8]"
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    }
-  }
-}
-```
+| Field | Location | Description |
+|-------|----------|-------------|
+| `config_hash` | `config.config_hash` | SHA-256 config identity |
+| `source` | `execution.source` | File path (optionally with `[HF_MODEL:...]` suffix) |
+| `board_type` | `execution.machine_info.board_type` | e.g. `"Wormhole"`, `"Blackhole"` |
+| `device_series` | `execution.machine_info.device_series` | e.g. `"n300"`, `"tt-galaxy-wh"`, `"p150b"` |
+| `card_count` | `execution.machine_info.card_count` | e.g. `1`, `32` |
+| `mesh_device_shape` | `execution.machine_info.mesh_device_shape` | Mesh topology array, e.g. `[1, 1]`, `[4, 8]` |
+| `device_count` | `execution.machine_info.device_count` | Total device count, e.g. `1`, `32` |
+
+If any field is absent the loader raises a `ValueError` identifying the operation, `config_hash`, and which fields are missing.
 
 ### Multi-Chip Mesh Configuration
 
-For multi-chip operations (Galaxy, T3K, etc.), the `machine_info` should include `tensor_placements` with `mesh_device_shape` to enable proper runner assignment in CI:
+`mesh_device_shape` and `device_count` live directly in `machine_info` (not inside a nested `tensor_placements` array):
 
 ```json
 {
-  "machine_info": [
-    {
-      "board_type": "Wormhole",
-      "device_series": "tt-galaxy-wh",
-      "card_count": 32,
-      "tensor_placements": [
-        {
-          "mesh_device_shape": "[4, 8]"
-        }
-      ]
-    }
-  ]
+  "machine_info": {
+    "board_type": "Wormhole",
+    "device_series": "tt-galaxy-wh",
+    "card_count": 32,
+    "mesh_device_shape": [4, 8],
+    "device_count": 32
+  }
 }
 ```
 
-**Note:** Only `mesh_device_shape` is used by the sweep framework for runner assignment. Other tensor placement fields (like `shard_mesh`, `tensor_layout`) may be captured during tracing for informational purposes but are not used for CI routing.
+Per-tensor placement details (`placement`, `distribution_shape`, `mesh_device_shape`) remain in `arguments.argN.tensor_placement` for tensors that have them.
 
 **Mesh Shape Values:**
+
 | Mesh Shape | Description | Runner Assignment |
 |------------|-------------|-------------------|
 | `[1, 1]` | Single-chip | N150 runner |
@@ -280,9 +280,8 @@ python model_tracer/generic_ops_tracer.py --from-trace-dir /tmp/traces/<test_nam
 - Data types (e.g., `BFLOAT8_B`, `BFLOAT16`)
 - Memory layouts (e.g., `HEIGHT_SHARDED`, `INTERLEAVED`)
 - Exact shard specifications (grid, shard_shape, orientation)
-- Machine information (board type and device series, e.g., `Wormhole n300`, `Blackhole tt-galaxy-bh`)
-- Mesh device shape for multi-chip configurations (e.g., `[4, 8]` for 32-chip Galaxy)
-- Tensor placements for distributed operations
+- Machine information: `board_type`, `device_series`, `card_count`, `mesh_device_shape`, `device_count`
+- Per-tensor placements for distributed operations (in `arguments.argN.tensor_placement`)
 
 **Output:**
 - Updates `model_tracer/traced_operations/ttnn_operations_master.json`

@@ -2,7 +2,7 @@
 
 The model tracer extracts operation configuration data while running models and stores them in a PostgreSQL database. From there, configurations can be reconstructed into JSON and used as sweep test vectors — in CI, on a branch, or in nightly runs.
 
-**Schema:** All data lives in `ttnn_ops_v5` on Metal Ops PostgreSQL.
+**Schema:** All data lives in `ttnn_ops_v5` on Metal Ops PostgreSQL (configurable via `--schema`).
 **Connection:** Set `TTNN_OPS_DATABASE_URL`
 
 ---
@@ -23,7 +23,7 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py load \
 # 4. Reconstruct configs for testing
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
     model_tracer/sweep_manifest.yaml \
-    model_tracer/traced_operations/ttnn_operations_master_reconstructed.json
+    model_tracer/traced_operations/ttnn_operations_master.json
 ```
 
 ---
@@ -67,6 +67,9 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py load path/to/master.json a
 
 # Dry run: preview what would be loaded without committing anything
 python tests/sweep_framework/load_ttnn_ops_data_v2.py load path/to/master.json --dry-run
+
+# Load into a different schema (default: ttnn_ops_v5)
+python tests/sweep_framework/load_ttnn_ops_data_v2.py --schema ttnn_ops_v6 load path/to/master.json
 ```
 
 On load the tool:
@@ -153,6 +156,9 @@ python tests/sweep_framework/load_ttnn_ops_data_v2.py resolve-manifest \
 
 # Reconstruct a single specific trace (all models in that trace)
 python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-trace 35 output.json
+
+# Reconstruct from a different schema
+python tests/sweep_framework/load_ttnn_ops_data_v2.py --schema ttnn_ops_v6 reconstruct-trace 35 output.json
 ```
 
 **Path resolution:** `MasterConfigLoader` looks for the master JSON in this order:
@@ -281,7 +287,7 @@ ttnn-generate-sweeps (hardware runner, no DB access)
 
 ## Database Schema
 
-All tables live in the `ttnn_ops_v5` schema.
+All tables live in the `ttnn_ops_v5` schema by default. All CLI commands accept `--schema <name>` to target a different schema (e.g., `--schema ttnn_ops_v6`). The schema must already exist in the database; create it from the DDL template in `model_tracer/destructively_create_ttnn_ops_schema_v5.sql`.
 
 ```
 ttnn_operation          ttnn_model ◄─── trace_run_model
@@ -388,7 +394,8 @@ The tracer and reconstructor both produce this format:
                 "board_type": "Wormhole",
                 "device_series": "tt-galaxy-wh",
                 "card_count": 32,
-                "mesh_device_shape": [4, 8]
+                "mesh_device_shape": [4, 8],
+                "device_count": 32
               },
               "count": 128
             }
@@ -406,23 +413,40 @@ The tracer and reconstructor both produce this format:
 }
 ```
 
-**`tensor_placement`** is per-tensor (V2 format). Different placement = different `config_hash`.
+**`tensor_placement`** is per-tensor in arguments. Different placement = different `config_hash`.
 **`full_config_json`** in the DB stores this entire config object for lossless reconstruction.
 **`config_hash`** in the JSON equals `input_hash` in sweep test results — enabling JOIN with performance history.
+
+### Required fields for loading
+
+The loader validates that every execution has the following fields. Missing any of them raises a `ValueError` naming the operation, config_hash, and missing fields.
+
+| Field | Location | Description |
+|---|---|---|
+| `config_hash` | `config.config_hash` | SHA-256 identity of the configuration |
+| `source` | `execution.source` | File path, optionally with `[HF_MODEL:...]` suffix |
+| `board_type` | `execution.machine_info.board_type` | Hardware board type (e.g. `"Wormhole"`, `"Blackhole"`) |
+| `device_series` | `execution.machine_info.device_series` | Device series (e.g. `"n300"`, `"tt-galaxy-wh"`, `"p150b"`) |
+| `card_count` | `execution.machine_info.card_count` | Number of cards (e.g. `1`, `32`) |
+| `mesh_device_shape` | `execution.machine_info.mesh_device_shape` | Mesh topology as an array (e.g. `[1, 1]`, `[4, 8]`) |
+| `device_count` | `execution.machine_info.device_count` | Total device count (e.g. `1`, `32`) |
 
 ### Common pitfalls
 
 | Problem | Wrong | Right |
 |---|---|---|
 | Arguments as array | `"arguments": [{"arg0": ...}]` | `"arguments": {"arg0": ...}` |
-| Global placement | `"machine_info": {"tensor_placements": [...]}` | `"arg0": {"tensor_placement": {...}}` |
+| Missing mesh/device info | `"machine_info": {"board_type": "Wormhole"}` | Include `mesh_device_shape` and `device_count` |
 | Source missing path | `"source": "meta-llama/Llama-3.2-1B"` | `"source": "models/.../demo.py [HF_MODEL:meta-llama/Llama-3.2-1B]"` |
+| Mesh shape in wrong place | `"tensor_placements": [{"mesh_device_shape": ...}]` | `"machine_info": {"mesh_device_shape": [4, 8]}` |
 
 ---
 
 ## CLI Reference
 
-All commands: `python tests/sweep_framework/load_ttnn_ops_data_v2.py <command>`
+All commands: `python tests/sweep_framework/load_ttnn_ops_data_v2.py [--schema <name>] <command>`
+
+The global `--schema <name>` flag can appear anywhere on the command line and applies to all commands. Default: `ttnn_ops_v5`.
 
 | Command | Description |
 |---|---|
@@ -433,7 +457,7 @@ All commands: `python tests/sweep_framework/load_ttnn_ops_data_v2.py <command>`
 | `resolve-manifest [manifest] [scope]` | Dry-run: print which trace IDs and model filters would be used |
 | `reconstruct-trace <id> [output]` | Reconstruct JSON from one specific trace_run (all models) |
 | `list-traces [filter]` | List all trace_runs in DB |
-| `reconstruct [output] [schema] [models]` | Reconstruct from DB filtered by model patterns (legacy) |
+| `reconstruct [output] [models]` | Reconstruct from DB filtered by model patterns (legacy) |
 | `reconstruct-op <name> [output]` | Reconstruct a single operation |
 | `verify [original] [reconstructed]` | Compare two JSON files |
 | `find-lines <op> <i1,i2,...>` | Find line numbers for config indices in a JSON file |
