@@ -25,6 +25,22 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 namespace {
 
 // ============================================================================
+// Test Fixtures
+// ============================================================================
+
+// Test fixture for ProgramSpec on Quasar - uses Quasar mock device
+class ProgramSpecTestQuasar : public ::testing::Test {
+protected:
+    void SetUp() override {
+        GTEST_SKIP() << "Re-enable tests after Quasar mock device support is checked in";
+        // Configure global mock mode for Quasar
+        // This way, the HAL is initialized for arch check and Program creation.
+        experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
+    }
+    void TearDown() override { experimental::disable_mock_mode(); }
+};
+
+// ============================================================================
 // Test Utilities
 // ============================================================================
 
@@ -140,22 +156,6 @@ ProgramSpec MakeMinimalValidProgramSpec() {
 
     return spec;
 }
-
-// ============================================================================
-// Test Fixtures
-// ============================================================================
-
-// Test fixture for ProgramSpec on Quasar - uses Quasar mock device
-class ProgramSpecTestQuasar : public ::testing::Test {
-protected:
-    void SetUp() override {
-        GTEST_SKIP() << "Re-enable tests after Quasar mock device support is checked in";
-        // Configure global mock mode for Quasar
-        // This way, the HAL is initialized for arch check and Program creation.
-        experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
-    }
-    void TearDown() override { experimental::disable_mock_mode(); }
-};
 
 // ============================================================================
 // SECTION 1: Structural Validation Tests (CollectSpecData)
