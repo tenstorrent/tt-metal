@@ -38,7 +38,7 @@ from models.demos.deepseek_v3_b1.utils import generate_mm_weights
     ],
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
-@pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize("use_fp32", [False])
 @pytest.mark.parametrize("reduce_cluster_axis", [1])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
 @pytest.mark.parametrize("num_iters", [(1)])

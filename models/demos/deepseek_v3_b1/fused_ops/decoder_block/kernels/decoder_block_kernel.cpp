@@ -2751,6 +2751,6 @@ void kernel_main() {
     // ====================================================================
     {
         DeviceZoneScopedN("MCAST_TEARDOWN");
-        mcast.teardown();
+        mcast.teardown(mcast_args);
     }
 }

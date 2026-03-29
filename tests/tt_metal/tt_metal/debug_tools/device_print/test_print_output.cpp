@@ -121,7 +121,7 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
         auto& program_ = workload.get_programs().at(device_range);
 
         constexpr CoreCoord core = {0, 0};
-        uint32_t iterations_count = 100;
+        uint32_t iterations_count = 1000;
         std::vector<uint32_t> runtime_args = {iterations_count};
 
         // BRISC
