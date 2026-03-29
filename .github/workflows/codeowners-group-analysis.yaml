@@ -1450,6 +1450,9 @@ jobs:
           fi
 
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
+          # Escape angle brackets so Slack mrkdwn link text is not malformed
+          # e.g. "CMAKE_CXX_FLAGS_<CONFIG>" → "CMAKE_CXX_FLAGS_&lt;CONFIG&gt;"
+          PR_TITLE=$(echo "$PR_TITLE" | sed 's/</\&lt;/g; s/>/\&gt;/g')
           PR_AUTHOR_LOGIN=$(echo "$PR_DATA" | jq -r '.user.login')
           PR_AUTHOR_NAME=$(echo "$PR_DATA" | jq -r '.user.name // .user.login')
 
@@ -2334,6 +2337,9 @@ jobs:
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
+          # Escape angle brackets so Slack mrkdwn link text is not malformed
+          # e.g. "CMAKE_CXX_FLAGS_<CONFIG>" → "CMAKE_CXX_FLAGS_&lt;CONFIG&gt;"
+          PR_TITLE=$(echo "$PR_TITLE" | sed 's/</\&lt;/g; s/>/\&gt;/g')
 
           # Use #tt-metal-pr-review-requests Slack channel
           SLACK_CHANNEL="C07G47JMQHM"
@@ -2431,6 +2437,9 @@ jobs:
                          -H "Accept: application/vnd.github.v3+json" \
                          "$PR_API")
           PR_TITLE=$(echo "$PR_DATA" | jq -r '.title')
+          # Escape angle brackets so Slack mrkdwn link text is not malformed
+          # e.g. "CMAKE_CXX_FLAGS_<CONFIG>" → "CMAKE_CXX_FLAGS_&lt;CONFIG&gt;"
+          PR_TITLE=$(echo "$PR_TITLE" | sed 's/</\&lt;/g; s/>/\&gt;/g')
 
           # Use #tt-metal-pr-review-requests Slack channel
           SLACK_CHANNEL="C07G47JMQHM"
