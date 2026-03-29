@@ -912,6 +912,7 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
         trace_details_map = {}
 
     existing_ids = {entry.get("trace_id") for entry in data["registry"]}
+    existing_trace_uids = {entry.get("trace_uid") for entry in data["registry"] if entry.get("trace_uid")}
     added = 0
 
     for trace_run_id in trace_run_cache.values():
@@ -919,8 +920,15 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
         if not tr_row:
             continue
         hardware_id, sha, trace_uid = tr_row
-        if trace_run_id in existing_ids:
+        if trace_uid and trace_uid in existing_trace_uids:
             continue
+        if not trace_uid and trace_run_id in existing_ids:
+            continue
+        if trace_uid and trace_run_id in existing_ids:
+            print(
+                f"  Note: trace_run_id {trace_run_id} already exists in manifest registry, "
+                f"but trace_uid {trace_uid} is new; appending a new draft entry."
+            )
 
         hw = hw_map.get(hardware_id, ("unknown", "unknown", 1))
         board_type, device_series, card_count = hw
@@ -942,6 +950,8 @@ def _append_manifest_drafts(trace_run_cache, schema=DEFAULT_SCHEMA):
         }
         data["registry"].append(entry)
         existing_ids.add(trace_run_id)
+        if trace_uid:
+            existing_trace_uids.add(trace_uid)
         added += 1
 
     if added:
