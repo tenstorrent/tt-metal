@@ -1027,15 +1027,15 @@ def test_save_load_embedding_and_lm_head_weights_4x2(bh_2d_mesh_device, tmp_path
 
 
 def _mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX, seed: int = 44) -> dict[str, torch.Tensor]:
-    """Build a synthetic state dict with the MTP HF keys (lightweight projections + full MoE decoder block)."""
-    state = _layer_state_dict(mtp_layer_idx, is_moe=True, seed=seed)
+    """Build a synthetic state dict with only the lightweight MTP projection/norm tensors."""
     g = torch.Generator().manual_seed(seed + 1000)
     dtype = torch.bfloat16
     H = LogicalModelDimensions.HIDDEN_SIZE
-    state[f"model.layers.{mtp_layer_idx}.hnorm.weight"] = torch.randn(H, generator=g, dtype=dtype)
-    state[f"model.layers.{mtp_layer_idx}.enorm.weight"] = torch.randn(H, generator=g, dtype=dtype)
-    state[f"model.layers.{mtp_layer_idx}.eh_proj.weight"] = torch.randn(H, 2 * H, generator=g, dtype=dtype)
-    return state
+    return {
+        f"model.layers.{mtp_layer_idx}.hnorm.weight": torch.randn(H, generator=g, dtype=dtype),
+        f"model.layers.{mtp_layer_idx}.enorm.weight": torch.randn(H, generator=g, dtype=dtype),
+        f"model.layers.{mtp_layer_idx}.eh_proj.weight": torch.randn(H, 2 * H, generator=g, dtype=dtype),
+    }
 
 
 @pytest.mark.parametrize(
@@ -1048,9 +1048,8 @@ def test_prepare_mtp_weights_4x2(bh_2d_mesh_device):
     _skip_unless_4x2_mesh(bh_2d_mesh_device)
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _mtp_state_dict()
-    bdw = BlitzDecodeWeights(submesh)
     t0 = time.perf_counter()
-    weights = prepare_mtp_weights(bdw, state, submesh, num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS)
+    weights = prepare_mtp_weights(state, submesh)
     elapsed = time.perf_counter() - t0
     logger.info("prepare_mtp_weights (4x2 mesh): {:.3f} s", elapsed)
     H = LogicalModelDimensions.HIDDEN_SIZE
@@ -1058,9 +1057,6 @@ def test_prepare_mtp_weights_4x2(bh_2d_mesh_device):
     assert weights.h_gamma.shape == (1, H)
     assert weights.e_gamma.shape == (1, H)
     assert weights.eh_projection.shape == (2 * H, H)
-    assert isinstance(weights.decoder, DeepSeekV3MoELayerWeights)
-    assert weights.decoder.q_a_proj is not None
-    assert weights.decoder.shared_down_proj is not None
 
 
 @pytest.mark.parametrize(
@@ -1075,8 +1071,7 @@ def test_save_load_mtp_weights_4x2(bh_2d_mesh_device, tmp_path):
         pytest.skip("load_mtp_weights requires slow dispatch")
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _mtp_state_dict()
-    bdw = BlitzDecodeWeights(submesh)
-    weights = prepare_mtp_weights(bdw, state, submesh, num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS)
+    weights = prepare_mtp_weights(state, submesh)
     expected_shapes = {
         "h_gamma": weights.h_gamma.shape,
         "e_gamma": weights.e_gamma.shape,
@@ -1091,28 +1086,21 @@ def test_save_load_mtp_weights_4x2(bh_2d_mesh_device, tmp_path):
         device_mesh_shape=(4, 2),
     )
 
-    layer_dir = tmp_path / "layer_061"
-    assert (layer_dir / "manifest.json").exists()
-    assert (layer_dir / "mtp_h_gamma.tensorbin").exists()
-    assert (layer_dir / "mtp_e_gamma.tensorbin").exists()
-    assert (layer_dir / "mtp_eh_projection.tensorbin").exists()
+    mtp_dir = tmp_path / "mtp"
+    assert (mtp_dir / "manifest.json").exists()
+    assert (mtp_dir / "mtp_h_gamma.tensorbin").exists()
+    assert (mtp_dir / "mtp_e_gamma.tensorbin").exists()
+    assert (mtp_dir / "mtp_eh_projection.tensorbin").exists()
 
     ttnn.deallocate(weights.h_gamma, force=True)
     ttnn.deallocate(weights.e_gamma, force=True)
     ttnn.deallocate(weights.eh_projection, force=True)
-    _deallocate_layer(weights.decoder)
 
     loaded = load_mtp_weights(tmp_path, submesh)
     assert isinstance(loaded, DeepSeekV3MTPWeights)
     assert loaded.h_gamma.shape == expected_shapes["h_gamma"]
     assert loaded.e_gamma.shape == expected_shapes["e_gamma"]
     assert loaded.eh_projection.shape == expected_shapes["eh_projection"]
-    assert isinstance(loaded.decoder, DeepSeekV3MoELayerWeights)
-    assert loaded.decoder.q_a_proj is not None
-    assert loaded.decoder.shared_down_proj is not None
-    assert len(loaded.decoder.routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
     _assert_on_device(loaded.h_gamma)
     _assert_on_device(loaded.e_gamma)
     _assert_on_device(loaded.eh_projection)
-    _assert_on_device(loaded.decoder.q_a_proj.fused_tensor)
-    _assert_on_device(loaded.decoder.shared_down_proj)

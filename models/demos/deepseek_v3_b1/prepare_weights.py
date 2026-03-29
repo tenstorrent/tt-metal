@@ -251,13 +251,12 @@ class DeepSeekV3MTPWeights:
     """Weights for the MTP (Multi-Token Prediction) speculative decode layer.
 
     HF state dict keys live under ``model.layers.{mtp_layer_idx}.*`` (layer 61 for DeepSeek V3).
+    The MTP decoder block (layer 61) is a regular MoE layer loaded separately.
     """
 
-    embedding: ttnn.Tensor  # model.embed_tokens.weight
     h_gamma: ttnn.Tensor  # model.layers.61.hnorm.weight
     e_gamma: ttnn.Tensor  # model.layers.61.enorm.weight
     eh_projection: ttnn.Tensor  # model.layers.61.eh_proj.weight
-    decoder: DeepSeekV3MoELayerWeights  # model.layers.61.self_attn & mlp
 
 
 # Constants for kv_b_proj split (HF stores one matrix; we split into kv_b1 and kv_b2).
@@ -992,25 +991,20 @@ def _to_tt_mtp_eh_proj(eh_proj_torch: torch.Tensor, device, *, move_to_device: b
 
 
 def prepare_mtp_weights(
-    bdw: BlitzDecodeWeights,
     state_dict: dict[str, torch.Tensor],
     device,
     *,
     mtp_layer_idx: int = _MTP_LAYER_IDX,
-    num_routed_experts: int = NUM_ROUTED_EXPERTS,
     move_to_device: bool = False,
 ) -> DeepSeekV3MTPWeights:
-    """Prepare MTP weights from state dict (model.layers.{mtp_layer_idx}.*).
+    """Prepare lightweight MTP projection/norm weights from state dict.
 
-    Includes the full MoE decoder block (attention + MoE FFN) at layer 61, plus the
-    lightweight MTP projection/norm weights. The shared head (final norm + lm_head) is
-    handled separately as a distinct pipeline stage.
+    Only the MTP-specific tensors (h_gamma, e_gamma, eh_projection) are prepared here.
+    The MTP decoder block (layer 61) is a regular MoE layer handled through the standard
+    prepare_moe_layer_weights / load_moe_decoder_layer path.
     """
     logger.info("Preparing MTP weights (layer {})...", mtp_layer_idx)
     t0 = time.perf_counter()
-
-    embedding_w = state_dict["model.embed_tokens.weight"]
-    embedding_tt = _to_tt_embedding(embedding_w, device, move_to_device=move_to_device)
 
     h_gamma_w = state_dict[_key(mtp_layer_idx, "hnorm.weight")].unsqueeze(0)
     h_gamma_tt = _to_tt_lm_head_final_norm(h_gamma_w, device, move_to_device=move_to_device)
@@ -1021,17 +1015,11 @@ def prepare_mtp_weights(
     eh_proj_w = state_dict[_key(mtp_layer_idx, "eh_proj.weight")].T.contiguous()
     eh_proj_tt = _to_tt_mtp_eh_proj(eh_proj_w, device, move_to_device=move_to_device)
 
-    decoder = prepare_moe_layer_weights(
-        bdw, state_dict, mtp_layer_idx, num_routed_experts=num_routed_experts, move_to_device=move_to_device
-    )
-
     logger.info("MTP weights prepared in {:.3f}s", time.perf_counter() - t0)
     return DeepSeekV3MTPWeights(
-        embedding=embedding_tt,
         h_gamma=h_gamma_tt,
         e_gamma=e_gamma_tt,
         eh_projection=eh_proj_tt,
-        decoder=decoder,
     )
 
 
@@ -1039,64 +1027,58 @@ def save_mtp_weights(
     weights: DeepSeekV3MTPWeights,
     path: str | Path,
     *,
-    mtp_layer_idx: int = _MTP_LAYER_IDX,
     hf_model_name: str = "",
     hf_state_dict_name: str = "",
     device_mesh_shape: tuple[int, int] = (1, 1),
 ) -> None:
-    """Save MTP weights to <path>/layer_{mtp_layer_idx:03d}/.
+    """Save MTP projection/norm weights to <path>/mtp/.
 
-    The decoder block is saved via save_decoder_layer (creating the standard layer
-    manifest and tensorbin files), and the lightweight MTP projection/norm weights
-    are saved alongside them in the same layer directory.
+    Only the lightweight MTP tensors (h_gamma, e_gamma, eh_projection) are saved here.
+    The MTP decoder block (layer 61) is saved separately as a standard MoE layer via
+    save_decoder_layer.
     """
     path = Path(path)
-    save_decoder_layer(
-        weights.decoder,
-        path,
-        mtp_layer_idx,
-        hf_model_name=hf_model_name,
-        hf_state_dict_name=hf_state_dict_name,
-        device_mesh_shape=device_mesh_shape,
-    )
-    layer_dir = path / f"layer_{mtp_layer_idx:03d}"
-    logger.info("Saving MTP projection/norm weights to {}...", layer_dir)
+    mtp_dir = path / "mtp"
+    mtp_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Saving MTP projection/norm weights to {}...", mtp_dir)
     t0 = time.perf_counter()
-    ttnn.dump_tensor(layer_dir / "mtp_embedding.tensorbin", weights.embedding)
-    ttnn.dump_tensor(layer_dir / "mtp_h_gamma.tensorbin", weights.h_gamma)
-    ttnn.dump_tensor(layer_dir / "mtp_e_gamma.tensorbin", weights.e_gamma)
-    ttnn.dump_tensor(layer_dir / "mtp_eh_projection.tensorbin", weights.eh_projection)
+    ttnn.dump_tensor(mtp_dir / "mtp_h_gamma.tensorbin", weights.h_gamma)
+    ttnn.dump_tensor(mtp_dir / "mtp_e_gamma.tensorbin", weights.e_gamma)
+    ttnn.dump_tensor(mtp_dir / "mtp_eh_projection.tensorbin", weights.eh_projection)
+    manifest = {
+        "version": _MANIFEST_VERSION,
+        "hf_model_name": hf_model_name,
+        "hf_state_dict_name": hf_state_dict_name,
+        "device_mesh_shape": list(device_mesh_shape),
+    }
+    with open(mtp_dir / "manifest.json", "w") as f:
+        json.dump(manifest, f, indent=2)
     logger.info("MTP weights saved in {:.3f}s", time.perf_counter() - t0)
 
 
 def load_mtp_weights(
     path: str | Path,
     device,
-    *,
-    mtp_layer_idx: int = _MTP_LAYER_IDX,
 ) -> DeepSeekV3MTPWeights:
-    """Load MTP weights from <path>/layer_{mtp_layer_idx:03d}/.
+    """Load MTP projection/norm weights from <path>/mtp/.
 
     device must be the mesh device (same shape as used for prepare_mtp_weights).
+    The MTP decoder block (layer 61) is loaded separately via load_moe_decoder_layer.
     """
     path = Path(path)
-    layer_dir = path / f"layer_{mtp_layer_idx:03d}"
-    if not layer_dir.is_dir():
-        raise FileNotFoundError(f"MTP layer dir not found: {layer_dir}")
-    logger.info("Loading MTP weights from {}...", layer_dir)
+    mtp_dir = path / "mtp"
+    if not mtp_dir.is_dir():
+        raise FileNotFoundError(f"MTP dir not found: {mtp_dir}")
+    logger.info("Loading MTP weights from {}...", mtp_dir)
     t0 = time.perf_counter()
-    decoder = load_moe_decoder_layer(path, device, mtp_layer_idx)
-    embedding = ttnn.load_tensor(layer_dir / "mtp_embedding.tensorbin", device=device)
-    h_gamma = ttnn.load_tensor(layer_dir / "mtp_h_gamma.tensorbin", device=device)
-    e_gamma = ttnn.load_tensor(layer_dir / "mtp_e_gamma.tensorbin", device=device)
-    eh_projection = ttnn.load_tensor(layer_dir / "mtp_eh_projection.tensorbin", device=device)
+    h_gamma = ttnn.load_tensor(mtp_dir / "mtp_h_gamma.tensorbin", device=device)
+    e_gamma = ttnn.load_tensor(mtp_dir / "mtp_e_gamma.tensorbin", device=device)
+    eh_projection = ttnn.load_tensor(mtp_dir / "mtp_eh_projection.tensorbin", device=device)
     logger.info("MTP weights loaded in {:.3f}s", time.perf_counter() - t0)
     return DeepSeekV3MTPWeights(
-        embedding=embedding,
         h_gamma=h_gamma,
         e_gamma=e_gamma,
         eh_projection=eh_projection,
-        decoder=decoder,
     )
 
 

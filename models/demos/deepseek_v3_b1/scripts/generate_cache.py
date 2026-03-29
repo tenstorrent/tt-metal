@@ -9,14 +9,14 @@ Runs in fast dispatch; weights are prepared and saved to disk (no device placeme
 
 Modes:
   dense     - Full dense layer (layers 0-2).
-  moe       - Full MoE layer (layers 3-60): attention + shared experts + routed experts.
+  moe       - Full MoE layer (layers 3-61): attention + shared experts + routed experts.
   embedding - Embedding layer (model.embed_tokens). No --layer-num needed.
   lm_head   - LM head + final RMSNorm. No --layer-num needed.
-  mtp       - MTP (Multi-Token Prediction) speculative decode weights (layer 61). No --layer-num needed.
+  mtp       - MTP (Multi-Token Prediction) lightweight projection/norm weights. No --layer-num needed.
 
 Usage:
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --layer-num 0 --type dense
-  python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --layer-num 3 4 5 6 --type moe
+  python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --layer-num 3 4 5 6 61 --type moe
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --type embedding
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --type lm_head
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --type mtp
@@ -62,7 +62,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     save_mtp_weights,
 )
 
-NUM_LAYERS = 61
+NUM_LAYERS = 62
 FIRST_K_DENSE_REPLACE = 3
 DEVICE_MESH_SHAPE = (4, 2)
 MANIFEST_VERSION = 1
@@ -97,14 +97,14 @@ def _create_parser() -> argparse.ArgumentParser:
         type=int,
         nargs="+",
         default=None,
-        help="Layer index(es) (0-60); one or more, required for dense/moe, ignored for embedding/lm_head",
+        help="Layer index(es) (0-61); one or more, required for dense/moe, ignored for embedding/lm_head/mtp",
     )
     parser.add_argument(
         "--type",
         dest="mode",
         choices=("dense", "moe", "embedding", "lm_head", "mtp"),
         required=True,
-        help="Cache type: dense (layers 0-2), moe (full layer for 3-60), embedding, lm_head, mtp",
+        help="Cache type: dense (layers 0-2), moe (full layer for 3-61), embedding, lm_head, mtp",
     )
     parser.add_argument(
         "--force",
@@ -166,9 +166,9 @@ def _validate_args(args: argparse.Namespace) -> None:
                 logger.error("lm_head/manifest.json not found for verify: {}", manifest_path)
                 sys.exit(1)
         elif mode == "mtp":
-            manifest_path = output_path / "layer_061" / "manifest.json"
+            manifest_path = output_path / "mtp" / "manifest.json"
             if not manifest_path.is_file():
-                logger.error("layer_061/manifest.json not found for verify: {}", manifest_path)
+                logger.error("mtp/manifest.json not found for verify: {}", manifest_path)
                 sys.exit(1)
         else:
             for layer_num in layer_nums:
@@ -207,9 +207,9 @@ def _validate_args(args: argparse.Namespace) -> None:
                 logger.error("lm_head cache already exists. Use --force to overwrite.")
                 sys.exit(1)
         elif mode == "mtp":
-            mtp_layer_dir = output_path / "layer_061"
-            if mtp_layer_dir.is_dir() and (mtp_layer_dir / "manifest.json").is_file():
-                logger.error("MTP layer cache already exists (layer_061). Use --force to overwrite.")
+            mtp_dir = output_path / "mtp"
+            if mtp_dir.is_dir() and (mtp_dir / "manifest.json").is_file():
+                logger.error("MTP cache already exists (mtp/). Use --force to overwrite.")
                 sys.exit(1)
         else:
             for layer_num in layer_nums:
@@ -440,9 +440,9 @@ def _verify_lm_head_cache(output_path: Path) -> bool:
 
 def _verify_mtp_cache(output_path: Path) -> bool:
     """Verify MTP cache: manifest, file existence, and optionally load to device. Returns True if all checks pass."""
-    layer_dir = output_path / "layer_061"
-    manifest_path = layer_dir / "manifest.json"
-    logger.info("Verifying MTP cache (layer_061)...")
+    mtp_dir = output_path / "mtp"
+    manifest_path = mtp_dir / "manifest.json"
+    logger.info("Verifying MTP cache (mtp/)...")
 
     try:
         with open(manifest_path) as f:
@@ -461,7 +461,7 @@ def _verify_mtp_cache(output_path: Path) -> bool:
         "mtp_e_gamma.tensorbin",
         "mtp_eh_projection.tensorbin",
     ):
-        if not _check_file(Path(fname), layer_dir):
+        if not _check_file(Path(fname), mtp_dir):
             return False
     logger.info("All MTP files present")
 
@@ -481,10 +481,6 @@ def _verify_mtp_cache(output_path: Path) -> bool:
         if not _check_on_device(loaded.e_gamma, "mtp.e_gamma"):
             return False
         if not _check_on_device(loaded.eh_projection, "mtp.eh_projection"):
-            return False
-        if not _check_on_device(loaded.decoder.q_a_proj.fused_tensor, "mtp.decoder.q_a_proj"):
-            return False
-        if not _check_on_device(loaded.decoder.shared_down_proj, "mtp.decoder.shared_down_proj"):
             return False
         logger.info("Device load OK (on-device checks passed)")
     except Exception as e:
@@ -750,7 +746,7 @@ def main() -> int:
             elif mode == "mtp":
                 logger.info("Preparing MTP weights...")
                 t0 = time.perf_counter()
-                weights = prepare_mtp_weights(bdw, state_dict, submesh)
+                weights = prepare_mtp_weights(state_dict, submesh)
                 logger.info("prepare_mtp_weights took {:.3f}s", time.perf_counter() - t0)
                 logger.info("Saving MTP weights...")
                 t0 = time.perf_counter()

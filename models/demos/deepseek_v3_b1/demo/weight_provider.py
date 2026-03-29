@@ -54,7 +54,7 @@ class WeightProvider(Protocol):
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
         ...
 
-    def load_mtp_weights(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
+    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         ...
 
 
@@ -204,19 +204,15 @@ def _build_synthetic_dense_state_dict(layer_id: int) -> dict[str, torch.Tensor]:
 
 
 def _build_synthetic_mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX) -> dict[str, torch.Tensor]:
-    """Build a synthetic MTP state dict with HF tensor shapes (randn for weights, ones for norms).
-
-    Includes the full MoE decoder layer keys (attention + MoE FFN) at the MTP layer index,
-    plus the lightweight MTP projection/norm weights.
-    """
-    state_dict = _build_synthetic_moe_state_dict(mtp_layer_idx, num_routed_experts=NUM_ROUTED_EXPERTS)
+    """Build a synthetic MTP state dict with only the lightweight MTP projection/norm tensors."""
     dtype = torch.bfloat16
     H = LogicalModelDimensions.HIDDEN_SIZE
 
-    state_dict[_layer_key(mtp_layer_idx, "hnorm.weight")] = torch.ones(H, dtype=dtype)
-    state_dict[_layer_key(mtp_layer_idx, "enorm.weight")] = torch.ones(H, dtype=dtype)
-    state_dict[_layer_key(mtp_layer_idx, "eh_proj.weight")] = torch.randn(H, 2 * H, dtype=dtype)
-    return state_dict
+    return {
+        _layer_key(mtp_layer_idx, "hnorm.weight"): torch.ones(H, dtype=dtype),
+        _layer_key(mtp_layer_idx, "enorm.weight"): torch.ones(H, dtype=dtype),
+        _layer_key(mtp_layer_idx, "eh_proj.weight"): torch.randn(H, 2 * H, dtype=dtype),
+    }
 
 
 class CacheWeightProvider:
@@ -242,7 +238,7 @@ class CacheWeightProvider:
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
         return load_dense_decoder_layer(self._path, device, layer_id)
 
-    def load_mtp_weights(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
+    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         return load_mtp_weights(self._path, device)
 
 
@@ -292,12 +288,9 @@ class SyntheticWeightProvider:
         bdw = BlitzDecodeWeights(device)
         return prepare_dense_layer_weights(bdw, sd, layer_id, move_to_device=True)
 
-    def load_mtp_weights(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
+    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         sd = _build_synthetic_mtp_state_dict()
-        bdw = BlitzDecodeWeights(device)
-        return prepare_mtp_weights(bdw, sd, device, move_to_device=True)
+        return prepare_mtp_weights(sd, device, move_to_device=True)
 
 
 class StateDictWeightProvider:
@@ -333,8 +326,5 @@ class StateDictWeightProvider:
         bdw = BlitzDecodeWeights(device)
         return prepare_dense_layer_weights(bdw, self._state_dict, layer_id, move_to_device=True)
 
-    def load_mtp_weights(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
-        bdw = BlitzDecodeWeights(device)
-        return prepare_mtp_weights(bdw, self._state_dict, device, move_to_device=True)
+    def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
+        return prepare_mtp_weights(self._state_dict, device, move_to_device=True)
