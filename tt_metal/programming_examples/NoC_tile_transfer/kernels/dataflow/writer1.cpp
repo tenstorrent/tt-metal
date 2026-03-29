@@ -25,11 +25,13 @@ void kernel_main() {
     // Wait for incoming data from reader1
     cb_wait_front(src1_cb_index, one_tile);
     DPRINT << "7. WRITER 1: Received data" << ENDL();
+    DEVICE_PRINT("7. WRITER 1: Received data\n");
     const uint32_t l1_write_addr_output = get_read_ptr(src1_cb_index);
 
     // Print data in buffer
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_output);
     DPRINT << " > Received data from src1: " << U32(ptr[0]) << ENDL();
+    DEVICE_PRINT(" > Received data from src1: {}\n", ptr[0]);
 
     // Save output data
     noc_async_write_tile(0, output_tensor_dram, l1_write_addr_output);
@@ -37,4 +39,5 @@ void kernel_main() {
 
     cb_pop_front(src1_cb_index, one_tile);
     DPRINT << "8. WRITER 1: Data saved" << ENDL();
+    DEVICE_PRINT("8. WRITER 1: Data saved\n");
 }

@@ -27,6 +27,7 @@ void kernel_main() {
 
     // Prepare for data transfer
     DPRINT << "5. READER 1: Preparing for data transfer" << ENDL();
+    DEVICE_PRINT("5. READER 1: Preparing for data transfer\n");
     cb_reserve_back(src1_cb_index, one_tile);  // Reserve space for incoming tile
 
     // Indicate readiness for data transfer to core 0
@@ -39,6 +40,7 @@ void kernel_main() {
     noc_semaphore_set(sem_ptr, 0);   // Reset semaphore
 
     DPRINT << "6. READER 1: Data received and stored in src1" << ENDL();
+    DEVICE_PRINT("6. READER 1: Data received and stored in src1\n");
 
     // Push data to src1 CB to writer1
     cb_push_back(src1_cb_index, one_tile);

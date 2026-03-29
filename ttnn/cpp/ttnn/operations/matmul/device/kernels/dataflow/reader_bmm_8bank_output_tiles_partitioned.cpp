@@ -31,8 +31,11 @@ void kernel_main() {
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
+    // DEVICE_PRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
     // DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
+    // DEVICE_PRINT("src0={} src1={}\n", src0_addr, src1_addr);
     // DPRINT << "batch=" << batch << ENDL();
+    // DEVICE_PRINT("batch={}\n", batch);
 
     constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
@@ -86,6 +89,7 @@ void kernel_main() {
                 cb_in1.push_back(onetile);
             }
             // DPRINT << "Pushed itileA=" << itileA << " itileB=" << itileB << ENDL();
+            // DEVICE_PRINT("Pushed itileA={} itileB={}\n", itileA, itileB);
 
             itileA += 1;   // A is MK
             itileB += Nt;  // B is KN, so to get k++ we stride by Nt

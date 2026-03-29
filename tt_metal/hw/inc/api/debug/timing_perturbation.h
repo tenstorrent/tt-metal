@@ -64,6 +64,12 @@ template <
 inline void add_compute_nops() {
     DPRINT << "is_riscv_nop: " << (uint32_t)is_riscv_nop << " Unpack NOPs: " << (uint32_t)num_unpack_nops
            << " Math NOPs: " << (uint32_t)num_math_nops << " Pack NOPs: " << (uint32_t)num_pack_nops << ENDL();
+    DEVICE_PRINT(
+        "is_riscv_nop: {} Unpack NOPs: {} Math NOPs: {} Pack NOPs: {}\n",
+        (uint32_t)is_riscv_nop,
+        (uint32_t)num_unpack_nops,
+        (uint32_t)num_math_nops,
+        (uint32_t)num_pack_nops);
     if constexpr (num_unpack_nops) {
         UNPACK((add_nops<num_unpack_nops, is_riscv_nop, use_loop>()));
     }

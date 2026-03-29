@@ -25,6 +25,9 @@ void kernel_main() {
     // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
     // DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
     // DPRINT << "batch=" << batch << ENDL();
+    // DEVICE_PRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
+    // DEVICE_PRINT("src0={} src1={}\n", src0_addr, src1_addr);
+    // DEVICE_PRINT("batch={}\n", batch);
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -66,6 +69,7 @@ void kernel_main() {
                 cb_push_back(cb_id_in1, onetile);
             }
             // DPRINT << "Pushed itileA=" << itileA << " itileB=" << itileB << ENDL();
+            // DEVICE_PRINT("Pushed itileA={} itileB={}\n", itileA, itileB);
 
             itileA += 1;   // A is MK
             itileB += Nt;  // B is KN, so to get k++ we stride by Nt

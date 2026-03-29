@@ -22,6 +22,7 @@ void kernel_main() {
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
 
     DPRINT << "Core (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y() << "): ";
+    DEVICE_PRINT("Core ({}, {}): ", get_absolute_logical_x(), get_absolute_logical_y());
     constexpr uint32_t element_per_stick = 2;  // Each stick contains two bfloat16 values
     const uint32_t n_sticks = stick_size / element_per_stick;
     for (uint32_t i = 0; i < n_sticks; i++) {
@@ -33,10 +34,12 @@ void kernel_main() {
         uint16_t* read_ptr_bf16 = (uint16_t*)l1_write_addr;
         DPRINT << BF16(read_ptr_bf16[0]) << " ";
         DPRINT << BF16(read_ptr_bf16[1]) << " ";
+        DEVICE_PRINT("{} {} ", bf16_t(read_ptr_bf16[0]), bf16_t(read_ptr_bf16[1]));
         stick_id++;
         l1_write_addr += padded_offset_bytes;
     }
     DPRINT << ENDL();
+    DEVICE_PRINT("\n");
     cb_push_back(cb_id_in0, stick_size);
 
     // At this point we have read all the sticks into the circular buffer. Computation and proceed knowing

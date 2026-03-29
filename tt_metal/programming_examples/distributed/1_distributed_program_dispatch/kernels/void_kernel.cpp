@@ -10,4 +10,5 @@ void kernel_main() {
     // Make sure to export TT_METAL_DPRINT_CORES=0,0 before runtime.
 
     DPRINT_MATH(DPRINT << "Hello, World! I'm running a void compute kernel." << ENDL());
+    DEVICE_PRINT_MATH("Hello, World! I'm running a void compute kernel.\n");
 }

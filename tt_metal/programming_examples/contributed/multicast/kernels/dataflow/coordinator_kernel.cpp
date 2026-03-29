@@ -34,6 +34,7 @@ void kernel_main() {
     ////////// PRINT TILE SLICE //////////
     SliceRange sr = SliceRange{.h0 = static_cast<uint8_t>(0), .h1 = static_cast<uint8_t>(32), .hs = 8, .w0 = 0, .w1 = 32, .ws = 8};
     DPRINT << TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false);
+    DEVICE_PRINT("{}", TileSlice(cb_id_in0, 0, sr, TSLICE_INPUT_CB, TSLICE_WR_PTR, true, false));
 
     cb_push_back(cb_id_in0, 1);
 
@@ -49,6 +50,10 @@ void kernel_main() {
 
     DPRINT << "CORE (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
     << "): Tile ready for multicast. I am starting all inbound kernels in cores in given range." << ENDL() << ENDL();
+    DEVICE_PRINT(
+        "CORE ({},{}): Tile ready for multicast. I am starting all inbound kernels in cores in given range.\n\n",
+        get_absolute_logical_x(),
+        get_absolute_logical_y());
 
     ////////// MULTICAST TILE TO RECEIVERS //////////
     uint64_t identity_tile_global_multicast_addr =

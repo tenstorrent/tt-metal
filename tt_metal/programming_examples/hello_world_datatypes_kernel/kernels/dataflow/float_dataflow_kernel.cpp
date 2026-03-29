@@ -23,6 +23,7 @@ void kernel_main() {
     float* data = (float*)l1_addr;
     DPRINT << "Master, I have retrieved the value stored on Device 0 DRAM. Here we go.  It is: " << F32(*data)
            << ENDL();
+    DEVICE_PRINT("Master, I have retrieved the value stored on Device 0 DRAM. Here we go. It is: {}\n", *data);
 
     cb_push_back(cb_id, 0);
 }

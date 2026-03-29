@@ -28,4 +28,9 @@ void kernel_main() {
 
     DPRINT << "Core (" << (uint32_t)get_absolute_logical_x() << "," << (uint32_t)get_absolute_logical_y()
            << "): Outbound kernel has written tile to DRAM index " << dram_tile_id << "." << ENDL();
+    DEVICE_PRINT(
+        "Core ({},{}): Outbound kernel has written tile to DRAM index {}.\n\n",
+        get_absolute_logical_x(),
+        get_absolute_logical_y(),
+        dram_tile_id);
 }

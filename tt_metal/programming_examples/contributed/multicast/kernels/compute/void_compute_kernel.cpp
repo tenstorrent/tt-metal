@@ -8,6 +8,7 @@
 void kernel_main() {
     // Nothing to compute. Print response message.
     DPRINT_MATH(DPRINT << "Void compute kernel is running." << ENDL() << ENDL());
+    DEVICE_PRINT_MATH("Void compute kernel is running.\n\n");
 
     // The user is encouraged to play around with tile compute behavior (i.e., element-wise math, column-wise or
     // row-wise transformations, etc.) as an exercise.

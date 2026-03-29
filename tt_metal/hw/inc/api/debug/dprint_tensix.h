@@ -44,23 +44,74 @@ inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data, ui
 // Dprints data format as string given an uint
 inline void dprint_data_format(uint8_t data_format) {
     switch (data_format) {
-        case (uint8_t)DataFormat::Float32: DPRINT << "Float32"; break;
-        case (uint8_t)DataFormat::Float16: DPRINT << "Float16"; break;
-        case (uint8_t)DataFormat::Bfp8: DPRINT << "Bfp8"; break;
-        case (uint8_t)DataFormat::Bfp4: DPRINT << "Bfp4"; break;
-        case (uint8_t)DataFormat::Bfp2: DPRINT << "Bfp2"; break;
-        case (uint8_t)DataFormat::Float16_b: DPRINT << "Float16_b"; break;
-        case (uint8_t)DataFormat::Bfp8_b: DPRINT << "Bfp8_b"; break;
-        case (uint8_t)DataFormat::Bfp4_b: DPRINT << "Bfp4_b"; break;
-        case (uint8_t)DataFormat::Bfp2_b: DPRINT << "Bfp2_b"; break;
-        case (uint8_t)DataFormat::Lf8: DPRINT << "Lf8"; break;
-        case (uint8_t)DataFormat::Int8: DPRINT << "Int8"; break;
-        case (uint8_t)DataFormat::UInt8: DPRINT << "UInt8"; break;
-        case (uint8_t)DataFormat::UInt16: DPRINT << "UInt16"; break;
-        case (uint8_t)DataFormat::Int32: DPRINT << "Int32"; break;
-        case (uint8_t)DataFormat::UInt32: DPRINT << "UInt32"; break;
-        case (uint8_t)DataFormat::Tf32: DPRINT << "Tf32"; break;
-        default: DPRINT << "INVALID DATA FORMAT"; break;
+        case (uint8_t)DataFormat::Float32:
+            DPRINT << "Float32";
+            DEVICE_PRINT("Float32");
+            break;
+        case (uint8_t)DataFormat::Float16:
+            DPRINT << "Float16";
+            DEVICE_PRINT("Float16");
+            break;
+        case (uint8_t)DataFormat::Bfp8:
+            DPRINT << "Bfp8";
+            DEVICE_PRINT("Bfp8");
+            break;
+        case (uint8_t)DataFormat::Bfp4:
+            DPRINT << "Bfp4";
+            DEVICE_PRINT("Bfp4");
+            break;
+        case (uint8_t)DataFormat::Bfp2:
+            DPRINT << "Bfp2";
+            DEVICE_PRINT("Bfp2");
+            break;
+        case (uint8_t)DataFormat::Float16_b:
+            DPRINT << "Float16_b";
+            DEVICE_PRINT("Float16_b");
+            break;
+        case (uint8_t)DataFormat::Bfp8_b:
+            DPRINT << "Bfp8_b";
+            DEVICE_PRINT("Bfp8_b");
+            break;
+        case (uint8_t)DataFormat::Bfp4_b:
+            DPRINT << "Bfp4_b";
+            DEVICE_PRINT("Bfp4_b");
+            break;
+        case (uint8_t)DataFormat::Bfp2_b:
+            DPRINT << "Bfp2_b";
+            DEVICE_PRINT("Bfp2_b");
+            break;
+        case (uint8_t)DataFormat::Lf8:
+            DPRINT << "Lf8";
+            DEVICE_PRINT("Lf8");
+            break;
+        case (uint8_t)DataFormat::Int8:
+            DPRINT << "Int8";
+            DEVICE_PRINT("Int8");
+            break;
+        case (uint8_t)DataFormat::UInt8:
+            DPRINT << "UInt8";
+            DEVICE_PRINT("UInt8");
+            break;
+        case (uint8_t)DataFormat::UInt16:
+            DPRINT << "UInt16";
+            DEVICE_PRINT("UInt16");
+            break;
+        case (uint8_t)DataFormat::Int32:
+            DPRINT << "Int32";
+            DEVICE_PRINT("Int32");
+            break;
+        case (uint8_t)DataFormat::UInt32:
+            DPRINT << "UInt32";
+            DEVICE_PRINT("UInt32");
+            break;
+        case (uint8_t)DataFormat::Tf32:
+            DPRINT << "Tf32";
+            DEVICE_PRINT("Tf32");
+            break;
+        default:
+            DPRINT << "INVALID DATA FORMAT";
+            DEVICE_PRINT("INVALID DATA FORMAT");
+            break;
     }
 }
 
@@ -185,6 +236,7 @@ inline void dprint_tensix_dest_reg_row_int32(uint16_t row) {
     dprint_array_with_data_type((uint32_t)DataFormat::Int32, rd_data, ARRAY_LEN);
 #else
     DPRINT << "Int32 format not supported on this architecture" << ENDL();
+    DEVICE_PRINT("Int32 format not supported on this architecture\n");
 #endif
 }
 
@@ -211,12 +263,15 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 #if defined(ARCH_WORMHOLE)
             DPRINT << "WARNING: Float32 on Wormhole displays limited precision - lower 16 mantissa bits are not shown"
                    << ENDL();
+            DEVICE_PRINT(
+                "WARNING: Float32 on Wormhole displays limited precision - lower 16 mantissa bits are not shown\n");
 #endif
         }
 
         // Print the contents
         DPRINT << FIXED() << SETW(WIDTH) << SETPRECISION(PRECISION);
         DPRINT << "Tile ID = " << tile_id << ENDL();
+        DEVICE_PRINT("Tile ID = {}\n", tile_id);
 
         uint32_t row = tile_id * NUM_ROWS_PER_TILE;
         for (int face_id = 0; face_id < NUM_FACES_PER_TILE; ++face_id) {
@@ -230,12 +285,16 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
                     case (uint32_t)DataFormat::Float16_b:
                         dprint_tensix_dest_reg_row_float16(data_format_reg_field_value, row);
                         break;
-                    default: DPRINT << "Unsupported data format: " << data_format_reg_field_value << ENDL(); break;
+                    default:
+                        DPRINT << "Unsupported data format: " << data_format_reg_field_value << ENDL();
+                        DEVICE_PRINT("Unsupported data format: {}\n", data_format_reg_field_value);
+                        break;
                 }
                 row++;
             }
             if constexpr (print_by_face) {
                 DPRINT << ENDL();
+                DEVICE_PRINT("\n");
             }
         }
     })
@@ -249,6 +308,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
     {                                                                                       \
         uint32_t field_val = READ_CFG_REG_FIELD(ckernel::dbg_cfgreg::bank, reg_field_name); \
         DPRINT << #reg_field_name << " = " << field_val << ENDL();                          \
+        DEVICE_PRINT(#reg_field_name " = {}\n", field_val);                                 \
     }
 
 // Print the contents of the whole configuration register. The register is specified by
@@ -259,6 +319,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
     {                                                                                           \
         uint32_t reg_val = dbg_read_cfgreg(ckernel::dbg_cfgreg::bank, reg_field_name##_ADDR32); \
         DPRINT << #reg_field_name << " = " << HEX() << reg_val << ENDL();                       \
+        DEVICE_PRINT(#reg_field_name " = 0x{:08X}\n", reg_val);                                 \
     }
 
 // Print the content of the register field given the value in the register.
@@ -268,19 +329,23 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
         DPRINT << name << " = ";                                                            \
         if (printDec) {                                                                     \
             DPRINT << DEC();                                                                \
+            DEVICE_PRINT(name " = {}; ", field_value);                                      \
         } else {                                                                            \
             DPRINT << "0x" << HEX();                                                        \
+            DEVICE_PRINT(name " = 0x{:X}; ", field_value);                                  \
         }                                                                                   \
         DPRINT << field_value << "; ";                                                      \
     }
 
-inline void dprint_tensix_struct_field(
-    uint32_t word, uint32_t mask, uint8_t shamt, const char* name, bool printDec = false) {
-    DPRINT << name << ": ";
-    if (printDec) {
-        DPRINT << DEC();
-    } else {
-        DPRINT << "0x" << HEX();
+#define dprint_tensix_struct_field(word, mask, shamt, name, printDec)     \
+    {                                                                     \
+        DPRINT << name << ": ";                                           \
+        if (printDec) {                                                   \
+            DPRINT << DEC();                                              \
+            DEVICE_PRINT(name " : {}", ((word) & (mask)) >> (shamt));     \
+        } else {                                                          \
+            DPRINT << "0x" << HEX();                                      \
+            DEVICE_PRINT(name " : 0x{:X}", ((word) & (mask)) >> (shamt)); \
+        }                                                                 \
+        DPRINT << (uint32_t)((((word) & (mask)) >> (shamt))) << ENDL();   \
     }
-    DPRINT << ((word & mask) >> shamt) << ENDL();
-}

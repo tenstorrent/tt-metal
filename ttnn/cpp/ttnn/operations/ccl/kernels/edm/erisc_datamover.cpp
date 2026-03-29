@@ -34,13 +34,17 @@
 FORCE_INLINE void eth_setup_handshake2(std::uint32_t handshake_register_address, bool is_sender) {
     if (is_sender) {
         DPRINT << "eth_send_bytes\n";
+        DEVICE_PRINT("eth_send_bytes\n");
         eth_send_bytes(handshake_register_address, handshake_register_address, 16);
         DPRINT << "eth_wait_for_receiver_done\n";
+        DEVICE_PRINT("eth_wait_for_receiver_done\n");
         eth_wait_for_receiver_done();
     } else {
         DPRINT << "eth_wait_for_bytes\n";
+        DEVICE_PRINT("eth_wait_for_bytes\n");
         eth_wait_for_bytes(16);
         DPRINT << "wait eth_receiver_done\n";
+        DEVICE_PRINT("wait eth_receiver_done\n");
         eth_receiver_channel_done(0);
     }
 }

@@ -83,6 +83,7 @@ void kernel_main() {
         uint32_t stats_tile_idx = tile_row * stats_tiles_cols;
         cb_reserve_back(cb_stats, stats_tiles_cols);
         DPRINT << "reserve_back stats on tile_row: " << tile_row << ENDL();
+        DEVICE_PRINT("reserve_back stats on tile_row: {}\n", tile_row);
         uint32_t stats_wr_ptr = get_write_ptr(cb_stats);
         for (uint32_t st = 0; st < stats_tiles_cols; ++st) {
             noc_async_read_tile(stats_tile_idx, src_stats, stats_wr_ptr);
@@ -126,6 +127,7 @@ void kernel_main() {
             // Input
             cb_reserve_back(cb_inp, block_size);
             DPRINT << "reserve_back input on tile_row: " << tile_row << " col_tile: " << col_tile << ENDL();
+            DEVICE_PRINT("reserve_back input on tile_row: {} col_tile: {}\n", tile_row, col_tile);
             uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
             for (uint32_t i = 0; i < block_size && col_tile + i < Wt; i++) {
                 noc_async_read_tile(input_tile_idx, src_a, inp_wr_ptr);
@@ -141,6 +143,8 @@ void kernel_main() {
                 cb_reserve_back(cb_gamma, block_size);
                 DPRINT << "reserve_back gamma on tile_row: " << tile_row << " col_tile: " << col_tile
                        << " batch: " << batch_idx << ENDL();
+                DEVICE_PRINT(
+                    "reserve_back gamma on tile_row: {} col_tile: {} batch: {}\n", tile_row, col_tile, batch_idx);
                 uint32_t l1_write_addr_g = get_write_ptr(cb_gamma);
                 // Calculate tile offset for this batch
                 uint32_t gamma_batch_offset = gamma_is_batched ? (batch_idx * gamma_batch_stride_tiles) : 0;
@@ -159,6 +163,8 @@ void kernel_main() {
                 cb_reserve_back(cb_beta, block_size);
                 DPRINT << "reserve_back beta on tile_row: " << tile_row << " col_tile: " << col_tile
                        << " batch: " << batch_idx << ENDL();
+                DEVICE_PRINT(
+                    "reserve_back beta on tile_row: {} col_tile: {} batch: {}\n", tile_row, col_tile, batch_idx);
                 uint32_t l1_write_addr_b = get_write_ptr(cb_beta);
                 // Calculate tile offset for this batch
                 uint32_t beta_batch_offset = beta_is_batched ? (batch_idx * beta_batch_stride_tiles) : 0;

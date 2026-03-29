@@ -48,6 +48,7 @@ CclCommandHeader update_command_tensor(std::size_t &arg_idx, CclCommandTensor &c
     auto cmd = CclCommandHeader::from_uint32(get_arg_val<uint32_t>(arg_idx++));
     #ifdef DEBUG_PRINT_ENABLED
     DPRINT << "CMD (code=" << (uint32_t)cmd.code << ", dst_t=" << (uint32_t)cmd.dest_type << ", arg_count=" << (uint32_t)cmd.arg_count << ")\n";
+    DEVICE_PRINT("CMD (code={}, dst_t={}, arg_count={})\n", (uint32_t)cmd.code, (uint32_t)cmd.dest_type, (uint32_t)cmd.arg_count);
     #endif
 
     for (size_t i = 0; i < cmd.arg_count; i++) {
@@ -63,6 +64,7 @@ CclCommandHeader update_command_tensor(std::size_t &arg_idx, CclCommandTensor &c
                 CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>::unpack(reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.tensor_shape);
                 #ifdef DEBUG_PRINT_ENABLED
                 DPRINT << "Updating tensor shape: (w=" << (uint32_t)cmd_tensor.tensor_shape.w << ", z=" << (uint32_t)cmd_tensor.tensor_shape.z << ", y=" << (uint32_t)cmd_tensor.tensor_shape.y << ", x=" << (uint32_t)cmd_tensor.tensor_shape.x << ")\n";
+                DEVICE_PRINT("Updating tensor shape: (w={}, z={}, y={}, x={})\n", cmd_tensor.tensor_shape.w, cmd_tensor.tensor_shape.z, cmd_tensor.tensor_shape.y, cmd_tensor.tensor_shape.x);
                 #endif
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_TENSOR_SHAPE_IN_PAGES>::size_in_words();
                 break;
@@ -70,6 +72,7 @@ CclCommandHeader update_command_tensor(std::size_t &arg_idx, CclCommandTensor &c
                 CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>::unpack(reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.tensor_slice_shape);
                 #ifdef DEBUG_PRINT_ENABLED
                 DPRINT << "Updating tensor slice shape: (w=" << (uint32_t)cmd_tensor.tensor_slice_shape.w << ", z=" << (uint32_t)cmd_tensor.tensor_slice_shape.z << ", y=" << (uint32_t)cmd_tensor.tensor_slice_shape.y << ", x=" << (uint32_t)cmd_tensor.tensor_slice_shape.x << ")\n";
+                DEVICE_PRINT("Updating tensor slice shape: (w={}, z={}, y={}, x={})\n", cmd_tensor.tensor_slice_shape.w, cmd_tensor.tensor_slice_shape.z, cmd_tensor.tensor_slice_shape.y, cmd_tensor.tensor_slice_shape.x);
                 #endif
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_SHAPE_IN_PAGES>::size_in_words();
                 break;
@@ -78,6 +81,7 @@ CclCommandHeader update_command_tensor(std::size_t &arg_idx, CclCommandTensor &c
                     reinterpret_cast<volatile uint32_t *>(get_arg_addr(arg_idx)), cmd_tensor.tensor_slice_offset);
                 #ifdef DEBUG_PRINT_ENABLED
                 DPRINT << "Updating tensor slice offset: (w=" << (uint32_t)cmd_tensor.tensor_slice_offset.w << ", z=" << (uint32_t)cmd_tensor.tensor_slice_offset.z << ", y=" << (uint32_t)cmd_tensor.tensor_slice_offset.y << ", x=" << (uint32_t)cmd_tensor.tensor_slice_offset.x << ")\n";
+                DEVICE_PRINT("Updating tensor slice offset: (w={}, z={}, y={}, x={})\n", cmd_tensor.tensor_slice_offset.w, cmd_tensor.tensor_slice_offset.z, cmd_tensor.tensor_slice_offset.y, cmd_tensor.tensor_slice_offset.x);
                 #endif
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_TENSOR_SLICE_OFFSET_IN_PAGES>::size_in_words();
                 break;
@@ -85,6 +89,7 @@ CclCommandHeader update_command_tensor(std::size_t &arg_idx, CclCommandTensor &c
                 CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::unpack(reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.worker_start_offset_in_slice);
                 #ifdef DEBUG_PRINT_ENABLED
                 DPRINT << "Updating worker start offset in slice: (w=" << (uint32_t)cmd_tensor.worker_start_offset_in_slice.w << ", z=" << (uint32_t)cmd_tensor.worker_start_offset_in_slice.z << ", y=" << (uint32_t)cmd_tensor.worker_start_offset_in_slice.y << ", x=" << (uint32_t)cmd_tensor.worker_start_offset_in_slice.x << ")\n";
+                DEVICE_PRINT("Updating worker start offset in slice: (w={}, z={}, y={}, x={})\n", cmd_tensor.worker_start_offset_in_slice.w, cmd_tensor.worker_start_offset_in_slice.z, cmd_tensor.worker_start_offset_in_slice.y, cmd_tensor.worker_start_offset_in_slice.x);
                 #endif
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_WORKER_START_OFFSET_IN_SLICE_IN_PAGES>::size_in_words();
                 break;
@@ -92,6 +97,7 @@ CclCommandHeader update_command_tensor(std::size_t &arg_idx, CclCommandTensor &c
                 CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::unpack(reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor.worker_pages_per_slice);
                 #ifdef DEBUG_PRINT_ENABLED
                 DPRINT << "Updating worker pages per slice: " << (uint32_t)cmd_tensor.worker_pages_per_slice << "\n";
+                DEVICE_PRINT("Updating worker pages per slice: {}\n", cmd_tensor.worker_pages_per_slice);
                 #endif
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_WORKER_PAGES_PER_SLICE>::size_in_words();
                 break;
@@ -99,6 +105,7 @@ CclCommandHeader update_command_tensor(std::size_t &arg_idx, CclCommandTensor &c
                 CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>::unpack(reinterpret_cast<volatile uint32_t*>(get_arg_addr(arg_idx)), cmd_tensor);
                 #ifdef DEBUG_PRINT_ENABLED
                 DPRINT << "Updating full tensor slice spec: (tensor_shape: w=" << (uint32_t)cmd_tensor.tensor_shape.w << ", z=" << (uint32_t)cmd_tensor.tensor_shape.z << ", y=" << (uint32_t)cmd_tensor.tensor_shape.y << ", x=" << (uint32_t)cmd_tensor.tensor_shape.x << ")\n";
+                DEVICE_PRINT("Updating full tensor slice spec: (tensor_shape: w={}, z={}, y={}, x={})\n", cmd_tensor.tensor_shape.w, cmd_tensor.tensor_shape.z, cmd_tensor.tensor_shape.y, cmd_tensor.tensor_shape.x);
                 #endif
                 arg_idx += CclCommandArg<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>::size_in_words();
                 break;

@@ -12,4 +12,7 @@ void kernel_main() {
     DPRINT_MATH(DPRINT << "Hello, I am the MATH core running the compute kernel" << ENDL());
     DPRINT_UNPACK(DPRINT << "Hello, I am the UNPACK core running the compute kernel" << ENDL());
     DPRINT_PACK(DPRINT << "Hello, I am the PACK core running the compute kernel" << ENDL());
+    DEVICE_PRINT_MATH("Hello, I am the MATH core running the compute kernel.\n");
+    DEVICE_PRINT_UNPACK("Hello, I am the UNPACK core running the compute kernel.\n");
+    DEVICE_PRINT_PACK("Hello, I am the PACK core running the compute kernel.\n");
 }

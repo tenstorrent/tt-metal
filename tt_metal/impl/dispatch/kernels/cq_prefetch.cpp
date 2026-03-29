@@ -324,6 +324,15 @@ FORCE_INLINE uint32_t read_from_pcie(
     DPRINT << "read_from_pcie: ENTER trid=" << trid << " size=" << size << " preamble_size=" << preamble_size
            << " fence=" << fence << " cmd_ptr=" << cmd_ptr << " pcie_read_ptr=" << pcie_read_ptr
            << " queue_empty=" << static_cast<uint32_t>(queue_empty) << ENDL();
+    DEVICE_PRINT(
+        "read_from_pcie: ENTER trid={} size={} preamble_size={} fence={} cmd_ptr={} pcie_read_ptr={} queue_empty={}\n",
+        trid,
+        size,
+        preamble_size,
+        fence,
+        cmd_ptr,
+        pcie_read_ptr,
+        queue_empty);
 #endif
 
     // Wrap cmddat_q
@@ -333,6 +342,12 @@ FORCE_INLINE uint32_t read_from_pcie(
 #if ENABLE_PREFETCH_DPRINTS
         DPRINT << "read_from_pcie: EARLY_EXIT (ring_full cmd_ptr==fence) trid=" << trid << " fence=" << fence
                << " cmd_ptr=" << cmd_ptr << " needed_bytes=" << needed_bytes << ENDL();
+        DEVICE_PRINT(
+            "read_from_pcie: EARLY_EXIT (ring_full cmd_ptr==fence) trid={} fence={} cmd_ptr={} needed_bytes={}\n",
+            trid,
+            fence,
+            cmd_ptr,
+            needed_bytes);
 #endif
         return pending_read_size;
     }
@@ -346,6 +361,14 @@ FORCE_INLINE uint32_t read_from_pcie(
             DPRINT << "read_from_pcie: EARLY_EXIT (insufficient_space, cmd_ptr > fence) trid=" << trid
                    << " fence=" << fence << " cmd_ptr=" << cmd_ptr << " needed_bytes=" << needed_bytes
                    << " available_bytes=" << available_bytes << ENDL();
+            DEVICE_PRINT(
+                "read_from_pcie: EARLY_EXIT (insufficient_space, cmd_ptr > fence) trid={} fence={} cmd_ptr={} "
+                "needed_bytes={} available_bytes={}\n",
+                trid,
+                fence,
+                cmd_ptr,
+                needed_bytes,
+                available_bytes);
 #endif
             return pending_read_size;
         }
@@ -360,6 +383,15 @@ FORCE_INLINE uint32_t read_from_pcie(
             DPRINT << "read_from_pcie: EARLY_EXIT (insufficient_space_at_beginning) trid=" << trid << " fence=" << fence
                    << " cmd_ptr=" << cmd_ptr << " needed_bytes=" << needed_bytes << " queue_empty=" << queue_empty
                    << " available_bytes_at_beginning=" << available_bytes_at_beginning << ENDL();
+            DEVICE_PRINT(
+                "read_from_pcie: EARLY_EXIT (insufficient_space_at_beginning) trid={} fence={} cmd_ptr={} "
+                "needed_bytes={} queue_empty={} available_bytes_at_beginning={}\n",
+                trid,
+                fence,
+                cmd_ptr,
+                needed_bytes,
+                queue_empty,
+                available_bytes_at_beginning);
 #endif
             return pending_read_size;
         }
@@ -367,6 +399,12 @@ FORCE_INLINE uint32_t read_from_pcie(
 #if ENABLE_PREFETCH_DPRINTS
         DPRINT << "read_from_pcie: WRAP cmddat_q fence=" << fence << " -> " << cmddat_q_base
                << " (needed_bytes=" << needed_bytes << " avail_begin=" << available_bytes_at_beginning << ")" << ENDL();
+        DEVICE_PRINT(
+            "read_from_pcie: WRAP cmddat_q fence={} -> {} (needed_bytes={} avail_begin={})\n",
+            fence,
+            cmddat_q_base,
+            needed_bytes,
+            available_bytes_at_beginning);
 #endif
         fence = cmddat_q_base;
     }
@@ -375,6 +413,7 @@ FORCE_INLINE uint32_t read_from_pcie(
     if (pcie_read_ptr + size > pcie_base + pcie_size) {
 #if ENABLE_PREFETCH_DPRINTS
         DPRINT << "read_from_pcie: WRAP pcie pcie_read_ptr=" << pcie_read_ptr << " -> " << pcie_base << ENDL();
+        DEVICE_PRINT("read_from_pcie: WRAP pcie pcie_read_ptr={} -> {}\n", pcie_read_ptr, pcie_base);
 #endif
         pcie_read_ptr = pcie_base;
     }
@@ -387,6 +426,12 @@ FORCE_INLINE uint32_t read_from_pcie(
 #if ENABLE_PREFETCH_DPRINTS
     DPRINT << "read_from_pcie: ISSUE_READ trid=" << trid << " host_src_addr=" << host_src_addr
            << " dst_addr=" << dst_addr << " size=" << size << ENDL();
+    DEVICE_PRINT(
+        "read_from_pcie: ISSUE_READ trid={} host_src_addr={} dst_addr={} size={}\n",
+        trid,
+        host_src_addr,
+        dst_addr,
+        size);
 #endif
     noc_async_read_set_trid(trid);
     noc_async_read(host_src_addr, dst_addr, size);
@@ -397,6 +442,12 @@ FORCE_INLINE uint32_t read_from_pcie(
 #if ENABLE_PREFETCH_DPRINTS
     DPRINT << "read_from_pcie: READ_ISSUED trid=" << trid << " pending_read_size=" << pending_read_size
            << " new_pcie_read_ptr=" << pcie_read_ptr << " new_fence=" << fence << ENDL();
+    DEVICE_PRINT(
+        "read_from_pcie: READ_ISSUED trid={} pending_read_size={} new_pcie_read_ptr={} new_fence={}\n",
+        trid,
+        pending_read_size,
+        pcie_read_ptr,
+        fence);
 #endif
 
     *prefetch_q_rd_ptr = 0U;
@@ -476,6 +527,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
         ASSERT(issue_fence == fence);
 #if ENABLE_PREFETCH_DPRINTS
         DPRINT << "fetch_q_get_cmds: EXIT (STALLED)" << ENDL();
+        DEVICE_PRINT("fetch_q_get_cmds: EXIT (STALLED)\n");
 #endif
         return;
     }
@@ -487,6 +539,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
 #if ENABLE_PREFETCH_DPRINTS
         DPRINT << "fetch_q_get_cmds: ADJUST cmd_ptr fence=" << fence << " cmd_ptr=" << cmd_ptr << " -> " << fence
                << ENDL();
+        DEVICE_PRINT("fetch_q_get_cmds: ADJUST cmd_ptr fence={} cmd_ptr={} -> {}\n", fence, cmd_ptr, fence);
 #endif
         cmd_ptr = fence;
     }
@@ -501,6 +554,18 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                << " inflight_tail=" << inflight_tail << " next_trid=" << next_trid << " fence=" << fence
                << " issue_fence=" << issue_fence << " cmd_ptr=" << cmd_ptr << " pcie_read_ptr=" << pcie_read_ptr
                << ENDL();
+        DEVICE_PRINT(
+            "fetch_q_get_cmds: ENTER stall_state={} inflight_count={} inflight_head={} inflight_tail={} next_trid={} "
+            "fence={} issue_fence={} cmd_ptr={} pcie_read_ptr={}\n",
+            stall_state,
+            inflight_count,
+            inflight_head,
+            inflight_tail,
+            next_trid,
+            fence,
+            issue_fence,
+            cmd_ptr,
+            pcie_read_ptr);
 #endif
 
         // At this point cmd_ptr <= fence and the contiguous set of commands from cmd_ptr to fence are valid, because
@@ -532,6 +597,12 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
         DPRINT << "fetch_q_get_cmds: STATE cmd_ready=" << static_cast<uint32_t>(cmd_ready)
                << " fetch_size=" << fetch_size << " stall_flag=" << static_cast<uint32_t>(stall_flag)
                << " inflight_count=" << inflight_count << ENDL();
+        DEVICE_PRINT(
+            "fetch_q_get_cmds: STATE cmd_ready={} fetch_size={} stall_flag={} inflight_count={}\n",
+            cmd_ready,
+            fetch_size,
+            stall_flag,
+            inflight_count);
 #endif
 
         // Issue tagged reads (up to MAX_OUTSTANDING_READS) whenever host has work and there is capacity.
@@ -550,6 +621,18 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                        << " issue_fence=" << issue_fence << " fence=" << fence << " cmd_ptr=" << cmd_ptr
                        << " inflight_count=" << inflight_count << " stall_flag=" << static_cast<uint32_t>(stall_flag)
                        << ENDL();
+                DEVICE_PRINT(
+                    "fetch_q_get_cmds: ISSUE_ATTEMPT idx={} trid={} fetch_size={} preamble_size={} issue_fence={} "
+                    "fence={} cmd_ptr={} inflight_count={} stall_flag={}\n",
+                    idx,
+                    this_trid,
+                    fetch_size,
+                    preamble_size,
+                    issue_fence,
+                    fence,
+                    cmd_ptr,
+                    inflight_count,
+                    stall_flag);
 #endif
 
                 total_size = read_from_pcie<preamble_size>(
@@ -560,6 +643,13 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
 #if ENABLE_PREFETCH_DPRINTS
                     DPRINT << "fetch_q_get_cmds: ISSUE_FAILED trid=" << this_trid << " fetch_size=" << fetch_size
                            << " issue_fence=" << issue_fence << " fence=" << fence << " cmd_ptr=" << cmd_ptr << ENDL();
+                    DEVICE_PRINT(
+                        "fetch_q_get_cmds: ISSUE_FAILED trid={} fetch_size={} issue_fence={} fence={} cmd_ptr={}\n",
+                        this_trid,
+                        fetch_size,
+                        issue_fence,
+                        fence,
+                        cmd_ptr);
 #endif
                     break;
                 }
@@ -584,6 +674,16 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                        << " read_size=" << fetch_size << " total_size=" << total_size
                        << " new_issue_fence=" << issue_fence << " inflight_count=" << inflight_count
                        << " next_trid=" << PREFETCH_TRIDS[next_trid_idx] << ENDL();
+                DEVICE_PRINT(
+                    "fetch_q_get_cmds: ISSUE_OK trid={} read_start={} read_size={} total_size={} new_issue_fence={} "
+                    "inflight_count={} next_trid={}\n",
+                    this_trid,
+                    read_fence,
+                    fetch_size,
+                    total_size,
+                    issue_fence,
+                    inflight_count,
+                    PREFETCH_TRIDS[next_trid_idx]);
 #endif
 
                 // Stop issuing reads beyond a stall entry. We'll stall when this read is retired.
@@ -611,6 +711,18 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                        << " total_size=" << inflight[idx].reserved_size << " preamble_size=" << preamble_size
                        << " flags=" << (inflight[idx].flags == InflightFlags::STALL_AFTER ? "STALL_AFTER" : "NOSTALL")
                        << " fence=" << fence << " cmd_ptr=" << cmd_ptr << ENDL();
+                DEVICE_PRINT(
+                    "fetch_q_get_cmds: RETIRE_START idx={} trid={} read_start={} read_size={} total_size={} "
+                    "preamble_size={} flags={} fence={} cmd_ptr={}\n",
+                    idx,
+                    inflight[idx].trid,
+                    inflight[idx].read_start,
+                    (inflight[idx].reserved_size - preamble_size),
+                    inflight[idx].reserved_size,
+                    preamble_size,
+                    inflight[idx].flags,
+                    fence,
+                    cmd_ptr);
 #endif
 
                 noc_async_read_barrier_with_trid(inflight[idx].trid);
@@ -619,6 +731,10 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                 if (inflight[idx].read_start < cmd_ptr) {
                     DPRINT << "fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr=" << cmd_ptr << " -> "
                            << inflight[idx].read_start << ENDL();
+                    DEVICE_PRINT(
+                        "fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr={} -> {}\n",
+                        cmd_ptr,
+                        inflight[idx].read_start);
                 }
 #endif
                 cmd_ptr = inflight[idx].read_start;
@@ -630,6 +746,11 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT << "fetch_q_get_cmds: RETIRE_DONE fence=" << fence << " inflight_count=" << inflight_count
                        << " inflight_head=" << inflight_head << ENDL();
+                DEVICE_PRINT(
+                    "fetch_q_get_cmds: RETIRE_DONE fence={} inflight_count={} inflight_head={}\n",
+                    fence,
+                    inflight_count,
+                    inflight_head);
 #endif
 
                 // If this was a stall-after read, transition to STALLED now (exec_buf is next).
@@ -639,6 +760,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
                     stall_state = StallState::STALLED;
 #if ENABLE_PREFETCH_DPRINTS
                     DPRINT << "fetch_q_get_cmds: RETIRE_DONE -> STALLED (stall-after read)" << ENDL();
+                    DEVICE_PRINT("fetch_q_get_cmds: RETIRE_DONE -> STALLED (stall-after read)\n");
 #endif
                     return;
                 }
@@ -792,6 +914,7 @@ uint32_t process_relay_paged_cmd_large(
     uint32_t length_adjust) {
 #if ENABLE_PREFETCH_DPRINTS
     DPRINT << "relay_paged_cmd_large: " << page_size << " " << pages << " " << length_adjust << ENDL();
+    DEVICE_PRINT("relay_paged_cmd_large: page_size={} pages={} length_adjust={}\n", page_size, pages, length_adjust);
 #endif
 
     auto addr_gen = TensorAccessor(tensor_accessor::make_interleaved_dspec<is_dram>(), base_addr, page_size);
@@ -1123,6 +1246,7 @@ uint32_t process_relay_paged_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream__
     uint32_t stride = cmd->relay_paged_packed.stride;
     ASSERT(total_length > 0);
     // DPRINT << "paged_packed: " << total_length << " " << cmd->relay_paged_packed.stride << ENDL();
+    // DEVICE_PRINT("paged_packed: total_length={} stride={}\n", total_length, cmd->relay_paged_packed.stride);
 
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
     uint32_t remaining = cmddat_q_end - data_ptr;
@@ -1193,6 +1317,8 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     uint64_t read_addr = cmd->relay_linear.addr;
     uint64_t wlength = cmd->relay_linear.length;
     // DPRINT << "relay_linear: " << cmd_ptr << " " << wlength << " " << read_addr << " " << noc_xy_addr << ENDL();
+    // DEVICE_PRINT("relay_linear: cmd_ptr={} length={} read_addr={} noc_xy_addr={}\n", cmd_ptr, wlength, read_addr,
+    // noc_xy_addr);
 
     // First step - read into DB0
     uint32_t scratch_read_addr = scratch_db_top[0];
@@ -1392,6 +1518,7 @@ FORCE_INLINE static uint32_t process_exec_buf_relay_inline_cmd(
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
 
     // DPRINT << "relay_inline_exec_buf_cmd:" << length << ENDL();
+    // DEVICE_PRINT("relay_inline_exec_buf_cmd: length={}\n", length);
     uint32_t npages =
         (length + RelayInlineState::downstream_page_size - 1) >> RelayInlineState::downstream_log_page_size;
     static_assert(
@@ -1540,6 +1667,7 @@ static uint32_t process_exec_buf_relay_paged_packed_cmd(
     uint32_t stride = cmd->relay_paged_packed.stride;
     ASSERT(total_length > 0);
     // DPRINT << "paged_packed: " << total_length << " " << cmd->relay_paged_packed.stride << ENDL();
+    // DEVICE_PRINT("paged_packed: total_length={} stride={}\n", total_length, cmd->relay_paged_packed.stride);
 
     void* end = copy_into_l1_cache(cmd_ptr, sub_cmds_length, l1_cache, exec_buf_state, stride);
 
@@ -1682,6 +1810,7 @@ uint32_t process_relay_ringbuffer_cmd(uint32_t cmd_ptr, uint32_t& downstream__da
     uint32_t sub_cmds_length = count * sizeof(CQPrefetchRelayRingbufferSubCmd);
     uint32_t stride = cmd->relay_ringbuffer.stride;
     // DPRINT << "relay_ringbuffer: " << count << " " << cmd->relay_ringbuffer.stride << ENDL();
+    // DEVICE_PRINT("relay_ringbuffer: count={} stride={}\n", count, cmd->relay_ringbuffer.stride);
 
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
     uint32_t remaining = cmddat_q_end - data_ptr;
@@ -1816,6 +1945,7 @@ uint32_t process_relay_linear_packed_cmd(uint32_t cmd_ptr, uint32_t& downstream_
     uint32_t stride = cmd->relay_linear_packed.stride;
     ASSERT(total_length > 0);
     // DPRINT << "linear_packed: " << total_length << " " << cmd->relay_linear_packed.stride << ENDL();
+    // DEVICE_PRINT("linear_packed: {} {}\n", total_length, cmd->relay_linear_packed.stride);
 
     uint32_t data_ptr = cmd_ptr + sizeof(CQPrefetchCmd);
     uint32_t remaining = cmddat_q_end - data_ptr;
@@ -1872,11 +2002,13 @@ bool process_cmd(
     switch (cmd->base.cmd_id) {
         case CQ_PREFETCH_CMD_RELAY_LINEAR:
             // DPRINT << "relay linear: " << cmd_ptr << ENDL();
+            // DEVICE_PRINT("relay_linear: {}\n", cmd_ptr);
             stride = process_relay_linear_cmd(cmd_ptr, downstream_data_ptr);
             break;
 
         case CQ_PREFETCH_CMD_RELAY_PAGED:
             // DPRINT << "relay paged: " << cmd_ptr << ENDL();
+            // DEVICE_PRINT("relay_paged: {}\n", cmd_ptr);
             {
                 uint32_t is_dram_and_length_adjust = cmd->relay_paged.is_dram_and_length_adjust;
                 uint32_t is_dram = is_dram_and_length_adjust & (1 << CQ_PREFETCH_RELAY_PAGED_IS_DRAM_SHIFT);
@@ -1891,6 +2023,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_PAGED_PACKED:
             // DPRINT << "relay paged packed" << ENDL();
+            // DEVICE_PRINT("relay_paged_packed\n");
             if (exec_buf) {
                 stride =
                     process_exec_buf_relay_paged_packed_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
@@ -1901,6 +2034,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_INLINE:
             // DPRINT << "relay inline" << ENDL();
+            // DEVICE_PRINT("relay_inline\n");
             if constexpr (exec_buf) {
                 if (cmd->relay_inline.dispatcher_type == DispatcherSelect::DISPATCH_MASTER) {
                     stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(
@@ -1922,6 +2056,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
             // DPRINT << "inline no flush" << ENDL();
+            // DEVICE_PRINT("relay_inline_noflush\n");
             if (exec_buf) {
                 stride = process_exec_buf_relay_inline_noflush_cmd(cmd_ptr, downstream_data_ptr, exec_buf_state);
             } else {
@@ -1931,6 +2066,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_EXEC_BUF:
             // DPRINT << "exec buf: " << cmd_ptr << ENDL();
+            // DEVICE_PRINT("exec_buf: {}\n", cmd_ptr);
             ASSERT(!exec_buf);
             if (is_h_variant) {
                 ASSERT(stall_state == StallState::STALLED);  // ExecBuf must be preceded by a prefetcher stall
@@ -1941,6 +2077,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_EXEC_BUF_END:
             // DPRINT << "exec buf end: " << cmd_ptr << ENDL();
+            // DEVICE_PRINT("exec_buf_end: {}\n", cmd_ptr);
             ASSERT(exec_buf);
             stride = process_exec_buf_relay_inline_cmd<DispatchRelayInlineState>(
                 cmd_ptr, downstream_data_ptr, exec_buf_state);
@@ -1949,11 +2086,13 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_STALL:
             // DPRINT << "stall" << ENDL();
+            // DEVICE_PRINT("stall\n");
             stride = process_stall(cmd_ptr);
             break;
 
         case CQ_PREFETCH_CMD_DEBUG:
             // DPRINT << "debug" << ENDL();
+            // DEVICE_PRINT("debug\n");
             //  Splitting debug cmds not implemented for exec_bufs (yet)
             if (exec_buf) {
                 ASSERT(0);
@@ -1963,22 +2102,26 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_TERMINATE:
             // DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();
+            // DEVICE_PRINT("prefetch terminating_{}{}\n", is_h_variant, is_d_variant);
             ASSERT(!exec_buf);
             done = true;
             break;
 
         case CQ_PREFETCH_CMD_PAGED_TO_RINGBUFFER:
             // DPRINT << "paged to ringbuffer" << ENDL();
+            // DEVICE_PRINT("paged_to_ringbuffer\n");
             stride = process_paged_to_ringbuffer_cmd(cmd_ptr, downstream_data_ptr);
             break;
 
         case CQ_PREFETCH_CMD_SET_RINGBUFFER_OFFSET:
             // DPRINT << "set ringbuffer offset" << ENDL();
+            // DEVICE_PRINT("set_ringbuffer_offset\n");
             stride = process_set_ringbuffer_offset(cmd_ptr);
             break;
 
         case CQ_PREFETCH_CMD_RELAY_RINGBUFFER:
             // DPRINT << "relay ringbuffer" << ENDL();
+            // DEVICE_PRINT("relay_ringbuffer\n");
             if (exec_buf) {
                 stride = process_exec_buf_relay_ringbuffer_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
             } else {
@@ -1988,6 +2131,7 @@ bool process_cmd(
 
         case CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED:
             // DPRINT << "relay linear packed" << ENDL();
+            // DEVICE_PRINT("relay_linear_packed\n");
             if (exec_buf) {
                 stride =
                     process_exec_buf_relay_linear_packed_cmd(cmd_ptr, downstream_data_ptr, l1_cache, exec_buf_state);
@@ -2004,6 +2148,10 @@ bool process_cmd(
             // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 2) << ENDL();
             // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 3) << ENDL();
             // DPRINT << HEX() << *((uint32_t*)cmd_ptr + 4) << ENDL();
+            // DEVICE_PRINT("prefetch invalid_command:{} {} {}\n", (uint32_t)cmd->base.cmd_id, cmd_ptr, cmddat_q_base);
+            // DEVICE_PRINT("0x{:08x}\n0x{:08x}\n0x{:08x}\n0x{:08x}\n0x{:08x}\n", *(uint32_t*)cmd_ptr,
+            // *((uint32_t*)cmd_ptr + 1), *((uint32_t*)cmd_ptr + 2), *((uint32_t*)cmd_ptr + 3), *((uint32_t*)cmd_ptr +
+            // 4));
             WAYPOINT("!CMD");
             ASSERT(0);
     }
@@ -2065,6 +2213,9 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_
     // DPRINT << "relay_linear_h: cmd_ptr:0x" << HEX() << (uint32_t)cmd_ptr << ", length:0x " << wlength << ", addr:0x"
     // << read_addr << ", nocxy:0x" << noc_xy_addr << ", downstream_data_ptr:0x" << downstream_data_ptr << DEC() <<
     // ENDL();
+    // DEVICE_PRINT("relay_linear_h: cmd_ptr:0x{:08x}, length:0x{:08x}, addr:0x{:08x}, nocxy:0x{:08x},
+    // downstream_data_ptr:0x{:08x}\n",
+    //              cmd_ptr, wlength, read_addr, noc_xy_addr, downstream_data_ptr);
 
     // First step - read into DB0
     uint32_t amt_to_read =
@@ -2368,6 +2519,8 @@ inline uint32_t relay_cb_get_cmds(uint32_t& data_ptr, uint32_t& downstream_data_
     while (true) {
         // DPRINT << "get_commands: data_ptr:0x" << HEX() << data_ptr << ", fence:0x" << fence << ",
         // downstream_data_ptr:0x" << downstream_data_ptr << ENDL();
+        // DEVICE_PRINT("get_commands: data_ptr:0x{:08x}, fence:0x{:08x}, downstream_data_ptr:0x{:08x}\n", data_ptr,
+        // fence, downstream_data_ptr);
         h_cmddat_q_reader.wait_for_available_data(data_ptr);
 
         volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader* cmd_ptr =
@@ -2447,6 +2600,7 @@ void kernel_main_h() {
         // The code below assumes these commands arrive individually, packing them would require parsing all cmds
         if (cmd_id == CQ_PREFETCH_CMD_TERMINATE) {
             // DPRINT << "prefetch terminating_10" << ENDL();
+            // DEVICE_PRINT("prefetch terminating_10\n");
             done = true;
         }
     }
@@ -2564,8 +2718,10 @@ void kernel_main() {
 #if defined(FABRIC_RELAY)
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start (fabric relay. 2d = " << (uint32_t)is_2d_fabric
            << ")" << ENDL();
+    DEVICE_PRINT("prefetcher_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);
 #else
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": start" << ENDL();
+    DEVICE_PRINT("prefetcher_{}{}: start\n", is_h_variant, is_d_variant);
 #endif
 
     // Get runtime args
@@ -2590,5 +2746,6 @@ void kernel_main() {
     noc_async_full_barrier();
 
     DPRINT << "prefetcher_" << is_h_variant << is_d_variant << ": out" << ENDL();
+    DEVICE_PRINT("prefetcher_{}{}: out\n", is_h_variant, is_d_variant);
     set_l1_data_cache<false>();
 }

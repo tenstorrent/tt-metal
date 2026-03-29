@@ -176,6 +176,7 @@ void kernel_main() {
                     uint32_t idx = get_index(index_l1_addr, i);
                     uint32_t msk = get_mask(mask_l1_addr, i);
                     DPRINT << chunk << ": " << idx << " -> " << msk << ENDL();
+                    DEVICE_PRINT("{}: {} -> {}\n", chunk, idx, msk);
                 }
 #endif
                 cb_push_back(cb_mask, 1);

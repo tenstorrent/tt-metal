@@ -45,7 +45,9 @@ public:
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
         ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
         llk_wait_for_free_tiles(logical_dfb_id_, num_entries);
-        // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " acked: " << static_cast<uint32_t>(tile_counters[tc_id].f.acked) << ENDL();
+        // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " acked: " <<
+        // static_cast<uint32_t>(tile_counters[tc_id].f.acked) << ENDL(); DEVICE_PRINT("reserve_back: tc_id: {} acked:
+        // {}\n", static_cast<uint32_t>(tc_id), static_cast<uint32_t>(tile_counters[tc_id].f.acked));
 #elif !defined(COMPILE_FOR_TRISC)
         if (__builtin_expect(local_dfb_interface_.broadcast_tc, 0)) {
             // DM-DM BLOCKED: wait until every consumer TC has free space (throttled by slowest consumer)
@@ -55,7 +57,10 @@ public:
                 for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
                     dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
                     ASSERT(llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
-                    // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " free space: " << static_cast<uint32_t>(llk_intf_get_free_space(get_tensix_id(ptc), get_counter_id(ptc))) << ENDL();
+                    // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " free space: " <<
+                    // static_cast<uint32_t>(llk_intf_get_free_space(get_tensix_id(ptc), get_counter_id(ptc))) <<
+                    // ENDL(); DEVICE_PRINT("reserve_back: tc_id: {} free space: {}\n", tc_id,
+                    // static_cast<uint32_t>(llk_intf_get_free_space(get_tensix_id(ptc), get_counter_id(ptc))));
                     if (llk_intf_get_free_space(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) < num_entries) {
                         ready = false;
                         break;
@@ -66,7 +71,9 @@ public:
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
             ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
             while (llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
-            // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " free space: " << static_cast<uint32_t>(llk_intf_get_free_space(tensix_id, tc_id)) << ENDL();
+            // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " free space: " <<
+            // static_cast<uint32_t>(llk_intf_get_free_space(tensix_id, tc_id)) << ENDL(); DEVICE_PRINT("reserve_back:
+            // tc_id: {} free space: {}\n", tc_id, static_cast<uint32_t>(llk_intf_get_free_space(tensix_id, tc_id)));
         }
 #endif
     }
@@ -77,14 +84,19 @@ public:
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
         ASSERT(ckernel::trisc::tile_counters[tc_id].f.buf_capacity >= num_entries);
         llk_push_tiles(logical_dfb_id_, num_entries);
-        // DPRINT << "push_bak: tc_id: " << static_cast<uint32_t>(tc_id) << " posted: " << static_cast<uint32_t>(tile_counters[tc_id].f.posted) << ENDL();
+        // DPRINT << "push_bak: tc_id: " << static_cast<uint32_t>(tc_id) << " posted: " <<
+        // static_cast<uint32_t>(tile_counters[tc_id].f.posted) << ENDL(); DEVICE_PRINT("push_back: tc_id: {} posted:
+        // {}\n", tc_id, static_cast<uint32_t>(tile_counters[tc_id].f.posted));
 #elif !defined(COMPILE_FOR_TRISC)
         if (__builtin_expect(local_dfb_interface_.broadcast_tc, 0)) {
             // DM-DM BLOCKED: post to all N TCs; wr_ptr tracked on slot 0
             for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
                 dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
                 ASSERT(llk_intf_get_capacity(get_tensix_id(ptc), get_counter_id(ptc)) >= num_entries);
-                // DPRINT << "push_back: tc_id: " << static_cast<uint32_t>(tc_id) << " posted: " << static_cast<uint32_t>(llk_intf_get_posted(get_tensix_id(ptc), get_counter_id(ptc))) << ENDL();
+                // DPRINT << "push_back: tc_id: " << static_cast<uint32_t>(tc_id) << " posted: " <<
+                // static_cast<uint32_t>(llk_intf_get_posted(get_tensix_id(ptc), get_counter_id(ptc))) << ENDL();
+                // DEVICE_PRINT("push_back: tc_id: {} posted: {}\n", tc_id,
+                // static_cast<uint32_t>(llk_intf_get_posted(get_tensix_id(ptc), get_counter_id(ptc))));
                 llk_intf_inc_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), num_entries);
             }
             local_dfb_interface_.tc_slots[0].wr_ptr += (num_entries * local_dfb_interface_.stride_size);
@@ -96,9 +108,13 @@ public:
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
             ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
             llk_intf_inc_posted(tensix_id, tc_id, num_entries);
-            // DPRINT << "push_back: tensix_id: " << static_cast<uint32_t>(tensix_id) << " tc_id: " << static_cast<uint32_t>(tc_id) << " capacity: "
+            // DPRINT << "push_back: tensix_id: " << static_cast<uint32_t>(tensix_id) << " tc_id: " <<
+            // static_cast<uint32_t>(tc_id) << " capacity: "
             //         << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
             //         << " posted: " << static_cast<uint32_t>(llk_intf_get_posted(tensix_id, tc_id)) << ENDL();
+            // DEVICE_PRINT("push_back: tensix_id: {} tc_id: {} capacity: {} posted: {}\n", tensix_id, tc_id,
+            // static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id)),
+            // static_cast<uint32_t>(llk_intf_get_posted(tensix_id, tc_id)));
 
             local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr += (num_entries * local_dfb_interface_.stride_size);
             if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr == local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
@@ -125,6 +141,9 @@ public:
         //        << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
         //        << " tc_id: " << static_cast<uint32_t>(tc_id)
         //        << " occupancy: " << static_cast<uint32_t>(llk_intf_get_occupancy(tensix_id, tc_id)) << ENDL();
+        // DEVICE_PRINT("wait_front: tensix_id: {} capacity: {} tc_id: {} occupancy: {}\n", tensix_id,
+        // static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id)), tc_id,
+        // static_cast<uint32_t>(llk_intf_get_occupancy(tensix_id, tc_id)));
         ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
         while (llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
 #endif
@@ -149,6 +168,7 @@ public:
         }
         local_dfb_interface_.tc_idx = (local_dfb_interface_.tc_idx + 1) % local_dfb_interface_.num_tcs_to_rr;
         // DPRINT << "pop_front: free space: " << (uint32_t)llk_intf_get_free_space(tensix_id, tc_id) << ENDL();
+        // DEVICE_PRINT("pop_front: free space: {}\n", (uint32_t)llk_intf_get_free_space(tensix_id, tc_id));
 #endif
     }
     // Explicit sync APIs end
@@ -237,7 +257,11 @@ public:
                 all_acked = all_acked && (ckernel::trisc::tile_counters[tc_id].f.posted == 0);
 #elif !defined(COMPILE_FOR_TRISC)
                 uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-                // DPRINT << "read acked: " << static_cast<uint32_t>(fast_llk_intf_read_acked(tensix_id, tc_id)) << " read posted: " << static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id)) << ENDL();
+                // DPRINT << "read acked: " << static_cast<uint32_t>(fast_llk_intf_read_acked(tensix_id, tc_id)) << "
+                // read posted: " << static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id)) << ENDL();
+                // DEVICE_PRINT("read acked: {} read posted: {}\n",
+                // static_cast<uint32_t>(fast_llk_intf_read_acked(tensix_id, tc_id)),
+                // static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id)));
                 all_acked &=
                     (fast_llk_intf_read_acked(tensix_id, tc_id) == fast_llk_intf_read_posted(tensix_id, tc_id));
 #endif

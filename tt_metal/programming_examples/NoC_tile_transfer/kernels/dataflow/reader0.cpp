@@ -26,6 +26,7 @@ void kernel_main() {
 
     // Read input value data
     DPRINT << "1. READER 0: Reading input data to L1 src0 CB" << ENDL();
+    DEVICE_PRINT("1. READER 0: Reading input data to L1 src0 CB\n");
     cb_reserve_back(src0_cb_index, one_tile);
     const uint32_t l1_write_addr = get_write_ptr(src0_cb_index);
     noc_async_read_tile(0, interleaved_accessor, l1_write_addr);
@@ -34,7 +35,9 @@ void kernel_main() {
     // Print data in buffer
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
     DPRINT << " > Data in buffer: " << U32(ptr[0]) << ENDL();
+    DEVICE_PRINT(" > Data in buffer: {}\n", ptr[0]);
 
     cb_push_back(src0_cb_index, one_tile);
     DPRINT << "2. READER 0: Data in src0 CB pushed from reader0" << ENDL();
+    DEVICE_PRINT("2. READER 0: Data in src0 CB pushed from reader0\n");
 }
