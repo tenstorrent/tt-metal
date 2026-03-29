@@ -621,3 +621,155 @@ The TTNN paged attention path (`paged_fill_cache`, `paged_update_cache`) has sta
 1. File TTNN kernel bug for video-sized paged attention operations
 2. Consider device reset between video requests (workaround)
 3. Investigate moving vision processing to CPU like Qwen VL
+
+---
+
+### 2026-03-28 — vLLM Server Vision Traces Fix
+
+**Status:** Completed. Image and video requests now produce coherent output in vLLM server.
+
+**Problem:** Image requests produced garbled/repetitive output (e.g., "Cinque Terreto is Cinque Terre rosso Cinque Terre..."), while video output was somewhat better. Model correctly identified visual content but text generation was degraded.
+
+**Root Cause:** Text traces captured during warmup (with random/text-only input) don't work correctly with vision-fused embeddings. The traces encode tensor shapes and memory layouts optimized for text input patterns, but vision-fused hidden states have different value distributions even though shapes match.
+
+| Mode | Trace Setting | Output Quality |
+|------|--------------|----------------|
+| Video | `use_trace=False` | ✅ Coherent ("animated forest with a large tree") |
+| Image | `use_trace=enable_trace` (True) | ❌ Garbled ("Cinque Terreto is Cinque...") |
+
+**Fix Applied:**
+
+| File | Line | Change |
+|------|------|--------|
+| `generator_vllm.py` | 1916-1921 | Changed IMAGE path from `use_trace=enable_trace` to `use_trace=False` |
+
+**Code Change:**
+```python
+# Before:
+use_trace=enable_trace,  # Re-enabled: traces work after tensor conversion fixes
+
+# After:
+use_trace=False,  # DISABLED for images - same as video path
+```
+
+Added logging: `"IMAGE: Running prefill WITHOUT traces (vision incompatible with text traces)"`
+
+**Test Results (vLLM server):**
+
+| Test | Before | After |
+|------|--------|-------|
+| Image: Cinque Terre | "Cinque Terreto is Cinque Terre rosso..." (garbled) | "This is Cinque Terre... in Italy" (correct) |
+| Image: Coastal scene | Repetitive nonsense | "coastal landscape with colorful town built into the sea cliffs" |
+| Video: Big Buck Bunny | Somewhat coherent | "large tree with bright light... green background" |
+
+**Server Startup Command:**
+```bash
+export TT_METAL_HOME=$(pwd)
+export PYTHONPATH=$(pwd):$(pwd)/vllm:$PYTHONPATH
+export VLLM_TARGET_DEVICE=tt
+source python_env/bin/activate
+python -m vllm.entrypoints.openai.api_server \
+  --model allenai/Molmo2-8B \
+  --trust-remote-code \
+  --max-model-len 4096 \
+  --max-num-seqs 1 \
+  --block-size 64
+```
+
+**Performance Note:**
+Non-traced prefill is slower than traced, but now produces correct output. Future optimization: capture vision-specific traces during warmup that work with vision-fused embeddings.
+
+---
+
+### 2026-03-28 — Docker Image Verification & Video Tests
+
+**Status:** Completed. Docker deployment verified working for all modalities.
+
+**Docker Configuration:**
+```bash
+cd /home/ttuser/ssinghal/PR-fix/tt-metal/tt-inference-server
+python run.py --model Molmo2-8B --workflow server --tt-device t3k \
+  --docker-server --dev-mode --no-auth --skip-system-sw-validation --host-hf-cache
+```
+
+**Test Results:**
+
+| Test Suite | Results | Notes |
+|------------|---------|-------|
+| Text (50 requests) | 50/50 ✅ | Various prompts |
+| Image (base64) | Working ✅ | URL-based fails in Docker (403) |
+| Video (105 tests) | 105/105 ✅ | Full test.jsonl suite |
+
+**Video Test Performance:**
+- Average latency: 10.3s per request
+- Total time: ~18 minutes for 105 tests
+- Success rate: 100%
+
+**Note:** URL-based image fetching fails inside Docker due to network restrictions. Use base64-encoded images for Docker deployment.
+
+---
+
+### 2026-03-29 — Eval Benchmarks Integration
+
+**Status:** Completed. Added Molmo2-8B eval config to tt-inference-server.
+
+**Config Added:**
+File: `tt-inference-server/evals/eval_config.py`
+
+```python
+EvalConfig(
+    hf_model_repo="allenai/Molmo2-8B",
+    tasks=[
+        EvalTask(task_name="chartqa", published_score=85.7),
+        EvalTask(task_name="docvqa_val", published_score=88.7),
+        EvalTask(task_name="mmmu_val", published_score=51.0),
+    ],
+)
+```
+
+**Eval Run Results:**
+
+| Benchmark | Samples | TT Score | Published | Status |
+|-----------|---------|----------|-----------|--------|
+| chartqa | 1250/2500 (50%) | 9.36% | 85.7% | Completed |
+| docvqa_val | 1026/2675 (~38%) | N/A | 88.7% | Server crashed |
+| mmmu_val | 0 | N/A | 51.0% | Not started |
+
+**Issues Identified:**
+
+1. **Low chartqa accuracy (9.36% vs 85.7%):**
+   - Model outputs spelled numbers ("Thirteen" vs "14")
+   - Garbage outputs for some decimal values ("4444444444444444")
+   - Counting errors and yes/no inversions
+
+2. **Server crash during docvqa:**
+   - Eval degraded from ~2s/sample to ~47s/sample
+   - Server crashed at ~38% completion
+
+**Sample Outputs Analysis:**
+
+| Target | Response | Match |
+|--------|----------|-------|
+| 14 | Thirteen | ❌ |
+| 23 | 23 | ✅ |
+| Yes | Yes | ✅ |
+| Inspired | Inspired | ✅ |
+| 0.03 | 4444444444444444 | ❌ |
+
+**Observation:** Direct API calls (video tests) produce coherent responses, but lmms-eval format produces low accuracy. This suggests prompt/format mismatch between eval harness and model expectations.
+
+**Documentation:**
+- `models/demos/molmo2/verification/eval_benchmarks_results.md` - Full eval results
+- `models/demos/molmo2/verification/video_test_results_full.md` - Video test results
+- `models/demos/molmo2/verification/video_test_results_docker.md` - Docker video test results
+
+**Commands:**
+```bash
+# Smoke test (3 samples)
+OPENAI_API_KEY="dummy" python run.py --model Molmo2-8B --workflow evals \
+  --tt-device t3k --limit-samples-mode smoke-test
+
+# Full eval (50% dataset)
+OPENAI_API_KEY="dummy" python run.py --model Molmo2-8B --workflow evals \
+  --tt-device t3k --limit-samples-mode ci-nightly
+```

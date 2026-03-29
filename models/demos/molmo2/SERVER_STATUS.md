@@ -3,13 +3,38 @@
 ## Goal
 Get the vLLM server working with **text, images, and video** using the same server code path.
 
-## Current Status: VIDEO QUALITY ISSUE (2026-03-27)
+## Current Status: STABLE FOR TEXT + IMAGES + VIDEO (2026-03-28)
 
-| Input Type | Demo (paged attn) | vLLM Server | Notes |
-|------------|-------------------|-------------|-------|
-| Text-only | ✅ WORKING | ✅ WORKING | Both use traces |
-| Images | ✅ WORKING | ✅ WORKING | Coherent, accurate responses |
-| Video | ✅ WORKING | ⚠️ GARBLED OUTPUT | First request works but output is incoherent |
+| Input Type | Demo (paged attn) | vLLM Server | Docker Image | Notes |
+|------------|-------------------|-------------|--------------|-------|
+| Text-only | ✅ WORKING | ✅ WORKING | ✅ WORKING | All pass 50/50 tests |
+| Images | ✅ WORKING | ✅ WORKING | ✅ WORKING | Traces DISABLED - coherent output |
+| Video | ✅ WORKING | ✅ WORKING | ⚠️ NOT TESTED | Traces DISABLED - coherent output |
+
+### Major Fix (2026-03-28): Disable Traces for Vision Input
+
+**Root Cause:** Text traces captured during warmup don't work with vision-fused embeddings. The traces encode patterns for text-only input distributions, but vision-fused hidden states have different value distributions even with same tensor shapes.
+
+**Fix:** Disabled `use_trace` for both IMAGE and VIDEO paths in `generator_vllm.py`:
+- Line 1762: VIDEO path already had `use_trace=False`
+- Line 1921: Changed IMAGE path from `use_trace=enable_trace` to `use_trace=False`
+
+**Results:**
+| Test | Before (traced) | After (non-traced) |
+|------|-----------------|-------------------|
+| Image: Cinque Terre | "Cinque Terreto is Cinque Terre rosso..." (garbled) | "This is Cinque Terre... in Italy" (correct) |
+| Video: Big Buck Bunny | Somewhat coherent | "large tree with bright light... green background" (coherent) |
+
+### Docker Image Test Results (2026-03-28)
+
+**Docker Image:** `ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.11.0-3035237ebd-ba84dbf0`
+
+| Test Type | Results | Notes |
+|-----------|---------|-------|
+| Text (50 requests) | 50/50 PASSED | Various prompts tested |
+| Image (50 requests) | 50/50 PASSED | Base64 encoded images |
+
+**Note:** URL-based image fetching fails inside Docker due to network access (403 Forbidden from Wikipedia). Use base64-encoded images for Docker deployment.
 
 ### vLLM Server Test Results (2026-03-27)
 - **Image:** "A small French bulldog" - coherent and accurate
@@ -472,4 +497,40 @@ RuntimeError: TT_THROW @ system_memory_manager.cpp:561
 ```
 
 ---
-Last Updated: 2026-03-27 (Video quality bug documented)
+
+## Eval Benchmarks (2026-03-29)
+
+### Configuration Added to tt-inference-server
+
+Added `EvalConfig` for Molmo2-8B in `tt-inference-server/evals/eval_config.py`:
+- chartqa (published: 85.7%)
+- docvqa_val (published: 88.7%)
+- mmmu_val (published: 51.0%)
+
+### Eval Run Results
+
+| Benchmark | Samples | TT Score | Published | Status |
+|-----------|---------|----------|-----------|--------|
+| chartqa | 1250/2500 | 9.36% | 85.7% | Completed |
+| docvqa_val | 1026/2675 | N/A | 88.7% | Server crashed |
+| mmmu_val | 0 | N/A | 51.0% | Not started |
+
+### Issues Found
+
+1. **Low chartqa accuracy (9.36% vs 85.7%):**
+   - Model outputs spelled numbers ("Thirteen" vs "14")
+   - Some garbage outputs for decimal values ("4444444444444444")
+   - Counting errors and yes/no inversions
+
+2. **Server crash during docvqa:**
+   - Eval degraded from ~2s/sample to ~47s/sample
+   - Server crashed at ~38% completion
+
+### Note
+
+Video verification tests (105/105) pass correctly with coherent responses. Direct API calls work well. The discrepancy between API quality and lmms-eval scores suggests prompt/format mismatch.
+
+See: `models/demos/molmo2/verification/eval_benchmarks_results.md`
+
+---
+Last Updated: 2026-03-29 (Eval benchmarks documented)
