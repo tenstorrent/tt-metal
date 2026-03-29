@@ -906,6 +906,7 @@ class AttentionBlock:
 
         kv_cache_output_cb = cb_id_context.get_cb_id(k_df, TD_32x32)  # Output CB for KV Cache Branch
         kv_cache_intermed_cb = cb_id_context.get_cb_id(untilize_df, TD_32x32)  # Intermed CB for KV Cache Branch
+        kv_cache_intermed_sync_cb = cb_id_context.get_cb_id(untilize_df, TD_32x32)  # Sync CB overlapping intermed CB
         kv_cache_input_cb = cb_id_context.get_cb_id(k_df, TD_32x32)  # Input CB for KV Cache Branch
 
         # MLA parameters
@@ -1455,17 +1456,15 @@ class AttentionBlock:
         ]
 
         # KVCacheUpdate compile-time args split across NCRISC (patch + writeback) and BRISC (DRAM read)
+        # k_chunk_size and num_cores_per_head are shared with MLA args (set in mla_ncrisc section)
+        # mla_sender_noc_x/y args are appended after MLA core group is built (depends on num_s_blocks)
         kv_cache_ncrisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("krope_output_cb", krope_output_cb),
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("kv_cache_intermed_sync_cb", kv_cache_intermed_sync_cb),
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
-            ("full_grid_mcast_start_x", mcast_dest_noc_start_core.x),
-            ("full_grid_mcast_start_y", mcast_dest_noc_start_core.y),
-            ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
-            ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
-            ("full_grid_mcast_num_dests", mcast_num_cores - 1),
             ("kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
         ]
         kv_cache_brisc_named_compile_time_args = [
@@ -1477,6 +1476,7 @@ class AttentionBlock:
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_input_cb", kv_cache_input_cb),
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
+            ("kv_cache_intermed_sync_cb", kv_cache_intermed_sync_cb),
         ]
 
         # Flash MLA named compile-time args
@@ -1591,6 +1591,20 @@ class AttentionBlock:
 
         # Create core group with the same layout
         mla_core_group = [ttnn.CoreCoord(x, y) for x, y in mla_all_cores]
+
+        # Physical NOC coordinates of mcast sender cores (first batch, one per S block).
+        # Used by kv_cache_update to unicast the cache-ready signal to the specific
+        # MLA reader core that handles the last KV chunk.
+        mla_sender_noc_xs = []
+        mla_sender_noc_ys = []
+        for s_idx in range(num_s_blocks):
+            phys = device.worker_core_from_logical_core(mla_core_group[s_idx])
+            mla_sender_noc_xs.append(phys.x)
+            mla_sender_noc_ys.append(phys.y)
+
+        kv_cache_ncrisc_named_compile_time_args += [
+            (f"mla_sender_noc_x_{i}", mla_sender_noc_xs[i]) for i in range(num_s_blocks)
+        ] + [(f"mla_sender_noc_y_{i}", mla_sender_noc_ys[i]) for i in range(num_s_blocks)]
 
         # Multicast: each S block's first core (Q1) reads KV and multicasts to others in that S block
         # Since all S blocks have 8 cores, num_mcast_dests is the same for all (7 = 8-1)
@@ -2471,15 +2485,23 @@ class AttentionBlock:
             page_size=TILE_32x32.get_tile_size(untilize_df),
             tile=ttnn.TileDescriptor(TILE_32x32),
         )
-        # One extra tile for syncing, can optimize to remove
+        kv_cache_intermed_sync_cb_format = ttnn.CBFormatDescriptor(
+            buffer_index=kv_cache_intermed_sync_cb,
+            data_format=untilize_df,
+            page_size=TILE_32x32.get_tile_size(untilize_df),
+            tile=ttnn.TileDescriptor(TILE_32x32),
+        )
         kv_cache_intermed_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             kv_cache_intermed_cb,
             ref_sdpa_forwarder_scratch,
             address_offset=sdpa_forwarder_scratch_running_offset,
-            total_size=(kv_cache_num_tiles + 1) * TILE_32x32.get_tile_size(untilize_df),
+            total_size=kv_cache_num_tiles * TILE_32x32.get_tile_size(untilize_df),
             core_ranges=full_device_grid,
         )
-        kv_cache_intermed_cb_descriptor.format_descriptors = [kv_cache_intermed_cb_format]
+        kv_cache_intermed_cb_descriptor.format_descriptors = [
+            kv_cache_intermed_cb_format,
+            kv_cache_intermed_sync_cb_format,
+        ]
         sdpa_forwarder_scratch_running_offset += kv_cache_intermed_cb_descriptor.total_size
         # Flash MLA cb descriptors
         mla_cb_descriptors = []
@@ -3424,17 +3446,18 @@ class AttentionBlock:
                     kv_cache_input_cb,  # idx 4
                     kv_cache_output_cb,  # idx 5
                     kv_cache_intermed_cb,  # idx 6
-                    position_ids_tensor_addr,  # idx 7
-                    matmul_weights_addr,  # idx 8
-                    matmul2_weights_addr,  # idx 9
-                    dkv_matmul_weights_addr,  # idx 10
-                    matmul3_weights_addr,  # idx 11
-                    matmul4_weights_addr,  # idx 12
-                    matmul5_weights_addr,  # idx 13
-                    qrope_trans_mat_addr,  # idx 14
-                    gamma_addr,  # idx 15
-                    rmsnorm2_gamma_addr,  # idx 16
-                    kv_rmsnorm_gamma_addr,  # idx 17
+                    kv_cache_intermed_sync_cb,  # idx 7
+                    position_ids_tensor_addr,  # idx 8
+                    matmul_weights_addr,  # idx 9
+                    matmul2_weights_addr,  # idx 10
+                    dkv_matmul_weights_addr,  # idx 11
+                    matmul3_weights_addr,  # idx 12
+                    matmul4_weights_addr,  # idx 13
+                    matmul5_weights_addr,  # idx 14
+                    qrope_trans_mat_addr,  # idx 15
+                    gamma_addr,  # idx 16
+                    rmsnorm2_gamma_addr,  # idx 17
+                    kv_rmsnorm_gamma_addr,  # idx 18
                 ]
 
                 qrope_ncrisc_addr_args = [
