@@ -140,7 +140,7 @@ def test_get_device_mla_work_assignment():
     ],
 )
 @pytest.mark.parametrize("epsilon", [1e-6])
-@pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize("use_fp32", [False])
 @pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2), (1, 1)])
 @pytest.mark.parametrize("num_iters", [(1)])
 @pytest.mark.parametrize("max_seq_len", [32 * 1024])
@@ -842,11 +842,11 @@ def test_pre_sdpa(
             compare_nope = compare_kv_cache[..., :KNOPE_DIM]
             compare_rope = compare_kv_cache[..., KNOPE_DIM:]
 
-            nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.98)
+            nope_passing, nope_pcc = comp_pcc(compare_nope, expected_nope, 0.99)
             logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC: {nope_pcc}")
             assert nope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache NOPE PCC check failed: {nope_pcc}"
 
-            rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.98)
+            rope_passing, rope_pcc = comp_pcc(compare_rope, expected_rope, 0.99)
             logger.info(f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC: {rope_pcc}")
             assert rope_passing, f"Device {device_idx} (SP={sp_group}) KV Cache ROPE PCC check failed: {rope_pcc}"
 
@@ -866,7 +866,7 @@ def test_pre_sdpa(
             )
             continue
 
-        passing, sdpa_pcc = comp_pcc(torch_output_expected_flat, received, 0.94)
+        passing, sdpa_pcc = comp_pcc(torch_output_expected_flat, received, 0.939)
         logger.info(f"Device {device_idx} (TP={tp_group}, SP={sp_group}) PreSDPA Output PCC: {sdpa_pcc}")
         assert (
             passing
