@@ -12,7 +12,11 @@
 
 #ifdef ARCH_BLACKHOLE
 #include "api/compute/experimental/matmul_custom.h"
+#endif
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/sdpa_sub_custom.h"
+#endif
+#ifdef ARCH_BLACKHOLE
 // BH has ample code size headroom; allow normal inlining and GCC IPA-CP cloning (no noinline/noclone).
 #define SDPA_NOINLINE
 #else
@@ -249,12 +253,11 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
 
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
         sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
 #else
         sub_bcast_cols_init_short(inout_cb, max_cb);
 #endif
-        PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
     }
 
     // inout_cb assumed ready (max_cb was already computed from it)
@@ -266,7 +269,7 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
         MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
             uint32_t in0_tile_index = (max_row_base + i) * cols_in_row + global_col_base;
             sub_tiles_bcast_cols_custom(
                 inout_cb, max_cb, in0_tile_index, max_row_base + i, dst_index, tiles_per_column);
@@ -282,6 +285,7 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
     tile_regs_commit();
 
     tile_regs_wait();
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
     {
         MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
         uint32_t dst_index = 0;
