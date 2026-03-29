@@ -907,8 +907,6 @@ TEST_F(ProgramSpecTestQuasar, RuntimeArgsSchemaSucceeds) {
 // ============================================================================
 // SECTION 5: Edge Cases and Boundary Tests
 // ============================================================================
-// NOTE: These also require Quasar hardware for Program creation.
-// TODO: Enable these tests with a Quasar mock device.
 
 TEST_F(ProgramSpecTestQuasar, NodeRangeSetTargetNodesSucceeds) {
     // Test with NodeRangeSet (multiple disjoint ranges)
@@ -974,104 +972,125 @@ TEST_F(ProgramSpecTestQuasar, ValidUnpackToDestModeSucceeds) {
 // ============================================================================
 // SECTION 6: Processor Assignment Edge Cases
 // ============================================================================
-// These tests document cases that expose limitations in our current processor
-// assignment implementation. There are two categories:
+// Here, we test two edge cases:
 //
-// A) GREEDY ALGORITHM FAILURES
-//    These are solvable with the simplifying assumption intact, but our naive
-//    greedy algorithm fails. A smarter algorithm (constraint propagation, or
-//    "assign multi-node kernels first") would handle these.
-//    TODO: Fix the algorithm to handle these cases.
+// A) ALGORITHM FAILURE
+//    The original naive greedy algorithm could either pass or fail on logically
+//    equivalent ProgramSpecs, depending on the order of kernels and workers.
+//    The ProgramSpec was legal and solvable (under the simplifying assumption),
+//    but the algorithm failed to find a solution.
+//    This class of failure should not occur with the backtracking solver.
 //
-// B) TRUE SIMPLIFYING ASSUMPTION VIOLATIONS
-//    These are fundamentally unsolvable while maintaining the assumption that
-//    "a kernel uses the same processor indices on all nodes it runs on."
-//    When we encounter these in production, the assumption must be removed.
+// B) SIMPLIFYING ASSUMPTION VIOLATION
+//    Some strictly legal ProgramSpecs are unsolvable if we assume that a kernel
+//    must uses the same processor indices on all nodes it runs on.
 //
 // Our plan is to keep the simplifying assumption for now.
-// But, with Op development on Quasar soon underway, we need a clear message
-// if the assumption is ever violated.
+// We issue a clear message if the assumption is ever violated in the real world.
 
-// Category A: Greedy Algorithm Failure
-// This test IS solvable with the simplifying assumption - a smarter algorithm would work.
-// TODO: Once this test passes, remove this TODO. The algorithm has been fixed!
-TEST_F(ProgramSpecTestQuasar, GreedyAlgorithmFailure_OrderDependentAssignment) {
-    // This test constructs a valid ProgramSpec that SHOULD work, but MAY fail
-    // with our naive greedy processor assignment algorithm.
+// Category A: Order-Independence Test
+// This test verifies that the backtracking solver finds valid assignments,
+// regardless of kernel and worker orderings.
+TEST_F(ProgramSpecTestQuasar, BacktrackingSolverFindsAssignment_RegardlessOfOrder) {
+    // This test verifies that semantically identical ProgramSpecs succeed
+    // regardless of the order of:
+    //  - workers in spec.workers
+    //  - kernels within each worker
+    //  - kernel order within the ProgramSpec
     //
     // Scenario:
-    //   - K_shared: A DM kernel spanning nodes (0,0) and (1,0), using 2 threads
-    //   - K_node0_only: A DM kernel on node (0,0) only, using 4 threads
-    //   - K_node1_only: A DM kernel on node (1,0) only, using 4 threads
-    //   - Two WorkerSpecs, one per node
+    //   - K_a:  3 threads on node A only (single-node)
+    //   - K_ab: 3 threads on nodes A and B (multi-node)
+    //   - K_bc: 3 threads on nodes B and C (multi-node)
+    //   - K_c:  3 threads on node C only (single-node)
+    //
+    // Budget check (6 DM cores per node):
+    //   Node A: K_a(3) + K_ab(3) = 6
+    //   Node B: K_ab(3) + K_bc(3) = 6
+    //   Node C: K_bc(3) + K_c(3) = 6
     //
     // SOLUTION EXISTS:
-    //   K_shared gets processors 6-7 on both nodes
-    //   K_node0_only gets processors 2-5 on node (0,0)
-    //   K_node1_only gets processors 2-5 on node (1,0)
+    //   K_ab uses [2-4] on A and B
+    //   K_a  uses [5-7] on A
+    //   K_bc uses [5-7] on B and C
+    //   K_c  uses [2-4] on C
     //
-    // A smarter algorithm (e.g., assign multi-node kernels first, or use
-    // constraint propagation) would find this solution.
+    // The original naive greedy algorithm would fail on certain orderings:
+    //   - Order [K_ab, K_bc, K_a, K_c] would succeed
+    //   - Order [K_a, K_c, K_ab, K_bc] would fail
+    //
+    // The backtracking solver should be order-independent.
+    // (Though it still makes the simplifying assumption.)
 
-    NodeCoord node0{0, 0};
-    NodeCoord node1{1, 0};
-    NodeRangeSet both_nodes(std::set<NodeRange>{NodeRange{node0, node0}, NodeRange{node1, node1}});
+    NodeCoord node_a{0, 0};
+    NodeCoord node_b{0, 1};
+    NodeCoord node_c{0, 2};
 
-    ProgramSpec spec;
-    spec.program_id = "simplifying_assumption_test";
+    NodeRangeSet nodes_ab(std::set<NodeRange>{NodeRange{node_a, node_a}, NodeRange{node_b, node_b}});
+    NodeRangeSet nodes_bc(std::set<NodeRange>{NodeRange{node_b, node_b}, NodeRange{node_c, node_c}});
 
-    // K_shared spans both nodes, needs 2 DM threads
-    auto k_shared = MakeMinimalDMKernel("k_shared", both_nodes, 2);
+    auto k_a = MakeMinimalDMKernel("k_a", node_a, 3);
+    auto k_ab = MakeMinimalDMKernel("k_ab", nodes_ab, 3);
+    auto k_bc = MakeMinimalDMKernel("k_bc", nodes_bc, 3);
+    auto k_c = MakeMinimalDMKernel("k_c", node_c, 3);
 
-    // K_node0_only runs only on node (0,0), needs 6 DM threads
-    // This will "claim" processors 0-5 on node (0,0)
-    auto k_node0_only = MakeMinimalDMKernel("k_node0_only", node0, 4);
+    auto worker_a1 = MakeMinimalWorker("worker_a1", node_a, {"k_a", "k_ab"}, {});
+    auto worker_b1 = MakeMinimalWorker("worker_b1", node_b, {"k_ab", "k_bc"}, {});
+    auto worker_c1 = MakeMinimalWorker("worker_c1", node_c, {"k_bc", "k_c"}, {});
+    auto worker_c2 = MakeMinimalWorker("worker_c2", node_c, {"k_c", "k_bc"}, {});
 
-    // K_node1_only runs only on node (1,0), needs 6 DM threads
-    // This will "claim" processors 0-5 on node (1,0)
-    auto k_node1_only = MakeMinimalDMKernel("k_node1_only", node1, 4);
-
-    // DFB for the shared kernel (needs producer + consumer)
-    auto dfb_shared = MakeMinimalDFB("dfb_shared", both_nodes);
-    BindDFBToKernel(k_shared, "dfb_shared", "shared_out", KernelSpec::DFBEndpointType::PRODUCER);
-
-    // Need a consumer for dfb_shared - let's add a simple consumer kernel
-    auto k_consumer = MakeMinimalDMKernel("k_consumer", both_nodes, 1);
-    BindDFBToKernel(k_consumer, "dfb_shared", "shared_in", KernelSpec::DFBEndpointType::CONSUMER);
-
-    // DFBs for the node-specific kernels
-    auto dfb_node0 = MakeMinimalDFB("dfb_node0", node0);
-    BindDFBToKernel(k_node0_only, "dfb_node0", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    // Need consumer - reuse k_shared as consumer on node0
-    auto k_node0_consumer = MakeMinimalDMKernel("k_node0_consumer", node0, 1);
-    BindDFBToKernel(k_node0_consumer, "dfb_node0", "in", KernelSpec::DFBEndpointType::CONSUMER);
-
-    auto dfb_node1 = MakeMinimalDFB("dfb_node1", node1);
-    BindDFBToKernel(k_node1_only, "dfb_node1", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    auto k_node1_consumer = MakeMinimalDMKernel("k_node1_consumer", node1, 1);
-    BindDFBToKernel(k_node1_consumer, "dfb_node1", "in", KernelSpec::DFBEndpointType::CONSUMER);
-
-    spec.kernels = {k_shared, k_consumer, k_node0_only, k_node0_consumer, k_node1_only, k_node1_consumer};
-    spec.dataflow_buffers = {dfb_shared, dfb_node0, dfb_node1};
-
-    // Two WorkerSpecs, one per node
-    // Worker 0 handles node (0,0)
-    spec.workers = std::vector<WorkerSpec>{
-        MakeMinimalWorker(
-            "worker_node0",
-            node0,
-            {"k_shared", "k_consumer", "k_node0_only", "k_node0_consumer"},
-            {"dfb_shared", "dfb_node0"}),
-        MakeMinimalWorker(
-            "worker_node1",
-            node1,
-            {"k_shared", "k_consumer", "k_node1_only", "k_node1_consumer"},
-            {"dfb_shared", "dfb_node1"}),
+    // Helper to create a ProgramSpec with a given id and worker ordering
+    auto make_spec = [&](const std::string& id, std::vector<KernelSpec> kernels, std::vector<WorkerSpec> workers) {
+        ProgramSpec spec;
+        spec.program_id = id;
+        spec.kernels = kernels;
+        spec.workers = workers;
+        return spec;
     };
 
-    // EXPECTED BEHAVIOR with current implementation: FAILS (greedy algorithm)
-    // Update this test to use EXPECT_NO_THROW after the algorithm is fixed.
-    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+    // All 24 possible permutations of k_a, k_ab, k_bc, k_c
+    std::vector<std::vector<KernelSpec>> kernel_permutations = {
+        {k_a, k_ab, k_bc, k_c}, {k_a, k_ab, k_c, k_bc}, {k_a, k_bc, k_ab, k_c},
+        {k_a, k_bc, k_c, k_ab}, {k_a, k_c, k_ab, k_bc}, {k_a, k_c, k_bc, k_ab},
+
+        {k_ab, k_a, k_bc, k_c}, {k_ab, k_a, k_c, k_bc}, {k_ab, k_bc, k_a, k_c},
+        {k_ab, k_bc, k_c, k_a}, {k_ab, k_c, k_a, k_bc}, {k_ab, k_c, k_bc, k_a},
+
+        {k_bc, k_a, k_ab, k_c}, {k_bc, k_a, k_c, k_ab}, {k_bc, k_ab, k_a, k_c},
+        {k_bc, k_ab, k_c, k_a}, {k_bc, k_c, k_a, k_ab}, {k_bc, k_c, k_ab, k_a},
+
+        {k_c, k_a, k_ab, k_bc}, {k_c, k_a, k_bc, k_ab}, {k_c, k_ab, k_a, k_bc},
+        {k_c, k_ab, k_bc, k_a}, {k_c, k_bc, k_a, k_ab}, {k_c, k_bc, k_ab, k_a}};
+
+    // All 6 possible permutations of worker orderings (using c1)
+    std::vector<std::vector<WorkerSpec>> worker_permutations1 = {
+        {worker_a1, worker_b1, worker_c1},
+        {worker_a1, worker_c1, worker_b1},
+        {worker_b1, worker_c1, worker_a1},
+        {worker_b1, worker_a1, worker_c1},
+        {worker_c1, worker_a1, worker_b1},
+        {worker_c1, worker_b1, worker_a1}};
+
+    // All 6 possible permutations of worker orderings (using c2)
+    std::vector<std::vector<WorkerSpec>> worker_permutations2 = {
+        {worker_a1, worker_b1, worker_c2},
+        {worker_a1, worker_c2, worker_b1},
+        {worker_b1, worker_c2, worker_a1},
+        {worker_b1, worker_a1, worker_c2},
+        {worker_c2, worker_a1, worker_b1},
+        {worker_c2, worker_b1, worker_a1}};
+
+    // All kernel permutations should succeed with all worker permutations.
+    for (size_t i = 0; i < kernel_permutations.size(); i++) {
+        for (size_t j = 0; j < worker_permutations1.size(); j++) {
+            EXPECT_NO_THROW(MakeProgramFromSpec(make_spec("", kernel_permutations[i], worker_permutations1[j])));
+        }
+    }
+    for (size_t i = 0; i < kernel_permutations.size(); i++) {
+        for (size_t j = 0; j < worker_permutations2.size(); j++) {
+            EXPECT_NO_THROW(MakeProgramFromSpec(make_spec("", kernel_permutations[i], worker_permutations2[j])));
+        }
+    }
 }
 
 // Category B: True Simplifying Assumption Violation
@@ -1079,81 +1098,54 @@ TEST_F(ProgramSpecTestQuasar, GreedyAlgorithmFailure_OrderDependentAssignment) {
 // When this case arises in production, the assumption must be removed from the codebase.
 TEST_F(ProgramSpecTestQuasar, SimplifyingAssumptionViolation_OverlappingMultiNodeKernels) {
     // This test constructs a valid ProgramSpec that CANNOT work with the
-    // simplifying assumption, regardless of how clever the solver is.
+    // "same DM cores on every node" simplifying assumption, regardless of
+    // how clever the solver is.
     //
     // Scenario (the "triangle of doom"):
     //   - Kernel A (3 threads) runs on nodes (0,0) and (0,1)
     //   - Kernel B (3 threads) runs on nodes (0,0) and (0,2)
     //   - Kernel C (3 threads) runs on nodes (0,1) and (0,2)
     //
-    // Per-node requirements (6 DM cores available per node):
-    //   Node (0,0): A + B = 6 threads
-    //   Node (0,1): A + C = 6 threads
-    //   Node (0,2): B + C = 6 threads
+    // Per-node DM budget (6 DM cores available per node):
+    //   Node (0,0): A(3) + B(3) = 6 ✓
+    //   Node (0,1): A(3) + C(3) = 6 ✓
+    //   Node (0,2): B(3) + C(3) = 6 ✓
     //
-    // With simplifying assumption (same processors on all nodes per kernel):
+    // With simplifying assumption (each kernel uses same cores on all its nodes):
     //   Node (0,0): A and B must partition [2-7]. Say A=[2-4], B=[5-7].
     //   Node (0,1): A must be [2-4] (from above). So C=[5-7].
     //   Node (0,2): B must be [5-7], C must be [5-7]. CONFLICT!
     //
-    // No assignment algorithm can solve this. The simplifying assumption
-    // must be removed to handle this case.
+    // No matter how we assign, there's always a conflict on one node.
+    // The simplifying assumption must be removed to handle this case.
+    //
+    // When this test starts PASSING: the simplifying assumption has been removed.
+    // Change to EXPECT_NO_THROW.
 
     NodeCoord node_00{0, 0};
     NodeCoord node_01{0, 1};
     NodeCoord node_02{0, 2};
 
-    // Create NodeRangeSets for each kernel's target nodes
     NodeRangeSet nodes_A(std::set<NodeRange>{NodeRange{node_00, node_00}, NodeRange{node_01, node_01}});
     NodeRangeSet nodes_B(std::set<NodeRange>{NodeRange{node_00, node_00}, NodeRange{node_02, node_02}});
     NodeRangeSet nodes_C(std::set<NodeRange>{NodeRange{node_01, node_01}, NodeRange{node_02, node_02}});
-    NodeRangeSet all_nodes(
-        std::set<NodeRange>{NodeRange{node_00, node_00}, NodeRange{node_01, node_01}, NodeRange{node_02, node_02}});
 
     ProgramSpec spec;
     spec.program_id = "triangle_of_doom";
 
-    // Three kernels, each spanning two nodes with 4 DM threads
-    auto kernel_a = MakeMinimalDMKernel("kernel_a", nodes_A, 4);
-    auto kernel_b = MakeMinimalDMKernel("kernel_b", nodes_B, 4);
-    auto kernel_c = MakeMinimalDMKernel("kernel_c", nodes_C, 4);
+    auto kernel_a = MakeMinimalDMKernel("kernel_a", nodes_A, 3);
+    auto kernel_b = MakeMinimalDMKernel("kernel_b", nodes_B, 3);
+    auto kernel_c = MakeMinimalDMKernel("kernel_c", nodes_C, 3);
 
-    // We need DFBs with producer/consumer pairs. Create minimal dataflow.
-    // Each kernel produces to its own DFB, consumed by a shared sink kernel.
-    auto dfb_a = MakeMinimalDFB("dfb_a", nodes_A);
-    auto dfb_b = MakeMinimalDFB("dfb_b", nodes_B);
-    auto dfb_c = MakeMinimalDFB("dfb_c", nodes_C);
+    spec.kernels = {kernel_a, kernel_b, kernel_c};
 
-    BindDFBToKernel(kernel_a, "dfb_a", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(kernel_b, "dfb_b", "out", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(kernel_c, "dfb_c", "out", KernelSpec::DFBEndpointType::PRODUCER);
-
-    // Consumer kernels for each DFB (1 thread each, same node coverage as DFB)
-    auto consumer_a = MakeMinimalDMKernel("consumer_a", nodes_A, 1);
-    auto consumer_b = MakeMinimalDMKernel("consumer_b", nodes_B, 1);
-    auto consumer_c = MakeMinimalDMKernel("consumer_c", nodes_C, 1);
-
-    BindDFBToKernel(consumer_a, "dfb_a", "in", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(consumer_b, "dfb_b", "in", KernelSpec::DFBEndpointType::CONSUMER);
-    BindDFBToKernel(consumer_c, "dfb_c", "in", KernelSpec::DFBEndpointType::CONSUMER);
-
-    spec.kernels = {kernel_a, kernel_b, kernel_c, consumer_a, consumer_b, consumer_c};
-    spec.dataflow_buffers = {dfb_a, dfb_b, dfb_c};
-
-    // Three WorkerSpecs, one per node
     spec.workers = std::vector<WorkerSpec>{
-        MakeMinimalWorker(
-            "worker_00", node_00, {"kernel_a", "kernel_b", "consumer_a", "consumer_b"}, {"dfb_a", "dfb_b"}),
-        MakeMinimalWorker(
-            "worker_01", node_01, {"kernel_a", "kernel_c", "consumer_a", "consumer_c"}, {"dfb_a", "dfb_c"}),
-        MakeMinimalWorker(
-            "worker_02", node_02, {"kernel_b", "kernel_c", "consumer_b", "consumer_c"}, {"dfb_b", "dfb_c"}),
+        MakeMinimalWorker("worker_00", node_00, {"kernel_a", "kernel_b"}, {}),
+        MakeMinimalWorker("worker_01", node_01, {"kernel_a", "kernel_c"}, {}),
+        MakeMinimalWorker("worker_02", node_02, {"kernel_b", "kernel_c"}, {}),
     };
 
-    // EXPECTED BEHAVIOR with current implementation: FAILS (simplifying assumption)
-    //
-    // Note: If GreedyAlgorithmFailure test passes but this test still fails,
-    // that's the expected intermediate state (smarter algorithm, assumption intact).
+    // EXPECTED BEHAVIOR: FAILS due to simplifying assumption violation.
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
