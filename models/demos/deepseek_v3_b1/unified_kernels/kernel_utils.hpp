@@ -114,7 +114,7 @@ FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
 }
 
 // ============================================================================
-// CB read-pointer utilities (TRISC only)
+// CB read and write pointer override utilities (TRISC only)
 // ============================================================================
 
 #if defined(COMPILE_FOR_TRISC)
@@ -122,6 +122,12 @@ FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
 // Override a CB's read pointer to a byte address (converted to cb_addr_shift units).
 FORCE_INLINE void override_cb_rd_ptr(uint32_t cb_id, uint32_t byte_address) {
     get_local_cb_interface(cb_id).fifo_rd_ptr = byte_address >> cb_addr_shift;
+}
+
+// Override a CB's write pointer to a byte address (converted to cb_addr_shift units).
+FORCE_INLINE void override_cb_wr_ptr(uint32_t cb_id, uint32_t byte_address) {
+    get_local_cb_interface(cb_id).fifo_wr_ptr = byte_address >> cb_addr_shift;
+    get_local_cb_interface(cb_id).fifo_wr_tile_ptr = 0;
 }
 
 #endif  // COMPILE_FOR_TRISC

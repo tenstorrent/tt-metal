@@ -3925,10 +3925,6 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
 
     iterations = 100
 
-    # print(f"[TEST] computing golden", flush=True)
-    # golden = _compute_expected_spec_decode_tokens_synthetic(iterations)
-    # print(f"[TEST] golden computed, creating config", flush=True)
-
     config = create_single_galaxy_spec_decode_pipeline_configuration(
         _SyntheticWeightProvider(),
         fp32_dest_acc_en=use_fp32,
@@ -3944,6 +3940,9 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
         token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
 
         if pipeline.my_mesh_id == 0:
+            print(f"[TEST] computing golden...", flush=True)
+            golden = _compute_expected_spec_decode_tokens_synthetic(iterations)
+            print(f"[TEST] golden computed, creating config", flush=True)
             for iteration in range(iterations):
                 print(f"[TEST P{pid}] iter {iteration} write_token", flush=True)
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
@@ -3974,6 +3973,8 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
                     f"[TEST P{pid}] iter {iteration} "
                     f"ntok={num_tokens} t0={tok0_id}/{type_name.get(tok0_type,'?')} "
                     f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
+                    f"golden base token={golden[iteration][0]}",
+                    f"golden spec token={golden[iteration][1]}",
                     flush=True,
                 )
         print(f"[TEST P{pid}] all iterations done, barrier", flush=True)

@@ -658,19 +658,10 @@ void kernel_main() {
         if constexpr (Core::is_input_core && (!Core::skip_ccl || !Core::bcast_use_socket_input)) {
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-            DPRINT << ">sb np=" << rmsnorm_num_tiles << ENDL();
             unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
-            DPRINT << "rmsnorm_input_cb=" << rmsnorm_input_cb << ENDL();
-            DPRINT << "rmsnorm_num_tiles=" << rmsnorm_num_tiles << ENDL();
         }
 
         if constexpr (Core::is_spec_stage && Core::is_input_core && Core::is_exit_device) {
-            DPRINT << ">vm" << ENDL();
-            if constexpr (Core::skip_ccl && Core::bcast_use_socket_input) {
-                constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-                constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-                cb_wait_front(rmsnorm_input_cb, rmsnorm_num_tiles);
-            }
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t argmax_noc_x = get_named_compile_time_arg_val("argmax_core_noc_x");
             constexpr uint32_t argmax_noc_y = get_named_compile_time_arg_val("argmax_core_noc_y");
@@ -739,7 +730,6 @@ void kernel_main() {
     // ====================================================================
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_argmax_final_core) {
-            DPRINT << ">tt" << ENDL();
             uint64_t dst = get_noc_addr(mtp_input_core_noc_x, mtp_input_core_noc_y, mtp_token_addr);
             noc_async_write(mtp_argmax_output_addr, dst, 4);
             noc_async_write_barrier();
@@ -749,7 +739,6 @@ void kernel_main() {
                 get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
             noc_semaphore_inc(sem_addr, 1);
             noc_async_atomic_barrier();
-            DPRINT << "tt<" << ENDL();
         }
 #endif
 
@@ -799,6 +788,13 @@ void kernel_main() {
                 deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, Core::is_rmsnorm_core, true> h_rmsnorm;
                 DeviceZoneScopedN("MTP_H_RMSNORM");
                 DPRINT << ">h rmsnorm" << ENDL();
+                PACK(({
+                    uint32_t eh_src_base = 0;
+                    uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("rmsnorm_h_output_cb");
+                    eh_src_base = get_local_cb_interface(mcast_eh_src_cb).fifo_wr_ptr << cb_addr_shift;
+                    unified_kernels::override_cb_wr_ptr(
+                        mcast_eh_src_cb, eh_src_base + 14336);  // 14k bytes offset for h_norm
+                }));
                 h_rmsnorm(rmsnorm_args);
                 DPRINT << "<h rmsnorm" << ENDL();
             }
@@ -829,7 +825,7 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_eh_matmul_core) {
-            deepseek_b1_ops::DRAMStreamingMatmul::Op<EHDRAMMMCTArgs, true, true, false, 0, false, false, 2> eh_matmul;
+            deepseek_b1_ops::DRAMStreamingMatmul::Op<EHDRAMMMCTArgs, true, true, false, 0, false, false, 3> eh_matmul;
             {
                 DeviceZoneScopedN("MTP_EH_DRAM_MATMUL");
                 eh_matmul();
