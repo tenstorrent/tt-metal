@@ -392,6 +392,13 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigFails) {
     auto& dm_config = std::get<DataMovementConfiguration>(kernel.config_spec);
     dm_config.gen2_data_movement_config = std::nullopt;
 
+    // Add Gen1 config
+    dm_config.gen1_data_movement_config = DataMovementConfiguration::Gen1DataMovementConfig{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = NOC::RISCV_0_default,
+        .noc_mode = NOC_MODE::DM_DEDICATED_NOC,
+    };
+
     spec.kernels = {kernel};
     spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"})};
 
@@ -847,6 +854,7 @@ TEST_F(ProgramSpecTestQuasar, MaxDMThreadsSucceeds) {
     auto producer = MakeMinimalDMKernel("producer", node, 3);
     auto consumer = MakeMinimalDMKernel("consumer", node, 3);  // Total: 6
     auto dfb = MakeMinimalDFB("dfb", node);
+    dfb.num_entries = 9;  // must be a multiple of the number of threads
 
     BindDFBToKernel(producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -870,6 +878,7 @@ TEST_F(ProgramSpecTestQuasar, MaxComputeThreadsSucceeds) {
 
     auto dfb = MakeMinimalDFB("dfb", node);
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    dfb.num_entries = 4;  // must be a multiple of the number of threads
 
     BindDFBToKernel(dm, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
     BindDFBToKernel(compute, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
@@ -959,7 +968,8 @@ TEST_F(ProgramSpecTestQuasar, NodeRangeSetTargetNodesSucceeds) {
     spec.dataflow_buffers = {dfb};
     spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", nodes, {"producer", "consumer"}, {"dfb"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(spec));
+    // TODO: Update when DFB multi-node support is added
+    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, SourceCodeKernelSucceeds) {
