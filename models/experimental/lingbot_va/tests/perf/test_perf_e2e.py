@@ -98,9 +98,9 @@ def _host_input_tensor_for_pipeline(mesh_device):
 @pytest.mark.parametrize("num_iterations", [4])
 @pytest.mark.parametrize(
     "batch_size, expected_compile_time, expected_throughput_fps",
-    [(1, 120.0, 0.01)],
+    [(1, 120.0, 0.84)],
 )
-@pytest.mark.timeout(0)
+@pytest.mark.timeout(600)
 def test_perf_lingbot_va_e2e_2cq_no_trace(
     mesh_device,
     num_iterations,
