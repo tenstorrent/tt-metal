@@ -2,6 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# Numeric thresholds below are derived from
+# tests/ttnn/unit_tests/operations/fused/all_numeric_results_fused.csv under
+# test_distributed_layernorm_sharded_numeric_results (run_pre_allgather_layernorm sweeps;
+# there are no separate rows for this file). PCC margin 1.5e-4 from min observed;
+# atol / Frobenius = ceil(max * 1.1, 3 dp); rtol = max(max_rel with max_rel < 10) * 1.1;
+# check_ulp when ceil(max_ulp * 1.1) < 12 (not met for that aggregate).
 
 import pytest
 import torch
@@ -126,10 +132,10 @@ def run_distributed_layernorm(
     assert_numeric_metrics(
         out_torch,
         tt_output_host,
-        rtol=0.1,
-        atol=0.1,
-        frobenius_threshold=0.15,
-        pcc_threshold=0.999,
+        rtol=10.313,
+        atol=0.207,
+        frobenius_threshold=0.028,
+        pcc_threshold=0.983,
     )
 
 

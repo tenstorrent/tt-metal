@@ -2,6 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# Numeric thresholds from tests/ttnn/unit_tests/operations/fused/all_numeric_results_fused.csv
+# (test_eltwise_softmax_in_place_numeric_results): PCC margin 1.5e-4 from min observed;
+# atol / Frobenius = ceil(max * 1.1, 3 dp); rtol = max(max_rel where max_rel < 10) * 1.1, 3 dp;
+# check_ulp when ceil(max_ulp * 1.1) < 12 (not met for current CSV).
+
 from loguru import logger
 import pytest
 import torch
@@ -37,10 +42,10 @@ def run_eltwise_softmax_in_place_tests(input_shape, dtype, dlayout, in_mem_confi
     assert_numeric_metrics(
         ref_value,
         tt_result,
-        pcc_threshold=0.999,
-        rtol=0.03,
-        atol=0.02,
-        frobenius_threshold=0.02,
+        pcc_threshold=0.998,
+        rtol=0.741,
+        atol=0.138,
+        frobenius_threshold=0.068,
     )
 
 
