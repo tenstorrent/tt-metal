@@ -12,13 +12,15 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # Wormhole Galaxy e2e tests
-- name: Galaxy CCL tests
-  cmd: pytest tests/nightly/tg/ccl --ignore tests/nightly/tg/ccl/moe
-  skus:
-    wh_galaxy:
-      timeout: 37
-  owner_id: U05ACKAJTHS # Naif Tarafdar
-  team: ttnn
+# Temporarily disabled due to consistent 37-minute timeouts with TT_FATAL errors
+# in neighbor_pad_async and mesh_trace operations. Related to issue #851.
+# - name: Galaxy CCL tests
+#   cmd: pytest tests/nightly/tg/ccl --ignore tests/nightly/tg/ccl/moe
+#   skus:
+#     wh_galaxy:
+#       timeout: 37
+#   owner_id: U05ACKAJTHS # Naif Tarafdar
+#   team: ttnn
 
 - name: Galaxy MoE tests
   cmd: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe
