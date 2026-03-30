@@ -64,6 +64,8 @@ Paths are relative to the launch directory:
 
 After a successful run, tt-run logs a **Phase 2–only** command using the paths under that cache directory so you can re-run with `--rank-binding` / legacy mode without re-executing Phase 1 when the cache still matches.
 
+**Force rediscovery:** If the cached rank bindings are stale (for example a host link or cluster layout changed but MGD and `--hosts` are unchanged), use **`--force-rediscovery`** with new mode. Phase 1 always runs and overwrites the cache for that fingerprint (same collision rules apply as on a normal miss). If **Phase 2** fails after a **Phase 1 cache hit** (non-zero exit from your program, or mpirun launch errors, etc.), tt-run logs a warning suggesting **`--force-rediscovery`** so you can refresh the Phase 1 cache. That hint is **not** shown when Phase 1 just ran (cache miss or `--force-rediscovery`), when using **legacy mode** only (`--rank-binding` without auto allocation), or for typical configuration parse errors—for legacy mode, separate guidance may mention cluster/golden files instead.
+
 ---
 
 ## Legacy Mode (Explicit Rank Bindings)
@@ -183,5 +185,6 @@ Both modes support:
 - `--tcp-interface` – NIC for MPI TCP (e.g., `cnx1`)
 - `--bare` – Disable default multi-host MPI settings
 - `--mock-cluster-rank-binding` – Mock cluster descriptor mapping file (rank → descriptor path). When used with auto allocation mode, `--hosts` is not required; processes run locally with one rank per mapping entry, each rank getting its corresponding descriptor via `TT_METAL_MOCK_CLUSTER_DESC_PATH`.
+- `--force-rediscovery` – **New mode only.** Always run Phase 1 and refresh the Phase 1 cache even when a cache hit would otherwise skip `generate_rank_bindings`. Ignored with `--rank-binding` (legacy mode). When new mode continues to **Phase 2**, failures there (config, mpirun, non-zero program exit, or Ctrl+C during a hang) log a hint to try **`--force-rediscovery`**.
 
 Run `tt-run --help` for the full list.
