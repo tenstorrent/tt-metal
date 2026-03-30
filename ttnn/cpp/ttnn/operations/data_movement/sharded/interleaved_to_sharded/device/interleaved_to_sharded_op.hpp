@@ -5,12 +5,12 @@
 #pragma once
 
 #include <variant>
-#include "ttnn/decorators.hpp"
 
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "interleaved_to_sharded_op_types.hpp"
 #include "interleaved_to_sharded_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 

@@ -8,7 +8,6 @@
 #include "fill_rm_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "fill_rm_device_operation_types.hpp"
 

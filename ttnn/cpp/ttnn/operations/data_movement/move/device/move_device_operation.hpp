@@ -7,7 +7,6 @@
 #include <variant>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "move_device_operation_types.hpp"
 #include "move_program_factory.hpp"
 #include "move_overlap_program_factory.hpp"

@@ -9,7 +9,6 @@
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include <optional>
 #include <variant>
 

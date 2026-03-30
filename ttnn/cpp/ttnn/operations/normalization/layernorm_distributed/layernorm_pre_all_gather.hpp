@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "device/layernorm_distributed_types.hpp"
 #include "device/layernorm_pre_all_gather_device_operation_types.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

@@ -11,7 +11,6 @@
 #include "convert_to_hwc_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "convert_to_hwc_device_operation_types.hpp"
 

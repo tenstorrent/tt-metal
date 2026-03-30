@@ -5,7 +5,6 @@
 #pragma once
 
 #include <optional>
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "factories/untilize_single_core_program_factory.hpp"
@@ -17,6 +16,7 @@
 #include "factories/untilize_multi_core_program_factory.hpp"
 #include "factories/untilize_multi_core_nd_shard_input_program_factory.hpp"
 #include "untilize_device_operation_types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 

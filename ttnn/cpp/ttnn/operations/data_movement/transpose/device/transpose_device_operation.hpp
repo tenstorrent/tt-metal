@@ -13,7 +13,6 @@
 #include "transpose_wh_sharded_program_factory.hpp"
 #include "transpose_wh_sharded_rm_program_factory.hpp"
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

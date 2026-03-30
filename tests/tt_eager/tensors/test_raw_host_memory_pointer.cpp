@@ -11,13 +11,14 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/shape.hpp>
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/to_string.hpp"
 

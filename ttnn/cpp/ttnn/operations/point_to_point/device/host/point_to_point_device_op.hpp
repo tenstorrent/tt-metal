@@ -4,12 +4,12 @@
 ///
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 namespace operations::point_to_point {

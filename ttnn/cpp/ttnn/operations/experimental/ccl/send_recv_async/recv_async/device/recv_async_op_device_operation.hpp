@@ -8,7 +8,6 @@
 #include "recv_async_op_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::experimental::prim {
 

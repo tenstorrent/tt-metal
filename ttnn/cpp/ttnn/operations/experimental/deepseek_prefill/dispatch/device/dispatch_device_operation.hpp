@@ -11,7 +11,6 @@
 #include "dispatch_types.hpp"
 #include "dispatch_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch {
 

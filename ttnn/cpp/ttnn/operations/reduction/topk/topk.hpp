@@ -5,12 +5,12 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 
 #include <cstdint>
 #include <optional>
 #include <tuple>
 #include <vector>
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::reduction::topk {
 struct ExecuteTopK {

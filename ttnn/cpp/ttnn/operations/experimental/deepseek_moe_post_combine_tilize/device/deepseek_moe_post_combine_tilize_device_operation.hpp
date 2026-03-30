@@ -10,7 +10,6 @@
 #include "deepseek_moe_post_combine_tilize_device_operation_types.hpp"
 #include "deepseek_moe_post_combine_tilize_program_factory.hpp"
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

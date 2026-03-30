@@ -13,9 +13,8 @@
 #include "concat_s2s_multi_program_factory.hpp"
 #include "concat_s2i_program_factory.hpp"
 
-#include "ttnn/decorators.hpp"
-
 #include "concat_device_operation_types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 

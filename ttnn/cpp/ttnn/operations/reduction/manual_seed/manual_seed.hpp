@@ -4,11 +4,10 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
-
 #include <functional>
 #include <optional>
 #include <variant>
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::experimental::topk_router_gpt {
 
-// Free-function wrapper around the registered operation
+// Free-function wrapper for nanobind
 std::tuple<ttnn::Tensor, ttnn::Tensor> topk_router_gpt_func(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,

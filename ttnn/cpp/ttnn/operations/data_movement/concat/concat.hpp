@@ -5,9 +5,9 @@
 #pragma once
 
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/decorators.hpp"
 
 #include <ranges>
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

@@ -7,7 +7,6 @@
 #include "rms_allgather_device_operation_types.hpp"
 #include "rms_allgather_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
 
 namespace ttnn::experimental::prim {

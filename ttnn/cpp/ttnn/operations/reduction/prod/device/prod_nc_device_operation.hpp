@@ -6,8 +6,8 @@
 #include "prod_nc_device_operation_types.hpp"
 #include "prod_nc_program_factory.hpp"
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 

@@ -4,8 +4,7 @@
 
 #pragma once
 #include <cstdint>
-
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 Tensor expand(

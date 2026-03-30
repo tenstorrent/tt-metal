@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "device/layernorm_types.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

@@ -8,7 +8,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "fused_rmsnorm_pre_all_gather_device_operation_types.hpp"
 #include "fused_rmsnorm_pre_all_gather_program_factory.hpp"

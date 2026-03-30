@@ -12,7 +12,6 @@
 #include "moe_compute_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {

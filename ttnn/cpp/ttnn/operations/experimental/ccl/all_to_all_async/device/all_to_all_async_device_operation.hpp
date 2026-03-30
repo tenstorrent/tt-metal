@@ -12,7 +12,6 @@
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/decorators.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include "all_to_all_async_device_operation_types.hpp"
 #include "all_to_all_async_program_factory.hpp"

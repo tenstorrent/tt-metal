@@ -9,13 +9,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 
-#include "ttnn/decorators.hpp"
-
 #include "../scatter_enums.hpp"
 #include "scatter_device_operation_types.hpp"
 
 #include "scatter_program_factory.hpp"
 #include "scatter_reduce_bfloat16_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 

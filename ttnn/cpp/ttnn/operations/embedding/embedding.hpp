@@ -5,7 +5,7 @@
 #pragma once
 
 #include "device/embedding_device_operation.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

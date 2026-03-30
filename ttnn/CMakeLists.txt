@@ -39,7 +39,6 @@ target_precompile_headers(
         <variant>
         <vector>
         # TTNN-specific headers that are included frequently
-        <ttnn/decorators.hpp>
         <ttnn/device_operation.hpp>
         <ttnn/operation.hpp>
 )
@@ -556,7 +555,6 @@ target_sources(
             api/ttnn/common/queue_id.hpp
             api/ttnn/config.hpp
             api/ttnn/core.hpp
-            api/ttnn/decorators.hpp
             api/ttnn/device.hpp
             api/ttnn/device_operation.hpp
             api/ttnn/device_operation_detail.hpp

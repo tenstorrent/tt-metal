@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/decorators.hpp"
-
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"

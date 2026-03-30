@@ -8,10 +8,10 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "generic_op_program_factory.hpp"
 #include "generic_op_device_operation_types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::generic {
 

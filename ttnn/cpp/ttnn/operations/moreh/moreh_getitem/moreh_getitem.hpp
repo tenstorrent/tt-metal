@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/moreh/moreh_getitem/device/moreh_getitem_device_operation.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

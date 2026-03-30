@@ -8,7 +8,6 @@
 #include "masked_bincount_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "masked_bincount_device_operation_types.hpp"
 

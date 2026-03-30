@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "device/moe_expert_token_remap_device_operation.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

@@ -6,8 +6,7 @@
 
 #include <array>
 #include <variant>
-
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

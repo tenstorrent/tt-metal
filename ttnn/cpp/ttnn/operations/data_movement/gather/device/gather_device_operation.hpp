@@ -7,9 +7,8 @@
 #include "gather_device_operation_types.hpp"
 #include "gather_program_factory.hpp"
 
-#include "ttnn/decorators.hpp"
-
 #include <optional>
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 

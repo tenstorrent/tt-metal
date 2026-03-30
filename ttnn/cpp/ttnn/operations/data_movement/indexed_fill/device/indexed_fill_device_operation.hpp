@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_device_operation_types.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::prim {
 

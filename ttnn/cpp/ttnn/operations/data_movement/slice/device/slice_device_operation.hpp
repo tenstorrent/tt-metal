@@ -12,10 +12,10 @@
 #include "ttnn/operations/data_movement/slice/device/slice_program_factory_tile_tensor_args.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 
 #include <optional>
 #include <variant>
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
 

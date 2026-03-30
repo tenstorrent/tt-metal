@@ -11,7 +11,6 @@
 #include "hc_sum_reduce_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "hc_sum_reduce_device_operation_types.hpp"
 

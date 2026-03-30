@@ -9,7 +9,6 @@
 #include "combine_types.hpp"
 #include "combine_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine {
 

@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include <optional>
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

@@ -5,7 +5,6 @@
 
 #include "clone/clone.hpp"
 #include "device/transpose_device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"

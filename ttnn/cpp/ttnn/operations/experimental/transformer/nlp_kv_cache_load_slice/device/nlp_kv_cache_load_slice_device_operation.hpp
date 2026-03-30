@@ -7,9 +7,9 @@
 #include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "nlp_kv_cache_load_slice_device_operation_types.hpp"
 #include "nlp_kv_cache_load_slice_program_factory.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::prim {
 

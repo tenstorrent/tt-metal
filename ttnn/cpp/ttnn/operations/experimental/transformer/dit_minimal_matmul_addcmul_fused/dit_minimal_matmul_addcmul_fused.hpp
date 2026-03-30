@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"

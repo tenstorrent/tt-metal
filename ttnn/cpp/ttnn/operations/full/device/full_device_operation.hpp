@@ -6,12 +6,12 @@
 
 #include <variant>
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "full_device_operation_types.hpp"
 #include "full_program_factory_interleaved.hpp"
 #include "full_program_factory_sharded.hpp"
 #include "full_program_factory_nd_sharded.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::full {
 

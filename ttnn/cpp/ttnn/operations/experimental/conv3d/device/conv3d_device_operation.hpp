@@ -12,7 +12,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "conv3d_device_operation_types.hpp"
 #include "conv3d_program_factory.hpp"

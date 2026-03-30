@@ -5,8 +5,7 @@
 
 #include <cstdint>
 #include <vector>
-
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

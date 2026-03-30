@@ -11,7 +11,6 @@
 #include "prefix_scan_program_factory.hpp"
 
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "prefix_scan_device_operation_types.hpp"
 

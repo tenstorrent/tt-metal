@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/base_types.hpp>
+#include "ttnn/types.hpp"
 
 namespace ttnn::experimental::deepseek::mla {
 
