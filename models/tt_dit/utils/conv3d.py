@@ -68,6 +68,10 @@ _MESH_SPATIAL_BLOCKINGS = {
     # lat_res (384->384 k333): H_out=23, W_out=5 — small spatial, compute-bound
     # (96,96,1,32,1) = 654 us vs shared (96,128,1,16,2) = 817 us = 20% faster
     (4, 32, 384, 384, (3, 3, 3), 23, 5): (96, 96, 1, 32, 1),
+    # up0_tconv (384->768 k311): H_out=23, W_out=5 — 276 us vs shared 319 us = 13% faster
+    (4, 32, 384, 768, (3, 1, 1), 23, 5): (96, 256, 1, 32, 2),
+    # up0_spatial (384->192 k133): H_out=46, W_out=10 — 650 us vs shared 846 us = 23% faster
+    (4, 32, 384, 192, (1, 3, 3), 46, 10): (96, 96, 1, 16, 4),
 }
 
 # Fallback table when no mesh-specific entry exists (bh_4x8 defaults).
