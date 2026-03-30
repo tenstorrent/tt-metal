@@ -200,6 +200,65 @@ def vision_transformer_forward(
 # ---------------------------------------------------------------------------
 
 
+def image_pooling_cross_attention_forward(
+    query: torch.Tensor,
+    key_value: torch.Tensor,
+    state_dict: Dict,
+    prefix: str = "model.vision_backbone.image_pooling_2d",
+    num_heads: int = 16,
+    head_dim: int = 72,
+    attn_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """
+    Cross-attention image pooling matching TTNN ``ImagePooling`` (query, key_value).
+
+    This is **not** the same as ``image_pooling_forward()`` below, which implements
+    the full-backbone path: gather neighborhoods from a flat ``features`` tensor via
+    ``pooled_patches_idx``, then attention. TTNN ``ImagePooling`` takes explicit
+    query and KV tensors only (see ``test_vision_pooling_pcc`` / integration tests).
+
+    Args:
+        query: [B, N_q, C_in]
+        key_value: [B, N_kv, C_in]
+        attn_mask: optional mask broadcastable to [B, num_heads, N_q, N_kv] (additive; 0=keep)
+
+    Returns:
+        [B, N_q, hidden_dim]
+    """
+    hidden_dim = num_heads * head_dim
+    b, n_q, _ = query.shape
+    _, n_kv, _ = key_value.shape
+
+    wq = state_dict[f"{prefix}.wq.weight"]
+    bq = state_dict[f"{prefix}.wq.bias"]
+    wk = state_dict[f"{prefix}.wk.weight"]
+    bk = state_dict[f"{prefix}.wk.bias"]
+    wv = state_dict[f"{prefix}.wv.weight"]
+    bv = state_dict[f"{prefix}.wv.bias"]
+    wo = state_dict[f"{prefix}.wo.weight"]
+    bo = state_dict[f"{prefix}.wo.bias"]
+
+    q = F.linear(query, wq, bq)
+    k = F.linear(key_value, wk, bk)
+    v = F.linear(key_value, wv, bv)
+
+    q = q.view(b, n_q, num_heads, head_dim).transpose(1, 2)
+    k = k.view(b, n_kv, num_heads, head_dim).transpose(1, 2)
+    v = v.view(b, n_kv, num_heads, head_dim).transpose(1, 2)
+
+    scale = head_dim**-0.5
+    attn_weights = torch.matmul(q, k.transpose(-2, -1)) * scale
+
+    if attn_mask is not None:
+        attn_weights = attn_weights + attn_mask
+
+    attn_probs = F.softmax(attn_weights, dim=-1)
+    attn_out = torch.matmul(attn_probs, v)
+
+    attn_out = attn_out.transpose(1, 2).contiguous().view(b, n_q, hidden_dim)
+    return F.linear(attn_out, wo, bo)
+
+
 def image_pooling_forward(
     features: torch.Tensor,
     pooled_patches_idx: torch.Tensor,
