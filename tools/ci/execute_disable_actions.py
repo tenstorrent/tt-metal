@@ -152,6 +152,23 @@ def branch_name(action: dict[str, Any]) -> str:
     return f"ci-disable-test-{issue}-{ts[-8:]}"
 
 
+def branch_exists_remote(branch: str) -> bool:
+    check = run(["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"], check=False, capture=True)
+    return bool((check.stdout or "").strip())
+
+
+def choose_branch_name(base: str, source_ts: str, attempt: int) -> str:
+    if not branch_exists_remote(base):
+        return base
+    ts = source_ts.replace(".", "")
+    suffix_seed = ts[-6:] if ts else "retry"
+    for idx in range(1, 50):
+        candidate = f"{base}-r{attempt}-{suffix_seed}-{idx}"
+        if not branch_exists_remote(candidate):
+            return candidate
+    raise RuntimeError(f"unable to allocate unique branch name from base {base!r}")
+
+
 def ensure_no_duplicate_open_pr(source_ts: str) -> str | None:
     marker = f"Auto-disable-source-ts: {source_ts}"
     prs = run_guarded_gh(["gh", "pr", "list", "--repo", REPO, "--state", "open", "--json", "number,url,body"])
@@ -679,6 +696,10 @@ def main() -> int:
             continue
 
         branch = branch_name(action)
+        if not args.dry_run:
+            branch = choose_branch_name(branch, source_ts, int(item.get("attempts", 0)) + 1)
+            if branch != branch_name(action):
+                log(f"action: adjusted branch name for issue #{issue_number} to avoid remote collision: {branch}")
         if args.dry_run:
             log(f"action: dry-run planned for issue #{issue_number} on branch {branch}")
             set_status(
