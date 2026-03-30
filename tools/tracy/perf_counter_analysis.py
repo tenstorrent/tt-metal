@@ -99,25 +99,24 @@ COUNTER_TYPE_NAMES = {
     76: "THREAD_INSTRUCTIONS_0",
     77: "THREAD_INSTRUCTIONS_1",
     78: "THREAD_INSTRUCTIONS_2",
-    # L1 Group (16 counters, split into bank 0 and bank 1 via MUX_CTRL bit 4)
-    # L1 Bank 0 (MUX bit 4 = 0)
-    79: "NOC_RING0_INCOMING_1",
-    80: "NOC_RING0_INCOMING_0",
-    81: "NOC_RING0_OUTGOING_1",
-    82: "NOC_RING0_OUTGOING_0",
-    83: "L1_ARB_TDMA_BUNDLE_1",
-    84: "L1_ARB_TDMA_BUNDLE_0",
-    85: "L1_ARB_UNPACKER",
-    86: "L1_NO_ARB_UNPACKER",
-    # L1 Bank 1 (MUX bit 4 = 1)
-    87: "NOC_RING1_INCOMING_1",
-    88: "NOC_RING1_INCOMING_0",
-    89: "NOC_RING1_OUTGOING_1",
-    90: "NOC_RING1_OUTGOING_0",
-    91: "TDMA_BUNDLE_1_ARB",
-    92: "TDMA_BUNDLE_0_ARB",
-    93: "TDMA_EXT_UNPACK_9_10",
-    94: "TDMA_PACKER_2_WR",
+    # L1 Bank 0 (MUX_CTRL bit 4 = 0, monitors L1 ports 0-7)
+    79: "L1_0_UNPACKER_0",
+    80: "L1_0_UNPACKER_1_ECC_PACK1",
+    81: "L1_0_TDMA_BUNDLE_0_RISC",
+    82: "L1_0_TDMA_BUNDLE_1_TRISC",
+    83: "L1_0_NOC_RING0_OUTGOING_0",
+    84: "L1_0_NOC_RING0_OUTGOING_1",
+    85: "L1_0_NOC_RING0_INCOMING_0",
+    86: "L1_0_NOC_RING0_INCOMING_1",
+    # L1 Bank 1 (MUX_CTRL bit 4 = 1, monitors L1 ports 8-15)
+    87: "L1_1_TDMA_PACKER_2",
+    88: "L1_1_EXT_UNPACKER_1",
+    89: "L1_1_EXT_UNPACKER_2",
+    90: "L1_1_EXT_UNPACKER_3",
+    91: "L1_1_NOC_RING1_OUTGOING_0",
+    92: "L1_1_NOC_RING1_OUTGOING_1",
+    93: "L1_1_NOC_RING1_INCOMING_0",
+    94: "L1_1_NOC_RING1_INCOMING_1",
 }
 
 
@@ -289,10 +288,48 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "Math Pipeline Utilization",
         "Math-to-Pack Handoff Efficiency",
         "Unpacker-to-Math Data Flow",
+        # INSTRN_THREAD metrics
+        "Thread 0 Stall Rate",
+        "Thread 1 Stall Rate",
+        "Thread 2 Stall Rate",
+        "SrcA Valid Wait",
+        "SrcB Valid Wait",
+        "SrcA Clear Wait",
+        "SrcB Clear Wait",
+        "Math Idle Wait T1",
+        "Pack Idle Wait T2",
+        "Unpack Idle Wait T0",
+        "Semaphore Zero Wait T0",
+        "Semaphore Zero Wait T1",
+        "Semaphore Zero Wait T2",
+        "Semaphore Full Wait T0",
+        "Semaphore Full Wait T1",
+        "Semaphore Full Wait T2",
+        # TDMA_UNPACK
+        "Data Hazard Stall Rate",
+        # L1 Bank 0
+        "L1 Unpacker Port Util",
+        "L1 TDMA Bundle Util",
+        "NOC Ring 0 Outgoing Util",
+        "NOC Ring 0 Incoming Util",
+        # L1 Bank 1
+        "NOC Ring 1 Outgoing Util",
+        "NOC Ring 1 Incoming Util",
+    ]
+
+    # IPC metrics use no suffix (not percentages)
+    base_metrics_no_pct = [
+        "Thread 0 IPC",
+        "Thread 1 IPC",
+        "Thread 2 IPC",
     ]
 
     # For each base metric, display a table with Min/Median/Max/Avg rows
-    for base_metric in base_metrics:
+    for base_metric in base_metrics + base_metrics_no_pct:
+        is_pct = base_metric not in base_metrics_no_pct
+        suffix = " (%)" if is_pct else ""
+        unit = "%" if is_pct else ""
+
         print("\n" + "=" * 80)
         print(f"{base_metric.upper()}")
         print("=" * 80)
@@ -304,13 +341,13 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         # Check each statistic
         total_ops = len(metrics_df)
         for stat in ["Min", "Median", "Max", "Avg"]:
-            col_name = f"{base_metric} {stat} (%)"
+            col_name = f"{base_metric} {stat}{suffix}"
             if col_name in metrics_df.columns:
                 non_nan = metrics_df[col_name].dropna()
                 if len(non_nan) > 0:
                     ops_with_data = f"{len(non_nan)}/{total_ops}"
-                    range_str = f"{non_nan.min():.2f}% - {non_nan.max():.2f}%"
-                    mean_str = f"{non_nan.mean():.2f}%"
+                    range_str = f"{non_nan.min():.2f}{unit} - {non_nan.max():.2f}{unit}"
+                    mean_str = f"{non_nan.mean():.2f}{unit}"
                 else:
                     ops_with_data = f"0/{total_ops}"
                     range_str = "N/A"

@@ -249,6 +249,37 @@ class TestPerfCountersSingleOp:
             "Unpacker-to-Math Data Flow Median (%)": 0.0,
             "Unpacker-to-Math Data Flow Max (%)": 0.0,
             "Unpacker-to-Math Data Flow Avg (%)": 0.0,
+            # INSTRN_THREAD: Thread stall rates
+            "Thread 0 Stall Rate Min (%)": 0.0,
+            "Thread 0 Stall Rate Avg (%)": 0.0,
+            "Thread 1 Stall Rate Min (%)": 0.0,
+            "Thread 1 Stall Rate Avg (%)": 0.0,
+            "Thread 2 Stall Rate Min (%)": 0.0,
+            "Thread 2 Stall Rate Avg (%)": 0.0,
+            # INSTRN_THREAD: Thread IPC
+            "Thread 0 IPC Min": 0.0,
+            "Thread 0 IPC Avg": 0.0,
+            "Thread 1 IPC Min": 0.0,
+            "Thread 1 IPC Avg": 0.0,
+            "Thread 2 IPC Min": 0.0,
+            "Thread 2 IPC Avg": 0.0,
+            # INSTRN_THREAD: Pipeline waits
+            "SrcA Valid Wait Min (%)": 0.0,
+            "SrcB Valid Wait Min (%)": 0.0,
+            "Math Idle Wait T1 Min (%)": 0.0,
+            "Pack Idle Wait T2 Min (%)": 0.0,
+            "Unpack Idle Wait T0 Min (%)": 0.0,
+            # INSTRN_THREAD: Semaphore waits
+            "Semaphore Zero Wait T0 Min (%)": 0.0,
+            "Semaphore Zero Wait T1 Min (%)": 0.0,
+            "Semaphore Zero Wait T2 Min (%)": 0.0,
+            # TDMA_UNPACK: Data hazard stalls
+            "Data Hazard Stall Rate Min (%)": 0.0,
+            # L1 Bank 0 metrics ("all" now includes L1_0)
+            "L1 Unpacker Port Util Min (%)": 0.0,
+            "L1 TDMA Bundle Util Min (%)": 0.0,
+            "NOC Ring 0 Outgoing Util Min (%)": 0.0,
+            "NOC Ring 0 Incoming Util Min (%)": 0.0,
         }
         # Just check presence of float columns
         verify_columns(received_columns, expected_columns, verify_float)

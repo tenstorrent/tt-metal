@@ -91,23 +91,24 @@ enum PerfCounterType : uint8_t {
     THREAD_INSTRUCTIONS_0,
     THREAD_INSTRUCTIONS_1,
     THREAD_INSTRUCTIONS_2,
-    // L1 Group (16 counters, mux-dependent)
-    NOC_RING0_INCOMING_1,
-    NOC_RING0_INCOMING_0,
-    NOC_RING0_OUTGOING_1,
-    NOC_RING0_OUTGOING_0,
-    L1_ARB_TDMA_BUNDLE_1,
-    L1_ARB_TDMA_BUNDLE_0,
-    L1_ARB_UNPACKER,
-    L1_NO_ARB_UNPACKER,
-    NOC_RING1_INCOMING_1,
-    NOC_RING1_INCOMING_0,
-    NOC_RING1_OUTGOING_1,
-    NOC_RING1_OUTGOING_0,
-    TDMA_BUNDLE_1_ARB,
-    TDMA_BUNDLE_0_ARB,
-    TDMA_EXT_UNPACK_9_10,
-    TDMA_PACKER_2_WR
+    // L1 Bank 0 (MUX_CTRL bit 4 = 0, monitors L1 ports 0-7)
+    L1_0_UNPACKER_0,            // Port 0: Unpacker #0
+    L1_0_UNPACKER_1_ECC_PACK1,  // Port 1: Unpacker #1 / ECC / Packer #1
+    L1_0_TDMA_BUNDLE_0_RISC,    // Port 2: TDMA Bundle 0 / RISC / TRISC0
+    L1_0_TDMA_BUNDLE_1_TRISC,   // Port 3: TDMA Bundle 1 / TRISC1 / TRISC2
+    L1_0_NOC_RING0_OUTGOING_0,  // Port 4: NOC Ring 0 Outgoing channel 0
+    L1_0_NOC_RING0_OUTGOING_1,  // Port 5: NOC Ring 0 Outgoing channel 1
+    L1_0_NOC_RING0_INCOMING_0,  // Port 6: NOC Ring 0 Incoming channel 0
+    L1_0_NOC_RING0_INCOMING_1,  // Port 7: NOC Ring 0 Incoming channel 1
+    // L1 Bank 1 (MUX_CTRL bit 4 = 1, monitors L1 ports 8-15)
+    L1_1_TDMA_PACKER_2,         // Port 8: TDMA Packer 2 write
+    L1_1_EXT_UNPACKER_1,        // Port 9: Extended Unpacker interface 1
+    L1_1_EXT_UNPACKER_2,        // Port 10: Extended Unpacker interface 2
+    L1_1_EXT_UNPACKER_3,        // Port 11: Extended Unpacker interface 3
+    L1_1_NOC_RING1_OUTGOING_0,  // Port 12: NOC Ring 1 Outgoing channel 0
+    L1_1_NOC_RING1_OUTGOING_1,  // Port 13: NOC Ring 1 Outgoing channel 1
+    L1_1_NOC_RING1_INCOMING_0,  // Port 14: NOC Ring 1 Incoming channel 0
+    L1_1_NOC_RING1_INCOMING_1   // Port 15: NOC Ring 1 Incoming channel 1
 };
 
 union PerfCounter {
@@ -133,13 +134,14 @@ static_assert(sizeof(PerfCounter) == sizeof(uint64_t), "PerfCounter must be 64-b
 
 namespace kernel_profiler {
 
-const PerfCounterGroup counter_groups[] = {
+constexpr PerfCounterGroup counter_groups[] = {
     PerfCounterGroup::FPU,
     PerfCounterGroup::PACK,
     PerfCounterGroup::UNPACK,
     PerfCounterGroup::L1_0,
     PerfCounterGroup::L1_1,
     PerfCounterGroup::INSTRN};
+constexpr size_t NUM_COUNTER_GROUPS = sizeof(counter_groups) / sizeof(counter_groups[0]);
 constexpr size_t MAX_NUM_COUNTERS_PER_GROUP = 61;
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
@@ -163,28 +165,28 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_
      {PerfCounterType::AVAILABLE_MATH, 272}}};
 constexpr size_t NUM_PACK_COUNTERS = 3;
 
-// L1 bank 0 counters (MUX_CTRL bit 4 = 0): ring0 NOC, L1 arbitration, unpacker
+// L1 bank 0 counters (MUX_CTRL bit 4 = 0): unpacker, TDMA bundles, ring0 NOC
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> l1_0_counters = {
-    {{PerfCounterType::NOC_RING0_INCOMING_1, 0},
-     {PerfCounterType::NOC_RING0_INCOMING_0, 1},
-     {PerfCounterType::NOC_RING0_OUTGOING_1, 2},
-     {PerfCounterType::NOC_RING0_OUTGOING_0, 3},
-     {PerfCounterType::L1_ARB_TDMA_BUNDLE_1, 4},
-     {PerfCounterType::L1_ARB_TDMA_BUNDLE_0, 5},
-     {PerfCounterType::L1_ARB_UNPACKER, 6},
-     {PerfCounterType::L1_NO_ARB_UNPACKER, 7}}};
+    {{PerfCounterType::L1_0_UNPACKER_0, 0},
+     {PerfCounterType::L1_0_UNPACKER_1_ECC_PACK1, 1},
+     {PerfCounterType::L1_0_TDMA_BUNDLE_0_RISC, 2},
+     {PerfCounterType::L1_0_TDMA_BUNDLE_1_TRISC, 3},
+     {PerfCounterType::L1_0_NOC_RING0_OUTGOING_0, 4},
+     {PerfCounterType::L1_0_NOC_RING0_OUTGOING_1, 5},
+     {PerfCounterType::L1_0_NOC_RING0_INCOMING_0, 6},
+     {PerfCounterType::L1_0_NOC_RING0_INCOMING_1, 7}}};
 constexpr size_t NUM_L1_0_COUNTERS = 8;
 
-// L1 bank 1 counters (MUX_CTRL bit 4 = 1): ring1 NOC, TDMA extended unpacker, packer
+// L1 bank 1 counters (MUX_CTRL bit 4 = 1): packer 2, ext unpacker, ring1 NOC
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> l1_1_counters = {
-    {{PerfCounterType::NOC_RING1_INCOMING_1, 0},
-     {PerfCounterType::NOC_RING1_INCOMING_0, 1},
-     {PerfCounterType::NOC_RING1_OUTGOING_1, 2},
-     {PerfCounterType::NOC_RING1_OUTGOING_0, 3},
-     {PerfCounterType::TDMA_BUNDLE_1_ARB, 4},
-     {PerfCounterType::TDMA_BUNDLE_0_ARB, 5},
-     {PerfCounterType::TDMA_EXT_UNPACK_9_10, 6},
-     {PerfCounterType::TDMA_PACKER_2_WR, 7}}};
+    {{PerfCounterType::L1_1_TDMA_PACKER_2, 0},
+     {PerfCounterType::L1_1_EXT_UNPACKER_1, 1},
+     {PerfCounterType::L1_1_EXT_UNPACKER_2, 2},
+     {PerfCounterType::L1_1_EXT_UNPACKER_3, 3},
+     {PerfCounterType::L1_1_NOC_RING1_OUTGOING_0, 4},
+     {PerfCounterType::L1_1_NOC_RING1_OUTGOING_1, 5},
+     {PerfCounterType::L1_1_NOC_RING1_INCOMING_0, 6},
+     {PerfCounterType::L1_1_NOC_RING1_INCOMING_1, 7}}};
 constexpr size_t NUM_L1_1_COUNTERS = 8;
 
 // INSTRN counters (61 counters)
@@ -392,61 +394,110 @@ void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
     *mux_reg = mux_val;
 }
 
-void start_perf_counter() {
-    // start counters for selected groups
-    for (auto counter_group : counter_groups) {
-        if (PROFILE_PERF_COUNTERS & get_flag_for_counter_group(counter_group)) {
-            // Set L1 MUX before starting L1 counters
-            if (counter_group == PerfCounterGroup::L1_0 || counter_group == PerfCounterGroup::L1_1) {
-                set_l1_mux_ctrl(counter_group);
-            }
-            volatile tt_reg_ptr uint32_t* cntl_reg =
-                reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
-            uint32_t counter_select = 0;  // individual counters selected later when reading
-            // Set continuous mode then start bit in control registers to start counters
-            cntl_reg[0] = 0;
-            cntl_reg[1] = counter_select << PERF_CNT_BANK_SELECT_SHIFT | PERF_CNT_CONTINUOUS_MODE;
-            cntl_reg[2] = PERF_CNT_START_VALUE;
-            cntl_reg[2] = 0;
-        }
+void start_single_group(PerfCounterGroup counter_group) {
+    if (counter_group == PerfCounterGroup::L1_0 || counter_group == PerfCounterGroup::L1_1) {
+        set_l1_mux_ctrl(counter_group);
     }
-};
+    volatile tt_reg_ptr uint32_t* cntl_reg =
+        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
+    cntl_reg[0] = 0xFFFFFFFF;
+    cntl_reg[1] = PERF_CNT_CONTINUOUS_MODE;
+    cntl_reg[2] = 0;
+    cntl_reg[2] = PERF_CNT_START_VALUE;
+}
+
+void stop_single_group(PerfCounterGroup counter_group) {
+    volatile tt_reg_ptr uint32_t* cntl_reg =
+        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
+    cntl_reg[2] = 0;
+    cntl_reg[2] = PERF_CNT_STOP_VALUE;
+}
+
+void read_single_group(PerfCounterGroup counter_group) {
+    if (counter_group == PerfCounterGroup::L1_0 || counter_group == PerfCounterGroup::L1_1) {
+        set_l1_mux_ctrl(counter_group);
+    }
+    volatile tt_reg_ptr uint32_t* cntl_reg =
+        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
+    volatile tt_reg_ptr uint32_t* read_reg =
+        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_read_register_for_counter_group(counter_group));
+    const auto& counters = get_counters_for_counter_group(counter_group);
+    const uint32_t counters_size = get_num_counters_for_counter_group(counter_group);
+    for (unsigned int i = 0; i < counters_size; i++) {
+        uint32_t counter_sel = counters[i].second;
+        cntl_reg[1] = counter_sel << PERF_CNT_BANK_SELECT_SHIFT | PERF_CNT_CONTINUOUS_MODE;
+        (void)read_reg[0];
+        (void)read_reg[1];
+        uint32_t ref_cnt_val = read_reg[0];
+        uint32_t counter_val = read_reg[1];
+        PerfCounter counter(counter_val, ref_cnt_val, counters[i].first);
+        timeStampedData<PERF_COUNTER_PROFILER_ID>(counter.raw_data);
+    }
+}
+
+// Use preprocessor #if to select groups at compile time, avoiding
+// runtime loop optimization issues with the RISC-V compiler.
+void start_perf_counter() {
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_FPU)
+    start_single_group(PerfCounterGroup::FPU);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_PACK)
+    start_single_group(PerfCounterGroup::PACK);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_UNPACK)
+    start_single_group(PerfCounterGroup::UNPACK);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_0)
+    start_single_group(PerfCounterGroup::L1_0);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_1)
+    start_single_group(PerfCounterGroup::L1_1);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
+    start_single_group(PerfCounterGroup::INSTRN);
+#endif
+}
 
 void stop_perf_counter() {
-    // Stop all counters first (set stop bit)
-    for (auto counter_group : counter_groups) {
-        if (PROFILE_PERF_COUNTERS & get_flag_for_counter_group(counter_group)) {
-            volatile tt_reg_ptr uint32_t* cntl_reg =
-                reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
-            cntl_reg[2] = PERF_CNT_STOP_VALUE;
-            cntl_reg[2] = 0;
-        }
-    }
+    // Stop all enabled groups first
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_FPU)
+    stop_single_group(PerfCounterGroup::FPU);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_PACK)
+    stop_single_group(PerfCounterGroup::PACK);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_UNPACK)
+    stop_single_group(PerfCounterGroup::UNPACK);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_0)
+    stop_single_group(PerfCounterGroup::L1_0);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_1)
+    stop_single_group(PerfCounterGroup::L1_1);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
+    stop_single_group(PerfCounterGroup::INSTRN);
+#endif
 
-    // Read data from all counters in all enabled groups
-    for (auto counter_group : counter_groups) {
-        if (PROFILE_PERF_COUNTERS & get_flag_for_counter_group(counter_group)) {
-            volatile tt_reg_ptr uint32_t* cntl_reg =
-                reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
-            volatile tt_reg_ptr uint32_t* read_reg =
-                reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_read_register_for_counter_group(counter_group));
-            const std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> counters =
-                get_counters_for_counter_group(counter_group);
-            const uint32_t counters_size = get_num_counters_for_counter_group(counter_group);
-            for (unsigned int i = 0; i < counters_size; i++) {
-                uint32_t counter_sel = counters[i].second;
-                cntl_reg[1] = counter_sel << PERF_CNT_BANK_SELECT_SHIFT | PERF_CNT_CONTINUOUS_MODE;
-                // Wait for registers to update
-                while (cntl_reg[1] != (counter_sel << PERF_CNT_BANK_SELECT_SHIFT | PERF_CNT_CONTINUOUS_MODE));
-                // Extra wait
-                for (int wait_count = 0; wait_count < 50; wait_count++) {
-                    asm("nop");
-                }
-                PerfCounter counter(read_reg[1], read_reg[0], counters[i].first);
-                timeStampedData<PERF_COUNTER_PROFILER_ID>(counter.raw_data);
-            }
-        }
-    }
+    // Read all enabled groups
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_FPU)
+    read_single_group(PerfCounterGroup::FPU);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_PACK)
+    read_single_group(PerfCounterGroup::PACK);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_UNPACK)
+    read_single_group(PerfCounterGroup::UNPACK);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_0)
+    read_single_group(PerfCounterGroup::L1_0);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_1)
+    read_single_group(PerfCounterGroup::L1_1);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
+    read_single_group(PerfCounterGroup::INSTRN);
+#endif
 };
 
 // Wrapper struct for starting and stopping performance counters using scope of PerfCounterWrapper object

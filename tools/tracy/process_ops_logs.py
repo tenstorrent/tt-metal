@@ -169,6 +169,117 @@ PERF_COUNTER_CSV_HEADERS = [
     "Unpacker-to-Math Data Flow Median (%)",
     "Unpacker-to-Math Data Flow Max (%)",
     "Unpacker-to-Math Data Flow Avg (%)",
+    # INSTRN_THREAD: Thread stall rates
+    "Thread 0 Stall Rate Min (%)",
+    "Thread 0 Stall Rate Median (%)",
+    "Thread 0 Stall Rate Max (%)",
+    "Thread 0 Stall Rate Avg (%)",
+    "Thread 1 Stall Rate Min (%)",
+    "Thread 1 Stall Rate Median (%)",
+    "Thread 1 Stall Rate Max (%)",
+    "Thread 1 Stall Rate Avg (%)",
+    "Thread 2 Stall Rate Min (%)",
+    "Thread 2 Stall Rate Median (%)",
+    "Thread 2 Stall Rate Max (%)",
+    "Thread 2 Stall Rate Avg (%)",
+    # INSTRN_THREAD: Thread IPC (instructions per cycle, not %)
+    "Thread 0 IPC Min",
+    "Thread 0 IPC Median",
+    "Thread 0 IPC Max",
+    "Thread 0 IPC Avg",
+    "Thread 1 IPC Min",
+    "Thread 1 IPC Median",
+    "Thread 1 IPC Max",
+    "Thread 1 IPC Avg",
+    "Thread 2 IPC Min",
+    "Thread 2 IPC Median",
+    "Thread 2 IPC Max",
+    "Thread 2 IPC Avg",
+    # INSTRN_THREAD: Pipeline wait metrics
+    "SrcA Valid Wait Min (%)",
+    "SrcA Valid Wait Median (%)",
+    "SrcA Valid Wait Max (%)",
+    "SrcA Valid Wait Avg (%)",
+    "SrcB Valid Wait Min (%)",
+    "SrcB Valid Wait Median (%)",
+    "SrcB Valid Wait Max (%)",
+    "SrcB Valid Wait Avg (%)",
+    "SrcA Clear Wait Min (%)",
+    "SrcA Clear Wait Median (%)",
+    "SrcA Clear Wait Max (%)",
+    "SrcA Clear Wait Avg (%)",
+    "SrcB Clear Wait Min (%)",
+    "SrcB Clear Wait Median (%)",
+    "SrcB Clear Wait Max (%)",
+    "SrcB Clear Wait Avg (%)",
+    "Math Idle Wait T1 Min (%)",
+    "Math Idle Wait T1 Median (%)",
+    "Math Idle Wait T1 Max (%)",
+    "Math Idle Wait T1 Avg (%)",
+    "Pack Idle Wait T2 Min (%)",
+    "Pack Idle Wait T2 Median (%)",
+    "Pack Idle Wait T2 Max (%)",
+    "Pack Idle Wait T2 Avg (%)",
+    "Unpack Idle Wait T0 Min (%)",
+    "Unpack Idle Wait T0 Median (%)",
+    "Unpack Idle Wait T0 Max (%)",
+    "Unpack Idle Wait T0 Avg (%)",
+    # INSTRN_THREAD: Semaphore wait metrics
+    "Semaphore Zero Wait T0 Min (%)",
+    "Semaphore Zero Wait T0 Median (%)",
+    "Semaphore Zero Wait T0 Max (%)",
+    "Semaphore Zero Wait T0 Avg (%)",
+    "Semaphore Zero Wait T1 Min (%)",
+    "Semaphore Zero Wait T1 Median (%)",
+    "Semaphore Zero Wait T1 Max (%)",
+    "Semaphore Zero Wait T1 Avg (%)",
+    "Semaphore Zero Wait T2 Min (%)",
+    "Semaphore Zero Wait T2 Median (%)",
+    "Semaphore Zero Wait T2 Max (%)",
+    "Semaphore Zero Wait T2 Avg (%)",
+    "Semaphore Full Wait T0 Min (%)",
+    "Semaphore Full Wait T0 Median (%)",
+    "Semaphore Full Wait T0 Max (%)",
+    "Semaphore Full Wait T0 Avg (%)",
+    "Semaphore Full Wait T1 Min (%)",
+    "Semaphore Full Wait T1 Median (%)",
+    "Semaphore Full Wait T1 Max (%)",
+    "Semaphore Full Wait T1 Avg (%)",
+    "Semaphore Full Wait T2 Min (%)",
+    "Semaphore Full Wait T2 Median (%)",
+    "Semaphore Full Wait T2 Max (%)",
+    "Semaphore Full Wait T2 Avg (%)",
+    # TDMA_UNPACK: Data hazard stalls
+    "Data Hazard Stall Rate Min (%)",
+    "Data Hazard Stall Rate Median (%)",
+    "Data Hazard Stall Rate Max (%)",
+    "Data Hazard Stall Rate Avg (%)",
+    # L1 Bank 0: utilization metrics
+    "L1 Unpacker Port Util Min (%)",
+    "L1 Unpacker Port Util Median (%)",
+    "L1 Unpacker Port Util Max (%)",
+    "L1 Unpacker Port Util Avg (%)",
+    "L1 TDMA Bundle Util Min (%)",
+    "L1 TDMA Bundle Util Median (%)",
+    "L1 TDMA Bundle Util Max (%)",
+    "L1 TDMA Bundle Util Avg (%)",
+    "NOC Ring 0 Outgoing Util Min (%)",
+    "NOC Ring 0 Outgoing Util Median (%)",
+    "NOC Ring 0 Outgoing Util Max (%)",
+    "NOC Ring 0 Outgoing Util Avg (%)",
+    "NOC Ring 0 Incoming Util Min (%)",
+    "NOC Ring 0 Incoming Util Median (%)",
+    "NOC Ring 0 Incoming Util Max (%)",
+    "NOC Ring 0 Incoming Util Avg (%)",
+    # L1 Bank 1: utilization metrics (NaN when L1_1 data unavailable)
+    "NOC Ring 1 Outgoing Util Min (%)",
+    "NOC Ring 1 Outgoing Util Median (%)",
+    "NOC Ring 1 Outgoing Util Max (%)",
+    "NOC Ring 1 Outgoing Util Avg (%)",
+    "NOC Ring 1 Incoming Util Min (%)",
+    "NOC Ring 1 Incoming Util Median (%)",
+    "NOC Ring 1 Incoming Util Max (%)",
+    "NOC Ring 1 Incoming Util Avg (%)",
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
@@ -816,6 +927,36 @@ def _enrich_ops_from_device_logs(
                 mask = perf_counter_df["counter type"] == counter_name
                 return perf_counter_df[mask].set_index(["run_host_id", "trace_id_count", "core_x", "core_y"])["ref cnt"]
 
+            def has_counter(counter_name):
+                return counter_name in perf_counter_df["counter type"].values
+
+            def compute_util_metric(counter_name, scale=100):
+                """Compute value / ref_cnt * scale per core, aggregate by op."""
+                val = get_counter_series(counter_name)
+                ref = get_counter_ref_cnt(counter_name)
+                ratio = (val / ref * scale).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                return {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+
+            def compute_avg_channel_util(counter_a, counter_b, scale=100):
+                """Average two channel utilizations per core, then aggregate by op."""
+                val_a = get_counter_series(counter_a)
+                val_b = get_counter_series(counter_b)
+                ref = get_counter_ref_cnt(counter_a)
+                ratio = ((val_a + val_b) / 2 / ref * scale).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                return {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+
             # Get all counter series needed for metrics
             sfpu_counter = get_counter_series("SFPU_COUNTER")
             sfpu_ref_cnt = get_counter_ref_cnt("SFPU_COUNTER")
@@ -834,6 +975,7 @@ def _enrich_ops_from_device_logs(
             math_instrn_started = get_counter_series("MATH_INSTRN_STARTED")
             math_instrn_available = get_counter_series("MATH_INSTRN_AVAILABLE")
             available_math = get_counter_series("AVAILABLE_MATH")
+            fpu_instrn_available_1 = get_counter_series("FPU_INSTRN_AVAILABLE_1")
 
             # Calculate utilization metrics (value / ref_cnt * 100)
             sfpu_util = (sfpu_counter / sfpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
@@ -909,11 +1051,14 @@ def _enrich_ops_from_device_logs(
             agg_pack_eff_max = grouped_pack.max().to_dict()
             avg_pack_eff = grouped_pack.mean().to_dict()
 
-            # FPU Execution Efficiency (same as FPU Util)
-            agg_fpu_exec_eff_min = agg_fpu_util_min
-            agg_fpu_exec_eff_median = agg_fpu_util_median
-            agg_fpu_exec_eff_max = agg_fpu_util_max
-            avg_fpu_exec_eff = grouped_fpu.mean().to_dict()
+            # FPU Execution Efficiency: FPU_COUNTER / FPU_INSTRN_AVAILABLE_1
+            # Measures: when FPU work was ready (thread 1), what % actually executed?
+            fpu_exec_eff = (fpu_counter / fpu_instrn_available_1 * 100).replace([float("inf"), -float("inf")], nan)
+            grouped_fpu_exec = fpu_exec_eff.groupby(level=["run_host_id", "trace_id_count"])
+            agg_fpu_exec_eff_min = grouped_fpu_exec.min().to_dict()
+            agg_fpu_exec_eff_median = grouped_fpu_exec.median().to_dict()
+            agg_fpu_exec_eff_max = grouped_fpu_exec.max().to_dict()
+            avg_fpu_exec_eff = grouped_fpu_exec.mean().to_dict()
 
             # Math Pipeline Utilization
             grouped_math_pipe = math_pipe_util.groupby(level=["run_host_id", "trace_id_count"])
@@ -935,6 +1080,73 @@ def _enrich_ops_from_device_logs(
             agg_unpack_math_flow_median = grouped_unpack_math.median().to_dict()
             agg_unpack_math_flow_max = grouped_unpack_math.max().to_dict()
             avg_unpack_math_flow = grouped_unpack_math.mean().to_dict()
+
+            # === New metrics: INSTRN_THREAD group ===
+            # Thread stall rates (value / ref_cnt * 100)
+            thread_stall_metrics = {}
+            for t in range(3):
+                name = f"THREAD_STALLS_{t}"
+                if has_counter(name):
+                    thread_stall_metrics[t] = compute_util_metric(name)
+
+            # Thread IPC (instructions / ref_cnt, no percentage scaling)
+            thread_ipc_metrics = {}
+            for t in range(3):
+                name = f"THREAD_INSTRUCTIONS_{t}"
+                if has_counter(name):
+                    thread_ipc_metrics[t] = compute_util_metric(name, scale=1)
+
+            # Pipeline wait metrics
+            pipeline_wait_metrics = {}
+            pipeline_wait_counters = {
+                "SrcA Valid Wait": "WAITING_FOR_SRCA_VALID",
+                "SrcB Valid Wait": "WAITING_FOR_SRCB_VALID",
+                "SrcA Clear Wait": "WAITING_FOR_SRCA_CLEAR",
+                "SrcB Clear Wait": "WAITING_FOR_SRCB_CLEAR",
+                "Math Idle Wait T1": "WAITING_FOR_MATH_IDLE_1",
+                "Pack Idle Wait T2": "WAITING_FOR_PACK_IDLE_2",
+                "Unpack Idle Wait T0": "WAITING_FOR_UNPACK_IDLE_0",
+            }
+            for metric_name, counter_name in pipeline_wait_counters.items():
+                if has_counter(counter_name):
+                    pipeline_wait_metrics[metric_name] = compute_util_metric(counter_name)
+
+            # Semaphore wait metrics
+            sem_wait_metrics = {}
+            for t in range(3):
+                zero_name = f"WAITING_FOR_NONZERO_SEM_{t}"
+                full_name = f"WAITING_FOR_NONFULL_SEM_{t}"
+                if has_counter(zero_name):
+                    sem_wait_metrics[f"Semaphore Zero Wait T{t}"] = compute_util_metric(zero_name)
+                if has_counter(full_name):
+                    sem_wait_metrics[f"Semaphore Full Wait T{t}"] = compute_util_metric(full_name)
+
+            # === New metrics: TDMA_UNPACK data hazard ===
+            data_hazard_metric = {}
+            if has_counter("DATA_HAZARD_STALLS_MOVD2A"):
+                data_hazard_metric = compute_util_metric("DATA_HAZARD_STALLS_MOVD2A")
+
+            # === New metrics: L1 Bank 0 ===
+            l1_unpacker_util = {}
+            l1_tdma_bundle_util = {}
+            noc_r0_out_util = {}
+            noc_r0_in_util = {}
+            if has_counter("L1_0_UNPACKER_0"):
+                l1_unpacker_util = compute_util_metric("L1_0_UNPACKER_0")
+            if has_counter("L1_0_TDMA_BUNDLE_0_RISC") and has_counter("L1_0_TDMA_BUNDLE_1_TRISC"):
+                l1_tdma_bundle_util = compute_avg_channel_util("L1_0_TDMA_BUNDLE_0_RISC", "L1_0_TDMA_BUNDLE_1_TRISC")
+            if has_counter("L1_0_NOC_RING0_OUTGOING_0") and has_counter("L1_0_NOC_RING0_OUTGOING_1"):
+                noc_r0_out_util = compute_avg_channel_util("L1_0_NOC_RING0_OUTGOING_0", "L1_0_NOC_RING0_OUTGOING_1")
+            if has_counter("L1_0_NOC_RING0_INCOMING_0") and has_counter("L1_0_NOC_RING0_INCOMING_1"):
+                noc_r0_in_util = compute_avg_channel_util("L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_1")
+
+            # === New metrics: L1 Bank 1 ===
+            noc_r1_out_util = {}
+            noc_r1_in_util = {}
+            if has_counter("L1_1_NOC_RING1_OUTGOING_0") and has_counter("L1_1_NOC_RING1_OUTGOING_1"):
+                noc_r1_out_util = compute_avg_channel_util("L1_1_NOC_RING1_OUTGOING_0", "L1_1_NOC_RING1_OUTGOING_1")
+            if has_counter("L1_1_NOC_RING1_INCOMING_0") and has_counter("L1_1_NOC_RING1_INCOMING_1"):
+                noc_r1_in_util = compute_avg_channel_util("L1_1_NOC_RING1_INCOMING_0", "L1_1_NOC_RING1_INCOMING_1")
 
         # Enrich ops with device data and perf counters
         for device_op, device_op_time in zip(host_ops_by_device[device], device_ops_time):
@@ -1030,6 +1242,43 @@ def _enrich_ops_from_device_logs(
                 device_op["Unpacker-to-Math Data Flow Median (%)"] = agg_unpack_math_flow_median.get(lookup_key, nan)
                 device_op["Unpacker-to-Math Data Flow Max (%)"] = agg_unpack_math_flow_max.get(lookup_key, nan)
                 device_op["Unpacker-to-Math Data Flow Avg (%)"] = avg_unpack_math_flow.get(lookup_key, nan)
+
+                # Helper to assign a metric dict's 4 stats to device_op
+                def assign_metric(base_name, metric_dict, suffix=" (%)", lookup=lookup_key):
+                    if metric_dict:
+                        device_op[f"{base_name} Min{suffix}"] = metric_dict["min"].get(lookup, nan)
+                        device_op[f"{base_name} Median{suffix}"] = metric_dict["median"].get(lookup, nan)
+                        device_op[f"{base_name} Max{suffix}"] = metric_dict["max"].get(lookup, nan)
+                        device_op[f"{base_name} Avg{suffix}"] = metric_dict["avg"].get(lookup, nan)
+
+                # Thread stall rates
+                for t in range(3):
+                    assign_metric(f"Thread {t} Stall Rate", thread_stall_metrics.get(t, {}))
+
+                # Thread IPC (not percentage)
+                for t in range(3):
+                    assign_metric(f"Thread {t} IPC", thread_ipc_metrics.get(t, {}), suffix="")
+
+                # Pipeline wait metrics
+                for metric_name, metric_data in pipeline_wait_metrics.items():
+                    assign_metric(metric_name, metric_data)
+
+                # Semaphore wait metrics
+                for metric_name, metric_data in sem_wait_metrics.items():
+                    assign_metric(metric_name, metric_data)
+
+                # Data Hazard Stall Rate
+                assign_metric("Data Hazard Stall Rate", data_hazard_metric)
+
+                # L1 Bank 0 metrics
+                assign_metric("L1 Unpacker Port Util", l1_unpacker_util)
+                assign_metric("L1 TDMA Bundle Util", l1_tdma_bundle_util)
+                assign_metric("NOC Ring 0 Outgoing Util", noc_r0_out_util)
+                assign_metric("NOC Ring 0 Incoming Util", noc_r0_in_util)
+
+                # L1 Bank 1 metrics
+                assign_metric("NOC Ring 1 Outgoing Util", noc_r1_out_util)
+                assign_metric("NOC Ring 1 Incoming Util", noc_r1_in_util)
 
         if perf_counter_df is not None and not perf_counter_df.empty:
             print_efficiency_metrics_summary(pd.DataFrame(host_ops_by_device[device]), device)
@@ -1276,175 +1525,184 @@ def get_device_data_generate_report(
                         ["Unpacker0 Write Efficiency", "Unpacker1 Write Efficiency"]
                     ].mean(axis=1, skipna=True)
                     eff_pivot["FPU Execution Efficiency"] = eff_pivot.apply(
-                        lambda x: (x.get("value_FPU_COUNTER", 0) / x.get("ref_cnt_FPU_COUNTER", 1) * 100)
-                        if x.get("ref_cnt_FPU_COUNTER", 0) > 0
+                        lambda x: (x.get("value_FPU_COUNTER", 0) / x.get("value_FPU_INSTRN_AVAILABLE_1", 1) * 100)
+                        if x.get("value_FPU_INSTRN_AVAILABLE_1", 0) > 0
                         else nan,
+                        axis=1,
+                    )
+
+                    # New metrics: Thread stall rates and IPC
+                    for t in range(3):
+                        stall_col = f"value_THREAD_STALLS_{t}"
+                        ipc_col = f"value_THREAD_INSTRUCTIONS_{t}"
+                        ref_col = f"ref_cnt_THREAD_STALLS_{t}"
+                        eff_pivot[f"Thread {t} Stall Rate"] = eff_pivot.apply(
+                            lambda x, s=stall_col, r=ref_col: safe_div(x.get(s, 0), x.get(r, 0)), axis=1
+                        )
+                        ref_ipc = f"ref_cnt_THREAD_INSTRUCTIONS_{t}"
+                        eff_pivot[f"Thread {t} IPC"] = eff_pivot.apply(
+                            lambda x, v=ipc_col, r=ref_ipc: (x.get(v, 0) / x.get(r, 1)) if x.get(r, 0) > 0 else nan,
+                            axis=1,
+                        )
+
+                    # Pipeline wait metrics
+                    pipeline_wait_defs = {
+                        "SrcA Valid Wait": "WAITING_FOR_SRCA_VALID",
+                        "SrcB Valid Wait": "WAITING_FOR_SRCB_VALID",
+                        "SrcA Clear Wait": "WAITING_FOR_SRCA_CLEAR",
+                        "SrcB Clear Wait": "WAITING_FOR_SRCB_CLEAR",
+                        "Math Idle Wait T1": "WAITING_FOR_MATH_IDLE_1",
+                        "Pack Idle Wait T2": "WAITING_FOR_PACK_IDLE_2",
+                        "Unpack Idle Wait T0": "WAITING_FOR_UNPACK_IDLE_0",
+                    }
+                    for metric_name, counter_name in pipeline_wait_defs.items():
+                        val_col = f"value_{counter_name}"
+                        ref_col = f"ref_cnt_{counter_name}"
+                        eff_pivot[metric_name] = eff_pivot.apply(
+                            lambda x, v=val_col, r=ref_col: safe_div(x.get(v, 0), x.get(r, 0)), axis=1
+                        )
+
+                    # Semaphore wait metrics
+                    for t in range(3):
+                        for kind, prefix in [
+                            ("Semaphore Zero Wait", "WAITING_FOR_NONZERO_SEM"),
+                            ("Semaphore Full Wait", "WAITING_FOR_NONFULL_SEM"),
+                        ]:
+                            val_col = f"value_{prefix}_{t}"
+                            ref_col = f"ref_cnt_{prefix}_{t}"
+                            eff_pivot[f"{kind} T{t}"] = eff_pivot.apply(
+                                lambda x, v=val_col, r=ref_col: safe_div(x.get(v, 0), x.get(r, 0)), axis=1
+                            )
+
+                    # Data Hazard Stall Rate
+                    eff_pivot["Data Hazard Stall Rate"] = eff_pivot.apply(
+                        lambda x: safe_div(
+                            x.get("value_DATA_HAZARD_STALLS_MOVD2A", 0), x.get("ref_cnt_DATA_HAZARD_STALLS_MOVD2A", 0)
+                        ),
+                        axis=1,
+                    )
+
+                    # L1 Bank 0 metrics
+                    eff_pivot["L1 Unpacker Port Util"] = eff_pivot.apply(
+                        lambda x: safe_div(x.get("value_L1_0_UNPACKER_0", 0), x.get("ref_cnt_L1_0_UNPACKER_0", 0)),
+                        axis=1,
+                    )
+                    eff_pivot["L1 TDMA Bundle Util"] = eff_pivot.apply(
+                        lambda x: safe_div(
+                            (x.get("value_L1_0_TDMA_BUNDLE_0_RISC", 0) + x.get("value_L1_0_TDMA_BUNDLE_1_TRISC", 0))
+                            / 2,
+                            x.get("ref_cnt_L1_0_TDMA_BUNDLE_0_RISC", 0),
+                        ),
+                        axis=1,
+                    )
+                    eff_pivot["NOC Ring 0 Outgoing Util"] = eff_pivot.apply(
+                        lambda x: safe_div(
+                            (x.get("value_L1_0_NOC_RING0_OUTGOING_0", 0) + x.get("value_L1_0_NOC_RING0_OUTGOING_1", 0))
+                            / 2,
+                            x.get("ref_cnt_L1_0_NOC_RING0_OUTGOING_0", 0),
+                        ),
+                        axis=1,
+                    )
+                    eff_pivot["NOC Ring 0 Incoming Util"] = eff_pivot.apply(
+                        lambda x: safe_div(
+                            (x.get("value_L1_0_NOC_RING0_INCOMING_0", 0) + x.get("value_L1_0_NOC_RING0_INCOMING_1", 0))
+                            / 2,
+                            x.get("ref_cnt_L1_0_NOC_RING0_INCOMING_0", 0),
+                        ),
+                        axis=1,
+                    )
+                    # L1 Bank 1 metrics
+                    eff_pivot["NOC Ring 1 Outgoing Util"] = eff_pivot.apply(
+                        lambda x: safe_div(
+                            (x.get("value_L1_1_NOC_RING1_OUTGOING_0", 0) + x.get("value_L1_1_NOC_RING1_OUTGOING_1", 0))
+                            / 2,
+                            x.get("ref_cnt_L1_1_NOC_RING1_OUTGOING_0", 0),
+                        ),
+                        axis=1,
+                    )
+                    eff_pivot["NOC Ring 1 Incoming Util"] = eff_pivot.apply(
+                        lambda x: safe_div(
+                            (x.get("value_L1_1_NOC_RING1_INCOMING_0", 0) + x.get("value_L1_1_NOC_RING1_INCOMING_1", 0))
+                            / 2,
+                            x.get("ref_cnt_L1_1_NOC_RING1_INCOMING_0", 0),
+                        ),
                         axis=1,
                     )
 
                     # Aggregate metrics per operation (min, median, max, avg)
                     grouped_eff = eff_pivot.groupby(["run_host_id", "trace_id_count"])
 
-                    # Store all aggregated metrics for this device
-                    device_efficiency_metrics[device] = {
-                        "sfpu_min": grouped_eff["SFPU Util"].min().to_dict(),
-                        "sfpu_median": grouped_eff["SFPU Util"].median().to_dict(),
-                        "sfpu_max": grouped_eff["SFPU Util"].max().to_dict(),
-                        "sfpu_avg": grouped_eff["SFPU Util"].mean().to_dict(),
-                        "fpu_min": grouped_eff["FPU Util"].min().to_dict(),
-                        "fpu_median": grouped_eff["FPU Util"].median().to_dict(),
-                        "fpu_max": grouped_eff["FPU Util"].max().to_dict(),
-                        "fpu_avg": grouped_eff["FPU Util"].mean().to_dict(),
-                        "math_min": grouped_eff["MATH Util"].min().to_dict(),
-                        "math_median": grouped_eff["MATH Util"].median().to_dict(),
-                        "math_max": grouped_eff["MATH Util"].max().to_dict(),
-                        "math_avg": grouped_eff["MATH Util"].mean().to_dict(),
-                        "unpack0_min": grouped_eff["Unpacker0 Write Efficiency"].min().to_dict(),
-                        "unpack0_median": grouped_eff["Unpacker0 Write Efficiency"].median().to_dict(),
-                        "unpack0_max": grouped_eff["Unpacker0 Write Efficiency"].max().to_dict(),
-                        "unpack0_avg": grouped_eff["Unpacker0 Write Efficiency"].mean().to_dict(),
-                        "unpack1_min": grouped_eff["Unpacker1 Write Efficiency"].min().to_dict(),
-                        "unpack1_median": grouped_eff["Unpacker1 Write Efficiency"].median().to_dict(),
-                        "unpack1_max": grouped_eff["Unpacker1 Write Efficiency"].max().to_dict(),
-                        "unpack1_avg": grouped_eff["Unpacker1 Write Efficiency"].mean().to_dict(),
-                        "unpack_min": grouped_eff["Unpacker Write Efficiency"].min().to_dict(),
-                        "unpack_median": grouped_eff["Unpacker Write Efficiency"].median().to_dict(),
-                        "unpack_max": grouped_eff["Unpacker Write Efficiency"].max().to_dict(),
-                        "unpack_avg": grouped_eff["Unpacker Write Efficiency"].mean().to_dict(),
-                        "pack_min": grouped_eff["Packer Efficiency"].min().to_dict(),
-                        "pack_median": grouped_eff["Packer Efficiency"].median().to_dict(),
-                        "pack_max": grouped_eff["Packer Efficiency"].max().to_dict(),
-                        "pack_avg": grouped_eff["Packer Efficiency"].mean().to_dict(),
-                        "fpu_exec_min": grouped_eff["FPU Execution Efficiency"].min().to_dict(),
-                        "fpu_exec_median": grouped_eff["FPU Execution Efficiency"].median().to_dict(),
-                        "fpu_exec_max": grouped_eff["FPU Execution Efficiency"].max().to_dict(),
-                        "fpu_exec_avg": grouped_eff["FPU Execution Efficiency"].mean().to_dict(),
-                        "math_pipe_min": grouped_eff["Math Pipeline Utilization"].min().to_dict(),
-                        "math_pipe_median": grouped_eff["Math Pipeline Utilization"].median().to_dict(),
-                        "math_pipe_max": grouped_eff["Math Pipeline Utilization"].max().to_dict(),
-                        "math_pipe_avg": grouped_eff["Math Pipeline Utilization"].mean().to_dict(),
-                        "math_pack_min": grouped_eff["Math-to-Pack Handoff Efficiency"].min().to_dict(),
-                        "math_pack_median": grouped_eff["Math-to-Pack Handoff Efficiency"].median().to_dict(),
-                        "math_pack_max": grouped_eff["Math-to-Pack Handoff Efficiency"].max().to_dict(),
-                        "math_pack_avg": grouped_eff["Math-to-Pack Handoff Efficiency"].mean().to_dict(),
-                        "unpack_math_min": grouped_eff["Unpacker-to-Math Data Flow"].min().to_dict(),
-                        "unpack_math_median": grouped_eff["Unpacker-to-Math Data Flow"].median().to_dict(),
-                        "unpack_math_max": grouped_eff["Unpacker-to-Math Data Flow"].max().to_dict(),
-                        "unpack_math_avg": grouped_eff["Unpacker-to-Math Data Flow"].mean().to_dict(),
-                    }
+                    # Store all aggregated metrics for this device using a systematic approach
+                    # All metric base names that use (%) suffix
+                    _pct_metric_names = [
+                        "SFPU Util",
+                        "FPU Util",
+                        "MATH Util",
+                        "Unpacker0 Write Efficiency",
+                        "Unpacker1 Write Efficiency",
+                        "Unpacker Write Efficiency",
+                        "Packer Efficiency",
+                        "FPU Execution Efficiency",
+                        "Math Pipeline Utilization",
+                        "Math-to-Pack Handoff Efficiency",
+                        "Unpacker-to-Math Data Flow",
+                        "Thread 0 Stall Rate",
+                        "Thread 1 Stall Rate",
+                        "Thread 2 Stall Rate",
+                        "SrcA Valid Wait",
+                        "SrcB Valid Wait",
+                        "SrcA Clear Wait",
+                        "SrcB Clear Wait",
+                        "Math Idle Wait T1",
+                        "Pack Idle Wait T2",
+                        "Unpack Idle Wait T0",
+                        "Semaphore Zero Wait T0",
+                        "Semaphore Zero Wait T1",
+                        "Semaphore Zero Wait T2",
+                        "Semaphore Full Wait T0",
+                        "Semaphore Full Wait T1",
+                        "Semaphore Full Wait T2",
+                        "Data Hazard Stall Rate",
+                        "L1 Unpacker Port Util",
+                        "L1 TDMA Bundle Util",
+                        "NOC Ring 0 Outgoing Util",
+                        "NOC Ring 0 Incoming Util",
+                        "NOC Ring 1 Outgoing Util",
+                        "NOC Ring 1 Incoming Util",
+                    ]
+                    # IPC metrics (no % suffix)
+                    _ipc_metric_names = ["Thread 0 IPC", "Thread 1 IPC", "Thread 2 IPC"]
 
-                    # Print efficiency summary directly
-                    eff_summary_df = []
-                    for key in device_efficiency_metrics[device]["sfpu_min"].keys():
-                        eff_summary_df.append(
-                            {
-                                "SFPU Util Min (%)": device_efficiency_metrics[device]["sfpu_min"].get(key, nan),
-                                "SFPU Util Median (%)": device_efficiency_metrics[device]["sfpu_median"].get(key, nan),
-                                "SFPU Util Max (%)": device_efficiency_metrics[device]["sfpu_max"].get(key, nan),
-                                "FPU Util Min (%)": device_efficiency_metrics[device]["fpu_min"].get(key, nan),
-                                "FPU Util Median (%)": device_efficiency_metrics[device]["fpu_median"].get(key, nan),
-                                "FPU Util Max (%)": device_efficiency_metrics[device]["fpu_max"].get(key, nan),
-                                "MATH Util Min (%)": device_efficiency_metrics[device]["math_min"].get(key, nan),
-                                "MATH Util Median (%)": device_efficiency_metrics[device]["math_median"].get(key, nan),
-                                "MATH Util Max (%)": device_efficiency_metrics[device]["math_max"].get(key, nan),
-                                "Unpacker0 Write Efficiency Min (%)": device_efficiency_metrics[device][
-                                    "unpack0_min"
-                                ].get(key, nan),
-                                "Unpacker0 Write Efficiency Median (%)": device_efficiency_metrics[device][
-                                    "unpack0_median"
-                                ].get(key, nan),
-                                "Unpacker0 Write Efficiency Max (%)": device_efficiency_metrics[device][
-                                    "unpack0_max"
-                                ].get(key, nan),
-                                "Unpacker0 Write Efficiency Avg (%)": device_efficiency_metrics[device][
-                                    "unpack0_avg"
-                                ].get(key, nan),
-                                "Unpacker1 Write Efficiency Min (%)": device_efficiency_metrics[device][
-                                    "unpack1_min"
-                                ].get(key, nan),
-                                "Unpacker1 Write Efficiency Median (%)": device_efficiency_metrics[device][
-                                    "unpack1_median"
-                                ].get(key, nan),
-                                "Unpacker1 Write Efficiency Max (%)": device_efficiency_metrics[device][
-                                    "unpack1_max"
-                                ].get(key, nan),
-                                "Unpacker1 Write Efficiency Avg (%)": device_efficiency_metrics[device][
-                                    "unpack1_avg"
-                                ].get(key, nan),
-                                "Unpacker Write Efficiency Min (%)": device_efficiency_metrics[device][
-                                    "unpack_min"
-                                ].get(key, nan),
-                                "Unpacker Write Efficiency Median (%)": device_efficiency_metrics[device][
-                                    "unpack_median"
-                                ].get(key, nan),
-                                "Unpacker Write Efficiency Max (%)": device_efficiency_metrics[device][
-                                    "unpack_max"
-                                ].get(key, nan),
-                                "Unpacker Write Efficiency Avg (%)": device_efficiency_metrics[device][
-                                    "unpack_avg"
-                                ].get(key, nan),
-                                "Packer Efficiency Min (%)": device_efficiency_metrics[device]["pack_min"].get(
-                                    key, nan
-                                ),
-                                "Packer Efficiency Median (%)": device_efficiency_metrics[device]["pack_median"].get(
-                                    key, nan
-                                ),
-                                "Packer Efficiency Max (%)": device_efficiency_metrics[device]["pack_max"].get(
-                                    key, nan
-                                ),
-                                "Packer Efficiency Avg (%)": device_efficiency_metrics[device]["pack_avg"].get(
-                                    key, nan
-                                ),
-                                "FPU Execution Efficiency Min (%)": device_efficiency_metrics[device]["fpu_min"].get(
-                                    key, nan
-                                ),
-                                "FPU Execution Efficiency Median (%)": device_efficiency_metrics[device][
-                                    "fpu_median"
-                                ].get(key, nan),
-                                "FPU Execution Efficiency Max (%)": device_efficiency_metrics[device]["fpu_max"].get(
-                                    key, nan
-                                ),
-                                "FPU Execution Efficiency Avg (%)": device_efficiency_metrics[device]["fpu_avg"].get(
-                                    key, nan
-                                ),
-                                "Math Pipeline Utilization Min (%)": device_efficiency_metrics[device][
-                                    "math_pipe_min"
-                                ].get(key, nan),
-                                "Math Pipeline Utilization Median (%)": device_efficiency_metrics[device][
-                                    "math_pipe_median"
-                                ].get(key, nan),
-                                "Math Pipeline Utilization Max (%)": device_efficiency_metrics[device][
-                                    "math_pipe_max"
-                                ].get(key, nan),
-                                "Math Pipeline Utilization Avg (%)": device_efficiency_metrics[device][
-                                    "math_pipe_avg"
-                                ].get(key, nan),
-                                "Math-to-Pack Handoff Efficiency Min (%)": device_efficiency_metrics[device][
-                                    "math_pack_min"
-                                ].get(key, nan),
-                                "Math-to-Pack Handoff Efficiency Median (%)": device_efficiency_metrics[device][
-                                    "math_pack_median"
-                                ].get(key, nan),
-                                "Math-to-Pack Handoff Efficiency Max (%)": device_efficiency_metrics[device][
-                                    "math_pack_max"
-                                ].get(key, nan),
-                                "Math-to-Pack Handoff Efficiency Avg (%)": device_efficiency_metrics[device][
-                                    "math_pack_avg"
-                                ].get(key, nan),
-                                "Unpacker-to-Math Data Flow Min (%)": device_efficiency_metrics[device][
-                                    "unpack_math_min"
-                                ].get(key, nan),
-                                "Unpacker-to-Math Data Flow Median (%)": device_efficiency_metrics[device][
-                                    "unpack_math_median"
-                                ].get(key, nan),
-                                "Unpacker-to-Math Data Flow Max (%)": device_efficiency_metrics[device][
-                                    "unpack_math_max"
-                                ].get(key, nan),
-                                "Unpacker-to-Math Data Flow Avg (%)": device_efficiency_metrics[device][
-                                    "unpack_math_avg"
-                                ].get(key, nan),
+                    agg_metrics = {}
+                    for base_name in _pct_metric_names + _ipc_metric_names:
+                        if base_name in eff_pivot.columns:
+                            agg_metrics[base_name] = {
+                                "min": grouped_eff[base_name].min().to_dict(),
+                                "median": grouped_eff[base_name].median().to_dict(),
+                                "max": grouped_eff[base_name].max().to_dict(),
+                                "avg": grouped_eff[base_name].mean().to_dict(),
                             }
-                        )
+                    device_efficiency_metrics[device] = agg_metrics
+
+                    # Print efficiency summary
+                    eff_summary_df = []
+                    first_metric = next(iter(agg_metrics.values()), {})
+                    first_stat = first_metric.get("min", {})
+                    for key in first_stat.keys():
+                        row = {}
+                        for base_name in _pct_metric_names:
+                            if base_name in agg_metrics:
+                                m = agg_metrics[base_name]
+                                for stat in ["min", "median", "max", "avg"]:
+                                    stat_cap = stat.capitalize() if stat != "avg" else "Avg"
+                                    row[f"{base_name} {stat_cap} (%)"] = m[stat].get(key, nan)
+                        for base_name in _ipc_metric_names:
+                            if base_name in agg_metrics:
+                                m = agg_metrics[base_name]
+                                for stat in ["min", "median", "max", "avg"]:
+                                    stat_cap = stat.capitalize() if stat != "avg" else "Avg"
+                                    row[f"{base_name} {stat_cap}"] = m[stat].get(key, nan)
+                        eff_summary_df.append(row)
                     if eff_summary_df:
                         print_efficiency_metrics_summary(pd.DataFrame(eff_summary_df), device)
 
@@ -1519,75 +1777,22 @@ def get_device_data_generate_report(
                     lookup_key = (global_call_count, trace_id_counter)
                     metrics = device_efficiency_metrics[device]
 
-                    # SFPU Util
-                    rowDict["SFPU Util Min (%)"] = metrics["sfpu_min"].get(lookup_key, nan)
-                    rowDict["SFPU Util Median (%)"] = metrics["sfpu_median"].get(lookup_key, nan)
-                    rowDict["SFPU Util Max (%)"] = metrics["sfpu_max"].get(lookup_key, nan)
-                    rowDict["Avg SFPU util on full grid (%)"] = metrics["sfpu_avg"].get(lookup_key, nan)
-
-                    # FPU Util
-                    rowDict["FPU Util Min (%)"] = metrics["fpu_min"].get(lookup_key, nan)
-                    rowDict["FPU Util Median (%)"] = metrics["fpu_median"].get(lookup_key, nan)
-                    rowDict["FPU Util Max (%)"] = metrics["fpu_max"].get(lookup_key, nan)
-                    rowDict["Avg FPU util on full grid (%)"] = metrics["fpu_avg"].get(lookup_key, nan)
-
-                    # MATH Util
-                    rowDict["MATH Util Min (%)"] = metrics["math_min"].get(lookup_key, nan)
-                    rowDict["MATH Util Median (%)"] = metrics["math_median"].get(lookup_key, nan)
-                    rowDict["MATH Util Max (%)"] = metrics["math_max"].get(lookup_key, nan)
-                    rowDict["Avg Math util on full grid (%)"] = metrics["math_avg"].get(lookup_key, nan)
-
-                    # Unpacker0 Write Efficiency
-                    rowDict["Unpacker0 Write Efficiency Min (%)"] = metrics["unpack0_min"].get(lookup_key, nan)
-                    rowDict["Unpacker0 Write Efficiency Median (%)"] = metrics["unpack0_median"].get(lookup_key, nan)
-                    rowDict["Unpacker0 Write Efficiency Max (%)"] = metrics["unpack0_max"].get(lookup_key, nan)
-                    rowDict["Unpacker0 Write Efficiency Avg (%)"] = metrics["unpack0_avg"].get(lookup_key, nan)
-
-                    # Unpacker1 Write Efficiency
-                    rowDict["Unpacker1 Write Efficiency Min (%)"] = metrics["unpack1_min"].get(lookup_key, nan)
-                    rowDict["Unpacker1 Write Efficiency Median (%)"] = metrics["unpack1_median"].get(lookup_key, nan)
-                    rowDict["Unpacker1 Write Efficiency Max (%)"] = metrics["unpack1_max"].get(lookup_key, nan)
-                    rowDict["Unpacker1 Write Efficiency Avg (%)"] = metrics["unpack1_avg"].get(lookup_key, nan)
-
-                    # Combined Unpacker Write Efficiency
-                    rowDict["Unpacker Write Efficiency Min (%)"] = metrics["unpack_min"].get(lookup_key, nan)
-                    rowDict["Unpacker Write Efficiency Median (%)"] = metrics["unpack_median"].get(lookup_key, nan)
-                    rowDict["Unpacker Write Efficiency Max (%)"] = metrics["unpack_max"].get(lookup_key, nan)
-                    rowDict["Unpacker Write Efficiency Avg (%)"] = metrics["unpack_avg"].get(lookup_key, nan)
-
-                    # Packer Efficiency
-                    rowDict["Packer Efficiency Min (%)"] = metrics["pack_min"].get(lookup_key, nan)
-                    rowDict["Packer Efficiency Median (%)"] = metrics["pack_median"].get(lookup_key, nan)
-                    rowDict["Packer Efficiency Max (%)"] = metrics["pack_max"].get(lookup_key, nan)
-                    rowDict["Packer Efficiency Avg (%)"] = metrics["pack_avg"].get(lookup_key, nan)
-
-                    # FPU Execution Efficiency
-                    rowDict["FPU Execution Efficiency Min (%)"] = metrics["fpu_min"].get(lookup_key, nan)
-                    rowDict["FPU Execution Efficiency Median (%)"] = metrics["fpu_median"].get(lookup_key, nan)
-                    rowDict["FPU Execution Efficiency Max (%)"] = metrics["fpu_max"].get(lookup_key, nan)
-                    rowDict["FPU Execution Efficiency Avg (%)"] = metrics["fpu_avg"].get(lookup_key, nan)
-
-                    # Math Pipeline Utilization
-                    rowDict["Math Pipeline Utilization Min (%)"] = metrics["math_pipe_min"].get(lookup_key, nan)
-                    rowDict["Math Pipeline Utilization Median (%)"] = metrics["math_pipe_median"].get(lookup_key, nan)
-                    rowDict["Math Pipeline Utilization Max (%)"] = metrics["math_pipe_max"].get(lookup_key, nan)
-                    rowDict["Math Pipeline Utilization Avg (%)"] = metrics["math_pipe_avg"].get(lookup_key, nan)
-
-                    # Math-to-Pack Handoff Efficiency
-                    rowDict["Math-to-Pack Handoff Efficiency Min (%)"] = metrics["math_pack_min"].get(lookup_key, nan)
-                    rowDict["Math-to-Pack Handoff Efficiency Median (%)"] = metrics["math_pack_median"].get(
-                        lookup_key, nan
-                    )
-                    rowDict["Math-to-Pack Handoff Efficiency Max (%)"] = metrics["math_pack_max"].get(lookup_key, nan)
-                    rowDict["Math-to-Pack Handoff Efficiency Avg (%)"] = metrics["math_pack_avg"].get(lookup_key, nan)
-
-                    # Unpacker-to-Math Data Flow
-                    rowDict["Unpacker-to-Math Data Flow Min (%)"] = metrics["unpack_math_min"].get(lookup_key, nan)
-                    rowDict["Unpacker-to-Math Data Flow Median (%)"] = metrics["unpack_math_median"].get(
-                        lookup_key, nan
-                    )
-                    rowDict["Unpacker-to-Math Data Flow Max (%)"] = metrics["unpack_math_max"].get(lookup_key, nan)
-                    rowDict["Unpacker-to-Math Data Flow Avg (%)"] = metrics["unpack_math_avg"].get(lookup_key, nan)
+                    # Write all metrics to CSV row systematically
+                    for base_name, m in metrics.items():
+                        is_ipc = "IPC" in base_name
+                        suffix = "" if is_ipc else " (%)"
+                        # Special handling for SFPU/FPU/MATH "Avg on full grid" legacy names
+                        if base_name == "SFPU Util":
+                            rowDict["Avg SFPU util on full grid (%)"] = m["avg"].get(lookup_key, nan)
+                        elif base_name == "FPU Util":
+                            rowDict["Avg FPU util on full grid (%)"] = m["avg"].get(lookup_key, nan)
+                        elif base_name == "MATH Util":
+                            rowDict["Avg Math util on full grid (%)"] = m["avg"].get(lookup_key, nan)
+                        else:
+                            rowDict[f"{base_name} Avg{suffix}"] = m["avg"].get(lookup_key, nan)
+                        rowDict[f"{base_name} Min{suffix}"] = m["min"].get(lookup_key, nan)
+                        rowDict[f"{base_name} Median{suffix}"] = m["median"].get(lookup_key, nan)
+                        rowDict[f"{base_name} Max{suffix}"] = m["max"].get(lookup_key, nan)
 
                 rowDicts.append(rowDict)
 

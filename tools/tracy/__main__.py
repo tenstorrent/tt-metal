@@ -251,9 +251,8 @@ def main():
         for group in options.perf_counter_groups:
             group_lower = group.lower()
             if group_lower == "all":
-                # Enable all counter groups (excluding L1 banks since they conflict;
-                # user must explicitly pick l1_0 or l1_1)
-                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 5)  # fpu|pack|unpack|instrn
+                # Enable all counter groups including L1 bank 0 (L1 bank 1 requires separate run)
+                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 5)  # fpu|pack|unpack|l1_0|instrn
                 break
             elif group_lower in counter_group_bits:
                 bitfield |= 1 << counter_group_bits[group_lower]
