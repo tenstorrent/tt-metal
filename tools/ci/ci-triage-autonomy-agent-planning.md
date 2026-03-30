@@ -54,6 +54,8 @@ Required placeholders:
 - `{{AUTO_DISABLE_COMMAND_PATH}}`
 - `{{KICKOFF_COMMAND_PATH}}`
 - `{{REPO_SLUG}}`
+- `{{ISSUE_TRACKING_REPO_TEST}}`
+- `{{ISSUE_TRACKING_REPO_PROD}}`
 
 If values are unknown at runtime, agent must stop and request clarification before write actions.
 
@@ -70,6 +72,7 @@ The agent must verify all of the following before enabling live writes:
   - contents
   - pull requests
   - actions/workflow dispatch
+- issue-tracking repository write scope is available for `{{ISSUE_TRACKING_REPO_TEST}}`
 - secrets are configured for:
   - Slack read/export path
   - Slack notify path (test channel only)
@@ -105,6 +108,7 @@ These invariants must always hold:
 4. Notifications are terminal-only (no per-attempt spam).
 5. Test-mode channels only until explicit promotion.
 6. State is source of truth; run-time behavior must reconcile state with live GitHub data.
+7. During testing, all automated issue writes must target `{{ISSUE_TRACKING_REPO_TEST}}` only.
 
 Violation of any invariant is a release blocker.
 
@@ -514,6 +518,7 @@ Definition of ready (before live writes):
 - preflight pass
 - placeholders mapped
 - dry-run checkpoints M0-M2 pass
+- issue-routing confirmed to `{{ISSUE_TRACKING_REPO_TEST}}`
 
 Definition of done:
 
@@ -541,6 +546,8 @@ Use these as examples; do not hardcode in portable implementations.
 - `{{AUTO_DISABLE_COMMAND_PATH}}` -> `.cursor/commands/ci/ci-disable-test-ci.md`
 - `{{KICKOFF_COMMAND_PATH}}` -> `.cursor/commands/ci/ci-kickoff-workflows.md`
 - `{{REPO_SLUG}}` -> `tenstorrent/tt-metal`
+- `{{ISSUE_TRACKING_REPO_TEST}}` -> `ebanerjeeTT/issue_dump`
+- `{{ISSUE_TRACKING_REPO_PROD}}` -> `tenstorrent/tt-metal`
 
 ---
 
@@ -622,12 +629,23 @@ Ticket states:
 - `closed_resolved`
 - `closed_obsolete`
 
+Issue repository routing rule:
+
+- test/staging: create/update/close/reopen issues only in `{{ISSUE_TRACKING_REPO_TEST}}`
+- production: use `{{ISSUE_TRACKING_REPO_PROD}}` only after explicit promotion gate
+- pre-promotion writes to production issue repo are forbidden
+
 ### 19.1 Create
 
 Create a ticket when:
 
 - fingerprint is persistent (above configurable repeat threshold)
 - no active ticket already linked to same fingerprint
+
+Labeling requirement (hard rule):
+
+- every issue created by this new system must include label `CI auto triage`
+- this system must not apply or rely on label `glean CI maintenance`
 
 Ticket body must include:
 
@@ -662,6 +680,12 @@ Close operation must capture:
 - resolving PR/commit linkage
 - resolution evidence window
 - bug-escape classification placeholder (for later enrichment if not available yet)
+
+Labeling requirement on close/update:
+
+- issue label `CI auto triage` must remain present when closing/updating
+- if an issue lacks `CI auto triage`, add it before automated close/update actions
+- never auto-close or auto-update issues that are only labeled `glean CI maintenance` and not `CI auto triage`
 
 ### 19.4 Reopen
 
@@ -918,6 +942,7 @@ A fresh agent must explicitly confirm all "yes" before claiming completion:
 
 - Aggregate failure ingestion implemented and tested
 - Ticket create/update/close/reopen implemented and tested
+- Ticket label policy enforced (`CI auto triage` only; no overlap with `glean CI maintenance`)
 - Slack read/post/update thread lifecycle implemented and tested in test channels
 - Disable and small-fix selection logic implemented and tested
 - Assignment/follow-up/escalation loops implemented and tested
