@@ -107,7 +107,21 @@ def run_disable_editor(issue_number: int, issue_url: str, model: str) -> dict[st
     if model != "auto":
         cmd[1:1] = ["--model", model]
     result = run(cmd, capture=True)
-    return parse_agent_json_after_marker(result.stdout, "===FINAL_DISABLE_EDIT_SUMMARY===")
+    try:
+        return parse_agent_json_after_marker(result.stdout, "===FINAL_DISABLE_EDIT_SUMMARY===")
+    except Exception:
+        # Retry with a strict summary-only prompt in case the main run omitted marker formatting.
+        retry_prompt = (
+            "Output only the required marker and compact JSON summary.\n"
+            "Do not run tools and do not edit files.\n"
+            "Use marker: ===FINAL_DISABLE_EDIT_SUMMARY===\n"
+            f"Set issue_number to {issue_number} and provide a concise disable_scope/notes."
+        )
+        retry_cmd = ["agent", "--trust", "-p", retry_prompt]
+        if model != "auto":
+            retry_cmd[1:1] = ["--model", model]
+        retry = run(retry_cmd, capture=True)
+        return parse_agent_json_after_marker(retry.stdout, "===FINAL_DISABLE_EDIT_SUMMARY===")
 
 
 def invoke_kickoff_agent(pr_url: str, model: str) -> str:
