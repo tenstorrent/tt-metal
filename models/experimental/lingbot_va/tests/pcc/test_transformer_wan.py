@@ -187,27 +187,21 @@ def _make_action_grid_id(
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    ("mesh_device", "num_links", "device_params", "topology", "is_fsdp"),
     [
         pytest.param(
             mesh_shape_request_param(),
-            (1, 1),
-            0,
-            1,
             1,
             line_params,
             ttnn.Topology.Linear,
             False,
-            id="submesh_1x1",
+            id="lingbot_transformer_pcc",
         ),
     ],
     indirect=["mesh_device", "device_params"],
 )
 def test_wan_transformer_model_video_and_action(
     mesh_device: ttnn.MeshDevice,
-    submesh_shape: tuple,
-    sp_axis: int,
-    tp_axis: int,
     num_links: int,
     topology: ttnn.Topology,
     is_fsdp: bool,
@@ -227,8 +221,14 @@ def test_wan_transformer_model_video_and_action(
     if not LINGBOT_VA_CHECKPOINT.exists():
         pytest.skip(f"Lingbot-VA checkpoint not found: {LINGBOT_VA_CHECKPOINT}")
 
-    mesh_device = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
-    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    # Full mesh from the fixture: single-device runs use (1,1); multi-device (e.g. N300) use (1,2) etc.
+    _, cols = tuple(mesh_device.shape)
+    if mesh_device.get_num_devices() > 1 and cols > 1 and NUM_HEADS % cols != 0:
+        pytest.skip(
+            f"NUM_HEADS={NUM_HEADS} not divisible by tensor_parallel factor {cols} for mesh {mesh_device.shape}"
+        )
+
+    parallel_config = _make_parallel_config(mesh_device, sp_axis=0, tp_axis=1)
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
 
     torch_model = _load_torch_reference()

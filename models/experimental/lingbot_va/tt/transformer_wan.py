@@ -21,7 +21,7 @@ import ttnn
 
 from models.tt_dit.layers.embeddings import WanPatchEmbed, WanTimeTextImageEmbedding
 from models.tt_dit.layers.feedforward import ParallelFeedForward
-from models.tt_dit.layers.linear import Linear
+from models.tt_dit.layers.linear import ColParallelLinear, Linear
 from models.tt_dit.layers.module import Module, ModuleList, Parameter
 from models.tt_dit.layers.normalization import DistributedLayerNorm
 from models.tt_dit.parallel.config import DiTParallelConfig
@@ -353,11 +353,13 @@ class WanTransformer3DModel(Module):
             tp_mesh_axis=parallel_config.tensor_parallel.mesh_axis,
         )
 
-        self.action_embedder = Linear(
+        # Column-parallel on TP (same as WanPatchEmbed proj_weight) so hidden dim matches blocks / norm1.
+        self.action_embedder = ColParallelLinear(
             action_dim,
             dim,
             bias=True,
             mesh_device=mesh_device,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
         )
 
         # Text and timestep for video path; text always from condition_embedder.
@@ -858,7 +860,6 @@ class WanTransformer3DModel(Module):
             spatial_1BND = self.action_embedder(
                 spatial_1BNI,
                 compute_kernel_config=self.hifi4_compute_kernel_config,
-                dtype=ttnn.bfloat16,
             )
         else:
             spatial_1BNI, N = self.preprocess_spatial_input(spatial)
