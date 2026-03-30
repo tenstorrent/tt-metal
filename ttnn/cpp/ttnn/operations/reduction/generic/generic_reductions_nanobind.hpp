@@ -53,7 +53,7 @@ inline std::string get_generic_reduction_doc(const char* op_name, const char* qu
                 * - BFLOAT16
                   - ROW_MAJOR, TILE
                 * - BFLOAT8_B
-                  - ROW_MAJOR, TILE
+                  - TILE
 
             The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`
 
