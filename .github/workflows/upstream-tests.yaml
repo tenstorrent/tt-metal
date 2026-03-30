@@ -247,7 +247,7 @@ jobs:
       - arch-wormhole_b0
       - topology-6u
       - in-service
-      - pipeline-functional
+      - pipeline-perf
     steps:
       # TODO -likely need to put this into a script which can be parameterized
       # on the build number and whether to only pull
