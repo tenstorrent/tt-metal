@@ -113,13 +113,7 @@ def _release_ttnn_runtime_configs(obj, _visited: set[int] | None = None) -> None
             try:
                 setattr(obj, name, None)
             except Exception:
-                # Best-effort teardown: setattr can fail on read-only or invalid descriptors.
-                logger.debug(
-                    "Could not clear TTNN runtime config attribute %r on %s",
-                    name,
-                    type(obj).__name__,
-                    exc_info=True,
-                )
+                pass
 
 
 class _TTTransformerAdapter:
@@ -332,8 +326,13 @@ def _close_lingbot_mesh_stack(models: dict) -> None:
             logger.warning("close_mesh_device(parent): %s", e)
 
 
-def _load_models_phase1(config, load_text_encoder=True):
-    """Load tokenizer, VAE (CPU), mesh, optional TT text encoder. Transformer and TT VAE load in later phases."""
+def _load_models_phase1(config, load_text_encoder=True, mesh_device=None):
+    """Load tokenizer, VAE (CPU), mesh, optional TT text encoder. Transformer and TT VAE load in later phases.
+
+    Args:
+        mesh_device: Optional pre-opened mesh (e.g. pytest ``mesh_device``). When ``None``, opens a mesh
+            via ``_open_lingbot_mesh_device`` and applies ``inference_work_mesh_from_opened``.
+    """
     init_logger()
     device = torch.device("cpu")
     dtype = config.param_dtype
@@ -342,8 +341,11 @@ def _load_models_phase1(config, load_text_encoder=True):
 
     from models.experimental.lingbot_va.tests.mesh_utils import inference_work_mesh_from_opened
 
-    opened_mesh = _open_lingbot_mesh_device()
-    mesh_device, mesh_parent = inference_work_mesh_from_opened(opened_mesh)
+    if mesh_device is None:
+        opened_mesh = _open_lingbot_mesh_device()
+        mesh_device, mesh_parent = inference_work_mesh_from_opened(opened_mesh)
+    else:
+        mesh_parent = None
     rows, cols = tuple(mesh_device.shape)
     if mesh_parent is not None:
         logger.info(
