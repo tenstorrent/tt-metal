@@ -254,13 +254,13 @@ class FlashMLAProgramConfig:
     tp_dim: int = 2
 
     def __post_init__(self):
-        expected = self.grid.CORES_PER_BLOCK * self.k_chunk_size
+        expected = self.grid.NUM_BLOCKS * self.k_chunk_size
         if self.device_chunk_size is None:
             self.device_chunk_size = expected
         else:
             assert self.device_chunk_size == expected, (
-                f"device_chunk_size must equal grid.CORES_PER_BLOCK * k_chunk_size "
-                f"({self.grid.CORES_PER_BLOCK} * {self.k_chunk_size} = {expected}), "
+                f"device_chunk_size must equal grid.NUM_BLOCKS * k_chunk_size "
+                f"({self.grid.NUM_BLOCKS} * {self.k_chunk_size} = {expected}), "
                 f"got {self.device_chunk_size}"
             )
 
