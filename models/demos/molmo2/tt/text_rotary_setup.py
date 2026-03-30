@@ -364,3 +364,53 @@ class TextRotarySetup(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=self.mesh_mapper,
         )
+
+    def get_rot_mats_decode_batched(
+        self,
+        rot_idxs: ttnn.Tensor,
+    ) -> List[ttnn.Tensor]:
+        """
+        Get rotation matrices for batched decode mode.
+
+        Uses ttnn.embedding to gather position-specific cos/sin values for each
+        batch element, similar to tt_transformers RotarySetup.get_rot_mats().
+
+        This enables true batched decode where each request has a different position.
+
+        Args:
+            rot_idxs: Position index tensor on device [1, batch_size_padded]
+
+        Returns:
+            List of [cos, sin] tensors with shape [1, batch, 1, head_dim]
+            where cos/sin values are gathered for each position in the batch
+        """
+        # Reshape cos/sin cache for embedding lookup
+        # Original shape: [1, 1, max_seq_len, head_dim]
+        # Need shape for embedding: [max_seq_len, head_dim]
+        cos_cache_2d = self.cos_matrix.reshape([self.max_seq_len, self.head_dim])
+        sin_cache_2d = self.sin_matrix.reshape([self.max_seq_len, self.head_dim])
+
+        # Use embedding to gather position-specific values
+        # rot_idxs shape: [1, batch] -> output shape: [1, batch, head_dim]
+        cos = ttnn.embedding(
+            rot_idxs,
+            cos_cache_2d,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        sin = ttnn.embedding(
+            rot_idxs,
+            sin_cache_2d,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Reshape to [1, batch, 1, head_dim] for broadcasting in rotary multiply
+        cos = ttnn.unsqueeze_to_4D(cos)  # [1, 1, batch, head_dim]
+        sin = ttnn.unsqueeze_to_4D(sin)  # [1, 1, batch, head_dim]
+
+        # Transpose to [1, batch, 1, head_dim] for attention compatibility
+        cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1, head_dim]
+        sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1, head_dim]
+
+        return [cos, sin]

@@ -491,25 +491,69 @@ class TextAttention(LightweightModule):
             k = ttnn.typecast(k, dtype=ttnn.bfloat16)
 
         # Apply RoPE using TTNN rotary embedding
-        # Note: rot_mats already contain cos/sin for the current position, so we pass 0
-        # This avoids reading current_pos from device during traced execution
+        # Two paths based on batch size:
+        # 1. batch=1 (traced): rot_mats is full cache [1, 1, max_seq_len, head_dim], use rotary_embedding
+        # 2. batch>1 (batched): rot_mats is gathered [1, batch, 1, head_dim], apply manually
         from loguru import logger
 
-        logger.debug(f"Before RoPE: q.shape={q.shape}, k.shape={k.shape}")
+        logger.debug(f"Before RoPE: q.shape={q.shape}, k.shape={k.shape}, rot_mats[0].shape={rot_mats[0].shape}")
 
-        q = ttnn.experimental.rotary_embedding(
-            q,
-            rot_mats[0],  # cos
-            rot_mats[1],  # sin
-            0,  # Position is already embedded in rot_mats
-        )
+        # Check rot_mats shape to determine which path to use
+        # Full cache has shape [1, 1, max_seq_len, head_dim]
+        # Batched has shape [1, batch, 1, head_dim]
+        cos, sin = rot_mats[0], rot_mats[1]
+        is_batched_rot_mats = cos.shape[2] == 1 and batch_size > 1
 
-        k = ttnn.experimental.rotary_embedding(
-            k,
-            rot_mats[0],  # cos
-            rot_mats[1],  # sin
-            0,  # Position is already embedded in rot_mats
-        )
+        if is_batched_rot_mats:
+            # Batched path: Apply RoPE manually using element-wise ops
+            # rot_mats shape: [1, batch, 1, head_dim]
+            # Q/K shape: [1, batch, num_heads, head_dim]
+            # Need to broadcast cos/sin across num_heads dimension
+
+            # HF-style RoPE: x_rot = x * cos + rotate_half(x) * sin
+            # rotate_half swaps first and second halves with negation
+
+            def apply_rope_batched(x, cos_mat, sin_mat):
+                """Apply RoPE using element-wise ops for batched decode."""
+                # x shape: [1, B, H, d], cos/sin shape: [1, B, 1, d]
+                # Split x into two halves
+                half_dim = x.shape[-1] // 2
+
+                # Get first and second halves
+                x1 = x[:, :, :, :half_dim]
+                x2 = x[:, :, :, half_dim:]
+
+                # rotate_half: concat(-x2, x1)
+                x_rotated = ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+
+                # Split cos/sin into halves (they have pattern [c0..c_{d/2}, c0..c_{d/2}])
+                cos1 = cos_mat[:, :, :, :half_dim]
+                sin1 = sin_mat[:, :, :, :half_dim]
+
+                # Apply RoPE: x * cos + rotate_half(x) * sin
+                # Broadcast cos/sin from [1, B, 1, d] to [1, B, H, d]
+                x_cos = ttnn.mul(x, cos_mat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                x_sin = ttnn.mul(x_rotated, sin_mat, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                return ttnn.add(x_cos, x_sin, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            q = apply_rope_batched(q, cos, sin)
+            k = apply_rope_batched(k, cos, sin)
+        else:
+            # Traced path (batch=1): Use rotary_embedding with position 0
+            # rot_mats is full cache, position already set in traced tensors
+            q = ttnn.experimental.rotary_embedding(
+                q,
+                cos,  # cos cache
+                sin,  # sin cache
+                0,  # Position (uses traced current_pos internally)
+            )
+
+            k = ttnn.experimental.rotary_embedding(
+                k,
+                cos,  # cos cache
+                sin,  # sin cache
+                0,  # Position (uses traced current_pos internally)
+            )
 
         logger.debug(f"After RoPE: q.shape={q.shape}, k.shape={k.shape}")
 

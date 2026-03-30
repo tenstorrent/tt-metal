@@ -2020,121 +2020,86 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         sampling_params=None,
     ):
         """
-        Run decode forward pass for Molmo2.
+        Run decode forward pass for Molmo2 with true batched processing.
+
+        Uses vLLM's start_pos (per-request positions) to create batch-sized
+        current_pos and rot_mat_idxs tensors, enabling true parallel decode
+        for multiple concurrent requests.
 
         Args:
-            tokens: Current token IDs [batch, 1]
-            start_pos: Current position in sequence for each batch item
-            page_table: Page table for paged attention
+            tokens: Current token IDs [batch_size, 1]
+            start_pos: Per-request positions from vLLM [batch_size]
+            page_table: Page table for paged attention [batch_size, num_blocks]
             kv_cache: KV cache tensors
-            enable_trace: Whether to use tracing
+            enable_trace: Whether to use tracing (disabled for batch>1)
             read_from_device: Whether to read output from device
             sampling_params: Sampling parameters (not used)
 
         Returns:
-            Logits tensor
+            Logits tensor [batch_size, 1, vocab_size]
         """
+        batch_size = tokens.shape[0]
+
         # Debug logging for shape investigation
         logger.info(
-            f"decode_forward called: tokens.shape={tokens.shape}, page_table.shape={page_table.shape if page_table is not None else None}"
+            f"decode_forward called: batch_size={batch_size}, tokens.shape={tokens.shape}, "
+            f"start_pos.shape={start_pos.shape}, page_table.shape={page_table.shape if page_table is not None else None}"
         )
 
-        # Check if generator is properly initialized (has run prefill)
-        # rot_mat_idxs is set during prefill - if not set, return dummy output
-        if not hasattr(self, "rot_mat_idxs") or self.rot_mat_idxs is None:
-            logger.warning("decode_forward called before prefill - returning dummy output")
-            batch_size = tokens.shape[0]
-            vocab_size = 152064  # Molmo2 vocab size
-            return torch.zeros(batch_size, 1, vocab_size)
-
-        # Convert tokens to device
-        token_id_ttnn = ttnn.from_torch(
-            tokens,
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        # Prepare batch-sized decode inputs using vLLM's per-request positions
+        token_id_ttnn, current_pos_tt, rot_mat_idxs_tt, page_table_tt = self.prepare_decode_inputs(
+            tokens, start_pos, page_table
         )
 
-        # Convert page_table to ttnn tensor if provided
-        # For traced decode, pad to match trace tensor shape
-        # CRITICAL: Slice page_table to match actual batch size (tokens.shape[0])
-        # vLLM provides page_table with shape [max_num_seqs, num_blocks] but we only
-        # decode batch_size requests at a time
-        page_table_tt = None
-        if page_table is not None:
-            batch_size = tokens.shape[0]
-            # Slice to actual batch size first
-            page_table_sliced = page_table[:batch_size]  # [batch_size, num_blocks]
+        # Embed tokens
+        hidden_states = self.model.text_model.embed_tokens(token_id_ttnn)
+        ttnn.deallocate(token_id_ttnn)
+
+        # Check if we have a captured decode trace and should use it
+        # IMPORTANT: Tracing only works for batch_size=1 with scalar positions
+        # For batched decode (batch_size>1), we must use non-traced path
+        has_trace_id = hasattr(self, "decode_trace_id") and self.decode_trace_id is not None
+        has_trace_tensors = hasattr(self, "decode_trace_tensors") and self.decode_trace_tensors is not None
+
+        # Disable trace for batched decode - trace was captured with scalar positions
+        use_traced_decode = enable_trace and has_trace_id and has_trace_tensors and batch_size == 1
+
+        # Log only on first decode to avoid spam
+        if not hasattr(self, "_logged_trace_status"):
             logger.info(
-                f"decode_forward: page_table sliced from {page_table.shape} to {page_table_sliced.shape} (batch_size={batch_size})"
+                f"decode_forward trace status: enable_trace={enable_trace}, has_trace_id={has_trace_id}, "
+                f"has_trace_tensors={has_trace_tensors}, batch_size={batch_size}, use_traced_decode={use_traced_decode}"
             )
+            self._logged_trace_status = True
 
-            # Check if we need to pad to match trace tensor shape
-            if (
-                hasattr(self, "decode_trace_tensors")
-                and self.decode_trace_tensors is not None
-                and "page_table" in self.decode_trace_tensors
-            ):
-                trace_page_table_shape = list(self.decode_trace_tensors["page_table"].shape)
-                trace_num_blocks = trace_page_table_shape[-1]
-                actual_num_blocks = page_table_sliced.shape[-1]
-                if actual_num_blocks < trace_num_blocks:
-                    # Pad with zeros to match trace tensor shape
-                    pad_size = trace_num_blocks - actual_num_blocks
-                    page_table_sliced = torch.nn.functional.pad(page_table_sliced, (0, pad_size), value=0)
-                    logger.debug(f"Padded page_table from {page_table.shape} to {page_table_sliced.shape}")
-
-            page_table_tt = ttnn.from_torch(
-                page_table_sliced,
+        if use_traced_decode and batch_size == 1:
+            # For batch_size=1, we can use traced decode with the existing scalar path
+            # Update scalar position tensors from vLLM's start_pos
+            new_pos = ttnn.from_torch(
+                start_pos[:1].int(),
                 device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
+            ttnn.copy(new_pos, self.current_pos)
+            ttnn.copy(new_pos, self.rot_mat_idxs)
+            ttnn.deallocate(new_pos)
 
-        # Embed tokens
-        hidden_states = self.model.text_model.embed_tokens(token_id_ttnn)
-
-        # Deallocate input tensor after embedding
-        ttnn.deallocate(token_id_ttnn)
-
-        # Check if we have a captured decode trace and should use it
-        has_trace_id = hasattr(self, "decode_trace_id") and self.decode_trace_id is not None
-        has_trace_tensors = hasattr(self, "decode_trace_tensors") and self.decode_trace_tensors is not None
-
-        # Check batch size compatibility - vLLM uses variable batch sizes
-        # Only use trace if batch size matches the trace tensor shape
-        batch_size = tokens.shape[0]
-        trace_batch_compatible = True
-        if has_trace_tensors and "hidden_states" in self.decode_trace_tensors:
-            trace_shape = list(self.decode_trace_tensors["hidden_states"].shape)
-            # trace_shape is [1, 1, trace_batch_size, hidden_dim]
-            trace_batch_size = trace_shape[2] if len(trace_shape) >= 3 else 1
-            if batch_size != trace_batch_size:
-                trace_batch_compatible = False
-
-        use_traced_decode = enable_trace and has_trace_id and has_trace_tensors and trace_batch_compatible
-
-        # Log only on first decode to avoid spam
-        if not hasattr(self, "_logged_trace_status"):
-            logger.info(
-                f"decode_forward trace status: enable_trace={enable_trace}, has_trace_id={has_trace_id}, has_trace_tensors={has_trace_tensors}, batch_compatible={trace_batch_compatible}, use_traced_decode={use_traced_decode}"
-            )
-            self._logged_trace_status = True
-
-        if use_traced_decode:
-            # Execute captured decode trace
             # Copy hidden states into trace input tensor
             ttnn.copy(hidden_states, self.decode_trace_tensors["hidden_states"])
             ttnn.deallocate(hidden_states)
 
-            # Copy page_table to trace tensor if provided (paged attention)
+            # Copy page_table to trace tensor if provided
             if page_table_tt is not None and "page_table" in self.decode_trace_tensors:
                 ttnn.copy(page_table_tt, self.decode_trace_tensors["page_table"])
+            if page_table_tt is not None:
                 ttnn.deallocate(page_table_tt)
+
+            # Deallocate batch tensors (not needed for traced path)
+            ttnn.deallocate(current_pos_tt)
+            ttnn.deallocate(rot_mat_idxs_tt)
 
             # Execute the captured trace
             ttnn.execute_trace(self.mesh_device, self.decode_trace_id, cq_id=0, blocking=False)
@@ -2142,8 +2107,9 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             # Get output from trace output tensor
             logits_ttnn = self.decode_trace_output
         else:
-            # Compute rotation matrices for this decode position
-            rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(self.rot_mat_idxs)
+            # Non-traced batched decode path - use batch-sized position tensors
+            # Compute rotation matrices (returns full cos/sin cache for internal slicing)
+            rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(rot_mat_idxs_tt)
 
             # Use vLLM's KV cache if provided (paged), otherwise fall back to internal cache
             if kv_cache is not None and len(kv_cache) > 0 and kv_cache[0] is not None:
@@ -2151,56 +2117,52 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             else:
                 decode_kv_cache = self.kv_caches
 
-            # Run forward_decode directly to get logits (not argmax like run_decode_step)
+            # Run forward_decode with batch-sized current_pos
             logits_ttnn = self.model.text_model.forward_decode(
                 hidden_states=hidden_states,
                 kv_caches=decode_kv_cache,
-                current_pos=self.current_pos,
+                current_pos=current_pos_tt,  # Batch-sized from vLLM start_pos
                 rot_mats=rot_mats,
                 page_table=page_table_tt,
             )
-            # Deallocate intermediate tensor (only when not using trace)
+
+            # Deallocate intermediate tensors
             ttnn.deallocate(hidden_states)
-            # Deallocate page_table_tt if allocated
+            ttnn.deallocate(current_pos_tt)
+            ttnn.deallocate(rot_mat_idxs_tt)
             if page_table_tt is not None:
                 ttnn.deallocate(page_table_tt)
 
-        # Increment position counters (must happen OUTSIDE trace for traced decode)
-        ttnn.plus_one(self.current_pos)
-        ttnn.plus_one(self.rot_mat_idxs)
-        self.decode_position += 1
+        # NOTE: No position increment needed - vLLM tracks positions externally
 
         # During trace capture, we cannot read from device
-        # Return dummy output if read_from_device is False
         if not read_from_device:
-            batch_size = tokens.shape[0]
             vocab_size = 152064  # Molmo2 vocab size
             return torch.zeros(batch_size, 1, vocab_size)
 
         # Synchronize device before reading
         ttnn.synchronize_device(self.mesh_device)
 
-        # Convert logits to torch - mesh device returns tensor for each device
-        # Use ConcatMeshToTensor and take first device since all devices have same logits
+        # Convert logits to torch
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
         logits = ttnn.to_torch(logits_ttnn, mesh_composer=mesh_composer)[0]
 
-        # Deallocate logits_ttnn after conversion (only safe when trace is disabled)
-        # When trace is enabled, logits_ttnn is decode_trace_output which is reused
+        # Deallocate logits_ttnn (only safe when trace is disabled)
         if not use_traced_decode:
             ttnn.deallocate(logits_ttnn)
 
-        # Logits shape from text_model.forward_decode: [1, 1, padded_seq, vocab_size]
-        # Slice to actual sequence length and reshape for vLLM
+        # Reshape logits for vLLM: [batch_size, 1, vocab_size]
+        # Output from forward_decode: [1, 1, padded_batch, vocab_size]
         if logits.dim() == 4:
-            logits = logits[:, :, :1, :]  # [1, 1, 1, vocab] -> [1, 1, 1, vocab]
-            logits = logits.squeeze(1)  # [1, 1, vocab]
+            # [1, 1, padded_batch, vocab] -> [batch, vocab]
+            logits = logits[0, 0, :batch_size, :]
+            logits = logits.unsqueeze(1)  # [batch, 1, vocab]
         elif logits.dim() == 3:
-            logits = logits[:, :1, :]  # [1, seq, vocab] -> [1, 1, vocab]
+            logits = logits[:batch_size, :1, :]
         elif logits.dim() == 2:
-            logits = logits.unsqueeze(1)  # [batch, vocab] -> [batch, 1, vocab]
+            logits = logits[:batch_size, :].unsqueeze(1)
         elif logits.dim() == 1:
-            logits = logits.unsqueeze(0).unsqueeze(1)  # [vocab] -> [1, 1, vocab]
+            logits = logits.unsqueeze(0).unsqueeze(1)
 
         logger.info(f"decode_forward returning: shape={logits.shape}")
         return logits
@@ -2629,6 +2591,84 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         self.rot_mat_idxs = self.model.text_model.rotary_setup.allocate_decode_rot_idxs(initial_pos=0)
 
         self.decode_position = 0
+
+    def prepare_decode_inputs(
+        self,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: Optional[torch.Tensor] = None,
+    ) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, Optional[ttnn.Tensor]]:
+        """
+        Prepare decode inputs for batched vLLM inference.
+
+        Creates batch-sized current_pos and rot_mat_idxs tensors from vLLM's
+        start_pos (per-request positions), similar to tt_transformers model.py:403.
+
+        Args:
+            tokens: Current token IDs [batch_size, 1]
+            start_pos: Per-request positions from vLLM [batch_size]
+            page_table: Page table for paged attention [batch_size, num_blocks]
+
+        Returns:
+            Tuple of (tokens_tt, current_pos_tt, rot_mat_idxs_tt, page_table_tt)
+        """
+        batch_size = tokens.shape[0]
+
+        # Convert tokens to device
+        tokens_tt = ttnn.from_torch(
+            tokens,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # Create batch-sized current_pos from vLLM's start_pos
+        # Ensure positions are non-negative (vLLM can pass -1 for invalid)
+        current_pos_clipped = torch.maximum(start_pos, torch.tensor(0, dtype=start_pos.dtype))
+
+        # Pad to multiple of 32 for tile alignment
+        pad_size = ((batch_size + 31) // 32) * 32 - batch_size
+        if pad_size > 0:
+            current_pos_padded = torch.nn.functional.pad(current_pos_clipped, (0, pad_size), value=0)
+        else:
+            current_pos_padded = current_pos_clipped
+
+        current_pos_tt = ttnn.from_torch(
+            current_pos_padded.reshape(1, -1),  # Shape: [1, padded_batch]
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # Create batch-sized rot_mat_idxs from positions (same values as current_pos)
+        rot_mat_idxs_tt = ttnn.from_torch(
+            current_pos_padded.reshape(1, -1),  # Shape: [1, padded_batch]
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+
+        # Convert page_table to device if provided
+        page_table_tt = None
+        if page_table is not None:
+            # Slice to actual batch size
+            page_table_sliced = page_table[:batch_size]
+            page_table_tt = ttnn.from_torch(
+                page_table_sliced,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+
+        return tokens_tt, current_pos_tt, rot_mat_idxs_tt, page_table_tt
 
     def _allocate_prefill_trace_tensors(self, seq_len: int, hidden_dim: int = 4096, max_num_blocks: int = 64) -> dict:
         """
