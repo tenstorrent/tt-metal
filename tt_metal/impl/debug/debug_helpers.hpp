@@ -10,6 +10,7 @@
 #include <fstream>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <vector>
 #include <fmt/core.h>
 #include <fmt/ranges.h>
@@ -110,57 +111,92 @@ inline uint16_t host_debug_file_hash(const char* str) {
     return static_cast<uint16_t>((hash >> 16) ^ (hash & 0xFFFF));
 }
 
-// Scan source directories to resolve a file_id hash back to a filename.
-inline std::string resolve_file_from_hash(uint16_t file_id) {
-    static const std::vector<std::string> search_dirs = {
-        "tt_metal/hw/inc/",
-        "tt_metal/hw/inc/api/debug/",
-        "tt_metal/hw/inc/internal/debug/",
-        "tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/",
-        "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/",
-        "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/",
-        "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/",
-        "tt_metal/hw/inc/hostdev/",
-        "tt_metal/hw/ckernels/",
-        "ttnn/cpp/",
-    };
-    for (const auto& dir : search_dirs) {
-        if (!std::filesystem::exists(dir)) {
-            continue;
+// Read all source file paths from a .o.dephash file.
+// These are always written during kernel compilation (no debug info required).
+// Format per line: "<absolute-path>"\t<uint64-content-hash>
+inline std::unordered_set<std::string> collect_dephash_filenames(const std::filesystem::path& dephash_path) {
+    std::unordered_set<std::string> result;
+    std::ifstream f(dephash_path);
+    if (!f.is_open()) {
+        return result;
+    }
+    std::filesystem::path dep;
+    while (f >> dep) {
+        uint64_t content_hash;
+        f >> content_hash;  // skip the file content hash
+        if (f.bad()) {
+            break;
         }
+        result.insert(dep.string());
+    }
+    return result;
+}
+
+// Try to match file_id against a path and all its stripped-prefix suffixes.
+// Returns the shortest matching path form (the one __FILE__ expanded to), or empty string.
+inline std::string match_hash_in_path(uint16_t file_id, const std::string& path) {
+    std::string best;
+    auto check = [&](const char* s) {
+        if (host_debug_file_hash(s) == file_id) {
+            if (best.empty()) {
+                best = s;  // keep first match; loop goes full→stripped so this is the longest match
+            }
+        }
+    };
+    // Try full path, then strip one leading directory component at a time.
+    // This recovers the relative path form __FILE__ expanded to at compile time.
+    check(path.c_str());
+    size_t start = 0;
+    while ((start = path.find('/', start)) != std::string::npos) {
+        ++start;
+        if (start < path.size()) {
+            check(path.c_str() + start);
+        }
+    }
+    return best;
+}
+
+// Resolve a file_id hash back to a source filename using the .o.dephash files that sit
+// alongside each kernel ELF.  These are always written during compilation (no debug info
+// required) and record the absolute paths of every header compiled into the kernel.
+inline std::string resolve_file_from_hash(uint16_t file_id, const std::vector<std::string>& elf_paths = {}) {
+    std::unordered_set<std::string> candidates;
+    for (const auto& elf_path : elf_paths) {
+        auto elf_dir = std::filesystem::path(elf_path).parent_path();
         try {
-            for (const auto& entry : std::filesystem::recursive_directory_iterator(
-                     dir, std::filesystem::directory_options::skip_permission_denied)) {
-                if (!entry.is_regular_file()) {
-                    continue;
-                }
-                auto ext = entry.path().extension().string();
-                if (ext != ".h" && ext != ".hpp" && ext != ".cpp") {
-                    continue;
-                }
-                std::string p = entry.path().string();
-                if (host_debug_file_hash(p.c_str()) == file_id) {
-                    return p;
-                }
-                std::string abs_p = std::filesystem::absolute(entry.path()).string();
-                if (abs_p != p && host_debug_file_hash(abs_p.c_str()) == file_id) {
-                    return p;
+            for (const auto& entry : std::filesystem::directory_iterator(elf_dir)) {
+                const auto& p = entry.path();
+                // Only *.o.dephash — *.elf.dephash contains only linker scripts.
+                if (p.extension() == ".dephash" && std::filesystem::path(p.stem()).extension() == ".o") {
+                    auto filenames = collect_dephash_filenames(p);
+                    candidates.insert(filenames.begin(), filenames.end());
                 }
             }
         } catch (const std::filesystem::filesystem_error&) {
-            continue;
         }
     }
+
+    for (const auto& path : candidates) {
+        auto m = match_hash_in_path(file_id, path);
+        if (!m.empty()) {
+            return m;
+        }
+    }
+
     return fmt::format("unknown file (hash=0x{:04x})", file_id);
 }
 
 // Returns the assert message portion for a given assert type.
 // Returns empty string for unknown types (callers must handle this).
 inline std::string get_debug_assert_message(
-    dev_msgs::debug_assert_type_t type, uint16_t line_num = 0, uint16_t file_id = 0, uint64_t hw_fault_info = 0) {
+    dev_msgs::debug_assert_type_t type,
+    uint16_t line_num = 0,
+    uint16_t file_id = 0,
+    uint64_t hw_fault_info = 0,
+    const std::vector<std::string>& elf_paths = {}) {
     switch (type) {
         case dev_msgs::DebugAssertTripped: {
-            std::string file_str = (file_id != 0) ? resolve_file_from_hash(file_id) : "unknown file";
+            std::string file_str = (file_id != 0) ? resolve_file_from_hash(file_id, elf_paths) : "unknown file";
             return fmt::format("tripped an assert in {} on line {}.", file_str, line_num);
         }
         case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped:

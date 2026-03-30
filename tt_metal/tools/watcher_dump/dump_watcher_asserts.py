@@ -78,25 +78,32 @@ def _build_file_line_ranges(elf_file: ELFFile) -> dict:
 
 def resolve_file_from_hash(file_id: int, ranges: dict) -> str | None:
     """
-    Scan DWARF line-table file paths — the exact paths __FILE__ expanded to
-    at compile time — and return the one matching file_id.
-    Strips the repo-root (CWD) prefix to recover the relative form.
-    """
-    repo_root = os.getcwd()
-    if not repo_root.endswith("/"):
-        repo_root += "/"
+    Scan the DWARF file paths and return the one matching file_id.
 
+    The hash was computed from __FILE__ at compile time.  The DWARF stores
+    absolute paths; __FILE__ is typically a relative path from the repo root.
+    We recover it by trying progressively shorter prefixes (at directory
+    boundaries) of each DWARF path until the hash matches — no hardcoded
+    path needed.
+    """
     seen: set[str] = set()
     for (_start, _end), (dwarf_fname, _line, _col) in ranges.items():
         if dwarf_fname in seen:
             continue
         seen.add(dwarf_fname)
+
+        # Try the full path as stored in DWARF.
         if _debug_file_hash(dwarf_fname) == file_id:
             return dwarf_fname
-        if dwarf_fname.startswith(repo_root):
-            rel = dwarf_fname[len(repo_root) :]
-            if _debug_file_hash(rel) == file_id:
-                return rel
+
+        # Try stripping one directory component at a time from the left.
+        # This recovers the relative path __FILE__ expanded to at compile time.
+        parts = dwarf_fname.split("/")
+        for i in range(1, len(parts)):
+            candidate = "/".join(parts[i:])
+            if candidate and _debug_file_hash(candidate) == file_id:
+                return candidate
+
     return None
 
 

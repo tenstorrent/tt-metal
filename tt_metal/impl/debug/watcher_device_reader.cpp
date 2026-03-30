@@ -768,13 +768,40 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
         }
         return;  // no assert tripped, nothing to do
     }
+    // Look up kernel ELF paths from generated/watcher/kernel_elf_paths.txt.
+    // These are used both by the C++ file resolver (DWARF-based) and the Python callstack script.
+    uint16_t k_id = launch_msg_.kernel_config().watcher_kernel_ids()[assert_status.which()];
+    std::vector<std::string> elf_paths;
+    {
+        std::string elf_index_path =
+            reader_.env.get_rtoptions().get_logs_dir() + "generated/watcher/kernel_elf_paths.txt";
+        std::ifstream elf_index(elf_index_path);
+        std::string line_buf;
+        while (std::getline(elf_index, line_buf)) {
+            int id = -1;
+            if (std::sscanf(line_buf.c_str(), "%d:", &id) == 1 && id == k_id) {
+                // Format: "id: path1:path2:..."
+                std::string paths_str = line_buf.substr(line_buf.find(':') + 2);
+                std::stringstream ss(paths_str);
+                std::string p;
+                while (std::getline(ss, p, ':')) {
+                    if (!p.empty()) {
+                        elf_paths.push_back(p);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
     std::string error_msg = fmt::format(
         "{}: {} ", core_str_, get_riscv_name(reader_.env.get_hal(), programmable_core_type_, assert_status.which()));
     std::string assert_msg = get_debug_assert_message(
         static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()),
         assert_status.line_num(),
         assert_status.file_id(),
-        assert_status.hw_fault_info());
+        assert_status.hw_fault_info(),
+        elf_paths);
     if (assert_msg.empty()) {
         LogRunningKernels();
         TT_THROW(
@@ -790,7 +817,7 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     DumpRingBuffer(true);
     LogRunningKernels();
 
-    // Run dump_watcher_asserts.py to show the resolved file, line, and function name.
+    // Run dump_watcher_asserts.py for function name / callstack resolution.
     // Requires only pyelftools — no triage framework, no ttexalens needed.
     {
         std::string script_path;
@@ -810,34 +837,29 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
             }
         }
 
-        // Look up the kernel ELF paths registered for this kernel ID from
-        // generated/watcher/kernel_elf_paths.txt (format: "id: path1:path2").
+        // Build --kernel-elf / --firmware-elf args.  Put the faulting processor's ELF first
+        // so the Python script searches the correct binary for function name resolution.
         std::string kernel_elf_args;
-        if (!script_path.empty() && std::filesystem::exists(script_path)) {
-            uint16_t k_id = launch_msg_.kernel_config().watcher_kernel_ids()[assert_status.which()];
-            std::string elf_file_path =
-                reader_.env.get_rtoptions().get_logs_dir() + "generated/watcher/kernel_elf_paths.txt";
-            std::ifstream elf_file(elf_file_path);
-            std::string line_buf;
-            while (std::getline(elf_file, line_buf)) {
-                int file_id = -1;
-                if (std::sscanf(line_buf.c_str(), "%d:", &file_id) == 1 && file_id == k_id) {
-                    // Format: "id: path1:path2:..."
-                    std::string paths_str = line_buf.substr(line_buf.find(':') + 2);
-                    std::stringstream ss(paths_str);
-                    std::string p;
-                    bool first = true;
-                    while (std::getline(ss, p, ':')) {
-                        if (!p.empty()) {
-                            if (first) {
-                                kernel_elf_args += " --kernel-elf " + p;
-                                first = false;
-                            } else {
-                                kernel_elf_args += " --firmware-elf " + p;
-                            }
-                        }
+        {
+            std::string proc_name =
+                get_riscv_name(reader_.env.get_hal(), programmable_core_type_, assert_status.which());
+            std::transform(proc_name.begin(), proc_name.end(), proc_name.begin(), ::tolower);
+
+            // Find the ELF whose parent directory matches the faulting processor name.
+            auto faulting = std::find_if(elf_paths.begin(), elf_paths.end(), [&](const std::string& p) {
+                return std::filesystem::path(p).parent_path().filename() == proc_name;
+            });
+
+            if (faulting != elf_paths.end()) {
+                kernel_elf_args += " --kernel-elf " + *faulting;
+                for (const auto& p : elf_paths) {
+                    if (&p != &*faulting) {
+                        kernel_elf_args += " --firmware-elf " + p;
                     }
-                    break;
+                }
+            } else {
+                for (size_t i = 0; i < elf_paths.size(); ++i) {
+                    kernel_elf_args += (i == 0 ? " --kernel-elf " : " --firmware-elf ") + elf_paths[i];
                 }
             }
         }
