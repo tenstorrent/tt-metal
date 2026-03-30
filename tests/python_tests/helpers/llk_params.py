@@ -343,7 +343,7 @@ class StableSort(Enum):
             return "false"
 
 
-class MailboxesPerf(Enum):
+class Mailboxes(Enum):
     Unpacker = 0x1FFB8
     Math = Unpacker + 4
     Packer = Unpacker + 8
@@ -352,7 +352,7 @@ class MailboxesPerf(Enum):
     BriscCounter = Unpacker + 20
 
 
-class MailboxesDebug(Enum):
+class MailboxesCoverage(Enum):
     Unpacker = 0x6DFB8
     Math = Unpacker + 4
     Packer = Unpacker + 8
@@ -361,14 +361,14 @@ class MailboxesDebug(Enum):
     BriscCounter = Unpacker + 20
 
 
-class MailboxesPerfQuasar(Enum):
+class MailboxesQuasar(Enum):
     Unpacker = 0x1FFB8
     Math = Unpacker + 4
     Packer = Unpacker + 8
     Sfpu = Unpacker + 12
 
 
-class MailboxesDebugQuasar(Enum):
+class MailboxesCoverageQuasar(Enum):
     Unpacker = 0x6DFB8
     Math = Unpacker + 4
     Packer = Unpacker + 8

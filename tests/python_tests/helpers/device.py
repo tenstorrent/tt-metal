@@ -32,8 +32,6 @@ from .fused_operation import FusedOperation
 from .llk_params import (
     BriscCmd,
     DataFormat,
-    MailboxesPerf,
-    MailboxesPerfQuasar,
     format_dict,
 )
 from .logger import logger
@@ -53,11 +51,18 @@ from .pack import (
 from .tilize_untilize import untilize_block
 from .unpack import unpack_res_tiles
 
-Mailbox = (
-    MailboxesPerf
-    if get_chip_architecture() != ChipArchitecture.QUASAR
-    else MailboxesPerfQuasar
-)
+
+class _UninitializedMailboxes:
+    """Placeholder mailboxes that fail fast with a clear error message if used before initialization."""
+
+    def __getattr__(self, name):
+        raise RuntimeError(
+            "Mailboxes have not been initialized. "
+            "Ensure TestConfig.setup_build() has been called before using mailbox-dependent helpers."
+        )
+
+
+Mailboxes = _UninitializedMailboxes()
 
 
 class LLKAssertException(Exception):
@@ -185,18 +190,18 @@ def commit_brisc_command(
     global common_counter
 
     if common_counter & 1:
-        write_words_to_device(location, Mailbox.BriscCommand1.value, [command.value])
+        write_words_to_device(location, Mailboxes.BriscCommand1.value, [command.value])
     else:
-        write_words_to_device(location, Mailbox.BriscCommand0.value, [command.value])
+        write_words_to_device(location, Mailboxes.BriscCommand0.value, [command.value])
 
     common_counter += 1
     end_time = time.time() + timeout
     while time.time() < end_time:
-        temp_value = read_word_from_device(location, Mailbox.BriscCounter.value, 0)
+        temp_value = read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
         if temp_value == common_counter:
             return
 
-    logger.error(f"{command.name} -> {hex(Mailbox.BriscCommand0.value)}")
+    logger.error(f"{command.name} -> {hex(Mailboxes.BriscCommand0.value)}")
 
     raise TimeoutError("Polling brisc command timed out")
 
@@ -295,12 +300,12 @@ def reset_mailboxes(location: str = "0,0"):
     """Reset all core mailboxes (Unpacker, Math, Packer, Sfpu for Quasar, Unpacker, Math, Packer for Wormhole/Blackhole) before each test."""
 
     # Use 0xA3, because it's a non-zero value that we don't use anywhere else - it's good for triaging hangs.
-    MAILBOX_START_BLOCK = Mailbox.Unpacker.value
+    MAILBOX_START_BLOCK = Mailboxes.Unpacker.value
     if get_chip_architecture() == ChipArchitecture.QUASAR:
         write_words_to_device(
             location=location,
             addr=MAILBOX_START_BLOCK,
-            data=[0xA3] * len(Mailbox),  # All 4 TRISC mailboxes on Quasar
+            data=[0xA3] * len(Mailboxes),  # All 4 TRISC mailboxes on Quasar
         )
     else:
         write_words_to_device(
