@@ -64,9 +64,9 @@ static void golden_matmul(
         for (uint32_t j = 0; j < N; j++) {
             float acc = 0.0f;
             for (uint32_t k = 0; k < K; k++) {
-                acc += static_cast<float>(a[i * K + k]) * static_cast<float>(b[k * N + j]);
+                acc += static_cast<float>(a[(i * K) + k]) * static_cast<float>(b[(k * N) + j]);
             }
-            output[i * N + j] = bfloat16(acc);
+            output[(i * N) + j] = bfloat16(acc);
         }
     }
 }
@@ -84,7 +84,7 @@ static std::vector<bfloat16> reorder_tiles_to_block_column(
     for (uint32_t blk = 0; blk < num_blocks; blk++) {
         for (uint32_t row = 0; row < Mt; row++) {
             for (uint32_t col = 0; col < block_w; col++) {
-                uint32_t src_tile_idx = row * Kt + blk * block_w + col;
+                uint32_t src_tile_idx = (row * Kt) + (blk * block_w) + col;
                 uint32_t src_offset = src_tile_idx * tiles_per_tile;
                 std::copy(
                     tilized.begin() + src_offset,
@@ -312,7 +312,6 @@ static bool run_matmul_block_helper_test(
 
 }  // namespace test_matmul_block_helper
 
-using test_matmul_block_helper::BlockMatmulConfig;
 using test_matmul_block_helper::run_matmul_block_helper_test;
 
 // Single block, 1×1 sub-blocks: simplest case (64×64×64)
