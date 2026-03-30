@@ -109,7 +109,7 @@ def test_refiner_unet(
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
         "wormhole": 191_201_442 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": 81_886_264 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "blackhole": 78_106_452 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
         "wormhole": 82_300_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
@@ -125,7 +125,7 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
-        "blackhole": 271_459_000,
+        "blackhole": 267_498_780,
     },
     "vae_decode_512x512": {
         "wormhole": 171_560_642,
@@ -141,11 +141,11 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "clip_encoder_1": {
         "wormhole": 13_112_562,
-        "blackhole": 7_101_101,
+        "blackhole": 7_089_747,
     },
     "clip_encoder_2": {
         "wormhole": 63_591_763,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 29_235_442,
+        "blackhole": 29_182_499,
     },
 }
 
