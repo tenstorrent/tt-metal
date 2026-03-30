@@ -265,6 +265,7 @@ target "_basic-common" {
   args = {
     UBUNTU_VERSION = UBUNTU_VERSION
     PYTHON_VERSION = PYTHON_VERSION
+    UV_IMAGE       = UV_IMAGE
   }
   contexts = {
     cmake-layer   = "target:cmake"
@@ -318,6 +319,9 @@ target "evaluation" {
   context    = "."
   dockerfile = "dockerfile/Dockerfile.evaluation"
   tags       = ["tt-metalium-evaluation:local"]
+  args = {
+    UV_IMAGE = UV_IMAGE
+  }
   contexts = {
     ccache-layer = "target:ccache"
     sfpi-layer   = "target:sfpi"

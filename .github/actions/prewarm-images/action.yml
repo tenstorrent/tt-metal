@@ -36,7 +36,11 @@ runs:
       run: |
         set -euo pipefail
 
-        echo "Prewarming ${TITLE} from GHCR via HARBOR..."
+        if [ -n "$HARBOR_PREFIX" ]; then
+          echo "Prewarming ${TITLE} from GHCR via Harbor pull-through..."
+        else
+          echo "Prewarming ${TITLE} from GHCR directly..."
+        fi
 
         # Build list of image tags to prewarm
         declare -a IMAGE_TAGS=()
