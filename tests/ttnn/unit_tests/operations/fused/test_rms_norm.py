@@ -114,21 +114,21 @@ def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
     output_tensor = ttnn.rms_norm(input_tensor, residual_input_tensor=residual_input_tensor, weight=weight)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
+
     if dtype == torch.bfloat16:
-        assert_numeric_metrics(
-            torch_output_tensor,
-            output_tensor,
-            pcc_threshold=0.999,
-            rtol=0.055,
-            atol=0.069,
-            frobenius_threshold=0.012,
-        )
+        rtol = (0.055,)
+        atol = (0.069,)
+        frobenius_threshold = (0.012,)
     else:
-        assert_numeric_metrics(
-            torch_output_tensor,
-            output_tensor,
-            pcc_threshold=0.999,
-            rtol=0.052,
-            atol=0.064,
-            frobenius_threshold=0.012,
-        )
+        rtol = (0.052,)
+        atol = (0.064,)
+        frobenius_threshold = (0.012,)
+
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )

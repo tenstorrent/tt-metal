@@ -17,6 +17,9 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import is_watcher_enabled
 
+# Parametrized sharded RMS norm checks use thresholds in sharded_test_utils.do_test_main (rms_norm),
+# derived from all_numeric_results_fused.csv (test_rms_norm_sharded_numeric_results).
+
 pytestmark = pytest.mark.use_module_device
 
 
@@ -261,10 +264,10 @@ def test_rms_norm_sharded_padded(device, h, w):
     assert_numeric_metrics(
         golden_output,
         output_ttnn,
-        pcc_threshold=0.99,
-        rtol=1.6e-2,
-        atol=1e-5,
-        frobenius_threshold=0.05,
+        pcc_threshold=0.999,
+        rtol=0.031,
+        atol=0.052,
+        frobenius_threshold=0.010,
     )
 
 
@@ -331,8 +334,8 @@ def test_rms_norm_sharded_width_default_config(device, h, w, dtype):
     assert_numeric_metrics(
         golden_output,
         output_tensor,
-        pcc_threshold=0.99,
-        rtol=0.006,
-        atol=0.045,
-        frobenius_threshold=0.008,
+        pcc_threshold=0.999,
+        rtol=0.031,
+        atol=0.052,
+        frobenius_threshold=0.010,
     )
