@@ -29,6 +29,8 @@ class DecoderLayer:
         max_local_batch_size=1,
         users_row_sharded=False,
         use_throughput_experts=False,
+        use_fused_experts=False,
+        tokens_per_device=32,
     ):
         self.input_layernorm = RMSNorm(
             mesh_device,
@@ -53,6 +55,8 @@ class DecoderLayer:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "mlp"),
             mesh_config=mesh_config,
             use_throughput_experts=use_throughput_experts,
+            use_fused_experts=use_fused_experts,
+            tokens_per_device=tokens_per_device,
         )
 
         self.attention_type = hf_config.layer_types[layer_idx]

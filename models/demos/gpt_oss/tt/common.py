@@ -23,11 +23,13 @@ def create_tt_model(
     create_kv_cache=True,
     users_row_sharded=False,
     use_throughput_experts=False,
+    use_fused_experts=False,
 ):
     """
     GPT-OSS version of create_tt_model that matches tt_transformers interface
     Uses clean MeshConfig abstraction for optimal device parallelization
     """
+    use_fused_experts = use_throughput_experts
     from models.demos.gpt_oss.config import MeshConfig
     from models.demos.gpt_oss.tt.model import Model
     from models.demos.gpt_oss.tt.model_config import ModelArgs
@@ -45,7 +47,10 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    # Note: num_layers parameter is intentionally not used to preserve full model architecture
+    # Override num_layers if provided (useful for quick testing with fewer layers)
+    if num_layers is not None:
+        gpt_oss_model_args.hf_config.num_hidden_layers = num_layers
+        gpt_oss_model_args.n_layers = num_layers
 
     # Avoid loading state_dict for every DP model
     if not state_dict:
@@ -67,6 +72,7 @@ def create_tt_model(
         create_kv_cache=create_kv_cache,
         users_row_sharded=users_row_sharded,
         use_throughput_experts=use_throughput_experts,
+        use_fused_experts=use_fused_experts,
     )
 
     # Extract tt_kv_cache like tt_transformers does
