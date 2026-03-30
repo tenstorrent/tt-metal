@@ -1110,6 +1110,38 @@ MatmulProgramConfig create_simple_matmul_program_config(
                                                    mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED);
         bool use_mcast_2d_config = all_interleaved or (core_range.y == 0 and mem_config.is_sharded() and
                                                        mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED);
+        if (core_range.y == 1 or use_mcast_1d_in0_config) {
+            return get_mcast_1d_config(
+                input_tensor_a,
+                input_tensor_b,
+                transpose_a,
+                transpose_b,
+                bias_single_tile_size,
+                false /* fuse_batch */,
+                std::nullopt /* fused_activation */,
+                true /* mcast_in0 */,
+                false /* out_sharded */,
+                std::nullopt /* compute_with_storage_grid_size */,
+                compute_kernel_config,
+                output_dtype,
+                all_dram_interleaved);
+        }
+        if (core_range.x == 1 or use_mcast_1d_in1_config) {
+            return get_mcast_1d_config(
+                input_tensor_a,
+                input_tensor_b,
+                transpose_a,
+                transpose_b,
+                bias_single_tile_size,
+                false /* fuse_batch */,
+                std::nullopt /* fused_activation */,
+                false /* mcast_in0 */,
+                false /* out_sharded */,
+                std::nullopt /* compute_with_storage_grid_size */,
+                compute_kernel_config,
+                output_dtype,
+                all_dram_interleaved);
+        }
         if ((core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or use_mcast_2d_config) {
             bool transpose_mcast =
                 input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
@@ -1161,38 +1193,6 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 .fused_activation = std::nullopt,
                 .fuse_batch = false,
             };
-        }
-        if (core_range.y == 1 or use_mcast_1d_in0_config) {
-            return get_mcast_1d_config(
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                bias_single_tile_size,
-                false /* fuse_batch */,
-                std::nullopt /* fused_activation */,
-                true /* mcast_in0 */,
-                false /* out_sharded */,
-                std::nullopt /* compute_with_storage_grid_size */,
-                compute_kernel_config,
-                output_dtype,
-                all_dram_interleaved);
-        }
-        if (core_range.x == 1 or use_mcast_1d_in1_config) {
-            return get_mcast_1d_config(
-                input_tensor_a,
-                input_tensor_b,
-                transpose_a,
-                transpose_b,
-                bias_single_tile_size,
-                false /* fuse_batch */,
-                std::nullopt /* fused_activation */,
-                false /* mcast_in0 */,
-                false /* out_sharded */,
-                std::nullopt /* compute_with_storage_grid_size */,
-                compute_kernel_config,
-                output_dtype,
-                all_dram_interleaved);
         }
     }
     return MatmulMultiCoreProgramConfig{};
