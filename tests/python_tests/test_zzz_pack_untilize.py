@@ -44,6 +44,7 @@ from helpers.utils import passed_test
             DataFormat.Float32,  # Test Float32 with both 32bit mode dest (full precision) and 16bit mode dest (precision loss)
             DataFormat.Int32,
             DataFormat.Bfp8_b,
+            DataFormat.Fp8_e4m3,
         ]  # Pack Untilize doesn't work for block float formats (Bfp8_b); we only include as input format in our test
     ),
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
@@ -65,6 +66,12 @@ def test_pack_untilize(
         pytest.skip(
             "Skipping large dimension test in coverage mode, check issue: #1063 on TT-LLK repo"
         )
+
+    if get_chip_architecture() == ChipArchitecture.WORMHOLE and (
+        formats.input_format == DataFormat.Fp8_e4m3
+        or formats.output_format == DataFormat.Fp8_e4m3
+    ):
+        pytest.skip("Fp8_e4m3 not supported on wormhole")
 
     if formats.output_format == DataFormat.Bfp8_b:
         pytest.skip("Pack Untilize does not support Bfp8_b format")
