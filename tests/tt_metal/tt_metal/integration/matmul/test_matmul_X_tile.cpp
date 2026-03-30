@@ -369,10 +369,8 @@ void matmul_tile(
             tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = writer_cta});
 
         // Build compute_cta from compute_kernel_args followed by dataflow buffer ids
-        std::vector<uint32_t> compute_dfb_ids = {src0_dfb, src1_dfb, dst_dfb};
         std::vector<uint32_t> compute_cta = cfg.compute_kernel_args;
-        compute_cta.insert(compute_cta.end(), compute_dfb_ids.begin(), compute_dfb_ids.end());
-
+        compute_cta.insert(compute_cta.end(), {src0_dfb, src1_dfb, dst_dfb});
         compute_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             cfg.compute_kernel,
