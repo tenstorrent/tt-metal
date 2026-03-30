@@ -1,14 +1,16 @@
-name: "(Galaxy) Quick"
+name: "(Galaxy) Health"
 
 on:
   workflow_dispatch:
     inputs:
-      arch:
-        required: true
-        type: choice
-        options:
-          - wormhole_b0
-        default: wormhole_b0
+      wormhole:
+        required: false
+        type: boolean
+        default: true
+      blackhole:
+        required: false
+        type: boolean
+        default: false
       platform:
         required: false
         type: choice
@@ -33,20 +35,10 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-      extra-tag:
-        required: false
-        type: string
-        default: "in-service"
   schedule:
-    # Every 2 hours (UTC)
-    - cron: "0 */2 * * *"
+    - cron: "0 */4 * * *" # Runs every 4 hours
 
-run-name: >
-  ${{
-    ((github.event.inputs.arch == 'blackhole') && '(BH Galaxy) Quick') ||
-    ((github.event.inputs.arch == 'wormhole_b0') && '(WH Galaxy) Quick') ||
-    '(Unspecified Galaxy) Quick'
-  }}
+run-name: "(Galaxy) Health"
 
 permissions:
   packages: write
@@ -64,12 +56,29 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
-  galaxy-quick-test:
+  galaxy-health-test:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/galaxy-quick-impl.yaml
+    uses: ./.github/workflows/galaxy-health-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      extra-tag: ${{ inputs.extra-tag || 'in-service' }}
+      enabled-skus: >-
+        ${{
+          github.event_name == 'schedule'
+            && 'wh_galaxy,bh_galaxy'
+            || (
+              inputs.wormhole && inputs.blackhole
+                && 'wh_galaxy,bh_galaxy'
+                || (
+                  inputs.wormhole
+                    && 'wh_galaxy'
+                    || (
+                      inputs.blackhole
+                        && 'bh_galaxy'
+                        || ''
+                    )
+                )
+            )
+        }}
