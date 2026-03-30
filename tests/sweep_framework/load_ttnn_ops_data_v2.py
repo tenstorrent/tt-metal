@@ -65,8 +65,12 @@ def _load_manifest(manifest_path=None):
             os.makedirs(manifest_dir, exist_ok=True)
         with open(path, "w") as f:
             f.write("targets: {}\nregistry:\n")
-    data.setdefault("targets", {})
-    data.setdefault("registry", [])
+    if not isinstance(data, dict):
+        data = {}
+    if data.get("targets") is None or not isinstance(data.get("targets"), dict):
+        data["targets"] = {}
+    if data.get("registry") is None or not isinstance(data.get("registry"), list):
+        data["registry"] = []
     return data, path
 
 
