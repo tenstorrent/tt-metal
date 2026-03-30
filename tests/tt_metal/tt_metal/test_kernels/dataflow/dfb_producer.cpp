@@ -11,7 +11,13 @@ void kernel_main() {
     const uint32_t src_addr_base = get_compile_time_arg_val(0);
     const uint32_t num_entries_per_producer = get_compile_time_arg_val(1);
     constexpr uint32_t implicit_sync = get_compile_time_arg_val(2);
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    // BLOCKED consumer does block reads (TC0 fully exhausted before TC1, etc.), so the DFB
+    // uses a contiguous layout per producer. Producer i must write pages [i*N .. i*N+(N-1)]
+    // so that each consumer TC sees a contiguous, in-order slice.
+    // STRIDED consumer reads in round-robin (TC0, TC1, ..., TC0, ...), so the DFB uses an
+    // interleaved layout and producer i writes pages [i, i+P, i+2P, ...].
+    constexpr uint32_t blocked_consumer = get_compile_time_arg_val(3);
+    constexpr auto src_args = TensorAccessorArgs<4>();
 
     uint32_t producer_mask = get_arg_val<uint32_t>(0);
     // Base page offset for this core's slice of the global buffer.
@@ -34,7 +40,9 @@ void kernel_main() {
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
-        const uint32_t page_id = chunk_offset + tile_id * num_producers + producer_idx;
+        const uint32_t page_id = blocked_consumer
+                                     ? chunk_offset + producer_idx * num_entries_per_producer + tile_id
+                                     : chunk_offset + tile_id * num_producers + producer_idx;
         // DPRINT << "producer tile id " << tile_id << " page id " << page_id << ENDL();
         if constexpr (implicit_sync) {
             dfb.read_in(noc, tensor_accessor, {.page_id = page_id});

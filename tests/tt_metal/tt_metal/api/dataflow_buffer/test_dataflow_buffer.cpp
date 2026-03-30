@@ -122,8 +122,12 @@ void run_single_dfb_program(
     log_info(tt::LogTest, "Out Buffer: [address: {} B, size: {} B]", out_buffer->address(), out_buffer->size());
 
     uint32_t num_entries_per_producer = entries_per_core / dfb_config.num_producers;
+    const bool is_blocked = (dfb_config.cap == dfb::AccessPattern::BLOCKED);
     std::vector<uint32_t> producer_cta = {
-        (uint32_t)in_buffer->address(), num_entries_per_producer, (uint32_t)dfb_config.enable_implicit_sync};
+        (uint32_t)in_buffer->address(),
+        num_entries_per_producer,
+        (uint32_t)dfb_config.enable_implicit_sync,
+        (uint32_t)is_blocked};
     tt::tt_metal::TensorAccessorArgs(in_buffer).append_to(producer_cta);
 
     KernelHandle producer_kernel;
@@ -142,7 +146,7 @@ void run_single_dfb_program(
             experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
     }
 
-    const bool is_blocked = (dfb_config.cap == dfb::AccessPattern::BLOCKED);
+    // is_blocked is already defined above
     uint32_t num_entries_per_consumer = is_blocked ? entries_per_core : entries_per_core / dfb_config.num_consumers;
     std::vector<uint32_t> consumer_cta = {
         (uint32_t)out_buffer->address(),
@@ -236,6 +240,18 @@ void run_single_dfb_program(
                 std::vector<uint32_t> expected(
                     input.begin() + co * entry_size / sizeof(uint32_t),
                     input.begin() + co * entry_size / sizeof(uint32_t) + words_per_core);
+                if (expected != l1_data) {
+                    std::cout << "expected: ";
+                    for (const auto& e : expected) {
+                        std::cout << e << " ";
+                    }
+                    std::cout << std::endl;
+                    std::cout << "l1_data: ";
+                    for (const auto& l : l1_data) {
+                        std::cout << l << " ";
+                    }
+                    std::cout << std::endl;
+                }
                 EXPECT_EQ(expected, l1_data)
                     << "DFB L1 mismatch on core (" << core.x << "," << core.y << ")";
             }
@@ -739,7 +755,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx1B) { // mismatching
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1B) { // mismatching
+TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }

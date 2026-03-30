@@ -337,7 +337,7 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
     data.insert(data.end(), init_bytes, init_bytes + sizeof(init));
 
     const uint32_t entry_size = this->config.entry_size;
-    const uint32_t max_prod_cons = std::max(this->config.num_producers, this->config.num_consumers);
+    // const uint32_t max_prod_cons = std::max(this->config.num_producers, this->config.num_consumers);
 
     // Find num_producer_tcs and num_consumer_tcs from the HW config.
     uint8_t num_producer_tcs = 0;
@@ -350,6 +350,17 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         }
     }
 
+    // Address arithmetic for L1 base/limit/step:
+    //   - STRIDED (stride_in_entries = max_prod_cons): interleaved layout.
+    //     Each producer occupies 1 slot per round → base step = entry_size.
+    //   - BLOCKED (stride_in_entries = 1): contiguous block per producer/TC.
+    //     Each producer occupies `capacity` consecutive slots → base step = capacity * entry_size.
+    //     This applies to both DM-DM BLOCKED (broadcast_tc) and Tensix-involved BLOCKED (remapper).
+    //     The hardware derives the per-pop stride from (limit - base - entry_size) / (capacity - 1),
+    //     which equals entry_size for BLOCKED and max_prod_cons * entry_size for STRIDED.
+    const uint32_t effective_stride = this->stride_in_entries;
+    const uint32_t base_step = (effective_stride > 1) ? entry_size : (this->capacity * entry_size);
+
     std::vector<DFBRiscConfig> per_core_rc = hw_risc_configs;
     uint32_t base = alloc_addr;
     for (uint8_t tc = 0; tc < num_producer_tcs; tc++) {
@@ -357,10 +368,10 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
             if (rc.is_producer && tc < rc.config.num_tcs_to_rr) {
                 rc.config.base_addr[tc] = base;
                 rc.config.limit[tc] =
-                    rc.config.base_addr[tc] + ((entry_size * max_prod_cons) * (this->capacity - 1)) + entry_size;
-                if (!rc.config.broadcast_tc) {
-                    base += entry_size;
-                }
+                    rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
+                // Always advance base so each producer/TC gets its own L1 slot range.
+                // broadcast_tc only governs device-side credit posting, not L1 addressing.
+                base += base_step;
             }
         }
     }
@@ -372,11 +383,11 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
             }
             rc.config.base_addr[tc] = base;
             rc.config.limit[tc] =
-                rc.config.base_addr[tc] + ((entry_size * max_prod_cons) * (this->capacity - 1)) + entry_size;
+                rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
             if ((this->config.cap == dfb::AccessPattern::STRIDED ||
                  (this->config.cap == dfb::AccessPattern::BLOCKED && this->config.num_producers > 1)) &&
                 tc < rc.config.num_tcs_to_rr) {
-                base += entry_size;
+                base += base_step;
             }
         }
     }
