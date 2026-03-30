@@ -851,7 +851,7 @@ def test_unary_tanhshrink_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, dev
     if ttnn_dtype == ttnn.bfloat8_b:
         in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
 
-    output_tensor = ttnn.tanhshrink(input_tensor1, fast_and_approximate_mode=True)
+    output_tensor = ttnn.tanhshrink(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
     golden_tensor = golden_function(in_data1)
 
