@@ -96,12 +96,23 @@ def parse_agent_json_after_marker(text: str, marker: str) -> dict[str, Any]:
         return json.loads(payload[brace_idx:])
 
 
-def run_disable_editor(issue_number: int, issue_url: str, model: str) -> dict[str, Any]:
+def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> dict[str, Any]:
+    issue_number = int(action["issue_number"])
+    job_urls = action.get("job_urls", [])
+    if not isinstance(job_urls, list):
+        job_urls = []
+    job_urls = [str(u).strip() for u in job_urls if str(u).strip()]
+    scope_hint = str(action.get("disable_scope_hint", "")).strip()
+    slack_link = str(action.get("source_slack_permalink", "")).strip()
+
     prompt = (
         "Follow .cursor/commands/ci/ci-disable-test-ci.md exactly.\n"
         f"Input issue: {issue_url}\n"
-        "If evidence is weak, make no code edits and explain in JSON summary.\n"
-        "You must emit the marker and JSON contract from the command file."
+        + (f"Evidence job URLs: {', '.join(job_urls)}\n" if job_urls else "")
+        + (f"Disable scope hint: {scope_hint}\n" if scope_hint else "")
+        + (f"Source Slack: {slack_link}\n" if slack_link else "")
+        + "If evidence is weak, make no code edits and explain in JSON summary.\n"
+        + "You must emit the marker and JSON contract from the command file."
     )
     cmd = ["agent", "--trust", "-p", prompt]
     if model != "auto":
@@ -437,7 +448,7 @@ def main() -> int:
             )
             result["state_updates"] += 1
 
-            edit_summary = run_disable_editor(issue_number, issue_url, args.model)
+            edit_summary = run_disable_editor(action, issue_url, args.model)
             changed = git_changed_files()
             if not changed:
                 set_status(
