@@ -209,7 +209,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
                 # Non-trace path from base generator returns [1, 1, B, V].
                 decode_step_output = decode_step_output.squeeze(0).squeeze(0)
             elif decode_step_output.dim() == 3 and decode_step_output.shape[1] == 1:
-                # Already time-major [B, 1, V].
+                # Already [B, 1, V].
                 decode_step_output = decode_step_output.squeeze(1)
             elif decode_step_output.dim() != 2:
                 raise RuntimeError(
