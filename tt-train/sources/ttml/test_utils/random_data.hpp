@@ -38,7 +38,7 @@ inline std::vector<T> make_uniform_vector(std::size_t count, T min, T max, uint3
 }
 
 template <typename T, typename Shape>
-inline xt::xarray<T> make_uniform_xarray(const Shape& shape, uint32_t seed, T min = T{-1}, T max = T{1}) {
+inline xt::xarray<T> make_uniform_xarray(const Shape& shape, uint32_t seed, T min, T max) {
     std::vector<std::size_t> xt_shape;
     xt_shape.reserve(std::size(shape));
     for (const auto dim : shape) {
