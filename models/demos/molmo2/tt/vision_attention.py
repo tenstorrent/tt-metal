@@ -6,9 +6,15 @@
 Attention implementation for Molmo2 Vision Transformer.
 
 The Molmo2 ViT uses standard multi-head attention with:
-- Separate wq, wk, wv, wo linear projections (all with bias)
+- Separate wq, wk, wv linear projections (all with bias), fused as QKV for efficiency
 - Bidirectional attention (no causal mask)
 - No rotary embeddings (positional info via learned pos embeddings)
+
+On a multi-device mesh, tensor parallelism matches Molmo2 text attention:
+- Column-parallel fused QKV (heads sharded along the fused projection dim)
+- Row-parallel output projection with all-reduce
+QKV and output linears use L1 width-sharded outputs with MatmulMultiCoreReuseMultiCast1DProgramConfig
+so per_core_M spans the full padded sequence height (width-sharded shard spec).
 """
 
 import math
@@ -24,7 +30,7 @@ class VisionAttention(LightweightModule):
     Multi-head attention for Molmo2 Vision Transformer.
 
     Architecture:
-        - Separate Q, K, V projections with bias
+        - Fused QKV projection with bias
         - Scaled dot-product attention (bidirectional)
         - Output projection with bias
     """
@@ -75,10 +81,25 @@ class VisionAttention(LightweightModule):
             cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}"
 
         is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
-        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
+        self.is_mesh_device = is_mesh_device
+        self.num_devices = mesh_device.get_num_devices() if is_mesh_device else 1
+
+        # Same TP pattern as text attention: column QKV, row output, all-reduce.
+        self.use_tensor_parallel = is_mesh_device and self.num_devices > 1 and num_heads % self.num_devices == 0
+        if self.use_tensor_parallel:
+            self.num_heads_per_device = num_heads // self.num_devices
+            col_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
+            row_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+            norm_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+            mesh_mapper_replicated = None
+        else:
+            self.num_heads_per_device = num_heads
+            col_mesh_mapper = None
+            row_mesh_mapper = None
+            norm_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
+            mesh_mapper_replicated = norm_mesh_mapper
 
         # Load separate Q, K, V, O weights and combine Q, K, V for efficient computation
-        # We'll create a fused QKV weight for efficiency
         wq = state_dict[f"{state_dict_prefix}.wq.weight"]  # [hidden_dim, hidden_dim]
         wk = state_dict[f"{state_dict_prefix}.wk.weight"]  # [hidden_dim, hidden_dim]
         wv = state_dict[f"{state_dict_prefix}.wv.weight"]  # [hidden_dim, hidden_dim]
@@ -110,30 +131,66 @@ class VisionAttention(LightweightModule):
             bv = pad_bias(bv)
 
         # Transpose weights for linear: [hidden_dim, qkv_dim] -> [qkv_dim, hidden_dim]
-        # Then concatenate Q, K, V
         wq_t = torch.transpose(wq, -2, -1)
         wk_t = torch.transpose(wk, -2, -1)
         wv_t = torch.transpose(wv, -2, -1)
 
-        # Fused QKV: [hidden_dim, 3 * num_heads * padded_head_dim]
-        wqkv = torch.cat([wq_t, wk_t, wv_t], dim=-1)
-        bqkv = torch.cat([bq, bk, bv], dim=-1)
+        if self.use_tensor_parallel:
+            # Multi-device: fused QKV with per-device head chunks (same layout as text_attention wqkv)
+            qkv_list = []
+            for i in range(self.num_devices):
+                wq_chunk = torch.chunk(wq, self.num_devices, dim=0)[i]
+                wk_chunk = torch.chunk(wk, self.num_devices, dim=0)[i]
+                wv_chunk = torch.chunk(wv, self.num_devices, dim=0)[i]
+                wq_chunk_t = torch.transpose(wq_chunk, -2, -1)
+                wk_chunk_t = torch.transpose(wk_chunk, -2, -1)
+                wv_chunk_t = torch.transpose(wv_chunk, -2, -1)
+                qkv_chunk = torch.cat([wq_chunk_t, wk_chunk_t, wv_chunk_t], dim=-1)
+                qkv_list.append(qkv_chunk)
+            wqkv = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
+
+            bias_parts = []
+            bq_r = bq.reshape(self.num_heads, self.padded_head_dim)
+            bk_r = bk.reshape(self.num_heads, self.padded_head_dim)
+            bv_r = bv.reshape(self.num_heads, self.padded_head_dim)
+            for i in range(self.num_devices):
+                sl = slice(
+                    i * self.num_heads_per_device,
+                    (i + 1) * self.num_heads_per_device,
+                )
+                piece = torch.cat(
+                    [
+                        bq_r[sl].reshape(-1),
+                        bk_r[sl].reshape(-1),
+                        bv_r[sl].reshape(-1),
+                    ],
+                    dim=0,
+                )
+                bias_parts.append(piece)
+            bqkv_torch = torch.cat(bias_parts, dim=0).reshape(1, 1, 1, -1)
+            bqkv_mapper = col_mesh_mapper
+            wqkv_mapper = col_mesh_mapper
+        else:
+            wqkv = torch.cat([wq_t, wk_t, wv_t], dim=-1).unsqueeze(0).unsqueeze(0)
+            bqkv_torch = torch.cat([bq, bk, bv], dim=0)
+            bqkv_mapper = mesh_mapper_replicated
+            wqkv_mapper = mesh_mapper_replicated
 
         self.wqkv = ttnn.as_tensor(
-            wqkv.unsqueeze(0).unsqueeze(0),
+            wqkv,
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=wqkv_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("wqkv.weight"),
         )
 
         self.bqkv = ttnn.as_tensor(
-            bqkv,
+            bqkv_torch,
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=bqkv_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("wqkv.bias"),
@@ -156,7 +213,7 @@ class VisionAttention(LightweightModule):
             wo_t.unsqueeze(0).unsqueeze(0),
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=row_mesh_mapper if self.use_tensor_parallel else mesh_mapper_replicated,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("wo.weight"),
@@ -166,17 +223,17 @@ class VisionAttention(LightweightModule):
             bo,
             dtype=ttnn.bfloat16,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=norm_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("wo.bias"),
         )
 
-        # Compute kernel configs
+        # Match text_attention.py forward / forward_decode linear fidelity
         self.compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
 
@@ -187,30 +244,52 @@ class VisionAttention(LightweightModule):
             packer_l1_acc=True,
         )
 
-    def _sdpa_program_config(self, seq_len: int) -> ttnn.SDPAProgramConfig:
-        """
-        SDPA tuning for ViT self-attention (bidirectional, typical seq ~729).
+        self.qkv_proj_out_dim = 3 * self.num_heads_per_device * self.padded_head_dim
+        self.wo_in_dim = self.num_heads_per_device * self.padded_head_dim
+        self.l1_width_sharded = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
 
-        Default SDPA uses q/k chunk size 32, which increases sequence tiling iterations.
-        Using larger chunks (multiples of 32) and the full device grid improves throughput;
-        chunk caps avoid oversized tiles on long sequences (e.g. reshaped >2048 path).
-        """
-        grid_size = self.mesh_device.compute_with_storage_grid_size()
-        seq_tile = ((int(seq_len) + 31) // 32) * 32
-        max_chunk = 256 if seq_len >= 1024 else 128
-        chunk_size = max(32, min(seq_tile, max_chunk))
-        return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=grid_size,
-            q_chunk_size=chunk_size,
-            k_chunk_size=chunk_size,
-            exp_approx_mode=False,
+    @staticmethod
+    def _max_divisor_at_most(n: int, limit: int) -> int:
+        for d in range(limit, 0, -1):
+            if n % d == 0:
+                return d
+        return 1
+
+    def _l1_linear_1d_program_config(self, num_m_rows: int, k_elements: int, n_elements: int):
+        tile = ttnn.TILE_SIZE
+        m_pad = ttnn.core.roundup(num_m_rows, tile)
+        k_pad = ttnn.core.roundup(k_elements, tile)
+        n_pad = ttnn.core.roundup(n_elements, tile)
+        k_tiles = k_pad // tile
+        n_tiles = n_pad // tile
+        gs = self.mesh_device.compute_with_storage_grid_size()
+        gx, gy = gs.x, gs.y
+        num_cores = gx * gy
+        if n_tiles // num_cores < 1:
+            gy = max(1, n_tiles // gx)
+            num_cores = gx * gy
+        per_core_m = m_pad // tile
+        per_core_n = ttnn.core.divup(n_pad, tile * num_cores)
+        in0_block_w = self._max_divisor_at_most(k_tiles, 8)
+        max_sb = 8
+        out_subblock_w = max(i for i in range(1, max_sb + 1) if per_core_n % i == 0)
+        out_subblock_h = max(
+            (h for h in range(1, max_sb + 1) if per_core_m % h == 0 and h * out_subblock_w <= max_sb),
+            default=1,
+        )
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
         )
 
-    def forward(
-        self,
-        x: ttnn.Tensor,
-        matmul_output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    ) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass through attention.
 
@@ -221,21 +300,21 @@ class VisionAttention(LightweightModule):
             Output tensor of shape [1, 1, seq_len, hidden_dim]
         """
         seq_len = x.shape[-2]
+        heads = self.num_heads_per_device
 
         # Reshape for long sequences (only when divisible for memory optimization)
         if seq_len > 2048 and seq_len % 2048 == 0:
             x = ttnn.reshape(x, [1, seq_len // 2048, 2048, -1])
 
-        # QKV projection
+        pc_qkv = self._l1_linear_1d_program_config(seq_len, self.hidden_dim, self.qkv_proj_out_dim)
         qkv = ttnn.linear(
             x,
             self.wqkv,
             bias=self.bqkv,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=matmul_output_memory_config,
+            memory_config=self.l1_width_sharded,
+            program_config=pc_qkv,
         )
-
-        # Add bias
 
         # Reshape back if needed
         if seq_len > 2048 and seq_len % 2048 == 0:
@@ -243,13 +322,13 @@ class VisionAttention(LightweightModule):
 
         ttnn.deallocate(x)
 
-        # Split Q, K, V and reshape to heads
+        qkv = ttnn.to_memory_config(qkv, ttnn.DRAM_MEMORY_CONFIG)
+
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
-            num_heads=self.num_heads,
-            num_kv_heads=self.num_heads,  # Full attention, not GQA
+            num_heads=heads,
+            num_kv_heads=heads,
             transpose_k_heads=False,
-            memory_config=matmul_output_memory_config,
         )
 
         ttnn.deallocate(qkv)
@@ -274,8 +353,8 @@ class VisionAttention(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Reshape attention output: [1, num_heads, seq_len, head_dim] -> [1, 1, seq_len, hidden_dim]
-        attn_output = ttnn.reshape(attn_output, [1, self.num_heads, -1, self.padded_head_dim])
+        # Reshape attention output: [1, num_heads, seq_len, head_dim] -> concat input layout
+        attn_output = ttnn.reshape(attn_output, [1, heads, -1, self.padded_head_dim])
 
         # Concatenate heads
         attn_output = ttnn.experimental.nlp_concat_heads(
@@ -287,17 +366,31 @@ class VisionAttention(LightweightModule):
         if seq_len > 1024 and seq_len % 1024 == 0:
             attn_output = ttnn.reshape(attn_output, [1, seq_len // 1024, 1024, -1])
 
+        pc_wo = self._l1_linear_1d_program_config(seq_len, self.wo_in_dim, self.hidden_dim)
         output = ttnn.linear(
             attn_output,
             self.wo,
             bias=self.bo,
             compute_kernel_config=self.compute_kernel_config_hifi2,
-            memory_config=matmul_output_memory_config,
+            memory_config=self.l1_width_sharded,
+            program_config=pc_wo,
         )
+
+        ttnn.deallocate(attn_output)
+
+        output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+
+        if self.use_tensor_parallel:
+            output = ttnn.all_reduce(
+                output,
+                cluster_axis=1,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        output = output + self.bo
 
         if seq_len > 1024 and seq_len % 1024 == 0:
             output = ttnn.reshape(output, [1, 1, seq_len, -1])
-
-        ttnn.deallocate(attn_output)
 
         return output
