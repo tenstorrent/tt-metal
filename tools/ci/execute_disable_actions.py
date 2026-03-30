@@ -69,6 +69,7 @@ def run_streaming(
     check: bool = True,
     heartbeat_label: str = "",
     heartbeat_interval_sec: int = 30,
+    timeout_sec: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     proc = subprocess.Popen(
         cmd,
@@ -106,7 +107,16 @@ def run_streaming(
 
     t_hb = threading.Thread(target=_heartbeat)
     t_hb.start()
-    returncode = proc.wait()
+    timed_out = False
+    if timeout_sec is None:
+        returncode = proc.wait()
+    else:
+        try:
+            returncode = proc.wait(timeout=timeout_sec)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            proc.kill()
+            returncode = 124
     stop_heartbeat.set()
     t_hb.join()
     t_out.join()
@@ -114,6 +124,12 @@ def run_streaming(
 
     stdout = "".join(out_parts)
     stderr = "".join(err_parts)
+    if timed_out:
+        timeout_msg = f"Command timed out after {timeout_sec}s: {' '.join(shlex.quote(c) for c in cmd)}"
+        if stderr:
+            stderr = f"{stderr.rstrip()}\n{timeout_msg}\n"
+        else:
+            stderr = timeout_msg + "\n"
     if check and returncode != 0:
         raise RuntimeError(
             "Command failed with non-zero exit status "
@@ -342,8 +358,18 @@ def invoke_kickoff_agent(pr_url: str, model: str) -> str:
     cmd = ["agent", "--trust", "-p", prompt]
     if model != "auto":
         cmd[1:1] = ["--model", model]
-    result = run_streaming(cmd, heartbeat_label=f"kickoff_agent for {pr_url}")
-    return result.stdout.strip()[-2000:]
+    result = run_streaming(
+        cmd,
+        check=False,
+        heartbeat_label=f"kickoff_agent for {pr_url}",
+        timeout_sec=300,
+    )
+    if result.returncode == 124:
+        log(f"kickoff_agent: timed out after 300s for {pr_url}; continuing without blocking")
+    elif result.returncode != 0:
+        log(f"kickoff_agent: exited non-zero ({result.returncode}) for {pr_url}; continuing")
+    combined = ((result.stdout or "") + "\n" + (result.stderr or "")).strip()
+    return combined[-2000:]
 
 
 def parse_first_url(text: str) -> str:
@@ -405,6 +431,34 @@ def parse_pr_number(pr_url: str) -> int:
     if not m:
         return 0
     return int(m.group(1))
+
+
+def post_triggered_workflows_comment(pr_url: str, runs: dict[str, str]) -> None:
+    pr_number = parse_pr_number(pr_url)
+    if pr_number <= 0 or not runs:
+        return
+    lines = [
+        "Auto-triage triggered these workflows:",
+        "",
+    ]
+    for workflow, run_url in sorted(runs.items()):
+        if run_url:
+            lines.append(f"- `{workflow}`: {run_url}")
+        else:
+            lines.append(f"- `{workflow}`: dispatched (run URL unavailable)")
+    body = "\n".join(lines).strip()
+    run_guarded_gh(
+        [
+            "gh",
+            "pr",
+            "comment",
+            "--repo",
+            REPO,
+            str(pr_number),
+            "--body",
+            body,
+        ]
+    )
 
 
 def pr_label(pr_url: str) -> str:
@@ -827,6 +881,7 @@ def main() -> int:
             required_check_runs = dispatch_required_pr_check_workflows(
                 branch, [*DEFAULT_REQUIRED_PR_CHECK_WORKFLOWS, *extra_pr_check_workflows]
             )
+            post_triggered_workflows_comment(pr_url, required_check_runs)
             log(f"action: invoking kickoff workflow agent for PR {pr_url}")
             kickoff_tail = invoke_kickoff_agent(pr_url, args.model)
             item["disable_pr"] = {

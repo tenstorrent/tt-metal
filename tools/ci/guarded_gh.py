@@ -193,6 +193,16 @@ def validate(tokens: list[str]) -> Decision:
             if repo_check:
                 return repo_check
             return Decision(True, f"Allowed: gh pr {sub}")
+        if sub == "comment":
+            repo_check = ensure_repo(tokens, {PRIMARY_REPO}, required=True)
+            if repo_check:
+                return repo_check
+            if not has_option(tokens, "--body"):
+                return Decision(False, "Denied: gh pr comment must include --body.")
+            target = first_positional_after(tokens, 3)
+            if target is None:
+                return Decision(False, "Denied: gh pr comment requires PR number/url argument.")
+            return Decision(True, "Allowed: gh pr comment in primary repo")
         if sub == "create":
             repo_check = ensure_repo(tokens, {PRIMARY_REPO}, required=True)
             if repo_check:
