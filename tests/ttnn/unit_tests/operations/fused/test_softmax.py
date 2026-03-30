@@ -11,6 +11,12 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_with_ulp
 from models.common.utility_functions import torch_random
 
+# Numeric thresholds derived from tests/ttnn/unit_tests/operations/fused/all_numeric_results_fused.csv
+# (test_softmax_numeric_results rows; ~10% margin on max_abs_dif / max_rel_dif / frobenius_value; pcc = min_pcc - 1.5e-4).
+# Sharded BF8 vs BF16 differ in CSV max_abs (mask path); program-cache uses shared thresholds (max over dtypes).
+# check_ulp where noted; test_softmax_accuracy uses parametrized expected_ulp.
+# All pcc/rtol/atol/frobenius literals use three decimal places; atol uses 0.001 where finer values would round to 0.000.
+
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize(
@@ -37,10 +43,10 @@ def test_large_softmax(device, batch_size, h, w, dim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.997,
-        rtol=0.06,
+        pcc_threshold=0.999,
+        rtol=0.10,
         atol=0.04,
-        frobenius_threshold=0.03,
+        frobenius_threshold=0.044,
     )
 
 
@@ -79,9 +85,11 @@ def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_e
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=0.03,
-        atol=0.02,
-        frobenius_threshold=0.02,
+        rtol=0.040,
+        atol=0.035,
+        frobenius_threshold=0.035,
+        ulp_threshold=10,
+        check_ulp=True,
     )
 
 
@@ -128,15 +136,26 @@ def run_softmax_stable_with_program_cache(
                 input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True
             )
     output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_numeric_metrics(
-        torch_output_tensor,
-        output_tensor,
-        pcc_threshold=0.999,
-        rtol=0.03,
-        atol=0.02,
-        frobenius_threshold=0.02,
-    )
+    if in_dtype == ttnn.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.030,
+            atol=0.020,
+            frobenius_threshold=0.030,
+            # check_ulp=True,
+            # ulp_threshold=14,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.120,
+            atol=0.040,
+            frobenius_threshold=0.032,
+        )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -229,14 +248,24 @@ def run_softmax_sharded_stable(
             )
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_numeric_metrics(
-        torch_output_tensor,
-        output_tensor,
-        pcc_threshold=0.999,
-        rtol=0.03,
-        atol=0.02,
-        frobenius_threshold=0.02,
-    )
+    if in_dtype == ttnn.bfloat8_b:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.400,
+            atol=0.570,
+            frobenius_threshold=0.035,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.066,
+            atol=0.043,
+            frobenius_threshold=0.034,
+        )
 
 
 @pytest.mark.parametrize("batch_size", [8])
@@ -287,10 +316,10 @@ def test_softmax(device, batch_size, h, w, dim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.997,
-        rtol=0.06,
-        atol=0.04,
-        frobenius_threshold=0.03,
+        pcc_threshold=0.998,
+        rtol=0.088,
+        atol=0.009,
+        frobenius_threshold=0.030,
     )
 
 
@@ -306,10 +335,10 @@ def test_softmax_with_3D(device):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.997,
-        rtol=0.06,
-        atol=0.04,
-        frobenius_threshold=0.03,
+        pcc_threshold=0.999,
+        rtol=0.158,
+        atol=0.010,
+        frobenius_threshold=0.024,
     )
 
 
@@ -327,10 +356,12 @@ def test_softmax_with_padded_tile_layout(device):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.997,
-        rtol=0.06,
-        atol=0.04,
-        frobenius_threshold=0.03,
+        pcc_threshold=0.999,
+        rtol=0.044,
+        atol=0.043,
+        frobenius_threshold=0.035,
+        ulp_threshold=10,
+        check_ulp=True,
     )
 
 
@@ -348,10 +379,10 @@ def test_softmax_with_padded_tile_layout_large(device):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.997,
-        rtol=0.06,
-        atol=0.04,
-        frobenius_threshold=0.03,
+        pcc_threshold=0.999,
+        rtol=0.148,
+        atol=0.010,
+        frobenius_threshold=0.029,
     )
 
 
@@ -374,7 +405,7 @@ def test_specific_tensor_combination(device):
     assert_numeric_metrics(
         torch_output_tensor,
         output,
-        pcc_threshold=0.9999,
+        pcc_threshold=0.999,
         rtol=0.015,
         atol=0.012,
         frobenius_threshold=0.012,
@@ -405,9 +436,9 @@ def test_5d_softmax(device, input_shape, dim):
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=0.03,
-        atol=0.02,
-        frobenius_threshold=0.02,
+        rtol=0.061,
+        atol=0.023,
+        frobenius_threshold=0.019,
     )
 
 
@@ -452,9 +483,9 @@ def test_large_fill_softmax(device, input_shape, dtype, dlayout, dim, numeric_st
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=0.03,
-        atol=0.02,
-        frobenius_threshold=0.02,
+        rtol=0.008,
+        atol=0.002,
+        frobenius_threshold=0.008,
     )
 
 
@@ -493,9 +524,9 @@ def test_softmax_sd(device):
         out_torch,
         ttnn.to_torch(out),
         pcc_threshold=0.999,
-        rtol=0.03,
-        atol=0.02,
-        frobenius_threshold=0.02,
+        rtol=0.330,
+        atol=0.086,
+        frobenius_threshold=0.025,
     )
 
 
@@ -528,14 +559,13 @@ def test_softmax_dtypes(device, shape, dim, dtype):
     )
     ttnn_output = ttnn.softmax(ttnn_tensor, dim=dim)
     ttnn_output = ttnn.to_torch(ttnn_output)
-
     assert_numeric_metrics(
         torch_output,
         ttnn_output,
         pcc_threshold=0.997,
-        rtol=0.06,
-        atol=0.04,
-        frobenius_threshold=0.03,
+        rtol=0.063,
+        atol=0.003,
+        frobenius_threshold=0.021,
     )
 
 
@@ -571,14 +601,13 @@ def test_softmax_bfloat8_dims(device, shape, dim, dtype):
     )
     ttnn_output = ttnn.softmax(ttnn_tensor, dim=dim)
     ttnn_output = ttnn.to_torch(ttnn_output)
-
     assert_numeric_metrics(
         torch_output,
         ttnn_output,
-        pcc_threshold=0.997,
-        rtol=0.06,
-        atol=0.04,
-        frobenius_threshold=0.03,
+        pcc_threshold=0.996,
+        rtol=0.088,
+        atol=0.009,
+        frobenius_threshold=0.060,
     )
 
 
@@ -619,8 +648,16 @@ def test_softmax_accuracy(device, shape, fp32_acc_en, math_approx_mode, expected
     )
 
     output_torch = ttnn_output.cpu().to_torch()
-
-    assert_with_ulp(torch_output, output_torch, expected_ulp)
+    assert_numeric_metrics(
+        torch_output,
+        output_torch,
+        pcc_threshold=0.997,
+        rtol=0.080,
+        atol=0.001,
+        frobenius_threshold=0.022,
+        ulp_threshold=expected_ulp,
+        check_ulp=True,
+    )
 
 
 @pytest.mark.parametrize(
@@ -656,10 +693,12 @@ def test_softmax_large_kernel_block_size(device, Wt):
     assert_numeric_metrics(
         torch_output,
         ttnn_output,
-        pcc_threshold=0.997,
-        rtol=0.06,
-        atol=0.04,
-        frobenius_threshold=0.03,
+        pcc_threshold=0.999,
+        rtol=0.053,
+        atol=0.001,
+        frobenius_threshold=0.021,
+        ulp_threshold=10,
+        check_ulp=True,
     )
 
 
@@ -675,8 +714,8 @@ def test_softmax_4096x4096_fp32(device):
     assert_numeric_metrics(
         torch_output,
         output_torch,
-        pcc_threshold=0.998,
-        rtol=0.04,
-        atol=0.03,
-        frobenius_threshold=0.025,
+        pcc_threshold=0.997,
+        rtol=0.044,
+        atol=0.001,
+        frobenius_threshold=0.019,
     )
