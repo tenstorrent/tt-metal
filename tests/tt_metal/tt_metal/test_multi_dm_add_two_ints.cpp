@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/device_fixture.hpp"
+#include "common/command_queue_fixture.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
