@@ -13,6 +13,10 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
 
+def is_simulator():
+    return os.environ.get("TT_METAL_SIMULATOR") != None
+
+
 @pytest.mark.parametrize(
     "shape,shard_shape",
     [
@@ -63,6 +67,10 @@ def test_reduce_on_batch(shape, shard_shape, dim, interleaved, device):
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=True, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # ttsim issue: #309
+    check_ulp = not is_simulator()
+    frobenius_threshold = 0.003 if is_simulator() else 0.002
+
     # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
@@ -70,6 +78,6 @@ def test_reduce_on_batch(shape, shard_shape, dim, interleaved, device):
         pcc_threshold=0.999,
         rtol=0.008,
         atol=8.1,
-        frobenius_threshold=0.002,
-        check_ulp=True,
+        frobenius_threshold=frobenius_threshold,
+        check_ulp=check_ulp,
     )
