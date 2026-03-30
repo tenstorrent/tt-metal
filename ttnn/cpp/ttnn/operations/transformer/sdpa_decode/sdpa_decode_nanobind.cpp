@@ -44,7 +44,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             sliding_window_size (int, optional): The size of sliding window for sliding window attention. Defaults to `None`.
-            share_cache (bool, optional): KV cache sharing across batch for decode. Defaults to `None` (same as False).
+            share_cache (bool, optional): KV cache sharing across batch for decode. `True` enables, `False` disables. Defaults to `None` (distinct program-cache key).
 
 
         Returns:

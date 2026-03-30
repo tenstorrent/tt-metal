@@ -16,9 +16,19 @@ from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
 )
 
 
-def test_mask_dtype_bf16_then_bfp8(device):
+@pytest.fixture
+def device_with_program_cache(device):
+    # Enable program cache for the tests andd reset device cache on exit.
     device.enable_program_cache()
     device.clear_program_cache()
+    try:
+        yield device
+    finally:
+        device.disable_and_clear_program_cache()
+
+
+def test_mask_dtype_bf16_then_bfp8(device_with_program_cache):
+    device = device_with_program_cache
 
     b, nh, nkv, s, d = 2, 8, 1, 1024, 64
     grid_size = (8, 4)
@@ -125,13 +135,10 @@ def test_mask_dtype_bf16_then_bfp8(device):
         ok, pcc = comp_pcc(ref, tt_data, min_pcc)
         assert ok, f"{label}: output vs PyTorch PCC failed ({pcc}); possible wrong cached program."
 
-    device.disable_and_clear_program_cache()
-
 
 # Share_cache must be part of compute_program_hash
-def test_share_cache_false_then_true_program_cache_distinct(device):
-    device.enable_program_cache()
-    device.clear_program_cache()
+def test_share_cache_false_then_true_program_cache_distinct(device_with_program_cache):
+    device = device_with_program_cache
 
     b, nh, nkv, s, d = 1, 8, 1, 512, 64
     grid_size = (8, 4)
@@ -206,8 +213,6 @@ def test_share_cache_false_then_true_program_cache_distinct(device):
         f"Got {device.num_program_cache_entries()}."
     )
 
-    device.disable_and_clear_program_cache()
-
 
 def _run_decode_non_causal_with_bkv_variant(device, *, b: int, nh: int, nkv: int, s: int, d: int):
     grid_size = (8, 4)
@@ -278,9 +283,8 @@ def _run_decode_non_causal_with_bkv_variant(device, *, b: int, nh: int, nkv: int
     return comp_pcc(ref, out_torch, 0.97)
 
 
-def test_share_cache_nullopt_bkv_relation_change(device):
-    device.disable_and_clear_program_cache()
-    device.enable_program_cache()
+def test_share_cache_nullopt_bkv_relation_change(device_with_program_cache):
+    device = device_with_program_cache
 
     torch.manual_seed(20250325)
 
@@ -297,13 +301,10 @@ def test_share_cache_nullopt_bkv_relation_change(device):
         f"(got {device.num_program_cache_entries()})."
     )
 
-    device.disable_and_clear_program_cache()
-
 
 # Operation_attributes.cur_pos must be in compute_program_hash when cur_pos_tensor is None.
-def test_cur_pos_list_values_change_program_cache_distinct(device):
-    device.enable_program_cache()
-    device.clear_program_cache()
+def test_cur_pos_list_values_change_program_cache_distinct(device_with_program_cache):
+    device = device_with_program_cache
 
     b, nh, nkv, s, d = 2, 8, 1, 512, 64
     grid_size = (8, 4)
@@ -381,12 +382,9 @@ def test_cur_pos_list_values_change_program_cache_distinct(device):
         "compute_program_hash may omit operation_attributes.cur_pos."
     )
 
-    device.disable_and_clear_program_cache()
 
-
-def test_mla_head_dim_v_change_program_cache_distinct(device):
-    device.enable_program_cache()
-    device.clear_program_cache()
+def test_mla_head_dim_v_change_program_cache_distinct(device_with_program_cache):
+    device = device_with_program_cache
 
     b, nh, nkv, s = 2, 8, 1, 512
     d_qk = 128
@@ -476,12 +474,9 @@ def test_mla_head_dim_v_change_program_cache_distinct(device):
         "compute_program_hash may omit tensor_args.v, head_dim_v, or use_mla."
     )
 
-    device.disable_and_clear_program_cache()
 
-
-def test_q_shard_height_diff_same_logical_program_cache_distinct(device):
-    device.enable_program_cache()
-    device.clear_program_cache()
+def test_q_shard_height_diff_same_logical_program_cache_distinct(device_with_program_cache):
+    device = device_with_program_cache
 
     b, nh, nkv, s, d = 1, 8, 1, 512, 64
     grid_size = (8, 4)
@@ -586,12 +581,9 @@ def test_q_shard_height_diff_same_logical_program_cache_distinct(device):
         "compute_program_hash likely fails to distinguish Q padded geometry (see also qkv_logical_padded_shape_key)."
     )
 
-    device.disable_and_clear_program_cache()
 
-
-def test_cur_pos_tensor_rank1_then_rank2_same_dram_same_qkv_program_cache(device):
-    device.enable_program_cache()
-    device.clear_program_cache()
+def test_cur_pos_tensor_rank1_then_rank2_same_dram_same_qkv_program_cache(device_with_program_cache):
+    device = device_with_program_cache
 
     b, nh, nkv, s, d = 2, 4, 1, 64, 64
     grid_size = (4, 2)
@@ -693,5 +685,3 @@ def test_cur_pos_tensor_rank1_then_rank2_same_dram_same_qkv_program_cache(device
         f"with identical Q/K/V (DRAM). Got {device.num_program_cache_entries()}. "
         "If cur_pos_tensor is dropped from compute_program_hash, entries can stay at 1."
     )
-
-    device.disable_and_clear_program_cache()

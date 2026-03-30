@@ -422,8 +422,8 @@ ttsl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
     // so rank and extents always contribute to the program-cache key
     const ttsl::hash::hash_t cur_pos_tensor_logical_shape_key =
         tensor_args.cur_pos_tensor.has_value()
-            ? ttsl::hash::hash_objects_with_default_seed(tensor_args.cur_pos_tensor->logical_shape())
-            : ttsl::hash::hash_t{0};
+            ? ttsl::hash::hash_objects_with_default_seed(true, tensor_args.cur_pos_tensor->logical_shape())
+            : ttsl::hash::hash_objects_with_default_seed(false);
 
     return operation::hash_operation<SdpaDecodeDeviceOperation>(
         operation_attributes.scale,
