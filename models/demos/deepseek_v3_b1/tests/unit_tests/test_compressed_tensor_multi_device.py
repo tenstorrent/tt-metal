@@ -13,21 +13,7 @@ import ttnn
 from models.demos.deepseek_v3_b1.compressed_tensor import CompressedTensor, CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.compressed_tensor.metrics import metric_value
 
-
-@pytest.fixture(scope="function")
-def mesh_device():
-    """Create a mesh device with HYBRID allocator mode for multi-device compressed tensor tests."""
-    num_devices = ttnn.get_num_devices()
-    if num_devices < 2:
-        pytest.skip("Multi-device compressed tensor tests require at least 2 devices")
-
-    mesh_shape = ttnn.MeshShape(1, min(num_devices, 2))
-    mesh = ttnn._ttnn.per_core_allocation.open_mesh_device(
-        mesh_shape=mesh_shape,
-        allocator_mode=ttnn._ttnn.per_core_allocation.AllocatorMode.HYBRID,
-    )
-    yield mesh
-    ttnn.close_mesh_device(mesh)
+_HYBRID_DEVICE_PARAMS = {"allocator_mode": ttnn._ttnn.per_core_allocation.AllocatorMode.HYBRID}
 
 
 def _print_per_device_per_core_addresses(ct):
@@ -83,6 +69,8 @@ def _make_sharded_mem_config(tensor_shape, layout, buffer_type, grid, orientatio
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
 def test_lockstep_round_trip_height_sharded(mesh_device):
     """Lockstep multi-device: height-sharded round-trip with from_torch → to_torch."""
     num_devices = mesh_device.get_num_devices()
@@ -114,6 +102,8 @@ def test_lockstep_round_trip_height_sharded(mesh_device):
     assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
 def test_lockstep_per_device_data_independence(mesh_device):
     """Verify each device gets different data in lockstep mode."""
     num_devices = mesh_device.get_num_devices()
@@ -146,6 +136,8 @@ def test_lockstep_per_device_data_independence(mesh_device):
         assert pcc > 0.98, f"Device {i} PCC {pcc:.6f} too low"
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
 def test_lockstep_different_assignment_per_device(mesh_device):
     """Different data per device should result in different assignments."""
     num_devices = mesh_device.get_num_devices()
@@ -186,6 +178,8 @@ def test_lockstep_different_assignment_per_device(mesh_device):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
 def test_per_core_round_trip_height_sharded(mesh_device):
     """Per-core multi-device: height-sharded round-trip."""
     num_devices = mesh_device.get_num_devices()
@@ -216,6 +210,8 @@ def test_per_core_round_trip_height_sharded(mesh_device):
     assert pcc > 0.98, f"PCC {pcc:.6f} unexpectedly low"
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
 def test_per_core_per_device_data_independence(mesh_device):
     """Verify each device gets independent per-core tensors."""
     num_devices = mesh_device.get_num_devices()
@@ -253,6 +249,8 @@ def test_per_core_per_device_data_independence(mesh_device):
         assert pcc > 0.98, f"Device {i} PCC {pcc:.6f} too low"
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
 def test_per_core_get_data_tensors_flattens_all_devices(mesh_device):
     """get_data_tensors() should return all per-core tensors from all devices."""
     num_devices = mesh_device.get_num_devices()
@@ -278,6 +276,8 @@ def test_per_core_get_data_tensors_flattens_all_devices(mesh_device):
     _print_per_device_per_core_addresses(ct)
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
 def test_per_core_tensors_allocated_per_device(mesh_device):
     """Verify per-device per-core tensors are allocated on device."""
     num_devices = mesh_device.get_num_devices()
@@ -309,6 +309,8 @@ def test_per_core_tensors_allocated_per_device(mesh_device):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
 def test_lockstep_mixed_formats_per_device(mesh_device):
     """Each device gets different data patterns → different format mixes."""
     num_devices = mesh_device.get_num_devices()
@@ -343,6 +345,8 @@ def test_lockstep_mixed_formats_per_device(mesh_device):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
 def test_get_data_core_range_set_per_device(mesh_device):
     """get_data_core_range_set works per-device for multi-device per-core mode."""
     num_devices = mesh_device.get_num_devices()
@@ -374,26 +378,12 @@ def test_get_data_core_range_set_per_device(mesh_device):
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="function")
-def mesh_device_2d():
-    """Create a 2D mesh device for 2D sharding tests."""
-    num_devices = ttnn.get_num_devices()
-    if num_devices < 4:
-        pytest.skip("2D mesh sharding tests require at least 4 devices")
-
-    mesh_shape = ttnn.MeshShape(2, 2)
-    mesh = ttnn._ttnn.per_core_allocation.open_mesh_device(
-        mesh_shape=mesh_shape,
-        allocator_mode=ttnn._ttnn.per_core_allocation.AllocatorMode.HYBRID,
-    )
-    yield mesh
-    ttnn.close_mesh_device(mesh)
-
-
-def test_2d_lockstep_round_trip(mesh_device_2d):
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
+def test_2d_lockstep_round_trip(mesh_device):
     """2D mesh sharding: split height across rows, width across cols."""
-    mesh_rows, mesh_cols = mesh_device_2d.shape[0], mesh_device_2d.shape[1]
-    num_devices = mesh_device_2d.get_num_devices()
+    mesh_rows, mesh_cols = mesh_device.shape[0], mesh_device.shape[1]
+    num_devices = mesh_device.get_num_devices()
     torch.manual_seed(42)
     # Each device gets (128, 64) → 4x2 tile grid
     x = torch.randn(128 * mesh_rows, 64 * mesh_cols)
@@ -406,7 +396,7 @@ def test_2d_lockstep_round_trip(mesh_device_2d):
     ct = CompressedTensor.from_torch(
         x,
         assigner,
-        device=mesh_device_2d,
+        device=mesh_device,
         memory_config=data_mem,
         per_core_allocation=False,
         mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(-1)]),
@@ -422,10 +412,12 @@ def test_2d_lockstep_round_trip(mesh_device_2d):
     assert pcc > 0.98, f"PCC {pcc:.6f} too low"
 
 
-def test_2d_per_core_round_trip(mesh_device_2d):
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
+def test_2d_per_core_round_trip(mesh_device):
     """2D mesh per-core: split height across rows, width across cols."""
-    mesh_rows, mesh_cols = mesh_device_2d.shape[0], mesh_device_2d.shape[1]
-    num_devices = mesh_device_2d.get_num_devices()
+    mesh_rows, mesh_cols = mesh_device.shape[0], mesh_device.shape[1]
+    num_devices = mesh_device.get_num_devices()
     per_dev_h, per_dev_w = 128, 64
     torch.manual_seed(42)
     x = torch.randn(per_dev_h * mesh_rows, per_dev_w * mesh_cols)
@@ -439,7 +431,7 @@ def test_2d_per_core_round_trip(mesh_device_2d):
     ct = CompressedTensor.from_torch(
         x,
         assigner,
-        device=mesh_device_2d,
+        device=mesh_device,
         memory_config=data_mem,
         per_core_allocation=True,
         mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(-1)]),
@@ -457,10 +449,12 @@ def test_2d_per_core_round_trip(mesh_device_2d):
     assert pcc > 0.98, f"PCC {pcc:.6f} too low"
 
 
-def test_2d_replicate_one_axis(mesh_device_2d):
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
+def test_2d_replicate_one_axis(mesh_device):
     """2D mesh with None on one axis: replicate across rows, shard cols."""
-    mesh_rows, mesh_cols = mesh_device_2d.shape[0], mesh_device_2d.shape[1]
-    num_devices = mesh_device_2d.get_num_devices()
+    mesh_rows, mesh_cols = mesh_device.shape[0], mesh_device.shape[1]
+    num_devices = mesh_device.get_num_devices()
     torch.manual_seed(42)
     # Only shard width across cols, replicate across rows
     # Each device gets (128, 64)
@@ -473,7 +467,7 @@ def test_2d_replicate_one_axis(mesh_device_2d):
     ct = CompressedTensor.from_torch(
         x,
         assigner,
-        device=mesh_device_2d,
+        device=mesh_device,
         memory_config=data_mem,
         per_core_allocation=False,
         mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(-1)]),
@@ -494,9 +488,11 @@ def test_2d_replicate_one_axis(mesh_device_2d):
 # ---------------------------------------------------------------------------
 
 
-def test_4d_lockstep_shard_dim0_dim2(mesh_device_2d):
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
+def test_4d_lockstep_shard_dim0_dim2(mesh_device):
     """4D tensor sharded along dim 0 and dim 2 across a 2x2 mesh."""
-    mesh_rows, mesh_cols = mesh_device_2d.shape[0], mesh_device_2d.shape[1]
+    mesh_rows, mesh_cols = mesh_device.shape[0], mesh_device.shape[1]
     torch.manual_seed(42)
     # Shape: (2*mesh_rows, 3, 64*mesh_cols, 128) → per device (2, 3, 64, 128)
     # Per-device 2D: (2*3*64, 128) = (384, 128), tiles_h=12, tiles_w=4
@@ -515,7 +511,7 @@ def test_4d_lockstep_shard_dim0_dim2(mesh_device_2d):
     ct = CompressedTensor.from_torch(
         x,
         assigner,
-        device=mesh_device_2d,
+        device=mesh_device,
         memory_config=data_mem,
         per_core_allocation=False,
         mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(2)]),
@@ -531,9 +527,11 @@ def test_4d_lockstep_shard_dim0_dim2(mesh_device_2d):
     assert pcc > 0.98, f"PCC {pcc:.6f} too low"
 
 
-def test_4d_per_core_shard_dim0_dim2(mesh_device_2d):
+@pytest.mark.parametrize("mesh_device", [(4, 2)], indirect=True)
+@pytest.mark.parametrize("device_params", [_HYBRID_DEVICE_PARAMS], indirect=True)
+def test_4d_per_core_shard_dim0_dim2(mesh_device):
     """4D tensor per-core sharded along dim 0 and dim 2 across a 2x2 mesh."""
-    mesh_rows, mesh_cols = mesh_device_2d.shape[0], mesh_device_2d.shape[1]
+    mesh_rows, mesh_cols = mesh_device.shape[0], mesh_device.shape[1]
     torch.manual_seed(42)
     per_dev = (2, 3, 64, 128)
     x = torch.randn(per_dev[0] * mesh_rows, per_dev[1], per_dev[2] * mesh_cols, per_dev[3])
@@ -550,7 +548,7 @@ def test_4d_per_core_shard_dim0_dim2(mesh_device_2d):
     ct = CompressedTensor.from_torch(
         x,
         assigner,
-        device=mesh_device_2d,
+        device=mesh_device,
         memory_config=data_mem,
         per_core_allocation=True,
         mesh_mapper_config=ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementShard(2)]),

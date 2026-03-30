@@ -588,8 +588,18 @@ def mesh_device(request, silicon_arch_name, device_params):
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
+    allocator_mode = updated_device_params.pop("allocator_mode", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
+    if allocator_mode is not None:
+        from ttnn.per_core_allocation import open_mesh_device as open_mesh_device_per_core
+
+        mesh_device = open_mesh_device_per_core(
+            mesh_shape=mesh_shape,
+            allocator_mode=allocator_mode,
+            **updated_device_params,
+        )
+    else:
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
     from tests.tests_common.cache_entries_counter import CacheEntriesCounter
 
@@ -718,20 +728,25 @@ def bh_2d_mesh_device_context(device_params):
     reliability_mode = updated_device_params.pop("reliability_mode", None)
     fabric_manager = updated_device_params.pop("fabric_manager", None)
     fabric_router_config = updated_device_params.pop("fabric_router_config", None)
+    allocator_mode = updated_device_params.pop("allocator_mode", None)
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
     if ttnn.get_num_devices() == 8:
-        mesh_device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(4, 2),
-            **updated_device_params,
-        )
+        mesh_shape = ttnn.MeshShape(4, 2)
     elif ttnn.get_num_devices() == 32:
-        mesh_device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(4, 8),
+        mesh_shape = ttnn.MeshShape(4, 8)
+    else:
+        mesh_shape = ttnn.MeshShape(ttnn.get_num_devices(), 1)
+    if allocator_mode is not None:
+        from ttnn.per_core_allocation import open_mesh_device as open_mesh_device_per_core
+
+        mesh_device = open_mesh_device_per_core(
+            mesh_shape=mesh_shape,
+            allocator_mode=allocator_mode,
             **updated_device_params,
         )
     else:
         mesh_device = ttnn.open_mesh_device(
-            mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
+            mesh_shape=mesh_shape,
             **updated_device_params,
         )
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
