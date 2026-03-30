@@ -16,7 +16,6 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -394,7 +393,6 @@ def test_ttnn_dispatch_combine(
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
-        memory_config=ttnn.L1_MEMORY_CONFIG if is_blackhole() else ttnn.DRAM_MEMORY_CONFIG,
         init_zeros=True,
     )
 

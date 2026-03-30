@@ -105,6 +105,7 @@ enum class EnvVarID {
     TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
     TT_METAL_FORCE_JIT_COMPILE,                // Force JIT compilation
     TT_METAL_DISABLE_SFPLOADMACRO,             // Disable use of SFPLOADMACRO instructions
+    TT_METAL_DRAM_BACKED_CQ,                   // Store command queues in device DRAM
 
     // ========================================
     // PROFILING & PERFORMANCE
@@ -166,6 +167,8 @@ enum class EnvVarID {
     TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS,             // Inspector RPC server address (host:port)
     TT_METAL_INSPECTOR_RPC,                            // Enable/disable inspector RPC server
     TT_METAL_INSPECTOR_SERIALIZE_ON_DISPATCH_TIMEOUT,  // Serialize inspector data on dispatch timeout
+    TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS,           // Capture tensor specs on op dispatch (default: off)
+    TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES,            // Log runtime entries to YAML (expensive, off by default)
 
     // ========================================
     // DEBUG PRINTING (DPRINT)
@@ -686,6 +689,12 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_DISABLE_SFPLOADMACRO=1
         case EnvVarID::TT_METAL_DISABLE_SFPLOADMACRO: this->disable_sfploadmacro = is_env_enabled(value); break;
 
+        // TT_METAL_DRAM_BACKED_CQ
+        // Store command queues in device DRAM.
+        // Default: false (use hugepages)
+        // Usage: export TT_METAL_DRAM_BACKED_CQ=1
+        case EnvVarID::TT_METAL_DRAM_BACKED_CQ: this->dram_backed_cq = is_env_enabled(value); break;
+
         // ========================================
         // PROFILING & PERFORMANCE
         // ========================================
@@ -1204,6 +1213,29 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->inspector_settings.serialize_on_dispatch_timeout = true;
             if (std::strncmp(value, "0", 1) == 0) {
                 this->inspector_settings.serialize_on_dispatch_timeout = false;
+            }
+            break;
+
+        // TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS
+        // Controls whether tensor specs are captured on every op dispatch.
+        // Default: true (enabled). Set to 0 to disable.
+        // Usage: export TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS=1
+        case EnvVarID::TT_METAL_INSPECTOR_CAPTURE_TENSOR_SPECS:
+            this->inspector_settings.capture_tensor_specs = true;
+            if (std::strncmp(value, "0", 1) == 0) {
+                this->inspector_settings.capture_tensor_specs = false;
+            }
+            break;
+
+        // TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES
+        // Enables logging of runtime entries (operation name, parameters, runtime ID) to YAML.
+        // WARNING: This is expensive and will cause significant log file growth.
+        // Default: false (disabled)
+        // Usage: export TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES=1
+        case EnvVarID::TT_METAL_INSPECTOR_LOG_RUNTIME_ENTRIES:
+            this->inspector_settings.log_runtime_entries = false;
+            if (strcmp(value, "1") == 0) {
+                this->inspector_settings.log_runtime_entries = true;
             }
             break;
 

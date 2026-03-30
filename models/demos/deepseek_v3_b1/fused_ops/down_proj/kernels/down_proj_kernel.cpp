@@ -232,7 +232,7 @@ void kernel_main() {
         DeviceZoneScopedN("MCAST2");
         mcast2(mcast2_args);
     }
-    mcast.teardown();
+    mcast.teardown(mcast_args);
 
     // ========================================================================
     // Matmul: [1, K] x [K, N_per_core] -> [1, N_per_core] on 112 cores
