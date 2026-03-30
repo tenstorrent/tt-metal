@@ -28,28 +28,6 @@ fi
 
 cd "${WORKDIR}"
 
-# Patch: drop __opal_attribute_always_inline__ from mca_part_persist_start.
-# GCC 14 (shipped in manylinux_2_34) treats _Bool -> volatile void* assignment as a hard error
-# when the enclosing function is force-inlined. Fix is upstream on main (aa024ac73d62, 2026-03-05)
-# but not yet backported to v5.0.x as of v5.0.10.
-PART_PERSIST_H="ompi/mca/part/persist/part_persist.h"
-python3 -c "
-import sys
-path = sys.argv[1]
-with open(path) as f:
-    content = f.read()
-patched = content.replace(
-    '__opal_attribute_always_inline__ static inline int\nmca_part_persist_start(',
-    'static inline int\nmca_part_persist_start('
-)
-if patched == content:
-    print('[ERROR] part_persist.h patch did not apply — pattern not found', file=sys.stderr)
-    sys.exit(1)
-with open(path, 'w') as f:
-    f.write(patched)
-print('Patched mca_part_persist_start: removed __opal_attribute_always_inline__')
-" "${PART_PERSIST_H}"
-
 # Run autogen.pl to generate configure script (required when building from git)
 echo "Running autogen.pl..."
 ./autogen.pl
