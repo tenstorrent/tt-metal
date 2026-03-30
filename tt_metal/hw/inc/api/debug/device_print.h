@@ -906,11 +906,10 @@ constexpr std::array<uint32_t, sizeof...(Args)> get_arg_offsets() {
 // GCC format: "... [with T = test::deep::Enum1]"
 template <typename T>
 constexpr auto get_type_name_string() {
-    constexpr const char* fn =
 #if defined(__GNUC__)
-        __PRETTY_FUNCTION__;
+    constexpr const char* fn = __PRETTY_FUNCTION__;
 #else
-        static_assert(false, "get_type_name_string requires __PRETTY_FUNCTION__ (GCC/Clang)");
+    static_assert(false, "get_type_name_string requires __PRETTY_FUNCTION__ (GCC/Clang)");
 #endif
     std::size_t fn_len = 0;
     while (fn[fn_len] != '\0') {
