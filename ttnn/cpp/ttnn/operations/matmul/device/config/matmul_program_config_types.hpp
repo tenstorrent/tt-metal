@@ -33,6 +33,7 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     bool transpose_mcast{};
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
+    bool untilize_out{};
 };
 
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {

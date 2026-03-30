@@ -292,11 +292,14 @@ Tensor matmul(
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
     bool user_run_batched = detail::is_input_batched(input_tensor_b.logical_shape());
-    const bool untilize_out =
-        program_config.has_value() &&
-                std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value())
-            ? std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value()).untilize_out
-            : false;
+    bool untilize_out = false;
+    if (program_config.has_value()) {
+        if (std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value())) {
+            untilize_out = std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value()).untilize_out;
+        } else if (std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config.value())) {
+            untilize_out = std::get<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config.value()).untilize_out;
+        }
+    }
     auto matmul_params = ttnn::prim::MatmulParams{
         program_config,
         /*bcast_batch=*/std::nullopt,

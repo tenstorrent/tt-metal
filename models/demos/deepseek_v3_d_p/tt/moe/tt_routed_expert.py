@@ -95,7 +95,19 @@ class TtRoutedExpert(LightweightModule):
         )
         self.gate_program_config = None
         self.up_program_config = None
-        self.down_program_config = None
+        self.down_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            in0_block_w=8,
+            out_subblock_h=7,
+            out_subblock_w=1,
+            out_block_h=7,
+            out_block_w=14,
+            per_core_M=7,
+            per_core_N=28,
+            transpose_mcast=False,
+            fuse_batch=False,
+            untilize_out=True,
+        )
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -282,6 +294,7 @@ class TtRoutedExpert(LightweightModule):
             down_proj,
             program_config=self.down_program_config,
             compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
         )
 
         return output

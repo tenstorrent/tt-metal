@@ -250,6 +250,7 @@ class TtMoe(LightweightModule):
         # ========================================
         # Shared expert expects replicated input (full emb_dim)
         # Convert x_full to TILE_LAYOUT for shared expert
+        # signpost("PRVI TO_LAYOUT")
         x_full_tiled = ttnn.to_layout(x_full, ttnn.TILE_LAYOUT)
         logger.debug(f"[TtMoe.forward] x_full_tiled shape: {x_full_tiled.shape}")
 
@@ -281,6 +282,7 @@ class TtMoe(LightweightModule):
         logger.debug(f"[TtMoe.forward] dispatched_buffer_squeezed shape: {dispatched_buffer_squeezed.shape}")
 
         # Convert dispatched_buffer to TILE_LAYOUT for routed experts
+        # signpost("DRUGI TO_LAYOUT")
         dispatched_buffer_tiled = ttnn.to_layout(dispatched_buffer_squeezed, ttnn.TILE_LAYOUT)
         logger.debug(f"[TtMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
 
@@ -297,11 +299,14 @@ class TtMoe(LightweightModule):
         # Step 4: Combine (enabled)
         # ========================================
         # Combine expects ROW_MAJOR input
-        expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
-        logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape} {expert_outputs_rm.dtype=}")
+        # signpost("UNTILIZE_START")
+        # signpost("TRECI TO_LAYOUT")
+        # expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
+        # signpost("UNTILIZE_END")
+        logger.debug(f"[TtMoe.forward] expert_outputs_rm shape: {expert_outputs.shape} {expert_outputs.dtype=}")
 
         combined_output = self.combine_module(
-            expert_outputs_rm,
+            expert_outputs,
             metadata,
             tt_expert_token_counts,
         )
@@ -318,7 +323,10 @@ class TtMoe(LightweightModule):
         # 2. Sum over topk dimension (dim=3): (1, 1, 256, 4, 2048) -> (1, 1, 256, 2048)
         # 3. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
         # combined_output_tiled is too big to fit L1; keep in DRAM for now
+        # signpost("TILIZE_START")
+        # signpost("CETVRTI TO_LAYOUT")
         combined_output_tiled = ttnn.to_layout(combined_output, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # signpost("TILIZE_END")
         logger.debug(f"[TtMoe.forward] combined_output_tiled shape: {combined_output_tiled.shape}")
 
         routed_output = self.reduce_module(combined_output_tiled, weights=weights)
@@ -338,6 +346,7 @@ class TtMoe(LightweightModule):
         logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
 
         # Convert to ROW_MAJOR for output consistency
+        # signpost("PETI TO_LAYOUT")
         final_output = ttnn.to_layout(final_output, ttnn.ROW_MAJOR_LAYOUT)
         logger.debug(f"[TtMoe.forward] Final output shape: {final_output.shape}")
 

@@ -360,7 +360,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             attributes.output_dtype.value());
         TT_FATAL(
             std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
-                chosen_program_config),
+                chosen_program_config) ||
+                std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>(
+                    chosen_program_config),
             "Untilize out is not supported for this program config: {}",
             typeid(chosen_program_config).name());
     }
@@ -1376,9 +1378,7 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
     return {TensorSpec(
         output_shape,
         TensorLayout(
-            attributes.output_dtype.value(),
-            PageConfig(Layout::TILE, attributes.output_tile),
-            attributes.output_mem_config))};
+            attributes.output_dtype.value(), PageConfig(output_layout, output_tile), attributes.output_mem_config))};
 }
 
 MatmulDeviceOperation::tensor_return_value_t MatmulDeviceOperation::create_output_tensors(

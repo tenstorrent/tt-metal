@@ -143,7 +143,8 @@ void py_module(nb::module_& mod) {
            std::size_t per_core_N,
            bool transpose_mcast,
            std::optional<UnaryWithParam> fused_activation,
-           bool fuse_batch) {
+           bool fuse_batch,
+           bool untilize_out) {
             // Set out_block_h and out_block_w to defaults if they are not provided
             std::size_t actual_out_block_h = out_block_h.value_or(per_core_M);
             std::size_t actual_out_block_w = out_block_w.value_or(per_core_N);
@@ -159,7 +160,8 @@ void py_module(nb::module_& mod) {
                 per_core_N,
                 transpose_mcast,
                 std::move(fused_activation),
-                fuse_batch);
+                fuse_batch,
+                untilize_out);
         },
         nb::kw_only(),
         nb::arg("compute_with_storage_grid_size"),
@@ -172,7 +174,8 @@ void py_module(nb::module_& mod) {
         nb::arg("per_core_N").noconvert(),
         nb::arg("transpose_mcast").noconvert(),
         nb::arg("fused_activation") = nb::none(),
-        nb::arg("fuse_batch").noconvert() = true);
+        nb::arg("fuse_batch").noconvert() = true,
+        nb::arg("untilize_out").noconvert() = false);
 
     matmul_multi_core_reuse_multicast_program_config.def_rw(
         "compute_with_storage_grid_size",
@@ -275,12 +278,22 @@ void py_module(nb::module_& mod) {
 
         Note: the batch dimensions need to all be 1 for the second input tensor when fuse_batch is true.
     )doc");
+
+    matmul_multi_core_reuse_multicast_program_config.def_rw(
+        "untilize_out", &MatmulMultiCoreReuseMultiCastProgramConfig::untilize_out, R"doc(
+        Whether to untilize the output during the matmul operation.
+
+        When true, the matmul output is written in ROW_MAJOR layout instead of TILE layout,
+        fusing the untilize operation into the matmul and avoiding a separate untilize op.
+        This saves one DRAM round-trip. Defaults to false.
+    )doc");
+
     matmul_multi_core_reuse_multicast_program_config.def(
         "__repr__", [](const MatmulMultiCoreReuseMultiCastProgramConfig& config) {
             return fmt::format(
                 "MatmulMultiCoreReuseMultiCastProgramConfig(compute_with_storage_grid_size={}, in0_block_w={}, "
                 "out_subblock_h={}, out_subblock_w={}, out_block_h={}, out_block_w={}, per_core_M={}, "
-                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={})",
+                "per_core_N={}, transpose_mcast={}, fused_activation={}, fuse_batch={}, untilize_out={})",
                 config.compute_with_storage_grid_size,
                 config.in0_block_w,
                 config.out_subblock_h,
@@ -291,7 +304,8 @@ void py_module(nb::module_& mod) {
                 config.per_core_N,
                 config.transpose_mcast,
                 config.fused_activation,
-                config.fuse_batch);
+                config.fuse_batch,
+                config.untilize_out);
         });
 
     auto matmul_multi_core_reuse_multicast_1d_program_config =
