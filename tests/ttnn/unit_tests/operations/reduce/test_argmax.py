@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize(
@@ -115,11 +115,4 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result)).to(torch.int32)
 
     # test for equivalance
-    assert_numeric_metrics(
-        torch_result,
-        ttnn_result,
-        pcc_threshold=0.99,
-        rtol=1e-06,
-        atol=1e-06,
-        frobenius_threshold=1e-09,
-    )
+    assert_equal(torch_result, ttnn_result)

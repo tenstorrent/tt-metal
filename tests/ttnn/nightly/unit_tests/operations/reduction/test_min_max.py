@@ -5,8 +5,8 @@
 import torch
 import pytest
 import ttnn
-from functools import partial
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize(
@@ -71,22 +71,15 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
 
     tt_output = tt_npu.cpu().to_torch()
     if kind == "mean":
-        pcc_threshold = 0.9999
-        rtol = 0.006
-        atol = 0.008
-        frobenius_threshold = 0.006
+        # test for equivalance
+        assert_numeric_metrics(
+            torch_output,
+            tt_output,
+            pcc_threshold=0.9999,
+            rtol=0.006,
+            atol=0.008,
+            frobenius_threshold=0.006,
+        )
     else:
-        pcc_threshold = 0.999
-        rtol = 1e-06
-        atol = 1e-06
-        frobenius_threshold = 1e-09
-
-    # test for equivalance
-    assert_numeric_metrics(
-        torch_output,
-        tt_output,
-        pcc_threshold=pcc_threshold,
-        rtol=rtol,
-        atol=atol,
-        frobenius_threshold=frobenius_threshold,
-    )
+        # test for equivalance
+        assert_equal(torch_output, tt_output)
