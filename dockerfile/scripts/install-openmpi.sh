@@ -42,7 +42,7 @@ echo "Running autogen.pl..."
     --prefix="${OMPI_PREFIX}" \
     --with-ft=ulfm \
     --enable-wrapper-rpath \
-    --enable-mpirun-prefix-by-default \
+    --enable-prte-prefix-by-default \
     --disable-mca-dso \
     --disable-dlopen \
     --enable-static \
