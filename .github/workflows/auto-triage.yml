@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       workflow_name:
-        description: "Workflow name without extension (e.g., galaxy-quick, t3000-unit-tests, single-card-demo-tests)"
+        description: "Workflow file base name under .github/workflows (e.g., .github/workflows/galaxy-quick.yml → galaxy-quick; t3000-unit-tests; single-card-demo-tests), without .yml/.yaml extension"
         required: true
         type: string
       job_name:
