@@ -80,6 +80,7 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
 
     uint32_t patch_size = operation_attributes.kernel_size[0] * operation_attributes.kernel_size[1] *
                           operation_attributes.kernel_size[2] * C_in_block;
+    uint32_t padded_patch_size = tt::round_up(patch_size, tt::constants::TILE_WIDTH);
     uint32_t num_patches = config.T_out_block * config.H_out_block * config.W_out_block;
 
     uint32_t C_in_num_blocks = tt::div_up(C_in, C_in_block);
@@ -92,27 +93,15 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         C_out_num_blocks,
         C_out_block);
 
-    // Both the reader (vol2col row layout) and writer (weight tile offsets) assume patch_size
-    // is tile-aligned. The reader writes patches contiguously but tilize_block expects rows at
-    // page_size stride; the writer indexes weight tiles at c_in_block * matmul_K_t assuming
-    // blocks don't share tile rows. Both break when patch_size % TILE_WIDTH != 0.
-    TT_FATAL(
-        patch_size % tt::constants::TILE_WIDTH == 0,
-        "patch_size (kD*kH*kW*C_in_block = {}*{}*{}*{} = {}) must be a multiple of TILE_WIDTH ({})",
-        operation_attributes.kernel_size[0],
-        operation_attributes.kernel_size[1],
-        operation_attributes.kernel_size[2],
-        C_in_block,
-        patch_size,
-        tt::constants::TILE_WIDTH);
-
     uint32_t matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
     uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
     uint32_t matmul_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
 
     uint32_t num_patches_tile_padded = tt::round_up(num_patches, tt::constants::TILE_HEIGHT);
 
-    uint32_t patch_size_bytes = patch_size * dtype_bytes;    // bytes per patch row (tile-aligned by assert above)
+    uint32_t patch_size_bytes = patch_size * dtype_bytes;                // bytes of actual data per patch row
+    uint32_t padded_patch_size_bytes = padded_patch_size * dtype_bytes;  // bytes per CB page (tile-aligned)
+    uint32_t patch_pad_bytes = padded_patch_size_bytes - patch_size_bytes;
     uint32_t C_out_block_bytes = C_out_block * dtype_bytes;  // bytes per output channel row
     uint32_t C_in_block_bytes = C_in_block * dtype_bytes;    // bytes per input channel row
 
@@ -137,7 +126,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // that many patches. The reader pushes in matching chunks.
     uint32_t vol2col_rm_pages = std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
     uint32_t cb_vol2col_rm_id = next_cb_index++;
-    tt::tt_metal::create_cb(cb_vol2col_rm_id, program, core_grid, patch_size_bytes, vol2col_rm_pages, data_format);
+    tt::tt_metal::create_cb(
+        cb_vol2col_rm_id, program, core_grid, padded_patch_size_bytes, vol2col_rm_pages, data_format);
 
     uint32_t cb_vol2col_tiled_id = next_cb_index++;
     tt::tt_metal::create_cb(cb_vol2col_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_K_t, data_format);
@@ -196,7 +186,12 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         tt::tt_metal::create_cb(cb_bias_tiled_id, program, core_grid, tile_size, matmul_N_t, data_format);
     }
 
-    log_debug(tt::LogOp, "CB vol2col_rm: page_size={} bytes, num_pages={}", patch_size_bytes, vol2col_rm_pages);
+    log_debug(
+        tt::LogOp,
+        "CB vol2col_rm: page_size={} bytes (padded from {}), num_pages={}",
+        padded_patch_size_bytes,
+        patch_size_bytes,
+        vol2col_rm_pages);
     log_debug(tt::LogOp, "CB vol2col_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_K_t);
     log_debug(tt::LogOp, "CB weight_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_K_t * matmul_N_t);
     log_debug(
@@ -358,7 +353,8 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
         cb_input_shard_id,
         T_shard_max,
         H_shard_max,
-        W_shard_max};
+        W_shard_max,
+        patch_pad_bytes};
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
