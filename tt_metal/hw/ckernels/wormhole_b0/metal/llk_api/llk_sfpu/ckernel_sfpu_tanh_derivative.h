@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_exp.h"  // For _sfpu_round_nearest_int32_
+#include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
 #include "sfpu/ckernel_sfpu_polyval.h"
 
 namespace ckernel {
@@ -94,7 +94,7 @@ sfpi_inline sfpi::vFloat inline_exp_sech2_tail(sfpi::vFloat a) {
     // Cody-Waite range reduction: t = k·ln(2) + r
     sfpi::vFloat z = t * INV_LN2;
     sfpi::vInt k_int;
-    sfpi::vFloat k = _sfpu_round_nearest_int32_(z, k_int);
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
     sfpi::vFloat r = k * LN2_HI + t;  // Extended precision subtraction
     r = k * LN2_LO + r;
