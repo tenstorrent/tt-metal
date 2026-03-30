@@ -694,7 +694,6 @@ def _prepare_latent_input(
 ):
     device = models["device"]
     dtype = models["dtype"]
-    config = models["config"]
     prompt_embeds = state["prompt_embeds"]
     action_mask = state["action_mask"]
 
@@ -806,7 +805,6 @@ def _reset_state(models, state, prompt):
     device = models["device"]
     dtype = models["dtype"]
     cache_name = models["cache_name"]
-    save_root = config.save_root
 
     logger.info("Reset.")
     state["use_cfg"] = False
