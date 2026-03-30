@@ -9,8 +9,10 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,10 @@ from typing import Any
 REPO = "tenstorrent/tt-metal"
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 GUARDED_GH = [sys.executable, "tools/ci/guarded_gh.py"]
+PROTECTED_AGENT_PATHS = {
+    "tools/ci/guarded_gh.py",
+    "tools/ci/execute_disable_actions.py",
+}
 ALLOWED_STATUS = {
     "new",
     "planned",
@@ -51,6 +57,16 @@ def run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subproce
 def run_guarded_gh(tokens: list[str], *, capture: bool = True) -> subprocess.CompletedProcess[str]:
     command_str = " ".join(shlex.quote(tok) for tok in tokens)
     return run([*GUARDED_GH, "--command", command_str], capture=capture)
+
+
+def prepare_guarded_gh_runtime_copy() -> None:
+    source = Path("tools/ci/guarded_gh.py")
+    if not source.exists():
+        raise RuntimeError(f"Missing guarded gh wrapper at {source}")
+    tmp_dir = Path(tempfile.mkdtemp(prefix="guarded-gh-"))
+    runtime_script = tmp_dir / "guarded_gh_runtime.py"
+    shutil.copy2(source, runtime_script)
+    GUARDED_GH[:] = [sys.executable, str(runtime_script)]
 
 
 def slugify(text: str) -> str:
@@ -391,6 +407,7 @@ def main() -> int:
         result["debug_dir"] = str(debug_root)
 
     if not args.dry_run:
+        prepare_guarded_gh_runtime_copy()
         run_guarded_gh(["gh", "auth", "status"])
         run(["git", "fetch", "origin", "main"], capture=True)
 
@@ -531,6 +548,24 @@ def main() -> int:
                         "source_slack_ts": source_ts,
                         "issue_number": issue_number,
                         "reason": skip_reason,
+                        "disable_edit_summary": edit_summary,
+                    }
+                )
+                continue
+            protected = sorted({p for p in changed if p in PROTECTED_AGENT_PATHS})
+            if protected:
+                set_status(
+                    item,
+                    "needs_human",
+                    event="protected_paths_modified",
+                    details=f"Attempt {item['attempts']} modified protected paths: {', '.join(protected)}",
+                )
+                result["state_updates"] += 1
+                result["skipped"].append(
+                    {
+                        "source_slack_ts": source_ts,
+                        "issue_number": issue_number,
+                        "reason": f"protected_paths_modified:{','.join(protected)}",
                         "disable_edit_summary": edit_summary,
                     }
                 )
