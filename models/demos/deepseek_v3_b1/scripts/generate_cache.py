@@ -170,7 +170,7 @@ def _verify_embedding_cache(output_path: Path) -> bool:
     logger.info("Verifying embedding cache...")
     cache, cc = _make_cache_config(output_path)
     fp = embedding_fingerprint(cc, DEVICE_MESH_SHAPE)
-    if not cache.tensor_exists(fp):
+    if not cache.has_tensor(fp):
         logger.error("Embedding artifact not found in cache (fingerprint {})", fp.artifact_id()[:12])
         return False
     logger.info("Embedding artifact present")
@@ -203,7 +203,7 @@ def _verify_lm_head_cache(output_path: Path) -> bool:
     cache, cc = _make_cache_config(output_path)
     fps = lm_head_fingerprints(cc, DEVICE_MESH_SHAPE)
     for name, (fp, _ctype) in fps.items():
-        if not cache.tensor_exists(fp):
+        if not cache.has_tensor(fp):
             logger.error("{} artifact not found in cache (fingerprint {})", name, fp.artifact_id()[:12])
             return False
     logger.info("All lm_head artifacts present")

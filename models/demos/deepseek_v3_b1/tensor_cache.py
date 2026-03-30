@@ -24,6 +24,11 @@ Three storage formats are supported:
   miss.  Sequential loading preserves allocation order, which is
   critical for contiguous DRAM placement (e.g. routed MoE experts).
 
+All write paths are crash-safe: single-file artifacts are written to a
+temporary file and atomically renamed (``os.rename``); list artifacts
+use a ``_complete`` sentinel that is only created after all items are
+flushed.
+
 Storage uses content-addressed directories keyed by
 ``sha256(fingerprint)`` under a configurable root.
 """
@@ -32,14 +37,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TypeVar
 
 from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensor
+
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True)
@@ -79,9 +87,6 @@ class Fingerprint:
         }
         blob = json.dumps(canonical, sort_keys=True).encode()
         return hashlib.sha256(blob).hexdigest()
-
-
-_TRANSFORM_VERSION = 1
 
 
 class TensorCache:
@@ -124,27 +129,64 @@ class TensorCache:
     # ------------------------------------------------------------------
 
     def load_overlapped(self, fingerprint: Fingerprint, *, device: ttnn.Device) -> dict[str, OverlappedTensor]:
-        """Load cached overlapped views. Caller must check :meth:`has_overlapped` first."""
+        """Load cached overlapped views. Raises if artifact is missing."""
         artifact_id = fingerprint.artifact_id()
         path = self._artifact_dir(artifact_id) / "data.overlappedtensorbin"
         return ttnn._ttnn.tensor.load_overlapped_tensors(str(path), device=device)
 
     def load_tensor(self, fingerprint: Fingerprint, *, device: ttnn.Device) -> ttnn.Tensor:
-        """Load cached standalone tensor. Caller must check :meth:`has_tensor` first."""
+        """Load cached standalone tensor. Raises if artifact is missing."""
         artifact_id = fingerprint.artifact_id()
         path = self._artifact_dir(artifact_id) / "data.tensorbin"
         return ttnn.load_tensor(str(path), device=device)
 
     def load_tensor_list(self, fingerprint: Fingerprint, *, device: ttnn.Device) -> list[ttnn.Tensor]:
-        """Load cached tensor list. Caller must check :meth:`has_tensor_list` first."""
+        """Load cached tensor list. Raises if sentinel or directory is missing."""
         artifact_id = fingerprint.artifact_id()
         list_dir = self._artifact_dir(artifact_id) / "list"
+        if not (list_dir / self._COMPLETE_MARKER).exists():
+            raise FileNotFoundError(
+                f"Tensor list cache entry incomplete or missing: {list_dir} "
+                f"(group={fingerprint.group_name}, layer={fingerprint.layer_idx})"
+            )
         paths = sorted(list_dir.glob("*.tensorbin"), key=lambda p: int(p.stem))
         return [ttnn.load_tensor(str(p), device=device) for p in paths]
 
     # ------------------------------------------------------------------
     # Get-or-create methods (create on miss, load on hit)
     # ------------------------------------------------------------------
+
+    def _get_or_create_file(
+        self,
+        fingerprint: Fingerprint,
+        filename: str,
+        *,
+        create: Callable[[], _T],
+        load: Callable[[str], _T],
+        dump: Callable[[str, _T], None],
+        miss_label: str,
+    ) -> _T:
+        """Shared logic for single-file cache entries (overlapped and standalone).
+
+        On miss, writes to a ``.tmp`` sibling and atomically renames into
+        place so a crash never leaves a half-written artifact.
+        """
+        artifact_id = fingerprint.artifact_id()
+        path = self._artifact_dir(artifact_id) / filename
+
+        if path.exists():
+            logger.debug(
+                "Cache hit for {} layer {} ({})", fingerprint.group_name, fingerprint.layer_idx, artifact_id[:12]
+            )
+            return load(str(path))
+
+        logger.debug("Cache miss for {} layer {} — {}", fingerprint.group_name, fingerprint.layer_idx, miss_label)
+        result = create()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        dump(str(tmp), result)
+        os.rename(str(tmp), str(path))
+        return result
 
     def get_or_create(
         self,
@@ -153,28 +195,15 @@ class TensorCache:
         fuse: Callable[[], dict[str, OverlappedTensor]],
         device: ttnn.Device,
     ) -> dict[str, OverlappedTensor]:
-        """Return cached overlapped views on hit, or fuse + store + return on miss.
-
-        Args:
-            fingerprint: The cache key identifying this fusion group.
-            fuse: A callable that produces the ``dict[str, OverlappedTensor]``
-                when invoked (only called on a cache miss).
-            device: The mesh device to load onto (hit path).
-        """
-        artifact_id = fingerprint.artifact_id()
-        path = self._artifact_dir(artifact_id) / "data.overlappedtensorbin"
-
-        if path.exists():
-            logger.debug(
-                "Cache hit for {} layer {} ({})", fingerprint.group_name, fingerprint.layer_idx, artifact_id[:12]
-            )
-            return ttnn._ttnn.tensor.load_overlapped_tensors(str(path), device=device)
-
-        logger.debug("Cache miss for {} layer {} — fusing", fingerprint.group_name, fingerprint.layer_idx)
-        views = fuse()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        ttnn._ttnn.tensor.dump_overlapped_tensors(str(path), views)
-        return views
+        """Return cached overlapped views on hit, or fuse + store + return on miss."""
+        return self._get_or_create_file(
+            fingerprint,
+            "data.overlappedtensorbin",
+            create=fuse,
+            load=lambda p: ttnn._ttnn.tensor.load_overlapped_tensors(p, device=device),
+            dump=ttnn._ttnn.tensor.dump_overlapped_tensors,
+            miss_label="fusing",
+        )
 
     def get_or_create_tensor(
         self,
@@ -183,30 +212,15 @@ class TensorCache:
         create: Callable[[], ttnn.Tensor],
         device: ttnn.Device,
     ) -> ttnn.Tensor:
-        """Return cached standalone tensor on hit, or create + store + return on miss.
-
-        Uses ``ttnn.dump_tensor`` / ``ttnn.load_tensor`` for serialization.
-
-        Args:
-            fingerprint: The cache key identifying this tensor.
-            create: A callable that produces the ``ttnn.Tensor``
-                when invoked (only called on a cache miss).
-            device: The mesh device to load onto (hit path).
-        """
-        artifact_id = fingerprint.artifact_id()
-        path = self._artifact_dir(artifact_id) / "data.tensorbin"
-
-        if path.exists():
-            logger.debug(
-                "Cache hit for {} layer {} ({})", fingerprint.group_name, fingerprint.layer_idx, artifact_id[:12]
-            )
-            return ttnn.load_tensor(str(path), device=device)
-
-        logger.debug("Cache miss for {} layer {} — creating", fingerprint.group_name, fingerprint.layer_idx)
-        tensor = create()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        ttnn.dump_tensor(str(path), tensor)
-        return tensor
+        """Return cached standalone tensor on hit, or create + store + return on miss."""
+        return self._get_or_create_file(
+            fingerprint,
+            "data.tensorbin",
+            create=create,
+            load=lambda p: ttnn.load_tensor(p, device=device),
+            dump=ttnn.dump_tensor,
+            miss_label="creating",
+        )
 
     def get_or_create_tensor_list(
         self,
@@ -221,12 +235,6 @@ class TensorCache:
         writes.  On hit every tensor is loaded sequentially so the device
         allocator preserves the original allocation order (important for
         contiguous DRAM placement).
-
-        Args:
-            fingerprint: The cache key identifying this tensor list.
-            create: A callable that returns a ``list[ttnn.Tensor]``
-                when invoked (only called on a cache miss).
-            device: The mesh device to load onto (hit path).
         """
         artifact_id = fingerprint.artifact_id()
         list_dir = self._artifact_dir(artifact_id) / "list"

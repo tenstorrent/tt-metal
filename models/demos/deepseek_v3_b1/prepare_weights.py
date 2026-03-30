@@ -32,7 +32,10 @@ from models.demos.deepseek_v3_b1.overlap_specs import (
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
     QAB_KVA_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
 )
-from models.demos.deepseek_v3_b1.tensor_cache import _TRANSFORM_VERSION, CacheConfig, Fingerprint
+from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, Fingerprint
+
+# Bump when any weight transform logic changes to invalidate cached artifacts.
+_TRANSFORM_VERSION = 1
 
 # MoE sender core: hardcoded grid (13, 10) so cache layout is consistent across slow/fast dispatch.
 # Sender core = (grid.x - 1, grid.y - 1) = (12, 9); must match test_moe_mlp create_runtime_tensors.
