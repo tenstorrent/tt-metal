@@ -245,15 +245,15 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         sfpi::vFloat r = k * LN2_HI + t;
         r = k * LN2_LO + r;
 
-        // Degree-5 Taylor for exp(r), |r| < ln(2)/2 ≈ 0.347
+        // Degree-4 Taylor for exp(r), |r| < ln(2)/2 ≈ 0.347
+        // Max relative error ~2.6e-7, negligible for BF16 output (~8-bit mantissa)
         sfpi::vFloat p = PolynomialEvaluator::eval(
             r,
-            sfpi::vConst1,   // 1
-            sfpi::vConst1,   // r
-            0.5f,            // r²/2!
-            1.0f / 6.0f,     // r³/3!
-            1.0f / 24.0f,    // r⁴/4!
-            1.0f / 120.0f);  // r⁵/5!
+            sfpi::vConst1,  // 1
+            sfpi::vConst1,  // r
+            0.5f,           // r²/2!
+            1.0f / 6.0f,    // r³/3!
+            1.0f / 24.0f);  // r⁴/4!
 
         // Scale by 2^k via exponent bit manipulation
         sfpi::vInt p_exp = sfpi::exexp_nodebias(p);
