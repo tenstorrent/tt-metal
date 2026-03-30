@@ -50,8 +50,44 @@ std::vector<T> decode_tensor_data(  // NOLINT(readability-redundant-declaration)
 
 namespace tt::tt_metal::tensor_impl::host_tensor {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+template <typename T>
+HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T pad_value) {
+    auto buffer_dtype = convert_to_data_type<T>();
+    auto buffer_spec =
+        TensorSpec(spec.logical_shape(), TensorLayout(buffer_dtype, spec.page_config(), spec.memory_config()));
+
+    size_t volume = spec.logical_shape().volume();
+
+    TT_FATAL(
+        !logical_matches_physical(spec),
+        "Logical matches physical, don't support that case, use Tensor::from_span instead!");
+
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
+        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
+    }
+
+    auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
+
+    auto res = HostTensor(std::move(host_buffer), buffer_spec, TensorTopology{});
+    return tensor_impl::to_dtype(res, spec.data_type());
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 template <typename T>
 HostTensor from_span(ttsl::Span<const T> buffer, const TensorSpec& spec, T pad_value) {
+    if (!logical_matches_physical(spec)) {
+        // If the logical shape doesn't match the physical shape, we need to encode the data
+        // and write the result to a new buffer. This branch avoids the extra copy that
+        // would otherwise occur in the from_vector function call.
+        return CMAKE_UNIQUE_NAMESPACE::from_span_impl(buffer, spec, pad_value);
+    }
     return from_vector(std::vector<T>(buffer.begin(), buffer.end()), spec, pad_value);
 }
 
@@ -101,9 +137,7 @@ std::vector<T> to_vector_generic(const HostTensor& tensor) {
         tensor.dtype(),
         convert_to_data_type<T>());
 
-    HostBuffer host_buffer = host_buffer::get_host_buffer(tensor);
-
-    auto data = host_buffer.view_as<const T>();
+    auto data = host_buffer::get_as<const T>(tensor);
     if (logical_matches_physical(tensor.tensor_spec())) {
         return std::vector<T>(data.begin(), data.end());
     }
@@ -111,11 +145,9 @@ std::vector<T> to_vector_generic(const HostTensor& tensor) {
 }
 
 std::vector<float> to_vector_float(const HostTensor& tensor) {
-    HostBuffer host_buffer = host_buffer::get_host_buffer(tensor);
-
     switch (tensor.dtype()) {
         case DataType::BFLOAT16: {
-            auto buffer = host_buffer.view_as<const bfloat16>();
+            auto buffer = host_buffer::get_as<bfloat16>(tensor);
             std::vector<float> physical_data;
             physical_data.reserve(buffer.size());
             std::transform(buffer.begin(), buffer.end(), std::back_inserter(physical_data), [](bfloat16 val) {
@@ -127,16 +159,13 @@ std::vector<float> to_vector_float(const HostTensor& tensor) {
             return decode_tensor_data(ttsl::make_const_span(physical_data), tensor.tensor_spec());
         }
         case DataType::FLOAT32: {
-            auto buffer = host_buffer.view_as<const float>();
-            if (logical_matches_physical(tensor.tensor_spec())) {
-                return std::vector<float>(buffer.begin(), buffer.end());
-            }
+            auto buffer = host_buffer::get_as<float>(tensor);
             return decode_tensor_data(buffer, tensor.tensor_spec());
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
             const auto& tile = tensor.tensor_spec().tile();
-            auto buffer = host_buffer.view_as<const uint32_t>();
+            auto buffer = host_buffer::get_as<uint32_t>(tensor);
             std::vector<float> unpacked_data =
                 tensor.dtype() == DataType::BFLOAT8_B
                     ? unpack_bfp8_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile)

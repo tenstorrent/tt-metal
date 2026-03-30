@@ -172,7 +172,6 @@ Tensor Tensor::from_span(
     T pad_value) {
     auto host_tensor = tensor_impl::host_tensor::from_span(buffer, spec, pad_value);
     auto res = Tensor(std::move(host_tensor));
-    res = to_dtype(res, spec.data_type());
     if (device) {
         res = res.to_device(device, spec.memory_config(), cq_id);
     }
