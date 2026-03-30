@@ -8,13 +8,10 @@ import os
 import pytest
 from loguru import logger
 
+from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name
 from models.demos.stable_diffusion_xl_base.demo.demo_lora import run_demo_inference
-from models.demos.stable_diffusion_xl_base.tests.test_common import (
-    SDXL_FABRIC_CONFIG,
-    SDXL_L1_SMALL_SIZE,
-    SDXL_TRACE_REGION_SIZE,
-)
+from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_FABRIC_CONFIG, SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
     accuracy_assert,
     calculate_accuracy_metrics,
@@ -41,7 +38,6 @@ from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
         (
             {
                 "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
             True,
@@ -49,7 +45,6 @@ from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
         (
             {
                 "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
             },
             False,
         ),
@@ -125,8 +120,8 @@ def test_accuracy_sdxl_lora(
     sigmas,
     lora_path,
 ):
-    if image_resolution == (512, 512):
-        pytest.skip("Accuracy target not available for 512x512 image resolution")
+    if vae_on_device and is_blackhole():
+        pytest.skip("Device VAE not supported on Blackhole")
 
     start_from, num_prompts = evaluation_range
 
@@ -171,7 +166,7 @@ def test_accuracy_sdxl_lora(
 
     accuracy_metrics = calculate_accuracy_metrics(images, prompts, coco_statistics_path)
 
-    model_name = "sdxl-lora" + ("-tp" if use_cfg_parallel else "")
+    model_name = f"sdxl-lora-{image_resolution[0]}" + ("-tp" if use_cfg_parallel else "")
     metadata = {
         "model_name": model_name,
         "device": get_device_name(),

@@ -39,6 +39,7 @@
 
 namespace tt::tt_metal {
 class Allocator;
+class MetalEnv;
 class SubDevice;
 class SystemMemoryManager;
 
@@ -73,9 +74,13 @@ using DeviceIds = std::vector<int>;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
     friend class MeshDeviceImpl;
+    friend class tt::tt_metal::MetalEnv;
 
 private:
     MeshDevice() = default;
+    // [[Experimental]] Creates a MeshDevice that uses the given MetalEnv instance.
+    // This is used by MetalEnv::create_mesh_device and MetalEnv::create_unit_mesh_device.
+    explicit MeshDevice(MetalEnv& metal_env);
 
     std::unique_ptr<MeshDeviceImpl> pimpl_;
 
@@ -162,14 +167,6 @@ public:
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    void init_command_queue_host() override;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    void init_command_queue_device() override;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    bool compile_fabric() override;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    void configure_fabric() override;
     bool close() override;
     void enable_program_cache() override;
     void clear_program_cache() override;
@@ -197,6 +194,10 @@ public:
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
+    // Returns true if this MeshDevice contains only remote devices (no local devices on this host).
+    // Remote-only MeshDevices cannot perform operations requiring local device access like
+    // allocator(), create_sub_device_manager(), etc. Use this to check before calling such methods.
+    bool is_remote_only() const;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.

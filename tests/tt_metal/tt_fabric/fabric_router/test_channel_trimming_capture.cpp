@@ -59,7 +59,8 @@ namespace tt::tt_fabric::fabric_router_tests {
 // ============================================================================
 // Type alias for the capture results struct used throughout these tests
 // ============================================================================
-using CaptureResults = FabricDatapathUsageL1Results<true, builder_config::num_max_receiver_channels, builder_config::num_max_sender_channels>;
+using CaptureResults =
+    FabricDatapathUsageL1Results<true, builder_config::MAX_NUM_VCS, builder_config::num_max_sender_channels>;
 
 // ============================================================================
 // Helper: Result of reading capture data from a single ETH core

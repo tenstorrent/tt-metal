@@ -13,33 +13,11 @@ from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
-from models.tt_transformers.tt.multimodal.llama_vision_encoder import mask_tile_padding, pad_seq_one_tile
-
-
-def get_negative_inf_value(dtype):
-    return torch.finfo(dtype).min
-
-
-def build_encoder_attention_mask(
-    x: torch.Tensor,
-    ar: torch.Tensor,
-    ntok: int,
-    num_chunks: int,
-    n_heads: int,
-):
-    """
-    Build vision encoder attention mask that omits padding tokens.
-    """
-    masks = []
-    for arx in ar:
-        mask_i = torch.ones((num_chunks, x.shape[2], 1), dtype=x.dtype)
-        mask_i[: arx[0] * arx[1], :ntok] = 0
-        mask_i = mask_i.view(num_chunks * x.shape[2], -1)
-        mask_i = mask_i @ mask_i.T * get_negative_inf_value(x.dtype)
-        mask_i = mask_i.unsqueeze(0)
-        masks.append(mask_i)
-    masks = torch.stack(masks).to(x.device).expand(-1, n_heads, -1, -1)
-    return masks
+from models.tt_transformers.tt.multimodal.llama_vision_encoder import (
+    build_encoder_attention_mask,
+    mask_tile_padding,
+    pad_seq_one_tile,
+)
 
 
 @pytest.mark.parametrize(
@@ -81,27 +59,18 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     dim = model_args.vision_dim
     ntok = model_args.vision_chunk_ntok - 1  # NOTE: -1 to remove class embedding
     weights_path = model_args.model_base_path.__str__()
-    # the following lines are memory intensive and create big overhead
-    # config = MllamaConfig.from_pretrained(weights_path)
-    # model = MllamaForConditionalGeneration(config).to(torch.bfloat16)
-    # model.model.vision_model.load_state_dict(partial_state_dict, strict=False)
 
     model = MllamaForConditionalGeneration.from_pretrained(
-        weights_path, torch_dtype=torch.bfloat16, device_map="auto", trust_remote_code=True, use_safetensors=True
-    )  # config=config,
+        weights_path,
+        torch_dtype=torch.bfloat16,
+        device_map="auto",
+        trust_remote_code=True,
+        use_safetensors=True,
+        attn_implementation="sdpa",
+    )
     reference_model = model.model.vision_model.eval()
     callable_reference = reference_model.transformer if not is_global else reference_model.global_transformer
     all_tests_pass = True
-
-    # Since attention weights are permuted by load_checkpoints.py, the Q and K attention weights are assigned to HF model computational graph to match tensor output for increased similarity between hidden states of each layer. This is temporary till exclusion of vision branch is implemented in convert_hf_to_meta_llama_format() and all Llama reference models use HF's computational graph. Refer to https://github.com/tenstorrent/tt-metal/issues/32024 for more details.
-    prefix = "global_" if is_global else ""
-    for id_b, _ in enumerate(callable_reference.layers):
-        callable_reference.layers[id_b].self_attn.q_proj.weight = torch.nn.Parameter(
-            state_dict["vision_model.vision_encoder." + prefix + "transformer.resblocks.{}.attn.wq.weight".format(id_b)]
-        )
-        callable_reference.layers[id_b].self_attn.k_proj.weight = torch.nn.Parameter(
-            state_dict["vision_model.vision_encoder." + prefix + "transformer.resblocks.{}.attn.wk.weight".format(id_b)]
-        )
 
     tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaImageTransformer(
@@ -167,13 +136,14 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
         tens_input = ttnn.to_torch(attention_input, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[
             0, :, :, :
         ].reshape(batch * num_chunks, ntok + npadtt, dim)
-        feats = callable_reference(tens_input[:, :ntok, :], attention_mask=mask)
+
+        feats = callable_reference(
+            tens_input[:, :ntok, :], attention_mask=mask, output_hidden_states=(return_intermediate is not None)
+        )
         reference_output = feats.last_hidden_state
-        if return_intermediate != None:
-            intermediates = [tens_input[:, :ntok, :]]
-            for l in range(n_layers):
-                intermediates.append(callable_reference.layers[l](tt_intermed_torch[l])[0])
-            reference_output = intermediates[n_layers]
+        if return_intermediate is not None:
+            intermediates = feats.hidden_states
+
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
         if not passing:

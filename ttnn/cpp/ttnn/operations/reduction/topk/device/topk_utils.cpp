@@ -85,6 +85,12 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     // Search for optimal split size by trying powers of 2 from conservative start to max_dim
     for (uint32_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
         // Calculate work distribution for this split size
+        TT_FATAL(
+            split_size != 0,
+            "Split size must be non-zero (got 0 for width={}, max_cores={}, max_dim={})",
+            width,
+            max_cores,
+            max_dim);
         const uint32_t rem = width % split_size;                      // Remainder after even division
         const uint32_t num_cores = (width / split_size) + (rem > 0);  // Cores needed (extra for remainder)
 

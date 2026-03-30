@@ -104,8 +104,9 @@ ALWI void mm_init(
     PACK((llk_pack_init(out_cb_id)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
 #else
+    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
     UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
-    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));  // transpose not yet implemented
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
 
     MATH((llk_math_matmul_init<MATH_FIDELITY>()));
     MATH((llk_math_pack_sync_init()));
@@ -254,7 +255,18 @@ ALWI void mm_block_init(
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
     PACK((llk_pack_init<false, false>(out_cb_id)));
     PACK((llk_pack_dest_init<DST_ACCUM_MODE, false>()));
-#endif  // TODO: AM; add Quasar implementation
+#else
+    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
+    UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
+
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
+    MATH((llk_math_pack_sync_init()));
+    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+
+    PACK((llk_pack_hw_configure(out_cb_id)));
+    PACK((llk_pack_init(out_cb_id)));
+#endif
 }
 
 // clang-format off
@@ -299,7 +311,10 @@ ALWI void matmul_block(
 #else
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
 #endif
-#endif  // TODO: AM; add Quasar implementation
+#else
+    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_block(ct_dim, rt_dim)));
+#endif
 }
 
 // clang-format off
@@ -335,7 +350,11 @@ ALWI void mm_block_init_short(
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #endif
-#endif  // TODO: AM; add Quasar implementation
+#else
+    ASSERT(transpose == 0);  // matmul transpose not yet implemented for Quasar
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
+#endif
 }
 
 // clang-format off
