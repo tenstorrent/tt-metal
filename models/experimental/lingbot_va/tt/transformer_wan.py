@@ -221,7 +221,6 @@ class WanTransformerBlock(Module):
         gate_msa = ttnn.typecast(gate_msa, dtype=ttnn.bfloat16)
         c_gate_msa = ttnn.typecast(c_gate_msa, dtype=ttnn.bfloat16)
 
-        k_cur, v_cur = None, None
         per_token = T_dim != 6
         if per_token:
             spatial_normed_1BND = self.norm1(spatial_1BND)
