@@ -599,7 +599,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             TT_FATAL(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
-                return {"signbit_tile_init();", fmt::format("signbit_tile_int32({});", idst)};
+                return {"signbit_tile_int32_init();", fmt::format("signbit_tile_int32({});", idst)};
             }
             return {"signbit_tile_init();", fmt::format("        signbit_tile({});", idst)};
 

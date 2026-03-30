@@ -143,7 +143,7 @@ std::pair<std::string, std::string> get_op_init_and_func(
         case UnaryOpType::SIGN: return {"sign_tile_init();", fmt::format("sign_tile({});", idst)};
         case UnaryOpType::SIGNBIT:
             if (input_dtype.has_value() && *input_dtype == DataType::INT32) {
-                return {"signbit_tile_init();", fmt::format("signbit_tile_int32({});", idst)};
+                return {"signbit_tile_int32_init();", fmt::format("signbit_tile_int32({});", idst)};
             }
             return {"signbit_tile_init();", fmt::format("signbit_tile({});", idst)};
         case UnaryOpType::SILU: return {"silu_tile_init();", fmt::format("silu_tile({});", idst)};
