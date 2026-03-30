@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 
 pytestmark = pytest.mark.use_module_device
@@ -14,7 +16,7 @@ from models.common.utility_functions import torch_random
 
 
 def is_simulator():
-    return os.environ.get("TT_METAL_SIMULATOR") != None
+    return os.environ.get("TT_METAL_SIMULATOR") is not None
 
 
 @pytest.mark.parametrize(
