@@ -12,6 +12,9 @@ void RandnDeviceOperation::validate_inputs(
     TT_FATAL(
         operation_attributes.dtype == DataType::FLOAT32 || operation_attributes.dtype == DataType::BFLOAT16,
         "Randn: Output tensor must be Float32 or Bfloat16");
+    TT_FATAL(
+        operation_attributes.layout == Layout::TILE,
+        "Randn device operation only supports TILE layout internally. Use ttnn::randn() for ROW_MAJOR support.");
 }
 
 void RandnDeviceOperation::validate_on_program_cache_miss(
