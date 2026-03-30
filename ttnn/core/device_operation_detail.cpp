@@ -8,15 +8,11 @@
 
 #include <algorithm>
 #include <functional>
-#include <string_view>
 #include <unordered_map>
 #include <variant>
 #include <vector>
 
-#include <fmt/format.h>
-
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 
@@ -51,12 +47,13 @@ std::pair<
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
 compute_output_placements_and_shape(
-    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors,
-    const tt::tt_metal::Tensor& first_tensor) {
+    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors) {
     using Tensor = tt::tt_metal::Tensor;
     using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
     using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
     using Replicate = tt::tt_metal::distributed::MeshMapperConfig::Replicate;
+
+    TT_FATAL(!tensors.empty(), "Cannot compute output placements and shape with no tensors");
 
     std::vector<std::reference_wrapper<const Tensor>> sharded_tensors;
     for (const auto& tensor_ref : tensors) {
@@ -74,6 +71,7 @@ compute_output_placements_and_shape(
                 std::max(max_distribution_rank, tensor_ref.get().tensor_topology().distribution_shape().dims());
         }
     } else {
+        const auto &first_tensor = tensors.front().get();
         max_distribution_rank = first_tensor.tensor_topology().distribution_shape().dims();
     }
 
@@ -145,33 +143,6 @@ compute_output_placements_and_shape(
             "have the max distribution rank");
     }
     return {result_placements, tt::tt_metal::distributed::MeshShape(result_strides)};
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// emit_mesh_workload_annotation_impl
-// ─────────────────────────────────────────────────────────────────────
-
-void emit_mesh_workload_annotation_impl(
-    tt::tt_metal::distributed::MeshWorkload& workload,
-    std::string_view operation_name,
-    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors) {
-    if (tt::tt_metal::experimental::inspector::IsEnabled()) {
-        constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
-        fmt::memory_buffer tensor_args_buffer;
-        tensor_args_buffer.reserve(TENSOR_ARGS_BUFFER_SIZE);
-
-        int index = 0;
-        for (const auto& tensor_ref : tensors) {
-            if (index > 0) {
-                fmt::format_to(std::back_inserter(tensor_args_buffer), ", ");
-            }
-            fmt::format_to(std::back_inserter(tensor_args_buffer), "[{}]: {}", index, tensor_ref.get());
-            index++;
-        }
-
-        tt::tt_metal::experimental::inspector::EmitMeshWorkloadAnnotation(
-            workload, operation_name, std::string_view(tensor_args_buffer.data(), tensor_args_buffer.size()));
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────

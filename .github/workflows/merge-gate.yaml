@@ -393,7 +393,7 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
-          "P150b-viommu-prio",
+          #"P150b-viommu-prio",   # p150b triage has been failing since latest p150b runner update; disable for now until we can investigate and stabilize
         ]
     uses: ./.github/workflows/triage.yaml
     with:
@@ -435,4 +435,4 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate-main@main
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
-          owner: "S0985AN7TC5,U0AK4BVCFM0"
+          owner: "U0AK4BVCFM0,S0985AN7TC5"

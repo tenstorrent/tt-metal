@@ -6,6 +6,7 @@
 #include "device/llama_reduce_scatter_create_heads_device_op.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::experimental {
 
@@ -18,13 +19,15 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> llama_rs_create_heads(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
-    const uint32_t num_links,
+    std::optional<uint32_t> num_links,
     const uint32_t num_heads,
     const uint32_t num_kv_heads,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::MemoryConfig>& qkv_memory_config,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
+    uint32_t resolved_num_links =
+        num_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
     const auto& mesh_view = mesh_device.get_view();
     uint32_t ring_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
@@ -40,7 +43,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> llama_rs_create_heads(
         cluster_axis,
         ring_devices,
         topology,
-        num_links,
+        resolved_num_links,
         num_heads,
         num_kv_heads,
         head_dim,

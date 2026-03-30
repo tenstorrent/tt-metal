@@ -41,7 +41,7 @@ inline void llk_unpack_AB(
     std::uint32_t address_b = base_address_b + offset_address_b;
 
     LLK_ASSERT(
-        (are_unpacker_AB_configured_correctly(
+        (are_unpackers_AB_configured_correctly(
             unpack_src_format[operandA_id],
             unpack_dst_format[operandA_id],
             unpack_src_format[operandB_id],
