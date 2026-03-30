@@ -170,6 +170,16 @@ class TtBarkModel:
         if attention_mask is not None:
             # Mask padding positions back to text_pad_token (= TEXT_ENCODING_OFFSET)
             input_ids = input_ids.masked_fill((1 - attention_mask).bool(), TEXT_ENCODING_OFFSET)
+
+        # Voice preset: prepend semantic history tokens before infer token
+        history_prompt = inputs.get("history_prompt", None)
+        if history_prompt is not None:
+            semantic_history = history_prompt.get("semantic_prompt", None)
+            if semantic_history is not None:
+                if semantic_history.dim() == 1:
+                    semantic_history = semantic_history.unsqueeze(0)
+                input_ids = torch.cat([input_ids, semantic_history.to(torch.long)], dim=-1)
+
         infer_token = torch.tensor([[SEMANTIC_INFER_TOKEN]], dtype=torch.long)
         input_ids = torch.cat([input_ids, infer_token], dim=-1)
 
@@ -299,8 +309,14 @@ class TtBarkModel:
             mask[:, COARSE_SEMANTIC_PAD_TOKEN] = 0.0  # always allow EOS
             next_token_torch = torch.argmax(last_logits + mask, dim=-1)
 
-            # EOS check BEFORE appending — EOS never enters output
+            # EOS check — must only stop on full codebook pairs to prevent
+            # odd-length output that would crash Stage 3 reshape.
             if next_token_torch.item() == COARSE_SEMANTIC_PAD_TOKEN:
+                if step % N_COARSE_CODEBOOKS == 0 and len(generated_tokens) > 0:
+                    # EOS fired after codebook 0 of a new pair — pad with
+                    # a silence token for codebook 1 so the pair is complete.
+                    pad_cb1 = torch.tensor([[SEMANTIC_VOCAB_SIZE + CODEBOOK_SIZE]], dtype=torch.long)
+                    generated_tokens.append(pad_cb1)
                 break
 
             generated_tokens.append(next_token_torch.unsqueeze(-1))
@@ -349,7 +365,15 @@ class TtBarkModel:
         """
         n_coarse = self.fine_model.n_codes_given  # 2
         batch_size = coarse_tokens.shape[0]
-        coarse_seq_len = coarse_tokens.shape[1] // n_coarse
+
+        # Defensive: truncate trailing incomplete codebook frame to prevent
+        # reshape crash if coarse generation produced an odd token count.
+        n_tokens = coarse_tokens.shape[1]
+        if n_tokens % n_coarse != 0:
+            n_tokens = (n_tokens // n_coarse) * n_coarse
+            coarse_tokens = coarse_tokens[:, :n_tokens]
+
+        coarse_seq_len = n_tokens // n_coarse
 
         # De-interleave: [batch, seq*2] -> [batch, seq, 2]
         coarse_tokens_reshaped = coarse_tokens.reshape(batch_size, coarse_seq_len, n_coarse)
@@ -369,15 +393,27 @@ class TtBarkModel:
         # Predict codebooks 2-7 autoregressively on device
         with torch.no_grad():
             for codebook_idx in range(n_coarse, self.fine_model.n_codes_total):
+                # Bark training convention: the current codebook slot should contain
+                # a pad token (CODEBOOK_SIZE = 1024) when predicting that codebook.
+                pad_tokens = torch.full((1, 1, coarse_seq_len, 1), CODEBOOK_SIZE, dtype=torch.int32)
+                tt_pad = ttnn.from_torch(
+                    pad_tokens,
+                    dtype=ttnn.uint32,
+                    device=self.device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                input_with_pad = tt_codebooks + [tt_pad]
+
                 # logits: [1, batch, seq, vocab]
-                logits = self.fine_model(codebook_idx, tt_codebooks)
+                logits = self.fine_model(codebook_idx, input_with_pad)
 
                 # argmax on device: [1, batch, seq, 1]
                 preds = ttnn.argmax(logits, dim=-1)
                 tt_codebooks.append(preds)
 
-                # Optimization: deallocate logits immediately
+                # Optimization: deallocate logits and pad immediately
                 ttnn.deallocate(logits)
+                ttnn.deallocate(tt_pad)
 
         # Gather all codebooks from device to host
         # shape [batch, seq, 8]

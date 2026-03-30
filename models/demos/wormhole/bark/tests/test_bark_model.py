@@ -358,6 +358,52 @@ class TestBarkEdgeCases:
         assert result.shape[1] >= 2, f"Expected at least 2 tokens (silence), got {result.shape[1]}"
         print(f"Empty semantic → silence: shape={result.shape}  ✓")
 
+    def test_semantic_short_sequence(self, device, hf_model):
+        """Short sequences (seq < 32) must use causal masking in prefill fallback."""
+        batch_size, seq_len = 1, 16  # Triggers the q_seq < 32 matmul path
+
+        config = BarkConfig(
+            hidden_size=hf_model.semantic.config.hidden_size,
+            num_heads=hf_model.semantic.config.num_heads,
+            num_layers=hf_model.semantic.config.num_layers,
+            block_size=hf_model.semantic.config.block_size,
+            input_vocab_size=hf_model.semantic.config.input_vocab_size,
+            output_vocab_size=hf_model.semantic.config.output_vocab_size,
+            bias=getattr(hf_model.semantic.config, "bias", False),
+        )
+
+        input_ids = torch.randint(0, 10048, (batch_size, seq_len))
+
+        # TTNN forward (short sequence, should apply causal mask in matmul path)
+        params = preprocess_model_parameters(hf_model.semantic, device)
+        tt_model = TtBarkGPT(device, params, config, is_causal=True)
+        tt_logits, _ = tt_model(input_ids=input_ids)
+        tt_logits_torch = ttnn.to_torch(tt_logits).squeeze(0)
+        ttnn.deallocate(tt_logits)
+
+        # Reference forward (always applies causal mask)
+        from models.demos.wormhole.bark.reference.bark_reference import compute_pcc, run_semantic_forward
+
+        ref_logits = run_semantic_forward(hf_model, input_ids)
+
+        pcc = compute_pcc(tt_logits_torch, ref_logits)
+        print(f"Short-sequence (seq={seq_len}) PCC: {pcc:.6f}")
+        assert pcc >= 0.95, f"Short-sequence PCC {pcc:.6f} below threshold 0.95 — causal masking may be broken"
+
+    def test_odd_coarse_token_count(self, device, hf_model, tt_bark_model):
+        """Odd-length coarse tokens must not crash Stage 3 reshape."""
+        model = tt_bark_model
+
+        # Simulate odd coarse output (3 tokens instead of even number)
+        odd_tokens = torch.randint(0, 1024, (1, 3), dtype=torch.long)
+        fine_tokens = model.generate_fine_tokens(odd_tokens)
+
+        # Should truncate to 2 tokens (1 frame), not crash
+        assert fine_tokens is not None, "generate_fine_tokens returned None for odd input"
+        assert fine_tokens.shape[1] == 1, f"Expected 1 frame, got {fine_tokens.shape[1]}"
+        assert fine_tokens.shape[2] == 8, f"Expected 8 codebooks, got {fine_tokens.shape[2]}"
+        print(f"Odd coarse tokens handled: shape={fine_tokens.shape}  ✓")
+
 
 class TestBarkLongText:
     """Long text chunking tests (CPU-only, no TT hardware required)."""

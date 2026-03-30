@@ -93,10 +93,10 @@ The implementation uses TTNN ops for all transformer computation:
 ### Performance Targets
 | Metric | Target | Status |
 |--------|--------|--------|
-| Semantic tokens/sec | ≥ 20 | ✅ Optimized |
-| Coarse tokens/sec | ≥ 60 | ✅ Optimized |
-| RTF | < 0.8 | ✅ Target Met |
-| PCC vs PyTorch | ≥ 0.95 | ✅ Verified |
+| Semantic tokens/sec | ≥ 20 | ✅ 92.0 tok/s (4.6× target) |
+| Coarse tokens/sec | ≥ 60 | ✅ 67.0 tok/s |
+| RTF | < 0.8 | ⚠️ 1.94 (sequential pipeline; see [PERFORMANCE_REPORT.md](PERFORMANCE_REPORT.md)) |
+| PCC vs PyTorch | ≥ 0.95 | ✅ All stages > 0.999 |
 
 ## Dependencies
 
