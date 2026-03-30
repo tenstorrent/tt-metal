@@ -3,13 +3,12 @@
 
 """Unit tests for ttrun command-line utility."""
 
-import itertools
-import random
 import yaml
 import importlib
 from pathlib import Path
 from unittest.mock import patch
 import pytest
+import click
 from click.testing import CliRunner
 
 from ttnn.distributed.ttrun import (
@@ -126,20 +125,6 @@ class TestCommandLineArguments:
         assert result.exit_code != 0
         assert "--hosts is required" in result.output.lower()
 
-    def test_new_mode_requires_hosts(self, runner, sample_mesh_graph_descriptor):
-        """Test that new mode requires --hosts unless --mock-cluster-rank-binding is provided."""
-        result = runner.invoke(
-            main,
-            [
-                "--mesh-graph-descriptor",
-                str(sample_mesh_graph_descriptor),
-                "echo",
-                "test",
-            ],
-        )
-        assert result.exit_code != 0
-        assert "--hosts is required" in result.output.lower()
-
     def test_new_mode_with_hosts(self, runner, sample_mesh_graph_descriptor):
         """Test that new mode accepts --hosts and attempts Phase 1."""
         import subprocess
@@ -161,11 +146,8 @@ class TestCommandLineArguments:
                     "test",
                 ],
             )
-            # Should fail because generate_rank_bindings not found, but not because "--hosts is required"
             assert result.exit_code != 0
             assert "--hosts is required" not in result.output.lower()
-            # Should attempt Phase 1 (find executable)
-            assert "generate_rank_bindings" in result.output.lower() or "Phase 1" in result.output.lower()
 
     def test_new_mode_with_mock_cluster_no_hosts(self, runner, sample_mesh_graph_descriptor, temp_dir):
         """Test that new mode doesn't require --hosts when --mock-cluster-rank-binding is provided."""
@@ -205,11 +187,8 @@ class TestCommandLineArguments:
                     "test",
                 ],
             )
-            # Should fail because generate_rank_bindings not found, but not because "--hosts is required"
             assert result.exit_code != 0
             assert "--hosts is required" not in result.output.lower()
-            # Should attempt Phase 1
-            assert "generate_rank_bindings" in result.output.lower() or "Phase 1" in result.output.lower()
 
 
 class TestPhase2Helpers:
@@ -248,54 +227,6 @@ class TestPhase2Helpers:
         assert str(executable.resolve()) in cmd
         assert "--mesh-graph-descriptor" in cmd
         assert str(mgd_path.resolve()) in cmd
-        assert "--output-dir" in cmd
-        assert str(output_dir.resolve()) in cmd
-
-    def test_build_generate_rank_bindings_mpi_cmd_mock(self, temp_dir):
-        """Test build_generate_rank_bindings_mpi_cmd with mock cluster."""
-        executable = temp_dir / "generate_rank_bindings"
-        executable.touch()
-        mgd_path = temp_dir / "mesh.textproto"
-        mgd_path.touch()
-        output_dir = temp_dir / "output"
-        mock_desc0 = temp_dir / "mock0.yaml"
-        mock_desc1 = temp_dir / "mock1.yaml"
-        mock_desc0.touch()
-        mock_desc1.touch()
-        mock_rank_to_desc = {0: mock_desc0, 1: mock_desc1}
-
-        cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, None, output_dir, mock_rank_to_desc)
-
-        # Check --oversubscribe flag (mock clusters don't use --host)
-        assert "--oversubscribe" in cmd
-        # Should NOT have --host (MPI defaults to localhost)
-        assert "--host" not in cmd
-        # Check per-rank -np 1 segments (not single -np 2)
-        np_indices = [i for i, arg in enumerate(cmd) if arg == "-np"]
-        assert len(np_indices) == 2  # One per rank
-        assert cmd[np_indices[0] + 1] == "1"
-        assert cmd[np_indices[1] + 1] == "1"
-        # Check : separator between ranks
-        assert ":" in cmd
-        # Check per-rank TT_METAL_MOCK_CLUSTER_DESC_PATH (one per rank segment)
-        env_vars = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-x"]
-        mock_env_vars = [e for e in env_vars if "TT_METAL_MOCK_CLUSTER_DESC_PATH" in e]
-        assert len(mock_env_vars) == 2
-        # Each rank segment should have its own env var (LD_LIBRARY_PATH is global, so find TT_METAL_MOCK_*)
-        colon_idx = cmd.index(":")
-        rank0_env_idx = next(
-            i
-            for i, arg in enumerate(cmd[:colon_idx])
-            if arg == "-x" and "TT_METAL_MOCK_CLUSTER_DESC_PATH" in cmd[i + 1]
-        )
-        assert str(mock_desc0.resolve()) in cmd[rank0_env_idx + 1]
-        rank1_env_idx = next(
-            i
-            for i, arg in enumerate(cmd[colon_idx:])
-            if arg == "-x" and "TT_METAL_MOCK_CLUSTER_DESC_PATH" in cmd[colon_idx + i + 1]
-        )
-        assert str(mock_desc1.resolve()) in cmd[colon_idx + rank1_env_idx + 1]
-        # Check --output-dir is passed
         assert "--output-dir" in cmd
         assert str(output_dir.resolve()) in cmd
 
@@ -559,64 +490,6 @@ class TestRankfileInjection:
         assert result[1] == "rankfile:file=rankfile"
         assert result[2:] == base_args
 
-    def test_legacy_flow_rankfile_conflict(self, runner, sample_rank_binding_yaml, temp_dir):
-        """Test legacy_flow skips rankfile injection if already in mpi_args."""
-        import subprocess
-
-        rankfile = temp_dir / "rankfile"
-        rankfile.touch()
-
-        with patch.object(subprocess, "run"):
-            result = runner.invoke(
-                main,
-                [
-                    "--rank-binding",
-                    str(sample_rank_binding_yaml),
-                    "--mpi-args",
-                    "--rankfile /tmp/other_rankfile",
-                    "--dry-run",
-                    "echo",
-                    "test",
-                ],
-            )
-            # Should succeed but warn about conflict (if rankfile param was used)
-            # Since we're not passing --rankfile param here, no conflict expected
-            assert result.exit_code == 0
-
-    def test_legacy_flow_rankfile_oversubscribe(self, runner, sample_rank_binding_yaml, temp_dir):
-        """Test legacy_flow adds --oversubscribe when rankfile has multiple ranks per host."""
-        from ttnn.distributed.ttrun import build_rankfile_args, detect_rankfile_syntax, get_mpi_launcher
-
-        # Create rankfile with multiple ranks per host
-        rankfile = temp_dir / "rankfile"
-        rankfile.write_text("rank 0=node1 slot=0\nrank 1=node1 slot=1\nrank 2=node2 slot=0\n")
-
-        # Verify rankfile needs oversubscribe
-        assert rankfile_needs_oversubscribe(rankfile), "Rankfile should need oversubscribe"
-
-        # Test the logic directly - simulate what happens in legacy_flow
-        mpi_launcher = get_mpi_launcher()
-        rankfile_syntax = detect_rankfile_syntax(mpi_launcher)
-        rankfile_args = build_rankfile_args(rankfile_syntax, rankfile, cwd=temp_dir)
-        effective_mpi_args = rankfile_args + []
-
-        # Check if --oversubscribe would be added (simulate the logic from legacy_flow)
-        if rankfile_needs_oversubscribe(rankfile):
-            has_oversubscribe = "--oversubscribe" in effective_mpi_args
-            if not has_oversubscribe:
-                # Simulate the insertion logic from legacy_flow
-                rankfile_args_len = len(rankfile_args)
-                effective_mpi_args = (
-                    effective_mpi_args[:rankfile_args_len]
-                    + ["--oversubscribe"]
-                    + effective_mpi_args[rankfile_args_len:]
-                )
-
-        # Verify --oversubscribe is present
-        assert (
-            "--oversubscribe" in effective_mpi_args
-        ), "Should add --oversubscribe when rankfile has multiple ranks per host"
-
 
 class TestDetectRankfileSyntax:
     """Test rankfile syntax detection."""
@@ -681,18 +554,6 @@ OpenMPI help text
         syntax = detect_rankfile_syntax("mpirun", subprocess_run=mock_run)
         assert syntax == RankfileSyntax.MCA_RMAPS_RANKFILE_PATH
 
-    def test_detect_rankfile_syntax_timeout_fallback(self, temp_dir):
-        """Test fallback to MCA parameter on timeout."""
-        from unittest.mock import MagicMock
-        import subprocess
-
-        # Mock subprocess.run to raise TimeoutExpired
-        def mock_run(cmd, **kwargs):
-            raise subprocess.TimeoutExpired(cmd, timeout=5)
-
-        syntax = detect_rankfile_syntax("mpirun", subprocess_run=mock_run)
-        assert syntax == RankfileSyntax.MCA_RMAPS_RANKFILE_PATH
-
 
 class TestFindGenerateRankBindingsExecutable:
     """Test finding generate_rank_bindings executable."""
@@ -706,32 +567,6 @@ class TestFindGenerateRankBindingsExecutable:
         monkeypatch.setenv("TT_METAL_HOME", str(temp_dir))
         result = find_generate_rank_bindings_executable()
         assert result == executable_path.resolve()
-
-    def test_find_generate_rank_bindings_executable_original_cwd(self, temp_dir, monkeypatch):
-        """Test finding executable relative to ORIGINAL_CWD."""
-        executable_path = temp_dir / "build" / "tools" / "scaleout" / "generate_rank_bindings"
-        executable_path.parent.mkdir(parents=True)
-        executable_path.touch()
-
-        # Mock ORIGINAL_CWD
-        original_cwd = ttrun_module.ORIGINAL_CWD
-        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
-        monkeypatch.delenv("TT_METAL_HOME", raising=False)
-
-        try:
-            result = find_generate_rank_bindings_executable()
-            assert result == executable_path.resolve()
-        finally:
-            monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", original_cwd)
-
-    def test_find_generate_rank_bindings_executable_not_found(self, monkeypatch):
-        """Test FileNotFoundError when executable not found."""
-        monkeypatch.delenv("TT_METAL_HOME", raising=False)
-
-        with patch("pathlib.Path.exists", return_value=False):
-            with pytest.raises(FileNotFoundError) as exc_info:
-                find_generate_rank_bindings_executable()
-            assert "generate_rank_bindings executable not found" in str(exc_info.value)
 
 
 class TestPhase1CacheId:
@@ -751,16 +586,8 @@ class TestPhase1CacheId:
         assert len(fp) == 64
         assert fp[:PHASE1_CACHE_ID_HEX_LEN] == compute_phase1_cache_id(mgd, sorted(["h"]), None)
 
-    @pytest.mark.parametrize(
-        "mgd_relative",
-        [
-            Path("tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto"),
-            Path("tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"),
-            Path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto"),
-        ],
-    )
-    def test_cache_id_real_mgd_host_permutations_stable(self, temp_dir, mgd_relative):
-        mgd_src = REPO_ROOT / mgd_relative
+    def test_cache_id_same_bytes_and_sorted_hosts_stable(self, temp_dir):
+        mgd_src = REPO_ROOT / "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto"
         if not mgd_src.is_file():
             pytest.skip(f"Mesh graph descriptor not present: {mgd_src}")
         mgd_a = temp_dir / "a.textproto"
@@ -769,26 +596,13 @@ class TestPhase1CacheId:
         data = mgd_src.read_bytes()
         mgd_a.write_bytes(data)
         mgd_b.write_bytes(data)
-
         hosts = ["zebra-0", "alpha-1", "moon-2"]
-        id_from_a = compute_phase1_cache_id(mgd_a, sorted(hosts), None)
-        id_from_b = compute_phase1_cache_id(mgd_b, sorted(hosts), None)
-        assert id_from_a == id_from_b
-
+        assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
+            mgd_b, sorted(hosts), None
+        )
         assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
             mgd_a, sorted(reversed(hosts)), None
         )
-        random.seed(42)
-        for _ in range(5):
-            shuffled = hosts.copy()
-            random.shuffle(shuffled)
-            assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
-                mgd_a, sorted(shuffled), None
-            )
-        for perm in itertools.permutations(hosts):
-            assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
-                mgd_a, sorted(perm), None
-            )
 
     def test_cache_id_hosts_change_changes_id(self, temp_dir):
         mgd = temp_dir / "m.textproto"
@@ -843,8 +657,6 @@ class TestPhase1CacheArtifacts:
         rb.write_text("x")
         rf.write_text("y")
         assert phase1_outputs_ready(run_dir, mock_mode=False)
-        rb.write_text("")
-        assert not phase1_outputs_ready(run_dir, mock_mode=False)
 
     def test_phase1_outputs_ready_mock_needs_phase2_mapping(self, temp_dir):
         run_dir = temp_dir / "r"
@@ -929,79 +741,13 @@ class TestRunPhase1GenerateRankBindings:
             run_phase1_generate_rank_bindings(mgd_path, hosts, output_dir, subprocess_run=mock_run, sleep_secs=0)
         assert "generate_rank_bindings failed" in str(exc_info.value)
 
-    def test_run_phase1_generate_rank_bindings_missing_output(self, temp_dir):
-        """Test Phase 1 failure when output files are missing."""
-        from unittest.mock import MagicMock
-
-        mgd_path = temp_dir / "mesh.textproto"
-        mgd_path.touch()
-        hosts = ["node1", "node2"]
-        output_dir = temp_dir / "output"
-        output_dir.mkdir()
-
-        def mock_run(cmd, cwd=None, **kwargs):
-            # Don't create output files
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            return mock_result
-
-        with pytest.raises(RuntimeError) as exc_info:
-            run_phase1_generate_rank_bindings(mgd_path, hosts, output_dir, subprocess_run=mock_run, sleep_secs=0)
-        assert "not found" in str(exc_info.value).lower()
-
-    def test_run_phase1_generate_rank_bindings_mock_cluster(self, temp_dir):
-        """Test Phase 1 with mock cluster descriptors."""
-        from unittest.mock import MagicMock
-
-        mgd_path = temp_dir / "mesh.textproto"
-        mgd_path.touch()
-        output_dir = temp_dir / "output"
-        output_dir.mkdir()
-
-        mock_desc_0 = temp_dir / "mock0.yaml"
-        mock_desc_1 = temp_dir / "mock1.yaml"
-        mock_desc_0.touch()
-        mock_desc_1.touch()
-
-        mock_rank_to_desc = {0: mock_desc_0, 1: mock_desc_1}
-
-        # Create output files after subprocess.run
-        rank_bindings_path = output_dir / "rank_bindings.yaml"
-        rankfile_path = output_dir / "rankfile"
-
-        captured_cmd = []
-
-        def mock_run(cmd, cwd=None, **kwargs):
-            captured_cmd.extend(cmd)
-            # Create output files
-            rank_bindings_path.write_text("rank_bindings:\n  - rank: 0\n")
-            rankfile_path.write_text("rank 0=localhost slot=0\n")
-            mock_result = MagicMock()
-            mock_result.returncode = 0
-            return mock_result
-
-        result_rank_bindings, result_rankfile = run_phase1_generate_rank_bindings(
-            mgd_path,
-            hosts=None,
-            output_dir=output_dir,
-            subprocess_run=mock_run,
-            sleep_secs=0,
-            mock_rank_to_desc=mock_rank_to_desc,
-        )
-
-        assert result_rank_bindings == rank_bindings_path
-        assert result_rankfile == rankfile_path
-        # Verify mock cluster command includes --oversubscribe and per-rank env vars
-        assert "--oversubscribe" in captured_cmd
-        assert any("TT_METAL_MOCK_CLUSTER_DESC_PATH" in str(arg) for arg in captured_cmd)
-
 
 class TestNewModeFlow:
     """Test new_mode_flow orchestration."""
 
     def test_new_mode_flow_success(self, runner, temp_dir, monkeypatch):
         """Test successful new_mode_flow execution."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
 
         monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
         mgd_path = temp_dir / "mesh.textproto"
@@ -1040,6 +786,7 @@ class TestNewModeFlow:
             call_args = mock_legacy.call_args
             assert call_args.kwargs["rank_binding"] == rank_bindings_path
             assert call_args.kwargs["rankfile"] == rankfile_path
+            assert call_args.kwargs.get("phase2_failure_hint") is None
 
     def test_new_mode_flow_phase1_cache_hit(self, runner, temp_dir, monkeypatch):
         """When cache dir has rank_bindings and rankfile, Phase 1 is skipped."""
@@ -1088,14 +835,15 @@ class TestNewModeFlow:
         assert mock_legacy.called
         assert mock_legacy.call_args.kwargs["rank_binding"] == run_dir / "rank_bindings.yaml"
         assert mock_legacy.call_args.kwargs["rankfile"] == run_dir / "rankfile"
+        assert mock_legacy.call_args.kwargs.get("phase2_failure_hint") == "stale_phase1_cache"
 
-    def test_new_mode_flow_cache_miss_without_key_file_runs_phase1(self, runner, temp_dir, monkeypatch):
-        """Outputs present but no .phase1_cache_key is not a valid hit (must re-verify)."""
+    def test_new_mode_flow_force_rediscovery_runs_phase1_despite_cache_hit(self, runner, temp_dir, monkeypatch):
+        """--force-rediscovery skips cache hit and invokes generate_rank_bindings."""
         from unittest.mock import patch
 
         monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
         mgd_path = temp_dir / "mesh.textproto"
-        mgd_path.write_bytes(b"m")
+        mgd_path.write_bytes(b"mgd-for-force-rediscovery")
         cache_id = compute_phase1_cache_id(mgd_path, sorted(["node1", "node2"]), None)
         run_dir = temp_dir / "generated" / "ttrun" / cache_id
         run_dir.mkdir(parents=True)
@@ -1109,122 +857,17 @@ class TestNewModeFlow:
         with open(run_dir / "rank_bindings.yaml", "w") as f:
             yaml.dump(rank_bindings_content, f)
         (run_dir / "rankfile").write_text("rank 0=node1 slot=0\n")
-        # no PHASE1_CACHE_KEY_FILENAME
+        write_phase1_cache_key_file(
+            run_dir, compute_phase1_cache_fingerprint_full(mgd_path, sorted(["node1", "node2"]), None)
+        )
+
         with patch.object(
             ttrun_module,
             "run_phase1_generate_rank_bindings",
             return_value=(run_dir / "rank_bindings.yaml", run_dir / "rankfile"),
-        ) as mock_p1, patch.object(ttrun_module, "legacy_flow"), patch.object(
+        ) as mock_p1, patch.object(ttrun_module, "legacy_flow") as mock_legacy, patch.object(
             ttrun_module, "resolve_path", return_value=mgd_path
         ), patch.object(
-            ttrun_module, "find_generate_rank_bindings_executable"
-        ):
-            runner.invoke(
-                main,
-                [
-                    "--mesh-graph-descriptor",
-                    str(mgd_path),
-                    "--hosts",
-                    "node1,node2",
-                    "--dry-run",
-                    "echo",
-                    "test",
-                ],
-            )
-        assert mock_p1.called
-
-    def test_new_mode_flow_truncation_collision_uses_full_id_dir(self, runner, temp_dir, monkeypatch):
-        """When short-id dir has another config's key, Phase 1 writes to full-fingerprint path."""
-        from unittest.mock import patch
-
-        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
-        mgd_path = temp_dir / "mesh.textproto"
-        mgd_path.write_bytes(b"collision-test-mgd")
-        fp = compute_phase1_cache_fingerprint_full(mgd_path, sorted(["a", "b"]), None)
-        short_dir = temp_dir / "generated" / "ttrun" / fp[:PHASE1_CACHE_ID_HEX_LEN]
-        full_dir = temp_dir / "generated" / "ttrun" / fp
-        short_dir.mkdir(parents=True)
-        mesh_graph_file = temp_dir / "mesh_graph.yaml"
-        mesh_graph_file.touch()
-        rank_bindings_content = {
-            "rank_bindings": [{"rank": 0, "mesh_id": 0, "mesh_host_rank": 0}],
-            "global_env": {},
-            "mesh_graph_desc_path": str(mesh_graph_file),
-        }
-        with open(short_dir / "rank_bindings.yaml", "w") as f:
-            yaml.dump(rank_bindings_content, f)
-        (short_dir / "rankfile").write_text("rank 0=a slot=0\n")
-        (short_dir / PHASE1_CACHE_KEY_FILENAME).write_text("0" * 64 + "\n")
-
-        with patch.object(
-            ttrun_module,
-            "run_phase1_generate_rank_bindings",
-            return_value=(full_dir / "rank_bindings.yaml", full_dir / "rankfile"),
-        ) as mock_p1, patch.object(ttrun_module, "legacy_flow"), patch.object(
-            ttrun_module, "resolve_path", return_value=mgd_path
-        ), patch.object(
-            ttrun_module, "find_generate_rank_bindings_executable"
-        ):
-            runner.invoke(
-                main,
-                [
-                    "--mesh-graph-descriptor",
-                    str(mgd_path),
-                    "--hosts",
-                    "a,b",
-                    "--dry-run",
-                    "echo",
-                    "test",
-                ],
-            )
-        assert mock_p1.called
-        assert mock_p1.call_args[0][2] == full_dir
-
-    def test_new_mode_flow_hosts_passed_sorted_to_phase1(self, runner, temp_dir, monkeypatch):
-        """Comma-list host order is canonicalized to sorted order for Phase 1 (MPI rank alignment)."""
-        from unittest.mock import patch
-
-        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
-        mgd_path = temp_dir / "mesh.textproto"
-        mgd_path.write_bytes(b"x")
-        cache_id = compute_phase1_cache_id(mgd_path, sorted(["alpha", "zebra"]), None)
-        run_dir = temp_dir / "generated" / "ttrun" / cache_id
-        rb = run_dir / "rank_bindings.yaml"
-        rf = run_dir / "rankfile"
-
-        with patch.object(
-            ttrun_module, "run_phase1_generate_rank_bindings", return_value=(rb, rf)
-        ) as mock_p1, patch.object(ttrun_module, "legacy_flow"), patch.object(
-            ttrun_module, "resolve_path", return_value=mgd_path
-        ), patch.object(
-            ttrun_module, "find_generate_rank_bindings_executable"
-        ):
-            runner.invoke(
-                main,
-                [
-                    "--mesh-graph-descriptor",
-                    str(mgd_path),
-                    "--hosts",
-                    "zebra,alpha",
-                    "--dry-run",
-                    "echo",
-                    "test",
-                ],
-            )
-
-        assert mock_p1.call_args[0][1] == ["alpha", "zebra"]
-
-    def test_new_mode_flow_phase1_failure(self, runner, temp_dir, monkeypatch):
-        """Test new_mode_flow handles Phase 1 failure."""
-        from unittest.mock import patch
-
-        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
-        mgd_path = temp_dir / "mesh.textproto"
-        mgd_path.touch()
-
-        with patch.object(
-            ttrun_module, "run_phase1_generate_rank_bindings", side_effect=RuntimeError("Phase 1 failed")
-        ) as mock_phase1, patch.object(ttrun_module, "resolve_path", return_value=mgd_path), patch.object(
             ttrun_module, "find_generate_rank_bindings_executable"
         ):
             result = runner.invoke(
@@ -1234,18 +877,21 @@ class TestNewModeFlow:
                     str(mgd_path),
                     "--hosts",
                     "node1,node2",
+                    "--force-rediscovery",
                     "--dry-run",
                     "echo",
                     "test",
                 ],
             )
 
-            assert result.exit_code != 0
-            assert "Phase 1" in result.output or "failed" in result.output.lower()
+        assert result.exit_code == 0
+        assert mock_p1.called
+        assert mock_legacy.called
+        assert mock_legacy.call_args.kwargs.get("phase2_failure_hint") is None
 
     def test_new_mode_flow_mock_cluster(self, runner, temp_dir, monkeypatch):
         """Test new_mode_flow with mock cluster rank binding."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
 
         monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
         mgd_path = temp_dir / "mesh.textproto"

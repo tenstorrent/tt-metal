@@ -18,7 +18,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 from enum import Enum
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Literal, Optional, Union
 
 import click
 import yaml
@@ -29,6 +29,38 @@ TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
+
+# How to extend Phase 2 failure messages (see legacy_flow phase2_failure_hint).
+Phase2FailureHint = Optional[Literal["stale_phase1_cache", "legacy"]]
+
+# Phase 2 troubleshooting (after new_mode_flow → legacy_flow).
+PHASE2_TROUBLESHOOTING_HINT_NEW_MODE = (
+    "If the run failed or hung during physical discovery, or expected files are missing, your rank bindings "
+    "cache may be stale. Retry with --force-rediscovery to regenerate Phase 1 outputs."
+)
+
+# Phase 2 troubleshooting when only --rank-binding was used (no mesh-graph-descriptor / Phase 1 cache).
+PHASE2_TROUBLESHOOTING_HINT_LEGACY_MODE = (
+    "If device/ASIC mapping or discovery failed (e.g. golden file mismatch), verify cluster descriptors and "
+    "golden YAML under tests/tt_metal/tt_fabric/golden_mapping_files/ match this system. "
+    "If you use tt-run new mode (--mesh-graph-descriptor), retry with --force-rediscovery to refresh rank bindings."
+)
+
+
+def _phase2_troubleshooting_hint_text(hint: Phase2FailureHint) -> Optional[str]:
+    if hint == "stale_phase1_cache":
+        return PHASE2_TROUBLESHOOTING_HINT_NEW_MODE
+    if hint == "legacy":
+        return PHASE2_TROUBLESHOOTING_HINT_LEGACY_MODE
+    return None
+
+
+def _emit_phase2_troubleshooting_hint(hint: Phase2FailureHint) -> None:
+    """Log a single Phase 2 failure hint (stale Phase 1 cache vs legacy rank-binding guidance)."""
+    text = _phase2_troubleshooting_hint_text(hint)
+    if text:
+        logger.warning(f"{TT_RUN_PREFIX} {text}")
+
 
 # Store the original working directory at module load time to preserve it
 # across mpirun process launches (critical for SLURM/sbatch environments)
@@ -1220,6 +1252,7 @@ def legacy_flow(
     tcp_interface: Optional[str],
     rankfile: Optional[Path] = None,
     rankfile_syntax: Optional[RankfileSyntax] = None,
+    phase2_failure_hint: Phase2FailureHint = "legacy",
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -1461,7 +1494,12 @@ def legacy_flow(
     try:
         config = parse_binding_config(rank_binding, mock_cluster_rank_binding, skip_mgd_check)
     except (ValueError, ValidationError) as e:
-        raise click.ClickException(f"Configuration error: {e}")
+        msg = f"Configuration error: {e}"
+        # Stale Phase 1 cache guidance applies after a cache hit when MPI/apps fail — not typical for YAML parse.
+        t_legacy = _phase2_troubleshooting_hint_text("legacy")
+        if phase2_failure_hint == "legacy" and t_legacy:
+            msg += f"\n{TT_RUN_PREFIX} {t_legacy}"
+        raise click.ClickException(msg)
 
     if verbose:
         logger.info(f"{TT_RUN_PREFIX}   Resolved mesh_graph_desc_path: {config.mesh_graph_desc_path}")
@@ -1563,13 +1601,17 @@ def legacy_flow(
 
     try:
         result = subprocess.run(mpi_cmd, cwd=ORIGINAL_CWD)
+        if result.returncode != 0:
+            _emit_phase2_troubleshooting_hint(phase2_failure_hint)
         sys.exit(result.returncode)
     except KeyboardInterrupt:
         # Handle Ctrl+C gracefully with proper exit code (128 + SIGINT)
         logger.error(f"{TT_RUN_PREFIX} Interrupted")
+        _emit_phase2_troubleshooting_hint(phase2_failure_hint)
         sys.exit(INTERRUPTED_EXIT_CODE)
     except OSError as e:
-        raise click.ClickException(f"Error launching mpirun: {e}")
+        t = _phase2_troubleshooting_hint_text(phase2_failure_hint)
+        raise click.ClickException(f"Error launching mpirun: {e}" + (f"\n{TT_RUN_PREFIX} {t}" if t else ""))
 
 
 def new_mode_flow(
@@ -1586,6 +1628,7 @@ def new_mode_flow(
     bare: bool,
     tcp_interface: Optional[str],
     rankfile_syntax: Optional[RankfileSyntax] = None,
+    force_rediscovery: bool = False,
 ) -> None:
     """New mode flow for ttrun using mesh graph descriptor.
 
@@ -1605,6 +1648,7 @@ def new_mode_flow(
         skip_executable_check: If True, skip program executable validation
         bare: If True, disable tt-run defaults
         tcp_interface: Network interface for MPI TCP communication
+        force_rediscovery: If True, always run Phase 1 and refresh cache (skip cache hit)
     """
     program = ctx.args
 
@@ -1657,15 +1701,22 @@ def new_mode_flow(
         phase1_mpi_args = mpi_args
 
     run_dir: Path
-    if phase1_cache_hit_valid(short_dir, fingerprint_full, mock_mode):
+    phase1_used_cache = False
+    if not force_rediscovery and phase1_cache_hit_valid(short_dir, fingerprint_full, mock_mode):
+        phase1_used_cache = True
         run_dir = short_dir
         logger.info(f"{TT_RUN_PREFIX} Phase 1 cache hit, skipping generate_rank_bindings ({run_dir})")
         rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(run_dir)
-    elif phase1_cache_hit_valid(full_dir, fingerprint_full, mock_mode):
+    elif not force_rediscovery and phase1_cache_hit_valid(full_dir, fingerprint_full, mock_mode):
+        phase1_used_cache = True
         run_dir = full_dir
         logger.info(f"{TT_RUN_PREFIX} Phase 1 cache hit, skipping generate_rank_bindings ({run_dir})")
         rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(run_dir)
     else:
+        if force_rediscovery:
+            logger.info(
+                f"{TT_RUN_PREFIX} --force-rediscovery: running Phase 1 (generate_rank_bindings) and refreshing cache"
+            )
         stored_short = read_stored_phase1_cache_key(short_dir)
         if (
             short_dir.is_dir()
@@ -1757,6 +1808,9 @@ def new_mode_flow(
     # are applied separately when this full command is executed from tt-run.
     logger.info(f"{TT_RUN_PREFIX} To re-run only Phase 2 (skip generate_rank_bindings): {' '.join(phase2_parts)}")
 
+    # Stale-cache hint only if Phase 1 was skipped via cache; fresh Phase 1 or --force-rediscovery → no hint.
+    phase2_failure_hint: Phase2FailureHint = "stale_phase1_cache" if phase1_used_cache else None
+
     legacy_flow(
         ctx,
         rank_binding=rank_bindings_path,
@@ -1771,6 +1825,7 @@ def new_mode_flow(
         tcp_interface=tcp_interface,
         rankfile=rankfile_path,  # Pass generated rankfile
         rankfile_syntax=rankfile_syntax,
+        phase2_failure_hint=phase2_failure_hint,
     )
 
 
@@ -1844,6 +1899,12 @@ def new_mode_flow(
     help="Rankfile MPI syntax. 'auto' (default) detects from MPI version. Use 'rankfile' (--rankfile) if "
     "--map-by rankfile:file= fails with 'unrecognized qualifier' on mpirun-ulfm.",
 )
+@click.option(
+    "--force-rediscovery",
+    is_flag=True,
+    help="New mode only: always run Phase 1 (generate_rank_bindings) and overwrite the Phase 1 cache for "
+    "this MGD/host fingerprint, even if a cache hit would otherwise skip it (e.g. after a host link failure).",
+)
 @click.pass_context
 def main(
     ctx: click.Context,
@@ -1860,6 +1921,7 @@ def main(
     bare: bool,
     tcp_interface: Optional[str],
     rankfile_syntax: str,
+    force_rediscovery: bool,
 ) -> None:
     """tt-run - MPI process launcher for TT-Metal and TTNN distributed applications
 
@@ -1894,6 +1956,10 @@ def main(
 
     # Legacy mode: use --rank-binding
     if rank_binding is not None:
+        if force_rediscovery:
+            logger.warning(
+                f"{TT_RUN_PREFIX} --force-rediscovery applies only to new mode (--mesh-graph-descriptor); ignoring."
+            )
         # Warn if new mode options are used with legacy mode
         if hosts is not None:
             logger.warning(
@@ -1940,6 +2006,7 @@ def main(
             bare,
             tcp_interface,
             rankfile_syntax=_parse_rankfile_syntax_option(rankfile_syntax),
+            force_rediscovery=force_rediscovery,
         )
         return
 
