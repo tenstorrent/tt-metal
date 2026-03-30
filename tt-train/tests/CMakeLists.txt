@@ -39,7 +39,6 @@ set(SOURCES
     ops/newton_schulz_op_test.cpp
     ops/frobenius_normalize_test.cpp
     ops/k_split_gram_matmul_op_test.cpp
-    ops/k_split_gram_matmul_benchmark.cpp
     optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
@@ -178,6 +177,7 @@ if(TARGET benchmark::benchmark)
         benchmark/adamw_benchmark.cpp
         benchmark/frobenius_normalize_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
+        benchmark/gram_matmul_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})
