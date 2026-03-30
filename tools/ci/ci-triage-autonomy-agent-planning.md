@@ -29,7 +29,7 @@ Non-goals for initial delivery:
 This spec assumes the executing model:
 
 - can read/write repository files
-- can run git, gh, and workflow commands
+- can run local scripts and git commands
 - can inspect workflow logs/artifacts
 - can perform iterative implementation + validation
 
@@ -59,6 +59,11 @@ Required placeholders:
 
 If values are unknown at runtime, agent must stop and request clarification before write actions.
 
+Slack ID hard constraint for current bootstrap:
+
+- use only `C0APK6215B5` for Slack reads and test notifications
+- do not use any other concrete Slack channel ID during this bootstrap phase
+
 ---
 
 ## 4) Preflight Contract (Hard Gate Before Any Writes)
@@ -67,7 +72,7 @@ The agent must verify all of the following before enabling live writes:
 
 ### 4.1 Environment/Access
 
-- `gh auth status` succeeds
+- `python3 tools/ci/guarded_gh.py --dry-run --command "gh auth status"` succeeds
 - repository write scopes are available for:
   - contents
   - pull requests
@@ -94,6 +99,14 @@ All of these must exist:
 - max attempts per candidate limit
 - single-flag disable for Slack notify writes
 
+### 4.4 Command Execution Gateway (Hard Rule)
+
+- Direct `gh` execution is forbidden for automated GitHub actions.
+- Any automated GitHub command must be executed only via:
+  - `python3 tools/ci/guarded_gh.py --command "<gh command>"`
+- Commands rejected by `guarded_gh.py` must not be retried by bypassing the wrapper.
+- `guarded_gh.py` allowlist is the execution boundary for issue/pr/workflow operations.
+
 If any preflight check fails, agent must only produce a preflight report and no writes.
 
 ---
@@ -109,6 +122,8 @@ These invariants must always hold:
 5. Test-mode channels only until explicit promotion.
 6. State is source of truth; run-time behavior must reconcile state with live GitHub data.
 7. During testing, all automated issue writes must target `{{ISSUE_TRACKING_REPO_TEST}}` only.
+8. During bootstrap testing, both `{{SLACK_READ_CHANNEL_ID}}` and `{{SLACK_NOTIFY_CHANNEL_ID_TEST}}` must resolve to `C0APK6215B5`.
+9. Automated GitHub commands must be executed via `tools/ci/guarded_gh.py` only.
 
 Violation of any invariant is a release blocker.
 
@@ -411,6 +426,11 @@ At any failed checkpoint:
 - force dry-run
 - execute rollback path for current milestone
 
+Bootstrap-specific check:
+
+- verify workflow/default config reads only from `C0APK6215B5`
+- verify notification path posts only to `C0APK6215B5`
+
 ---
 
 ## 12) Fresh-Agent Bootstrap Prompt (Copy/Paste)
@@ -435,6 +455,7 @@ Rules:
 8) Preserve state as source of truth and reconcile against live PR/workflow data each run.
 9) Produce evidence artifacts and checkpoint report at each milestone.
 10) If blocked, output exact blocker and proposed minimal fix.
+11) Never run `gh` directly for automation; route all automated GitHub commands through `python3 tools/ci/guarded_gh.py`.
 
 Start now with:
 - Read spec
@@ -539,8 +560,8 @@ Use these as examples; do not hardcode in portable implementations.
 - `{{TRIAGE_WORKFLOW_NAME}}` -> `(triage) Export Evan Slack threads`
 - `{{STATE_ARTIFACT_NAME}}` -> `triage-state` (recommended)
 - `{{ACTIONS_ARTIFACT_NAME}}` -> `triage-actions` (recommended)
-- `{{SLACK_READ_CHANNEL_ID}}` -> `C05GRJC4J4A` (current test read source)
-- `{{SLACK_NOTIFY_CHANNEL_ID_TEST}}` -> `C09EC0QNSB0`
+- `{{SLACK_READ_CHANNEL_ID}}` -> `C0APK6215B5`
+- `{{SLACK_NOTIFY_CHANNEL_ID_TEST}}` -> `C0APK6215B5`
 - `{{DEFAULT_STALE_HOURS}}` -> `32`
 - `{{DEFAULT_MAX_ACTIONS}}` -> `3`
 - `{{AUTO_DISABLE_COMMAND_PATH}}` -> `.cursor/commands/ci/ci-disable-test-ci.md`
