@@ -197,6 +197,15 @@ Tensor unpad(
 }
 
 Tensor pad_to_tile(const Tensor& input_tensor, float pad_value) {
+    // TODO: Flip to assert when we remove use cases in python and c++
+    if (input_tensor.layout() != Layout::ROW_MAJOR) {
+        log_warning(
+            tt::LogOp,
+            "Tensor layout {} must be ROW_MAJOR for padding! Returning original tensor!",
+            input_tensor.layout());
+        return input_tensor;
+    }
+
     GraphTracker::instance().track_function_start("Tensor::pad_to_tile", input_tensor, pad_value);
     TT_FATAL(is_cpu_tensor(input_tensor), "Tensor must be on host for pad_to_tile conversion");
     auto output = Tensor(tensor_impl::pad_to_tile(input_tensor.host_tensor(), pad_value));
