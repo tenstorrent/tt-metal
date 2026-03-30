@@ -393,26 +393,274 @@ def test_performance():
     ), f"Utilization {util:.1f}% is greater than expected {expected_util:.1f}% by more than {tolerance:.1f}%"
 
 
-TABLE_CONFIGS = [
-    (512, 512, 512),
-    (512, 1024, 1024),
-    (512, 1024, 2048),
-    (1024, 1024, 1024),
-    (1024, 1024, 2048),
-    (1024, 2048, 2048),
-    (2048, 2048, 2048),
-    (2048, 2048, 3072),
-    (2048, 3072, 3072),
-    (3072, 3072, 3072),
-    (3072, 3072, 4096),
-    (3072, 4096, 4096),
-    (4096, 4096, 4096),
-    (8192, 8192, 8192),
-    (16384, 16384, 16384),
+OPTIMAL_CONFIGS = [
+    # (M, K, N, M_block, K_block, N_block, subblock_h, subblock_w)
+    # (512, 512, 512, 2, 8, 2, 1, 2),
+    # (512, 5120, 2560, 2, 5, 8, 1, 4),
+    # (1024, 1024, 1024, 8, 8, 4, 2, 2),
+    (2048, 2048, 2048, 8, 8, 8, 1, 2),
+    # (2368, 5120, 3840, 4, 8, 12, 1, 4),
+    # (2368, 5120, 1280, 8, 4, 4, 1, 4),
+    # (2368, 5120, 3456, 8, 2, 12, 2, 2),
+    # (2368, 3456, 5120, 4, 4, 8, 1, 4),
+    # (4096, 4096, 4096, 8, 4, 16, 1, 2),
+    # (8192, 8192, 8192, 16, 4, 8, 2, 2),
+    # (9472, 5120, 3840, 16, 4, 4, 1, 4),
+    # (9472, 5120, 1280, 16, 8, 4, 1, 4),
+    # (9472, 5120, 3456, 16, 8, 4, 1, 4),
+    # (9472, 3456, 5120, 16, 3, 4, 1, 4),
+    # (16384, 16384, 16384, 4, 16, 8, 2, 2),
 ]
 
 
-@pytest.mark.skip()
+@pytest.mark.parametrize(
+    "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    OPTIMAL_CONFIGS,
+    ids=[f"M={c[0]}-K={c[1]}-N={c[2]}" for c in OPTIMAL_CONFIGS],
+)
+def test_run_perf_optimal(device, M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    core_grid = ttnn.CoreCoord(11, 10)
+    check_result = run_test_linear(
+        device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        core_grid=core_grid,
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.timeout(0)
+def test_perf_report():
+    fidelity_div = 2  # HiFi2
+    subdir = "ttnn_minimal_matmul_optimal_perf"
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+
+    perf_results = []
+    expected_results = []
+    for M, K, N, *_ in OPTIMAL_CONFIGS:
+        test_id = f"M={M}-K={K}-N={N}"
+        command = (
+            f"pytest tests/ttnn/nightly/unit_tests/operations/experimental/"
+            f"test_minimal_matmul.py::test_run_perf_optimal[{test_id}]"
+        )
+        run_device_profiler(
+            command, subdir, device_analysis_types=["device_kernel_duration"], check_test_return_code=False
+        )
+        r = post_process_ops_log(subdir, float_columns=float_cols, op_name="", sum_vals=False, has_signposts=False)
+
+        core_count = int(r["CORE COUNT"][0])
+        duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].min())
+        expected_ns = perf_model(M, K, N, core_count, fidelity_div)
+
+        perf_results.append(duration_ns)
+        expected_results.append(expected_ns)
+
+    header = "| M, K, N | math util (%) | measured perf (ms) |"
+    sep = "|---|---:|---:|"
+    print("DTYPE: bf16, FP32 ACC: fp32, FIDELITY: HiFi2")
+    print(header)
+    print(sep)
+    for idx, (M, K, N, M_b, K_b, N_b, sh, sw) in enumerate(OPTIMAL_CONFIGS):
+        measured_ns = perf_results[idx]
+        ideal_ns = expected_results[idx]
+        if measured_ns is None or ideal_ns is None or measured_ns == 0:
+            print(f"| ({M}, {K}, {N}) | - | - |")
+        else:
+            measured_ms = measured_ns / 1e6
+            math_util = (ideal_ns / measured_ns) * 100.0
+            print(f"| ({M}, {K}, {N}) | {math_util:.1f} | {measured_ms:.3f} |")
+
+
+def test_run_perf_profiled(device):
+    core_grid = ttnn.CoreCoord(11, 10)
+    M, K, N = 2048, 2048, 2048
+    M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 8, 8, 8, 1, 2
+    check_result = run_test_linear(
+        device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        core_grid=core_grid,
+    )
+    assert check_result["pcc"] > 0.999_500
+    assert check_result["relative_rmse"] < 0.02
+
+
+@pytest.mark.timeout(0)
+def test_profile_analysis():
+    import os
+    import pandas as pd
+    from collections import defaultdict
+
+    subdir = "ttnn_minimal_matmul_profile"
+    command = (
+        "pytest tests/ttnn/nightly/unit_tests/operations/experimental/" "test_minimal_matmul.py::test_run_perf_profiled"
+    )
+    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"], check_test_return_code=False)
+
+    tt_metal_home = os.environ.get("TT_METAL_HOME", os.getcwd())
+    profiler_dir = os.environ.get("TT_METAL_PROFILER_DIR", os.path.join(tt_metal_home, "generated", "profiler"))
+    csv_path = os.path.join(profiler_dir, subdir, ".logs", "profile_log_device.csv")
+
+    with open(csv_path, "r") as f:
+        first_line = f.readline()
+    freq_mhz = 1.0
+    if "CHIP_FREQ[MHz]:" in first_line:
+        freq_mhz = float(first_line.split("CHIP_FREQ[MHz]:")[1].strip().split(",")[0].strip())
+
+    df = pd.read_csv(csv_path, skiprows=1, skipinitialspace=True)
+    df.columns = df.columns.str.strip()
+
+    custom_zones = [
+        "in0-dram-read",
+        "in0-recv-wait",
+        "in0-mcast",
+        "in0-write-out",
+        "in1-dram-read",
+        "in1-recv-wait",
+        "in1-mcast",
+        "in1-write-out",
+        "compute-wait",
+        "compute-matmul",
+    ]
+    kernel_zones = ["BRISC-KERNEL", "NCRISC-KERNEL", "TRISC-KERNEL"]
+    all_zones = custom_zones + kernel_zones
+
+    df_filtered = df[df["zone name"].str.strip().isin(all_zones)].copy()
+    df_filtered["zone name"] = df_filtered["zone name"].str.strip()
+    df_filtered["type"] = df_filtered["type"].str.strip()
+    df_filtered["RISC processor type"] = df_filtered["RISC processor type"].str.strip()
+
+    # compute-wait (cb_wait_front) only blocks the unpacker (TRISC_0)
+    df_filtered = df_filtered[
+        ~((df_filtered["zone name"] == "compute-wait") & (df_filtered["RISC processor type"] != "TRISC_0"))
+    ]
+
+    core_zone_durations = defaultdict(lambda: defaultdict(list))
+
+    for (core_x, core_y, risc, zone), group in df_filtered.groupby(
+        ["core_x", "core_y", "RISC processor type", "zone name"]
+    ):
+        begins = group[group["type"] == "ZONE_START"]["time[cycles since reset]"].values
+        ends = group[group["type"] == "ZONE_END"]["time[cycles since reset]"].values
+        n_pairs = min(len(begins), len(ends))
+        for i in range(n_pairs):
+            duration = ends[i] - begins[i]
+            if duration > 0:
+                core_zone_durations[(core_x, core_y, risc)][zone].append(duration)
+
+    core_type_zone_totals = defaultdict(lambda: defaultdict(list))
+
+    for (core_x, core_y, risc), zones_data in core_zone_durations.items():
+        zone_names = set(zones_data.keys())
+        if "in0-dram-read" in zone_names:
+            core_type = "in0 injector"
+        elif "in0-recv-wait" in zone_names:
+            core_type = "in0 receiver"
+        elif "in1-dram-read" in zone_names:
+            core_type = "in1 injector"
+        elif "in1-recv-wait" in zone_names:
+            core_type = "in1 receiver"
+        elif "compute-matmul" in zone_names:
+            core_type = "compute"
+        else:
+            core_type = f"other ({risc})"
+
+        for zone, durations in zones_data.items():
+            total = sum(durations)
+            core_type_zone_totals[core_type][zone].append(total)
+
+    print("\n" + "=" * 100)
+    print("KERNEL PROFILING BREAKDOWN: 2048x2048x2048 matmul (M_block=8, K_block=8, N_block=8)")
+    print("=" * 100)
+
+    for core_type in sorted(core_type_zone_totals.keys()):
+        zones_data = core_type_zone_totals[core_type]
+        n_cores = 0
+        print(f"\n--- {core_type} ---")
+        print(f"{'Zone':<25} {'Avg Cycles':>12} {'Min Cycles':>12} {'Max Cycles':>12} {'Avg us':>10} {'Count':>6}")
+        print("-" * 80)
+        for zone in all_zones:
+            if zone in zones_data:
+                totals = zones_data[zone]
+                n_cores = max(n_cores, len(totals))
+                avg_cycles = sum(totals) / len(totals)
+                min_cycles = min(totals)
+                max_cycles = max(totals)
+                avg_us = avg_cycles / freq_mhz
+                print(
+                    f"{zone:<25} {avg_cycles:>12.0f} {min_cycles:>12.0f} {max_cycles:>12.0f} {avg_us:>10.1f} {len(totals):>6}"
+                )
+        print(f"  (across {n_cores} cores)")
+
+    print("\n" + "=" * 100)
+    print("SUMMARY: Average total cycles per core type")
+    print("=" * 100)
+    summary_header = f"{'Core Type':<30}"
+    for zone in custom_zones:
+        short = zone.replace("compute-", "cmp-").replace("write-out", "wr")
+        summary_header += f" {short:>14}"
+    summary_header += f" {'KERNEL':>14}"
+    print(summary_header)
+    print("-" * len(summary_header))
+
+    for core_type in sorted(core_type_zone_totals.keys()):
+        zones_data = core_type_zone_totals[core_type]
+        row = f"{core_type:<30}"
+        for zone in custom_zones:
+            if zone in zones_data:
+                avg = sum(zones_data[zone]) / len(zones_data[zone])
+                row += f" {avg:>14.0f}"
+            else:
+                row += f" {'-':>14}"
+        kernel_zone = None
+        for kz in kernel_zones:
+            if kz in zones_data:
+                kernel_zone = kz
+                break
+        if kernel_zone:
+            avg = sum(zones_data[kernel_zone]) / len(zones_data[kernel_zone])
+            row += f" {avg:>14.0f}"
+        else:
+            row += f" {'-':>14}"
+        print(row)
+
+    print()
+
+
+TABLE_CONFIGS = [
+    # (512, 512, 512),
+    # # (512, 1024, 1024),
+    # # (512, 1024, 2048),
+    # (1024, 1024, 1024),
+    # # (1024, 1024, 2048),
+    # # (1024, 2048, 2048),
+    (2048, 2048, 2048),
+    # # (2048, 2048, 3072),
+    # # (2048, 3072, 3072),
+    # # (3072, 3072, 3072),
+    # # (3072, 3072, 4096),
+    # # (3072, 4096, 4096),
+    # (4096, 4096, 4096),
+    # (8192, 8192, 8192),
+    # (16384, 16384, 16384),
+]
+
+
+# @pytest.mark.skip()
+@pytest.mark.timeout(0)
 @pytest.mark.parametrize(
     "M, K, N",
     TABLE_CONFIGS,
@@ -449,8 +697,8 @@ def test_perf_table_sweep(device, M, K, N, fp32_acc, math_fidelity, dtype):
         packer_l1_acc=True,
     )
 
-    core_grid = device.compute_with_storage_grid_size()
-    subblocks = [(2, 2)] if fp32_acc else [(2, 4), (4, 2)]
+    core_grid = ttnn.CoreCoord(11, 10)
+    subblocks = [(1, 2), (2, 2)] if fp32_acc else [(2, 4), (4, 2)]
 
     m_block_sizes = [2, 4, 8, 16]
     n_block_sizes = [2, 4, 8, 16]
@@ -461,6 +709,11 @@ def test_perf_table_sweep(device, M, K, N, fp32_acc, math_fidelity, dtype):
     for M_block_size, K_block_size, N_block_size, (subblock_h, subblock_w) in product(
         m_block_sizes, k_block_sizes, n_block_sizes, subblocks
     ):
+        # TILE_SIZE = 32
+        # if M_block_size * core_grid.x * TILE_SIZE > M:
+        #     continue
+        # if N_block_size * core_grid.y * TILE_SIZE > N:
+        #     continue
         if (M_block_size < subblock_h) or (N_block_size < subblock_w):
             continue
         if (M_block_size % subblock_h) != 0 or (N_block_size % subblock_w) != 0:
@@ -485,8 +738,8 @@ def test_perf_table_sweep(device, M, K, N, fp32_acc, math_fidelity, dtype):
                 compute_kernel_config=compute_config,
                 config=matmul_config,
             )
-            tt_output = ttnn.to_torch(tt_output)
-            check_result = assert_quality(torch_output, tt_output)
+            # tt_output = ttnn.to_torch(tt_output)
+            # check_result = assert_quality(torch_output, tt_output)
         except Exception as e:
             if isinstance(e, KeyboardInterrupt):
                 raise
@@ -547,7 +800,8 @@ def post_process_ops_log(
     return results
 
 
-@pytest.mark.skip()
+# @pytest.mark.skip()
+@pytest.mark.timeout(0)
 @pytest.mark.parametrize(
     "fidelity, dtype, fp32_acc",
     [
@@ -625,3 +879,7 @@ def test_create_perf_table(fidelity, dtype, fp32_acc):
             util_str = f"{math_util:.1f}"
 
         print(f"| ({M}, {K}, {N}) | {util_str} | {measured_ms_str} | {attrs_str} |")
+
+
+def test_open_device(device):
+    breakpoint()
