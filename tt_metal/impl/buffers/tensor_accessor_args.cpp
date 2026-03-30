@@ -4,6 +4,8 @@
 
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include <limits>
+
 #include <tt-metalium/device.hpp>
 
 namespace tt::tt_metal {
@@ -35,12 +37,19 @@ void append_sharded_args(
     size_t n_args =
         add_rank + add_num_banks + (rank * add_tensor_shape) + (rank * add_shard_shape) + (n_banks * add_bank_coords);
     if (!is_runtime) {
-        n_args += 1;  // +1 for the args_config config
+        n_args += 2;  // +1 for args_config, +1 for aligned_page_size
     }
     args.reserve(args.size() + n_args);
 
     if (!is_runtime) {
         args.push_back(args_config.raw());
+        auto aligned_page_size = buffer.aligned_page_size();
+        TT_FATAL(
+            aligned_page_size <= std::numeric_limits<uint32_t>::max(),
+            "Aligned page size {} exceeds uint32_t max {}",
+            aligned_page_size,
+            std::numeric_limits<uint32_t>::max());
+        args.push_back(static_cast<uint32_t>(aligned_page_size));
     }
 
     if (add_rank) {
@@ -149,6 +158,13 @@ void TensorAccessorArgs::append_to(
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, common_runtime_args, /* is_runtime */ true);
     } else {
         compile_time_args.push_back(args_config_.raw());
+        auto aligned_page_size = buffer_ ? buffer_->aligned_page_size() : 0;
+        TT_FATAL(
+            aligned_page_size <= std::numeric_limits<uint32_t>::max(),
+            "Aligned page size {} exceeds uint32_t max {}",
+            aligned_page_size,
+            std::numeric_limits<uint32_t>::max());
+        compile_time_args.push_back(static_cast<uint32_t>(aligned_page_size));
     }
 }
 
@@ -161,6 +177,13 @@ void TensorAccessorArgs::append_to(std::vector<uint32_t>& compile_time_args) con
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
     } else {
         compile_time_args.push_back(args_config_.raw());
+        auto aligned_page_size = buffer_ ? buffer_->aligned_page_size() : 0;
+        TT_FATAL(
+            aligned_page_size <= std::numeric_limits<uint32_t>::max(),
+            "Aligned page size {} exceeds uint32_t max {}",
+            aligned_page_size,
+            std::numeric_limits<uint32_t>::max());
+        compile_time_args.push_back(static_cast<uint32_t>(aligned_page_size));
     }
 }
 
@@ -170,6 +193,13 @@ std::vector<uint32_t> TensorAccessorArgs::get_compile_time_args() const {
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
     } else {
         compile_time_args.push_back(args_config_.raw());
+        auto aligned_page_size = buffer_ ? buffer_->aligned_page_size() : 0;
+        TT_FATAL(
+            aligned_page_size <= std::numeric_limits<uint32_t>::max(),
+            "Aligned page size {} exceeds uint32_t max {}",
+            aligned_page_size,
+            std::numeric_limits<uint32_t>::max());
+        compile_time_args.push_back(static_cast<uint32_t>(aligned_page_size));
     }
     return compile_time_args;
 }

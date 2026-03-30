@@ -31,6 +31,8 @@
 // RISC-V Address map definition (hardware)
 #define MEM_L1_BASE 0x0
 #define MEM_L1_SIZE (4 * 1024 * 1024)
+// Note: RISC-V LR/SC and AMO atomics don't work with uncached L1 (they hang).
+// Both require the cache coherence system. Only plain loads/stores with fences work uncached.
 #define MEM_L1_UNCACHED_BASE (MEM_L1_BASE + MEM_L1_SIZE)  // upper 4MBs bypass cache
 
 #define MEM_ETH_BASE 0x0
@@ -97,7 +99,7 @@
 #define MEM_MAILBOX_BASE 16
 #define UNCACHED_MEM_MAILBOX_BASE (0x400010)  // workaround for https://github.com/tenstorrent/tt-metal/issues/19265
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 57424
+#define MEM_MAILBOX_SIZE 57696
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -118,7 +120,7 @@
 #define MEM_TRISC2_FIRMWARE_BASE (MEM_TRISC1_FIRMWARE_BASE + MEM_TRISC_FIRMWARE_SIZE)
 #define MEM_TRISC3_FIRMWARE_BASE (MEM_TRISC2_FIRMWARE_BASE + MEM_TRISC_FIRMWARE_SIZE)
 #define MEM_DM_GLOBAL_BASE (MEM_TRISC3_FIRMWARE_BASE + MEM_TRISC_FIRMWARE_SIZE)
-#define MEM_TRISC0_GLOBAL_BASE (MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE)
+#define MEM_TRISC0_GLOBAL_BASE (MEM_DM_GLOBAL_BASE + MEM_DM_GLOBAL_SIZE * NUM_DM_CORES + MEM_DM_GLOBAL_SIZE)
 #define MEM_TRISC1_GLOBAL_BASE (MEM_TRISC0_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE)
 #define MEM_TRISC2_GLOBAL_BASE (MEM_TRISC1_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE)
 #define MEM_TRISC3_GLOBAL_BASE (MEM_TRISC2_GLOBAL_BASE + MEM_TRISC_GLOBAL_SIZE)

@@ -16,6 +16,12 @@
 
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_program_factory.hpp"
 namespace ttnn::experimental::prim {
+
+void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
+
 void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -107,7 +113,7 @@ AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t AllGatherMatmulAsyncD
     return {all_gather_output_tensor, matmul_output_tensor};
 }
 
-tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllGatherMatmulAsyncDeviceOperation::compute_program_hash is called");
 
@@ -166,7 +172,7 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
 
     /* All Gather setup */
     const auto [all_gather_async_operation_attributes, all_gather_async_tensor_args] =
-        ttnn::experimental::prim::AllGatherAsyncDeviceOperation::invoke(
+        ttnn::experimental::prim::all_gather_async_build_operation_args(
             input_tensor,
             persistent_output_buffer,
             dim,

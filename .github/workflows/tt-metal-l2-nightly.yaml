@@ -50,6 +50,16 @@ on:
         required: false
         type: boolean
         default: false
+      run_tt_train_cpp_model_tests:
+        description: 'Run tt-train-cpp-models'
+        required: false
+        type: boolean
+        default: false
+      run_tt_train_python_unit_tests:
+        description: 'Run tt-train-python-unit-tests'
+        required: false
+        type: boolean
+        default: false
       run_models_unit_tests:
         description: 'Run models-unit-tests'
         required: false
@@ -61,7 +71,7 @@ on:
         type: boolean
         default: false
       additional_test_categories:
-        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers)'
+        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused)'
         required: false
         type: string
         default: ''
@@ -120,6 +130,7 @@ jobs:
       matrix-cpp-tests: ${{ steps.parse.outputs.matrix-cpp-tests }}
       matrix-sd-fd-tests: ${{ steps.parse.outputs.matrix-sd-fd-tests }}
       matrix-tutorials: ${{ steps.parse.outputs.matrix-tutorials }}
+      matrix-tt-train-tests: ${{ steps.parse.outputs.matrix-tt-train-tests }}
       matrix-wormhole-only: ${{ steps.parse.outputs.matrix-wormhole-only }}
       matrix-blackhole-only: ${{ steps.parse.outputs.matrix-blackhole-only }}
     steps:
@@ -224,6 +235,18 @@ jobs:
           fi
           echo "matrix-tutorials=$matrix_tutorials" >> $GITHUB_OUTPUT
 
+          # Matrix for tt-train-cpp-unit-tests (N150, N300, P100a, P150b)
+          matrix_tt_train='[]'
+          if [[ "$run_wormhole" == "true" ]]; then
+            matrix_tt_train=$(add_entry "$matrix_tt_train" "wormhole_b0" "N150")
+            matrix_tt_train=$(add_entry "$matrix_tt_train" "wormhole_b0" "N300")
+          fi
+          if [[ "$run_blackhole" == "true" ]]; then
+            matrix_tt_train=$(add_entry "$matrix_tt_train" "blackhole" "P100a")
+            matrix_tt_train=$(add_entry "$matrix_tt_train" "blackhole" "P150b")
+          fi
+          echo "matrix-tt-train-tests=$matrix_tt_train" >> $GITHUB_OUTPUT
+
           # Matrix for wormhole-only jobs (N150)
           matrix_wh='[]'
           if [[ "$run_wormhole" == "true" ]]; then
@@ -271,6 +294,7 @@ jobs:
       run_fused_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',fused,') }}
       run_reduction_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',reduction,') }}
       run_misc_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',misc,') }}
+      run_compute_fused_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',compute_fused,') }}
   ttnn-ops-docs-check:
     needs: [build-artifact, generate-arch-matrix]
     if: |
@@ -422,12 +446,12 @@ jobs:
     needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_cpp_unit_tests) &&
-      needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
+      needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
+        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tt-train-tests) }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
@@ -435,7 +459,43 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      timeout: 90
       gtest_filter: "*"
+  tt-train-cpp-models:
+    needs: [build-artifact, generate-arch-matrix]
+    if: |
+      (github.event_name == 'schedule' || inputs.run_tt_train_cpp_model_tests) &&
+      needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tt-train-tests) }}
+    uses: ./.github/workflows/tt-train-run-models.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      timeout: 90
+  tt-train-python-unit-tests:
+    needs: [build-artifact, generate-arch-matrix]
+    if: |
+      (github.event_name == 'schedule' || inputs.run_tt_train_python_unit_tests) &&
+      needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tt-train-tests) }}
+    uses: ./.github/workflows/tt-train-post-commit.yaml
+    with:
+      arch: ${{ matrix.test-group.arch }}
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      timeout: 10
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD Model Tests
   models-unit-tests:
     needs: [check-harbor, build-artifact, generate-arch-matrix]
@@ -454,6 +514,22 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # Triage tests (including hang report generation test)
+  triage-tests:
+    needs: [build-artifact, generate-arch-matrix]
+    if: ${{ needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]' }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
+    uses: ./.github/workflows/triage.yaml
+    with:
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      run-hang-report-test: true
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
     needs: [build-artifact, generate-arch-matrix]

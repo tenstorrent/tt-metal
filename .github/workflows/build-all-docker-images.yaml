@@ -63,6 +63,9 @@ on:
       manylinux-tag:
         description: "Docker tag for ManyLinux image"
         value: ${{ jobs.build-2204.outputs.manylinux-tag }}
+      llk-ci-tag:
+        description: "Docker tag for LLK CI image (Ubuntu 22.04)"
+        value: ${{ jobs.check-images.outputs.llk-ci-tag }}
   workflow_dispatch:
     inputs:
       force-rebuild:
@@ -90,6 +93,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          submodules: recursive
 
       - name: Check Harbor availability
         id: harbor
@@ -168,6 +172,28 @@ jobs:
           echo "::group::Ubuntu 24.04 Platform Data"
           echo '${{ steps.platform-2404.outputs.data }}' | jq .
           echo "::endgroup::"
+
+      - name: Check LLK CI image
+        id: llk-check
+        run: |
+          set -euo pipefail
+          LLK="tt_metal/third_party/tt_llk"
+          # MIGRATION: Uses migrated script in parent repo (.github/scripts/llk-get-docker-tag.sh)
+          # instead of the submodule's script, so changes to build scripts trigger rebuilds
+          if [ ! -d "$LLK" ] || [ ! -f "$LLK/.github/Dockerfile.base" ]; then
+            echo "::error::tt_llk submodule is missing or not checked out (expected $LLK with .github/Dockerfile.base). Initialize submodules in CI checkout or fix .gitmodules."
+            exit 1
+          fi
+          DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
+          TAG="ghcr.io/${{ github.repository }}/tt-llk-ci-ubuntu-22-04:${DOCKER_TAG}"
+          echo "llk-ci-tag=$TAG" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "$TAG" > /dev/null 2>&1; then
+            echo "LLK CI image exists"
+            echo "llk-needs-build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "LLK CI image needs to be built"
+            echo "llk-needs-build=true" >> "$GITHUB_OUTPUT"
+          fi
 
   # Tool images
   build-tools:

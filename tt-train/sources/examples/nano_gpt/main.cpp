@@ -342,7 +342,7 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string training_config_name =
-        std::filesystem::current_path().string() + "/configs/training_configs/training_shakespeare_nanogpt.yaml";
+        std::string(CONFIGS_FOLDER) + "/training_configs/training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -360,11 +360,15 @@ int main(int argc, char **argv) {
         ->default_val(save_and_exit_path);
     app.add_option("--safetensors", safetensors_path, "Loads safetensors model from the given path")
         ->default_val(safetensors_path);
+    bool track_memory = false;
+    app.add_flag("--track_memory", track_memory, "Enable memory usage tracking during first iteration");
     CLI11_PARSE(app, argc, argv);
 
     auto yaml_config = YAML::LoadFile(training_config_name);
 
     TrainingConfig training_config = parse_config(yaml_config);
+    training_config.model_config = expand_config_path(training_config.model_config);
+
     DeviceConfig device_config = parse_device_config(yaml_config);
     // Resolve model_config path relative to tt-train root (configs/training_configs/ -> configs/ -> tt-train)
     auto training_config_path = std::filesystem::path(training_config_name).parent_path();
@@ -399,7 +403,11 @@ int main(int argc, char **argv) {
 
     // Pass tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH to measure memory usage
     // of model that doesn't fit in the memory of the device.
-    ttnn::ScopeGuard memory_usage_guard = ttml::utils::MemoryUsageTracker::begin_capture();
+    std::unique_ptr<ttnn::ScopeGuard> memory_usage_guard;
+    if (track_memory) {
+        // NOLINTNEXTLINE(modernize-make-unique): ScopeGuard has deleted move ctor; need direct new for copy elision
+        memory_usage_guard.reset(new ttnn::ScopeGuard(ttml::utils::MemoryUsageTracker::begin_capture()));
+    }
 
     if (multihost_config.enable_mpi || device_config.enable_cp) {
         auto &ctx = ttml::autograd::ctx();
@@ -543,7 +551,7 @@ int main(int argc, char **argv) {
                     const uint32_t BATCH_DIM = 0;
                     const uint32_t SEQUENCE_DIM_DATA = 3;
                     const uint32_t SEQUENCE_DIM_TARGETS = 1;
-                    tt::stl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> data_placements(
+                    ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> data_placements(
                         mesh_device.shape().dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
                     if (pctx.is_ddp_enabled()) {
                         data_placements[pctx.get_ddp_axis().value()] =
@@ -563,7 +571,7 @@ int main(int argc, char **argv) {
                             device,
                             ttnn::Layout::ROW_MAJOR,
                             data_mapper.get()));
-                    tt::stl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> targets_placements(
+                    ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> targets_placements(
                         mesh_device.shape().dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
                     if (pctx.is_ddp_enabled()) {
                         targets_placements[pctx.get_ddp_axis().value()] =
@@ -650,7 +658,9 @@ int main(int argc, char **argv) {
         model_config.transformer_config);
 
     fmt::print("Model number of parameters: {}\n", get_number_of_parameters(model, device_config.enable_tp));
-    ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
+    if (track_memory) {
+        ttml::utils::MemoryUsageTracker::snapshot("MODEL_CREATION");
+    }
 
     if (!safetensors_path.empty()) {
         fmt::print("Loading model from safetensors path: {}\n", safetensors_path);
@@ -722,7 +732,9 @@ int main(int argc, char **argv) {
         }
     }
 
-    ttml::utils::MemoryUsageTracker::snapshot("OPTIMIZER_CREATION");
+    if (track_memory) {
+        ttml::utils::MemoryUsageTracker::snapshot("OPTIMIZER_CREATION");
+    }
 
     if (multihost_config.enable_mpi && training_config.use_clip_grad_norm) {
         throw std::logic_error("Clip grad norm is not supported with 3 tier training");
@@ -753,8 +765,8 @@ int main(int argc, char **argv) {
     auto gradient_accumulator_helper = GradientAccumulator(training_config.gradient_accumulation_steps);
 
     bool is_everything_compiled = false;
-    auto memory_snapshot = [&is_everything_compiled](const std::string &name) {
-        if (!is_everything_compiled) {
+    auto memory_snapshot = [&is_everything_compiled, track_memory](const std::string &name) {
+        if (track_memory && !is_everything_compiled) {
             ttml::utils::MemoryUsageTracker::snapshot(name);
         }
     };
@@ -779,14 +791,17 @@ int main(int argc, char **argv) {
                 auto loss = ttml::ops::cross_entropy_loss(output, target);
                 loss = gradient_accumulator_helper.scale(loss);
                 loss_float = get_loss_value(loss);
-                ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
+                ttml::autograd::ctx().get_profiler().read_results(device, "forward_pass_done");
 
                 memory_snapshot("FORWARD_PASS");
                 loss->backward();
+                ttml::autograd::ctx().get_profiler().read_results(device, "backward_pass_done");
                 memory_snapshot("BACKWARD_PASS");
             } else {
+                ttml::autograd::ctx().get_profiler().read_results(device, "forward_pass_done");
                 memory_snapshot("FORWARD_PASS");
                 output->backward();
+                ttml::autograd::ctx().get_profiler().read_results(device, "backward_pass_done");
                 memory_snapshot("BACKWARD_PASS");
             }
 
@@ -802,6 +817,7 @@ int main(int argc, char **argv) {
                     !is_three_tier_training(multihost_config)) {
                     ttml::core::distributed::synchronize_gradients(parameters);
                 }
+                ttml::autograd::ctx().get_profiler().read_results(device, "gradient_sync_done");
 
                 if (training_config.use_clip_grad_norm) {
                     if (device_config.enable_tp) {
@@ -811,6 +827,7 @@ int main(int argc, char **argv) {
                 }
                 optimizer->step();
                 scheduler->step();
+                ttml::autograd::ctx().get_profiler().read_results(device, "optimizer_step_done");
                 auto global_step = optimizer->get_steps();
                 if (needs_to_call_loss) {
                     if (multihost_config.enable_mpi) {
@@ -830,6 +847,15 @@ int main(int argc, char **argv) {
 
                 ttml::autograd::ctx().get_profiler().read_results(device, fmt::format("iteration_{}", global_step));
 
+                auto end_timer = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
+                if (needs_to_call_loss) {
+                    fmt::print(
+                        "Full step time {} ms, cache entries: {}\n",
+                        (double)duration / 1000,
+                        device->num_program_cache_entries());
+                }
+
                 if (global_step >= training_config.max_steps) {
                     break;
                 }
@@ -839,18 +865,12 @@ int main(int argc, char **argv) {
                 if (!is_everything_compiled) {
                     ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
                     is_everything_compiled = true;
-                    ttml::utils::MemoryUsageTracker::end_capture("FIRST_ITERATION_COMPLETE");
-                    ttml::utils::MemoryUsageTracker::print_memory_usage();
-                    ttml::utils::MemoryUsageTracker::clear();
+                    if (track_memory) {
+                        ttml::utils::MemoryUsageTracker::end_capture("FIRST_ITERATION_COMPLETE");
+                        ttml::utils::MemoryUsageTracker::print_memory_usage();
+                        ttml::utils::MemoryUsageTracker::clear();
+                    }
                 }
-            }
-            auto end_timer = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
-            if (needs_to_call_loss) {
-                fmt::print(
-                    "Full step time {} ms, cache entries: {}\n",
-                    (double)duration / 1000,
-                    device->num_program_cache_entries());
             }
         }
         if (optimizer->get_steps() >= training_config.max_steps) {

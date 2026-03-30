@@ -5,7 +5,10 @@
 #pragma once
 
 #include <memory>
+#include <vector>
+#include <string>
 #include "impl/program/program_impl.hpp"
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "mesh_coord.hpp"
 
@@ -57,12 +60,11 @@ public:
         std::size_t program_id) noexcept;
     static void mesh_workload_set_program_binary_status(
         const distributed::MeshWorkloadImpl* mesh_workload, std::size_t mesh_id, ProgramBinaryStatus status) noexcept;
-    static void mesh_workload_set_operation_name_and_parameters(
+    static void emit_debug_entry(
         const distributed::MeshWorkloadImpl* mesh_workload,
+        uint64_t runtime_id,
         std::string_view operation_name,
-        std::string_view operation_parameters) noexcept;
-    static void mesh_workload_set_runtime_id(
-        const distributed::MeshWorkloadImpl* mesh_workload, uint64_t runtime_id) noexcept;
+        std::vector<TensorSpec> tensor_specs) noexcept;
 
     // static method for logging dispatch core info
     static void set_dispatch_core_info(
@@ -90,6 +92,11 @@ public:
 
     // static method for clearing all core info to clear stale entries
     static void clear_all_core_info();
+
+    // Helper function to get ELF path from watcher kernel id, used for resolving format strings in dprint server
+    // If data is available, returns ELF path. If data is not available (e.g. inspector disabled, or no kernel data for
+    // the given id), returns empty string.
+    static std::string get_kernel_path_from_watcher_kernel_id(int watcher_kernel_id);
 
     static inspector::RpcServer& get_rpc_server();
 

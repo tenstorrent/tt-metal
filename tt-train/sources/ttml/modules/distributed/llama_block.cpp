@@ -11,6 +11,7 @@
 #include "modules/linear_module.hpp"
 #include "modules/rms_norm_module.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/swiglu_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::modules::distributed {
@@ -30,6 +31,8 @@ DistributedLlamaMLP::DistributedLlamaMLP(
         hidden_size = ((unrounded_size + multiple_of - 1U) / multiple_of) * multiple_of;
     }
 
+    m_dropout_prob = dropout_prob;
+
     if (use_tp) {
         m_w1 = std::make_shared<ColumnParallelLinear>(
             embedding_size, hidden_size, /* has_bias */ false, /* gather_output */ false, tp_axis);
@@ -38,9 +41,12 @@ DistributedLlamaMLP::DistributedLlamaMLP(
         m_w2 = std::make_shared<RowParallelLinear>(
             hidden_size, embedding_size, /* has_bias */ false, /* input_is_parallel */ true, tp_axis);
     } else {
-        m_w1 = std::make_shared<ttml::modules::LinearLayer>(embedding_size, hidden_size, /* has_bias */ false);
-        m_w3 = std::make_shared<ttml::modules::LinearLayer>(embedding_size, hidden_size, /* has_bias */ false);
-        m_w2 = std::make_shared<ttml::modules::LinearLayer>(hidden_size, embedding_size, /* has_bias */ false);
+        m_w1_linear = std::make_shared<ttml::modules::LinearLayer>(embedding_size, hidden_size, /* has_bias */ false);
+        m_w3_linear = std::make_shared<ttml::modules::LinearLayer>(embedding_size, hidden_size, /* has_bias */ false);
+        m_w2_linear = std::make_shared<ttml::modules::LinearLayer>(hidden_size, embedding_size, /* has_bias */ false);
+        m_w1 = m_w1_linear;
+        m_w3 = m_w3_linear;
+        m_w2 = m_w2_linear;
     }
     m_dropout = std::make_shared<DropoutLayer>(dropout_prob, /* use_per_device_seed */ false);
 
@@ -52,6 +58,19 @@ DistributedLlamaMLP::DistributedLlamaMLP(
 }
 
 autograd::TensorPtr DistributedLlamaMLP::operator()(const autograd::TensorPtr& input) {
+    const float dropout_prob = (get_run_mode() == RunMode::EVAL) ? 0.0F : m_dropout_prob;
+    // Fused path is available only for non-TP where local LinearLayer weights exist.
+    if (m_w1_linear && m_w2_linear && m_w3_linear) {
+        // Keep distributed MLP RNG behavior aligned with DropoutLayer(use_per_device_seed=false).
+        return ops::swiglu(
+            input,
+            m_w1_linear->get_weight(),
+            m_w2_linear->get_weight(),
+            m_w3_linear->get_weight(),
+            dropout_prob,
+            false);
+    }
+
     auto swished = ops::silu((*m_w1)(input));
     auto gate = (*m_w3)(input);
     auto gated = swished * gate;

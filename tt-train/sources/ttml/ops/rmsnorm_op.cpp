@@ -30,7 +30,7 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     }
 
     auto ashape_arr = a_shape.to_array_4D();
-    auto [B, N, S, C] = ashape_arr;
+    [[maybe_unused]] auto [B, N, S, C] = ashape_arr;
     assert((N == 1));  // one sequence per batch
 
     // one gain parameter per channel
@@ -61,8 +61,7 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
         }
     };
 
-    auto links = autograd::get_links(tensor, gamma);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma));
 
     return out;
 }
@@ -75,7 +74,7 @@ autograd::TensorPtr rmsnorm_composite(
     }
 
     auto ashape_arr = a_shape.to_array_4D();
-    auto [B, N, S, C] = ashape_arr;
+    [[maybe_unused]] auto [B, N, S, C] = ashape_arr;
     assert((N == 1));  // one sequence per batch
 
     // one gain parameter per channel
@@ -235,8 +234,7 @@ autograd::TensorPtr rmsnorm_composite(
         gamma->add_grad(dL_dg);
     };
 
-    auto links = autograd::get_links(tensor, gamma);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, gamma));
 
     return out;
 }

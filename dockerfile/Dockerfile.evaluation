@@ -70,16 +70,15 @@ COPY tt_metal/python_env/requirements-dev.txt tt_metal/python_env/
 COPY docs/requirements-docs.txt docs/
 COPY tests/sweep_framework/requirements-sweeps.txt tests/sweep_framework/
 COPY tools/triage/requirements.txt tools/triage/
-
-RUN uv pip install --system --no-cache setuptools==80 && \
-    uv pip install --system --no-cache -r tt_metal/python_env/requirements-dev.txt
+RUN uv pip install --system --no-cache setuptools && \
+    uv pip install --system --no-cache -r tt_metal/python_env/requirements-dev.txt && \
+    uv pip install --system --no-cache -r tools/triage/requirements.txt
 
 # Install Metal dependencies
 # Copy dependency scripts before full source for better caching
 COPY install_dependencies.sh .
 COPY tt_metal/sfpi-info.sh tt_metal/
 COPY tt_metal/sfpi-version tt_metal/
-COPY scripts/ttexalens_ref.txt scripts/
 RUN ./install_dependencies.sh --docker
 
 # Copy full source (this layer changes most frequently)

@@ -684,7 +684,7 @@ public:
      * @brief Read the remapper enable status
      * @return true if remapper is enabled, false otherwise
      */
-    bool is_remapper_enabled() { return (READ_REG32(REMAP_GLOBAL_CONTROL_REG_ADDR32) & 0x1) != 0; }
+    static bool is_remapper_enabled() { return (READ_REG32(REMAP_GLOBAL_CONTROL_REG_ADDR32) & 0x1) != 0; }
 
     // ========================================================================
     // Combined Configuration Methods

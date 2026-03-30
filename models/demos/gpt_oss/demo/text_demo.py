@@ -251,7 +251,7 @@ def prepare_gpt_oss_generator_args(
             1,  # repeat_batches
             8 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 8 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
             True,  # enable_prefill_trace
@@ -268,7 +268,7 @@ def prepare_gpt_oss_generator_args(
             1,  # repeat_batches
             16 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 16 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
             True,  # enable_prefill_trace
@@ -285,7 +285,7 @@ def prepare_gpt_oss_generator_args(
             1,  # repeat_batches
             32 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 32 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
             True,  # enable_prefill_trace
@@ -302,7 +302,7 @@ def prepare_gpt_oss_generator_args(
             1,  # repeat_batches
             64 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 64 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
             True,  # enable_decode_trace
             False,  # enable_prefill_trace
@@ -346,6 +346,29 @@ def prepare_gpt_oss_generator_args(
             False,  # long_context_mode
             True,  # stop_at_eos
             True,  # run_in_ci
+        ),
+        # Batch 128 with logprobs (top-5)
+        (
+            "models/demos/gpt_oss/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            1,  # data_parallel
+            128,  # batch_size
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            200,  # max_generated_tokens
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {
+                "temperature": 0,
+                "top_p": 0.08,
+                "enable_log_probs": True,
+                "num_logprobs": 5,
+            },  # sampling_params with logprobs
+            True,  # enable_decode_trace
+            True,  # enable_prefill_trace
+            False,  # warmup_prefill
+            True,  # users_row_sharded
+            False,  # long_context_mode
+            True,  # stop_at_eos
+            False,  # run_in_ci
         ),
         # Long-context mode: 1 user per row with 128k tokens, batch=128 for decode throughput
         (
@@ -394,6 +417,7 @@ def prepare_gpt_oss_generator_args(
         "prefill_64k",
         "prefill_128k",
         "batch128",
+        "batch128_logprobs",
         "long_context_128k",
         "long_context_short_prefill_long_decode",
     ],
@@ -435,7 +459,7 @@ def test_gpt_oss_demo(
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=True)
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
     mesh_config = setup["mesh_config"]
 
@@ -459,6 +483,20 @@ def test_gpt_oss_demo(
 
     # GPT-OSS doesn't support any performance optimizations
     optimizations = None
+
+    # For long_context_mode, we only have 1 real user per row
+    # The rest are padding users with empty prompts
+    num_real_users = mesh_device.shape[0] if long_context_mode else global_batch_size
+    users_per_row = global_batch_size // mesh_device.shape[0]
+
+    if isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
+        real_prompts = input_prompts * num_real_users
+    elif isinstance(input_prompts, str):  # Inputs from file
+        real_prompts, _ = load_inputs(input_prompts, num_real_users, instruct=False)
+    else:
+        raise ValueError(
+            f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
+        )
 
     # Prepare GPT-OSS with tt_transformers infrastructure
     profiler.start(f"generator_setup", iteration=batch_idx)
@@ -493,44 +531,19 @@ def test_gpt_oss_demo(
     # Create on-device sampling params
     SAMPLING_BATCH_SIZE = 32
     greedy = sampling_params["temperature"] == 0
+    enable_log_probs = sampling_params.get("enable_log_probs", False)
+    num_logprobs = sampling_params.get("num_logprobs", 0)
     device_sampling_params = SamplingParams(
         temperature=[sampling_params["temperature"]] * SAMPLING_BATCH_SIZE,
         top_k=[1] * SAMPLING_BATCH_SIZE if greedy else [40] * SAMPLING_BATCH_SIZE,
         top_p=[1.0] * SAMPLING_BATCH_SIZE if greedy else [sampling_params["top_p"]] * SAMPLING_BATCH_SIZE,
+        enable_log_probs=[enable_log_probs] * SAMPLING_BATCH_SIZE,
+        num_logprobs=[num_logprobs] * SAMPLING_BATCH_SIZE,
     )
 
     # Prepare input prompts
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-
-    # For long_context_mode, we only have 1 real user per row
-    # The rest are padding users with empty prompts
-    num_real_users = mesh_device.shape[0] if long_context_mode else global_batch_size
-    users_per_row = global_batch_size // mesh_device.shape[0]
-
-    if isinstance(input_prompts, list) and len(input_prompts) == 1:  # Manual input
-        real_prompts = input_prompts * num_real_users
-    elif isinstance(input_prompts, str):  # Inputs from file
-        real_prompts, _ = load_inputs(input_prompts, num_real_users, instruct=False)
-    else:
-        raise ValueError(
-            f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
-        )
-    if model_args[0].model_name.split("-")[-1] == "120b" and mesh_device.shape[0] == 1:
-        if max([len(p) for p in real_prompts]) > 32 * 1024:
-            pytest.skip(
-                "120b model with mesh_shape (1, 8) and prefill > 32k is not supported. OOM error gh issue #38729"
-            )
-    if model_args[0].model_name.split("-")[-1] == "120b" and mesh_device.shape[0] == 4:
-        if max([len(p) for p in real_prompts]) > 64 * 1024:
-            pytest.skip(
-                "120b model with mesh_shape (4, 8) and prefill > 64k is not supported. OOM error gh issue #38728"
-            )
-    if model_args[0].model_name.split("-")[-1] == "20b" and mesh_device.shape[0] == 4:
-        if max([len(p) for p in real_prompts]) > 32 * 1024:
-            pytest.skip(
-                "20b model with mesh_shape (4, 8) and prefill > 32k is not supported. Determinstic hang gh issue #38751"
-            )
 
     if long_context_mode:
         # Expand to full batch: 1 real user + (users_per_row - 1) padding users per row

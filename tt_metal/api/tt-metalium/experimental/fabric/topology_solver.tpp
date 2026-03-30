@@ -16,9 +16,11 @@
 #endif
 
 #include <algorithm>
-#include <sstream>
 #include <chrono>
+#include <functional>
+#include <optional>
 #include <set>
+#include <sstream>
 #include <climits>   // For INT_MAX
 #include <cstddef>   // For SIZE_MAX
 #include <unordered_set>
@@ -55,30 +57,66 @@ const std::vector<NodeId>& AdjacencyGraph<NodeId>::get_neighbors(const NodeId& n
 }
 
 template <typename NodeId>
-void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name) const {
-    std::stringstream ss;
-    ss << "\n=== " << graph_name << " Adjacency Map ===" << std::endl;
-    ss << "Total nodes: " << nodes_cache_.size() << std::endl;
+const typename AdjacencyGraph<NodeId>::AdjacencyMap& AdjacencyGraph<NodeId>::get_adjacency_map() const {
+    return adj_map_;
+}
 
+template <typename NodeId>
+void AdjacencyGraph<NodeId>::print_adjacency_map(const std::string& graph_name, bool quiet_mode) const {
+    // Build degree histogram (counting unique neighbors only)
+    std::map<size_t, size_t> degree_hist;
     for (const auto& node : nodes_cache_) {
         const auto& neighbors = get_neighbors(node);
-        ss << fmt::format("  Node {} (degree {}): ", node, neighbors.size());
+        std::set<NodeId> unique_neighbors(neighbors.begin(), neighbors.end());
+        size_t degree = unique_neighbors.size();
+        degree_hist[degree]++;
+    }
+
+    std::string degree_hist_str = "{";
+    bool first = true;
+    for (const auto& [degree, count] : degree_hist) {
+        if (!first) {
+            degree_hist_str += ", ";
+        }
+        first = false;
+        degree_hist_str += std::to_string(degree) + ":" + std::to_string(count);
+    }
+    degree_hist_str += "}";
+
+    // Always print histogram and summary in log_info
+    std::stringstream summary_ss;
+    summary_ss << "\n=== " << graph_name << " Adjacency Map ===" << std::endl;
+    summary_ss << "Total nodes: " << nodes_cache_.size() << std::endl;
+    summary_ss << "Degree histogram: " << degree_hist_str << std::endl;
+    log_info(tt::LogFabric, "{}", summary_ss.str());
+
+    // Print node details based on mode
+    std::stringstream nodes_ss;
+    for (const auto& node : nodes_cache_) {
+        const auto& neighbors = get_neighbors(node);
+        std::set<NodeId> unique_neighbors(neighbors.begin(), neighbors.end());
+        nodes_ss << fmt::format("  Node {} (degree {}): ", node, unique_neighbors.size());
         if (neighbors.empty()) {
-            ss << "no neighbors";
+            nodes_ss << "no neighbors";
         } else {
             bool first = true;
             for (const auto& neighbor : neighbors) {
                 if (!first) {
-                    ss << ", ";
+                    nodes_ss << ", ";
                 }
                 first = false;
-                ss << fmt::format("{}", neighbor);
+                nodes_ss << fmt::format("{}", neighbor);
             }
         }
-        ss << std::endl;
+        nodes_ss << std::endl;
     }
-    ss << "========================================" << std::endl;
-    log_info(tt::LogFabric, "{}", ss.str());
+    nodes_ss << "========================================" << std::endl;
+
+    if (quiet_mode) {
+        log_debug(tt::LogFabric, "{}", nodes_ss.str());
+    } else {
+        log_info(tt::LogFabric, "{}", nodes_ss.str());
+    }
 }
 
 // MappingConstraints trait constraint template method implementations
@@ -177,11 +215,10 @@ template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     TargetNode target_node, GlobalNode global_node) {
     // Save current state before modifying (for rollback if validation fails)
-    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     auto it = valid_mappings_.find(target_node);
-    if (it != valid_mappings_.end()) {
-        saved_state[target_node] = it->second;
-    }
+    saved_state[target_node] =
+        (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
 
     // If this global node is already reserved, add target_node to the reserved set
     auto reserved_it = reserved_global_nodes_.find(global_node);
@@ -207,11 +244,10 @@ template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     TargetNode target_node, const std::set<GlobalNode>& global_nodes) {
     // Save current state before modifying (for rollback if validation fails)
-    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     auto it = valid_mappings_.find(target_node);
-    if (it != valid_mappings_.end()) {
-        saved_state[target_node] = it->second;
-    }
+    saved_state[target_node] =
+        (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
 
     // If any of these global nodes are already reserved, add target_node to the reserved set
     for (const auto& global_node : global_nodes) {
@@ -238,12 +274,11 @@ template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
     // Save current state before modifying (for rollback if validation fails)
-    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     for (const auto& target_node : target_nodes) {
         auto it = valid_mappings_.find(target_node);
-        if (it != valid_mappings_.end()) {
-            saved_state[target_node] = it->second;
-        }
+        saved_state[target_node] =
+            (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
     }
 
     // If this global node is already reserved, add all target_nodes to the reserved set
@@ -272,12 +307,11 @@ template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_required_constraint(
     const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes) {
     // Save current state before modifying (for rollback if validation fails)
-    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     for (const auto& target_node : target_nodes) {
         auto it = valid_mappings_.find(target_node);
-        if (it != valid_mappings_.end()) {
-            saved_state[target_node] = it->second;
-        }
+        saved_state[target_node] =
+            (it == valid_mappings_.end()) ? std::nullopt : std::make_optional(it->second);
     }
 
     // For each target node, ensure it can map to any of the global nodes
@@ -342,13 +376,37 @@ void MappingConstraints<TargetNode, GlobalNode>::add_preferred_constraint(
 
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::validate(
-    const std::map<TargetNode, std::set<GlobalNode>>* saved_state) {
+    const std::map<TargetNode, std::optional<std::set<GlobalNode>>>* saved_state) {
+    auto restore_saved_valid_mappings =
+        [this](const std::map<TargetNode, std::optional<std::set<GlobalNode>>>* ss) {
+            if (ss == nullptr) {
+                return;
+            }
+            for (const auto& [target, opt] : *ss) {
+                if (!opt.has_value()) {
+                    valid_mappings_.erase(target);
+                } else {
+                    valid_mappings_[target] = *opt;
+                }
+            }
+        };
+
+    // When no per-call partial rollback is provided, snapshot all required mappings so filter / checks
+    // can be rolled back on failure (e.g. set_same_rank_groups_constraint, forbidden-only adds).
+    std::optional<std::map<TargetNode, std::set<GlobalNode>>> full_valid_mappings_rollback;
+    if (saved_state == nullptr) {
+        full_valid_mappings_rollback = valid_mappings_;
+    }
+
     // Filter out invalid mappings (e.g., those that conflict with reserved global nodes)
     // This ensures that valid_mappings_ only contains mappings that pass is_valid_mapping
     // We need to check against reserved nodes, so we check each mapping
     for (auto& [target, valid_set] : valid_mappings_) {
         std::set<GlobalNode> filtered_set;
         for (const auto& global : valid_set) {
+            if (forbidden_pairs_.find({target, global}) != forbidden_pairs_.end()) {
+                continue;
+            }
             // Check if this global node is reserved and if target is allowed
             auto reserved_it = reserved_global_nodes_.find(global);
             if (reserved_it != reserved_global_nodes_.end()) {
@@ -373,12 +431,10 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate(
     }
 
     if (!conflicted_targets.empty()) {
-        // Restore saved state if provided
         if (saved_state != nullptr) {
-            // Restore only the affected nodes from saved_state
-            for (const auto& [target, saved_valid_set] : *saved_state) {
-                valid_mappings_[target] = saved_valid_set;
-            }
+            restore_saved_valid_mappings(saved_state);
+        } else if (full_valid_mappings_rollback.has_value()) {
+            valid_mappings_ = std::move(*full_valid_mappings_rollback);
         }
 
         std::ostringstream oss;
@@ -395,20 +451,173 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate(
         oss << "  Target nodes with valid mappings: " << (valid_mappings_.size() - conflicted_targets.size()) << "\n";
         oss << "  Overconstrained target nodes: " << conflicted_targets.size() << "\n";
 
-        // Log info message instead of throwing
-        log_info(tt::LogFabric, "{}", oss.str());
+        // Log message - use debug level in quiet mode, info level otherwise
+        if (quiet_mode_) {
+            log_debug(tt::LogFabric, "{}", oss.str());
+        } else {
+            log_info(tt::LogFabric, "{}", oss.str());
+        }
+        return false;
+    }
+
+    if (!validate_same_rank_groups_feasible()) {
+        if (saved_state != nullptr) {
+            restore_saved_valid_mappings(saved_state);
+        } else if (full_valid_mappings_rollback.has_value()) {
+            valid_mappings_ = std::move(*full_valid_mappings_rollback);
+        }
         return false;
     }
 
     // Validate cardinality constraints are still satisfiable with current required constraints
-    // (only if we didn't restore saved state, as that means validation passed before)
-    if (saved_state == nullptr) {
-        if (!validate_cardinality_constraints()) {
-            return false;
+    if (!validate_cardinality_constraints()) {
+        if (saved_state != nullptr) {
+            restore_saved_valid_mappings(saved_state);
+        } else if (full_valid_mappings_rollback.has_value()) {
+            valid_mappings_ = std::move(*full_valid_mappings_rollback);
         }
+        return false;
     }
 
     return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::set_quiet_mode(bool quiet_mode) const {
+    quiet_mode_ = quiet_mode;
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::print_mapping_constraint_maps(
+    const std::string& label, bool quiet_mode) const {
+    std::map<size_t, size_t> valid_set_size_hist;
+    for (const auto& [target, globals] : valid_mappings_) {
+        (void)target;
+        valid_set_size_hist[globals.size()]++;
+    }
+
+    std::stringstream summary_ss;
+    summary_ss << "\n=== " << label << " ===" << std::endl;
+    summary_ss << "Targets with explicit valid (required) sets: " << valid_mappings_.size() << std::endl;
+    if (!valid_set_size_hist.empty()) {
+        summary_ss << "Valid-set size histogram (targets per size): {";
+        bool first_hist = true;
+        for (const auto& [sz, cnt] : valid_set_size_hist) {
+            if (!first_hist) {
+                summary_ss << ", ";
+            }
+            first_hist = false;
+            summary_ss << std::to_string(sz) << ":" << std::to_string(cnt);
+        }
+        summary_ss << "}" << std::endl;
+    }
+    summary_ss << "Preferred mapping entries: " << preferred_mappings_.size() << std::endl;
+    summary_ss << "Forbidden pairs: " << forbidden_pairs_.size() << std::endl;
+    summary_ss << "Cardinality constraints: " << cardinality_constraints_.size() << std::endl;
+    summary_ss << "Same-rank target groups: " << same_rank_target_groups_.size() << std::endl;
+    log_info(tt::LogFabric, "{}", summary_ss.str());
+
+    std::stringstream detail_ss;
+    detail_ss << "\n--- Valid (required) mappings ---" << std::endl;
+    if (valid_mappings_.empty()) {
+        detail_ss << "  (no explicit required sets — targets without entries are unrestricted)" << std::endl;
+    } else {
+        for (const auto& [target, globals] : valid_mappings_) {
+            detail_ss << fmt::format("  Target {} (|valid|={}): ", target, globals.size());
+            if (globals.empty()) {
+                detail_ss << "(empty)";
+            } else {
+                bool first = true;
+                for (const auto& g : globals) {
+                    if (!first) {
+                        detail_ss << ", ";
+                    }
+                    first = false;
+                    detail_ss << fmt::format("{}", g);
+                }
+            }
+            detail_ss << std::endl;
+        }
+    }
+
+    detail_ss << "\n--- Preferred mappings ---" << std::endl;
+    if (preferred_mappings_.empty()) {
+        detail_ss << "  (none)" << std::endl;
+    } else {
+        for (const auto& [target, globals] : preferred_mappings_) {
+            detail_ss << fmt::format("  Target {} (|preferred|={}): ", target, globals.size());
+            if (globals.empty()) {
+                detail_ss << "(empty)";
+            } else {
+                bool first = true;
+                for (const auto& g : globals) {
+                    if (!first) {
+                        detail_ss << ", ";
+                    }
+                    first = false;
+                    detail_ss << fmt::format("{}", g);
+                }
+            }
+            detail_ss << std::endl;
+        }
+    }
+
+    detail_ss << "\n--- Forbidden pairs ---" << std::endl;
+    if (forbidden_pairs_.empty()) {
+        detail_ss << "  (none)" << std::endl;
+    } else {
+        for (const auto& [t, g] : forbidden_pairs_) {
+            detail_ss << fmt::format("  ({}, {})", t, g) << std::endl;
+        }
+    }
+
+    detail_ss << "\n--- Cardinality constraints ---" << std::endl;
+    if (cardinality_constraints_.empty()) {
+        detail_ss << "  (none)" << std::endl;
+    } else {
+        size_t ci = 0;
+        for (const auto& [pairs, min_count] : cardinality_constraints_) {
+            detail_ss << fmt::format("  [{}] min_count={} ({} pairs)", ci, min_count, pairs.size()) << std::endl;
+            ci++;
+        }
+    }
+
+    detail_ss << "\n--- Same-rank groups ---" << std::endl;
+    if (same_rank_target_groups_.empty()) {
+        detail_ss << "  (none)" << std::endl;
+    } else {
+        for (size_t gi = 0; gi < same_rank_target_groups_.size(); ++gi) {
+            detail_ss << fmt::format("  Target group {}: ", gi);
+            bool first = true;
+            for (const auto& t : same_rank_target_groups_[gi]) {
+                if (!first) {
+                    detail_ss << ", ";
+                }
+                first = false;
+                detail_ss << fmt::format("{}", t);
+            }
+            detail_ss << std::endl;
+            if (gi < same_rank_global_groups_.size()) {
+                detail_ss << fmt::format("  Global group {}: ", gi);
+                first = true;
+                for (const auto& g : same_rank_global_groups_[gi]) {
+                    if (!first) {
+                        detail_ss << ", ";
+                    }
+                    first = false;
+                    detail_ss << fmt::format("{}", g);
+                }
+                detail_ss << std::endl;
+            }
+        }
+    }
+    detail_ss << "========================================" << std::endl;
+
+    if (quiet_mode) {
+        log_debug(tt::LogFabric, "{}", detail_ss.str());
+    } else {
+        log_info(tt::LogFabric, "{}", detail_ss.str());
+    }
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -477,6 +686,137 @@ MappingConstraints<TargetNode, GlobalNode>::get_cardinality_constraints() const 
 }
 
 template <typename TargetNode, typename GlobalNode>
+bool MappingConstraints<TargetNode, GlobalNode>::set_same_rank_groups_constraint(
+    const std::vector<std::set<TargetNode>>& target_groups,
+    const std::vector<std::set<GlobalNode>>& global_groups) {
+    auto saved_targets = same_rank_target_groups_;
+    auto saved_globals = same_rank_global_groups_;
+    same_rank_target_groups_ = target_groups;
+    same_rank_global_groups_ = global_groups;
+    if (!validate()) {
+        same_rank_target_groups_ = std::move(saved_targets);
+        same_rank_global_groups_ = std::move(saved_globals);
+        return false;
+    }
+    return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool MappingConstraints<TargetNode, GlobalNode>::validate_same_rank_groups_feasible() const {
+    const auto& target_groups = same_rank_target_groups_;
+    const auto& global_groups = same_rank_global_groups_;
+    if (target_groups.empty() || global_groups.empty()) {
+        return true;
+    }
+
+    std::vector<size_t> target_indices;
+    std::vector<size_t> global_indices;
+    for (size_t i = 0; i < target_groups.size(); ++i) {
+        if (!target_groups[i].empty()) {
+            target_indices.push_back(i);
+        }
+    }
+    for (size_t j = 0; j < global_groups.size(); ++j) {
+        if (!global_groups[j].empty()) {
+            global_indices.push_back(j);
+        }
+    }
+    if (target_indices.empty()) {
+        return true;
+    }
+    if (global_indices.empty()) {
+        return true;
+    }
+
+    const size_t nt = target_indices.size();
+    const size_t ng = global_indices.size();
+    if (nt > ng) {
+        if (!quiet_mode_) {
+            log_info(
+                tt::LogFabric,
+                "Constraint validation failed: more same-rank target groups than global host partitions (cannot "
+                "assign each group to a distinct partition).");
+        } else {
+            log_debug(
+                tt::LogFabric,
+                "Constraint validation failed: same-rank groups infeasible (too many target groups).");
+        }
+        return false;
+    }
+
+    // can_assign[ti][gj]: target group target_indices[ti] can use global partition global_indices[gj]
+    // (every member has some allowed candidate in that partition). Matching is injective: groups are not
+    // tied by index — any bijection between target groups and distinct global partitions is allowed.
+    std::vector<std::vector<bool>> can_assign(nt, std::vector<bool>(ng, false));
+    for (size_t ti = 0; ti < nt; ++ti) {
+        const auto& tset = target_groups[target_indices[ti]];
+        for (size_t gj = 0; gj < ng; ++gj) {
+            const auto& gset = global_groups[global_indices[gj]];
+            bool partition_ok = true;
+            for (const TargetNode& t : tset) {
+                bool has_candidate = false;
+                for (const GlobalNode& g : gset) {
+                    if (forbidden_pairs_.find({t, g}) != forbidden_pairs_.end()) {
+                        continue;
+                    }
+                    auto vm_it = valid_mappings_.find(t);
+                    if (vm_it == valid_mappings_.end()) {
+                        // Staged rank bindings: other ranks may not have required pools yet; reserved globals
+                        // from earlier adds must not make matching fail before all pools are installed.
+                        has_candidate = true;
+                        break;
+                    }
+                    if (is_valid_mapping(t, g)) {
+                        has_candidate = true;
+                        break;
+                    }
+                }
+                if (!has_candidate) {
+                    partition_ok = false;
+                    break;
+                }
+            }
+            can_assign[ti][gj] = partition_ok;
+        }
+    }
+
+    std::vector<bool> used_gj(ng, false);
+    std::function<bool(size_t)> try_match;
+    try_match = [&](size_t ti) -> bool {
+        if (ti == nt) {
+            return true;
+        }
+        for (size_t gj = 0; gj < ng; ++gj) {
+            if (!can_assign[ti][gj] || used_gj[gj]) {
+                continue;
+            }
+            used_gj[gj] = true;
+            if (try_match(ti + 1)) {
+                return true;
+            }
+            used_gj[gj] = false;
+        }
+        return false;
+    };
+
+    if (!try_match(0)) {
+        if (!quiet_mode_) {
+            log_info(
+                tt::LogFabric,
+                "Constraint validation failed: no injective assignment of same-rank target groups to distinct "
+                "global partitions where every member still allows at least one mapping (check required, "
+                "forbidden, and reserved constraints).");
+        } else {
+            log_debug(
+                tt::LogFabric,
+                "Constraint validation failed: same-rank groups infeasible (no matching to global partitions).");
+        }
+        return false;
+    }
+    return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
 const std::set<std::pair<TargetNode, GlobalNode>>& MappingConstraints<TargetNode, GlobalNode>::get_forbidden_pairs()
     const {
     return forbidden_pairs_;
@@ -488,10 +828,15 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     auto it = valid_mappings_.find(target_node);
     if (it == valid_mappings_.end()) {
         forbidden_pairs_.insert({target_node, global_node});
+        if (!validate()) {
+            forbidden_pairs_.erase({target_node, global_node});
+            return false;
+        }
         return true;
     }
 
-    std::map<TargetNode, std::set<GlobalNode>> saved_state{{target_node, it->second}};
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state{
+        {target_node, std::make_optional(it->second)}};
     it->second.erase(global_node);
     return validate(&saved_state);
 }
@@ -504,10 +849,17 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
         for (const auto& global_node : global_nodes) {
             forbidden_pairs_.insert({target_node, global_node});
         }
+        if (!validate()) {
+            for (const auto& global_node : global_nodes) {
+                forbidden_pairs_.erase({target_node, global_node});
+            }
+            return false;
+        }
         return true;
     }
 
-    std::map<TargetNode, std::set<GlobalNode>> saved_state{{target_node, it->second}};
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state{
+        {target_node, std::make_optional(it->second)}};
     for (const auto& global_node : global_nodes) {
         it->second.erase(global_node);
     }
@@ -517,21 +869,22 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
-    std::map<TargetNode, std::set<GlobalNode>> saved_state;
+    std::map<TargetNode, std::optional<std::set<GlobalNode>>> saved_state;
     for (const auto& target_node : target_nodes) {
+        forbidden_pairs_.insert({target_node, global_node});
         auto it = valid_mappings_.find(target_node);
-        if (it == valid_mappings_.end()) {
-            forbidden_pairs_.insert({target_node, global_node});
-        } else {
-            saved_state[target_node] = it->second;
+        if (it != valid_mappings_.end()) {
+            saved_state[target_node] = std::make_optional(it->second);
             it->second.erase(global_node);
         }
     }
-
-    if (!saved_state.empty()) {
-        return validate(&saved_state);
+    const bool ok = validate(saved_state.empty() ? nullptr : &saved_state);
+    if (!ok) {
+        for (const auto& target_node : target_nodes) {
+            forbidden_pairs_.erase({target_node, global_node});
+        }
     }
-    return true;
+    return ok;
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -726,6 +1079,9 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
 
     auto start_time = std::chrono::steady_clock::now();
 
+    // Set quiet mode on constraints to suppress verbose validation messages
+    constraints.set_quiet_mode(quiet_mode);
+
     // Build indexed graph representation
     GraphIndexData<TargetNode, GlobalNode> graph_data(target_graph, global_graph);
 
@@ -799,7 +1155,7 @@ namespace tt::tt_fabric::detail {
 constexpr uint32_t PROGRESS_LOG_INTERVAL_MASK = (1u << 18) - 1;
 
 // DFS call limit to prevent excessive search for complex topologies
-constexpr size_t DFS_CALL_LIMIT = 1000000;  // 1 million calls
+constexpr size_t DFS_CALL_LIMIT = 10000000;  // 10 million calls
 
 template <typename TargetNode, typename GlobalNode>
 GraphIndexData<TargetNode, GlobalNode>::GraphIndexData(
@@ -1130,7 +1486,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
                     missing_nodes_str << fmt::format("{}", node);
                 }
 
-                log_warning(
+                log_debug(
                     tt::LogFabric,
                     "Topology solver: {} constraint node(s) for target node {} are not present in the global graph. "
                     "These nodes will be ignored. Missing nodes: {}",
@@ -1140,7 +1496,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
 
                 // Warn if all constraint nodes are missing (empty restricted_indices)
                 if (restricted_indices.empty()) {
-                    log_warning(
+                    log_debug(
                         tt::LogFabric,
                         "Topology solver: All constraint nodes for target node {} are missing from the global graph. "
                         "This target node will have no restrictions.",
@@ -1180,7 +1536,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
                     missing_nodes_str << fmt::format("{}", node);
                 }
 
-                log_warning(
+                log_debug(
                     tt::LogFabric,
                     "Topology solver: {} preferred constraint node(s) for target node {} are not present in the global "
                     "graph. These nodes will be ignored. Missing nodes: {}",
@@ -1256,6 +1612,222 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
                 indexed_pairs.size());
         }
     }
+
+    // Convert same-group constraint from node-based to index-based
+    const auto& target_groups_node = constraints.get_same_rank_target_groups();
+    const auto& global_groups_node = constraints.get_same_rank_global_groups();
+    target_to_group.resize(graph_data.n_target, SIZE_MAX);
+    global_to_same_rank_group.resize(graph_data.n_global, -1);
+    for (size_t group_id = 0; group_id < target_groups_node.size(); ++group_id) {
+        for (const auto& target_node : target_groups_node[group_id]) {
+            auto idx_it = graph_data.target_to_idx.find(target_node);
+            if (idx_it != graph_data.target_to_idx.end()) {
+                target_to_group[idx_it->second] = group_id;
+            }
+        }
+    }
+    for (size_t group_id = 0; group_id < global_groups_node.size(); ++group_id) {
+        std::set<size_t> group_indices;
+        for (const auto& global_node : global_groups_node[group_id]) {
+            auto idx_it = graph_data.global_to_idx.find(global_node);
+            if (idx_it != graph_data.global_to_idx.end()) {
+                group_indices.insert(idx_it->second);
+                global_to_same_rank_group[idx_it->second] = static_cast<int>(group_id);
+            }
+        }
+        same_rank_groups.push_back(std::move(group_indices));
+    }
+}
+
+template <typename TargetNode, typename GlobalNode>
+void ConstraintIndexData<TargetNode, GlobalNode>::print_resolved_mapping_constraint_maps(
+    const GraphIndexData<TargetNode, GlobalNode>& graph_data,
+    const std::string& label,
+    bool quiet_mode) const {
+    std::stringstream summary_ss;
+    summary_ss << "\n=== " << label << " (indexed, resolved) ===" << std::endl;
+    summary_ss << "Targets: " << graph_data.n_target << ", Globals: " << graph_data.n_global << std::endl;
+    log_info(tt::LogFabric, "{}", summary_ss.str());
+
+    std::stringstream detail_ss;
+    detail_ss << "\n--- Per-target valid / forbidden / preferred (resolved to global nodes) ---" << std::endl;
+    for (size_t i = 0; i < graph_data.n_target; ++i) {
+        const auto& tnode = graph_data.target_nodes[i];
+        detail_ss << fmt::format("  Target {} [idx={}]: ", tnode, i);
+
+        detail_ss << "valid=";
+        if (i < restricted_global_indices.size() && !restricted_global_indices[i].empty()) {
+            bool first = true;
+            detail_ss << "{";
+            for (size_t gi : restricted_global_indices[i]) {
+                if (gi < graph_data.n_global) {
+                    if (!first) {
+                        detail_ss << ", ";
+                    }
+                    first = false;
+                    detail_ss << fmt::format("{}[{}]", graph_data.global_nodes[gi], gi);
+                }
+            }
+            detail_ss << "}";
+        } else {
+            detail_ss << "(unrestricted)";
+        }
+
+        detail_ss << "; forbidden=";
+        if (i < forbidden_global_indices.size() && !forbidden_global_indices[i].empty()) {
+            bool first = true;
+            detail_ss << "{";
+            for (size_t gi : forbidden_global_indices[i]) {
+                if (gi < graph_data.n_global) {
+                    if (!first) {
+                        detail_ss << ", ";
+                    }
+                    first = false;
+                    detail_ss << fmt::format("{}[{}]", graph_data.global_nodes[gi], gi);
+                }
+            }
+            detail_ss << "}";
+        } else {
+            detail_ss << "{}";
+        }
+
+        detail_ss << "; preferred=";
+        if (i < preferred_global_indices.size() && !preferred_global_indices[i].empty()) {
+            bool first = true;
+            detail_ss << "{";
+            for (size_t gi : preferred_global_indices[i]) {
+                if (gi < graph_data.n_global) {
+                    if (!first) {
+                        detail_ss << ", ";
+                    }
+                    first = false;
+                    detail_ss << fmt::format("{}[{}]", graph_data.global_nodes[gi], gi);
+                }
+            }
+            detail_ss << "}";
+        } else {
+            detail_ss << "{}";
+        }
+
+        detail_ss << std::endl;
+    }
+
+    detail_ss << "\n--- Cardinality constraints (resolved) ---" << std::endl;
+    if (cardinality_constraints.empty()) {
+        detail_ss << "  (none)" << std::endl;
+    } else {
+        size_t ci = 0;
+        constexpr size_t kMaxPairsListed = 24;
+        for (const auto& [pairs, min_count] : cardinality_constraints) {
+            detail_ss << fmt::format("  [{}] min_count={} ({} pairs)", ci, min_count, pairs.size()) << std::endl;
+            size_t shown = 0;
+            for (const auto& [ti, gi] : pairs) {
+                if (shown >= kMaxPairsListed) {
+                    if (pairs.size() > kMaxPairsListed) {
+                        detail_ss << fmt::format("    ... and {} more pairs", pairs.size() - kMaxPairsListed)
+                                  << std::endl;
+                    }
+                    break;
+                }
+                if (ti < graph_data.n_target && gi < graph_data.n_global) {
+                    detail_ss << fmt::format(
+                        "    ({}, {}) -> ({}, {})\n",
+                        graph_data.target_nodes[ti],
+                        ti,
+                        graph_data.global_nodes[gi],
+                        gi);
+                }
+                shown++;
+            }
+            ci++;
+        }
+    }
+
+    detail_ss << "\n--- Same-rank groups (resolved) ---" << std::endl;
+    bool any_target_in_rank_group = false;
+    for (size_t g : target_to_group) {
+        if (g != SIZE_MAX) {
+            any_target_in_rank_group = true;
+            break;
+        }
+    }
+    const bool no_same_rank = same_rank_groups.empty() && !any_target_in_rank_group;
+    if (no_same_rank) {
+        detail_ss << "  (none)" << std::endl;
+    } else {
+        for (size_t i = 0; i < graph_data.n_target; ++i) {
+            size_t gid = (i < target_to_group.size()) ? target_to_group[i] : SIZE_MAX;
+            detail_ss << fmt::format(
+                "  Target {} [idx={}]: same_rank_group_id={}\n",
+                graph_data.target_nodes[i],
+                i,
+                gid == SIZE_MAX ? std::string("none") : std::to_string(gid));
+        }
+        for (size_t g = 0; g < same_rank_groups.size(); ++g) {
+            detail_ss << fmt::format("  Global same-rank group {}: ", g);
+            bool first = true;
+            for (size_t gi : same_rank_groups[g]) {
+                if (gi >= graph_data.n_global) {
+                    continue;
+                }
+                if (!first) {
+                    detail_ss << ", ";
+                }
+                first = false;
+                detail_ss << fmt::format("{}[{}]", graph_data.global_nodes[gi], gi);
+            }
+            detail_ss << std::endl;
+        }
+    }
+    detail_ss << "========================================" << std::endl;
+
+    if (quiet_mode) {
+        log_debug(tt::LogFabric, "{}", detail_ss.str());
+    } else {
+        log_info(tt::LogFabric, "{}", detail_ss.str());
+    }
+}
+
+template <typename TargetNode, typename GlobalNode>
+bool ConstraintIndexData<TargetNode, GlobalNode>::check_same_rank_constraint(
+    size_t target_idx, size_t global_idx, const std::vector<int>& mapping, const std::vector<bool>& /*used*/) const {
+    // Constraint: don't break target-group boundaries. All targets in the same target group must
+    // map to globals in the same global group. Multiple target groups may share a global group
+    // (e.g. {1},{2} -> {1,3,2} is fine). Splitting a target group across global groups is invalid
+    // (e.g. [1,2,3] mapping to globals spanning [3,4,5] when 3,4 and 5 are in different groups).
+    bool no_same_rank_groups =
+        global_to_same_rank_group.empty() || global_idx >= global_to_same_rank_group.size();
+    if (no_same_rank_groups) {
+        return true;
+    }
+    int group_id = global_to_same_rank_group[global_idx];
+    bool group_id_out_of_range = group_id < 0 || static_cast<size_t>(group_id) >= same_rank_groups.size();
+    if (group_id_out_of_range) {
+        return true;
+    }
+    size_t my_group = target_idx < target_to_group.size() ? target_to_group[target_idx] : SIZE_MAX;
+    bool target_not_in_any_group = (my_group == SIZE_MAX);
+    if (target_not_in_any_group) {
+        return true;
+    }
+    // Check: any other target in our group already assigned must be in the same global group
+    for (size_t t = 0; t < mapping.size(); ++t) {
+        if (t == target_idx || mapping[t] < 0) {
+            continue;
+        }
+        if (t >= target_to_group.size() || target_to_group[t] != my_group) {
+            continue;
+        }
+        size_t other_global_idx = static_cast<size_t>(mapping[t]);
+        if (other_global_idx >= global_to_same_rank_group.size()) {
+            continue;
+        }
+        int other_global_group = global_to_same_rank_group[other_global_idx];
+        if (other_global_group != group_id) {
+            return false;  // Would split our target group across global boundaries
+        }
+    }
+    return true;
 }
 
 // ============================================================================
@@ -1742,7 +2314,10 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
                 graph_data.target_nodes[selection.target_idx],
                 remaining_targets,
                 remaining_global);
-            log_debug(tt::LogFabric, "{}", error_msg);
+            // Suppress verbose debug messages in quiet mode to avoid spam
+            if (!quiet_mode_) {
+                log_debug(tt::LogFabric, "{}", error_msg);
+            }
             if (state_.error_message.empty()) {
                 state_.error_message = error_msg;
             }
@@ -1751,7 +2326,10 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
             std::string error_msg = fmt::format(
                 "Search error: no unassigned target nodes found, but {} nodes still need to be placed",
                 graph_data.n_target - pos);
-            log_debug(tt::LogFabric, "{}", error_msg);
+            // Suppress verbose debug messages in quiet mode to avoid spam
+            if (!quiet_mode_) {
+                log_debug(tt::LogFabric, "{}", error_msg);
+            }
             if (state_.error_message.empty()) {
                 state_.error_message = error_msg;
             }
@@ -1774,6 +2352,13 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
         if (!ConsistencyChecker::check_forward_consistency(
                 target_idx, global_idx, graph_data, constraint_data, state_.mapping, state_.used, validation_mode)) {
             continue;  // Skip candidate that leaves no options
+        }
+
+        // Check same-rank groups (UNSET host: all ASICs from a host must map to same rank)
+        bool violates_same_host_same_rank =
+            !constraint_data.check_same_rank_constraint(target_idx, global_idx, state_.mapping, state_.used);
+        if (violates_same_host_same_rank) {
+            continue;  // Would violate same-host same-rank
         }
 
         // Assign candidate temporarily to check cardinality constraints
@@ -1814,6 +2399,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::search(
     state_ = SearchState();
     state_.mapping.resize(graph_data.n_target, -1);
     state_.used.resize(graph_data.n_global, false);
+    quiet_mode_ = quiet_mode;
 
     // Log node degrees and degree histograms at the start of mapping
     // Build degree histograms for more descriptive logging

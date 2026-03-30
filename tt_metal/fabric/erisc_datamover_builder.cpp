@@ -30,9 +30,6 @@
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_remote_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
-#include "tt_metal/fabric/builder/fabric_router_recipe.hpp"
-#include "tt_metal/fabric/builder/channel_to_pool_mapping.hpp"
-#include "tt_metal/fabric/builder/multi_pool_channel_allocator.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
 
 #include "impl/context/metal_context.hpp"
@@ -233,11 +230,9 @@ bool requires_forced_assignment_to_noc1() {
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topology(topology) {
     const bool is_2D_routing = is_2D_topology(topology);
-    // Allocate L1 addresses for MAX sender channels (9) to support all router types
-    // Even though most routers use fewer channels, we need addresses for all possible channels
-    uint32_t num_sender_channels = is_2D_routing
-                                       ? builder_config::num_max_sender_channels
-                                       : builder_config::get_sender_channel_count(false);  // Use MAX (9) instead of 8
+    // Allocate L1 addresses for global max sender channels so layout is stable across all configs
+    uint32_t num_sender_channels =
+        is_2D_routing ? builder_config::num_max_sender_channels : builder_config::get_sender_channel_count(false);
     uint32_t num_downstream_edms = builder_config::get_downstream_edm_count(is_2D_routing);
     // Global
     size_t next_l1_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
@@ -268,9 +263,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
         this->datapath_usage_l1_address = next_l1_addr;
         this->datapath_usage_buffer_size = sizeof(tt::tt_fabric::FabricDatapathUsageL1Results<
                                                   true,
-                                                  builder_config::num_max_receiver_channels,
+                                                  builder_config::MAX_NUM_VCS,
                                                   builder_config::num_max_sender_channels>);
         next_l1_addr += this->datapath_usage_buffer_size;
+        next_l1_addr = tt::align(next_l1_addr, eth_word_l1_alignment);
     } else {
         this->datapath_usage_l1_address = 0;
         this->datapath_usage_buffer_size = 0;
@@ -458,14 +454,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         size_t{0},
         [](size_t sum, const MemoryRegion& region) { return sum + region.get_size(); });
 
-    // Create a default recipe with a single static pool for backward compatibility
-    // All channels map to pool 0 (the single static pool)
-    auto recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(
-        this->num_used_sender_channels, this->num_used_receiver_channels);
-    auto remote_channels_recipe = tt::tt_fabric::FabricRouterRecipe::create_default_single_static_pool_recipe(
-        0, this->num_used_receiver_channels);
-
-    // Create the single static pool allocator with per-VC channel distribution
+    // Create the static channel allocator with per-VC channel distribution
     auto static_allocator = std::make_shared<tt::tt_fabric::FabricStaticSizedChannelsAllocator>(
         topology,
         options,
@@ -475,26 +464,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         available_channel_buffering_space,
         this->available_buffer_memory_regions);
 
-    // Assign static allocator directly to channel_allocator (composition, not wrapped)
     this->channel_allocator = static_allocator;
 
     // Create remote channels allocator from the static allocator
     this->remote_channels_allocator = std::make_shared<tt::tt_fabric::FabricRemoteChannelsAllocator>(*static_allocator);
-
-    // Create multi-pool coordinator that manages the pool allocators
-    std::vector<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>> pool_allocators;
-    pool_allocators.push_back(static_allocator);
-
-    std::vector<tt::tt_fabric::FabricChannelPoolType> pool_types;
-    pool_types.push_back(tt::tt_fabric::FabricChannelPoolType::STATIC);
-
-    this->multi_pool_allocator =
-        std::make_shared<tt::tt_fabric::MultiPoolChannelAllocator>(std::move(pool_allocators), std::move(pool_types));
-
-    // Create the channel-to-pool mapping
-    this->channel_to_pool_mapping = std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(recipe);
-    this->remote_channel_to_pool_mapping =
-        std::make_shared<tt::tt_fabric::ChannelToPoolMapping>(remote_channels_recipe);
 
     // set default noc and cmd bufs (current setup in TG 4U)
     for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
@@ -725,7 +698,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     // 1. Stored as members for later use in compile-time args
     // 2. Used for connection validation
     // We intentionally DON'T override config values because:
-    // 1. config.multi_pool_allocator was created with MAX channel counts
+    // 1. The channel allocator was created with MAX channel counts
     // 2. Changing config counts would cause emit_ct_args to emit wrong number of args
     // The config stays at MAX, but we pass actual counts to device via compile-time args
     // Validate injection flags vector size matches the number of sender channels
@@ -813,10 +786,14 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     this->receiver_channel_to_downstream_adapter =
         std::make_shared<tt::tt_fabric::StaticSizedChannelConnectionWriterAdapter>(
             *static_allocator, config.topology, direction);
-    // worker is always index 0.
-    // rest of the downstream buffer index addresses will be populated when building connections to downstream edm
-    // channels.
+    // Worker channels need their buffer-index-counter L1 address set so the EDM kernel can reset it on each launch.
+    // Channel 0 is always a worker. VC2 is also a worker channel when active.
     downstream_vcs_sender_channel_buffer_index_semaphore_id[0] = sender_channels_buffer_index_semaphore_id[0];
+    if (static_allocator->get_num_sender_channels(2) > 0) {
+        size_t vc2_flat = static_allocator->get_num_sender_channels(0) + static_allocator->get_num_sender_channels(1);
+        downstream_vcs_sender_channel_buffer_index_semaphore_id[vc2_flat] =
+            sender_channels_buffer_index_semaphore_id[vc2_flat];
+    }
 
     // Add this log right at the beginning of the constructor body
     log_debug(
@@ -887,18 +864,14 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
 }
 
 /*
- * Channel ct args schema:
- * 1) First arg: defines the number of "pools": `num_channel_pools`
- * 2) The next `num_channel_pools` of compile time args is an array of `FabricChannelPoolType`: `channel_pool_types`
- * 3) The next indeterminate number of args are the args for the individual pools. For each entry in
- * `channel_pool_types`, you invoke the corresponding `Pool` class by passing the next CT arg index. After each `Pool`,
- * you increment the compile time arg index by <type>::NUM_ARGS_USED. 4) All of the pools from step 3 should be placed
- * into a constexprable tuple.
+ * Channel allocations CT args schema (ChannelAllocations format):
+ * 1) Alignment tag (0xabcd1234)
+ * 2) num_entries: total channel data entries (sender + receiver)
+ * 3) Per-entry data: [base_addr, num_slots, remote_base_addr, remote_num_slots] × num_entries
+ * 4) Sender channel-to-entry index mapping (NUM_SENDER_CHANNELS entries)
+ * 5) Receiver channel-to-entry index mapping (NUM_RECEIVER_CHANNELS entries)
  *
- * 5) a sender channel to pool index mapping is passed as compile time args
- * 6) a sender channel to pool type mapping is passed as compile time args
- * 7) a receiver channel to pool index mapping is passed as compile time args
- * 8) a receiver channel to pool type mapping is passed as compile time args
+ * Then remote channel allocations block (same format, receiver-only), then downstream sender data.
  */
 
 FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_compile_time_args(
@@ -1047,49 +1020,96 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     auto actual_sender_channels_vc1 = actual_sender_channels_per_vc_.has_value()
                                           ? actual_sender_channels_per_vc_.value()[1]
                                           : config.num_used_sender_channels_per_vc[1];
+    auto actual_sender_channels_vc2 = actual_sender_channels_per_vc_.has_value()
+                                          ? actual_sender_channels_per_vc_.value()[2]
+                                          : config.num_used_sender_channels_per_vc[2];
 
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
 
-    // --- Stream IDs ---
-    const auto& stream_ids = StreamRegAssignments::get_all_stream_ids();
-    named_args["TO_RECEIVER_0_PKTS_SENT_ID"] = stream_ids[0];
-    named_args["TO_RECEIVER_1_PKTS_SENT_ID"] = stream_ids[1];
-    named_args["TO_SENDER_0_PKTS_ACKED_ID"] = stream_ids[2];
-    named_args["TO_SENDER_1_PKTS_ACKED_ID"] = stream_ids[3];
-    named_args["TO_SENDER_2_PKTS_ACKED_ID"] = stream_ids[4];
-    named_args["TO_SENDER_3_PKTS_ACKED_ID"] = stream_ids[5];
-    named_args["TO_SENDER_0_PKTS_COMPLETED_ID"] = stream_ids[6];
-    named_args["TO_SENDER_1_PKTS_COMPLETED_ID"] = stream_ids[7];
-    named_args["TO_SENDER_2_PKTS_COMPLETED_ID"] = stream_ids[8];
-    named_args["TO_SENDER_3_PKTS_COMPLETED_ID"] = stream_ids[9];
-    named_args["TO_SENDER_4_PKTS_COMPLETED_ID"] = stream_ids[10];
-    named_args["TO_SENDER_5_PKTS_COMPLETED_ID"] = stream_ids[11];
-    named_args["TO_SENDER_6_PKTS_COMPLETED_ID"] = stream_ids[12];
-    named_args["TO_SENDER_7_PKTS_COMPLETED_ID"] = stream_ids[13];
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] = stream_ids[14];
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] = stream_ids[15];
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID"] = stream_ids[16];
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] = stream_ids[17];
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] = stream_ids[18];
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] = stream_ids[19];
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID"] = stream_ids[20];
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] = stream_ids[21];
-    named_args["SENDER_CHANNEL_0_FREE_SLOTS_STREAM_ID"] = stream_ids[22];
-    named_args["SENDER_CHANNEL_1_FREE_SLOTS_STREAM_ID"] = stream_ids[23];
-    named_args["SENDER_CHANNEL_2_FREE_SLOTS_STREAM_ID"] = stream_ids[24];
-    named_args["SENDER_CHANNEL_3_FREE_SLOTS_STREAM_ID"] = stream_ids[25];
-    named_args["SENDER_CHANNEL_4_FREE_SLOTS_STREAM_ID"] = stream_ids[26];
-    named_args["SENDER_CHANNEL_5_FREE_SLOTS_STREAM_ID"] = stream_ids[27];
-    named_args["SENDER_CHANNEL_6_FREE_SLOTS_STREAM_ID"] = stream_ids[28];
-    named_args["SENDER_CHANNEL_7_FREE_SLOTS_STREAM_ID"] = stream_ids[29];
-    named_args["TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID"] = stream_ids[30];
-    named_args["MULTI_RISC_TEARDOWN_SYNC_STREAM_ID"] = stream_ids[31];
-    named_args["ETH_RETRAIN_LINK_SYNC_STREAM_ID"] = stream_ids[32];
+    // --- Stream IDs (increment-on-write registers) ---
+    named_args["TO_RECEIVER_0_PKTS_SENT_ID"] = StreamRegAssignments::IncrementOnWrite::to_receiver_0_pkts_sent_id;
+    named_args["TO_RECEIVER_1_PKTS_SENT_ID"] = StreamRegAssignments::IncrementOnWrite::to_receiver_1_pkts_sent_id;
+    named_args["TO_SENDER_0_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_0_pkts_acked_id;
+    named_args["TO_SENDER_1_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_1_pkts_acked_id;
+    named_args["TO_SENDER_2_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_2_pkts_acked_id;
+    named_args["TO_SENDER_3_PKTS_ACKED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_3_pkts_acked_id;
+    named_args["TO_SENDER_0_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_0_pkts_completed_id;
+    named_args["TO_SENDER_1_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_1_pkts_completed_id;
+    named_args["TO_SENDER_2_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_2_pkts_completed_id;
+    named_args["TO_SENDER_3_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_3_pkts_completed_id;
+    named_args["TO_SENDER_4_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_4_pkts_completed_id;
+    named_args["TO_SENDER_5_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_5_pkts_completed_id;
+    named_args["TO_SENDER_6_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_6_pkts_completed_id;
+    named_args["TO_SENDER_7_PKTS_COMPLETED_ID"] = StreamRegAssignments::IncrementOnWrite::to_sender_7_pkts_completed_id;
+    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_1;
+    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_2;
+    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_3;
+    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::vc_0_free_slots_from_downstream_edge_4;
+    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_1;
+    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_2;
+    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_3;
+    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::vc_1_free_slots_from_downstream_edge_4;
+    named_args["SENDER_CHANNEL_0_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::sender_channel_0_free_slots_stream_id;
+    named_args["SENDER_CHANNEL_1_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::sender_channel_1_free_slots_stream_id;
+    named_args["SENDER_CHANNEL_2_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::sender_channel_2_free_slots_stream_id;
+    named_args["SENDER_CHANNEL_3_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::sender_channel_3_free_slots_stream_id;
+    named_args["SENDER_CHANNEL_4_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::sender_channel_4_free_slots_stream_id;
+    named_args["SENDER_CHANNEL_5_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::sender_channel_5_free_slots_stream_id;
+    named_args["SENDER_CHANNEL_6_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::sender_channel_6_free_slots_stream_id;
+    named_args["SENDER_CHANNEL_7_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::sender_channel_7_free_slots_stream_id;
+    // Channels 8 and 9 are 0 by default (padding). The firmware array
+    // sender_channel_free_slots_stream_ids[] is sized to MAX_NUM_SENDER_CHANNELS (10) but only
+    // indices 0..NUM_SENDER_CHANNELS-1 are accessed at runtime (via is_sender_channel_serviced[] guard).
+    //
+    // Channel layout by router type:
+    //   Non-Z mesh (no VC1):  indices 0-3 = VC0 (IDs 22-25),  index 4 = VC2 (ID 30 when enabled)
+    //   Non-Z mesh (with VC1): indices 0-3 = VC0, 4-6/7 = VC1, last = VC2 (ID 30 when enabled)
+    //   Z-router:              indices 0-4 = VC0, 5-8 = VC1 (mapped but NOT serviced by firmware —
+    //                          Z-routers don't step through VC1 sender channels), index 9 = VC2
+    //
+    // For Z-routers, VC1 sender channels (5-8) exist in the flat index space for layout compatibility
+    // but is_sender_channel_serviced[5..8] is false, so their stream IDs are never read by firmware.
+    // This is why indices 8 and 9 can safely be 0 — they are only accessed when VC2 is enabled,
+    // at which point the override below sets the correct one to stream ID 30.
+    named_args["SENDER_CHANNEL_8_FREE_SLOTS_STREAM_ID"] = 0;
+    named_args["SENDER_CHANNEL_9_FREE_SLOTS_STREAM_ID"] = 0;
+    // VC2 sender is always the last used channel. Override its stream ID to 30 (VC2 flow control).
+    // The flat index varies by config: non-Z without VC1 = index 4, non-Z with VC1 = index 7/8,
+    // Z-router = index 9.
+    if (actual_sender_channels_vc2 > 0 && num_sender_channels > 0) {
+        named_args[fmt::format("SENDER_CHANNEL_{}_FREE_SLOTS_STREAM_ID", num_sender_channels - 1)] =
+            StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id;
+    }
+    named_args["VC2_RECEIVER_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::vc2_receiver_free_slots_stream_id;
+    named_args["TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::IncrementOnWrite::tensix_relay_local_free_slots_stream_id;
+    // --- Stream IDs (scratch registers) ---
+    named_args["MULTI_RISC_TEARDOWN_SYNC_STREAM_ID"] =
+        StreamRegAssignments::Scratch::multi_risc_teardown_sync_stream_id;
+    named_args["ETH_RETRAIN_LINK_SYNC_STREAM_ID"] = StreamRegAssignments::Scratch::eth_retrain_link_sync_stream_id;
 
-    // --- Max channel counts ---
-    named_args["MAX_NUM_SENDER_CHANNELS"] = builder_config::num_max_sender_channels;
-    named_args["MAX_NUM_RECEIVER_CHANNELS"] = builder_config::num_max_receiver_channels;
+    // --- Max channel counts (always global max — instance counts use NUM_SENDER/RECEIVER_CHANNELS) ---
+    named_args["MAX_NUM_SENDER_CHANNELS"] = static_cast<uint32_t>(builder_config::num_max_sender_channels);
+    named_args["MAX_NUM_RECEIVER_CHANNELS"] = static_cast<uint32_t>(builder_config::num_max_receiver_channels);
+    named_args["MAX_NUM_VCS"] = static_cast<uint32_t>(builder_config::MAX_NUM_VCS);
 
     // --- Downstream tensix connections ---
     named_args["NUM_DS_OR_LOCAL_TENSIX_CONNECTIONS"] = this->num_downstream_tensix_connections;
@@ -1117,6 +1137,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["VC1_DOWNSTREAM_EDM_SIZE"] = vc1_downstream_edm_size;
     named_args["ACTUAL_VC0_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc0);
     named_args["ACTUAL_VC1_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc1);
+    named_args["ACTUAL_VC2_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc2);
 
     // --- Remote channel info (always emitted; 0 when inactive) ---
     named_args["SKIP_SRC_CH_ID_UPDATE"] = skip_src_ch_id_update ? 1 : 0;
@@ -1256,9 +1277,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             channel_trimming_overrides_->is_receiver_channel_data_forwarded(0) ? 0 : 1;
         named_args["DISABLE_RX_CH1_FORWARDING"] =
             channel_trimming_overrides_->is_receiver_channel_data_forwarded(1) ? 0 : 1;
+        named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
     } else {
         named_args["DISABLE_RX_CH0_FORWARDING"] = 0;
         named_args["DISABLE_RX_CH1_FORWARDING"] = 0;
+        named_args["DISABLE_RX_CH2_FORWARDING"] = 1;  // VC2 receiver never forwards (always disabled)
     }
 
     // Credit amortization named compile-time args
@@ -1277,25 +1300,19 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["SENDER_CREDIT_AMORTIZATION_FREQUENCY"] = sender_amort_freq;
     named_args["RECEIVER_CREDIT_AMORTIZATION_FREQUENCY"] = receiver_amort_freq;
 
-    // ===== Build positional args (pool/channel-mapping/downstream data only) =====
-    // Pool data now starts at index 0 in the positional vector.
+    // ===== Build positional args (channel allocations + downstream data) =====
     std::vector<uint32_t> ct_args;
 
-    // Emit pool data via multi-pool coordinator
-    config.multi_pool_allocator->emit_ct_args(
+    // Emit local channel allocations
+    auto* static_alloc_ptr = dynamic_cast<FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
+    TT_FATAL(static_alloc_ptr != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator");
+    static_alloc_ptr->emit_channel_allocations_ct_args(
         ct_args, actual_sender_channels_vc0, actual_sender_channels_vc1, num_receiver_channels);
 
-    // Emit channel-to-pool mappings
-    ct_args.push_back(0xabaddad8);
-    config.channel_to_pool_mapping->emit_ct_args(ct_args);
-
-    // Emit remote channel pool data (for remote_receiver_channels initialization)
+    // Emit remote channel allocations
     ct_args.push_back(0xabaddad6);
     TT_FATAL(config.remote_channels_allocator != nullptr, "Remote channels allocator must be non-null");
-    MultiPoolChannelAllocator remote_multi_pool_allocator(
-        {config.remote_channels_allocator}, {FabricChannelPoolType::STATIC});
-    remote_multi_pool_allocator.emit_ct_args(ct_args, 0, 0, num_receiver_channels);
-    config.remote_channel_to_pool_mapping->emit_ct_args(ct_args);
+    config.remote_channels_allocator->emit_channel_allocations_ct_args(ct_args, num_receiver_channels);
 
     // Downstream sender data
     ct_args.push_back(0xabaddad7);
@@ -1339,6 +1356,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[6]),
         static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[7]),
         static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[8]),  // 9th channel for Z routers
+        static_cast<uint32_t>(this->sender_channels_connection_semaphore_id[9]),  // 10th channel for VC2
 
         static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[0]),
         static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[1]),
@@ -1350,6 +1368,8 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         static_cast<uint32_t>(this->downstream_vcs_sender_channel_buffer_index_semaphore_id[7]),
         static_cast<uint32_t>(
             this->downstream_vcs_sender_channel_buffer_index_semaphore_id[8]),  // 9th channel for Z routers
+        static_cast<uint32_t>(
+            this->downstream_vcs_sender_channel_buffer_index_semaphore_id[9]),  // 10th channel for VC2
     };
 
     // Pack VC0 runtime args
@@ -1442,13 +1462,6 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     std::array<std::optional<size_t>, builder_config::max_downstream_edms>
         receiver_channels_downstream_teardown_semaphore_id;
 
-    auto remote_pool_allocators =
-        std::vector<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>>{config.remote_channels_allocator};
-    auto remote_pool_types =
-        std::vector<tt::tt_fabric::FabricChannelPoolType>{tt::tt_fabric::FabricChannelPoolType::STATIC};
-    auto remote_multi_pool_allocator = std::make_shared<tt::tt_fabric::MultiPoolChannelAllocator>(
-        std::move(remote_pool_allocators), std::move(remote_pool_types));
-
     log_debug(
         tt::LogFabric,
         "FABRIC NODE ID: M={},D={} eth=(x={},y={})\n"
@@ -1463,7 +1476,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         config.num_used_sender_channels,
         config.num_used_receiver_channels,
         *config.channel_allocator,
-        *remote_multi_pool_allocator->get_pool(0));
+        *config.remote_channels_allocator);
 
     if (build_in_worker_connection_mode) {
         for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
@@ -1478,6 +1491,19 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
             sender_channels_flow_control_semaphore_id[i] = 0;
             sender_channels_connection_semaphore_id[i] = 0;
             sender_channels_buffer_index_semaphore_id[i] = 0;
+        }
+        // VC2 supports a worker connection, so if it's present we'll add the relevant book-keeping
+        auto* static_allocator =
+            dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
+        const auto vc2_flat =
+            static_allocator->get_num_sender_channels(0) + static_allocator->get_num_sender_channels(1);
+        if (static_allocator->get_num_sender_channels(2) > 0) {
+            sender_channels_buffer_index_semaphore_id[vc2_flat] =
+                config.sender_channels_buffer_index_semaphore_address[vc2_flat];
+            sender_channels_flow_control_semaphore_id[vc2_flat] =
+                config.sender_channels_local_flow_control_semaphore_address[vc2_flat];
+            sender_channels_connection_semaphore_id[vc2_flat] =
+                config.sender_channels_connection_semaphore_address[vc2_flat];
         }
     } else {
         const bool is_2D_routing =
@@ -1570,11 +1596,6 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_
     return build_connection_to_fabric_channel(0, channel_id, channel_id);  // Default to VC0
 }
 
-// TODO: take the downstream sender channel, based on the VC index, and use it to construct our
-// `to_sender_channel_adapter` The `to_sender_channel_adapter` type is resolved based on the type of the downstream
-// sender channel it is connecting to.
-//   downstream == static? => instantiate static_sender_channel_adapter
-//   downstream == elastic? => instantiate elastic_sender_channel_adapter
 void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     FabricDatamoverBuilderBase* downstream_builder,
     uint32_t upstream_vc_idx,

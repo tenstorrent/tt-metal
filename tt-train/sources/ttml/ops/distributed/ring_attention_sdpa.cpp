@@ -21,7 +21,7 @@
 #include "ops/binary_ops.hpp"
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -112,7 +112,7 @@ autograd::TensorPtr ring_attention_sdpa(
         std::ref(*mesh_device));
 
     // Pad to 32 columns each (adds 31 zeros on the right of last dim)
-    ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec = {
+    ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding_spec = {
         {0, 0},  // batch
         {0, 0},  // heads
         {0, 0},  // seq_len
@@ -150,15 +150,15 @@ autograd::TensorPtr ring_attention_sdpa(
 
         // Extract max_val from column 0
         // Slice: [0:B, 0:H, 0:S, 0:1]
-        const ttnn::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
-        const ttnn::SmallVector<uint32_t> max_start = {0, 0, 0, 0};
-        const ttnn::SmallVector<uint32_t> max_end = {batch_num, heads, seq_len_local, 1};
+        const ttsl::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
+        const ttsl::SmallVector<uint32_t> max_start = {0, 0, 0, 0};
+        const ttsl::SmallVector<uint32_t> max_end = {batch_num, heads, seq_len_local, 1};
         ttnn::Tensor max_val_chunk = ttnn::slice(intermediate_tensor, max_start, max_end, slice_step);
 
         // Extract recip_sum_exp from column 32
         // Slice: [0:B, 0:H, 0:S, 32:33]
-        const ttnn::SmallVector<uint32_t> recip_start = {0, 0, 0, 32};
-        const ttnn::SmallVector<uint32_t> recip_end = {batch_num, heads, seq_len_local, 33};
+        const ttsl::SmallVector<uint32_t> recip_start = {0, 0, 0, 32};
+        const ttsl::SmallVector<uint32_t> recip_end = {batch_num, heads, seq_len_local, 33};
         ttnn::Tensor recip_sum_exp_chunk = ttnn::slice(intermediate_tensor, recip_start, recip_end, slice_step);
 
         // Step 1: Compute sum_exp_chunk = 1 / recip_sum_exp
@@ -250,11 +250,11 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::Tensor recip_final_sum = ttnn::reciprocal(final_global_sum_exp);
 
         // Slice parameters for extracting max and sum_exp from intermediate
-        const ttnn::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
-        const ttnn::SmallVector<uint32_t> max_start = {0, 0, 0, 0};
-        const ttnn::SmallVector<uint32_t> max_end = {batch_num, heads, seq_len_local, 1};
-        const ttnn::SmallVector<uint32_t> recip_start = {0, 0, 0, 32};
-        const ttnn::SmallVector<uint32_t> recip_end = {batch_num, heads, seq_len_local, 33};
+        const ttsl::SmallVector<uint32_t> slice_step = {1, 1, 1, 1};
+        const ttsl::SmallVector<uint32_t> max_start = {0, 0, 0, 0};
+        const ttsl::SmallVector<uint32_t> max_end = {batch_num, heads, seq_len_local, 1};
+        const ttsl::SmallVector<uint32_t> recip_start = {0, 0, 0, 32};
+        const ttsl::SmallVector<uint32_t> recip_end = {batch_num, heads, seq_len_local, 33};
 
         // Loop over ring steps in reverse order (from last to first)
         for (int step = ring_size - 1; step >= 0; --step) {
@@ -342,8 +342,7 @@ autograd::TensorPtr ring_attention_sdpa(
         value->add_grad(grad_V_accum);
     };
 
-    auto links = autograd::get_links(query, key, value);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad_fn), links));
+    out->set_node(autograd::add_backward_node(std::move(grad_fn), out, query, key, value));
 
     return out;
 }

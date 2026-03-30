@@ -81,5 +81,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.model || 'all' }}
-      enabled-skus: wh_galaxy
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}

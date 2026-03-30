@@ -131,7 +131,7 @@ jobs:
           fi
       - name: Upload benchmark data
         if: ${{ matrix.test-group.save-perf-data && !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
-        uses: ./.github/actions/upload-data-via-sftp
+        uses: ./docker-job/.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
@@ -157,11 +157,6 @@ jobs:
         with:
           name: perf-report-csv-${{ matrix.test-group.model-type }}-wormhole_b0-${{ matrix.test-group.model-name }}-bare-metal
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

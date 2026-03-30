@@ -4,6 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
+#include "api/kernel_thread_globals.h"
 #include "experimental/dataflow_buffer.h"
 #include "experimental/endpoints.h"
 #include "experimental/noc.h"
@@ -11,13 +12,15 @@
 
 void kernel_main() {
     const uint32_t cb_id = get_compile_time_arg_val(0);
-    uint32_t dst_addr  = get_arg_val<uint32_t>(0);
-    uint32_t dst_bank_id = get_arg_val<uint32_t>(1);
+    uint32_t dst_addr  = get_arg_val<uint32_t>(0); // global base address
+    uint32_t dst_bank_id = get_arg_val<uint32_t>(1); // data is in one bank
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
 
     uint32_t ublock_size_tiles = 1;
 
 #ifdef ARCH_QUASAR
+    uint32_t consumer_idx = get_my_thread_id();
+
     experimental::DataflowBuffer dfb(cb_id);
     constexpr experimental::AllocatorBankType bank_type = experimental::AllocatorBankType::DRAM;
     experimental::AllocatorBank<bank_type> dst_dram;
@@ -25,18 +28,17 @@ void kernel_main() {
 
     uint32_t ublock_size_bytes = dfb.get_entry_size();
 
-    volatile tt_l1_ptr uint32_t* debug_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(763520);
+    uint32_t tlocal_dst_addr = dst_addr + (consumer_idx * ublock_size_bytes);
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
-        dfb.wait_front(ublock_size_tiles);
+        dfb.write_out(noc, dst_dram, {.bank_id = dst_bank_id, .addr = tlocal_dst_addr});
+        tlocal_dst_addr += dfb.get_stride_size();
+    }
 
-        DPRINT << "Debug pointer value: " << *debug_ptr << ENDL();
-
-        noc.async_write(dfb, dst_dram, ublock_size_bytes, {}, {.bank_id = dst_bank_id, .addr = dst_addr});
-        noc.async_write_barrier();
-
-        dfb.pop_front(ublock_size_tiles);
-        dst_addr += ublock_size_bytes;
+    // TODO: This will be replaced with some dfb.commit or noc.async_write_barrier call
+    LocalDFBInterface& local_dfb_interface = g_dfb_interface[cb_id];
+    for (uint32_t i = 0; i < local_dfb_interface.num_txn_ids; i++) {
+        noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(local_dfb_interface.txn_ids[i]);
     }
 #else
     // single-tile ublocks

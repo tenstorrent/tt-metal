@@ -8,14 +8,12 @@ import pytest
 from datasets import load_dataset
 from loguru import logger
 
+from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name
 from models.demos.stable_diffusion_xl_base.demo.demo_inpainting import test_demo
-from models.demos.stable_diffusion_xl_base.tests.test_common import (
-    SDXL_FABRIC_CONFIG,
-    SDXL_L1_SMALL_SIZE,
-    SDXL_TRACE_REGION_SIZE,
-)
+from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_FABRIC_CONFIG
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
+    accuracy_assert,
     calculate_accuracy_metrics,
     check_clip_scores,
     create_report_json,
@@ -39,17 +37,12 @@ MAX_N_SAMPLES, MIN_N_SAMPLES = 1260, 2
     [
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
             True,
         ),
         (
-            {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
-            },
+            {},
             False,
         ),
     ],
@@ -101,6 +94,8 @@ def test_accuracy_sdxl_inpaint(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
+    is_ci_v2_env,
+    sdxl_inpainting_pipeline_location,
     image_resolution,
     num_inference_steps,
     vae_on_device,
@@ -113,8 +108,8 @@ def test_accuracy_sdxl_inpaint(
     use_cfg_parallel,
     strength,
 ):
-    if image_resolution == (512, 512):
-        pytest.skip("Accuracy test on 512x512 image resolution is not yet supported for inpainting pipeline.")
+    if vae_on_device and is_blackhole():
+        pytest.skip("Device VAE not supported on Blackhole")
 
     start_from, num_prompts = evaluation_range
     input_images, input_masks, prompts = get_dataset_for_inpainting_accuracy(num_prompts)
@@ -125,6 +120,8 @@ def test_accuracy_sdxl_inpaint(
         validate_fabric_compatibility,
         mesh_device,
         is_ci_env,
+        is_ci_v2_env,
+        sdxl_inpainting_pipeline_location,
         image_resolution,
         prompts,
         negative_prompt,
@@ -149,7 +146,7 @@ def test_accuracy_sdxl_inpaint(
 
     accuracy_metrics = calculate_accuracy_metrics(images, prompts, coco_statistics_path)
 
-    model_name = "sdxl-inpaint-tp" if use_cfg_parallel else "sdxl-inpaint"
+    model_name = f"sdxl-inpaint-{image_resolution[0]}" + ("-tp" if use_cfg_parallel else "")
     metadata = {
         "model_name": model_name,
         "device": get_device_name(),
@@ -171,6 +168,7 @@ def test_accuracy_sdxl_inpaint(
     print(json.dumps(report_json, indent=4))
 
     check_clip_scores(model_name, evaluation_range, prompts, accuracy_metrics["clip_scores"])
+    accuracy_assert(metadata, accuracy_metrics)
 
 
 def get_dataset_for_inpainting_accuracy(n_prompts: int):

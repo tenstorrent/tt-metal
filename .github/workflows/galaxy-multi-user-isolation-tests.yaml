@@ -59,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [wormhole_b0]
+        arch: [wormhole_b0, blackhole]
         scenario: [single, tp2, tray]
         include:
           # Wormhole B0 configuration
@@ -86,7 +86,33 @@ jobs:
             container_prefix: tray
             mesh_descriptor: t3k_mesh_graph_descriptor.textproto
             test_path: tests/nightly/t3000/ccl/test_minimal_all_gather_async.py
+            # Exclude fabric_ring tests for tray: t3k tray topology and mesh descriptor are mismatched, causing these cases to fail in CI.
+            test_args: "-k 'not fabric_ring'"
+          # Blackhole configuration
+          - arch: blackhole
+            scenario: single
+            num_containers: 32
+            chips_per_container: 1
+            container_prefix: bh_chip
+            mesh_descriptor: p150_mesh_graph_descriptor.textproto
+            test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
+            test_args: "-k test_fill"
+          - arch: blackhole
+            scenario: tp2
+            num_containers: 16
+            chips_per_container: 2
+            container_prefix: bh_tp2
+            mesh_descriptor: p150_x2_mesh_graph_descriptor.textproto
+            test_path: tests/ttnn/unit_tests/operations/transformers/test_paged_cache_mask.py
             test_args: ""
+          - arch: blackhole
+            scenario: tray
+            num_containers: 4
+            chips_per_container: 8
+            container_prefix: bh_tray
+            mesh_descriptor: p150_x8_mesh_graph_descriptor.textproto
+            test_path: tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_all_gather_nightly.py
+            test_args: "-k 'non-trace and not ring and not broken'"
     runs-on:
       - topology-6u
       - arch-${{ matrix.arch }}

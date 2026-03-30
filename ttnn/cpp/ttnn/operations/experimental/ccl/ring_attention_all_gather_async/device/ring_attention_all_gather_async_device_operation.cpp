@@ -7,7 +7,6 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -22,7 +21,6 @@ void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
     const auto& first_input_tensor = input_tensors[0];
     const auto& dtype = first_input_tensor.dtype();
     const auto& memory_config = first_input_tensor.memory_config();
-    const auto& input_shape = first_input_tensor.logical_shape();
 
     // Validate all input tensors
     for (size_t i = 0; i < input_tensors.size(); ++i) {
@@ -42,11 +40,6 @@ void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor.memory_config() == memory_config,
             "All input tensors must have the same memory config. Input tensor {} has different memory config",
-            i);
-
-        TT_FATAL(
-            input_tensor.logical_shape() == input_shape,
-            "All input tensors must have the same shape. Input tensor {} has different shape",
             i);
     }
 
@@ -89,7 +82,7 @@ void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
 
                 // Check output tensor shape
                 auto output_shape = output_tensor.logical_shape();
-                auto expected_output_shape = input_shape;
+                auto expected_output_shape = input_tensors[i].logical_shape();
                 expected_output_shape[operation_attributes.dim] *= operation_attributes.ring_size;
 
                 TT_FATAL(
@@ -109,10 +102,11 @@ RingAttentionAllGatherAsyncDeviceOperation::compute_output_specs(
     const auto& input_tensors = tensor_args.input_tensor;
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.logical_shape();
-    shape[operation_attributes.dim] *= operation_attributes.ring_size;
     std::vector<ttnn::TensorSpec> output_specs;
     output_specs.reserve(input_tensors.size());
-    for (uint32_t i = 0; i < input_tensors.size(); i++) {
+    for (const auto& input_item : input_tensors) {
+        auto shape = input_item.logical_shape();
+        shape[operation_attributes.dim] *= operation_attributes.ring_size;
         output_specs.push_back(TensorSpec(
             shape,
             TensorLayout(
@@ -145,7 +139,7 @@ RingAttentionAllGatherAsyncDeviceOperation::create_output_tensors(
     return output_tensors;
 }
 
-tt::stl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash is called");
 
@@ -164,10 +158,8 @@ tt::stl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_progra
         tensor_args);
 }
 
-std::tuple<
-    RingAttentionAllGatherAsyncDeviceOperation::operation_attributes_t,
-    RingAttentionAllGatherAsyncDeviceOperation::tensor_args_t>
-RingAttentionAllGatherAsyncDeviceOperation::invoke(
+std::tuple<RingAttentionAllGatherAsyncParams, RingAttentionAllGatherAsyncInputs>
+ring_attention_all_gather_async_build_operation_args(
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& persistent_output_buffer,
     int32_t dim,
@@ -200,7 +192,7 @@ RingAttentionAllGatherAsyncDeviceOperation::invoke(
     }
 
     return {
-        operation_attributes_t{
+        RingAttentionAllGatherAsyncParams{
             {},
             gather_dim,
             num_links,
@@ -211,7 +203,38 @@ RingAttentionAllGatherAsyncDeviceOperation::invoke(
             sub_device_id,
             cluster_axis,
         },
-        tensor_args_t{.input_tensor = input_tensors, .persistent_output_buffer = optional_output_tensors}};
+        RingAttentionAllGatherAsyncInputs{
+            .input_tensor = input_tensors, .persistent_output_buffer = optional_output_tensors}};
 }
 
 }  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+std::vector<Tensor> ring_attention_all_gather_async(
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& persistent_output_buffer,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    auto [params, inputs] = experimental::prim::ring_attention_all_gather_async_build_operation_args(
+        input_tensors,
+        persistent_output_buffer,
+        dim,
+        multi_device_global_semaphore,
+        cluster_axis,
+        mesh_device,
+        topology,
+        num_links,
+        memory_config,
+        sub_device_id);
+    return ttnn::device_operation::launch<experimental::prim::RingAttentionAllGatherAsyncDeviceOperation>(
+        params, inputs);
+}
+
+}  // namespace ttnn::prim

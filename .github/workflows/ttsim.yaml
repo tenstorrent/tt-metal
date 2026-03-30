@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.4.1"
+        default: "v1.4.8"
       job-timeout:
         required: false
         type: number
@@ -43,7 +43,7 @@ on:
 jobs:
   ttsim-integration:
     if: ${{ inputs.run-ttsim-integration-tests }}
-    runs-on: tt-ubuntu-2204-small-stable
+    runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim Integration - ${{ matrix.arch }}"
     strategy:
@@ -73,6 +73,7 @@ jobs:
       TT_METAL_SIMULATOR_HOME: /work/sim
       TT_METAL_SIMULATOR: /work/sim/libttsim.so
       TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_DISABLE_SFPLOADMACRO: 1
     steps:
 
       - name: Checkout actions
@@ -230,6 +231,7 @@ jobs:
         TT_METAL_SIMULATOR_HOME: /work/sim
         TT_METAL_SIMULATOR: /work/sim/libttsim.so
         TT_METAL_SLOW_DISPATCH_MODE: 1
+        TT_METAL_DISABLE_SFPLOADMACRO: 1
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
         PYTHONHASHSEED: 0
@@ -287,12 +289,20 @@ jobs:
 
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
         run: |
-          # Run pytest with parallel execution and skip list
-          ${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}
+          # Run pytest with parallel execution and skip list.
+          # If a worker crashes, pytest-xdist only reports "worker crashed"
+          # which is useless for debugging. Re-run the failures serially to
+          # get actionable output.
+          if ${{ matrix.test-group.cmd }} -n 4 ${{ steps.skip-list.outputs.skip_args }}; then
+            exit 0
+          fi
+          echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
+          ${{ matrix.test-group.cmd }} --lf --lfnf=all --tb=long -v ${{ steps.skip-list.outputs.skip_args }} || true
+          exit 1
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
-    runs-on: tt-ubuntu-2204-small-stable
+    runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim C++ tests - ${{ matrix.arch }}"
     strategy:
@@ -317,6 +327,7 @@ jobs:
       TT_METAL_SIMULATOR_HOME: /work/sim
       TT_METAL_SIMULATOR: /work/sim/libttsim.so
       TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_DISABLE_SFPLOADMACRO: 1
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@v4
@@ -404,6 +415,7 @@ jobs:
       TT_METAL_SIMULATOR_HOME: /work/sim
       TT_METAL_SIMULATOR: /work/sim/libttsim.so
       TT_METAL_SLOW_DISPATCH_MODE: 1
+      TT_METAL_DISABLE_SFPLOADMACRO: 1
       TT_METAL_MOCK_CLUSTER_DESC_PATH: ${{ matrix.cluster_desc }}
     steps:
       - name: 🧬 Checkout Repository

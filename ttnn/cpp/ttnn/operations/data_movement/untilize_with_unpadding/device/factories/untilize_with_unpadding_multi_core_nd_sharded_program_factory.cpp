@@ -29,7 +29,6 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
 
     // const auto& a = input;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
-    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -61,7 +60,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
     const auto& groups = distribution_spec.core_groups();
     const auto& ordered_cores_with_data = distribution_spec.cores_with_data();
     uint32_t num_compute_cores = ordered_cores_with_data.size();
-    const auto& compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
+    const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 
     uint32_t num_tiles_per_input_block = input_shard_width / tile_width;
     uint32_t num_blocks_per_shard_plane =
@@ -133,7 +132,8 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
         output_tensor_width;  // In height-sharded and interleaved cases, the output page is the entire tensor row
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        output.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
         if (output.shard_spec().has_value()) {
             output_page_width = output.shard_spec().value().shape[1];
         } else {
@@ -198,19 +198,8 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
     }
 
     // Compute kernel file
-    std::string compute_kernel;
-    if (!use_pack_untilize || input.dtype() == DataType::UINT16) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = std::string(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
-        unpack_to_dest_mode[src0_cb_index] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
-        compute_kernel = std::string(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
-            "pack_untilize_variable_num_blocks.cpp");
-    }
+    std::string compute_kernel(
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
 
     // Compute compile-time args and kernel
     // Note: This condition is always true for sharded input

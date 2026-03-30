@@ -14,6 +14,7 @@ from tests.nightly.t3000.ccl.test_all_to_all_dispatch import (
     gen_tensors,
     tt_to_torch_dtype,
 )
+from tests.nightly.tg.ccl.moe.test_moe_compute_6U import gen_expert_mapping
 
 
 # Mesh graph descriptor paths for different mesh configurations
@@ -22,6 +23,9 @@ MESH_GRAPH_DESC_16x1 = (
 )
 MESH_GRAPH_DESC_1x16 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto"
+)
+MESH_GRAPH_DESC_1x8 = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
 
 
@@ -41,38 +45,6 @@ def create_fabric_router_config(*, max_payload_size=None):
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 from tracy import signpost
-
-
-def gen_expert_mapping_new_format_from_old(expert_mapping_old, mesh_shape):
-    """
-    Convert old format expert mapping to new format.
-
-    Old format: [1, 1, experts, devices] - one-hot encoding where expert_mapping_old[0, 0, e, d] = 1
-                means expert e is on device d.
-    New format: [devices, experts] - direct device ID lookup where expert_mapping_new[src_device, e] = d
-                means expert e is on device d (from the perspective of src_device).
-
-    For now, all devices see the same mapping (no replicated experts), so we just replicate
-    the same row for each source device.
-
-    In the future, this can be extended to support replicated experts where each device
-    sees the "optimal" device (e.g., shortest distance) for each expert.
-    """
-    devices = mesh_shape[0] * mesh_shape[1]
-    experts = expert_mapping_old.shape[2]
-
-    # Extract device assignment from one-hot encoding
-    # expert_mapping_old has shape [1, 1, experts, devices]
-    # For each expert, find which device has the 1
-    expert_mapping_new = torch.zeros(1, experts, dtype=torch.uint16)
-    for e in range(experts):
-        device_assignment = expert_mapping_old[0, 0, e, :]
-        device_id = torch.where(device_assignment == 1)[0].item()
-        expert_mapping_new[0, e] = device_id
-
-    # Replicate across all devices (same mapping for now)
-    expert_mapping_new = expert_mapping_new.repeat(devices, 1)
-    return expert_mapping_new
 
 
 def gen_tensors_for_metadata_op(
@@ -99,20 +71,25 @@ def gen_tensors_for_metadata_op(
         input_tokens: [batch, 1, seq_len, hidden_size] - input tokens per device
         expert_indices: [batch, 1, seq_len, selected_experts_k] - expert indices per device
         expert_scores: [batch, 1, seq_len, selected_experts_k] - expert scores per device
-        expert_mapping_old: [1, 1, experts, devices] - old format expert to device mapping (one-hot)
         expert_mapping_new: [devices, experts] - new format expert to device mapping (direct device ID)
         sparse_output_token_tensor: [devices, total_tokens, hidden_size] - golden output tokens
         metadata_tensor: [devices, total_tokens, selected_experts_k] - golden indices (all-gathered)
         scores_tensor: [devices, total_tokens, selected_experts_k] - golden scores (all-gathered)
     """
+
+    num_dispatch_devices = mesh_shape[cluster_axis] if cluster_axis is not None else devices
+    num_replicated_devices = devices // num_dispatch_devices
+    experts_per_cluster = experts // num_replicated_devices
+    experts_per_device = experts // devices
+
     # Use original gen_tensors to get base tensors
     input_tokens, expert_indices, expert_mapping_old, sparse_output_orig, metadata_orig = gen_tensors(
         batch, experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme=scheme, dtype=dtype
     )
 
-    # Convert old format expert mapping to new format: [devices, experts] with device IDs
-    # This ensures the new format matches the scheme (random vs sequential)
-    expert_mapping_new = gen_expert_mapping_new_format_from_old(expert_mapping_old, mesh_shape)
+    expert_mapping_new = gen_expert_mapping(
+        devices, num_replicated_devices, cluster_axis, experts, experts_per_cluster, experts_per_device
+    )
 
     total_tokens = batch * seq_len
 
@@ -140,7 +117,6 @@ def gen_tensors_for_metadata_op(
         input_tokens,
         expert_indices,
         expert_scores,
-        expert_mapping_old,
         expert_mapping_new,
         sparse_output_token_tensor,
         metadata_tensor,
@@ -176,11 +152,9 @@ def run_all_to_all_dispatch_metadata_test(
 
     expert_indices_tensors = []
     expert_scores_tensors = []
-    expert_mapping_tensors = []
     expert_mapping_new_tensors = []  # New format mapping tensors
     input_tensors = []
 
-    torch_expert_mappings = []
     torch_expert_mappings_new = []  # New format mappings
     torch_expert_scores_list = []
 
@@ -233,7 +207,6 @@ def run_all_to_all_dispatch_metadata_test(
             input_tokens,
             expert_indices,
             expert_scores,
-            expert_mapping_old,
             expert_mapping_new,
             sparse_output_token_tensor,
             metadata_tensor,
@@ -255,7 +228,6 @@ def run_all_to_all_dispatch_metadata_test(
             logger.info(f"input_tokens shape: {input_tokens.shape}")
             logger.info(f"expert_indices shape: {expert_indices.shape}")
             logger.info(f"expert_scores shape: {expert_scores.shape}")
-            logger.info(f"expert_mapping_old shape: {expert_mapping_old.shape}")
             logger.info(f"expert_mapping_new shape: {expert_mapping_new.shape}")
             logger.info(f"sparse_output_token_tensor shape: {sparse_output_token_tensor.shape}")
             logger.info(f"metadata_tensor shape: {metadata_tensor.shape}")
@@ -264,7 +236,6 @@ def run_all_to_all_dispatch_metadata_test(
         output_tensor_goldens_list.append(sparse_output_token_tensor)
         output_metadata_goldens_list.append(metadata_tensor)
         output_scores_goldens_list.append(scores_tensor)
-        torch_expert_mappings.append(expert_mapping_old)
         torch_expert_mappings_new.append(expert_mapping_new)
         torch_expert_scores_list.append(expert_scores)
 
@@ -297,16 +268,6 @@ def run_all_to_all_dispatch_metadata_test(
             mesh_mapper=mesh_mapper,
         )
 
-        # Old format expert mapping: [1, 1, experts, devices] - one-hot encoding
-        tt_expert_mapping = ttnn.from_torch(
-            expert_mapping_old,
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=mesh_shape),
-        )
-
         # New format expert mapping: [devices, experts] - direct device ID lookup
         # Each entry expert_mapping_new[d, e] = device_id that owns expert e
         # Replicate across all devices so each device has the full mapping table
@@ -323,13 +284,11 @@ def run_all_to_all_dispatch_metadata_test(
             logger.info(f"tt_input shape: {tt_input.shape}")
             logger.info(f"tt_expert_indices shape: {tt_expert_indices.shape}")
             logger.info(f"tt_expert_scores shape: {tt_expert_scores.shape}")
-            logger.info(f"tt_expert_mapping (old) shape: {tt_expert_mapping.shape}")
             logger.info(f"tt_expert_mapping_new shape: {tt_expert_mapping_new.shape}")
 
         input_tensors.append(tt_input)
         expert_indices_tensors.append(tt_expert_indices)
         expert_scores_tensors.append(tt_expert_scores)
-        expert_mapping_tensors.append(tt_expert_mapping)
         expert_mapping_new_tensors.append(tt_expert_mapping_new)
 
     tt_out_tensor_list = []
@@ -652,8 +611,8 @@ def run_all_to_all_dispatch_metadata_test(
 # Correctness test - single focused test case for pipeline validation
 # Requires TT_MESH_GRAPH_DESC_PATH to be set to the 1x16 mesh descriptor before running
 @pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
-    reason=f"Requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+    not (is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16) or is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8)),
+    reason=f"Requires TT_MESH_GRAPH_DESC_PATH to be 1x16 or 1x8 descriptor",
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -671,17 +630,33 @@ def run_all_to_all_dispatch_metadata_test(
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device, cluster_axis",
     [
-        pytest.param((1, 16), (1, 16), 1, id="1x16"),
+        pytest.param(
+            (1, 8),
+            (1, 8),
+            1,
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x8),
+                reason=f"1x8 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x8}",
+            ),
+            id="1x8",
+        ),
+        pytest.param(
+            (1, 16),
+            (1, 16),
+            1,
+            marks=pytest.mark.skipif(
+                not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_1x16),
+                reason=f"1x16 mesh requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_1x16}",
+            ),
+            id="1x16",
+        ),
     ],
     indirect=["mesh_device"],
 )
-def test_correctness(
-    mesh_device,
-    mesh_shape,
-    cluster_axis,
-):
+@pytest.mark.parametrize("experts_per_device", [2])
+def test_correctness(mesh_device, mesh_shape, cluster_axis, experts_per_device):
     batches_per_device = 32
-    experts = 2 * 16
+    experts = experts_per_device * mesh_shape[cluster_axis]
     select_experts_k = 8
     hidden_size = 7168
     seq_len = 1

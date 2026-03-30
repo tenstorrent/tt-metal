@@ -5,11 +5,10 @@
 #pragma once
 
 #include <concepts>
+#include <exception>
 #include <optional>
-#include <random>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
-#include <tt_stl/indestructible.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <unordered_map>
@@ -18,9 +17,8 @@
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include <tt_stl/concepts.hpp>
-#include "ttnn/graph/graph_serialization.hpp"
 #include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/core.hpp"
+#include "ttnn/graph/graph_serialization.hpp"  // serialize_tracked_arg<T> definitions, used via track_function_start
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
@@ -65,8 +63,8 @@ auto compute_program_hash(
         return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
     } else {
         ZoneScopedN("Compute default program hash");
-        return tt::stl::hash::hash_objects_with_default_seed(
-            tt::stl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
     }
 }
 
@@ -109,7 +107,7 @@ static auto create_mesh_workload_from_workload_factory(
         return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
     } else {
         static_assert(
-            tt::stl::concepts::always_false_v<WorkloadFactory>,
+            ttsl::concepts::always_false_v<WorkloadFactory>,
             "WorkloadFactory must implement create_mesh_workload(operation_attributes, tensor_coords, tensor_args, "
             "tensor_return_value) or create_at(operation_attributes, mesh_coordinate, tensor_args, "
             "tensor_return_value, tensor_coords)");
@@ -133,7 +131,7 @@ auto get_operation_name(const typename device_operation_t::operation_attributes_
         // For MeshAdapter operations, we recurse to get the name of the underlying device operation
         return get_operation_name<typename device_operation_t::device_operation_t>(operation_attributes);
     } else {
-        return tt::stl::get_type_name<device_operation_t>();
+        return ttsl::get_type_name<device_operation_t>();
     }
 }
 
@@ -146,7 +144,7 @@ inline void log_operation(
     std::size_t /*device_id*/,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args,
-    tt::stl::hash::hash_t program_hash,
+    ttsl::hash::hash_t program_hash,
     bool program_cache_hit) {
     log_debug(
         tt::LogOp, "Launching Device Operation: \"{}\"", get_operation_name<device_operation_t>(operation_attributes));
@@ -155,13 +153,13 @@ inline void log_operation(
     log_debug(tt::LogOp, "Program Cache Hit: {}", program_cache_hit);
 
     log_debug(tt::LogOp, "Attributes:");
-    for ([[maybe_unused]] const auto& [key, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
+    for ([[maybe_unused]] const auto& [key, value] : ttsl::reflection::get_attributes(operation_attributes)) {
         log_debug(tt::LogOp, "\t{} = {}", key, value);
     }
 
     log_debug(tt::LogOp, "Tensors Args:");
     auto index = 0;
-    tt::stl::reflection::visit_object_of_type<Tensor>(
+    ttsl::reflection::visit_object_of_type<Tensor>(
         [&index](auto&& tensor) {
             log_debug(tt::LogOp, "\t{}: {}", index, tensor);
             index++;
@@ -178,26 +176,56 @@ inline void log_operation(
     std::size_t /*device_id*/,
     const typename device_operation_t::operation_attributes_t& /*operation_attributes*/,
     const typename device_operation_t::tensor_args_t& /*tensor_args*/,
-    tt::stl::hash::hash_t /*program_hash*/,
+    ttsl::hash::hash_t /*program_hash*/,
     bool /*program_cache_hit*/) {}
 
 #endif
 
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
-    [[maybe_unused]] const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
-    [[maybe_unused]] const typename mesh_device_operation_t::tensor_args_t& tensor_args,
+    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
+    const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
-    tt::tt_metal::distributed::MeshWorkload& workload) {
-    mesh_device_operation_utils::set_runtime_id(workload);
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    [[maybe_unused]] bool program_cache_hit = false) {
+    // Generate and set runtime_id for all programs (always, for dispatcher)
+    auto runtime_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
+    for (auto& [_, program] : workload.get_programs()) {
+        program.set_runtime_id(runtime_id);
+    }
+
+    // Inspector: emit debug entry with tensor parameters
+    if (tt::tt_metal::experimental::inspector::IsEnabled()) {
+        auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
+
+        std::vector<TensorSpec> spec_copies;
+        if (tt::tt_metal::experimental::inspector::ShouldCaptureTensorSpecs()) {
+            size_t specs_count = ttsl::reflection::count_object_of_type<Tensor>(tensor_args);
+            spec_copies.reserve(specs_count);
+
+            ttsl::reflection::visit_object_of_type<Tensor>(
+                [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
+        }
+
+        tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
+            workload, runtime_id, operation_name, std::move(spec_copies));
+    }
+
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
     }
+
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     TracyOpMeshWorkload(
-        mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
+        mesh_device,
+        workload,
+        mesh_device_operation_t{},
+        operation_attributes,
+        tensor_args,
+        tensor_return_value,
+        program_cache_hit);
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
@@ -205,7 +233,7 @@ void enqueue_mesh_workload(
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
 void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, const Fn& fn) {
     std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [&]<ProgramFactoryConcept T>(const T&) {
                 // Adapt ProgramFactory to MeshWorkloadFactory concept.
                 using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template MeshWorkloadFactoryAdapter<T>;
@@ -224,7 +252,7 @@ void handle_mesh_adapter_cache_hit(
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
-    tt::stl::hash::hash_t program_hash) {
+    ttsl::hash::hash_t program_hash) {
     if constexpr (HasValidateOnProgramCacheHit<mesh_device_operation_t>) {
         mesh_device_operation_t::validate_on_program_cache_hit(operation_attributes, tensor_args);
     } else {
@@ -245,25 +273,13 @@ void handle_mesh_adapter_cache_hit(
                 cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
 
             enqueue_mesh_workload<mesh_device_operation_t>(
-                operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload);
+                operation_attributes,
+                tensor_args,
+                tensor_return_value,
+                mesh_device,
+                cached_mesh_workload.workload,
+                true);
         });
-}
-
-// Helper for logging operation info to inspector.
-// Extracts tensors from the templated tensor_args and delegates to the non-template implementation
-// in device_operation_detail.cpp to reduce per-operation template instantiation cost.
-template <DeviceOperationConcept mesh_device_operation_t>
-void emit_mesh_workload_annotation(
-    tt::tt_metal::distributed::MeshWorkload& workload,
-    const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
-    const typename mesh_device_operation_t::tensor_args_t& tensor_args) {
-    if (tt::tt_metal::experimental::inspector::IsEnabled()) {
-        auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
-        std::vector<std::reference_wrapper<const Tensor>> tensors;
-        tt::stl::reflection::visit_object_of_type<Tensor>(
-            [&tensors](const Tensor& t) { tensors.push_back(std::cref(t)); }, tensor_args);
-        emit_mesh_workload_annotation_impl(workload, operation_name, tensors);
-    }
 }
 
 // Helper for creating and caching a mesh workload
@@ -274,7 +290,7 @@ void create_and_cache_mesh_workload(
     typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     ttnn::MeshDevice* mesh_device,
     tt::tt_metal::program_cache::detail::ProgramCache& program_cache,
-    tt::stl::hash::hash_t program_hash) {
+    ttsl::hash::hash_t program_hash) {
     mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
 
     auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
@@ -303,9 +319,6 @@ void create_and_cache_mesh_workload(
             auto cached_workload = create_mesh_workload_from_workload_factory<WorkloadFactory, mesh_device_operation_t>(
                 operation_attributes, tensor_coords, tensor_args, tensor_return_value);
 
-            emit_mesh_workload_annotation<mesh_device_operation_t>(
-                cached_workload.workload, operation_attributes, tensor_args);
-
             // Don't cache programs during NO_DISPATCH graph capture mode because
             // buffer addresses are invalid (address=0). Caching such programs would
             // cause issues when later running in NORMAL mode.
@@ -324,10 +337,18 @@ void create_and_cache_mesh_workload(
                 auto& cached_program_factory = program_cache.get(program_hash);
                 auto& workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>().workload;
                 enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes, tensor_args, tensor_return_value, mesh_device, workload);
+                    operation_attributes,
+                    tensor_args,
+                    tensor_return_value,
+                    mesh_device,
+                    workload);
             } else {
                 enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_workload.workload);
+                    operation_attributes,
+                    tensor_args,
+                    tensor_return_value,
+                    mesh_device,
+                    cached_workload.workload);
             }
         });
 }
@@ -365,7 +386,7 @@ void launch_operation_with_adapter(
     log_operation<mesh_device_operation_t>(
         mesh_device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
 
-    tt::stl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
+    ttsl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
 
     if (program_cache_hit) {
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
@@ -376,22 +397,18 @@ void launch_operation_with_adapter(
     }
 }
 
-// get_output_placements_and_shape has been factored into the non-template function
-// compute_output_placements_and_shape() in device_operation_detail.hpp/cpp.
-// This eliminates ~100 lines of template code that was instantiated per operation type.
-
 template <DeviceOperationConcept device_operation_t>
 ttnn::MeshDevice* get_mesh_device(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ttnn::MeshDevice* mesh_device;
-    auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+    auto first_tensor = ttsl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     // Try to get the mesh device from the first tensor
     if (first_tensor.has_value()) [[likely]] {
         mesh_device = first_tensor.value().device();
     } else {
         // If no tensor is found, try to get the mesh device from the operation attributes
-        auto mesh_device_opt = tt::stl::reflection::get_first_object_of_type<ttnn::MeshDevice*>(operation_attributes);
+        auto mesh_device_opt = ttsl::reflection::get_first_object_of_type<ttnn::MeshDevice*>(operation_attributes);
         if (mesh_device_opt.has_value()) [[likely]] {
             mesh_device = mesh_device_opt.value();
         } else {
@@ -414,17 +431,14 @@ typename device_operation_t::tensor_return_value_t launch(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     std::vector<std::reference_wrapper<const Tensor>> input_tensors;
-    tt::stl::reflection::visit_object_of_type<Tensor>(
+    ttsl::reflection::visit_object_of_type<Tensor>(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
 
-    tt::tt_metal::GraphTracker::instance().track_function_start(
-        detail::get_operation_name<device_operation_t>(operation_attributes), operation_attributes, input_tensors);
+    const auto operation_name = detail::get_operation_name<device_operation_t>(operation_attributes);
+    tt::tt_metal::GraphTracker::instance().track_function_start(operation_name, operation_attributes, input_tensors);
 
-    auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    if (first_tensor.has_value()) [[likely]] {
-        TT_FATAL(
-            tt::tt_metal::is_device_tensor(first_tensor.value()),
-            "Device Operations expect tensor with Device storage in inputs");
+    if (!input_tensors.empty()) {
+        TT_FATAL(is_device_tensor(input_tensors.front().get()), "Device Operations expect tensor with Device storage in inputs");
     }
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
@@ -444,8 +458,7 @@ typename device_operation_t::tensor_return_value_t launch(
             mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device), tensor_return_value);
     }
 
-    if (first_tensor.has_value()) [[likely]] {
-        // Check if op provides custom output topologies
+    if (!input_tensors.empty()) [[likely]] {
         std::vector<tt::tt_metal::TensorTopology> custom_topologies;
         if constexpr (requires {
                           {
@@ -455,32 +468,8 @@ typename device_operation_t::tensor_return_value_t launch(
             custom_topologies = device_operation_t::compute_output_topologies(operation_attributes, tensor_args);
         }
 
-        if (!custom_topologies.empty()) {
-            // Use custom topologies provided by the op
-            tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-                [&custom_topologies, topology_idx = size_t{0}](const Tensor& output_tensor) mutable {
-                    TT_FATAL(
-                        topology_idx < custom_topologies.size(),
-                        "Not enough custom topologies provided for output tensors");
-                    return output_tensor.with_tensor_topology(custom_topologies[topology_idx++]);
-                },
-                tensor_return_value);
-        } else {
-            // Fall back to default topology imputation.
-            // Uses the pre-extracted input_tensors to avoid re-visiting the templated tensor_args struct.
-            auto output_topology_result =
-                detail::compute_output_placements_and_shape(input_tensors, first_tensor.value());
-
-            tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-                [&output_topology_result](const Tensor& output_tensor) {
-                    auto topology = tt::tt_metal::TensorTopology(
-                        output_topology_result.second,
-                        output_topology_result.first,
-                        output_tensor.tensor_topology().mesh_coords());
-                    return output_tensor.with_tensor_topology(topology);
-                },
-                tensor_return_value);
-        }
+        mesh_device_operation_utils::update_output_tensor_topologies(
+            tensor_return_value, input_tensors, std::move(custom_topologies));
     }
 
     detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(

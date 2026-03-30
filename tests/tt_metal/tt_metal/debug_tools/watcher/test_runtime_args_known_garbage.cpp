@@ -5,7 +5,6 @@
 #include <vector>
 #include <gtest/gtest.h>
 
-#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
@@ -16,21 +15,33 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include "debug_tools_fixture.hpp"
-#include "impl/buffers/circular_buffer.hpp"
-#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal {
 
 // Fixture for RTA/CRTA watcher bounds check tests
 class RTATestFixture : public MeshWatcherFixture {
 protected:
+    const std::string rta_crta_kernel_path =
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/test_rta_crta_asserts.cpp";
+    bool is_quasar{false};
+    uint32_t l1_unreserved_base{0};
+    std::shared_ptr<distributed::MeshDevice> mesh_device;
+    IDevice* device{nullptr};
+    uint32_t num_dms_{0};
+
     void SetUp() override {
         bool watcher_assert_disabled = MetalContext::instance().rtoptions().watcher_assert_disabled();
         if (watcher_assert_disabled) {
             GTEST_SKIP() << "This test requires watcher assert checks (RTA/CRTA) to be enabled";
         }
         MeshWatcherFixture::SetUp();
+        mesh_device = devices_[0];
+        device = mesh_device->get_devices()[0];
+        num_dms_ = MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
+        is_quasar = arch_ == tt::ARCH::QUASAR;
+        l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     }
     // Common test data
     const std::vector<uint32_t> default_rtas{0xAAAAAAAA, 0xBBBBBBBB, 0xCCCCCCCC, 0xDDDDDDDD, 0xEEEEEEEE};
@@ -39,24 +50,15 @@ protected:
     distributed::MeshCoordinate zero_coord{0, 0};
     distributed::MeshCoordinateRange device_range{zero_coord, zero_coord};
 
-    // Helper: Create CB config for RTA/CRTA tests
-    CircularBufferConfig CreateArgCBConfig(uint32_t word_count) {
-        const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-        uint32_t cb_size = tt::align(word_count * sizeof(uint32_t), l1_alignment);
-        return CircularBufferConfig(cb_size, {{0, tt::DataFormat::Float32}}).set_page_size(0, cb_size);
-    }
-
-    // Helper: Read and validate RTA/CRTA results
+    // Helper: Read and validate RTA/CRTA results from L1
     void ValidateArgResults(
-        IDevice* device,
         const CoreCoord& core,
-        uint32_t cb_addr,
         const std::vector<uint32_t>& expected_rtas,
         const std::vector<uint32_t>& expected_crtas) {
         const uint32_t total_size = (2 + expected_rtas.size() + expected_crtas.size()) * sizeof(uint32_t);
         std::vector<uint32_t> read_result;
 
-        tt::tt_metal::detail::ReadFromDeviceL1(device, core, cb_addr, total_size, read_result);
+        tt::tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, total_size, read_result);
 
         // Validate counts
         EXPECT_EQ(read_result[0], expected_rtas.size());
@@ -101,24 +103,21 @@ struct RTAAssertTestParams {
     std::string test_name;                  // For readable test names
     bool test_rta;                          // true = test RTA, false = test CRTA
     std::string expected_message;           // Expected watcher exception message
-    HalProcessorClassType processor_class;  // DM (BRISC) or COMPUTE (TRISC0)
+    HalProcessorClassType processor_class;  // DM or COMPUTE
 };
 
 // Parameterized test fixture for RTA/CRTA out-of-bounds assertions
 class RTAAssertTest : public RTATestFixture, public ::testing::WithParamInterface<RTAAssertTestParams> {};
 
 // Verifies watcher handles 0xFFFF sentinel pattern (used when no RTAs set):
-// - Device interprets 0xBEEF#### as rta_count = 0 (validated on BRISC/TRISC0)
+// - Device interprets 0xBEEF#### as rta_count = 0 (validated on DM0/TRISC0)
 // - Kernels not accessing args run successfully with sentinel pattern
 // - Kernels accessing args when count = 0 trigger "out of bounds" assert
 // - Catches bug: kernel placed on cores but SetRuntimeArgs() only called for subset
 TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
-    if (IsSlowDispatch()) {
+    if (IsSlowDispatch() || is_quasar) {
         GTEST_SKIP() << "This test can only be run with fast dispatch mode";
     }
-
-    auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
 
     // Part A: Zero-arg kernels should see rta_count = 0, crta_count = 0
     {
@@ -126,45 +125,41 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         CoreRangeSet core_range_set(std::vector{core_range});
 
         const uint32_t total_read_size = 2 * sizeof(uint32_t);
-        const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-        uint32_t cb_size = tt::align(total_read_size, l1_alignment);
-        CircularBufferConfig cb0(cb_size, {{tt::CBIndex::c_0, tt::DataFormat::Float32}});
-        cb0.set_page_size(tt::CBIndex::c_0, cb_size);
-        // For TRISC0 writeback
-        uint32_t compute_scratch_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        // Separate L1 space for TRISC0 writeback (DM writes 2 words, so offset by 8 bytes)
+        uint32_t compute_scratch_addr = l1_unreserved_base + total_read_size;
+
+        // Zero-init the L1 scratch space on all cores (both DM and compute regions)
+        std::vector<uint32_t> zero_init(4, 0);  // 2 words for DM + 2 words for TRISC0
+        for (const auto& core : core_range) {
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, compute_scratch_addr, zero_init);
+        }
 
         distributed::MeshWorkload workload;
         Program program;
-        CBHandle cb0_handle = CreateCircularBuffer(program, core_range_set, cb0);
 
         CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/test_rta_crta_asserts.cpp",
+            rta_crta_kernel_path,
             core_range_set,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {l1_unreserved_base}});
 
         CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/test_rta_crta_asserts.cpp",
-            core_range_set,
-            ComputeConfig{.compile_args = {compute_scratch_addr}});
+            program, rta_crta_kernel_path, core_range_set, ComputeConfig{.compile_args = {compute_scratch_addr}});
 
         // No SetRuntimeArgs called - all cores have RTA/CRTA offset = 0xFFFF pattern
         workload.add_program(device_range, std::move(program));
         RunProgram(mesh_device, workload);
 
-        auto& program_from_workload = workload.get_programs().at(device_range);
         std::vector<uint32_t> read_result;
 
         for (const auto& core : core_range) {
-            // BRISC: verify rta_count = 0, crta_count = 0
+            // DM: verify rta_count = 0, crta_count = 0
             read_result.clear();
-            tt::tt_metal::detail::ReadFromDeviceL1(
-                device,
-                core,
-                program_from_workload.impl().get_circular_buffer(cb0_handle)->address(),
-                total_read_size,
-                read_result);
+            tt::tt_metal::detail::ReadFromDeviceL1(device, core, l1_unreserved_base, total_read_size, read_result);
             EXPECT_EQ(read_result[0], 0);  // rta_count
             EXPECT_EQ(read_result[1], 0);  // crta_count
 
@@ -182,15 +177,12 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
         CoreRange cores_without_rtas(CoreCoord(2, 2), CoreCoord(3, 3));
         CoreRangeSet core_range_set(std::vector{cores_with_rtas, cores_without_rtas});
 
-        CircularBufferConfig cb_config = CreateArgCBConfig(default_rtas.size());
-
         distributed::MeshWorkload workload;
         Program program;
-        CreateCircularBuffer(program, core_range_set, cb_config);
 
         auto kernel = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/test_rta_crta_asserts.cpp",
+            rta_crta_kernel_path,
             core_range_set,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
@@ -212,91 +204,127 @@ TEST_F(RTATestFixture, SentinelPatternHandlingAndMissingRTADetection) {
 // cores, and re-dispatching on subsequent runs. Ensures arg counts and payload
 // values match what was set via SetRuntimeArgs/SetCommonRuntimeArgs
 TEST_F(RTATestFixture, CorrectArgDispatchAndPayloadValidation) {
-    // First run the program with the initial runtime args
-    CoreRange core_range1(CoreCoord(0, 0), CoreCoord(1, 1));
+    // Quasar: single core; other archs: multi-core with two ranges
+    CoreRange core_range1 =
+        is_quasar ? CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)) : CoreRange(CoreCoord(0, 0), CoreCoord(1, 1));
     CoreRange core_range2(CoreCoord(2, 2), CoreCoord(3, 3));
-    CoreRangeSet core_range_set(std::vector{core_range1, core_range2});
+    CoreRangeSet core_range_set =
+        is_quasar ? CoreRangeSet(std::vector{core_range1}) : CoreRangeSet(std::vector{core_range1, core_range2});
 
-    auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
-    // Configure CB to store read-back args
-    const uint32_t total_read_size = 2 + default_rtas.size() + default_crtas.size();
-    uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    CircularBufferConfig cb_config = CreateArgCBConfig(total_read_size);
+    // Use l1_unreserved space for RTA/CRTA write back to L1 for verification of correct dispatch payload
+    const uint32_t total_word_count = 2 + default_rtas.size() + default_crtas.size();
+
+    // Zero-init the L1 scratch space on all cores before running
+    std::vector<uint32_t> zero_init(total_word_count, 0);
+    for (const auto& core : core_range1) {
+        tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+    }
+    if (!is_quasar) {
+        for (const auto& core : core_range2) {
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+        }
+    }
 
     distributed::MeshWorkload workload;
     Program program;
-    CreateCircularBuffer(program, core_range_set, cb_config);
 
-    // No out-of-bounds testing here: that's covered by RTAAssertTest
-    // Kernel will read back all RTAs/CRTAs for per-core validation
-    std::map<std::string, std::string> defines = {};
-
-    auto kernel = CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/test_rta_crta_asserts.cpp",
-        core_range_set,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
+    KernelHandle kernel;
+    if (is_quasar) {
+        // Compile args: [dm_id, l1_scratch_addr]
+        kernel = experimental::quasar::CreateKernel(
+            program,
+            rta_crta_kernel_path,
+            core_range_set,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = num_dms_, .compile_args = {0, l1_unreserved_base}});
+    } else {
+        // Compile args: [l1_scratch_addr]
+        kernel = CreateKernel(
+            program,
+            rta_crta_kernel_path,
+            core_range_set,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = {l1_unreserved_base}});
+    }
 
     // Range 1: 5 RTAs per core
     SetRuntimeArgs(program, kernel, core_range1, default_rtas);
 
     // Range 2: 3 RTAs per core (different size than core_range1)
     std::vector<uint32_t> rtas_range2 = {0x1000, 0x1001, 0x1002};
-    SetRuntimeArgs(program, kernel, core_range2, rtas_range2);
+    if (!is_quasar) {
+        SetRuntimeArgs(program, kernel, core_range2, rtas_range2);
+    }
 
     // Common args
     SetCommonRuntimeArgs(program, kernel, default_crtas);
     workload.add_program(device_range, std::move(program));
     RunProgram(mesh_device, workload);
 
-    // Validate first run for both core ranges
+    // Validate first run
     for (const auto& core : core_range1) {
-        ValidateArgResults(device, core, cb_addr, default_rtas, default_crtas);
+        ValidateArgResults(core, default_rtas, default_crtas);
+    }
+    if (!is_quasar) {
+        for (const auto& core : core_range2) {
+            ValidateArgResults(core, rtas_range2, default_crtas);
+        }
     }
 
-    for (const auto& core : core_range2) {
-        ValidateArgResults(device, core, cb_addr, rtas_range2, default_crtas);
+    // Zero-init again before second run
+    for (const auto& core : core_range1) {
+        tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+    }
+    if (!is_quasar) {
+        for (const auto& core : core_range2) {
+            tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, zero_init);
+        }
     }
 
     // Second run: call SetRuntimeArgs again. This tests the case when we're memcpying new data
     // directly into the command issue queue with the arg count
     auto& program_from_workload = workload.get_programs().at(device_range);
     SetRuntimeArgs(program_from_workload, kernel, core_range1, default_rtas);
-    SetRuntimeArgs(program_from_workload, kernel, core_range2, rtas_range2);
+    if (!is_quasar) {
+        SetRuntimeArgs(program_from_workload, kernel, core_range2, rtas_range2);
+    }
     RunProgram(mesh_device, workload);
 
     // Validate second run for both core ranges
     for (const auto& core : core_range1) {
-        ValidateArgResults(device, core, cb_addr, default_rtas, default_crtas);
+        ValidateArgResults(core, default_rtas, default_crtas);
     }
-    for (const auto& core : core_range2) {
-        ValidateArgResults(device, core, cb_addr, rtas_range2, default_crtas);
+    if (!is_quasar) {
+        for (const auto& core : core_range2) {
+            ValidateArgResults(core, rtas_range2, default_crtas);
+        }
     }
 }
 
 // Parameterized test: Out-of-Bounds Arg Access Detection
 // Verifies watcher detects kernels accessing args beyond bounds (index >= count)
-// Tests RTA/CRTA access on both BRISC and TRISC0
+// Tests RTA/CRTA access on DM0 and TRISC0 (single processor per test)
 TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
-    if (IsSlowDispatch()) {
-        GTEST_SKIP() << "This test can only be run with fast dispatch mode";
-    }
     const auto& params = GetParam();
 
-    CoreRange core_range(CoreCoord(0, 0), CoreCoord(4, 4));
+    // Dispatch mode validation:
+    // - Quasar: SD only (FD not yet available)
+    // - Other archs: FD only
+    if (IsSlowDispatch() && !is_quasar) {
+        GTEST_SKIP() << "This test requires fast dispatch mode (except on Quasar)";
+    }
+
+    // Quasar: single core; other archs: 5x5 grid
+    CoreRange core_range =
+        is_quasar ? CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)) : CoreRange(CoreCoord(0, 0), CoreCoord(4, 4));
     CoreRangeSet core_range_set(std::vector{core_range});
 
     auto mesh_device = devices_[0];
-    auto* device = mesh_device->get_devices()[0];
-
-    const uint32_t total_read_size = 2 + default_rtas.size() + default_crtas.size();
-    CircularBufferConfig cb_config = CreateArgCBConfig(total_read_size);
 
     distributed::MeshWorkload workload;
     Program program;
-    CreateCircularBuffer(program, core_range_set, cb_config);
 
     std::map<std::string, std::string> defines;
     if (params.test_rta) {
@@ -305,26 +333,38 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
         defines["MAX_CRTA_IDX"] = std::to_string(default_crtas.size());  // Out of bounds
     }
 
-    // Create kernel based on processor class
     KernelHandle kernel;
     switch (params.processor_class) {
-        case HalProcessorClassType::DM: {
-            kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/test_rta_crta_asserts.cpp",
-                core_range_set,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
-        } break;
-        case HalProcessorClassType::COMPUTE: {
-            // For compute kernel, pass scratch address as compile arg
-            uint32_t compute_scratch_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-            kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/test_rta_crta_asserts.cpp",
-                core_range_set,
-                ComputeConfig{.compile_args = {compute_scratch_addr}, .defines = defines});
-        } break;
+        case HalProcessorClassType::DM:
+            if (is_quasar) {
+                // Compile args: [dm_id]
+                kernel = experimental::quasar::CreateKernel(
+                    program,
+                    rta_crta_kernel_path,
+                    core_range_set,
+                    experimental::quasar::QuasarDataMovementConfig{
+                        .num_threads_per_cluster = num_dms_, .compile_args = {0}, .defines = defines});
+            } else {
+                kernel = CreateKernel(
+                    program,
+                    rta_crta_kernel_path,
+                    core_range_set,
+                    DataMovementConfig{
+                        .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
+            }
+            break;
+        case HalProcessorClassType::COMPUTE:
+            if (is_quasar) {
+                kernel = experimental::quasar::CreateKernel(
+                    program,
+                    rta_crta_kernel_path,
+                    core_range_set,
+                    experimental::quasar::QuasarComputeConfig{
+                        .num_threads_per_cluster = 1 /*Run only on 1 NEO Cluster*/, .defines = defines});
+            } else {
+                kernel = CreateKernel(program, rta_crta_kernel_path, core_range_set, ComputeConfig{.defines = defines});
+            }
+            break;
         default: TT_THROW("Unsupported processor class");
     }
 
@@ -339,17 +379,55 @@ TEST_P(RTAAssertTest, OutOfBoundsArgAccessDetection) {
     ExpectWatcherException(params.expected_message);
 }
 
+// Multi-DM test: verifies all DMs running concurrently can trigger RTA bounds check on Quasar.
+// Uses a sync barrier so all DMs hit the OOB access together, stress-testing
+// watcher's first-writer-wins assert mechanism. Any DM can report the error.
+TEST_F(RTATestFixture, QuasarMultiDMOutOfBoundsArgDetection) {
+    if (!is_quasar) {
+        GTEST_SKIP() << "Test only applicable to Quasar";
+    }
+
+    CoreRange core_range(CoreCoord(0, 0), CoreCoord(0, 0));
+    CoreRangeSet core_range_set(std::vector{core_range});
+
+    distributed::MeshWorkload workload;
+    Program program;
+
+    std::map<std::string, std::string> defines = {
+        {"MAX_RTA_IDX", std::to_string(default_rtas.size())}, {"TEST_MULTI_DM_RTA", "1"}};
+
+    // Compile args: [num_dms, l1_sync_addr]
+    auto kernel = experimental::quasar::CreateKernel(
+        program,
+        rta_crta_kernel_path,
+        core_range_set,
+        experimental::quasar::QuasarDataMovementConfig{
+            .num_threads_per_cluster = num_dms_, .compile_args = {num_dms_, l1_unreserved_base}, .defines = defines});
+
+    SetRuntimeArgs(program, kernel, core_range, default_rtas);
+    workload.add_program(device_range, std::move(program));
+
+    // Zero out sync counter before launch
+    std::vector<uint32_t> zero_sync = {0, 0};
+    tt::tt_metal::detail::WriteToDeviceL1(device, core_range.start_coord, l1_unreserved_base, zero_sync);
+
+    RunProgram(mesh_device, workload);
+
+    // Any DM can report the error; just verify the bounds-check message appears
+    ExpectWatcherException("unique runtime arg index out of bounds");
+}
+
 INSTANTIATE_TEST_SUITE_P(
     WatcherArgAsserts,
     RTAAssertTest,
     ::testing::Values(
-        // RTA tests on BRISC
-        RTAAssertTestParams{"RTA_RISCV0", true, "unique runtime arg index out of bounds", HalProcessorClassType::DM},
+        // RTA tests on DM0
+        RTAAssertTestParams{"RTA_DM0", true, "unique runtime arg index out of bounds", HalProcessorClassType::DM},
         // RTA tests on TRISC0
         RTAAssertTestParams{
             "RTA_TRISC0", true, "unique runtime arg index out of bounds", HalProcessorClassType::COMPUTE},
-        // CRTA tests on BRISC
-        RTAAssertTestParams{"CRTA_RISCV0", false, "common runtime arg index out of bounds", HalProcessorClassType::DM},
+        // CRTA tests on DM0
+        RTAAssertTestParams{"CRTA_DM0", false, "common runtime arg index out of bounds", HalProcessorClassType::DM},
         // CRTA tests on TRISC0
         RTAAssertTestParams{
             "CRTA_TRISC0", false, "common runtime arg index out of bounds", HalProcessorClassType::COMPUTE}),
