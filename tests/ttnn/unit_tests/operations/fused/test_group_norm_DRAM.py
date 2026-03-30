@@ -2,6 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# Thresholds for run_group_norm_DRAM and test_sdxl_base_group_norm_split are tuned from
+# tests/ttnn/unit_tests/operations/fused/all_numeric_results_fused.csv (source
+# test_group_norm_DRAM_numeric_results): PCC margin 1.5e-4 from min observed;
+# atol / Frobenius are ceil(max_observed * 1.1, 3 dp); rtol uses max rel over rows with
+# max_rel < 10 (scaled 1.1), else 0.060; check_ulp with ulp_threshold = ceil(max_ulp * 1.1)
+# only when that threshold is < 12 (none of the fused CSV rows qualify here).
+
 import pytest
 
 import torch
@@ -106,16 +113,17 @@ def run_group_norm_DRAM(
     if not perf_test_mode:
         output_tensor = ttnn.from_device(output_tensor)
         output_tensor = ttnn.to_torch(output_tensor)
+        # Covers use_input_mask True/False and welford_normal vs welford_reciprocal (same bounds in CSV).
         if use_welford:
-            pcc_threshold = 0.9996
-            rtol = 0.14
-            atol = 0.085
-            frobenius_threshold = 0.02
+            pcc_threshold = 0.999
+            rtol = 0.060
+            atol = 0.043
+            frobenius_threshold = 0.010
         else:
-            pcc_threshold = 0.9997
-            rtol = 0.065
-            atol = 0.065
-            frobenius_threshold = 0.014
+            pcc_threshold = 0.999
+            rtol = 0.060
+            atol = 0.069
+            frobenius_threshold = 0.018
         assert_numeric_metrics(
             torch_output_tensor,
             output_tensor,
@@ -329,10 +337,10 @@ def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
     assert_numeric_metrics(
         torch_output_tensor,
         tt_output_tensor,
-        pcc_threshold=0.9997,
-        rtol=0.065,
-        atol=0.065,
-        frobenius_threshold=0.014,
+        pcc_threshold=0.999,
+        rtol=10.519,
+        atol=0.086,
+        frobenius_threshold=0.043,
     )
 
 
@@ -422,6 +430,7 @@ def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cor
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    # Blackhole-only; no entries in all_numeric_results_fused.csv for this path.
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor[:, :, : H * W, :C],
