@@ -24,6 +24,7 @@ class ttMLA:
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
+        topology=ttnn.FabricConfig.FABRIC_1D,
     ):
         self.config = config
         self.mesh_device = mesh_device
@@ -87,6 +88,7 @@ class ttMLA:
         self.tp_factor = mesh_device.shape[tp_axis]
 
         self.ccl_num_links = 2 if is_blackhole() else 1
+        self.ccl_topology = topology
 
         # ring attention setup
         persistent_v_shard_dims = [None, None]
@@ -356,7 +358,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             cluster_axis=1,
         )
         tt_q = ttnn.experimental.all_gather_async(
@@ -366,7 +368,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             cluster_axis=1,
         )
 
@@ -438,7 +440,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             cluster_axis=1,
         )
         tt_kv = ttnn.experimental.fast_reduce_nc(
@@ -506,7 +508,7 @@ class ttMLA:
             num_links=self.ccl_num_links,
             cluster_axis=0,
             mesh_device=self.mesh_device,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             subdevice_id=self.tt_ccl.worker_sub_device_id,
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             is_causal=True,
@@ -528,7 +530,7 @@ class ttMLA:
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
+            topology=self.ccl_topology,
             cluster_axis=1,
         )
         return out

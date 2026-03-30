@@ -120,6 +120,7 @@ def test_mla(
     is_balanced,
     is_ci_env,
     is_ci_v2_env,
+    device_params,
 ):
     """
     Test comparing reference and TT MLA modules with same weights.
@@ -140,6 +141,9 @@ def test_mla(
         config, weights = request.getfixturevalue("pretrained_weights")
     else:
         config, weights = request.getfixturevalue("random_weights")
+
+    fabric_config = device_params.get("fabric_config", ttnn.FabricConfig.FABRIC_1D)
+    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
 
     production_mesh = [32, 4]
     sp_axis = 0
@@ -183,6 +187,7 @@ def test_mla(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         is_balanced=is_balanced,
+        topology=topology,
     )
     rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(seq_len)
