@@ -14,20 +14,16 @@ WORKDIR="/tmp/ompi-src"
 rm -rf "${WORKDIR}"
 mkdir -p "${WORKDIR}"
 
-echo "Cloning OpenMPI ${OMPI_TAG} from GitHub..."
-git clone --branch "${OMPI_TAG}" --depth 1 --recursive https://github.com/open-mpi/ompi.git "${WORKDIR}"
-
-# Verify cloned commit matches expected SHA (supply-chain integrity check)
 if [ -n "${OMPI_COMMIT_SHA:-}" ]; then
-    ACTUAL_SHA=$(git -C "${WORKDIR}" rev-parse HEAD)
-    if [ "${ACTUAL_SHA}" != "${OMPI_COMMIT_SHA}" ]; then
-        echo "[ERROR] OpenMPI commit SHA mismatch!" >&2
-        echo "  Expected: ${OMPI_COMMIT_SHA}" >&2
-        echo "  Actual:   ${ACTUAL_SHA}" >&2
-        echo "  This could indicate a compromised or changed tag." >&2
-        exit 1
-    fi
-    echo "Commit SHA verified: ${ACTUAL_SHA}"
+    echo "Fetching OpenMPI commit ${OMPI_COMMIT_SHA} from GitHub..."
+    git init "${WORKDIR}"
+    git -C "${WORKDIR}" remote add origin https://github.com/open-mpi/ompi.git
+    git -C "${WORKDIR}" fetch --depth 1 origin "${OMPI_COMMIT_SHA}"
+    git -C "${WORKDIR}" checkout FETCH_HEAD
+    git -C "${WORKDIR}" submodule update --init --recursive
+else
+    echo "WARNING: OMPI_COMMIT_SHA not set, cloning by tag ${OMPI_TAG} (less secure)"
+    git clone --branch "${OMPI_TAG}" --depth 1 --recursive https://github.com/open-mpi/ompi.git "${WORKDIR}"
 fi
 
 cd "${WORKDIR}"
