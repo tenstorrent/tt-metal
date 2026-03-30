@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Multicast receiver + output/reduce kernel with M_block x N_block streaming.
-// Per (m_sub, n_sub): receives K-blocks via multicast, then handles output:
+// Multicast receiver + output writer — runs on RISCV_0 (row direction) or RISCV_1 (col edge).
+// Receives multicast K-blocks, then per (m_sub, n_sub) handles output:
 //   Default:      writes compute output to DRAM.
 //   REDUCE_SEND:  NOC-writes compute partial to partner's reduce CB.
 //   REDUCE_RECV:  waits for partner's partial, then writes combined output to DRAM.

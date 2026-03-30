@@ -2,15 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// DRAM reader for diagonal helper cores with M_block x N_block streaming.
-// Phase 1: Reads M_block rows of odd K-columns from DRAM into c_1 for compute.
-//          Loop: for m_sub: for n_sub: for blk: read M_block rows.
-// Phase 2: Writes combined output (c_6, after accumulation) to DRAM per (m_sub, n_sub) block.
+// Diagonal helper DRAM reader + output writer — runs on RISCV_1/NOC_1 on helper cores (x=grid_dim).
+// Phase 1: Reads odd K-columns from DRAM into c_1 for compute.
+// Phase 2: Writes combined output (c_6) to DRAM per (m_sub, n_sub) block.
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "metal/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);

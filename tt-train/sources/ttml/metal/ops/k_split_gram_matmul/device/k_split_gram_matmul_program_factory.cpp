@@ -161,11 +161,11 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     const uint32_t out_addr = output.buffer()->address();
 
     const std::string base = "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/";
-    const std::string sender_path = base + "reader_mcast_sender.cpp";
-    const std::string receiver_path = base + "reader_mcast_receiver.cpp";
-    const std::string receiver_writer_path = base + "reader_mcast_receiver_writer.cpp";
+    const std::string sender_path = base + "mcast_sender.cpp";
+    const std::string receiver_path = base + "mcast_receiver.cpp";
+    const std::string receiver_writer_path = base + "mcast_receiver_writer.cpp";
     const std::string compute_matmul_path = base + "compute_matmul.cpp";
-    const std::string dram_reader_col_path = base + "dram_reader_col.cpp";
+    const std::string helper_dram_reader_path = base + "helper_dram_reader.cpp";
 
     // === Core classification ===
     // Row senders: x=0
@@ -468,7 +468,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         dram_defines["MIRROR_OUTPUT"] = "1";
     const KernelHandle helper_dram_reader_kid = CreateKernel(
         program,
-        dram_reader_col_path,
+        helper_dram_reader_path,
         helper_range,
         DataMovementConfig{.processor = risc_1, .noc = noc_1, .compile_args = ct_dram, .defines = dram_defines});
 

@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Multicast receiver kernel with M_block x N_block streaming.
-// Receives block_size tiles per handshake from the injector.
-// Loop: for m_sub: for n_sub: for blk: receive.
-// When REDUCE_RECV is defined, also waits for partner's partial per (m_sub, n_sub) block.
+// Plain multicast receiver — runs on RISCV_1 (col interior/upper) or RISCV_0 (helper row receiver).
+// Only receives multicast tiles into CB; does not write output.
+// When REDUCE_RECV is defined, also waits for partner's reduce partial per (m_sub, n_sub) block.
 
 #include <stdint.h>
 
