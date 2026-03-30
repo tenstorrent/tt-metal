@@ -18,10 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import pytest
-from loguru import logger
-from tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
+from tracy.process_model_log import run_device_profiler
 
 import models
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
@@ -90,7 +88,7 @@ pytestmark = pytest.mark.filterwarnings(
 
 def _run_device_profiler_op_support_count(*args, **kwargs):
     # Default cap is low; Lingbot-VA graphs exceed it without this override.
-    kwargs.setdefault("op_support_count", 10000)
+    kwargs.setdefault("op_support_count", 7500)
     return run_device_profiler(*args, **kwargs)
 
 
@@ -126,29 +124,13 @@ def test_lingbot_va_ttnn_forward_run():
     _run_lingbot_va_ttnn_forward()
 
 
-def _prepare_tt_perf_report_csv(subdir: str) -> str:
-    source_csv = Path(get_latest_ops_log_filename(subdir))
-    df = pd.read_csv(source_csv)
-    dtype_cols = [column for column in df.columns if column.endswith("_DATATYPE")]
-    float32_mask = df[dtype_cols].eq("FLOAT32").any(axis=1)
-    float32_rows = int(float32_mask.sum())
-    sanitized_csv = source_csv.with_name(f"{source_csv.stem}_tt_perf_report.csv")
-    df.loc[~float32_mask].to_csv(sanitized_csv, index=False)
-    logger.info(
-        "tt-perf-report CSV: {} (dropped {} FLOAT32 rows)",
-        sanitized_csv,
-        float32_rows,
-    )
-    return str(sanitized_csv)
-
-
 @pytest.mark.parametrize(
     "batch_size, model_name",
     [
         (1, "ttnn_lingbot_va"),
     ],
 )
-@pytest.mark.timeout(0)
+@pytest.mark.timeout(600)
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal_lingbot_va(batch_size, model_name):
     subdir = model_name
@@ -171,5 +153,3 @@ def test_perf_device_bare_metal_lingbot_va(batch_size, model_name):
         expected_results=expected_results,
         comments="",
     )
-
-    _prepare_tt_perf_report_csv(subdir)

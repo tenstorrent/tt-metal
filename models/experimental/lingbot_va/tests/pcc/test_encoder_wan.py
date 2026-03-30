@@ -35,7 +35,7 @@ def hf_model():
     [mesh_shape_request_param()],
     indirect=True,
 )
-@pytest.mark.timeout(0)
+@pytest.mark.timeout(600)
 def test_umt5_encoder_comparison(mesh_device, hf_model):
     text_weights = {k: v.cpu() for k, v in hf_model.state_dict().items()}
     torch.manual_seed(42)

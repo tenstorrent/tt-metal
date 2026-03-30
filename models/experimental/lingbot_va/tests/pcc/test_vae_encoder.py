@@ -105,7 +105,6 @@ def encode_ttnn(vae, video, mesh_device):
     [mesh_shape_request_param()],
     indirect=True,
 )
-@pytest.mark.timeout(0)
 def test_encode_one_video_pcc(mesh_device, vae):
     mesh_device.enable_program_cache()
     torch.manual_seed(42)
