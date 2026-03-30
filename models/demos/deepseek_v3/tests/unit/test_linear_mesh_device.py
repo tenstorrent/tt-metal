@@ -13,10 +13,11 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 
 @pytest.mark.parametrize(
-    "op_name, input_shape, weight_shape, input_memory_config, weight_memory_config, output_memory_config",
+    "op_name, mode, input_shape, weight_shape, input_memory_config, weight_memory_config, output_memory_config",
     [
         (
             "test_on_dram",
+            "decode",
             [1, 1, 32, 7168],  # Input shape
             [1, 1, 7168, 256],  # Weight shape
             "dram",
@@ -25,6 +26,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
         ),
         (
             "test_on_l1",
+            "decode",
             [1, 1, 32, 7168],  # Input shape
             [1, 1, 7168, 256],  # Weight shape
             "L1",
@@ -33,14 +35,42 @@ from tests.ttnn.utils_for_testing import comp_pcc
         ),
         (
             "test_on_l1_dram",
+            "decode",
             [1, 1, 32, 7168],  # Input shape
             [1, 1, 7168, 256],  # Weight shape
             "L1",
             "DRAM",
             "L1",
         ),
+        (
+            "test_on_dram",
+            "prefill",
+            [1, 1, 128, 7168],  # Input shape
+            [1, 1, 7168, 256],  # Weight shape
+            "dram",
+            "dram",
+            "dram",
+        ),
+        (
+            "test_on_l1",
+            "prefill",
+            [1, 1, 128, 7168],  # Input shape
+            [1, 1, 7168, 256],  # Weight shape
+            "L1",
+            "L1",
+            "L1",
+        ),
+        (
+            "test_on_l1_dram",
+            "prefill",
+            [1, 1, 128, 7168],  # Input shape
+            [1, 1, 7168, 256],  # Weight shape
+            "L1",
+            "DRAM",
+            "L1",
+        ),
     ],
-    ids=["dram_dram", "l1_l1", "l1_dram"],
+    ids=["dram_dram_decode", "l1_l1_decode", "l1_dram_decode", "dram_dram_prefill", "l1_l1_prefill", "l1_dram_prefill"],
 )
 @pytest.mark.parametrize("warmup_iters", [10])
 @pytest.mark.parametrize("num_iters", [100])
@@ -54,6 +84,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 def test_deepseek_v3_moe_gate_linear_trace_mode(
     mesh_device,
     op_name,
+    mode,
     input_shape,
     weight_shape,
     input_memory_config,
@@ -161,10 +192,11 @@ def test_deepseek_v3_moe_gate_linear_trace_mode(
     ttnn.synchronize_device(mesh_device)
 
     # Verify correctness
+    seq_len = 32 if mode == "decode" else 128
     torch_output_from_tt = ttnn.to_torch(
         tt_output_tensor,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-    )[0, :, :32, :].unsqueeze(0)
+    )[0, :, :seq_len, :].unsqueeze(0)
 
     assert torch_output_from_tt.shape == torch_output_tensor.shape
     pcc_passed, pcc_output = comp_pcc(torch_output_tensor, torch_output_from_tt, 0.99)

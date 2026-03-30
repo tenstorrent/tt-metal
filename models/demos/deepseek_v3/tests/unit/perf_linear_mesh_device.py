@@ -34,10 +34,14 @@ def galaxy_type():
 @pytest.mark.parametrize(
     "step_name, warmup_iters, perf_target_us",
     [
-        ("dram_dram", 10, 79.54),
-        ("l1_l1", 10, 202.26),
-        ("l1_dram", 10, 71.62),
+        ("dram_dram_decode", 10, 79.54),  # 0.9999 -> 0.9997, 40.13
+        ("l1_l1_decode", 10, 71.62),  # 39.24
+        ("l1_dram_decode", 10, 71.62),  # 39.24
+        ("dram_dram_prefill", 10, 51.15),  # 9997
+        ("l1_l1_prefill", 10, 217.63),  # 41.28
+        ("l1_dram_prefill", 10, 217.63),  # 41.29
     ],
+    ids=["dram_dram_decode", "l1_l1_decode", "l1_dram_decode", "dram_dram_prefill", "l1_l1_prefill", "l1_dram_prefill"],
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_linear_moe_gate_perf(
