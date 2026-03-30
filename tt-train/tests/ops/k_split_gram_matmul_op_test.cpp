@@ -4,16 +4,11 @@
 
 #include <gtest/gtest.h>
 
-#include <chrono>
 #include <core/ttnn_all_includes.hpp>
-#include <iomanip>
 #include <iostream>
 
 #include "autograd/auto_context.hpp"
-#include "core/compute_kernel_config.hpp"
 #include "metal/operations.hpp"
-#include "ttnn/operations/experimental/minimal_matmul/minimal_matmul.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
 
 class KSplitGramMatmulTest : public ::testing::Test {
 protected:
@@ -95,14 +90,12 @@ TEST_F(KSplitGramMatmulTest, Verification4096x4096) {
     uint32_t K = input.logical_shape()[-1];
     uint32_t padded_out = output.logical_shape()[-1];
 
-    // Upper off-diagonal: full accumulated result (own odd-K + partner's even-K)
     auto ref = compute_gram_tile(in_vec, K, 2, 15);
     auto dev = extract_output_tile(out_vec, padded_out, 2, 15);
     double p = tile_pcc(ref, dev);
     std::cout << "G[2,15] (upper) PCC=" << p << "\n";
     EXPECT_GT(p, 0.99);
 
-    // Diagonal: full accumulated result (from helper)
     ref = compute_gram_tile(in_vec, K, 0, 0);
     dev = extract_output_tile(out_vec, padded_out, 0, 0);
     p = tile_pcc(ref, dev);
@@ -137,14 +130,12 @@ TEST_F(KSplitGramMatmulTest, VerificationMirror) {
     uint32_t K = input.logical_shape()[-1];
     uint32_t padded_out = output.logical_shape()[-1];
 
-    // Upper: full result
     auto ref_upper = compute_gram_tile(in_vec, K, 2, 4);
     auto dev_upper = extract_output_tile(out_vec, padded_out, 2, 4);
     double p = tile_pcc(ref_upper, dev_upper);
     std::cout << "Upper G[2,4] PCC=" << p << "\n";
     EXPECT_GT(p, 0.99);
 
-    // Mirror: transposed
     auto dev_mirror = extract_output_tile(out_vec, padded_out, 4, 2);
     std::vector<float> ref_mirror(32 * 32);
     for (uint32_t i = 0; i < 32; i++)
@@ -159,7 +150,6 @@ TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
     auto input = make_test_tensor(64, 2048);
     uint32_t M = input.logical_shape()[-2];
 
-    // Preallocate output tensor
     auto output_spec = ttnn::TensorSpec(
         ttnn::Shape({1, 1, M, M}),
         tt::tt_metal::TensorLayout(ttnn::DataType::BFLOAT16, tt::tt_metal::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG));
@@ -169,10 +159,8 @@ TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
         ttml::metal::gram_matmul(input, ttml::metal::OutputMode::UpperTriangle, MathFidelity::HiFi4, preallocated);
     tt::tt_metal::distributed::Synchronize(device, std::nullopt);
 
-    // Verify it wrote to the preallocated tensor (same buffer address)
     EXPECT_EQ(output.buffer()->address(), preallocated.buffer()->address());
 
-    // Verify correctness
     auto in_vec = input.to_vector<float>();
     auto out_vec = output.to_vector<float>();
     uint32_t K = input.logical_shape()[-1];
@@ -207,117 +195,6 @@ TEST_F(KSplitGramMatmulTest, StressTest8192x8192) {
         tt::tt_metal::distributed::Synchronize(device, std::nullopt);
         out.deallocate();
         std::cout << "  dispatch " << (i + 1) << "/" << N << " OK\n" << std::flush;
-    }
-    SUCCEED();
-}
-
-// NOTE: 8192x8192 (subs>1) deadlocks on repeated dispatch.
-// 8192x8192 uses subs=3 (per-msb reduction path).
-TEST_F(KSplitGramMatmulTest, Benchmark) {
-    auto* device = &ttml::autograd::ctx().get_device();
-    auto device_grid = device->compute_with_storage_grid_size();
-    auto core_grid = std::make_optional<ttnn::CoreGrid>(device_grid.x, device_grid.y);
-
-    struct Shape {
-        uint32_t M_tiles, K_dim;
-        const char* label;
-    };
-    Shape shapes[] = {
-        {64, 2048, "2048x2048"},
-        {64, 5632, "2048x5632"},
-        {128, 4096, "4096x4096"},
-        {128, 11008, "4096x11008"},
-        {256, 8192, "8192x8192"},
-    };
-
-    constexpr int warmup = 3;
-    constexpr int iters = 10;
-
-    auto bench = [&](auto fn, const char* name) {
-        for (int i = 0; i < warmup; i++) {
-            fn();
-            tt::tt_metal::distributed::Synchronize(device, std::nullopt);
-        }
-        auto t0 = std::chrono::high_resolution_clock::now();
-        for (int i = 0; i < iters; i++) {
-            fn();
-            tt::tt_metal::distributed::Synchronize(device, std::nullopt);
-        }
-        auto t1 = std::chrono::high_resolution_clock::now();
-        return std::chrono::duration<double, std::micro>(t1 - t0).count() / iters;
-    };
-
-    constexpr MathFidelity bench_fidelity = MathFidelity::HiFi4;
-    auto compute_kernel_config = ttml::core::ComputeKernelConfig::matmul();
-
-    for (auto& s : shapes) {
-        auto input = make_test_tensor(s.M_tiles, s.K_dim);
-        auto input_t = ttnn::transpose(input, -2, -1);
-
-        uint64_t M = s.M_tiles * 32;
-        uint64_t K = s.K_dim;
-        // Utilization: ideal time / actual time
-        // HiFi4: 64 cycles per tile op (32x32x32 matmul), 110 compute cores, ~1.2 GHz
-        constexpr int cycles_per_tile = (bench_fidelity == MathFidelity::HiFi4) ? 64 : 32;
-        constexpr int num_cores = 110;
-        constexpr double freq_ghz = 1.35;
-        double num_tile_ops = static_cast<double>(M) * M * K / (32.0 * 32.0 * 32.0);
-        double ideal_us = num_tile_ops * cycles_per_tile / num_cores / (freq_ghz * 1e3);
-        auto util = [&](double us) { return 100.0 * ideal_us / us; };
-
-        double t_gram = bench(
-            [&]() {
-                auto out = ttml::metal::gram_matmul(input, ttml::metal::OutputMode::UpperTriangle, bench_fidelity);
-
-                out.deallocate();
-            },
-            "gram_matmul");
-
-        double t_minimal = bench(
-            [&]() {
-                auto out = ttnn::experimental::minimal_matmul(
-                    input,
-                    input_t,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    compute_kernel_config);
-                out.deallocate();
-            },
-            "minimal_matmul");
-
-        double t_ttnn = bench(
-            [&]() {
-                auto out = ttnn::matmul(
-                    input,
-                    input_t,
-                    false,
-                    false,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    std::nullopt,
-                    compute_kernel_config,
-                    core_grid,
-                    std::nullopt);
-                out.deallocate();
-            },
-            "ttnn::matmul");
-
-        std::cout << "\n  " << s.label << ":\n" << std::flush;
-        std::cout << "    gram_matmul:      " << std::fixed << std::setprecision(1) << t_gram << " us  "
-                  << std::setprecision(1) << util(t_gram) << "%\n";
-        std::cout << "    minimal_matmul:   " << std::setprecision(1) << t_minimal << " us  " << std::setprecision(1)
-                  << util(t_minimal) << "%\n";
-        std::cout << "    ttnn::matmul:     " << std::setprecision(1) << t_ttnn << " us  " << std::setprecision(1)
-                  << util(t_ttnn) << "%\n";
-        std::cout << "    vs minimal:       " << std::setprecision(2) << t_minimal / t_gram << "x\n";
-        std::cout << "    vs ttnn:          " << std::setprecision(2) << t_ttnn / t_gram << "x\n" << std::flush;
-
-        input.deallocate();
-        input_t.deallocate();
     }
     SUCCEED();
 }
