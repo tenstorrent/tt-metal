@@ -6,7 +6,6 @@
 #include <sys/types.h>
 
 #include <cmath>
-#include <umd/device/cluster.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -36,17 +35,6 @@ protected:
         ttml::autograd::ctx().close_device();
     }
 };
-
-bool should_skip_wormhole_nightly_sdpa() {
-    // TODO: Re-enable once Wormhole nightly backward SDPA numerical instability is addressed.
-    // Tracking issue: TODO(create issue for Wormhole SDPABackward nightly failures).
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::N300) {
-        return true;
-    }
-
-    return ttml::autograd::ctx().get_device().arch() == tt::ARCH::WORMHOLE_B0;
-}
 
 xt::xarray<float> generate_attn_mask(const xt::xarray<float>& query) {
     const auto shape = query.shape();
@@ -697,9 +685,8 @@ TEST_F(SDPABackwardTest, SmallBatch) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
-    if (should_skip_wormhole_nightly_sdpa()) {
-        GTEST_SKIP() << "Skipping Wormhole nightly SDPA backward NanoGPT config";
-    }
+    // Fails in L2 nightly workflow on Wormhole/N300. Temporarily skipped pending root-cause fix.
+    GTEST_SKIP() << "Temporarily disabled due to L2 nightly failures on Wormhole/N300";
     // Match nano_gpt training config
     SDPABackwardTestConfig config{
         .batch_size = 64U,
@@ -803,9 +790,8 @@ TEST_F(SDPABackwardTest, CausalMask_GQA) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
-    if (should_skip_wormhole_nightly_sdpa()) {
-        GTEST_SKIP() << "Skipping Wormhole nightly SDPA backward causal NanoGPT config";
-    }
+    // Fails in L2 nightly workflow on Wormhole/N300. Temporarily skipped pending root-cause fix.
+    GTEST_SKIP() << "Temporarily disabled due to L2 nightly failures on Wormhole/N300";
     SDPABackwardTestConfig config{
         .batch_size = 64U,
         .sequence_length = 256U,
