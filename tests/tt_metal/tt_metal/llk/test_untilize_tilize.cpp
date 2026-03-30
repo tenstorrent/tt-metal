@@ -92,7 +92,7 @@ struct TestConfig {
     tt::DataFormat input_fmt = tt::DataFormat::Float16_b;
     tt::DataFormat output_fmt = tt::DataFormat::Float16_b;
     // Pre-generated source data; if empty, create_arange_vector_of_bfloat16 is used.
-    std::vector<uint32_t> src0_data = {};
+    std::vector<uint32_t> src0_data;
     GoldenFunc golden_function;
 };
 
