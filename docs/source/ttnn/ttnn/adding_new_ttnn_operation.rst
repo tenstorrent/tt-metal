@@ -26,7 +26,7 @@ What steps are needed to add TT-NN operation in C++?
 What steps are needed to add TT-NN operation in Python?
 -------------------------------------------------------
 1. Take an existing C++ operation and add a nanobind Python binding for it using `ttnn::bind_function`.
-   The operation will be accessible in Python. If the operation is called ``ttnn::add`` in C++, then the Python binding will be ``ttnn.add``.
+   If the operation is called ``ttnn::add`` in C++, then the Python binding will be ``ttnn.add``.
 2. (Optional) Attach golden function to the operation using ``ttnn.attach_golden_function``. This is useful for debugging and testing.
 
 
