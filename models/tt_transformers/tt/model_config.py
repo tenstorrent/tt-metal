@@ -977,15 +977,16 @@ class ModelArgs:
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
-            self.num_reduce_scatter_links = 1
+            self.is_p300 = self.device_name == "P300"
+            self.num_reduce_scatter_links = 2 if (self.is_galaxy or self.is_p300) else 1
             self.num_all_gather_links = (
-                2 if self.is_galaxy else 1
+                2 if (self.is_galaxy or self.is_p300) else 1
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
             self.ccl_dtype = ttnn.bfloat8_b
 
             # model specific CCL configs
-            default_ln_ag = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
-            default_agmm = {"num_links": 1, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            default_ln_ag = {"num_links": self.num_all_gather_links, "chunks_per_sync": 10, "num_workers_per_link": 2}
+            default_agmm = {"num_links": self.num_all_gather_links, "chunks_per_sync": 10, "num_workers_per_link": 2}
             default_mlp_rs = {
                 "num_links": self.num_reduce_scatter_links,
                 "chunks_per_sync": 10,
@@ -994,7 +995,7 @@ class ModelArgs:
             }
             default_sampling_force_argmax = {
                 "allow_force_argmax": False,
-                "num_links": 1,
+                "num_links": self.num_all_gather_links,
                 "chunks_per_sync": 10,
                 "num_workers_per_link": 2,
                 "topology": ttnn.Topology.Linear,
@@ -1020,7 +1021,7 @@ class ModelArgs:
                 }
             }
             # Model-specific CCL configs are tuned for Galaxy (TG) with 4 links
-            # Only apply them on Galaxy, otherwise use defaults
+            # P300 uses 2 links; apply optimized configs for both Galaxy and P300
             executed_on_galaxy = ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
             if executed_on_galaxy and self.base_model_name in model_specific_ccl_configs:
                 self.model_config["ATTN_LN_AG_CONFIG"] = model_specific_ccl_configs[self.base_model_name]["attn_ln_ag"]
@@ -2282,8 +2283,8 @@ class ModelArgs:
                 "DeepSeek-R1-Distill-Qwen-14B": {"N150": 4, "N300": 64, "T3K": 128, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-3-mini-128k-instruct": {"N150": 32, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
-                "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
+                "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P300": 64},
+                "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128, "P300": 64},
                 "Qwen3-Embedding-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Phi-4": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Mistral-Small-3.1-24B": {
@@ -2298,6 +2299,7 @@ class ModelArgs:
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Qwen3.5-27B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 64},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -2548,6 +2550,18 @@ class ModelArgs:
         self.sliding_window_pattern = (
             [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
         )
+        self.linear_attention_pattern = (
+            [lt == "linear_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
+        )
+
+        # Qwen3.5 linear attention (DeltaNet) parameters
+        self.linear_num_key_heads = text_config.get("linear_num_key_heads", None)
+        self.linear_num_value_heads = text_config.get("linear_num_value_heads", None)
+        self.linear_key_head_dim = text_config.get("linear_key_head_dim", None)
+        self.linear_value_head_dim = text_config.get("linear_value_head_dim", None)
+        self.linear_conv_kernel_dim = text_config.get("linear_conv_kernel_dim", 4)
+        self.attn_output_gate = text_config.get("attn_output_gate", False)
+        self.partial_rotary_factor = text_config.get("partial_rotary_factor", 1.0)
 
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
@@ -2605,6 +2619,7 @@ class ModelArgs:
                 "Qwen2.5-72B": 32,
                 "Qwen2.5-7B": 16,
                 "QwQ-32B": 16,
+                "Qwen3-32B": 16,
             }.get(self.base_model_name, 0)
 
             # Override MLP padding cores from env var
@@ -4331,10 +4346,18 @@ def determine_device_name(mesh_device):
         return "CPU"
 
     if is_blackhole():
+        # Use cluster type to distinguish P300x2 (2 P300 boards) from P150x4 (4 individual chips)
+        try:
+            cluster_type = ttnn.cluster.get_cluster_type()
+            is_p300x2 = (
+                hasattr(ttnn.cluster.ClusterType, "P300_X2") and cluster_type == ttnn.cluster.ClusterType.P300_X2
+            )
+        except Exception:
+            is_p300x2 = False
         dict_device_names = {
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
             2: "P300",
-            4: "P150x4",
+            4: "P300" if is_p300x2 else "P150x4",
             8: "P150x8",
             32: "BHGLX",
         }
