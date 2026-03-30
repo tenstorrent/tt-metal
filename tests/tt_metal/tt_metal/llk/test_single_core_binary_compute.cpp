@@ -154,7 +154,7 @@ bool single_core_binary(
     uint32_t out_dfb = 0;
 
     if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        tt_metal::experimental::dfb::DataflowBufferConfig l1_input0_dfb_config = {
+        tt_metal::experimental::dfb::DataflowBufferConfig common_input_dfb_config = {
             .entry_size = test_config.tile_byte_size,
             .num_entries = test_config.num_tiles,
             .num_producers = 1,
@@ -162,11 +162,11 @@ bool single_core_binary(
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
-            .data_format = tt::DataFormat::Float16_b,
+            .data_format = test_config.l1_input_data_format,
             .tile = test_config.tile,
         };
 
-        tt_metal::experimental::dfb::DataflowBufferConfig l1_input1_dfb_config = {
+        tt_metal::experimental::dfb::DataflowBufferConfig common_output_dfb_config = {
             .entry_size = test_config.tile_byte_size,
             .num_entries = test_config.num_tiles,
             .num_producers = 1,
@@ -174,38 +174,14 @@ bool single_core_binary(
             .num_consumers = 1,
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
-            .data_format = tt::DataFormat::Float16_b,
+            .data_format = test_config.l1_output_data_format,
             .tile = test_config.tile,
         };
 
-        tt_metal::experimental::dfb::DataflowBufferConfig l1_input2_dfb_config = {
-            .entry_size = test_config.tile_byte_size,
-            .num_entries = test_config.num_tiles,
-            .num_producers = 1,
-            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 1,
-            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = false,
-            .data_format = tt::DataFormat::Float16_b,
-            .tile = test_config.tile,
-        };
-
-        tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
-            .entry_size = test_config.tile_byte_size,
-            .num_entries = test_config.num_tiles,
-            .num_producers = 1,
-            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 1,
-            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = false,
-            .data_format = tt::DataFormat::Float16_b,
-            .tile = test_config.tile,
-        };
-
-        inp0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input0_dfb_config);
-        inp1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input1_dfb_config);
-        inp2_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input2_dfb_config);
-        out_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_output_dfb_config);
+        inp0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, common_input_dfb_config);
+        inp1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, common_input_dfb_config);
+        inp2_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, common_input_dfb_config);
+        out_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, common_output_dfb_config);
 
     } else {
         tt_metal::CircularBufferConfig l1_input0_cb_config =
@@ -449,7 +425,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAdd) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            return;
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
@@ -470,7 +448,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSub) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            return;
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
@@ -491,7 +471,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMul) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            return;
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
@@ -513,7 +495,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileAddFullInit) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            return;
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
@@ -535,7 +519,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileSubFullInit) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            return;
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
@@ -557,7 +543,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreSingleTileMulFullInit) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            return;
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
@@ -647,7 +635,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileAdd) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            return;
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
@@ -668,7 +658,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileSub) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            return;
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
@@ -689,7 +681,9 @@ TEST_F(MeshDeviceFixture, TensixBinaryComputeSingleCoreMultiTileMul) {
         log_info(tt::LogTest, "Math Fidelity = {}", i);
         for (unsigned int id = 0; id < num_devices_; id++) {
             ASSERT_TRUE(unit_tests::compute::binary::single_core_binary(devices_.at(id), test_config));
-            return;
+            if (this->arch_ == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
