@@ -263,6 +263,13 @@ def parse_pr_number(pr_url: str) -> int:
     return int(m.group(1))
 
 
+def pr_label(pr_url: str) -> str:
+    m = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", pr_url)
+    if not m:
+        return pr_url
+    return f"{m.group(1)}#{m.group(2)}"
+
+
 def empty_state() -> dict[str, Any]:
     return {"version": 1, "updated_at_utc": now_utc(), "items": []}
 
@@ -378,7 +385,9 @@ def write_summary(path: Path, data: dict[str, Any]) -> None:
     lines.append("")
     lines.append("## Executed")
     for item in data.get("executed", []):
-        lines.append(f"- issue #{item.get('issue_number')}: {item.get('pr_url')}")
+        issue_number = item.get("issue_number")
+        pr_url = str(item.get("pr_url", "")).strip()
+        lines.append(f"- issue #{issue_number} -> PR: {pr_label(pr_url)}")
     lines.append("")
     lines.append("## Skipped")
     for item in data.get("skipped", []):
