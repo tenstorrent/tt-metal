@@ -4,10 +4,12 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <core/ttnn_all_includes.hpp>
 #include <iostream>
 
 #include "autograd/auto_context.hpp"
+#include "core/random.hpp"
 #include "metal/operations.hpp"
 
 class KSplitGramMatmulTest : public ::testing::Test {
@@ -22,17 +24,12 @@ protected:
 
 namespace {
 
-ttnn::Tensor make_test_tensor(uint32_t M_tiles, uint32_t K_dim = 0) {
+ttnn::Tensor make_random_tensor(uint32_t M, uint32_t N, uint32_t seed = 42) {
     auto* device = &ttml::autograd::ctx().get_device();
-    uint32_t M = M_tiles * 32;
-    uint32_t K = (K_dim > 0) ? K_dim : M;
-    std::vector<float> data(M * K);
-    std::generate(data.begin(), data.end(), []() {
-        static std::mt19937 gen(42);
-        static std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
-        return dist(gen);
-    });
-    auto shape = ttnn::Shape({1, 1, M, K});
+    std::vector<float> data(M * N);
+    ttml::core::parallel_generate(
+        std::span{data.data(), data.size()}, []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); }, seed);
+    auto shape = ttnn::Shape({1, 1, M, N});
     return ttnn::Tensor::from_vector(
         data,
         ttnn::TensorSpec(
@@ -41,21 +38,11 @@ ttnn::Tensor make_test_tensor(uint32_t M_tiles, uint32_t K_dim = 0) {
         device);
 }
 
-double tile_pcc(const std::vector<float>& a, const std::vector<float>& b) {
-    double sum_ab = 0, sum_a2 = 0, sum_b2 = 0;
-    for (size_t i = 0; i < a.size(); i++) {
-        sum_ab += (double)a[i] * b[i];
-        sum_a2 += (double)a[i] * a[i];
-        sum_b2 += (double)b[i] * b[i];
-    }
-    return sum_ab / (std::sqrt(sum_a2) * std::sqrt(sum_b2));
-}
-
-std::vector<float> compute_gram_tile(
-    const std::vector<float>& in_vec, uint32_t K, uint32_t m_tile, uint32_t n_tile, int k_stride = 1, int k_start = 0) {
+// Compute reference gram matmul tile G[m_tile, n_tile] on CPU
+std::vector<float> compute_gram_tile(const std::vector<float>& in_vec, uint32_t K, uint32_t m_tile, uint32_t n_tile) {
     std::vector<float> result(32 * 32, 0.0f);
     uint32_t K_tiles = K / 32;
-    for (uint32_t k_tile = k_start; k_tile < K_tiles; k_tile += k_stride) {
+    for (uint32_t k_tile = 0; k_tile < K_tiles; k_tile++) {
         for (uint32_t i = 0; i < 32; i++) {
             for (uint32_t j = 0; j < 32; j++) {
                 float sum = 0.0f;
@@ -70,84 +57,103 @@ std::vector<float> compute_gram_tile(
     return result;
 }
 
+// Extract a 32x32 tile from a flattened row-major matrix
 std::vector<float> extract_output_tile(
-    const std::vector<float>& out_vec, uint32_t padded_out, uint32_t tile_r, uint32_t tile_c) {
+    const std::vector<float>& out_vec, uint32_t out_width, uint32_t tile_r, uint32_t tile_c) {
     std::vector<float> tile(32 * 32);
     for (uint32_t i = 0; i < 32; i++)
-        for (uint32_t j = 0; j < 32; j++) tile[i * 32 + j] = out_vec[(tile_r * 32 + i) * padded_out + tile_c * 32 + j];
+        for (uint32_t j = 0; j < 32; j++) tile[i * 32 + j] = out_vec[(tile_r * 32 + i) * out_width + tile_c * 32 + j];
     return tile;
+}
+
+// Max relative error between two tile vectors: max(|ref-dev| / max(|ref|, 1))
+float max_rel_error(const std::vector<float>& ref, const std::vector<float>& dev) {
+    float max_abs_ref = 1.0f;
+    for (size_t i = 0; i < ref.size(); i++) {
+        max_abs_ref = std::max(max_abs_ref, std::abs(ref[i]));
+    }
+    float max_err = 0.0f;
+    for (size_t i = 0; i < ref.size(); i++) {
+        max_err = std::max(max_err, std::abs(ref[i] - dev[i]) / max_abs_ref);
+    }
+    return max_err;
+}
+
+// Check a tile against reference with relative tolerance
+void check_tile(
+    const std::vector<float>& in_vec,
+    const std::vector<float>& out_vec,
+    uint32_t K,
+    uint32_t out_width,
+    uint32_t tile_r,
+    uint32_t tile_c,
+    float rtol,
+    const char* label) {
+    auto ref = compute_gram_tile(in_vec, K, tile_r, tile_c);
+    auto dev = extract_output_tile(out_vec, out_width, tile_r, tile_c);
+    float err = max_rel_error(ref, dev);
+    std::cout << label << " max_rel_error=" << err << "\n";
+    EXPECT_LT(err, rtol) << label << " exceeded tolerance";
 }
 
 }  // namespace
 
 TEST_F(KSplitGramMatmulTest, Verification4096x4096) {
-    auto input = make_test_tensor(128, 4096);
+    auto input = make_random_tensor(4096, 4096);
     auto output = ttml::metal::gram_matmul(input);
     tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
 
     auto in_vec = input.to_vector<float>();
     auto out_vec = output.to_vector<float>();
     uint32_t K = input.logical_shape()[-1];
-    uint32_t padded_out = output.logical_shape()[-1];
+    uint32_t W = output.logical_shape()[-1];
 
-    auto ref = compute_gram_tile(in_vec, K, 2, 15);
-    auto dev = extract_output_tile(out_vec, padded_out, 2, 15);
-    double p = tile_pcc(ref, dev);
-    std::cout << "G[2,15] (upper) PCC=" << p << "\n";
-    EXPECT_GT(p, 0.99);
-
-    ref = compute_gram_tile(in_vec, K, 0, 0);
-    dev = extract_output_tile(out_vec, padded_out, 0, 0);
-    p = tile_pcc(ref, dev);
-    std::cout << "G[0,0] (diag) PCC=" << p << "\n";
-    EXPECT_GT(p, 0.99);
+    constexpr float rtol = 0.01f;
+    check_tile(in_vec, out_vec, K, W, 2, 15, rtol, "G[2,15] (upper)");
+    check_tile(in_vec, out_vec, K, W, 0, 0, rtol, "G[0,0] (diag)");
 }
 
 TEST_F(KSplitGramMatmulTest, Verification4096x11008) {
-    auto input = make_test_tensor(128, 11008);
+    auto input = make_random_tensor(4096, 11008);
     auto output = ttml::metal::gram_matmul(input);
     tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
 
     auto in_vec = input.to_vector<float>();
     auto out_vec = output.to_vector<float>();
     uint32_t K = input.logical_shape()[-1];
-    uint32_t padded_out = output.logical_shape()[-1];
+    uint32_t W = output.logical_shape()[-1];
 
-    auto ref = compute_gram_tile(in_vec, K, 2, 15);
-    auto dev = extract_output_tile(out_vec, padded_out, 2, 15);
-    double p = tile_pcc(ref, dev);
-    std::cout << "G[2,15] PCC=" << p << "\n";
-    EXPECT_GT(p, 0.99);
+    constexpr float rtol = 0.01f;
+    check_tile(in_vec, out_vec, K, W, 2, 15, rtol, "G[2,15]");
 }
 
 TEST_F(KSplitGramMatmulTest, VerificationMirror) {
-    auto input = make_test_tensor(20);
+    auto input = make_random_tensor(640, 640);
     auto output = ttml::metal::gram_matmul(input, ttml::metal::OutputMode::Full);
     tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
 
     auto in_vec = input.to_vector<float>();
     auto out_vec = output.to_vector<float>();
     uint32_t K = input.logical_shape()[-1];
-    uint32_t padded_out = output.logical_shape()[-1];
+    uint32_t W = output.logical_shape()[-1];
 
+    constexpr float rtol = 0.01f;
+    check_tile(in_vec, out_vec, K, W, 2, 4, rtol, "Upper G[2,4]");
+
+    // Mirror: G[4,2] should equal G[2,4]^T
     auto ref_upper = compute_gram_tile(in_vec, K, 2, 4);
-    auto dev_upper = extract_output_tile(out_vec, padded_out, 2, 4);
-    double p = tile_pcc(ref_upper, dev_upper);
-    std::cout << "Upper G[2,4] PCC=" << p << "\n";
-    EXPECT_GT(p, 0.99);
-
-    auto dev_mirror = extract_output_tile(out_vec, padded_out, 4, 2);
+    auto dev_mirror = extract_output_tile(out_vec, W, 4, 2);
     std::vector<float> ref_mirror(32 * 32);
     for (uint32_t i = 0; i < 32; i++)
         for (uint32_t j = 0; j < 32; j++) ref_mirror[i * 32 + j] = ref_upper[j * 32 + i];
-    double p_mirror = tile_pcc(ref_mirror, dev_mirror);
-    std::cout << "Mirror G[4,2] PCC=" << p_mirror << "\n";
-    EXPECT_GT(p_mirror, 0.99);
+    float err = max_rel_error(ref_mirror, dev_mirror);
+    std::cout << "Mirror G[4,2] max_rel_error=" << err << "\n";
+    EXPECT_LT(err, rtol) << "Mirror exceeded tolerance";
 }
 
 TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
     auto* device = &ttml::autograd::ctx().get_device();
-    auto input = make_test_tensor(64, 2048);
+    auto input = make_random_tensor(2048, 2048);
     uint32_t M = input.logical_shape()[-2];
 
     auto output_spec = ttnn::TensorSpec(
@@ -164,22 +170,19 @@ TEST_F(KSplitGramMatmulTest, PreallocatedOutput) {
     auto in_vec = input.to_vector<float>();
     auto out_vec = output.to_vector<float>();
     uint32_t K = input.logical_shape()[-1];
-    uint32_t padded_out = output.logical_shape()[-1];
+    uint32_t W = output.logical_shape()[-1];
 
-    auto ref = compute_gram_tile(in_vec, K, 2, 15);
-    auto dev = extract_output_tile(out_vec, padded_out, 2, 15);
-    double p = tile_pcc(ref, dev);
-    std::cout << "Preallocated G[2,15] PCC=" << p << "\n";
-    EXPECT_GT(p, 0.99);
+    constexpr float rtol = 0.01f;
+    check_tile(in_vec, out_vec, K, W, 2, 15, rtol, "Preallocated G[2,15]");
 }
 
 TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {
     struct Shape {
-        uint32_t M_tiles, K_dim;
+        uint32_t M, K;
     };
-    Shape shapes[] = {{10, 0}, {64, 2048}, {64, 5632}, {128, 4096}, {128, 11008}, {256, 8192}};
+    Shape shapes[] = {{320, 320}, {2048, 2048}, {2048, 5632}, {4096, 4096}, {4096, 11008}, {8192, 8192}};
     for (auto& s : shapes) {
-        auto input = make_test_tensor(s.M_tiles, s.K_dim);
+        auto input = make_random_tensor(s.M, s.K);
         auto output = ttml::metal::gram_matmul(input);
         tt::tt_metal::distributed::Synchronize(&ttml::autograd::ctx().get_device(), std::nullopt);
     }
@@ -188,7 +191,7 @@ TEST_F(KSplitGramMatmulTest, SmokeAllShapes) {
 
 TEST_F(KSplitGramMatmulTest, StressTest8192x8192) {
     auto* device = &ttml::autograd::ctx().get_device();
-    auto input = make_test_tensor(256, 8192);
+    auto input = make_random_tensor(8192, 8192);
     constexpr int N = 5;
     for (int i = 0; i < N; i++) {
         auto out = ttml::metal::gram_matmul(input);
