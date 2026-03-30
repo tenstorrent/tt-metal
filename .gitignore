@@ -157,7 +157,6 @@ models/experimental/petr/resources/*.pth
 *.out
 *.err
 
-.claude
 .cursor/.DS_store
 CLAUDE.md
 
