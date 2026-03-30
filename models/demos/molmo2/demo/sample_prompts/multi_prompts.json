@@ -1,0 +1,18 @@
+[
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Describe this image in detail."
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What breed of dog is this?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What is the dog doing in this image?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Write a short haiku about this dog."
+    }
+]
