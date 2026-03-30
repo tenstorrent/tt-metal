@@ -117,11 +117,11 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "refiner_unet_1024x1024": {
         "wormhole": 244_107_203 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": None,  # Refiner not supported yet on Blackhole
+        "blackhole": 114_154_100 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "refiner_unet_512x512": {
         "wormhole": 79_843_092 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": None,  # Refiner not supported yet on Blackhole
+        "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
