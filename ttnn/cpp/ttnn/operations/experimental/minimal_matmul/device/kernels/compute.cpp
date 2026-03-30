@@ -317,11 +317,30 @@ void kernel_main() {
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    mm_init(in0_cb, in1_cb, intermediate_cb);
-
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
     constexpr uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
+
+#ifdef SKIP_COMPUTE
+    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+        for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
+            cb_reserve_back(intermediate_cb, out_block_num_tiles);
+            for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
+                cb_wait_front(in0_cb, in0_block_num_tiles);
+                cb_wait_front(in1_cb, in1_block_num_tiles);
+                cb_pop_front(in0_cb, in0_block_num_tiles);
+                cb_pop_front(in1_cb, in1_block_num_tiles);
+            }
+            cb_push_back(intermediate_cb, out_block_num_tiles);
+
+            cb_reserve_back(out_cb, out_block_num_tiles);
+            cb_wait_front(intermediate_cb, out_block_num_tiles);
+            cb_push_back(out_cb, out_block_num_tiles);
+            cb_pop_front(intermediate_cb, out_block_num_tiles);
+        }
+    }
+#else
+    mm_init(in0_cb, in1_cb, intermediate_cb);
 
     constexpr uint32_t M_num_subblocks = M_block_tiles / subblock_h;
     constexpr uint32_t N_num_subblocks = N_block_tiles / subblock_w;
@@ -378,12 +397,7 @@ void kernel_main() {
                 }
 
                 if (k_block == K_num_blocks - 1) {
-                    /**
-                     * On next iteration we might get reuse on in0
-                     *
-                     */
                     if (n_block_iter < N_blocks_per_core - 1) {
-                        // going to stride on N, so reuse in0
                         reuse_in0_block = true;
                     }
                 }
@@ -425,4 +439,5 @@ void kernel_main() {
 #endif  // FUSE_TERNARY
         }
     }
+#endif  // SKIP_COMPUTE
 }

@@ -399,6 +399,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     if (std::getenv("SKIP_OUT")) {
         defines["SKIP_OUT"] = "1";
     }
+    if (std::getenv("SKIP_COMPUTE")) {
+        defines["SKIP_COMPUTE"] = "1";
+    }
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
