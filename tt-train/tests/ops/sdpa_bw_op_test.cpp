@@ -685,7 +685,7 @@ TEST_F(SDPABackwardTest, SmallBatch) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
-    // Fails in L2 nightly workflow on Wormhole/N300. Temporarily skipped pending root-cause fix.
+    // Fails in L2 nightly workflow on Wormhole/N300. Tracking: #41005.
     GTEST_SKIP() << "Temporarily disabled due to L2 nightly failures on Wormhole/N300";
     // Match nano_gpt training config
     SDPABackwardTestConfig config{
@@ -790,7 +790,7 @@ TEST_F(SDPABackwardTest, CausalMask_GQA) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
-    // Fails in L2 nightly workflow on Wormhole/N300. Temporarily skipped pending root-cause fix.
+    // Fails in L2 nightly workflow on Wormhole/N300. Tracking: #41005.
     GTEST_SKIP() << "Temporarily disabled due to L2 nightly failures on Wormhole/N300";
     SDPABackwardTestConfig config{
         .batch_size = 64U,
