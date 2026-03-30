@@ -144,7 +144,8 @@ std::tuple<Tensor, Tensor> topk_router_gpt(
     auto [operation_attributes, tensors_args] =
         operations::experimental::topk_router_gpt::TopkRouterGptDeviceOperation::invoke(
             input_tensor, weight_tensor, bias_tensor, k, num_experts);
-    return ttnn::device_operation::detail::invoke<
-        operations::experimental::topk_router_gpt::TopkRouterGptDeviceOperation>(operation_attributes, tensors_args);
+
+    return ttnn::device_operation::launch<operations::experimental::topk_router_gpt::TopkRouterGptDeviceOperation>(
+        operation_attributes, tensors_args);
 }
 }  // namespace ttnn::experimental
