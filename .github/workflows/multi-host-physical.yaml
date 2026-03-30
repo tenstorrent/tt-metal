@@ -123,7 +123,7 @@ jobs:
       - multi-host-galaxy
       - arch-wormhole_b0
       - bare-metal
-      - g10glx03
+      - g02glx01
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
