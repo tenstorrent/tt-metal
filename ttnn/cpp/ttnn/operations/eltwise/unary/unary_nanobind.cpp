@@ -24,48 +24,6 @@
 namespace ttnn::operations::unary {
 
 namespace {
-template <Tensor (*Func)(
-    const Tensor&,
-    const std::optional<MemoryConfig>&,
-    const std::optional<Tensor>&,
-    const std::optional<CoreRangeSet>&)>
-Tensor unary_3param_wrapper(const Tensor& t, const std::optional<MemoryConfig>& m, const std::optional<Tensor>& o) {
-    return Func(t, m, o, std::nullopt);
-}
-
-template <Tensor (*Func)(
-    const Tensor&,
-    const std::optional<MemoryConfig>&,
-    const std::optional<Tensor>&,
-    const std::optional<CoreRangeSet>&)>
-Tensor unary_composite_2param_wrapper(const Tensor& t, const std::optional<MemoryConfig>& m) {
-    return Func(t, m, std::nullopt, std::nullopt);
-}
-
-template <auto Func>
-Tensor unary_4param_to_5param_wrapper(
-    const Tensor& input_tensor,
-    float parameter,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor) {
-    return Func(input_tensor, parameter, memory_config, output_tensor, std::nullopt);
-}
-
-template <auto Func>
-Tensor unary_3param_to_4param_wrapper(
-    const Tensor& input_tensor, float parameter, const std::optional<MemoryConfig>& memory_config) {
-    return Func(input_tensor, parameter, memory_config, std::nullopt);
-}
-
-template <auto Func>
-Tensor unary_composite_3param_to_4param_wrapper(
-    const Tensor& input_tensor,
-    float parameter_a,
-    float parameter_b,
-    const std::optional<MemoryConfig>& memory_config) {
-    return Func(input_tensor, parameter_a, parameter_b, memory_config, std::nullopt);
-}
-
 void bind_unary_clamp(nb::module_& mod) {
     const char* doc = R"doc(
         Applies clamp to :attr:`input_tensor` element-wise.
@@ -265,6 +223,7 @@ void bind_unary_operation(
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -293,11 +252,12 @@ void bind_unary_operation(
     ttnn::bind_function<OpName>(
         mod,
         doc.c_str(),
-        &unary_3param_wrapper<Func>,
+        Func,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("output_tensor") = nb::none());
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 template <ttnn::unique_string OpName, typename Func>
@@ -430,6 +390,7 @@ void bind_unary_operation_overload_complex_return_complex(
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -457,11 +418,16 @@ void bind_unary_operation_overload_complex_return_complex(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            &unary_3param_wrapper<ttnn::reciprocal>,
+            nb::overload_cast<
+                const Tensor&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::reciprocal),
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()},
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()},
         ttnn::overload_t{
             nb::overload_cast<const ComplexTensor&, const ttnn::MemoryConfig&>(&ttnn::reciprocal),
             nb::arg("input_tensor"),
@@ -550,6 +516,7 @@ void bind_unary_operation_with_float_parameter(
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -579,12 +546,13 @@ void bind_unary_operation_with_float_parameter(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            &unary_4param_to_5param_wrapper<Func>,
+            Func,
             nb::arg("input_tensor"),
             nb::arg(parameter_name.c_str()),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()});
 }
 
 template <ttnn::unique_string OpName, auto Func>
@@ -673,6 +641,7 @@ void bind_unary_operation_with_float_parameter_default(
             {2} (float): Defaults to `{3}`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -703,12 +672,13 @@ void bind_unary_operation_with_float_parameter_default(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            &unary_4param_to_5param_wrapper<Func>,
+            Func,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name.data()) = parameter_default,
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()});
 }
 
 template <ttnn::unique_string OpName, auto Func>
@@ -1350,6 +1320,8 @@ void bind_unary_composite(
 
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1378,10 +1350,12 @@ void bind_unary_composite(
     ttnn::bind_function<OpName>(
         mod,
         doc.c_str(),
-        &unary_composite_2param_wrapper<Func>,
+        Func,
         nb::arg("input_tensor"),
         nb::kw_only(),
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
 }
 
 // OpHandler_1int
@@ -1467,6 +1441,7 @@ void bind_unary_composite_floats_with_default(
             {2} (float, optional): {3}. Defaults to `{4}`.
             {5} (float, optional): {6}. Defaults to `{7}`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1499,12 +1474,13 @@ void bind_unary_composite_floats_with_default(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            &unary_composite_3param_to_4param_wrapper<Func>,
+            Func,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
             nb::arg(parameter_name_b.c_str()) = parameter_b_value,
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()});
 }
 
 // OpHandler_one_int
@@ -1579,6 +1555,7 @@ void bind_unary_threshold(
 
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1606,12 +1583,13 @@ void bind_unary_threshold(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            &unary_composite_3param_to_4param_wrapper<Func>,
+            Func,
             nb::arg("input_tensor"),
             nb::arg(parameter_name_a.c_str()),
             nb::arg(parameter_name_b.c_str()),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()});
 }
 
 // OpHandler_float_with_default
@@ -1636,6 +1614,7 @@ void bind_unary_composite_float_with_default(
         Keyword args:
             {2} (float, optional): {3}. Defaults to `{4}`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1665,11 +1644,12 @@ void bind_unary_composite_float_with_default(
         mod,
         doc.c_str(),
         ttnn::overload_t{
-            &unary_3param_to_4param_wrapper<Func>,
+            Func,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg(parameter_name_a.c_str()) = parameter_a_value,
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none()});
 }
 
 namespace {
