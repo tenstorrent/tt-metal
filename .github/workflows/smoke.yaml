@@ -162,11 +162,12 @@ jobs:
           fi
 
       - name: Checkout repository for Codecov mapping
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         if: ${{ inputs.upload-coverage }}
         with:
           submodules: recursive
           fetch-depth: 1
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5

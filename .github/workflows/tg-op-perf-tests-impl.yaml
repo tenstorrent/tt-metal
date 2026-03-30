@@ -48,9 +48,10 @@ jobs:
       - ${{ inputs.topology }}
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Enable performance mode
         run: |
           sudo cpupower frequency-set -g performance

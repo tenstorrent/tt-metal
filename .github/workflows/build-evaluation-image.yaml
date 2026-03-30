@@ -106,9 +106,10 @@ jobs:
       evaluation-image-url: ${{ steps.docker-metadata.outputs.tags }}
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       - name: Set evaluation image metadata
         id: evaluation-image-metadata

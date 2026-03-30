@@ -92,25 +92,27 @@ jobs:
           mkdir -p /tmp/ccache
 
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
           clean: true
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       - name: Configure git safe.directory
         run: git config --global --add safe.directory /work
 
       - name: Check out baseline
         if: ${{ inputs.do-full-scan != 'true' }}
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           ref: ${{ inputs.merge-base }}
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
           clean: true
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       - name: Create shim
         run: |
@@ -147,12 +149,13 @@ jobs:
           ccache -s
 
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           fetch-depth: 0
           fetch-tags: true
           submodules: recursive
           clean: false
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       - name: Prepare ccache summary
         run: |

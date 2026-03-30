@@ -83,10 +83,11 @@ jobs:
       llk-needs-build: ${{ steps.llk-check.outputs.llk-needs-build }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           fetch-depth: 1
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       # Compute Ubuntu 22.04 tags
       - name: Compute Ubuntu 22.04 tags
@@ -198,9 +199,10 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -282,9 +284,10 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -366,9 +369,10 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -396,9 +400,10 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:

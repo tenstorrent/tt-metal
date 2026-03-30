@@ -99,11 +99,12 @@ jobs:
       llk-ci-tag: ${{ steps.llk-images.outputs.llk-ci-tag }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       - name: Parse platform
         id: platform
@@ -226,10 +227,11 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -321,10 +323,11 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -350,10 +353,11 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
