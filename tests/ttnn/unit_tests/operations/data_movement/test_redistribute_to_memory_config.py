@@ -2291,9 +2291,7 @@ def test_redistribute_to_memory_config_tilized_legacy_2d_sharded_to_interleaved_
     ],
 )
 @pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1])
-def test_redistribute_to_memory_config_rm_interleaved_to_nd_sharded_preallocated_output(
-    device, tensor_shape, shard_shape, grid, buffer_type
-):
+def test_redistribute_to_memory_config_rm_preallocated_output(device, tensor_shape, shard_shape, grid, buffer_type):
     """Interleaved row-major → ND sharded (row-major orientation) with uneven shards; write into preallocated output."""
     torch.manual_seed(0)
     shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
@@ -2325,3 +2323,98 @@ def test_redistribute_to_memory_config_rm_interleaved_to_nd_sharded_preallocated
 
     output_torch = ttnn.to_torch(output_tensor)
     assert_equal(torch_input, output_torch)
+
+
+# ---------------------------------------------------------------------------
+# Program cache callback (override_runtime_arguments) tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def isolate_program_cache(device):
+    """Ensure each test starts with an empty program cache and cleans up after."""
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    yield
+    device.disable_and_clear_program_cache()
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape, grid",
+    [
+        ([6, 32, 64], [2, 32, 64], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))})),
+        ([6, 8, 64], [4, 3, 20], ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))})),
+    ],
+)
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1])
+def test_redistribute_to_memory_config_rm_override_runtime_arguments(
+    device, isolate_program_cache, tensor_shape, shard_shape, grid, buffer_type
+):
+    """Call the row-major program twice with different data to exercise override_runtime_arguments on the second call."""
+    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+    nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=shard_orientation)
+    sharded_memory_config = ttnn.MemoryConfig(buffer_type, nd_shard_spec)
+
+    outputs = []
+    assert device.num_program_cache_entries() == 0, "Program cache should be empty before the test"
+    for seed in (0, 42):
+        torch.manual_seed(seed)
+        torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        input_tensor = ttnn.to_device(input_tensor, device)
+
+        output_tensor = ttnn.redistribute_to_memory_config(input_tensor, sharded_memory_config)
+
+        check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
+        output_torch = ttnn.to_torch(output_tensor)
+        assert_equal(torch_input, output_torch)
+        outputs.append(output_torch)
+
+    assert (
+        device.num_program_cache_entries() == 1
+    ), f"Expected 1 program cache entry (cache hit on second call), got {device.num_program_cache_entries()}"
+    assert not torch.equal(outputs[0], outputs[1]), "Outputs should differ to confirm different data was processed"
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape, grid",
+    [
+        (
+            [1, 1, 128, 64],
+            [1, 1, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ),
+        (
+            [3, 5, 160, 96],
+            [2, 3, 96, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ),
+    ],
+)
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1])
+def test_redistribute_to_memory_config_tilized_override_runtime_arguments(
+    device, isolate_program_cache, tensor_shape, shard_shape, grid, buffer_type
+):
+    """Call the tilized program twice with different data to exercise override_runtime_arguments on the second call."""
+    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+    nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=shard_orientation)
+    sharded_memory_config = ttnn.MemoryConfig(buffer_type, nd_shard_spec)
+
+    outputs = []
+    assert device.num_program_cache_entries() == 0, "Program cache should be empty before the test"
+    for seed in (0, 42):
+        torch.manual_seed(seed)
+        torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+        output_tensor = ttnn.redistribute_to_memory_config(input_tensor, sharded_memory_config)
+
+        check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=True)
+        output_torch = ttnn.to_torch(output_tensor)
+        assert_equal(torch_input, output_torch)
+        outputs.append(output_torch)
+
+    assert (
+        device.num_program_cache_entries() == 1
+    ), f"Expected 1 program cache entry (cache hit on second call), got {device.num_program_cache_entries()}"
+    assert not torch.equal(outputs[0], outputs[1]), "Outputs should differ to confirm different data was processed"
