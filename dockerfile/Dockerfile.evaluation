@@ -29,6 +29,9 @@ FROM ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a
 
 FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 
+# Enforce strict error handling: exit on error, unset vars, pipe failures
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Copy uv from official distroless image

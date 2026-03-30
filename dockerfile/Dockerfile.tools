@@ -39,10 +39,13 @@ ARG YQ_SHA256=0c2b24e645b57d8e7c0566d18643a6d4f5580feeea3878127354a46f2a1e4598
 # NOTE: OMPI_TAG is the single source of truth for the OpenMPI version.
 # If you change this value, you MUST also update OMPI_TAG in:
 #   - dockerfile/Dockerfile (ENV OMPI_TAG in base stage)
+#   - dockerfile/Dockerfile.basic-dev (ARG OMPI_TAG in base stage)
 #   - dockerfile/Dockerfile.manylinux
 # A mismatch will be caught at build time by a validation step in Dockerfile.
+# OMPI_COMMIT_SHA is the dereferenced commit for the tag, used to verify
+# clone integrity in install-openmpi.sh.
 ARG OMPI_TAG=v5.0.7
-ARG OMPI_SHA256=119f2009936a403334d0df3c0d74d5595a32d99497f9b1d41e90019fee2fc2dd
+ARG OMPI_COMMIT_SHA=29341e55efaabf7a6968444b4bb6f1f1fb40d664
 
 # NOTE: SFPI version/hash are NOT defined here as ARGs.
 # The single source of truth for SFPI version information is:
@@ -291,7 +294,7 @@ COPY --from=sfpi-builder /install/ /install/
 
 FROM quay.io/pypa/manylinux_2_34_x86_64 AS openmpi-builder
 ARG OMPI_TAG
-ARG OMPI_SHA256
+ARG OMPI_COMMIT_SHA
 
 # Enforce strict error handling: exit on error, unset vars, pipe failures
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
@@ -328,7 +331,7 @@ RUN dnf install -y \
 
 COPY dockerfile/scripts/install-openmpi.sh /tmp/install-openmpi.sh
 RUN OMPI_TAG=${OMPI_TAG} \
-    OMPI_SHA256=${OMPI_SHA256} \
+    OMPI_COMMIT_SHA=${OMPI_COMMIT_SHA} \
     INSTALL_DIR=/opt \
     /bin/bash /tmp/install-openmpi.sh
 

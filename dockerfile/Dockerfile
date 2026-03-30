@@ -355,7 +355,7 @@ WORKDIR /tt-metal
 # This is acceptable for single-user containers but should be reconsidered for multi-tenant
 # or security-sensitive deployments. Consider using user-specific venvs in those cases.
 RUN umask 000 && /bin/bash -c "./build_metal.sh \
-    && ./create_venv.sh --bundle-python --python-version "$PYTHON_VERSION" --env-dir "$PYTHON_ENV_DIR" \
+    && ./create_venv.sh --bundle-python --python-version \"$PYTHON_VERSION\" --env-dir \"$PYTHON_ENV_DIR\" \
     && rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache" && \
     umask 002 && \
     echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc

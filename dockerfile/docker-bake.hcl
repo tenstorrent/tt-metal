@@ -256,7 +256,7 @@ group "main" {
 # =============================================================================
 # Basic image targets (from Dockerfile.basic-dev)
 #
-# Uses a subset of tools: cmake, sfpi, openmpi, ccache
+# Uses a subset of tools: cmake, openmpi, ccache (SFPI is only in basic-ttnn-runtime, not basic-dev)
 # =============================================================================
 
 target "_basic-common" {

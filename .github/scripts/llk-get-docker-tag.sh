@@ -31,6 +31,11 @@ METAL_BUILD_FILES=(
     ".github/scripts/llk-get-docker-tag.sh"
 )
 
+# Verify all files exist before hashing
+for file in "${DOCKERFILE_HASH_FILES[@]}" "${METAL_BUILD_FILES[@]}"; do
+    [[ -f "$file" ]] || { echo "ERROR: Required file not found: $file" >&2; exit 1; }
+done
+
 # Combine hashes from both submodule and parent repo files
 SUBMODULE_HASH=$(sha256sum "${DOCKERFILE_HASH_FILES[@]}" | sha256sum | cut -d ' ' -f 1)
 PARENT_HASH=$(sha256sum "${METAL_BUILD_FILES[@]}" | sha256sum | cut -d ' ' -f 1)

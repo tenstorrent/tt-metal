@@ -95,9 +95,6 @@ LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 ARG UBUNTU_VERSION
 ARG PYTHON_VERSION
 
-# Install uv with version pinning (centralized in install-uv.sh)
-COPY --from=uv-layer /uv /uvx /usr/local/bin/
-
 ENV UV_PYTHON_INSTALL_DIR="/usr/local/share/uv"
 
 # Enforce strict error handling: exit on error, unset vars, pipe failures

@@ -16,6 +16,20 @@ mkdir -p "${WORKDIR}"
 
 echo "Cloning OpenMPI ${OMPI_TAG} from GitHub..."
 git clone --branch "${OMPI_TAG}" --depth 1 --recursive https://github.com/open-mpi/ompi.git "${WORKDIR}"
+
+# Verify cloned commit matches expected SHA (supply-chain integrity check)
+if [ -n "${OMPI_COMMIT_SHA:-}" ]; then
+    ACTUAL_SHA=$(git -C "${WORKDIR}" rev-parse HEAD)
+    if [ "${ACTUAL_SHA}" != "${OMPI_COMMIT_SHA}" ]; then
+        echo "[ERROR] OpenMPI commit SHA mismatch!" >&2
+        echo "  Expected: ${OMPI_COMMIT_SHA}" >&2
+        echo "  Actual:   ${ACTUAL_SHA}" >&2
+        echo "  This could indicate a compromised or changed tag." >&2
+        exit 1
+    fi
+    echo "Commit SHA verified: ${ACTUAL_SHA}"
+fi
+
 cd "${WORKDIR}"
 
 # Run autogen.pl to generate configure script (required when building from git)
