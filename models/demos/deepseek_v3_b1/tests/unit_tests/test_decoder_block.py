@@ -10,6 +10,8 @@ Tests decoder fused operation with full pipeline:
 - Qrope output: [64, 1, 64] after RoPE
 """
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -41,6 +43,8 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_post_sdpa import compute_forwarder_scratch_size
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_pre_sdpa import deinterleave_kv_cache
 from models.demos.deepseek_v3_b1.utils import get_pinned_optimal_dram_bank_to_logical_worker_assignment
+
+MTP_LAYER_IDX = 61
 
 
 def _decode_expert_upload_mode(expert_upload_mode: str) -> tuple[int, int | None]:
@@ -897,7 +901,7 @@ def create_decoder_block_tensors(
 @pytest.mark.parametrize(
     "expert_upload_mode",
     [
-        pytest.param("unrigged_all_experts", marks=pytest.mark.skip_post_commit),
+        "unrigged_all_experts",
         pytest.param("rigged_groups1", marks=pytest.mark.skip_post_commit),
         pytest.param("rigged_groups2", marks=pytest.mark.skip_post_commit),
         pytest.param("rigged_groups3", marks=pytest.mark.skip_post_commit),
@@ -919,6 +923,14 @@ def create_decoder_block_tensors(
         "full_routing",
     ],
 )
+@pytest.mark.parametrize(
+    "decoder_layer_idx",
+    [
+        ROUTED_EXPERT_LAYER_IDX,
+        pytest.param(MTP_LAYER_IDX, id="mtp_layer_61"),
+    ],
+)
+@pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @pytest.mark.parametrize(
     "validate_standalone_mla",
     [pytest.param(True, marks=pytest.mark.skip_post_commit), False],
@@ -949,6 +961,8 @@ def test_decoder(
     enable_routing,
     use_hardcoded_expert_index,
     num_routed_experts,
+    decoder_layer_idx,
+    use_real_weights,
     validate_standalone_mla,
     validate_standalone_moe,
     get_reference_model_state_dict,
@@ -959,6 +973,11 @@ def test_decoder(
     logger.info(f"Number of devices: {num_devices}")
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
         pytest.skip("Test requires more devices than available")
+
+    if use_real_weights and expert_upload_mode != "unrigged_all_experts":
+        pytest.skip("Real-weight decoder tests require unrigged_all_experts")
+    if use_real_weights and not os.getenv("DEEPSEEK_V3_HF_MODEL"):
+        pytest.skip("DEEPSEEK_V3_HF_MODEL must be set to run real MTP layer tests")
 
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
     device_grid_size = submesh.compute_with_storage_grid_size()
@@ -975,10 +994,11 @@ def test_decoder(
 
     logger.info("Preparing model state dict...")
     state_dict = get_reference_model_state_dict(
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        layer_idx=decoder_layer_idx,
         is_moe=True,
         seed=RoutedExpert.SEED,
         num_routed_experts=effective_num_routed_experts,
+        random_weights=not use_real_weights,
     )
 
     logger.info("Creating decoder block tensors...")
@@ -990,7 +1010,7 @@ def test_decoder(
         sender_col,
         position_id,
         state_dict,
-        layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        layer_idx=decoder_layer_idx,
         max_seq_len=max_seq_len,
         is_moe=True,
         num_routed_experts=effective_num_routed_experts,
