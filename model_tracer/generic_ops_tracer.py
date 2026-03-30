@@ -348,6 +348,56 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
                         del arg_value_clean["dtype"]
 
                 arguments[arg_key] = arg_value_clean
+            elif isinstance(arg_value, list):
+                cleaned_list = []
+                for item in arg_value:
+                    if isinstance(item, dict) and "mesh_device" in item:
+                        mesh_data = item["mesh_device"]
+
+                        if mesh_device_info is None:
+                            mesh_device_info = {
+                                "device_ids": mesh_data.get("device_ids", []),
+                                "device_count": len(mesh_data.get("device_ids", [])),
+                                "mesh_device_shape": mesh_data.get("shape", []),
+                            }
+
+                        placements = mesh_data.get("placements", [])
+                        distribution_shape = mesh_data.get("distribution_shape", [])
+                        mesh_shape = mesh_data.get("shape", [])
+
+                        item_clean = {k: v for k, v in item.items() if k != "mesh_device"}
+
+                        if placements:
+                            item_clean["tensor_placement"] = {
+                                "placement": str(placements),
+                                "distribution_shape": str(distribution_shape),
+                                "mesh_device_shape": str(mesh_shape),
+                            }
+
+                        if "shape" in item_clean and "original_shape" in item_clean:
+                            if item_clean["shape"] == item_clean["original_shape"]:
+                                del item_clean["shape"]
+
+                        if "dtype" in item_clean and "original_dtype" in item_clean:
+                            if item_clean["dtype"] == item_clean["original_dtype"]:
+                                del item_clean["dtype"]
+
+                        cleaned_list.append(item_clean)
+                    elif isinstance(item, dict):
+                        item_clean = item.copy()
+
+                        if "shape" in item_clean and "original_shape" in item_clean:
+                            if item_clean["shape"] == item_clean["original_shape"]:
+                                del item_clean["shape"]
+
+                        if "dtype" in item_clean and "original_dtype" in item_clean:
+                            if item_clean["dtype"] == item_clean["original_dtype"]:
+                                del item_clean["dtype"]
+
+                        cleaned_list.append(item_clean)
+                    else:
+                        cleaned_list.append(item)
+                arguments[arg_key] = cleaned_list
             else:
                 # Also clean up non-mesh tensors
                 if isinstance(arg_value, dict):
@@ -409,6 +459,56 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
                         del value_clean["dtype"]
 
                 arguments[key] = value_clean
+            elif isinstance(value, list):
+                cleaned_list = []
+                for item in value:
+                    if isinstance(item, dict) and "mesh_device" in item:
+                        mesh_data = item["mesh_device"]
+
+                        if mesh_device_info is None:
+                            mesh_device_info = {
+                                "device_ids": mesh_data.get("device_ids", []),
+                                "device_count": len(mesh_data.get("device_ids", [])),
+                                "mesh_device_shape": mesh_data.get("shape", []),
+                            }
+
+                        placements = mesh_data.get("placements", [])
+                        distribution_shape = mesh_data.get("distribution_shape", [])
+                        mesh_shape = mesh_data.get("shape", [])
+
+                        item_clean = {k: v for k, v in item.items() if k != "mesh_device"}
+
+                        if placements:
+                            item_clean["tensor_placement"] = {
+                                "placement": str(placements),
+                                "distribution_shape": str(distribution_shape),
+                                "mesh_device_shape": str(mesh_shape),
+                            }
+
+                        if "shape" in item_clean and "original_shape" in item_clean:
+                            if item_clean["shape"] == item_clean["original_shape"]:
+                                del item_clean["shape"]
+
+                        if "dtype" in item_clean and "original_dtype" in item_clean:
+                            if item_clean["dtype"] == item_clean["original_dtype"]:
+                                del item_clean["dtype"]
+
+                        cleaned_list.append(item_clean)
+                    elif isinstance(item, dict):
+                        item_clean = item.copy()
+
+                        if "shape" in item_clean and "original_shape" in item_clean:
+                            if item_clean["shape"] == item_clean["original_shape"]:
+                                del item_clean["shape"]
+
+                        if "dtype" in item_clean and "original_dtype" in item_clean:
+                            if item_clean["dtype"] == item_clean["original_dtype"]:
+                                del item_clean["dtype"]
+
+                        cleaned_list.append(item_clean)
+                    else:
+                        cleaned_list.append(item)
+                arguments[key] = cleaned_list
             else:
                 # Also clean up non-mesh tensors in kwargs
                 if isinstance(value, dict):
