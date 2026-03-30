@@ -5,14 +5,19 @@
 """Integration tests for new mode Phase 1 and Phase 2 MPI commands."""
 
 import yaml
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 import pytest
 from click.testing import CliRunner
+
+import importlib
 
 from ttnn.distributed.ttrun import (
     main,
     run_phase1_generate_rank_bindings,
 )
+
+ttrun_module = importlib.import_module("ttnn.distributed.ttrun")
 
 
 @pytest.fixture
@@ -203,7 +208,7 @@ class TestNewModePhase1Phase2:
         assert "RANK3_VAR=value3" in env_vars
         assert "GLOBAL_VAR=global_value" in env_vars
 
-    def test_phase1_vs_phase2_different_commands(self, runner, temp_dir):
+    def test_phase1_vs_phase2_different_commands(self, runner, temp_dir, monkeypatch):
         """Test that Phase 1 and Phase 2 produce different MPI commands."""
         import subprocess
         from ttnn.distributed.ttrun import (
@@ -214,17 +219,12 @@ class TestNewModePhase1Phase2:
         )
         import os
 
+        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
 
-        # Use temp_dir for output (tests use temp to avoid writing to generated/ttrun)
-        output_dir = temp_dir / "generated" / "ttrun"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create generated rank_bindings.yaml with 3 ranks (different from Phase 1)
-        rank_bindings_path = output_dir / "rank_bindings.yaml"
-        rankfile_path = output_dir / "rankfile"
         mesh_graph_file = temp_dir / "mesh_graph.yaml"
+        mesh_graph_file.touch()
 
         rank_bindings_content = {
             "rank_bindings": [
@@ -235,19 +235,19 @@ class TestNewModePhase1Phase2:
             "global_env": {},
             "mesh_graph_desc_path": str(mesh_graph_file),
         }
-        with open(rank_bindings_path, "w") as f:
-            yaml.dump(rank_bindings_content, f)
-        mesh_graph_file.touch()
-        rankfile_path.touch()
 
         # Capture Phase 1 command
         captured_phase1_cmd = []
 
         def mock_phase1_run(cmd, cwd=None, **kwargs):
             captured_phase1_cmd.extend(cmd)
-            # Create output files in the correct location
-            rank_bindings_path.touch()
-            rankfile_path.touch()
+            out_dir = Path(cmd[cmd.index("--output-dir") + 1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            rb = out_dir / "rank_bindings.yaml"
+            rf = out_dir / "rankfile"
+            with open(rb, "w") as f:
+                yaml.dump(rank_bindings_content, f)
+            rf.touch()
             mock_result = MagicMock()
             mock_result.returncode = 0
             return mock_result
@@ -292,9 +292,14 @@ class TestNewModePhase1Phase2:
         phase1_np_idx = captured_phase1_cmd.index("-np")
         assert captured_phase1_cmd[phase1_np_idx + 1] == "2"
 
-        # Phase 1: should have --host node1,node2
+        # Phase 1: should have --host node1,node2 (canonical sorted order)
         phase1_host_idx = captured_phase1_cmd.index("--host")
         assert captured_phase1_cmd[phase1_host_idx + 1] == "node1,node2"
+
+        cache_id = ttrun_module.compute_phase1_cache_id(mgd_path, sorted(["node1", "node2"]), None)
+        output_dir = temp_dir / "generated" / "ttrun" / cache_id
+        rank_bindings_path = output_dir / "rank_bindings.yaml"
+        rankfile_path = output_dir / "rankfile"
 
         # Now test Phase 2 command building directly (since dry-run doesn't execute it)
         config = parse_binding_config(rank_bindings_path)
@@ -393,7 +398,7 @@ class TestNewModePhase1Phase2:
         rankfile_path_str = str(rankfile_path.resolve())
         assert rankfile_path_str in cmd_str, f"Rankfile path should be in command: {rankfile_path_str}"
 
-    def test_phase1_vs_phase2_asymmetrical_different_counts(self, runner, temp_dir):
+    def test_phase1_vs_phase2_asymmetrical_different_counts(self, runner, temp_dir, monkeypatch):
         """Test Phase 1 and Phase 2 with asymmetrical slot distribution."""
         import subprocess
         from ttnn.distributed.ttrun import (
@@ -403,19 +408,10 @@ class TestNewModePhase1Phase2:
             get_mpi_launcher,
         )
 
+        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
 
-        # Use temp_dir for output (tests use temp to avoid writing to generated/ttrun)
-        output_dir = temp_dir / "generated" / "ttrun"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Create generated rank_bindings.yaml with asymmetrical distribution:
-        # node1: 3 ranks (slots 0, 1, 2)
-        # node2: 2 ranks (slots 0, 1)
-        # Total: 5 ranks (different from Phase 1's 2 hosts)
-        rank_bindings_path = output_dir / "rank_bindings.yaml"
-        rankfile_path = output_dir / "rankfile"
         mesh_graph_file = temp_dir / "mesh_graph.yaml"
 
         rank_bindings_content = {
@@ -429,26 +425,28 @@ class TestNewModePhase1Phase2:
             "global_env": {},
             "mesh_graph_desc_path": str(mesh_graph_file),
         }
-        with open(rank_bindings_path, "w") as f:
-            yaml.dump(rank_bindings_content, f)
         mesh_graph_file.touch()
 
-        # Create asymmetrical rankfile
-        with open(rankfile_path, "w") as f:
-            f.write("rank 0=node1 slot=0\n")
-            f.write("rank 1=node1 slot=1\n")
-            f.write("rank 2=node1 slot=2\n")
-            f.write("rank 3=node2 slot=0\n")
-            f.write("rank 4=node2 slot=1\n")
+        rankfile_body = (
+            "rank 0=node1 slot=0\n"
+            "rank 1=node1 slot=1\n"
+            "rank 2=node1 slot=2\n"
+            "rank 3=node2 slot=0\n"
+            "rank 4=node2 slot=1\n"
+        )
 
         # Capture Phase 1 command
         captured_phase1_cmd = []
 
         def mock_phase1_run(cmd, cwd=None, **kwargs):
             captured_phase1_cmd.extend(cmd)
-            # Create output files
-            rank_bindings_path.touch()
-            rankfile_path.touch()
+            out_dir = Path(cmd[cmd.index("--output-dir") + 1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            rb = out_dir / "rank_bindings.yaml"
+            rf = out_dir / "rankfile"
+            with open(rb, "w") as f:
+                yaml.dump(rank_bindings_content, f)
+            rf.write_text(rankfile_body)
             mock_result = MagicMock()
             mock_result.returncode = 0
             return mock_result
@@ -484,9 +482,14 @@ class TestNewModePhase1Phase2:
         phase1_np_idx = captured_phase1_cmd.index("-np")
         assert captured_phase1_cmd[phase1_np_idx + 1] == "2"
 
-        # Phase 1: should have --host node1,node2
+        # Phase 1: should have --host node1,node2 (sorted)
         phase1_host_idx = captured_phase1_cmd.index("--host")
         assert captured_phase1_cmd[phase1_host_idx + 1] == "node1,node2"
+
+        cache_id = ttrun_module.compute_phase1_cache_id(mgd_path, sorted(["node1", "node2"]), None)
+        output_dir = temp_dir / "generated" / "ttrun" / cache_id
+        rank_bindings_path = output_dir / "rank_bindings.yaml"
+        rankfile_path = output_dir / "rankfile"
 
         # Phase 2: Build command directly (dry-run doesn't execute)
         config = parse_binding_config(rank_bindings_path)
