@@ -73,13 +73,15 @@ def extract_yolov8l_config(model_name="yolov8l.pt"):
         bott_cv2_info = layer_info.get(bott_cv2_name, {})
 
         if cv1_info and cv2_info and bott_cv1_info and bott_cv2_info:
+            cv1_half_out = cv1_info["out_channels"] // 2
+            cv1_in = cv1_info["in_channels"]
             config["c2f_configs"][module_name] = {
                 "input_params": [
-                    [1, 1, 0, cv1_info["out_channels"], cv1_info["in_channels"]],  # cv1
-                    [1, 1, 0, cv2_info["out_channels"], cv2_info["in_channels"]],  # cv2
-                    [3, 1, 1, bott_cv1_info["out_channels"], bott_cv1_info["in_channels"]],  # bott cv1
-                    [1, 1, 0, bott_cv2_info["out_channels"], bott_cv2_info["in_channels"]],  # bott cv2
-                    [1, 1, 0, bott_cv2_info["out_channels"], bott_cv2_info["in_channels"]],  # duplicate for split
+                    [1, 1, 0, cv1_info["out_channels"], cv1_in],
+                    [1, 1, 0, cv2_info["out_channels"], cv2_info["in_channels"]],
+                    [3, 1, 1, bott_cv1_info["out_channels"], bott_cv1_info["in_channels"]],
+                    [1, 1, 0, cv1_half_out, cv1_in],
+                    [1, 1, 0, cv1_half_out, cv1_in],
                 ]
             }
 

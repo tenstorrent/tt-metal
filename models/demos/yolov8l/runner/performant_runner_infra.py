@@ -8,13 +8,13 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.common.utility_functions import divup, is_wormhole_b0
-from models.demos.yolov8s.common import load_torch_model
-from models.demos.yolov8s.tt.tt_yolov8s_utils import create_custom_mesh_preprocessor
-from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
+from models.demos.yolov8l.common import load_torch_model
+from models.demos.yolov8l.tt.tt_yolov8l_utils import create_custom_mesh_preprocessor
+from models.demos.yolov8l.tt.ttnn_yolov8l import TtYolov8lModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-class YOLOv8sPerformanceRunnerInfra:
+class YOLOv8lPerformanceRunnerInfra:
     def __init__(
         self,
         device,
@@ -44,7 +44,7 @@ class YOLOv8sPerformanceRunnerInfra:
             custom_preprocessor=create_custom_mesh_preprocessor(device, self.weights_mesh_mapper),
             device=device,
         )
-        self.ttnn_yolov8_model = TtYolov8sModel(device=device, parameters=parameters, res=(inp_h, inp_w))
+        self.ttnn_yolov8_model = TtYolov8lModel(device=device, parameters=parameters, res=(inp_h, inp_w))
         self.torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
         self.tt_input_tensor = ttnn.from_torch(self.torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.mesh_mapper)
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
@@ -104,7 +104,7 @@ class YOLOv8sPerformanceRunnerInfra:
         output_tensor = ttnn.to_torch(ttnn_output_tensor[0], mesh_composer=self.mesh_composer)
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=0.99)
 
-        logger.info(f"Yolov8s - batch_size={self.batch_size}, PCC={self.pcc_message}")
+        logger.info(f"Yolov8l - batch_size={self.batch_size}, PCC={self.pcc_message}")
 
     def dealloc_output(self):
         ttnn.deallocate(self.output_tensor[0])
