@@ -78,6 +78,7 @@ struct SingleCoreBinaryConfig {
     bool acc_to_dest = false;
     bool full_init = true;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::Tile tile = tt::tt_metal::Tile({32, 32});
 };
 
 void set_math_fid_masks(
@@ -162,7 +163,7 @@ bool single_core_binary(
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b,
-            .tile = tt_metal::Tile({32, 32}),
+            .tile = test_config.tile,
         };
 
         tt_metal::experimental::dfb::DataflowBufferConfig l1_input1_dfb_config = {
@@ -174,7 +175,7 @@ bool single_core_binary(
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b,
-            .tile = tt_metal::Tile({32, 32}),
+            .tile = test_config.tile,
         };
 
         tt_metal::experimental::dfb::DataflowBufferConfig l1_input2_dfb_config = {
@@ -186,7 +187,7 @@ bool single_core_binary(
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b,
-            .tile = tt_metal::Tile({32, 32}),
+            .tile = test_config.tile,
         };
 
         tt_metal::experimental::dfb::DataflowBufferConfig l1_output_dfb_config = {
@@ -198,7 +199,7 @@ bool single_core_binary(
             .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
             .enable_implicit_sync = false,
             .data_format = tt::DataFormat::Float16_b,
-            .tile = tt_metal::Tile({32, 32}),
+            .tile = test_config.tile,
         };
 
         inp0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, test_config.core, l1_input0_dfb_config);
@@ -331,6 +332,7 @@ bool single_core_binary(
 
     // Quasar has 8x8 mantissa multipliers so fidelity has no effect on bfloat16 multiplications.
     // Only set FID masks for non-Quasar to ensure we are testing the effect of reduced math fidelity on the binary compute results.
+    // TODO: If the tests are extended to FP32, then the FID masks should also be applied for Quasar.
     if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
         set_math_fid_masks(srca_fid_mask, srcb_fid_mask, test_config.math_fidelity);
     }

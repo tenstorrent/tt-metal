@@ -11,6 +11,16 @@
  * LLK UNPACK AB
  *************************************************************************/
 
+/**
+ * @brief Initialization for unpack of binary operations, uses SrcA & SrcB
+ * @details Sets up MOP for unpacking binary operands
+ * operandA will be used for UNPACKER0 -> SRCA
+ * operandB will be used for UNPACKER1 -> SRCB
+ * @tparam BType: Broadcast type for SrcB. Currently only BroadcastType::NONE is supported on Quasar.
+ * @param operandA: The input operand dataflow buffer for source A
+ * @param operandB: The input operand dataflow buffer for source B
+ * @param transpose: Unused param; only for API compatibiliy.
+ */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB_init(
     const std::uint32_t operandA, const std::uint32_t operandB, [[maybe_unused]] const std::uint32_t transpose = 0) {
@@ -24,6 +34,15 @@ inline void llk_unpack_AB_init(
     _llk_unpack_binary_operands_init_(operandA_id, operandB_id, 1);
 }
 
+/**
+ * @brief Unpacks binary operands for SrcA & SrcB
+ * @tparam BType: Broadcast type for SrcB. Currently only BroadcastType::NONE is supported on Quasar.
+ * @param operandA: The logical dataflow buffer id for source A. Used to derive L1 addresses for SrcA unpacking.
+ * @param operandB: The logical dataflow buffer id for source B. Used to derive L1 addresses for SrcB unpacking.
+ * @param tile_index_a: Tile index within the operandA dataflow buffer to read from
+ * @param tile_index_b: Tile index within the operandB dataflow buffer to read from
+ * @param bcast_row_idx: Unused param; only for API compatibiliy.
+ */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void llk_unpack_AB(
     const std::uint32_t operandA,
