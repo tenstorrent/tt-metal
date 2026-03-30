@@ -91,6 +91,11 @@ jobs:
         run: |
           mkdir -p /tmp/ccache
 
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: Check out repo
         uses: ./.github/actions/checkout
         with:
@@ -103,6 +108,11 @@ jobs:
       - name: Configure git safe.directory
         run: git config --global --add safe.directory /work
 
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: Check out baseline
         if: ${{ inputs.do-full-scan != 'true' }}
         uses: ./.github/actions/checkout
@@ -148,6 +158,11 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s
 
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: Checkout repo
         uses: ./.github/actions/checkout
         with:

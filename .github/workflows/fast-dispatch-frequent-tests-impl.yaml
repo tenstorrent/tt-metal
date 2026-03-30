@@ -60,6 +60,11 @@ jobs:
       LOGURU_LEVEL: INFO
     runs-on: ${{ matrix.test-group.runs-on }}
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: ⬇️ Checkout
         uses: ./.github/actions/checkout
         with:

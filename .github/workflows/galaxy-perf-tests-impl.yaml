@@ -28,6 +28,11 @@ jobs:
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_perf_tests.yaml
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: Checkout the repository
         uses: ./.github/actions/checkout
         with:
@@ -85,6 +90,11 @@ jobs:
       PYTHONPATH: ${{ github.workspace }}
     runs-on: ${{ matrix.test-group.runs_on }}
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: ⬇️ Checkout
         uses: ./.github/actions/checkout
         with:

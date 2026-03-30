@@ -98,6 +98,11 @@ jobs:
       llk-ci-exists: ${{ steps.llk-images.outputs.llk-ci-exists }}
       llk-ci-tag: ${{ steps.llk-images.outputs.llk-ci-tag }}
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: Checkout repo
         uses: ./.github/actions/checkout
         with:
@@ -226,6 +231,11 @@ jobs:
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: ⬇️ Checkout
         uses: ./.github/actions/checkout
         with:
@@ -322,6 +332,11 @@ jobs:
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: ⬇️ Checkout
         uses: ./.github/actions/checkout
         with:
@@ -352,6 +367,11 @@ jobs:
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: ⬇️ Checkout
         uses: ./.github/actions/checkout
         with:
