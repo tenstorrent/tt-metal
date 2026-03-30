@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#include <tools/profiler/kernel_profiler.hpp>
 
 void kernel_main() {
     constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
@@ -241,16 +242,20 @@ void kernel_main() {
                             fused_op_receiver.compute_actual_k_block_iter(n_block_iter == 0, k_block_iter, k_forward);
                     }
 #endif
-                    read_in1_block_sync<K_block_tiles, N_block_tiles>(
-                        in1_reader,
-                        in1_shape,
-                        in1_start_address,
-                        in1_tile_size,
-                        k_block * K_block_tiles,
-                        (k_block + 1) * K_block_tiles,
-                        n_tile,
-                        n_tile_end);
+                    {
+                        DeviceZoneScopedN("in1-dram-read");
+                        read_in1_block_sync<K_block_tiles, N_block_tiles>(
+                            in1_reader,
+                            in1_shape,
+                            in1_start_address,
+                            in1_tile_size,
+                            k_block * K_block_tiles,
+                            (k_block + 1) * K_block_tiles,
+                            n_tile,
+                            n_tile_end);
+                    }
                 } else {
+                    DeviceZoneScopedN("in1-recv-wait");
                     noc_semaphore_set(in1_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in1_receiver_semaphore_addr_ptr, VALID);
@@ -262,6 +267,7 @@ void kernel_main() {
 
 #ifdef USE_MCAST
                 if constexpr (is_injector_core && num_mcast_receivers > 0) {
+                    DeviceZoneScopedN("in1-mcast");
                     noc_semaphore_wait(in1_sender_semaphore_addr_ptr, num_mcast_receivers);
                     noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
                     uint32_t in1_row_ptr = in1_start_address;
@@ -346,8 +352,7 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
-                    // write_block_sync_granular_split is more generic (support multiple output tensors)
-                    // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync_granular should be faster
+                    DeviceZoneScopedN("in1-write-out");
                     if constexpr (N_chunks == 1) {
                         write_block_sync_granular<M_block_tiles, N_block_tiles>(
                             std::get<0>(outputs_tuple),

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
+#include <tools/profiler/kernel_profiler.hpp>
 #include "api/compute/untilize.h"
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
@@ -356,19 +357,25 @@ void kernel_main() {
             // Accumulation buffer
             cb_reserve_back(intermediate_cb, out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                cb_wait_front(in0_cb, in0_block_num_tiles);
-                cb_wait_front(in1_cb, in1_block_num_tiles);
+                {
+                    DeviceZoneScopedN("compute-wait");
+                    cb_wait_front(in0_cb, in0_block_num_tiles);
+                    cb_wait_front(in1_cb, in1_block_num_tiles);
+                }
 
-                matmul_blocks(
-                    in0_cb,
-                    in1_cb,
-                    intermediate_cb,
-                    current_M_block_tiles,
-                    current_N_block_tiles,
-                    N_block_tiles,
-                    K_block_tiles,
-                    current_subblock_h,
-                    current_subblock_w);
+                {
+                    DeviceZoneScopedN("compute-matmul");
+                    matmul_blocks(
+                        in0_cb,
+                        in1_cb,
+                        intermediate_cb,
+                        current_M_block_tiles,
+                        current_N_block_tiles,
+                        N_block_tiles,
+                        K_block_tiles,
+                        current_subblock_h,
+                        current_subblock_w);
+                }
 
                 if (k_block == K_num_blocks - 1) {
                     /**
