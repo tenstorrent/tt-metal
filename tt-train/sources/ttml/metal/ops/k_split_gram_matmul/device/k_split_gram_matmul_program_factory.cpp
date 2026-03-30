@@ -116,7 +116,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     uint32_t num_tiles = M_block * K_tiles;  // tiles per sender per m_sub/n_sub pass
     // Output tensor is logical [M, M] — width in tiles matches logical_M_tiles
     uint32_t padded_out_tiles = logical_M_tiles;
-    uint32_t recv_tiles = K_half * M_block;  // tiles per receiver per nsb pass
+    uint32_t recv_tiles = K_half * M_block;  // tiles per receiver per (m_sub, n_sub) pass
 
     uint32_t send_out_cb = (uint32_t)tt::CBIndex::c_5;
     uint32_t c5_tiles = M_block * N_block;
@@ -506,7 +506,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     CreateKernel(
         program, compute_matmul_path, make_core_range_set(sender_diag_cores), compute_cfg({{"REDUCE_SENDER", "1"}}));
 
-    // Upper: REDUCE_ACCUMULATOR (or diagnostic variant)
+    // Upper: REDUCE_ACCUMULATOR
     std::string accum_define = "REDUCE_ACCUMULATOR";
 
     std::vector<tt::tt_metal::CoreCoord> accum_cores;

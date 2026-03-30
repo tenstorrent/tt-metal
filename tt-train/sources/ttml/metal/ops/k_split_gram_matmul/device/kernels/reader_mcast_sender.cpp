@@ -5,8 +5,8 @@
 // Unified same-NOC multicast sender with M_block x N_block streaming.
 // Row senders (c_0) read M_block rows indexed by m_sub, col senders (c_1) read N_block rows indexed by n_sub.
 // Loop: for m_sub: for n_sub: for blk: read + multicast.
-// Even blocks → lower/diag, odd blocks → upper. One handshake per K-block batch.
-// Only pushes tiles of sender's own parity to CB.
+// Even K-columns → lower/diag, odd K-columns → upper. One handshake per K-block batch.
+// Pushes own-parity blocks to local CB before multicast (critical for avoiding deadlock).
 
 #include <stdint.h>
 
