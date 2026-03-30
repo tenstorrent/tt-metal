@@ -63,7 +63,7 @@ inline void calculate_signbit_int32() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         constexpr int a = p_sfpu::LREG0;
-        TTI_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset | (a >> 2));
+        TTI_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::INT32, ADDR_MOD_6, offset | (a >> 2));
     }
     TTI_SFPNOP;
     TTI_SFPNOP;
