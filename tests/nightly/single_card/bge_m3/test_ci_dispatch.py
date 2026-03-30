@@ -16,7 +16,7 @@ from models.tt_transformers.tt.common import get_hf_tt_cache_path
         "BAAI/bge-m3",
     ],
     ids=[
-        "bge-m3",
+        "bge_m3",
     ],
 )
 def test_ci_dispatch(model_weights):
