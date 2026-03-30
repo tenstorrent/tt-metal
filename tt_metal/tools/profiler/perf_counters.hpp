@@ -108,7 +108,10 @@ enum PerfCounterType : uint8_t {
     L1_1_NOC_RING1_OUTGOING_0,  // Port 12: NOC Ring 1 Outgoing channel 0
     L1_1_NOC_RING1_OUTGOING_1,  // Port 13: NOC Ring 1 Outgoing channel 1
     L1_1_NOC_RING1_INCOMING_0,  // Port 14: NOC Ring 1 Incoming channel 0
-    L1_1_NOC_RING1_INCOMING_1   // Port 15: NOC Ring 1 Incoming channel 1
+    L1_1_NOC_RING1_INCOMING_1,  // Port 15: NOC Ring 1 Incoming channel 1
+    // Blackhole-specific L1 ports (differ from Wormhole at ports 1 and 8)
+    L1_0_UNIFIED_PACKER,  // BH Port 1, mux 0: Unified Packer (WH has Unpacker#1/ECC/Pack1)
+    L1_1_RISC_CORE        // BH Port 8, mux 1: RISC Core L1 access (WH has TDMA Packer 2)
 };
 
 union PerfCounter {
@@ -165,10 +168,15 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_
      {PerfCounterType::AVAILABLE_MATH, 272}}};
 constexpr size_t NUM_PACK_COUNTERS = 3;
 
-// L1 bank 0 counters (MUX_CTRL bit 4 = 0): unpacker, TDMA bundles, ring0 NOC
+// L1 bank 0 counters (MUX_CTRL[6:4] = 0): unpacker, TDMA bundles, ring0 NOC
+// Port 1 differs between architectures: BH has unified packer, WH has unpacker#1/ECC/pack1
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> l1_0_counters = {
     {{PerfCounterType::L1_0_UNPACKER_0, 0},
+#if defined(ARCH_BLACKHOLE)
+     {PerfCounterType::L1_0_UNIFIED_PACKER, 1},
+#else
      {PerfCounterType::L1_0_UNPACKER_1_ECC_PACK1, 1},
+#endif
      {PerfCounterType::L1_0_TDMA_BUNDLE_0_RISC, 2},
      {PerfCounterType::L1_0_TDMA_BUNDLE_1_TRISC, 3},
      {PerfCounterType::L1_0_NOC_RING0_OUTGOING_0, 4},
@@ -177,9 +185,14 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_1, 7}}};
 constexpr size_t NUM_L1_0_COUNTERS = 8;
 
-// L1 bank 1 counters (MUX_CTRL bit 4 = 1): packer 2, ext unpacker, ring1 NOC
+// L1 bank 1 counters (MUX_CTRL[6:4] = 1): packer/risc, ext unpacker, ring1 NOC
+// Port 8 differs between architectures: BH has RISC core, WH has TDMA packer 2
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> l1_1_counters = {
+#if defined(ARCH_BLACKHOLE)
+    {{PerfCounterType::L1_1_RISC_CORE, 0},
+#else
     {{PerfCounterType::L1_1_TDMA_PACKER_2, 0},
+#endif
      {PerfCounterType::L1_1_EXT_UNPACKER_1, 1},
      {PerfCounterType::L1_1_EXT_UNPACKER_2, 2},
      {PerfCounterType::L1_1_EXT_UNPACKER_3, 3},
@@ -385,12 +398,15 @@ void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
     volatile tt_reg_ptr uint32_t* mux_reg =
         reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
     uint32_t mux_val = *mux_reg;
-    constexpr uint32_t L1_MUX_SEL_BIT = (1 << 4);
-    if (counter_group == PerfCounterGroup::L1_0) {
-        mux_val &= ~L1_MUX_SEL_BIT;  // bit 4 = 0 for bank 0
-    } else {
-        mux_val |= L1_MUX_SEL_BIT;  // bit 4 = 1 for bank 1
-    }
+    // Blackhole: 3-bit L1 mux at MUX_CTRL[6:4], values 0-4
+    // Wormhole:  1-bit L1 mux at MUX_CTRL[4], values 0-1
+#if defined(ARCH_BLACKHOLE)
+    constexpr uint32_t L1_MUX_MASK = 0x7 << 4;  // 3 bits [6:4]
+#else
+    constexpr uint32_t L1_MUX_MASK = 0x1 << 4;  // 1 bit [4]
+#endif
+    uint32_t mux_sel = (counter_group == PerfCounterGroup::L1_1) ? 1 : 0;
+    mux_val = (mux_val & ~L1_MUX_MASK) | (mux_sel << 4);
     *mux_reg = mux_val;
 }
 

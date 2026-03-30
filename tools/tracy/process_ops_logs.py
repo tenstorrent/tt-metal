@@ -280,6 +280,11 @@ PERF_COUNTER_CSV_HEADERS = [
     "NOC Ring 1 Incoming Util Median (%)",
     "NOC Ring 1 Incoming Util Max (%)",
     "NOC Ring 1 Incoming Util Avg (%)",
+    # L1 Bank 0 Port 1: arch-specific (WH: Unpacker#1/ECC/Pack1, BH: Unified Packer)
+    "L1 Packer Port Util Min (%)",
+    "L1 Packer Port Util Median (%)",
+    "L1 Packer Port Util Max (%)",
+    "L1 Packer Port Util Avg (%)",
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
@@ -1140,6 +1145,13 @@ def _enrich_ops_from_device_logs(
             if has_counter("L1_0_NOC_RING0_INCOMING_0") and has_counter("L1_0_NOC_RING0_INCOMING_1"):
                 noc_r0_in_util = compute_avg_channel_util("L1_0_NOC_RING0_INCOMING_0", "L1_0_NOC_RING0_INCOMING_1")
 
+            # L1 Port 1 (arch-specific: BH unified packer or WH unpacker#1/ECC/pack1)
+            l1_packer_port_util = {}
+            if has_counter("L1_0_UNIFIED_PACKER"):
+                l1_packer_port_util = compute_util_metric("L1_0_UNIFIED_PACKER")
+            elif has_counter("L1_0_UNPACKER_1_ECC_PACK1"):
+                l1_packer_port_util = compute_util_metric("L1_0_UNPACKER_1_ECC_PACK1")
+
             # === New metrics: L1 Bank 1 ===
             noc_r1_out_util = {}
             noc_r1_in_util = {}
@@ -1279,6 +1291,9 @@ def _enrich_ops_from_device_logs(
                 # L1 Bank 1 metrics
                 assign_metric("NOC Ring 1 Outgoing Util", noc_r1_out_util)
                 assign_metric("NOC Ring 1 Incoming Util", noc_r1_in_util)
+
+                # L1 Port 1 (arch-specific: BH unified packer, WH unpacker#1/ECC/pack1)
+                assign_metric("L1 Packer Port Util", l1_packer_port_util)
 
         if perf_counter_df is not None and not perf_counter_df.empty:
             print_efficiency_metrics_summary(pd.DataFrame(host_ops_by_device[device]), device)
@@ -1628,6 +1643,14 @@ def get_device_data_generate_report(
                         ),
                         axis=1,
                     )
+                    # L1 Port 1 (arch-specific: BH unified packer, WH unpacker#1/ECC/pack1)
+                    eff_pivot["L1 Packer Port Util"] = eff_pivot.apply(
+                        lambda x: safe_div(
+                            x.get("value_L1_0_UNIFIED_PACKER", x.get("value_L1_0_UNPACKER_1_ECC_PACK1", 0)),
+                            x.get("ref_cnt_L1_0_UNIFIED_PACKER", x.get("ref_cnt_L1_0_UNPACKER_1_ECC_PACK1", 0)),
+                        ),
+                        axis=1,
+                    )
 
                     # Aggregate metrics per operation (min, median, max, avg)
                     grouped_eff = eff_pivot.groupby(["run_host_id", "trace_id_count"])
@@ -1669,6 +1692,7 @@ def get_device_data_generate_report(
                         "NOC Ring 0 Incoming Util",
                         "NOC Ring 1 Outgoing Util",
                         "NOC Ring 1 Incoming Util",
+                        "L1 Packer Port Util",
                     ]
                     # IPC metrics (no % suffix)
                     _ipc_metric_names = ["Thread 0 IPC", "Thread 1 IPC", "Thread 2 IPC"]

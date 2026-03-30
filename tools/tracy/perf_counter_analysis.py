@@ -117,6 +117,9 @@ COUNTER_TYPE_NAMES = {
     92: "L1_1_NOC_RING1_OUTGOING_1",
     93: "L1_1_NOC_RING1_INCOMING_0",
     94: "L1_1_NOC_RING1_INCOMING_1",
+    # Blackhole-specific L1 ports (differ from Wormhole at ports 1 and 8)
+    95: "L1_0_UNIFIED_PACKER",  # BH Port 1, mux 0: Unified Packer
+    96: "L1_1_RISC_CORE",  # BH Port 8, mux 1: RISC Core L1 access
 }
 
 
@@ -315,6 +318,8 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         # L1 Bank 1
         "NOC Ring 1 Outgoing Util",
         "NOC Ring 1 Incoming Util",
+        # L1 Port 1 (arch-specific: BH unified packer, WH unpacker#1/ECC/pack1)
+        "L1 Packer Port Util",
     ]
 
     # IPC metrics use no suffix (not percentages)
