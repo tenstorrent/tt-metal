@@ -25,7 +25,7 @@ import pytest
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 @pytest.fixture
@@ -63,11 +63,27 @@ def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
 
     torch.manual_seed(0)
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref1, tt_out1, 0.999)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
     torch.manual_seed(42)
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref2, tt_out2, 0.999)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
     assert device.num_program_cache_entries() == 1
     assert not torch.equal(tt_out1, tt_out2)
@@ -83,10 +99,26 @@ def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
     shape = [1, 1, 64, 64]
 
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref1, tt_out1, 0.999)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.max, shape, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref2, tt_out2, 0.999)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
     assert device.num_program_cache_entries() == 2
 
@@ -97,11 +129,27 @@ def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
 
     # dim=-1 (W): ReduceMultiCoreWProgramFactory
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref1, tt_out1, 0.999)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
     # dim=-2 (H): ReduceMultiCoreHProgramFactory
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, shape, dim=-2, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref2, tt_out2, 0.999)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
     assert device.num_program_cache_entries() == 2
 
@@ -111,11 +159,27 @@ def test_reduce_cache_miss_different_input_dtypes(device, isolate_program_cache)
     shape = [1, 1, 64, 64]
 
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref1, tt_out1, 0.999)
 
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.float32)
-    assert_with_pcc(torch_ref2, tt_out2, 0.999)
-
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.999,
+        rtol=0.007,
+        atol=0.25,
+        frobenius_threshold=0.001,
+        check_ulp=True,
+    )
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.999,
+        rtol=0.004,
+        atol=0.152,
+        frobenius_threshold=0.003,
+    )
     assert device.num_program_cache_entries() == 2
 
 
@@ -126,12 +190,30 @@ def test_reduce_cache_miss_different_memory_configs(device, isolate_program_cach
     torch_ref1, tt_out1 = run_reduce_op(
         device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    assert_with_pcc(torch_ref1, tt_out1, 0.999)
 
     torch_ref2, tt_out2 = run_reduce_op(
         device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    assert_with_pcc(torch_ref2, tt_out2, 0.999)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+        check_ulp=True,
+    )
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+        check_ulp=True,
+    )
 
     assert device.num_program_cache_entries() == 2
 
@@ -140,11 +222,28 @@ def test_reduce_cache_miss_different_shapes(device, isolate_program_cache):
     """Different padded shapes -> different cache entries.
     padded_shape is included in compute_program_hash() because Ht, Wt are compile-time args."""
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, [1, 1, 32, 64], dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref1, tt_out1, 0.999)
 
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, [1, 1, 64, 64], dim=-1, dtype=ttnn.bfloat16)
-    assert_with_pcc(torch_ref2, tt_out2, 0.999)
-
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+        check_ulp=True,
+    )
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+        check_ulp=True,
+    )
     assert device.num_program_cache_entries() == 2
 
 
@@ -162,7 +261,23 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
     tt_out2 = ttnn.sum(tt_a, dim=-1, keepdim=True, sub_core_grids=grid_b)
 
     torch_ref = torch.sum(torch_a, dim=-1, keepdim=True)
-    assert_with_pcc(torch_ref, ttnn.to_torch(tt_out1), 0.999)
-    assert_with_pcc(torch_ref, ttnn.to_torch(tt_out2), 0.999)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref,
+        ttnn.to_torch(tt_out1),
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_ref,
+        ttnn.to_torch(tt_out2),
+        pcc_threshold=0.9999,
+        rtol=1e-06,
+        atol=1e-06,
+        frobenius_threshold=1e-09,
+    )
 
     assert device.num_program_cache_entries() == 2
