@@ -50,6 +50,10 @@ def first_positional_after(tokens: Sequence[str], start_idx: int) -> str | None:
     return None
 
 
+def has_option(tokens: Sequence[str], long_opt: str, short_opt: str | None = None) -> bool:
+    return extract_option(tokens, long_opt, short_opt) is not None
+
+
 def repo_for_command(tokens: Sequence[str]) -> str | None:
     return extract_option(tokens, "--repo", "-R")
 
@@ -115,6 +119,21 @@ def validate(tokens: list[str]) -> Decision:
             if repo_check:
                 return repo_check
             return Decision(True, f"Allowed: gh pr {sub}")
+        if sub == "create":
+            repo_check = ensure_repo(tokens, {PRIMARY_REPO}, required=True)
+            if repo_check:
+                return repo_check
+            if extract_option(tokens, "--base") != "main":
+                return Decision(False, "Denied: gh pr create must target --base main.")
+            if not has_option(tokens, "--head"):
+                return Decision(False, "Denied: gh pr create must include --head.")
+            if not has_option(tokens, "--title"):
+                return Decision(False, "Denied: gh pr create must include --title.")
+            if not has_option(tokens, "--body"):
+                return Decision(False, "Denied: gh pr create must include --body.")
+            if "--draft" not in tokens:
+                return Decision(False, "Denied: gh pr create must include --draft.")
+            return Decision(True, "Allowed: gh pr create (draft to main in primary repo)")
         return Decision(False, f"Denied: unsupported gh pr subcommand {sub!r}.")
 
     # Run read-only commands in primary repo.

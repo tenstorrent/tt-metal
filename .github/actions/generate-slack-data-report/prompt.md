@@ -38,8 +38,8 @@ Requirements:
   - a one-line reason it is unresolved
   - a Slack permalink
 - Build Slack permalinks from top-level message `ts` using:
-  - `https://tenstorrent.slack.com/archives/C05GRJC4J4A/p<ts_without_dot>`
-  - Example: ts `1773082489.672879` -> `https://tenstorrent.slack.com/archives/C05GRJC4J4A/p1773082489672879`
+  - `https://tenstorrent.slack.com/archives/C0APK6215B5/p<ts_without_dot>`
+  - Example: ts `1773082489.672879` -> `https://tenstorrent.slack.com/archives/C0APK6215B5/p1773082489672879`
 - Include total top-level message count and per-category counts.
 - If an item is ambiguous, classify as "still failing/unresolved" and mention ambiguity.
 - Show percentages with one decimal place.

@@ -99,10 +99,10 @@ jobs:
         run: |
           set -euo pipefail
           python tools/ci/export_slack_author_threads.py \
-            --channel-id C05GRJC4J4A \
+            --channel-id C0APK6215B5 \
             --author-user-id U08GTDV8MDH \
             --days "${{ github.event.inputs.days || 30 }}" \
-            --output build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json
+            --output build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
 
       - name: Enrich export with GitHub issue closure booleans
         env:
@@ -110,14 +110,14 @@ jobs:
         run: |
           set -euo pipefail
           python tools/ci/enrich_slack_with_issue_status.py \
-            --input build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json \
-            --output build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json
+            --input build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json \
+            --output build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
 
       - name: Upload Slack export artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
         with:
-          name: slack-C05GRJC4J4A-U08GTDV8MDH-threads
-          path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json
+          name: slack-C0APK6215B5-U08GTDV8MDH-threads
+          path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
           retention-days: 7
 
       - name: Ensure CURSOR_API_KEY is configured (data gathering mode)
@@ -146,8 +146,8 @@ jobs:
           CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
         uses: ./.github/actions/generate-slack-data-report
         with:
-          input-json-path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json
-          report-path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_report.md
+          input-json-path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
+          report-path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_report.md
           model: ${{ github.event.inputs['data-report-model'] || 'auto' }}
 
       - name: Auto-disable stale unresolved CI messages
@@ -157,7 +157,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         uses: ./.github/actions/auto-disable-stale-ci
         with:
-          input-json-path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_threads.json
+          input-json-path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
           stale-hours: ${{ github.event.inputs['stale-hours-threshold'] || '32' }}
           max-actions: ${{ github.event.inputs['max-auto-disable-actions'] || '3' }}
           model: ${{ github.event.inputs['auto-disable-model'] || 'auto' }}
@@ -174,6 +174,14 @@ jobs:
             build_ci/auto_disable/disable_actions.json
             build_ci/auto_disable/execution_result.json
             build_ci/auto_disable/summary.md
+          retention-days: 7
+
+      - name: Upload triage state artifact
+        if: ${{ !inputs['data-gathering-mode'] }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: triage-state
+          path: build_ci/triage_state/ci_triage_state.json
           retention-days: 7
 
       - name: Publish auto-disable summary to run summary
@@ -199,15 +207,15 @@ jobs:
         if: ${{ inputs['data-gathering-mode'] }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
         with:
-          name: slack-C05GRJC4J4A-U08GTDV8MDH-report
-          path: build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_report.md
+          name: slack-C0APK6215B5-U08GTDV8MDH-report
+          path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_report.md
           retention-days: 7
 
       - name: Publish report to run summary
         if: ${{ inputs['data-gathering-mode'] }}
         run: |
           set -euo pipefail
-          report_path="build_ci/raw_data/slack_C05GRJC4J4A_U08GTDV8MDH_report.md"
+          report_path="build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_report.md"
           {
             echo "# Slack Data Gathering Report"
             echo

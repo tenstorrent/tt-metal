@@ -15,7 +15,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--input", required=True, help="Path to enriched Slack JSON")
     parser.add_argument("--output", required=True, help="Path to candidate JSON")
     parser.add_argument("--stale-hours", type=float, default=32.0, help="Minimum age in hours")
-    parser.add_argument("--channel-id", default="C05GRJC4J4A", help="Slack channel ID for permalink generation")
+    parser.add_argument("--channel-id", default="C0APK6215B5", help="Slack channel ID for permalink generation")
     parser.add_argument("--max-candidates", type=int, default=20, help="Optional max candidate count")
     return parser.parse_args()
 

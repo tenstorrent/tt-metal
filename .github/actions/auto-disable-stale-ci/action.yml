@@ -83,6 +83,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        python3 tools/ci/load_previous_triage_state.py \
+          --repo tenstorrent/tt-metal \
+          --workflow triage-ci.yaml \
+          --artifact-name triage-state \
+          --state-path build_ci/triage_state/ci_triage_state.json
         dry=""
         if [ "${{ inputs.dry-run }}" = "true" ]; then
           dry="--dry-run"
@@ -91,5 +96,6 @@ runs:
           --actions-json "${{ inputs.output-dir }}/disable_actions.json" \
           --output-json "${{ inputs.output-dir }}/execution_result.json" \
           --summary-md "${{ inputs.output-dir }}/summary.md" \
+          --state-json "build_ci/triage_state/ci_triage_state.json" \
           --model "${{ inputs.model }}" \
           $dry
