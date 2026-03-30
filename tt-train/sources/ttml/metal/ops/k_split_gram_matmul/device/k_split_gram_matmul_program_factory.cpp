@@ -26,46 +26,46 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
 
     Program program = CreateProgram();
     const auto& input = tensor_args.input_tensor;
-    auto* device = input.device();
+    auto* const device = input.device();
 
-    auto device_grid = device->compute_with_storage_grid_size();
+    const auto device_grid = device->compute_with_storage_grid_size();
     // Largest square grid with room for a helper column at x=grid_dim
-    uint32_t grid_dim = static_cast<uint32_t>(std::min(device_grid.x - 1, device_grid.y));
+    const uint32_t grid_dim = static_cast<uint32_t>(std::min(device_grid.x - 1, device_grid.y));
 
-    uint32_t logical_M_tiles = input.logical_shape()[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t logical_K_tiles = input.logical_shape()[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t logical_M_tiles = input.logical_shape()[-2] / tt::constants::TILE_HEIGHT;
+    const uint32_t logical_K_tiles = input.logical_shape()[-1] / tt::constants::TILE_WIDTH;
 
-    uint32_t padded_M_tiles = tt::round_up(logical_M_tiles, grid_dim);
-    uint32_t Mpc = padded_M_tiles / grid_dim;
+    const uint32_t padded_M_tiles = tt::round_up(logical_M_tiles, grid_dim);
+    const uint32_t Mpc = padded_M_tiles / grid_dim;
 
-    auto tile_format = tt::DataFormat::Float16_b;
-    auto tile_sz = tt::tile_size(tile_format);
-    uint32_t K_tiles = logical_K_tiles;
-    uint32_t K_half = K_tiles / 2;
+    const auto tile_format = tt::DataFormat::Float16_b;
+    const auto tile_sz = tt::tile_size(tile_format);
+    const uint32_t K_tiles = logical_K_tiles;
+    const uint32_t K_half = K_tiles / 2;
 
-    auto full_grid = tt::tt_metal::CoreRange({0, 0}, {grid_dim - 1, grid_dim - 1});
+    const auto full_grid = tt::tt_metal::CoreRange({0, 0}, {grid_dim - 1, grid_dim - 1});
 
     // Diagonal helper column: x=grid_dim cores compute odd-K partial for diagonal blocks.
-    tt::tt_metal::CoreRange helper_range({grid_dim, 0}, {grid_dim, grid_dim - 1});
-    auto all_cores = tt::tt_metal::CoreRangeSet(std::set<tt::tt_metal::CoreRange>{full_grid, helper_range});
+    const tt::tt_metal::CoreRange helper_range({grid_dim, 0}, {grid_dim, grid_dim - 1});
+    const auto all_cores = tt::tt_metal::CoreRangeSet(std::set<tt::tt_metal::CoreRange>{full_grid, helper_range});
     // Upper x-bound for row multicast (includes helper column)
-    uint32_t upper_x_end = grid_dim;
+    const uint32_t upper_x_end = grid_dim;
 
-    uint32_t subblock_h = 2;
-    uint32_t subblock_w = std::min(Mpc, 2u);
+    const uint32_t subblock_h = 2;
+    const uint32_t subblock_w = std::min(Mpc, 2u);
 
-    auto intermed_format = tt::DataFormat::Float32;
-    auto intermed_tile_sz = tt::tile_size(intermed_format);
-    auto out_tile_format = tt::DataFormat::Float16_b;
-    auto out_tile_sz = tt::tile_size(out_tile_format);
+    const auto intermed_format = tt::DataFormat::Float32;
+    const auto intermed_tile_sz = tt::tile_size(intermed_format);
+    const auto out_tile_format = tt::DataFormat::Float16_b;
+    const auto out_tile_sz = tt::tile_size(out_tile_format);
 
-    bool mirror_active = (attrs.output_mode == ttml::metal::OutputMode::Full);
+    const bool mirror_active = (attrs.output_mode == ttml::metal::OutputMode::Full);
 
     // Joint optimization of K_block_tiles and M_block with N_block = M_block streaming.
     // Mirror mode adds c_4 (mb tiles) + c_7 (mb tiles) L1 overhead
     const uint32_t L1_BUDGET =
         device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    uint32_t mirror_out_overhead = mirror_active ? 2 * out_tile_sz : 0;  // per-mb extra for c_4 + c_7
+    const uint32_t mirror_out_overhead = mirror_active ? 2 * out_tile_sz : 0;  // per-mb extra for c_4 + c_7
 
     // Find optimal (kb, mb) that minimizes num_m_blocks (= ceil(Mpc/mb)), then maximizes kb.
     // Input CBs (c_0, c_1) hold 2 blocks each for double-buffered DRAM streaming.
@@ -106,20 +106,20 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     }
     TT_FATAL(best_mb > 0, "Cannot fit mcast gram matmul in L1");
 
-    uint32_t K_block_tiles = best_kb;
-    uint32_t M_block = best_mb;
-    uint32_t N_block = M_block;
-    uint32_t num_m_blocks = best_num_m_blocks;
-    uint32_t num_n_blocks = (Mpc + N_block - 1) / N_block;
-    uint32_t block_sz = K_block_tiles * M_block;
-    uint32_t cb_size = input_cb_num_blocks * block_sz;
-    uint32_t num_tiles = M_block * K_tiles;  // tiles per sender per m_sub/n_sub pass
+    const uint32_t K_block_tiles = best_kb;
+    const uint32_t M_block = best_mb;
+    const uint32_t N_block = M_block;
+    const uint32_t num_m_blocks = best_num_m_blocks;
+    const uint32_t num_n_blocks = (Mpc + N_block - 1) / N_block;
+    const uint32_t block_sz = K_block_tiles * M_block;
+    const uint32_t cb_size = input_cb_num_blocks * block_sz;
+    const uint32_t num_tiles = M_block * K_tiles;  // tiles per sender per (m_sub, n_sub) pass
     // Output tensor is logical [M, M] — width in tiles matches logical_M_tiles
-    uint32_t padded_out_tiles = logical_M_tiles;
-    uint32_t recv_tiles = K_half * M_block;  // tiles per receiver per (m_sub, n_sub) pass
+    const uint32_t padded_out_tiles = logical_M_tiles;
+    const uint32_t recv_tiles = K_half * M_block;  // tiles per receiver per (m_sub, n_sub) pass
 
-    uint32_t send_out_cb = (uint32_t)tt::CBIndex::c_5;
-    uint32_t c5_tiles = M_block * N_block;
+    const uint32_t send_out_cb = (uint32_t)tt::CBIndex::c_5;
+    const uint32_t c5_tiles = M_block * N_block;
 
     auto create_all_cbs = [&](const tt::tt_metal::CoreRange& range) {
         create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_0, tile_format, tile_sz, cb_size);
@@ -151,14 +151,14 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     auto col_receiver_sem2 = CreateSemaphore(program, all_cores, INVALID);
     auto reduce_sem = CreateSemaphore(program, all_cores, 0);
 
-    auto noc_1 = detail::preferred_noc_for_dram_write(device->arch());
-    auto noc_0 = detail::preferred_noc_for_dram_read(device->arch());
-    auto risc_1 = DataMovementProcessor::RISCV_1;
-    auto risc_0 = DataMovementProcessor::RISCV_0;
+    const auto noc_1 = detail::preferred_noc_for_dram_write(device->arch());
+    const auto noc_0 = detail::preferred_noc_for_dram_read(device->arch());
+    const auto risc_1 = DataMovementProcessor::RISCV_1;
+    const auto risc_0 = DataMovementProcessor::RISCV_0;
 
-    uint32_t in_addr = input.buffer()->address();
+    const uint32_t in_addr = input.buffer()->address();
 
-    uint32_t out_addr = output.buffer()->address();
+    const uint32_t out_addr = output.buffer()->address();
 
     const std::string base = "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/";
     const std::string sender_path = base + "reader_mcast_sender.cpp";
@@ -507,7 +507,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         program, compute_matmul_path, make_core_range_set(sender_diag_cores), compute_cfg({{"REDUCE_SENDER", "1"}}));
 
     // Upper: REDUCE_ACCUMULATOR
-    std::string accum_define = "REDUCE_ACCUMULATOR";
+    const std::string accum_define = "REDUCE_ACCUMULATOR";
 
     std::vector<tt::tt_metal::CoreCoord> accum_cores;
     for (uint32_t y = 0; y < grid_dim; y++)
