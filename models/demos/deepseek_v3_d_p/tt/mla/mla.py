@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import time
 
 import torch
 from loguru import logger
@@ -490,6 +491,11 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+
+        start = time.time()
+
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
             tt_kvpe,
@@ -515,6 +521,10 @@ class ttMLA:
             scale=self.scale,
             is_balanced=self.is_balanced,
         )
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.distributed_context_barrier()
+        end = time.time()
+        logger.debug(f"SDPA time: {end - start}s")
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
