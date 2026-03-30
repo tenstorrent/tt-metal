@@ -33,7 +33,7 @@ namespace tt::tt_metal::experimental::tt_fabric {
 namespace {
 
 // BH Galaxy half-pod pairing: all ASICs in a mesh subgraph must sit on trays 1&3 only, or trays 2&4 only.
-static std::string format_uint_set(const std::set<uint32_t>& values) {
+std::string format_uint_set(const std::set<uint32_t>& values) {
     std::string out;
     for (uint32_t v : values) {
         if (!out.empty()) {
@@ -44,7 +44,7 @@ static std::string format_uint_set(const std::set<uint32_t>& values) {
     return out;
 }
 
-static void expect_bh_halfpod_tray_pairing_for_graph_nodes(
+void expect_bh_halfpod_tray_pairing_for_graph_nodes(
     const std::string& context,
     const tt::tt_metal::PhysicalSystemDescriptor& psd,
     const AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_graph) {
