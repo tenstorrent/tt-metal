@@ -22,7 +22,8 @@ from models.common.lightweightmodule import LightweightModule
 
 from models.experimental.gemma3_4b.tt.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
-from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
 
 
 class Attention(LightweightModule):
@@ -109,6 +110,55 @@ class Attention(LightweightModule):
         self.transformation_mats = transformation_mats
 
         self.model_config = configuration.get_model_config()
+        self.model_config["XQKV_DECODE_PROGCFG"] = (
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(configuration.lm_head_core_grid.y),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                per_core_M=1,
+                per_core_N=1,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+            if configuration.is_galaxy
+            else configuration.dram_matmul_config(
+                m=configuration.tile_padded_batch_rows,
+                k=configuration.dim,
+                n=configuration.qkv_size // configuration.num_devices,
+                num_cores=configuration.attn_input_grid.num_cores,
+            )
+        )
+        self.model_config["CREATE_QKV_DECODE_SHARD"] = configuration.get_attn_create_head_output_mem_config(
+            Mode.DECODE, None
+        )
+        self.model_config["SDPA_DECODE_PROGCFG"] = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            exp_approx_mode=False,
+            q_chunk_size=0,
+            k_chunk_size=0,
+        )
+        self.model_config[
+            "SCORES_BATCHED_MM_OUTPUT_MEMCFG"
+        ] = lambda batch_size_per_device_group: ttnn.create_sharded_memory_config(
+            shape=(math.ceil(configuration.n_local_heads / 32) * 32, self.head_dim),  # self.n_heads padded to tile size
+            core_grid=ttnn.CoreRangeSet({num_to_corerange(batch_size_per_device_group)}),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["ATTN_OUTPUT_PROGCFG"] = (
+            None
+            if configuration.is_galaxy
+            else configuration.dram_matmul_config(
+                m=configuration.tile_padded_batch_rows,
+                k=(configuration.n_heads * configuration.head_dim) // configuration.num_devices,
+                n=configuration.dim,
+                num_cores=configuration.n_heads // configuration.num_devices,
+            )
+        )
+
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
         self.activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
@@ -303,7 +353,7 @@ class Attention(LightweightModule):
             self.k_norm = lambda x, mode: x
 
         # For ring topology we can use all gather matmul for wo
-        self.use_fused_all_gather_matmul = self.model_config.use_fused_all_gather_matmul
+        self.use_fused_all_gather_matmul = configuration.use_fused_all_gather_matmul
         pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(

@@ -12,7 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.gemma3_4b.tt.attention import Attention
-from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig
 from models.tt_transformers.tt.rope import RotarySetup, compute_freqs_cis
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.common.utility_functions import comp_allclose, comp_pcc
@@ -79,6 +79,7 @@ def test_attention_inference(
     # }
 
     reference_model = model_args.reference_attention()
+    reference_model.attention = reference_model.attention.to(torch.float32)
     # reference_model.load_state_dict(partial_state_dict)
 
     seq_len = 1
@@ -166,7 +167,7 @@ def test_attention_inference(
 
         attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
-            model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+            model_args.get_attn_input_mem_config(Mode.DECODE, None),
             force_replicated=False if model_args.is_galaxy else True,
         )
 
