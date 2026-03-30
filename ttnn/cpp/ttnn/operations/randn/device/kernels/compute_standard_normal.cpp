@@ -102,7 +102,6 @@ void kernel_main() {
     const uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t num_pairs = num_tiles >> 1;
     const uint32_t is_odd = num_tiles & 1;
-    const uint32_t num_rand_tiles = num_tiles + is_odd;
 
     init_sfpu(dst_cb_id, dst_cb_id);
     rand_tile_init(seed);
