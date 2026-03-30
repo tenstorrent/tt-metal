@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 /**
  * Writer kernel for post-combine reduce.
@@ -29,9 +29,12 @@ void kernel_main() {
 
     constexpr uint32_t tile_size = 2048;  // bfloat16 tile
 
+    // Output page size = entire row (all emb_dim_tiles)
+    constexpr uint32_t output_page_size = emb_dim_tiles * tile_size;
+
     // Setup address generator for output
     const InterleavedAddrGenFast<output_is_dram> output_addrg = {
-        .bank_base_address = output_addr, .page_size = tile_size, .data_format = DataFormat::Float16_b};
+        .bank_base_address = output_addr, .page_size = output_page_size, .data_format = DataFormat::Float16_b};
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // Process tokens assigned to this core
@@ -39,34 +42,26 @@ void kernel_main() {
     for (uint32_t token_idx = 0; token_idx < tokens_per_core; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
 
-        DPRINT << "WRITER: Writing token " << global_token_idx << ENDL();
+        // DPRINT << "WRITER: Writing token " << global_token_idx << ENDL();
 
         // Wait for output tiles for this token (224 tiles)
         cb_wait_front(cb_output, emb_dim_tiles);
 
-        // Debug: Print first output tile before writing
-        SliceRange sr_out = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 10, .ws = 1};
-        DPRINT << "  WRITER: Output tile 0: " << TileSlice(cb_output, 0, sr_out, true, false) << ENDL();
-
         uint32_t output_read_addr = get_read_ptr(cb_output);
 
         // ──────────────────────────────────────────────────────────────────────
-        // Write all output tiles for this token
+        // Write all output tiles for this token as one contiguous page
+        // (ROW_MAJOR: entire row is one page)
         // ──────────────────────────────────────────────────────────────────────
-        for (uint32_t emb_tile = 0; emb_tile < emb_dim_tiles; ++emb_tile) {
-            // Calculate output page index
-            // Output layout: [seq_len, emb_dim_tiles]
-            uint32_t output_page_idx = global_token_idx * emb_dim_tiles + emb_tile;
-
-            // Write tile to DRAM
-            noc_async_write_tile(output_page_idx, output_addrg, output_read_addr);
-
-            output_read_addr += tile_size;
-        }
+        uint32_t output_page_idx = global_token_idx;  // One page per token
+        noc_async_write_page(output_page_idx, output_addrg, output_read_addr);
 
         noc_async_write_barrier();
 
-        DPRINT << "  WRITER: Wrote " << emb_dim_tiles << " tiles to DRAM" << ENDL();
+        // DPRINT_DATA1(DPRINT << "4.WRITER[tok=" << global_token_idx << "]: Wrote to page=" << output_page_idx <<
+        // ENDL());
+
+        // DPRINT << "  WRITER: Wrote " << emb_dim_tiles << " tiles to DRAM" << ENDL();
 
         cb_pop_front(cb_output, emb_dim_tiles);
     }

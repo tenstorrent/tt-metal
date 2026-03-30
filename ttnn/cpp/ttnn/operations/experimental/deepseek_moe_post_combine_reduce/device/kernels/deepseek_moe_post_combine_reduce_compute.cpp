@@ -55,49 +55,102 @@ void kernel_main() {
     // Process each token assigned to this core
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     for (uint32_t token_idx = 0; token_idx < tokens_per_core; ++token_idx) {
-        DPRINT << "COMPUTE: Processing token " << token_idx << ENDL();
+        // DPRINT << "COMPUTE: Processing token " << token_idx << ENDL();
 
         // Reserve output space (7 tiles - the final reduced result for this token)
         cb_reserve_back(cb_output, emb_dim_tiles);
 
         // ──────────────────────────────────────────────────────────────────────
-        // Step 1: Initialize accumulator to ZERO (all 7 tiles in one batch)
+        // Step 2: Wait for ALL data (bulk loaded by reader)
         // ──────────────────────────────────────────────────────────────────────
+        uint32_t total_expert_tiles = num_experts * emb_dim_tiles;
+        cb_wait_front(cb_combine_input, total_expert_tiles);  // All expert tiles
+        cb_wait_front(cb_weights, num_experts);               // All weights
+
+        // 2. COMPUTE START: Show first value of first 2 input tiles
+        SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
+        DPRINT_UNPACK(
+            DPRINT << "COMPUTE tile values for expert 0 -- " << "\n"
+                   << TileSlice(cb_combine_input, 0, sr, true, false) << ", "
+                   << TileSlice(cb_combine_input, 1, sr, true, false) << ", "
+                   << TileSlice(cb_combine_input, 2, sr, true, false) << ", "
+                   << TileSlice(cb_combine_input, 3, sr, true, false) << ", "
+                   << TileSlice(cb_combine_input, 4, sr, true, false) << ", "
+                   << TileSlice(cb_combine_input, 5, sr, true, false) << ", "
+                   << TileSlice(cb_combine_input, 6, sr, true, false) << ENDL());
+
+        // ──────────────────────────────────────────────────────────────────────
+        // Step 3: Process first expert (no accumulation, just multiply and pack)
+        // ──────────────────────────────────────────────────────────────────────
+        // DPRINT_UNPACK(DPRINT << "  COMPUTE: Processing expert 0 (initial)" << ENDL());
+
+        // SliceRange sr_input = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+        // DPRINT_MATH(DPRINT << "    Input tile offset 0: "
+        //         << TileSlice(cb_combine_input, 0, sr_input, true, false) << ENDL());
+        DPRINT_UNPACK(DPRINT << ENDL());
+        DPRINT_UNPACK(
+            DPRINT << "COMPUTE weight values for expert 0 ================== "
+                   << TileSlice(cb_weights, 0, sr, true, false) << ENDL());
+
         tile_regs_acquire();
 
-        zero_tile_init_short();
+        // Multiply expert 0 output by weight 0
+        mul_tiles_bcast_scalar_init_short(cb_combine_input, cb_weights);
+
         for (uint32_t j = 0; j < emb_dim_tiles; j++) {
-            zero_tile(j);  // Zero DST[0..6]
+            mul_tiles_bcast<BroadcastType::SCALAR>(
+                cb_combine_input,
+                cb_weights,
+                j,  // Expert 0's tiles start at offset 0
+                0,  // Weight 0
+                j   // DST register (0-6)
+            );
         }
 
         tile_regs_commit();
         tile_regs_wait();
 
-        // Pack zeros to output (so we can accumulate into them)
+        // Pack to output (this becomes our initial accumulator value)
         for (uint32_t j = 0; j < emb_dim_tiles; j++) {
             pack_tile(j, cb_output, j);
         }
 
         tile_regs_release();
 
-        DPRINT << "  COMPUTE: Initialized accumulator to zero" << ENDL();
+        DPRINT_UNPACK(
+            DPRINT << "COMPUTE output for expert 0 -- " << token_idx << " => " << "\n"
+                   << TileSlice(cb_output, 0, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 1, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 2, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 3, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 4, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 5, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 6, sr, true, false) << ENDL());
 
         // ──────────────────────────────────────────────────────────────────────
-        // Step 2: For each expert, multiply by weight and accumulate
+        // Step 4: For remaining experts (1-7), multiply by weight and accumulate
         // ──────────────────────────────────────────────────────────────────────
-        for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
-            DPRINT << "  COMPUTE: Processing expert " << expert_idx << ENDL();
+        for (uint32_t expert_idx = 1; expert_idx < num_experts; ++expert_idx) {
+            // DPRINT_UNPACK(DPRINT << "  COMPUTE: Processing expert " << expert_idx << ENDL());
 
-            // Wait for this expert's weight (loaded by reader)
-            cb_wait_front(cb_weights, 1);
-
-            // Wait for this expert's output tiles (7 tiles)
-            cb_wait_front(cb_combine_input, emb_dim_tiles);
+            uint32_t tile_offset = expert_idx * emb_dim_tiles;  // Offset into CB for this expert's tiles
 
             // Debug: Print input data before processing
-            SliceRange sr_input = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
-            DPRINT << "    Input tile 0: " << TileSlice(cb_combine_input, 0, sr_input, true, false) << ENDL();
-            DPRINT << "    Weight: " << TileSlice(cb_weights, 0, sr_input, true, false) << ENDL();
+            // SliceRange sr_input = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
+            // DPRINT_UNPACK(DPRINT << "    Input tile offset " << tile_offset << ": "
+            //        << TileSlice(cb_combine_input, tile_offset, sr, true, false) << ENDL());
+            DPRINT_UNPACK(
+                DPRINT << "COMPUTE tile values for expert " << expert_idx << " -- " << "\n"
+                       << TileSlice(cb_combine_input, tile_offset + 0, sr, true, false) << "               , "
+                       << TileSlice(cb_combine_input, tile_offset + 1, sr, true, false) << "               , "
+                       << TileSlice(cb_combine_input, tile_offset + 2, sr, true, false) << "               , "
+                       << TileSlice(cb_combine_input, tile_offset + 3, sr, true, false) << "               , "
+                       << TileSlice(cb_combine_input, tile_offset + 4, sr, true, false) << "               , "
+                       << TileSlice(cb_combine_input, tile_offset + 5, sr, true, false) << "               , "
+                       << TileSlice(cb_combine_input, tile_offset + 6, sr, true, false) << ENDL());
+            DPRINT_UNPACK(
+                DPRINT << "COMPUTE weight values for expert " << expert_idx
+                       << " ================== " << TileSlice(cb_weights, expert_idx, sr, true, false) << ENDL());
 
             // ──────────────────────────────────────────────────────────────────
             // Process all 7 tiles in a single batch (fits perfectly in DST[0..6])
@@ -105,18 +158,18 @@ void kernel_main() {
             tile_regs_acquire();
 
             // ─────────────────────────────────────────────────────────────────
-            // Multiply: expert_output[0..6] × weight → DST[0..6]
+            // Multiply: expert_output[tile_offset..tile_offset+6] × weight[expert_idx] → DST[0..6]
             // ─────────────────────────────────────────────────────────────────
             mul_tiles_bcast_scalar_init_short(cb_combine_input, cb_weights);
 
             for (uint32_t j = 0; j < emb_dim_tiles; j++) {
-                // input[j] × weight → DST[j]
+                // Read from CB at correct offset for this expert
                 mul_tiles_bcast<BroadcastType::SCALAR>(
                     cb_combine_input,
                     cb_weights,
-                    j,  // Source tile index (0-6)
-                    0,  // Weight tile (always 0)
-                    j   // DST register (0-6)
+                    tile_offset + j,  // Source tile index (expert's j-th tile)
+                    expert_idx,       // Weight tile index (expert's weight)
+                    j                 // DST register (0-6)
                 );
             }
 
@@ -148,19 +201,40 @@ void kernel_main() {
             tile_regs_release();
 
             // Debug: Print accumulator after this expert
-            DPRINT << "    Accumulator tile 0 after expert " << expert_idx << ": "
-                   << TileSlice(cb_output, 0, sr_input, true, false) << ENDL();
-
-            // Done with this expert's data
-            cb_pop_front(cb_combine_input, emb_dim_tiles);
-            cb_pop_front(cb_weights, 1);
+            DPRINT_PACK(
+                DPRINT << "COMPUTE output for expert " << expert_idx << " -- " << "\n"
+                       << TileSlice(cb_output, tile_offset + 0, sr, true, false) << "               , "
+                       << TileSlice(cb_output, tile_offset + 1, sr, true, false) << "               , "
+                       << TileSlice(cb_output, tile_offset + 2, sr, true, false) << "               , "
+                       << TileSlice(cb_output, tile_offset + 3, sr, true, false) << "               , "
+                       << TileSlice(cb_output, tile_offset + 4, sr, true, false) << "               , "
+                       << TileSlice(cb_output, tile_offset + 5, sr, true, false) << "               , "
+                       << TileSlice(cb_output, tile_offset + 6, sr, true, false) << ENDL());
         }
 
         // ──────────────────────────────────────────────────────────────────────
-        // Step 3: Output final accumulated result
+        // Step 5: Pop all data at once (after processing all experts)
         // ──────────────────────────────────────────────────────────────────────
-        SliceRange sr_final = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 10, .ws = 1};
-        DPRINT << "  COMPUTE: Final output tile 0: " << TileSlice(cb_output, 0, sr_final, true, false) << ENDL();
+        cb_pop_front(cb_combine_input, total_expert_tiles);
+        cb_pop_front(cb_weights, num_experts);
+
+        // ──────────────────────────────────────────────────────────────────────
+        // Step 6: Output final accumulated result
+        // ──────────────────────────────────────────────────────────────────────
+        // 3. COMPUTE END: Show first value of first 2 output tiles
+        DPRINT_PACK(
+            DPRINT << "COMPUTE final output -- " << "\n"
+                   << TileSlice(cb_output, 0, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 1, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 2, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 3, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 4, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 5, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 6, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 7, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 8, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 9, sr, true, false) << "               , "
+                   << TileSlice(cb_output, 10, sr, true, false) << ENDL());
 
         cb_push_back(cb_output, emb_dim_tiles);
     }

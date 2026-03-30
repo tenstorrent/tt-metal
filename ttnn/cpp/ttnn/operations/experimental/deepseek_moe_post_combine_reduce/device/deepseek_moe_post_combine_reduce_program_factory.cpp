@@ -52,15 +52,24 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     TT_FATAL(
         emb_dim_tiles <= 8, "Embedding dimension tiles {} must fit in 8 DST registers for batching", emb_dim_tiles);
 
-    // Core setup - use single core for initial implementation
+    // Core setup - use 2 cores for testing (each processes tokens independently)
+    // For small tests: use min(num_tokens, available_cores)
+    // For production: scale to ~100 cores
+    uint32_t num_cores = std::min(num_tokens, 2u);  // Start with 2 cores for testing
+
+    // Use row-major ordering: cores go (0,0), (1,0), (2,0), ... then (0,1), (1,1), ...
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
     CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {0, 0};
+    CoreCoord end_core = {num_cores - 1, 0};  // Cores in a row: (0,0), (1,0), ...
     auto all_cores = CoreRange(start_core, end_core);
     auto core_range_set = CoreRangeSet({all_cores});
 
-    uint32_t num_cores = 1;
-    auto cores = grid_to_cores(
-        num_cores, device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y, false);
+    // Get cores in row-major order to match our CoreRange
+    constexpr bool row_major = true;
+    auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
     // Data formats
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(combine_output.dtype());
@@ -74,18 +83,19 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     uint32_t tile_size = tt::tile_size(input_cb_data_format);
 
     // CB0: combine_input - ROW_MAJOR expert output treated as "fake tiles"
-    // Size: 7 tiles (7168 elements = 7 × 1024-element tiles)
-    // Single-buffered since we process one expert at a time
-    uint32_t combine_cb_size = emb_dim_tiles * tile_size;
+    // BULK LOADING: Hold ALL experts for one token (num_experts × emb_dim_tiles tiles)
+    // For 8 experts × 7 tiles = 56 tiles = 114,688 bytes
+    uint32_t combine_cb_size = num_experts * emb_dim_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_combine_config =
         tt::tt_metal::CircularBufferConfig(combine_cb_size, {{tt::CBIndex::c_0, input_cb_data_format}})
             .set_page_size(tt::CBIndex::c_0, tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_combine_config);
 
-    // CB1: weights - single scalar weight per expert
-    // Single-buffered (one weight at a time)
+    // CB1: weights - BULK LOADING: Hold ALL weights for one token
+    // For 8 experts = 8 weight tiles (only first element of each tile used for SCALAR broadcast)
+    uint32_t weight_cb_size = num_experts * tile_size;
     tt::tt_metal::CircularBufferConfig cb_weight_config =
-        tt::tt_metal::CircularBufferConfig(tile_size, {{tt::CBIndex::c_1, weight_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(weight_cb_size, {{tt::CBIndex::c_1, weight_cb_data_format}})
             .set_page_size(tt::CBIndex::c_1, tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_weight_config);
 

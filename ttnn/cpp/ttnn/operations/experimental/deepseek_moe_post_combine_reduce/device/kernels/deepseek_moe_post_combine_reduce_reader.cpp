@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "dataflow_api.h"
+#include "api/dataflow/dataflow_api.h"
 
 /**
  * Optimized reader kernel for post-combine reduce.
@@ -61,57 +61,49 @@ void kernel_main() {
     for (uint32_t token_idx = 0; token_idx < tokens_per_core; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
 
-        DPRINT << "READER: Processing token " << global_token_idx << ENDL();
+        // DPRINT << "READER: Processing token " << global_token_idx << ENDL();
 
         // ──────────────────────────────────────────────────────────────────────
-        // For each expert, load weight and expert output
+        // BULK LOAD: Load ALL expert data for this token at once
         // ──────────────────────────────────────────────────────────────────────
+        uint32_t total_expert_tiles = num_experts * emb_dim_tiles;
+        cb_reserve_back(cb_combine_input, total_expert_tiles);
+        uint32_t cb_write_addr = get_write_ptr(cb_combine_input);
+
         for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
-            // ──────────────────────────────────────────────────────────────────
-            // 1. Load weight scalar for this (token, expert) pair
-            // ──────────────────────────────────────────────────────────────────
-            uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
+            uint32_t expert_page_idx = global_token_idx * num_experts + expert_idx;
+            noc_async_read_page(expert_page_idx, combine_addrg, cb_write_addr);
+            cb_write_addr += combine_page_size;
 
-            cb_reserve_back(cb_weights, 1);
-            uint32_t weight_write_addr = get_write_ptr(cb_weights);
-
-            // Read weight tile (only first element will be used for SCALAR broadcast)
-            noc_async_read_page(weight_page_idx, weight_addrg, weight_write_addr);
-            noc_async_read_barrier();
-
-            cb_push_back(cb_weights, 1);
-
-            // Debug: Print weight value
-            SliceRange sr_weight = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 5, .ws = 1};
-            DPRINT << "  READER: Expert " << expert_idx << " weight (page " << weight_page_idx
-                   << "): " << TileSlice(cb_weights, 0, sr_weight, true, false) << ENDL();
-
-            // ──────────────────────────────────────────────────────────────────
-            // 2. Read expert output as "fake tiles" (ROW_MAJOR → treated as tiles)
-            // ──────────────────────────────────────────────────────────────────
-            // Expert output for this token starts at:
-            // [global_token_idx, expert_idx, 0..emb_dim-1]
-            uint32_t expert_output_start_page = global_token_idx * num_experts + expert_idx;
-
-            cb_reserve_back(cb_combine_input, emb_dim_tiles);
-            uint32_t cb_write_addr = get_write_ptr(cb_combine_input);
-
-            // Read entire expert output (emb_dim bytes = 7168 bytes)
-            // This reads ONE ROW of data (one expert's output for this token)
-            noc_async_read_page(expert_output_start_page, combine_addrg, cb_write_addr);
-            noc_async_read_barrier();
-
-            cb_push_back(cb_combine_input, emb_dim_tiles);
-
-            // Debug: Print first few values of first "fake tile"
-            SliceRange sr_data = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 10, .ws = 1};
-            DPRINT << "  READER: Expert " << expert_idx << " activations tile 0 (page " << expert_output_start_page
-                   << "): " << TileSlice(cb_combine_input, 0, sr_data, true, false) << ENDL();
-
-            // Compute kernel will now:
-            // - Multiply these emb_dim_tiles by the weight
-            // - Accumulate into output
-            // Then pop both CBs, and we load the next expert
+            // Debug: Print first expert page index
+            // if (expert_idx == 0) {
+            //     DPRINT << "  READER: Loading experts starting at page " << expert_page_idx << ENDL();
+            // }
         }
+        noc_async_read_barrier();
+        cb_push_back(cb_combine_input, total_expert_tiles);
+
+        // 1. READER: Print first value of first 2 tiles using DATA macros
+        // DPRINT_DATA0(DPRINT << "1.READER[tok=" << global_token_idx << "]: t0="
+        //              << TileSlice(cb_combine_input, 0, SliceRange{0,1,1,0,1,1}, true, false)
+        //              << " t1=" << TileSlice(cb_combine_input, 1, SliceRange{0,1,1,0,1,1}, true, false) << ENDL());
+
+        // ──────────────────────────────────────────────────────────────────────
+        // BULK LOAD: Load ALL weights for this token at once
+        // ──────────────────────────────────────────────────────────────────────
+        cb_reserve_back(cb_weights, num_experts);
+        uint32_t weight_write_addr = get_write_ptr(cb_weights);
+
+        for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
+            uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
+            noc_async_read_page(weight_page_idx, weight_addrg, weight_write_addr);
+            weight_write_addr += tile_size;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_weights, num_experts);
+
+        // DPRINT << "  READER: Loaded " << num_experts << " weights" << ENDL();
+
+        // Compute kernel will now process all experts and accumulate in DST
     }
 }

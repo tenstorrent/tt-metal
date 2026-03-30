@@ -23,6 +23,9 @@ struct DeepseekMoEPostCombineReduceDeviceOperation {
     using tensor_return_value_t = ttnn::Tensor;
     using program_factory_t = std::variant<DeepseekMoEPostCombineReduceProgramFactory>;
 
+    // Disable program caching since num_cores depends on input shape (num_tokens)
+    static constexpr bool use_program_cache = false;
+
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
