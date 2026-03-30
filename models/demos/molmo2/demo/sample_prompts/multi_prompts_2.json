@@ -1,0 +1,10 @@
+[
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Describe this image in detail."
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What breed of dog is this?"
+    }
+]
