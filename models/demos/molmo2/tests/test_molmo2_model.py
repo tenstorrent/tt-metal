@@ -241,39 +241,18 @@ def test_vision_adapter_integration(device):
         dtype=ttnn.bfloat8_b,
     )
 
-    # Create random inputs
+    # Random inputs: same layout as TTNN ImagePooling (cross-attention over shared KV).
     torch.manual_seed(42)
     query = torch.randn(1, num_queries, pool_input_dim, dtype=torch.float32)
     kv = torch.randn(1, pool_size, pool_input_dim, dtype=torch.float32)
 
-    # Convert to TTNN
-    query_ttnn = ttnn.from_torch(
-        query.unsqueeze(0),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    kv_ttnn = ttnn.from_torch(
-        kv.unsqueeze(0),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # Reference: same math as test_image_pooling_and_projector_pcc (NOT image_pooling_forward
+    # with pooled_patches_idx — that path is for the full vision backbone gather op).
+    from models.demos.molmo2.reference.functional import image_pooling_cross_attention_forward, image_projector_forward
 
-    # Reference: run pooling + projector in PyTorch
-    from models.demos.molmo2.reference.functional import image_pooling_forward, image_projector_forward
-
-    torch.manual_seed(42)
-    query = torch.randn(1, num_queries, pool_input_dim, dtype=torch.float32)
-    kv = torch.randn(1, pool_size, pool_input_dim, dtype=torch.float32)
-    # Use kv as the features tensor; create trivial pooled_patches_idx
-    pooled_patches_idx = torch.randint(0, pool_size, (1, num_queries, 4))
-    ref_pooled = image_pooling_forward(query, pooled_patches_idx, state_dict)
+    ref_pooled = image_pooling_cross_attention_forward(query, kv, state_dict)
     ref_output = image_projector_forward(ref_pooled, state_dict)
 
-    # TTNN: run pooling + projector
     query_ttnn = ttnn.from_torch(
         query.unsqueeze(0),
         device=device,
@@ -297,9 +276,9 @@ def test_vision_adapter_integration(device):
     assert output_torch.shape == expected_shape, f"Expected output shape {expected_shape}, got {output_torch.shape}"
 
     # PCC check against PyTorch reference — adapter pipeline must be >= 0.99
-    passing, pcc_msg = comp_pcc(ref_output, output_torch, pcc=0.99)
-    print(f"Vision adapter PCC: {pcc_msg}")
-    assert passing, f"Vision adapter integration failed PCC check: {pcc_msg}"
+    passing, pcc_value = comp_pcc(ref_output, output_torch, pcc=0.99)
+    print(f"Vision adapter PCC: {pcc_value:.6f} (threshold 0.99)")
+    assert passing, f"Vision adapter integration failed PCC check: got {pcc_value}, need >= 0.99"
 
     print(f"Vision adapter integration successful!")
     print(f"Pooling input: [{num_queries}, {pool_input_dim}] query, [{pool_size}, {pool_input_dim}] kv")
