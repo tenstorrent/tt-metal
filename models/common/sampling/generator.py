@@ -13,6 +13,7 @@ from loguru import logger
 import ttnn
 
 from ._utils import clamp, is_default_value, split_list
+from .tt_allowed_tokens import TTAllowedTokensMask
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
 
@@ -37,9 +38,13 @@ class SamplingParams:
     repetition_penalty: float | list[float] = 1.0
     seed: int | list[int] | None = None
     enable_log_probs: bool | list[bool] = False
+    allowed_token_ids: list[list[int]] | None = None  # per-batch-entry list of allowed token IDs, or None for unconstrained
 
 
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
+
+# Fields that require special handling in format/chunk/broadcast (not simple scalars/lists)
+_SKIP_FORMAT_FIELDS = {"allowed_token_ids"}
 
 
 @dataclass(frozen=True)
@@ -47,6 +52,7 @@ class _TraceKey:
     penalties_on: bool
     log_probs_on: bool
     force_argmax: bool
+    mask_active: bool
 
 
 class SamplingGenerator:
@@ -83,6 +89,7 @@ class SamplingGenerator:
 
         self.tt_sampling = TTSampling(mesh_device=mesh_device, tt_ccl=tt_ccl, args=args)
         self.tt_penalties = TTPenalties(mesh_device=mesh_device, args=args)
+        self.tt_allowed_tokens = TTAllowedTokensMask(mesh_device=mesh_device, args=args)
 
         self._penalties_active = False
 
@@ -93,8 +100,8 @@ class SamplingGenerator:
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
 
-    def _trace_slot(self, penalties_on: bool, log_probs_on: bool, force_argmax: bool):
-        key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on, force_argmax=force_argmax)
+    def _trace_slot(self, penalties_on: bool, log_probs_on: bool, force_argmax: bool, mask_active: bool):
+        key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on, force_argmax=force_argmax, mask_active=mask_active)
         slot = self._trace_states.get(key)
         if slot is None:
             slot = self._new_trace_state()
@@ -108,7 +115,7 @@ class SamplingGenerator:
         for key, slot in self._trace_states.items():
             if slot["id"] is not None:
                 logger.debug(
-                    f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
+                    f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, mask_active={key.mask_active}, trace_id={slot['id']})"
                 )
         self._trace_states.clear()
 
@@ -183,6 +190,9 @@ class SamplingGenerator:
                 lists = [getattr(fc, field) for fc in formatted_chunks]
                 if all(v is None for v in lists):
                     concat_fields[field] = None
+                elif field in _SKIP_FORMAT_FIELDS:
+                    # For list-of-lists fields (e.g. allowed_token_ids), concatenate outer lists
+                    concat_fields[field] = sum((v if isinstance(v, list) else [] for v in lists), [])
                 else:
                     concat_fields[field] = sum((v if isinstance(v, list) else [v] for v in lists), [])
             formatted_params = SamplingParams(**concat_fields)
@@ -222,6 +232,13 @@ class SamplingGenerator:
             )
         self._log_probs_active = self.tt_sampling.log_probs_calculator.enable_log_probs
 
+        # Update allowed-token mask
+        allowed = getattr(sampling_params, "allowed_token_ids", None)
+        old_mask_active = self.tt_allowed_tokens._active
+        self.tt_allowed_tokens.reset_mask(allowed)
+        if self.tt_allowed_tokens._active != old_mask_active:
+            self.reset_trace()
+
     def _validate_trace_inputs(self, slot, logits: ttnn.Tensor, tt_out_tok: Optional[ttnn.Tensor]):
         if slot["input"] is None or slot["output"] is None:
             raise RuntimeError("Trace metadata missing. Call capture_trace first.")
@@ -253,6 +270,7 @@ class SamplingGenerator:
     ):
         if penalties_on:
             logits = self.tt_penalties.apply(logits)
+        logits = self.tt_allowed_tokens.apply(logits)
         tt_tokens, tt_log_probs = self.tt_sampling(logits, tt_out_tok=tt_out_tok)
         return tt_tokens, tt_log_probs
 
@@ -268,11 +286,12 @@ class SamplingGenerator:
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         force_argmax = self.tt_sampling.force_argmax_sampling
+        mask_active = self.tt_allowed_tokens._active
 
-        key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
+        key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax, mask_active)
 
         logger.debug(
-            f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax})"
+            f"Pre-compiling sampling path before trace capture (penalties={penalties_on},log_probs_on={log_probs_on},force_argmax={force_argmax},mask_active={mask_active})"
         )
         self._run_sampling(
             logits,
@@ -329,6 +348,7 @@ class SamplingGenerator:
         penalties_on = self._penalties_active
         log_probs_on = getattr(self, "_log_probs_active", False)
         force_argmax = self.tt_sampling.force_argmax_sampling
+        mask_active = self.tt_allowed_tokens._active
         use_internal_trace = enable_trace and self.enable_internal_trace
 
         if not use_internal_trace:
@@ -338,7 +358,7 @@ class SamplingGenerator:
                 tt_out_tok=tt_out_tok,
             )
         else:
-            key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax)
+            key, slot = self._trace_slot(penalties_on, log_probs_on, force_argmax, mask_active)
             if slot["id"] is None:
                 return self.capture_trace(
                     logits,
@@ -366,7 +386,11 @@ def format_sampling_params(sampling_params, max_batch_size):
     Returns a **new** SamplingParams — the input is never mutated.
     """
     if not isinstance(sampling_params.temperature, List):
-        update_dict = {field.name: [getattr(sampling_params, field.name)] for field in fields(sampling_params)}
+        update_dict = {
+            field.name: [getattr(sampling_params, field.name)]
+            for field in fields(sampling_params)
+            if field.name not in _SKIP_FORMAT_FIELDS
+        }
         sampling_params = replace(sampling_params, **update_dict)
 
     target_len = max_batch_size
@@ -457,6 +481,10 @@ def broadcast_sampling_params(
     kwargs = {}
     for f in fields(formatted_sampling_params):
         value = getattr(formatted_sampling_params, f.name)
+        if f.name in _SKIP_FORMAT_FIELDS:
+            # Pass through without broadcasting
+            kwargs[f.name] = value
+            continue
         if isinstance(value, List):
             chosen = value[idx] if idx < len(value) else value[0]
         else:
@@ -490,7 +518,16 @@ def chunk_sampling_params(sampling_params, sampling_dp: int) -> list:
                 val = getattr(SamplingParams, field_name)
             else:
                 raise
-        if isinstance(val, list):
+        if field_name in _SKIP_FORMAT_FIELDS:
+            # For list-of-lists fields (e.g. allowed_token_ids), split outer list or replicate
+            if val is not None and isinstance(val, list):
+                assert (
+                    len(val) % sampling_dp == 0
+                ), f"Sampling param '{field_name}' length {len(val)} not divisible by sampling_dp {sampling_dp}"
+                chunked_fields[field_name] = split_list(val, sampling_dp)
+            else:
+                chunked_fields[field_name] = [val] * sampling_dp
+        elif isinstance(val, list):
             assert (
                 len(val) % sampling_dp == 0
             ), f"Sampling param '{field_name}' length {len(val)} not divisible by sampling_dp {sampling_dp}"

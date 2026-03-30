@@ -21,3 +21,4 @@ class SamplingParams:
     repetition_penalty: float | list[float] = 1.0
     seed: int | list[int] | None = None
     enable_log_probs: bool | list[bool] = False
+    allowed_token_ids: list[list[int]] | None = None  # per-batch-entry list of allowed token IDs, or None for unconstrained

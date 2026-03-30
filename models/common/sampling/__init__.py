@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .tt_sampling import TTSampling
+from .tt_allowed_tokens import TTAllowedTokensMask
 from .tt_penalties import TTPenalties, apply_penalties
 from .tt_log_probs import LogProbsCalculator
 from .generator import (
@@ -18,6 +19,7 @@ from ._utils import split_list
 
 __all__ = [
     "TTSampling",
+    "TTAllowedTokensMask",
     "TTPenalties",
     "apply_penalties",
     "LogProbsCalculator",
