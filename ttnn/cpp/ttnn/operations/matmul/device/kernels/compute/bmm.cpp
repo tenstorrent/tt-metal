@@ -4,11 +4,20 @@
 
 #include <cstdint>
 
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_tile_helpers.hpp"
+#include "api/compute/matmul.h"
+#include "api/compute/tile_move_copy.h"
+#include "experimental/circular_buffer.h"
 
 using std::uint32_t;
 
+// matmul C=A*B using dims MK*KN = MN (row major order)
+//
 void kernel_main() {
+    constexpr int onetile = 1;
+
+    int dst_tile_index = 0;
+    int in0_block_tile_index = 0;
+
     uint32_t batch = get_compile_time_arg_val(0);
     uint32_t Mt = get_compile_time_arg_val(1);
     uint32_t Kt = get_compile_time_arg_val(2);
@@ -18,6 +27,35 @@ void kernel_main() {
     constexpr uint32_t cb_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
-    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out);
-    compute_kernel_lib::matmul_tile<cb_in0, cb_in1, cb_out>(Mt, Nt, Kt, batch);
+    experimental::CircularBuffer in0_cb(cb_in0);
+    experimental::CircularBuffer in1_cb(cb_in1);
+    experimental::CircularBuffer out_cb(cb_out);
+
+    mm_init(cb_in0, cb_in1, cb_out);
+
+    // the simplest possible version of outer product blocked matmul
+    // the reader is expected to read the A's and B's tile rows and tile columns for each output tile
+    for (uint32_t nb = 0; nb < batch; nb++) {
+        for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
+            for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
+            {
+                acquire_dst();
+                for (uint32_t kt = 0; kt < Kt; kt++) {
+                    in0_cb.wait_front(onetile);
+                    in1_cb.wait_front(onetile);
+
+                    matmul_tiles(cb_in0, cb_in1, 0, 0, 0);
+
+                    in0_cb.pop_front(onetile);
+                    in1_cb.pop_front(onetile);
+                }
+
+                out_cb.reserve_back(onetile);
+                pack_tile(0, cb_out);
+                out_cb.push_back(onetile);
+
+                release_dst();
+            }
+        }
+    }
 }

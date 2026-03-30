@@ -11,7 +11,6 @@ set(UNIT_TESTS_INTEGRATION_SRC
     matmul/test_matmul_multi_core_X_dram.cpp
     matmul/test_matmul_single_core.cpp
     matmul/test_matmul_block_helper.cpp
-    matmul/test_matmul_tile_helper.cpp
     matmul/test_matmul_X_tile.cpp
     vecadd/test_vecadd_multi_core.cpp
 )

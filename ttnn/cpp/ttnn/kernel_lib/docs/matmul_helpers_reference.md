@@ -1,210 +1,102 @@
 # Matmul Compute Helper Reference (LLM)
 
-Two helpers are provided: `matmul_tile` for simple tile-at-a-time matmul, and
-`matmul_block` for sub-blocked matmul with spill/reload (used for performance).
+One helper is provided: `matmul_block` for sub-blocked matmul with spill/reload.
 
-## Includes
+For simple tile-at-a-time matmul (no sub-blocking), use inline `mm_init` + `matmul_tiles`
+directly — see the programming example at
+`tt_metal/programming_examples/matmul/matmul_single_core/kernels/compute/mm.cpp`.
+
+## Include
 
 ```cpp
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_tile_helpers.hpp"   // simple tile-at-a-time
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"  // sub-blocked with spill/reload
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
 ```
 
 Namespace: `compute_kernel_lib`.
-Compute kernels MUST call `compute_kernel_hw_startup(in0_cb, in1_cb, out_cb)` before any
-helper call. Use the **three-argument form** — srcA and srcB are different CBs.
 
 ## Dimension Notation
 
 - `Mt = M / 32`, `Kt = K / 32`, `Nt = N / 32`
 - M, K, N must all be multiples of 32
-- A: shape `[batch, Mt, Kt]` in tiles — tile at `(b, mt, kt)` → linear index `b*Mt*Kt + mt*Kt + kt`
-- B: shape `[batch, Kt, Nt]` in tiles — tile at `(b, kt, nt)` → linear index `b*Kt*Nt + kt*Nt + nt`
-- C: shape `[batch, Mt, Nt]` in tiles — tile at `(b, mt, nt)` → linear index `b*Mt*Nt + mt*Nt + nt`
-
-## CB Setup Requirements
-
-```
-in0_cb: tile-sized pages, >= 1 page (WaitPerTile) or >= Kt pages (WaitUpfront)
-in1_cb: tile-sized pages, >= 1 page (WaitPerTile) or >= Kt*Nt pages (WaitUpfront)
-out_cb: tile-sized pages, >= 1 page
-```
-
-All CBs use tiled data format (not row-major). in0_cb and in1_cb must differ from out_cb
-(enforced by static_assert).
-
-## Numerical Precision: fp32_dest_acc_en
-
-For Kt > 4 (K > 128 elements), bf16 accumulation in the DEST register degrades precision
-below typical test tolerances (rtol=0.05, atol=0.2). Enable fp32 DEST accumulation in the
-program descriptor's `ComputeConfigDescriptor`:
-
-```python
-ComputeConfigDescriptor(math_fidelity="HiFi4", dst_full_sync_en=True, fp32_dest_acc_en=True)
-```
-
-With `fp32_dest_acc_en=True`, each partial product is accumulated in fp32 before the final
-result is packed back to bf16, significantly reducing accumulated rounding error for large K.
-
-## compute_kernel_lib::matmul_tile
-
-Performs `C = A × B` tile-by-tile using `mm_init` + `matmul_tiles`. Loop order:
-batch × Mt × Nt × Kt. One output tile is accumulated per (b, mt, nt) over all Kt steps.
-
-```cpp
-template <
-    uint32_t in0_cb,
-    uint32_t in1_cb,
-    uint32_t out_cb,
-    InitUninitMode init_uninit_mode = InitAndUninit,
-    WaitMode wait_mode = WaitPerTile,
-    ReconfigureRegisterDatatypeMode reconfig_mode = UnpackAndPackReconfigure>
-void matmul_tile(uint32_t Mt, uint32_t Nt, uint32_t Kt, uint32_t batch = 1);
-```
-
-## Compute Kernel Example
-
-```cpp
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_tile_helpers.hpp"
-void kernel_main() {
-    uint32_t Mt    = get_compile_time_arg_val(0);
-    uint32_t Kt    = get_compile_time_arg_val(1);
-    uint32_t Nt    = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out);
-    compute_kernel_lib::matmul_tile<cb_in0, cb_in1, cb_out>(Mt, Nt, Kt);
-}
-```
-
-## WaitMode Trade-offs
-
-- `WaitPerTile` (default): CB depth 1 sufficient for in0 and in1. Reader and compute
-  naturally pipeline tile-by-tile. Use for all standard cases.
-- `WaitUpfront`: CB must hold the full Mt-row block (in0 >= Kt pages, in1 >= Kt*Nt pages).
-  Reader must pre-load the full block before compute begins. Requires a hand-written reader.
-- `NoWait`: caller guarantees all tiles are already in CBs. Skips all CB synchronization
-  inside the helper.
-
-## InitUninitMode Use Cases
-
-- `InitAndUninit`: standalone matmul kernel. Most common case.
-- `InitOnly`: matmul followed by an eltwise op in the same kernel. Init matmul first, then
-  init the eltwise op (which will call its own init and uninit).
-- `UninitOnly` / `Neither`: both are no-ops for matmul since there is no `mm_uninit` in
-  the LLK API. Included for API symmetry. Use `Neither` for middle calls in a chain.
-
-## ReconfigureRegisterDatatypeMode Use Cases
-
-- `UnpackAndPackReconfigure` (default): always safe when the kernel switches between op types.
-  Reconfigures both unpack (srcA, srcB) and pack (output) register formats before `mm_init`.
-- `NoReconfigure`: use when the kernel only ever calls `matmul_tile` and no other op. Avoids
-  redundant reconfiguration overhead.
-- `UnpackReconfigure` / `PackReconfigure`: partial reconfiguration for mixed-precision cases.
-
-## Static Asserts (matmul_tile)
-
-The implementation enforces at compile time:
-- `in0_cb != out_cb`
-- `in1_cb != out_cb`
-- `in0_cb < 32`, `in1_cb < 32`, `out_cb < 32`
-
----
+- A: shape `[batch, Mt, Kt]` in tiles
+- B: shape `[batch, Kt, Nt]` in tiles
+- C: shape `[batch, Mt, Nt]` in tiles
 
 ## compute_kernel_lib::matmul_block
 
-Sub-blocked matmul with spill/reload for larger matrices. Uses `mm_init` + `matmul_tiles`
-with block-level CB waits and non-zero tile indices. When the K dimension is split across
-multiple blocks (`num_blocks > 1`), partial results spill to an intermediate CB and are
-reloaded for accumulation on the next block.
+Sub-blocked matmul with spill/reload for larger matrices. Uses `mm_block_init` +
+`matmul_block` LLK with block-level CB waits and sub-block indexing. When the K
+dimension is split across multiple blocks (`num_k_blocks > 1`), partial results
+spill to an intermediate CB and are reloaded for accumulation on the next block.
 
 ```cpp
 template <
     uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t interm_cb,
-    InitUninitMode init_uninit_mode = InitAndUninit,
-    ReconfigureRegisterDatatypeMode reconfig_mode = UnpackAndPackReconfigure>
+    bool transpose = false,
+    typename PostComputeFn = NoPostCompute>
 void matmul_block(
-    uint32_t in0_block_w,            // inner block dimension in tiles
-    uint32_t in0_num_subblocks,      // sub-blocks along M dimension
-    uint32_t in0_block_num_tiles,    // total tiles per A block
-    uint32_t in0_subblock_num_tiles, // tiles per A sub-block
-    uint32_t in1_num_subblocks,      // sub-blocks along N dimension
-    uint32_t in1_block_num_tiles,    // total tiles per B block
-    uint32_t in1_per_core_w,         // tiles per B row
-    uint32_t num_blocks,             // blocks along K dimension
-    uint32_t out_subblock_h,         // output sub-block height in tiles
-    uint32_t out_subblock_w,         // output sub-block width in tiles
-    uint32_t out_subblock_num_tiles, // tiles per output sub-block
-    uint32_t batch = 1);
+    uint32_t block_w,            // K-dimension block size in tiles
+    uint32_t in0_num_subblocks,  // sub-blocks along M dimension
+    uint32_t in1_num_subblocks,  // sub-blocks along N dimension
+    uint32_t num_k_blocks,       // blocks along K dimension
+    uint32_t out_subblock_h,     // output sub-block height in tiles
+    uint32_t out_subblock_w,     // output sub-block width in tiles
+    uint32_t batch = 1,
+    PostComputeFn post_compute = {});
 ```
 
-### CB Setup (matmul_block)
+### Derived quantities (computed internally)
 
 ```
-in0_cb:    >= in0.block_num_tiles pages (full A block)
-in1_cb:    >= in1.block_num_tiles pages (full B block)
+out_num_tiles          = out_subblock_h * out_subblock_w
+in0_subblock_num_tiles = out_subblock_h * block_w
+in0_block_num_tiles    = in0_subblock_num_tiles * in0_num_subblocks
+in1_per_core_w         = out_subblock_w * in1_num_subblocks
+in1_block_num_tiles    = out_subblock_w * block_w * in1_num_subblocks
+```
+
+### CB Setup
+
+```
+in0_cb:    >= in0_block_num_tiles pages (full A block)
+in1_cb:    >= in1_block_num_tiles pages (full B block)
 out_cb:    >= total output tiles (for reservation tracking)
-interm_cb: >= out.num_tiles pages (partial result spill)
+interm_cb: >= out_num_tiles pages (partial result spill, only when num_k_blocks > 1)
 ```
 
 `out_cb` and `interm_cb` should share memory (overlapping address space). The output CB
 only needs space once the final K-block is ready; until then, `interm_cb` uses the space
 for partial results.
 
-### When to use matmul_block vs matmul_tile
+### PostComputeFn
 
-- **matmul_tile**: simple, tile-at-a-time. Good for small matrices, prototyping, or when
-  the full M×N output fits in DST. CB depth 1 is sufficient.
-- **matmul_block**: sub-blocked with spill/reload. Required when the output is larger than
-  DST capacity. Better performance through block-level CB operations. Used in production
-  TTNN matmul kernels.
-
-### Parameter Structs (matmul_block)
+Optional functor called on each output sub-block after the last K-block's matmul,
+before tiles are packed. Use for fused SFPU activations (relu, gelu, etc.).
 
 ```cpp
-namespace matmul_block_config {
-
-struct In0BlockParams {
-    uint32_t block_w;              // Inner block dim in tiles (K block size)
-    uint32_t num_subblocks;        // Sub-blocks along M dimension
-    uint32_t block_num_tiles;      // Total tiles per A block (= out.h * block_w * num_subblocks)
-    uint32_t subblock_num_tiles;   // Tiles per A sub-block (= out.h * block_w)
+struct ApplyRelu {
+    ALWI void operator()(uint32_t num_tiles) const {
+        for (uint32_t i = 0; i < num_tiles; i++) {
+            relu_tile(i);
+        }
+    }
 };
-
-struct In1BlockParams {
-    uint32_t num_subblocks;    // Sub-blocks along N dimension
-    uint32_t block_num_tiles;  // Total tiles per B block (= out.w * block_w * num_subblocks)
-    uint32_t per_core_w;       // Tiles per B row (= out.w * num_subblocks)
-};
-
-struct OutSubblockParams {
-    uint32_t h;          // Output sub-block height in tiles
-    uint32_t w;          // Output sub-block width in tiles
-    uint32_t num_tiles;  // Tiles per output sub-block (= h * w)
-};
-
-}  // namespace matmul_block_config
+compute_kernel_lib::matmul_block<cb_in0, cb_in1, cb_out, cb_interm,
+    false, ApplyRelu>(..., ApplyRelu{});
 ```
 
-### Compute Kernel Example (matmul_block)
+### Compute Kernel Example
 
 ```cpp
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
-using namespace compute_kernel_lib::matmul_block_config;
 
 void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1);
-    uint32_t in0_block_num_tiles = get_compile_time_arg_val(2);
-    uint32_t in0_subblock_num_tiles = get_compile_time_arg_val(3);
     uint32_t in1_num_subblocks = get_compile_time_arg_val(4);
-    uint32_t in1_block_num_tiles = get_compile_time_arg_val(5);
-    uint32_t in1_per_core_w = get_compile_time_arg_val(6);
-    uint32_t num_blocks = get_compile_time_arg_val(7);
+    uint32_t num_k_blocks = get_compile_time_arg_val(7);
     uint32_t out_subblock_h = get_compile_time_arg_val(8);
     uint32_t out_subblock_w = get_compile_time_arg_val(9);
-    uint32_t out_subblock_num_tiles = get_compile_time_arg_val(10);
     uint32_t batch = get_compile_time_arg_val(11);
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
@@ -213,25 +105,15 @@ void kernel_main() {
     constexpr uint32_t cb_interm = tt::CBIndex::c_24;
 
     compute_kernel_lib::matmul_block<cb_in0, cb_in1, cb_out, cb_interm>(
-        {.block_w = in0_block_w,
-         .num_subblocks = in0_num_subblocks,
-         .block_num_tiles = in0_block_num_tiles,
-         .subblock_num_tiles = in0_subblock_num_tiles},
-        {.num_subblocks = in1_num_subblocks,
-         .block_num_tiles = in1_block_num_tiles,
-         .per_core_w = in1_per_core_w},
-        num_blocks,
-        {.h = out_subblock_h, .w = out_subblock_w, .num_tiles = out_subblock_num_tiles},
-        batch);
+        in0_block_w, in0_num_subblocks, in1_num_subblocks,
+        num_k_blocks, out_subblock_h, out_subblock_w, batch);
 }
 ```
 
-### Sub-block dimension relationships
+### Runtime Asserts
 
-```
-in0.block_num_tiles    = out.h * in0.block_w * in0.num_subblocks
-in0.subblock_num_tiles = out.h * in0.block_w
-in1.block_num_tiles    = out.w * in0.block_w * in1.num_subblocks
-in1.per_core_w         = out.w * in1.num_subblocks
-out.num_tiles          = out.h * out.w
-```
+The helper validates at runtime:
+- All dimension parameters > 0
+- `out_num_tiles <= DEST_AUTO_LIMIT` (DST register capacity — 16 tiles for FP16 full-sync,
+  8 for FP32 full-sync or FP16 half-sync, 4 for FP32 half-sync)
+- CB capacity >= required block sizes (in0, in1, out)
