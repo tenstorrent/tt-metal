@@ -92,7 +92,7 @@ scaleout:
   integration:
     wh_llmbox: 40
   health:
-    wh_galaxy: 20
+    wh_galaxy: 15
     bh_galaxy: 10
   e2e:
     wh_llmbox: 185

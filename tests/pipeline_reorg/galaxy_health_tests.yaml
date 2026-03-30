@@ -26,7 +26,7 @@
     TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_6U_galaxy_quick.yaml
   skus:
     wh_galaxy:
-      timeout: 20
+      timeout: 15
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
   arch: wormhole_b0
