@@ -240,7 +240,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         sfpi::vFloat z = t * INV_LN2;
 
         sfpi::vInt k_int;
-        sfpi::vFloat k = _sfpu_round_nearest_int32_(z, k_int);
+        sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
         constexpr float LN2_HI = -0.6931152343750000f;
         constexpr float LN2_LO = -3.19461832987e-05f;
@@ -473,7 +473,7 @@ inline void calculate_gelu_derivative_polynomial() {
 template <bool APPROXIMATION_MODE>
 inline void gelu_derivative_polynomial_init() {
     if constexpr (!APPROXIMATION_MODE) {
-        _init_sfpu_reciprocal_<false>();
+        _init_reciprocal_<false, false>();
     }
 }
 
