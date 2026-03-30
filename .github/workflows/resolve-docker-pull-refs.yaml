@@ -1,0 +1,119 @@
+# Prefix canonical GHCR image refs with Harbor pull-through when healthy.
+# Callers pass check-harbor.outputs.harbor-prefix plus canonical tags; outputs are pull-ready strings.
+name: "[internal] Resolve Docker pull refs"
+
+on:
+  workflow_call:
+    inputs:
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+      dev-docker-image:
+        required: false
+        type: string
+        default: ""
+      basic-dev-docker-image:
+        required: false
+        type: string
+        default: ""
+      ci-test-docker-image:
+        required: false
+        type: string
+        default: ""
+      ci-build-docker-image:
+        required: false
+        type: string
+        default: ""
+      manylinux-docker-image:
+        required: false
+        type: string
+        default: ""
+      basic-ttnn-runtime-docker-image:
+        required: false
+        type: string
+        default: ""
+      basic-docker-image:
+        required: false
+        type: string
+        default: ""
+      test-docker-image:
+        required: false
+        type: string
+        default: ""
+      llk-ci-docker-image:
+        required: false
+        type: string
+        default: ""
+        description: "Canonical ghcr.io/... tag for the LLK CI image (from build-docker-images / build-docker-artifact llk-ci-tag)"
+    outputs:
+      dev-docker-image:
+        description: Pull-ready dev image ref
+        value: ${{ jobs.resolve.outputs.dev-docker-image }}
+      basic-dev-docker-image:
+        value: ${{ jobs.resolve.outputs.basic-dev-docker-image }}
+      ci-test-docker-image:
+        value: ${{ jobs.resolve.outputs.ci-test-docker-image }}
+      ci-build-docker-image:
+        value: ${{ jobs.resolve.outputs.ci-build-docker-image }}
+      manylinux-docker-image:
+        value: ${{ jobs.resolve.outputs.manylinux-docker-image }}
+      basic-ttnn-runtime-docker-image:
+        value: ${{ jobs.resolve.outputs.basic-ttnn-runtime-docker-image }}
+      basic-docker-image:
+        value: ${{ jobs.resolve.outputs.basic-docker-image }}
+      test-docker-image:
+        value: ${{ jobs.resolve.outputs.test-docker-image }}
+      llk-ci-docker-image:
+        description: Pull-ready LLK CI image ref
+        value: ${{ jobs.resolve.outputs.llk-ci-docker-image }}
+
+jobs:
+  resolve:
+    name: Resolve Docker pull refs
+    runs-on: ubuntu-latest
+    outputs:
+      dev-docker-image: ${{ steps.prefix.outputs.dev-docker-image }}
+      basic-dev-docker-image: ${{ steps.prefix.outputs.basic-dev-docker-image }}
+      ci-test-docker-image: ${{ steps.prefix.outputs.ci-test-docker-image }}
+      ci-build-docker-image: ${{ steps.prefix.outputs.ci-build-docker-image }}
+      manylinux-docker-image: ${{ steps.prefix.outputs.manylinux-docker-image }}
+      basic-ttnn-runtime-docker-image: ${{ steps.prefix.outputs.basic-ttnn-runtime-docker-image }}
+      basic-docker-image: ${{ steps.prefix.outputs.basic-docker-image }}
+      test-docker-image: ${{ steps.prefix.outputs.test-docker-image }}
+      llk-ci-docker-image: ${{ steps.prefix.outputs.llk-ci-docker-image }}
+    steps:
+      - id: prefix
+        shell: bash
+        env:
+          HARBOR_PREFIX: ${{ inputs.harbor-prefix }}
+          DEV_DOCKER_IMAGE: ${{ inputs.dev-docker-image }}
+          BASIC_DEV_DOCKER_IMAGE: ${{ inputs.basic-dev-docker-image }}
+          CI_TEST_DOCKER_IMAGE: ${{ inputs.ci-test-docker-image }}
+          CI_BUILD_DOCKER_IMAGE: ${{ inputs.ci-build-docker-image }}
+          MANYLINUX_DOCKER_IMAGE: ${{ inputs.manylinux-docker-image }}
+          BASIC_TTNN_RUNTIME_DOCKER_IMAGE: ${{ inputs.basic-ttnn-runtime-docker-image }}
+          BASIC_DOCKER_IMAGE: ${{ inputs.basic-docker-image }}
+          TEST_DOCKER_IMAGE: ${{ inputs.test-docker-image }}
+          LLK_CI_DOCKER_IMAGE: ${{ inputs.llk-ci-docker-image }}
+        run: |
+          join_pref() {
+            local p="$1"
+            local c="$2"
+            if [ -z "$c" ]; then
+              echo ""
+            else
+              printf '%s%s' "$p" "$c"
+            fi
+          }
+          {
+            echo "dev-docker-image=$(join_pref "$HARBOR_PREFIX" "$DEV_DOCKER_IMAGE")"
+            echo "basic-dev-docker-image=$(join_pref "$HARBOR_PREFIX" "$BASIC_DEV_DOCKER_IMAGE")"
+            echo "ci-test-docker-image=$(join_pref "$HARBOR_PREFIX" "$CI_TEST_DOCKER_IMAGE")"
+            echo "ci-build-docker-image=$(join_pref "$HARBOR_PREFIX" "$CI_BUILD_DOCKER_IMAGE")"
+            echo "manylinux-docker-image=$(join_pref "$HARBOR_PREFIX" "$MANYLINUX_DOCKER_IMAGE")"
+            echo "basic-ttnn-runtime-docker-image=$(join_pref "$HARBOR_PREFIX" "$BASIC_TTNN_RUNTIME_DOCKER_IMAGE")"
+            echo "basic-docker-image=$(join_pref "$HARBOR_PREFIX" "$BASIC_DOCKER_IMAGE")"
+            echo "test-docker-image=$(join_pref "$HARBOR_PREFIX" "$TEST_DOCKER_IMAGE")"
+            echo "llk-ci-docker-image=$(join_pref "$HARBOR_PREFIX" "$LLK_CI_DOCKER_IMAGE")"
+          } >> "$GITHUB_OUTPUT"
