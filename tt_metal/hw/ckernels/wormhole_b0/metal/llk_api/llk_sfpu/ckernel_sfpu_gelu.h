@@ -200,15 +200,15 @@ constexpr float GELU_EXP_CORR_C4 = 1.0058581740e-05f;
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
 sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.1875
+    sfpi::vFloat x2 = x * x;              // Hoisted: used by both core CDF and exp regions
 
     v_if(x >= 2.78125f) { result = x; }
     // Core CDF region [-3.125, 2.78125): GELU(x) = x * Phi_core(x)
     // Phi(x) = C0 + x*(C1 + x^2*(C3 + x^2*(C5 + ... + x^2*C15)))
     // Factored via u=x^2 to eliminate zero even-power coefficients
     v_elseif(x >= -3.125f) {
-        sfpi::vFloat u = x * x;
         sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
-            u,
+            x2,
             GELU_CDF_CORE_C1,
             GELU_CDF_CORE_C3,
             GELU_CDF_CORE_C5,
@@ -231,7 +231,6 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     // Degree-5 Taylor (vs degree-7 in library): error < 3.3e-9 relative,
     // negligible for BF16 output.
     v_elseif(x > -13.1875f) {
-        sfpi::vFloat x2 = x * x;
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
 
         // Inline Cody-Waite range reduction: exp(t) = 2^k · exp(r)
