@@ -10,17 +10,19 @@
 #define BCAST_LLKOP EltwiseBinaryType::ELWMUL
 #define BCAST_DIM BroadcastType::COL
 
-#include "tt-metalium/constants.hpp"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/tilize.h"
-#include "compute_kernel_api/untilize.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/transpose_wh.h"
-#include "compute_kernel_api/welford.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/tilize.h"
+#include "api/compute/untilize.h"
+#include "api/compute/matmul.h"
+#include "api/compute/transpose_wh.h"
+#include "api/compute/welford.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
@@ -39,6 +41,7 @@ void kernel_main() {
 
     constexpr uint32_t num_tiles_input_mask = get_compile_time_arg_val(19);
     constexpr uint32_t num_channels_per_group = get_compile_time_arg_val(24);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(25);
 
     // dst regs
     constexpr uint32_t dst0 = 0;
@@ -46,89 +49,103 @@ void kernel_main() {
     constexpr uint32_t mean_dst = 1;
 
     // input cbs
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_eps = tt::CBIndex::c_3;
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
-    constexpr uint32_t cb_input_mask = tt::CBIndex::c_7;
+    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in_id = tt::CBIndex::c_1;
+    constexpr uint32_t cb_eps_id = tt::CBIndex::c_3;
+    constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
+    constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
+    constexpr uint32_t cb_input_mask_id = tt::CBIndex::c_7;
 
     // interm cbs
-    constexpr uint32_t cb_repack = tt::CBIndex::c_11;
-    constexpr uint32_t cb_repack_out = tt::CBIndex::c_12;
-    constexpr uint32_t cb_x = tt::CBIndex::c_13;
-    constexpr uint32_t cb_xmm = tt::CBIndex::c_2;
-    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;
-    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_17;
+    constexpr uint32_t cb_repack_id = tt::CBIndex::c_11;
+    constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_12;
+    constexpr uint32_t cb_x_id = tt::CBIndex::c_13;
+    constexpr uint32_t cb_xmm_id = tt::CBIndex::c_2;
+    constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;
+    constexpr uint32_t cb_ex_global_id = tt::CBIndex::c_15;
+    constexpr uint32_t cb_ex2pe_id = tt::CBIndex::c_17;
 
     // output cb
-    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
-    constexpr uint32_t cb_out = tt::CBIndex::c_30;
+    constexpr uint32_t cb_out_id = tt::CBIndex::c_30;
 #else
-    constexpr uint32_t cb_out = (do_gamma or do_beta)
-                                    ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? cb_in : cb_out0)
-                                    : cb_out0;
+    constexpr uint32_t cb_out_id =
+        (do_gamma or do_beta) ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? cb_in_id : cb_out0_id)
+                              : cb_out0_id;
 #endif
 
 #ifdef UNTILIZE_OUT
-    constexpr int cb_outgamma = cb_in;
-    constexpr int cb_outbeta = do_gamma ? cb_out : cb_in;
-    constexpr int cb_untilize_in = (do_gamma and not do_beta) ? cb_outgamma : do_beta ? cb_outbeta : cb_out;
-    constexpr int cb_untilize_out =
+    constexpr int cb_outgamma_id = cb_in_id;
+    constexpr int cb_outbeta_id = do_gamma ? cb_out_id : cb_in_id;
+    constexpr int cb_untilize_in_id = (do_gamma and not do_beta) ? cb_outgamma_id : do_beta ? cb_outbeta_id : cb_out_id;
+    constexpr int cb_untilize_out_id =
 #ifdef READER_REPACK
-        cb_repack_out;
+        cb_repack_out_id;
 #else
-        cb_out0;
+        cb_out0_id;
 #endif
 #else
-    constexpr int cb_outgamma = do_beta ? cb_in : cb_out0;
-    constexpr int cb_outbeta = cb_out0;
+    constexpr int cb_outgamma_id = do_beta ? cb_in_id : cb_out0_id;
+    constexpr int cb_outbeta_id = cb_out0_id;
 #endif
+
+    experimental::CircularBuffer cb_beta(cb_beta_id);
+    experimental::CircularBuffer cb_eps(cb_eps_id);
+    experimental::CircularBuffer cb_ex2pe(cb_ex2pe_id);
+    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
+    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    experimental::CircularBuffer cb_gamma(cb_gamma_id);
+    experimental::CircularBuffer cb_in(cb_in_id);
+    experimental::CircularBuffer cb_input_mask(cb_input_mask_id);
+    experimental::CircularBuffer cb_x(cb_x_id);
+    experimental::CircularBuffer cb_xmm(cb_xmm_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    binary_op_init_common(cb_in0, cb_in0, cb_in);
-// tilize in0 -> in
+    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_id);
+// Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
-    constexpr uint32_t cb_in_rm = cb_repack;
+    constexpr uint32_t cb_in_rm_id = cb_repack_id;
+    compute_kernel_lib::tilize<
+        per_core_N,
+        cb_in_rm_id,
+        cb_in_id,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
-    constexpr uint32_t cb_in_rm = cb_in0;
+    constexpr uint32_t cb_in_rm_id = cb_in0_id;
+    compute_kernel_lib::tilize<
+        per_core_N,
+        cb_in_rm_id,
+        cb_in_id,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::NoWait,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
-    tilize_init(cb_in_rm, per_core_N, cb_in);
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-#ifdef READER_REPACK
-        cb_wait_front(cb_in_rm, per_core_N);
-#endif
-        cb_reserve_back(cb_in, per_core_N);
-        tilize_block(cb_in_rm, per_core_N, cb_in);
-        cb_push_back(cb_in, per_core_N);
-        cb_pop_front(cb_in_rm, per_core_N);
-    }
-    tilize_uninit(cb_in_rm, cb_in);
-    cb_wait_front(cb_in, per_core_MN);
+    cb_in.wait_front(per_core_MN);
 #else
-    binary_op_init_common(cb_in0, cb_in0, cb_in0);
+    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in0_id);
 #endif
 
     // Sharded v2 does not use reciprocal lookup table, so we pass an empty array
     constexpr std::array<uint32_t, 0> empty_reciprocal_lut{};
 
-    cb_wait_front(cb_eps, 1);
-    cb_wait_front(cb_input_mask, num_tiles_input_mask);
+    cb_eps.wait_front(1);
+    cb_input_mask.wait_front(num_tiles_input_mask);
 
     if constexpr (do_gamma) {
-        cb_wait_front(cb_gamma, per_core_N);
+        cb_gamma.wait_front(per_core_N);
     }
     if constexpr (do_beta) {
-        cb_wait_front(cb_beta, per_core_N);
+        cb_beta.wait_front(per_core_N);
     }
 
     for (uint32_t b = 0; b < num_batches; ++b) {
         uint32_t tile_id = b * block_hw;
-        cb_reserve_back(cb_ex_partial, 2);
-        transpose_wh_init(cb_in0, cb_ex_partial);
+        cb_ex_partial.reserve_back(2);
+        transpose_wh_init(cb_in0_id, cb_ex_partial_id);
         tile_regs_acquire();
         welford_init();
 
@@ -158,17 +175,17 @@ void kernel_main() {
 
             for (uint32_t nt = 0; nt < per_core_N; ++nt) {
 #ifdef TILIZE_IN
-                transpose_wh_init_short(cb_in);
-                transpose_wh_tile(cb_in, tile_id, input_dst);
+                transpose_wh_init_short(cb_in_id);
+                transpose_wh_tile(cb_in_id, tile_id, input_dst);
 #else
-                transpose_wh_init_short(cb_in0);
-                transpose_wh_tile(cb_in0, tile_id, input_dst);
+                transpose_wh_init_short(cb_in0_id);
+                transpose_wh_tile(cb_in0_id, tile_id, input_dst);
 #endif
 
                 uint32_t group_offset = 0;
                 for (uint32_t g = min_group; g < num_groups; ++g) {
                     // Start Welford's Calculation
-                    uint32_t cols_available = tt::constants::TILE_WIDTH - group_offset;
+                    uint32_t cols_available = tile_width - group_offset;
                     uint32_t cols_consumed = std::min(cols_available, channels_left);
 
                     welford_restore_state(mean_dst, g);
@@ -195,7 +212,7 @@ void kernel_main() {
 
                     // All available columns have been used for this tile, so we don't do any
                     // more groups for this tile.
-                    if (group_offset == tt::constants::TILE_WIDTH) {
+                    if (group_offset == tile_width) {
                         break;
                     }
                 }
@@ -212,33 +229,33 @@ void kernel_main() {
 
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile_block(mean_dst, cb_ex_partial, 2);
+        pack_tile_block(mean_dst, cb_ex_partial_id, 2);
         tile_regs_release();
-        cb_push_back(cb_ex_partial, 2);
+        cb_ex_partial.push_back(2);
 
         // Start Variance Calc
-        // Wait for final welford values in cb_ex_global
-        cb_wait_front(cb_ex_global, 2 * num_groups);
-        cb_reserve_back(cb_ex2pe, num_groups);
+        // Wait for final welford values in cb_ex_global_id
+        cb_ex_global.wait_front(2 * num_groups);
+        cb_ex2pe.reserve_back(num_groups);
         // (Var + eps)
-        add_tiles_init(cb_ex_global, cb_eps);
-        reconfig_data_format_srcb(cb_eps);
+        add_tiles_init(cb_ex_global_id, cb_eps_id);
+        reconfig_data_format_srcb(cb_eps_id);
         for (uint32_t g = 0; g < num_groups; ++g) {
             tile_regs_acquire();
-            add_tiles(cb_ex_global, cb_eps, 1 + (g << 1), 0, dst0);
+            add_tiles(cb_ex_global_id, cb_eps_id, 1 + (g << 1), 0, dst0);
 
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
             rsqrt_tile<true>(dst0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe);
+            pack_tile(dst0, cb_ex2pe_id);
             tile_regs_release();
         }
-        cb_push_back(cb_ex2pe, num_groups);
+        cb_ex2pe.push_back(num_groups);
         // End Variance Calc
 
-        cb_wait_front(cb_ex2pe, num_groups);
+        cb_ex2pe.wait_front(num_groups);
 
         // Start Final Val Calc
         tile_id = b * block_hw;
@@ -263,87 +280,87 @@ void kernel_main() {
             for (uint32_t nt = 0; nt < per_core_N; ++nt) {
                 uint32_t group_offset = 0;
                 for (uint32_t g = min_group; g < num_groups; ++g) {
-                    cb_reserve_back(cb_xmm, 2);
+                    cb_xmm.reserve_back(2);
 
                     // // Now let us do the actual computation for the current group here
                     // // a. x-u
-                    sub_tiles_bcast_scalar_init_short(cb_in0, cb_ex_global);
-                    reconfig_data_format(cb_in0, cb_ex_global);
+                    sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
+                    reconfig_data_format(cb_in0_id, cb_ex_global_id);
 
                     tile_regs_acquire();
 #ifdef TILIZE_IN
-                    sub_tiles_bcast_scalar(cb_in, cb_ex_global, tile_id, 0 + (g << 1), dst0);
+                    sub_tiles_bcast_scalar(cb_in_id, cb_ex_global_id, tile_id, 0 + (g << 1), dst0);
 #else
-                    sub_tiles_bcast_scalar(cb_in0, cb_ex_global, tile_id, 0 + (g << 1), dst0);
+                    sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, tile_id, 0 + (g << 1), dst0);
 #endif
                     tile_regs_commit();
                     tile_regs_wait();
-                    pack_tile(dst0, cb_xmm);
+                    pack_tile(dst0, cb_xmm_id);
                     tile_regs_release();
 
                     // // b. 1/[sqrt(Var + eps)] * mask
                     const uint32_t mask_offset = g * block_w;
                     const uint32_t mask_index = mask_offset + block_w_index;
 
-                    mul_tiles_bcast_scalar_init_short(cb_input_mask, cb_ex2pe);
-                    reconfig_data_format(cb_in0, cb_input_mask, cb_ex_global, cb_ex2pe);
+                    mul_tiles_bcast_scalar_init_short(cb_input_mask_id, cb_ex2pe_id);
+                    reconfig_data_format(cb_in0_id, cb_input_mask_id, cb_ex_global_id, cb_ex2pe_id);
                     tile_regs_acquire();
-                    mul_tiles_bcast_scalar(cb_input_mask, cb_ex2pe, mask_index, g, dst0);
+                    mul_tiles_bcast_scalar(cb_input_mask_id, cb_ex2pe_id, mask_index, g, dst0);
                     tile_regs_commit();
                     tile_regs_wait();
-                    pack_tile(dst0, cb_xmm);
+                    pack_tile(dst0, cb_xmm_id);
                     tile_regs_release();
-                    cb_push_back(cb_xmm, 2);
+                    cb_xmm.push_back(2);
 
                     // // c. a * b
-                    cb_wait_front(cb_xmm, 2);
-                    mul_tiles_init(cb_xmm, cb_xmm);
-                    reconfig_data_format(cb_input_mask, cb_xmm, cb_ex2pe, cb_xmm);
+                    cb_xmm.wait_front(2);
+                    mul_tiles_init(cb_xmm_id, cb_xmm_id);
+                    reconfig_data_format(cb_input_mask_id, cb_xmm_id, cb_ex2pe_id, cb_xmm_id);
                     tile_regs_acquire();
-                    mul_tiles(cb_xmm, cb_xmm, 0, 1, dst0);
+                    mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
                     tile_regs_commit();
-                    cb_pop_front(cb_xmm, 2);
-                    cb_reserve_back(cb_xmm, 1);
+                    cb_xmm.pop_front(2);
+                    cb_xmm.reserve_back(1);
                     tile_regs_wait();
-                    pack_tile(dst0, cb_xmm);
+                    pack_tile(dst0, cb_xmm_id);
                     tile_regs_release();
-                    cb_push_back(cb_xmm, 1);
+                    cb_xmm.push_back(1);
 
-                    // // d. Add to cb_xmm (accumulate results)
+                    // // d. Add to cb_xmm_id (accumulate results)
                     // // First we get the result in dst0
                     if (group_offset == 0) {
                         // When group_offset is 0, this is the first group for this tile,
-                        // so we can copy the results to cb_x without needing to add them
-                        copy_tile_init(cb_xmm);
+                        // so we can copy the results to cb_x_id without needing to add them
+                        copy_tile_init(cb_xmm_id);
 
-                        cb_wait_front(cb_xmm, 1);
+                        cb_xmm.wait_front(1);
                         tile_regs_acquire();
-                        copy_tile(cb_xmm, 0, dst0);
+                        copy_tile(cb_xmm_id, 0, dst0);
                         tile_regs_commit();
-                        cb_pop_front(cb_xmm, 1);
+                        cb_xmm.pop_front(1);
                     } else {
                         // This is not the first group for this tile, so we need to add
-                        // the results over what is already in cb_x
-                        reconfig_data_format_srca(cb_xmm, cb_x);
-                        add_tiles_init(cb_x, cb_xmm);
+                        // the results over what is already in cb_x_id
+                        reconfig_data_format_srca(cb_xmm_id, cb_x_id);
+                        add_tiles_init(cb_x_id, cb_xmm_id);
 
-                        cb_wait_front(cb_xmm, 1);
-                        cb_wait_front(cb_x, 1);
+                        cb_xmm.wait_front(1);
+                        cb_x.wait_front(1);
                         tile_regs_acquire();
-                        add_tiles(cb_x, cb_xmm, 0, 0, dst0);
+                        add_tiles(cb_x_id, cb_xmm_id, 0, 0, dst0);
                         tile_regs_commit();
-                        cb_pop_front(cb_xmm, 1);
-                        cb_pop_front(cb_x, 1);
+                        cb_xmm.pop_front(1);
+                        cb_x.pop_front(1);
                     }
 
-                    // Then we pack the result into cb_x
-                    cb_reserve_back(cb_x, 1);
+                    // Then we pack the result into cb_x_id
+                    cb_x.reserve_back(1);
                     tile_regs_wait();
-                    pack_tile(dst0, cb_x);
+                    pack_tile(dst0, cb_x_id);
                     tile_regs_release();
-                    cb_push_back(cb_x, 1);
+                    cb_x.push_back(1);
 
-                    uint32_t cols_available = tt::constants::TILE_WIDTH - group_offset;
+                    uint32_t cols_available = tile_width - group_offset;
                     uint32_t cols_consumed = std::min(cols_available, channels_left);
                     channels_left -= cols_consumed;
                     group_offset += cols_consumed;
@@ -366,91 +383,90 @@ void kernel_main() {
 
                     // All available columns have been used for this tile, so we don't do any
                     // more groups for this tile.
-                    if (group_offset == tt::constants::TILE_WIDTH) {
+                    if (group_offset == tile_width) {
                         break;
                     }
                 }
                 ++tile_id;
 
                 if constexpr (do_gamma) {
-                    mul_bcast_rows_init_short(cb_x, cb_gamma);
-                    reconfig_data_format_srcb(cb_xmm, cb_gamma);
+                    mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
+                    reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
 
-                    cb_wait_front(cb_x, 1);
+                    cb_x.wait_front(1);
                     tile_regs_acquire();
-                    mul_tiles_bcast_rows(cb_x, cb_gamma, 0, nt, dst0);
+                    mul_tiles_bcast_rows(cb_x_id, cb_gamma_id, 0, nt, dst0);
                     tile_regs_commit();
-                    cb_pop_front(cb_x, 1);
-                    cb_reserve_back(cb_x, 1);
+                    cb_x.pop_front(1);
+                    cb_x.reserve_back(1);
                     tile_regs_wait();
-                    pack_tile(dst0, cb_x);
+                    pack_tile(dst0, cb_x_id);
                     tile_regs_release();
-                    cb_push_back(cb_x, 1);
+                    cb_x.push_back(1);
                 }
 
                 if constexpr (do_beta) {
-                    add_bcast_rows_init_short(cb_x, cb_beta);
-                    reconfig_data_format_srcb(do_gamma ? cb_gamma : cb_xmm, cb_beta);
+                    add_bcast_rows_init_short(cb_x_id, cb_beta_id);
+                    reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
 
-                    cb_wait_front(cb_x, 1);
+                    cb_x.wait_front(1);
                     tile_regs_acquire();
-                    add_tiles_bcast_rows(cb_x, cb_beta, 0, nt, dst0);
+                    add_tiles_bcast_rows(cb_x_id, cb_beta_id, 0, nt, dst0);
                     tile_regs_commit();
-                    cb_pop_front(cb_x, 1);
-                    cb_reserve_back(cb_x, 1);
+                    cb_x.pop_front(1);
+                    cb_x.reserve_back(1);
                     tile_regs_wait();
-                    pack_tile(dst0, cb_x);
+                    pack_tile(dst0, cb_x_id);
                     tile_regs_release();
-                    cb_push_back(cb_x, 1);
+                    cb_x.push_back(1);
                 }
 
                 // Write out the final output
-                copy_tile_init(cb_x);
-                reconfig_data_format_srcb(do_beta ? cb_beta : cb_xmm, cb_x);
+                copy_tile_init(cb_x_id);
+                reconfig_data_format_srcb(do_beta ? cb_beta_id : cb_xmm_id, cb_x_id);
 
-                cb_wait_front(cb_x, 1);
+                cb_x.wait_front(1);
                 tile_regs_acquire();
-                copy_tile(cb_x, 0, dst0);
+                copy_tile(cb_x_id, 0, dst0);
                 tile_regs_commit();
-                cb_pop_front(cb_x, 1);
+                cb_x.pop_front(1);
 #ifdef UNTILIZE_OUT
-                auto write_cb = cb_untilize_in;
+                auto write_cb_id = cb_untilize_in_id;
 #else
-                auto write_cb = cb_out0;
+                auto write_cb_id = cb_out0_id;
 #endif
-                cb_reserve_back(write_cb, 1);
+                experimental::CircularBuffer write_cb(write_cb_id);
+                write_cb.reserve_back(1);
                 tile_regs_wait();
-                pack_tile(dst0, write_cb);
+                pack_tile(dst0, write_cb_id);
                 tile_regs_release();
-                cb_push_back(write_cb, 1);
+                write_cb.push_back(1);
             }
         }
 
-        cb_pop_front(cb_ex_global, 2 * num_groups);
-        cb_pop_front(cb_ex2pe, num_groups);
+        cb_ex_global.pop_front(2 * num_groups);
+        cb_ex2pe.pop_front(num_groups);
     }
 
-    cb_pop_front(cb_eps, 1);
-    cb_pop_front(cb_input_mask, num_tiles_input_mask);
+    cb_eps.pop_front(1);
+    cb_input_mask.pop_front(num_tiles_input_mask);
 
-    // Pop all the cb_beta and cb_gamma if used
+    // Pop all the cb_beta_id and cb_gamma_id if used
     if constexpr (do_beta) {
-        cb_pop_front(cb_beta, per_core_N);
+        cb_beta.pop_front(per_core_N);
     }
     if constexpr (do_gamma) {
-        cb_pop_front(cb_gamma, per_core_N);
+        cb_gamma.pop_front(per_core_N);
     }
 
 #ifdef UNTILIZE_OUT
-    // untilize
-    untilize_init(cb_untilize_in);
-    cb_wait_front(cb_untilize_in, per_core_MN);
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_reserve_back(cb_untilize_out, per_core_N);
-        untilize_block(cb_untilize_in, per_core_N, cb_untilize_out);
-        cb_push_back(cb_untilize_out, per_core_N);
-        cb_pop_front(cb_untilize_in, per_core_N);
-    }
-    untilize_uninit(cb_untilize_in);
+    // untilize - DEST capacity auto-detected
+    compute_kernel_lib::untilize<
+        per_core_N,
+        cb_untilize_in_id,
+        cb_untilize_out_id,
+        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
 }

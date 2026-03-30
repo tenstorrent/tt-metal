@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -25,11 +26,15 @@ void kernel_main() {
     constexpr auto cb_tmp2 = get_compile_time_arg_val(12);                 // tmp 2
     constexpr auto cb_tmp3 = get_compile_time_arg_val(13);                 // tmp 3
 
+    experimental::CircularBuffer cb_out0_obj(cb_out0);
+    experimental::CircularBuffer cb_momentum_obj(cb_momentum);
+    experimental::CircularBuffer cb_one_obj(cb_one);
+
     binary_op_init_common(cb_batch_mean, cb_batch_var, cb_out0);
     constexpr uint32_t onetile = 1;
 
-    cb_wait_front(cb_one, 1);
-    cb_wait_front(cb_momentum, 1);
+    cb_one_obj.wait_front(1);
+    cb_momentum_obj.wait_front(1);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         tile_regs_acquire();
@@ -51,9 +56,9 @@ void kernel_main() {
         tile_regs_wait();
         pack_tile(0, cb_out0);
         tile_regs_release();
-        cb_push_back(cb_out0, 1);
+        cb_out0_obj.push_back(1);
     }
 
-    cb_pop_front(cb_one, 1);
-    cb_pop_front(cb_momentum, 1);
+    cb_one_obj.pop_front(1);
+    cb_momentum_obj.pop_front(1);
 }

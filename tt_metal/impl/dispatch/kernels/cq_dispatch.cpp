@@ -103,8 +103,10 @@ constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X
 constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SUBORDINATE_NOC_X, DOWNSTREAM_SUBORDINATE_NOC_Y));
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
+#if !defined(IS_CQ_DRAM_BACKED) || IS_CQ_DRAM_BACKED == 0
 constexpr uint64_t pcie_noc_xy =
     uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
+#endif
 constexpr uint32_t dispatch_cb_page_size = 1 << dispatch_cb_log_page_size;
 
 constexpr uint32_t completion_queue_end_addr = completion_queue_base_addr + completion_queue_size;
@@ -181,6 +183,9 @@ constexpr uint32_t l1_cache_elements =
 constexpr uint32_t l1_cache_elements_rounded =
     ((l1_cache_elements + l1_to_local_cache_copy_chunk - 1) / l1_to_local_cache_copy_chunk) *
     l1_to_local_cache_copy_chunk;
+static_assert(
+    l1_cache_elements * sizeof(uint32_t) / sizeof(CQDispatchWritePackedLargeUnicastSubCmd) >=
+    CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
 
 // Used to send go signals asynchronously. Currently unused but this is a prototype for a GoSignalState
 // ring buffer that can be used to store and then asynchronously send Go Signals.
@@ -255,6 +260,9 @@ void notify_host_of_completion_queue_write_pointer() {
     volatile tt_l1_ptr uint32_t* completion_wr_ptr_addr = get_cq_completion_write_ptr();
     completion_wr_ptr_addr[0] = completion_wr_ptr_and_toggle;
 #if defined(FABRIC_RELAY)
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+    uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
+#endif
     noc_async_write(dev_completion_q_wr_ptr, pcie_noc_xy | completion_queue_write_ptr_addr, 4);
 #else
     cq_noc_async_write_with_state<CQ_NOC_SnDL>(dev_completion_q_wr_ptr, completion_queue_write_ptr_addr, 4);
@@ -289,6 +297,9 @@ void process_write_host_h() {
     // DPRINT << "process_write_host_h: " << length << ENDL();
     uint32_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+    uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
+#endif
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
 #endif
     constexpr uint32_t max_batch_size = ~(dispatch_cb_page_size - 1);
@@ -311,6 +322,9 @@ void process_write_host_h() {
             if (completion_queue_write_addr + xfer_size > completion_queue_end_addr) {
                 uint32_t last_chunk_size = completion_queue_end_addr - completion_queue_write_addr;
 #if defined(FABRIC_RELAY)
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+                uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
+#endif
                 noc_async_write(data_ptr, pcie_noc_xy | completion_queue_write_addr, last_chunk_size);
 #else
                 cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, last_chunk_size);
@@ -324,6 +338,9 @@ void process_write_host_h() {
                 xfer_size -= last_chunk_size;
             }
 #if defined(FABRIC_RELAY)
+#if defined(IS_CQ_DRAM_BACKED) && IS_CQ_DRAM_BACKED == 1
+            uint64_t pcie_noc_xy = get_noc_addr_from_bank_id<true>(DRAM_BACKED_CQ_BANK_ID, 0);
+#endif
             noc_async_write(data_ptr, pcie_noc_xy | completion_queue_write_addr, xfer_size);
 #else
             cq_noc_async_write_with_state_any_len(data_ptr, completion_queue_write_addr, xfer_size);
@@ -721,6 +738,7 @@ void process_write_packed_large(uint32_t* l1_cache) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
 
     uint32_t count = cmd->write_packed_large.count;
+    ASSERT(count <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_MAX_SUB_CMDS);
     uint32_t alignment = cmd->write_packed_large.alignment;
     uint32_t write_offset_index = cmd->write_packed_large.write_offset_index;
     uint32_t local_write_offset = write_offset[write_offset_index];
@@ -839,6 +857,83 @@ void process_write_packed_large(uint32_t* l1_cache) {
         count--;
     }
     noc_nonposted_writes_acked[noc_index] = mcasts;
+
+    cmd_ptr = data_ptr;
+}
+
+// Unicast variant of packed large write with uint32_t length and discard support
+void process_write_packed_large_unicast(uint32_t* l1_cache) {
+    volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
+
+    uint32_t count = cmd->write_packed_large_unicast.count;
+    ASSERT(count <= CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
+    uint32_t alignment = cmd->write_packed_large_unicast.alignment;
+    uint32_t write_offset_index = cmd->write_packed_large_unicast.write_offset_index;
+    uint32_t local_write_offset = write_offset[write_offset_index];
+    uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(CQDispatchWritePackedLargeUnicastSubCmd);
+    data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
+
+    constexpr uint32_t sub_cmd_size = sizeof(CQDispatchWritePackedLargeUnicastSubCmd);
+    careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
+        (volatile uint32_t tt_l1_ptr*)(cmd_ptr + sizeof(CQDispatchCmd)),
+        count * sub_cmd_size / sizeof(uint32_t),
+        l1_cache);
+
+    CQDispatchWritePackedLargeUnicastSubCmd* sub_cmd_ptr = (CQDispatchWritePackedLargeUnicastSubCmd*)l1_cache;
+
+    while (count != 0) {
+        uint32_t dst_addr = sub_cmd_ptr->addr;
+        uint32_t length = sub_cmd_ptr->length;
+        uint32_t pad_size = align_power_of_2(length, alignment) - length;
+
+        // Check if this is a discard transaction
+        bool is_discard = (dst_addr == CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_ADDR_DISCARD);
+
+        if (!is_discard) {
+            // Normal unicast write
+            dst_addr += local_write_offset;
+            uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
+
+            while (length != 0) {
+                // More data needs to be written, but we've exhausted the CB. Acquire more pages.
+                uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
+
+                // Transfer size is min(remaining_length, data_available_in_cb)
+                uint32_t xfer_size = (length > available_data) ? available_data : length;
+
+                noc_async_write(data_ptr, get_noc_addr_helper(dst_noc, dst_addr), xfer_size);
+
+                length -= xfer_size;
+                data_ptr += xfer_size;
+                dst_addr += xfer_size;
+            }
+        } else {
+            // Discard: skip data without issuing NOC write
+            uint32_t remaining_length = length;
+            while (remaining_length != 0) {
+                uint32_t available_data = dispatch_cb_reader.wait_for_available_data_and_release_old_pages(data_ptr);
+
+                uint32_t skip_size = (remaining_length > available_data) ? available_data : remaining_length;
+
+                data_ptr += skip_size;
+                remaining_length -= skip_size;
+            }
+        }
+
+        // Handle padded size and potential wrap
+        if (pad_size > dispatch_cb_reader.available_bytes(data_ptr)) {
+            dispatch_cb_reader.get_cb_page_and_release_pages(data_ptr, [&](bool will_wrap) {
+                if (will_wrap) {
+                    uint32_t orphan_size = dispatch_cb_reader.available_bytes(data_ptr);
+                    pad_size -= orphan_size;
+                }
+            });
+        }
+        data_ptr += pad_size;
+
+        sub_cmd_ptr++;
+        count--;
+    }
 
     cmd_ptr = data_ptr;
 }
@@ -1109,6 +1204,12 @@ re_run_command:
             // Must match unpacking code in tt_metal/impl/profiler/profiler.cpp.
             DeviceTimestampedData("packed_large_data_dispatch", cmd->write_packed_large.type);
             process_write_packed_large(l1_cache);
+            break;
+
+        case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST:
+            // DPRINT << "cmd_write_packed_large_unicast" << ENDL();
+            DeviceTimestampedData("packed_large_unicast_data_dispatch", cmd->write_packed_large_unicast.type);
+            process_write_packed_large_unicast(l1_cache);
             break;
 
         case CQ_DISPATCH_CMD_WAIT:

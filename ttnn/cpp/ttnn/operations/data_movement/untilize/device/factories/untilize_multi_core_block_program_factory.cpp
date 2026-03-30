@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -28,7 +30,6 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
     const auto& a = tensor_args.input;
     const auto& output = tensor_return_value;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
-    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
@@ -47,6 +48,9 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
 
     uint32_t num_blocks = (a.padded_shape()[-1] * a.padded_shape()[-2]) / (a_tile_height * a_tile_width);
 
+    uint32_t max_l1_size = operations::data_movement::get_max_l1_space(a);
+    uint32_t cb_block_size_limit = max_l1_size / (input_single_tile_size + output_single_tile_size);
+
     auto
         [ncores,
          all_cores,
@@ -61,8 +65,14 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
          has_cliff_row,
          has_cliff_col,
          full_cores_per_row,
-         full_cores_per_col] =
-            ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
+         full_cores_per_col,
+         single_sub_block_size] =
+            ttnn::split_blocks_for_tilize_wh(
+                grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col, cb_block_size_limit);
+
+    if (single_sub_block_size > 0 && single_block_size % single_sub_block_size) {
+        TT_FATAL(false, "single_block_size is not divided by single_sub_block_size");
+    }
 
     uint32_t total_tiles_per_row =
         (full_cores_per_row * single_block_size) + (has_cliff_row * single_block_size_cliff_row);
@@ -78,10 +88,15 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
 
     if (!core_range.empty()) {
         create_cb(
-            tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
+            tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_sub_block_size, input_cb_data_format);
 
         create_cb(
-            tt::CBIndex::c_16, program, core_range, output_single_tile_size, single_block_size, output_cb_data_format);
+            tt::CBIndex::c_16,
+            program,
+            core_range,
+            output_single_tile_size,
+            single_sub_block_size,
+            output_cb_data_format);
     }
 
     if (has_cliff_col && has_cliff_row) {
@@ -126,7 +141,7 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
             program,
             cliff_col_core_range,
             input_single_tile_size,
-            single_block_size,
+            single_sub_block_size,
             input_cb_data_format);
 
         create_cb(
@@ -134,7 +149,7 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
             program,
             cliff_col_core_range,
             output_single_tile_size,
-            single_block_size,
+            single_sub_block_size,
             output_cb_data_format);
     }
 
@@ -174,55 +189,63 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
         WriterDataMovementConfig(writer_ct_args));
 
     // compute
-    bool use_pack_kernel = true;
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (a.dtype() == DataType::FLOAT32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
-        use_pack_kernel = false;
+    uint32_t single_sub_block_size_wh = single_block_size * single_block_size / single_sub_block_size;
+    uint32_t single_sub_block_size_cliff_col_wh =
+        single_block_size_cliff_col * single_block_size / single_sub_block_size;
+
+    std::map<std::string, std::string> compute_kernel_defines;
+    if (input_cb_data_format == tt::DataFormat::Int32 || input_cb_data_format == tt::DataFormat::UInt32 ||
+        input_cb_data_format == tt::DataFormat::Float32) {
+        compute_kernel_defines["DST_ACCUM_MODE"] = "1";
+    }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
     }
     if (!core_range.empty()) {
         CreateKernel(
             program,
-            use_pack_kernel
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size, single_block_size, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_sub_block_size_wh, single_sub_block_size, third_dim},
+                .defines = compute_kernel_defines});
     }
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
             program,
-            use_pack_kernel
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim},
+                .defines = compute_kernel_defines});
     }
     if (has_cliff_row) {
         CreateKernel(
             program,
-            use_pack_kernel
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size, single_block_size_cliff_row, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_block_size, single_block_size_cliff_row, third_dim},
+                .defines = compute_kernel_defines});
     }
 
     if (has_cliff_col) {
         CreateKernel(
             program,
-            use_pack_kernel
-                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
-                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
-                .compile_args = {single_block_size_cliff_col, single_block_size, third_dim}});
+                .unpack_to_dest_mode = unpack_to_dest_mode,
+                .compile_args = {single_sub_block_size_cliff_col_wh, single_sub_block_size, third_dim},
+                .defines = compute_kernel_defines});
     }
 
     // RUNTIME ARGS
@@ -232,6 +255,7 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
     uint32_t tile_start_id = 0;
     uint32_t single_block_size_row_arg;
     uint32_t single_block_size_col_arg;
+    uint32_t single_sub_block_size_row_arg;
 
     uint32_t total_row_cores = full_cores_per_row;
     if (has_cliff_row) {
@@ -245,18 +269,22 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
         if (has_cliff_col && has_cliff_row && i == ncores - 1) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size_cliff_col;
+            single_sub_block_size_row_arg = single_block_size_cliff_row;
 
         } else if (has_cliff_row && i != 0 && ((i + 1) % (full_cores_per_row + 1)) == 0) {
             single_block_size_row_arg = single_block_size_cliff_row;
             single_block_size_col_arg = single_block_size;
+            single_sub_block_size_row_arg = single_block_size_cliff_row;
 
         } else if (i < total_row_cores * full_cores_per_col) {
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size;
+            single_sub_block_size_row_arg = single_sub_block_size;
 
         } else {
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size_cliff_col;
+            single_sub_block_size_row_arg = single_sub_block_size;
         }
 
         //  writer runtime args
@@ -267,6 +295,8 @@ UntilizeMultiCoreBlockProgramFactory::cached_program_t UntilizeMultiCoreBlockPro
             start_column_id,
             single_block_size_row_arg,
             single_block_size_col_arg,
+            TILE_WIDTH * el_size * single_sub_block_size_row_arg,
+            single_sub_block_size_row_arg,
         };
 
         // reader runtime args

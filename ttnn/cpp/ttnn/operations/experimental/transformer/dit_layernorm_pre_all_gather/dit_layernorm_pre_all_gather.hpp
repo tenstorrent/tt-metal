@@ -10,24 +10,14 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn {
-namespace operations::experimental::transformer {
+namespace ttnn::experimental {
 
-struct ExecuteDitLayerNormPreAllGather {
-    // Computes Welford stats (sum and sumsq) over the last dim for LayerNorm.
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        DataType dtype = DataType::BFLOAT16,
-        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
-};
+// Computes Welford stats (sum and sumsq) over the last dim for LayerNorm.
+ttnn::Tensor dit_layernorm_pre_allgather(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& recip_tensor,
+    DataType dtype = DataType::BFLOAT16,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
-}  // namespace operations::experimental::transformer
-
-namespace experimental {
-constexpr auto dit_layernorm_pre_allgather = ttnn::register_operation<
-    "ttnn::experimental::dit_layernorm_pre_allgather",
-    ttnn::operations::experimental::transformer::ExecuteDitLayerNormPreAllGather>();
-
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

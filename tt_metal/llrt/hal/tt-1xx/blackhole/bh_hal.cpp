@@ -56,11 +56,21 @@ constexpr static std::uint32_t get_dram_profiler_size(
 #endif
 }
 
-constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size) {
+constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t dram_profiler_size) {
     return DRAM_PROFILER_BASE + dram_profiler_size;
 }
-constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size) {
-    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size);
+
+constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
+    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+                                 : 0;
+}
+
+constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
+    return get_dram_backed_command_queues_base(dram_profiler_size) +
+           get_dram_backed_command_queues_size(enable_dram_backed_cq);
+}
+constexpr static std::uint32_t get_dram_unreserved_size(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {
+    return MEM_DRAM_SIZE - get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
 }
 
 static constexpr float EPS_BH = 1.19209e-7f;
@@ -74,7 +84,8 @@ private:
     bool enable_2_erisc_mode_;
 
 public:
-    HalJitBuildQueryBlackHole(bool enable_2_erisc_mode) : enable_2_erisc_mode_(enable_2_erisc_mode) {}
+    HalJitBuildQueryBlackHole(const Hal& hal, bool enable_2_erisc_mode) :
+        HalJitBuildQueryBase(hal), enable_2_erisc_mode_(enable_2_erisc_mode) {}
 
     std::string linker_flags([[maybe_unused]] const Params& params) const override { return ""; }
 
@@ -172,7 +183,7 @@ public:
                         srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisck.cc");
                     }
                     break;
-                default: TT_THROW("Unkown processor id {}", params.processor_id);
+                default: TT_THROW("Unknown processor id {}", params.processor_id);
             }
         }
         return srcs;
@@ -250,7 +261,8 @@ public:
     }
 };
 
-void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_bank_size_per_risc_bytes) {
+void Hal::initialize_bh(
+    bool enable_2_erisc_mode, std::uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq) {
     using namespace blackhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
@@ -274,10 +286,14 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = DRAM_PROFILER_BASE;
     const std::uint32_t dram_profiler_size = get_dram_profiler_size(profiler_dram_bank_size_per_risc_bytes);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::PROFILER)] = dram_profiler_size;
+    this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
+        get_dram_backed_command_queues_base(dram_profiler_size);
+    this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::DRAM_BACKED_COMMAND_QUEUES)] =
+        get_dram_backed_command_queues_size(enable_dram_backed_cq);
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
-        get_dram_unreserved_base(dram_profiler_size);
+        get_dram_unreserved_base(dram_profiler_size, enable_dram_backed_cq);
     this->dram_sizes_[static_cast<std::size_t>(HalDramMemAddrType::UNRESERVED)] =
-        get_dram_unreserved_size(dram_profiler_size);
+        get_dram_unreserved_size(dram_profiler_size, enable_dram_backed_cq);
 
     this->mem_alignments_.resize(static_cast<std::size_t>(HalMemType::COUNT));
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::L1)] = L1_ALIGNMENT;
@@ -381,6 +397,7 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
         STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX;
     this->operand_start_stream_ = OPERAND_START_STREAM;
     this->has_stream_registers_ = true;
+    this->noc_topology_ = NoCTopologyType::TORUS;
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
@@ -391,6 +408,8 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
+    this->has_tile_counter_registers_ = false;
+    this->supports_implicit_dfb_sync_ = false;
 
     this->eps_ = EPS_BH;
     this->nan_ = NAN_BH;
@@ -419,23 +438,7 @@ void Hal::initialize_bh(bool enable_2_erisc_mode, std::uint32_t profiler_dram_ba
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_4),
         NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_5)};
 
-    this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>(enable_2_erisc_mode);
-
-    this->verify_eth_fw_version_func_ = [=](tt::umd::semver_t fw_version) {
-        if (enable_2_erisc_mode) {
-            tt::umd::semver_t min_version(1, 7, 0);
-            if (!(fw_version >= min_version)) {
-                log_warning(
-                    tt::LogLLRuntime,
-                    "Blackhole multi erisc mode requires ethernet firmware version {} or higher, but detected version "
-                    "{}. Automatically falling back to single erisc mode for compatibility.",
-                    min_version.to_string(),
-                    fw_version.to_string());
-                return false;
-            }
-        }
-        return true;
-    };
+    this->jit_build_query_ = std::make_unique<HalJitBuildQueryBlackHole>(*this, enable_2_erisc_mode);
 
     this->max_pinned_memory_count_ = std::numeric_limits<size_t>::max();
     this->total_pinned_memory_size_ = std::numeric_limits<size_t>::max();

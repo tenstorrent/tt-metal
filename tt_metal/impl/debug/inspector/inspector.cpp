@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "inspector.hpp"
+#include "context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/data.hpp"
 #include "impl/debug/inspector/rpc_server_generated.hpp"
@@ -13,16 +15,32 @@
 #include "program.hpp"
 #include <memory>
 #include <tt-metalium/experimental/inspector.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include "impl/kernels/kernel.hpp"
 
 namespace tt::tt_metal {
 
 namespace {
-inspector::Data* get_inspector_data() { return tt::tt_metal::MetalContext::instance().get_inspector_data(); }
+inspector::Data* get_inspector_data() {
+    // TODO: we assume inspector only works on the silicon context
+    // https://github.com/tenstorrent/tt-metal/issues/39745
+    if (tt::tt_metal::MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
+        return tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID).get_inspector_data();
+    }
+    return nullptr;
+}
 }  // namespace
 
-bool Inspector::is_enabled() { return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_enabled(); }
+// Inspector is not used on mock devices
+bool Inspector::is_enabled() {
+    if (tt::tt_metal::MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
+        auto& ctx = tt::tt_metal::MetalContext::instance(DEFAULT_CONTEXT_ID);
+        if (ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+            return false;
+        }
+        return ctx.rtoptions().get_inspector_enabled();
+    }
+    return false;
+}
 
 std::unique_ptr<inspector::Data> Inspector::initialize() {
     if (!is_enabled()) {
@@ -345,44 +363,38 @@ void Inspector::mesh_workload_set_program_binary_status(
     }
 }
 
-void Inspector::mesh_workload_set_operation_name_and_parameters(
+void Inspector::emit_debug_entry(
     const distributed::MeshWorkloadImpl* mesh_workload,
+    uint64_t runtime_id,
     std::string_view operation_name,
-    std::string_view operation_parameters) noexcept {
+    std::vector<TensorSpec> tensor_specs) noexcept {
     if (!is_enabled()) {
         return;
     }
-    try {
-        auto* data = get_inspector_data();
-        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
-        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
-        mesh_workload_data.name = std::string(operation_name);
-        mesh_workload_data.parameters = std::string(operation_parameters);
-        // Keep log/event name stable for tooling compatibility.
-        data->logger.log_mesh_workload_operation_name_and_parameters(
-            mesh_workload_data, operation_name, operation_parameters);
-    } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh workload set metadata: {}", e.what());
-    }
-}
-
-void Inspector::mesh_workload_set_runtime_id(
-    const distributed::MeshWorkloadImpl* mesh_workload, uint64_t runtime_id) noexcept {
-    if (!is_enabled()) {
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
         return;
     }
     try {
-        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->runtime_entries_mutex);
+        auto pos = data->runtime_entries_write_pos;
+        auto& slot = data->runtime_entries[pos % inspector::Data::kRuntimeEntriesCapacity];
+        slot.workload_id = mesh_workload->get_id();
+        slot.runtime_id = runtime_id;
+        slot.operation_name = operation_name;
+        slot.tensor_specs = std::move(tensor_specs);
+        if (pos == 2 * inspector::Data::kRuntimeEntriesCapacity) {
+            data->runtime_entries_write_pos = inspector::Data::kRuntimeEntriesCapacity + 1;
+        } else {
+            data->runtime_entries_write_pos++;
+        }
 
-        std::lock_guard<std::mutex> lock(data->runtime_ids_mutex);
-        data->runtime_ids.push_back({mesh_workload->get_id(), runtime_id});
-
-        // Keep only the last MAX_RUNTIME_ID_ENTRIES
-        if (data->runtime_ids.size() > inspector::Data::MAX_RUNTIME_ID_ENTRIES) {
-            data->runtime_ids.pop_front();
+        if (MetalContext::instance().rtoptions().get_inspector_log_runtime_entries()) {
+            data->logger.log_runtime_entry(slot);
         }
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log workload runtime ID: {}", e.what());
+        TT_INSPECTOR_LOG("Failed to emit debug entry: {}", e.what());
     }
 }
 
@@ -508,22 +520,51 @@ void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {
     }
 }
 
+std::string Inspector::get_kernel_path_from_watcher_kernel_id(int watcher_kernel_id) {
+    std::string elf_path;
+
+    if (!is_enabled()) {
+        return elf_path;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize.
+        return elf_path;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(data->programs_mutex);
+        auto program_id_it = data->kernel_id_to_program_id.find(watcher_kernel_id);
+        if (program_id_it != data->kernel_id_to_program_id.end()) {
+            auto program_id = data->kernel_id_to_program_id.at(watcher_kernel_id);
+            auto program_data_it = data->programs_data.find(program_id);
+            if (program_data_it != data->programs_data.end()) {
+                auto& program_data = program_data_it->second;
+                auto kernel_data_it = program_data.kernels.find(watcher_kernel_id);
+                if (kernel_data_it != program_data.kernels.end()) {
+                    elf_path = kernel_data_it->second.path;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to get ELF path from watcher kernel ID {}: {}", watcher_kernel_id, e.what());
+    }
+    return elf_path;
+}
+
 namespace experimental::inspector {
 
-bool IsEnabled() {
-    return Inspector::is_enabled();
+bool IsEnabled() { return Inspector::is_enabled(); }
+
+bool ShouldCaptureTensorSpecs() {
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_inspector_capture_tensor_specs();
 }
 
-void EmitMeshWorkloadAnnotation(
+void EmitMeshWorkloadDebugEntry(
     tt::tt_metal::distributed::MeshWorkload& workload,
+    uint64_t runtime_id,
     std::string_view operation_name,
-    std::string_view operation_parameters) {
-    tt::tt_metal::Inspector::mesh_workload_set_operation_name_and_parameters(
-        &workload.impl(), operation_name, operation_parameters);
-}
-
-void EmitMeshWorkloadRuntimeId(tt::tt_metal::distributed::MeshWorkload& workload, uint64_t runtime_id) {
-    tt::tt_metal::Inspector::mesh_workload_set_runtime_id(&workload.impl(), runtime_id);
+    std::vector<TensorSpec> tensor_specs) {
+    tt::tt_metal::Inspector::emit_debug_entry(&workload.impl(), runtime_id, operation_name, std::move(tensor_specs));
 }
 
 }  // namespace experimental::inspector

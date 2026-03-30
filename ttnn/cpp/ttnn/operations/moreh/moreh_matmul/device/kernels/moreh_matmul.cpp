@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Implemented based on bmm.cpp
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/transpose_wh.h"
+#include "api/compute/matmul.h"
+#include "api/compute/transpose_wh.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 ////////////////////
@@ -276,10 +276,10 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
                 cb_wait_front(mm_src1, onetile);
             }
 
-            mm_init_short(mm_src0, mm_src1);
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(mm_src0, mm_src1);
 #endif
+            mm_init_short(mm_src0, mm_src1);
             matmul_tiles(mm_src0, mm_src1, 0, 0, 0);
             tile_regs_commit();
 

@@ -22,7 +22,6 @@ LLK Asserts are controlled independently from Lightweight Kernel Asserts and the
 
    export TT_METAL_LLK_ASSERTS=1  # Enable LLK Asserts. Default is `0` (disabled).
 
-**Important:** LLK Asserts require either Lightweight Kernel Asserts or the Watcher to be enabled for proper failure reporting.
 Lightweight Kernel Asserts at present provide more detailed information about the assertion failure.
 
 It is recommended to enable at least one of these mechanisms for comprehensive debugging:
@@ -37,14 +36,17 @@ It is recommended to enable at least one of these mechanisms for comprehensive d
    export TT_METAL_LLK_ASSERTS=1
    export TT_METAL_WATCHER=1
 
+   # Option 3: Enable LLK Asserts only
+   export TT_METAL_LLK_ASSERTS=1
+
 When an LLK assert fails, it triggers:
 
-1. An ``ebreak`` instruction (in case of Lightweight Kernel Asserts)
+1. An ``ebreak`` instruction (in case of Lightweight Kernel Asserts or LLK Asserts only)
 2. Watcher assertion (in case of Watcher)
 
 This causes the kernel to hang.
 If Watcher is used, the assertion message will be printed to stderr and the watcher log file.
-If Lightweight Kernel Asserts are used, use ``tt-triage`` to analyze the failure state.
+If Lightweight Kernel Asserts are used or LLK Asserts only are used, use ``tt-triage`` to analyze the failure state.
 
 What LLK Asserts Validate
 --------------------------
@@ -133,7 +135,7 @@ LLK asserts are fully integrated into the tt-metal CI/CD system through the ``en
 
 The following workflows support LLK asserts:
 
-- ``apc-select-tests.yaml`` - Selective APC test execution
+- ``sanity-tests.yaml`` - Selective sanity test execution
 
 When to Use LLK Asserts
 ------------------------
@@ -156,7 +158,7 @@ When an LLK assert fails:
 
 1. The kernel hangs at the assertion point (``ebreak`` instruction)
 2. Run ``tt-triage`` to analyze the device state
-3. If Lightweight Kernel Asserts are enabled, use ``dump_lightweight_asserts.py`` to see call stacks and local variables
+3. If Lightweight Kernel Asserts are enabled or LLK Asserts only are enabled, use ``dump_lightweight_asserts.py`` to see call stacks and local variables
 4. Check the assertion message to understand what constraint was violated
 
 Common failure scenarios:

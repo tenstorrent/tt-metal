@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,5 +15,7 @@
 #include "ops/sdpa_fw/sdpa_fw.hpp"
 #include "ops/silu_bw/silu_bw.hpp"
 #include "ops/softmax/softmax.hpp"
-#include "ops/swiglu_fw/swiglu_fw.hpp"
-#include "optimizers/sgd_fused/sgd_fused.hpp"
+#include "ops/softmax_backward/softmax_backward.hpp"
+#include "ops/swiglu_elemwise_bw/swiglu_elemwise_bw.hpp"
+#include "optimizers/adamw/adamw.hpp"
+#include "optimizers/sgd/sgd.hpp"

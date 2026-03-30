@@ -43,9 +43,10 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
-#include "data_types.hpp"
+#include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
-#include "dispatch_core_common.hpp"
+#include "impl/context/context_types.hpp"
+#include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include <tt_stl/enum.hpp>
@@ -54,7 +55,6 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "profiler_state.hpp"
 #include "program_command_sequence.hpp"
 #include "program_device_map.hpp"
 #include "program_impl.hpp"
@@ -65,7 +65,6 @@
 #include "sub_device_types.hpp"
 #include "tile.hpp"
 #include "tt_memory.h"
-#include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/debug/inspector/inspector.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -76,8 +75,9 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
+#include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
-#include "tt_stl/reflection.hpp"
+#include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"
@@ -85,12 +85,9 @@
 namespace tt {
 class tt_hlk_desc;
 enum CBIndex : std::uint8_t;
-namespace tt_metal {
-class EnqueueProgramCommand;
-namespace experimental {
+namespace tt_metal::experimental {
 class GlobalCircularBuffer;
-}  // namespace experimental
-}  // namespace tt_metal
+}  // namespace tt_metal::experimental
 }  // namespace tt
 
 namespace {
@@ -167,23 +164,20 @@ void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std
 size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint64_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
-    // Also account for watcher/dprint enabled in hash because they enable additional code to
-    // be compiled into the kernel.
-    std::string compile_hash_str = fmt::format(
-        "{}_{}_{}_{}",
-        build_key,
-        std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
-        kernel->compute_hash(),
-        tt::tt_metal::MetalContext::instance().rtoptions().get_compile_hash_string());
-    size_t compile_hash = std::hash<std::string>{}(compile_hash_str);
+    // watcher/dprint enabled are accounted for in the build key.
+    tt::FNV1a hasher;
+    hasher.update(build_key);
+    hasher.update(stable_hash_hlk_desc(build_options.hlk_desc));
+    hasher.update(kernel->compute_hash());
+    size_t compile_hash = static_cast<size_t>(hasher.digest());
 
 #ifdef GENERATE_HASH_LOG
     static std::ofstream f("/tmp/hashlog.txt");
     static std::mutex mutex_;
     {
         std::unique_lock<std::mutex> lock(mutex_);
-        f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
+        f << kernel->name() << " :: " << build_key << "::" << stable_hash_hlk_desc(build_options.hlk_desc)
+          << " :: " << kernel->compute_hash() << " :: " << compile_hash << std::endl
           << std::flush;
     }
 #endif
@@ -193,7 +187,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
 
 namespace experimental {
 
-void ClearKernelCache() { detail::HashLookup::inst().clear(); }
+void ClearKernelCache() { jit_build_cache_clear(); }
 
 }  // namespace experimental
 
@@ -257,14 +251,14 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
 
         auto config = std::visit(
             tt::stl::overloaded{
-                [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                [&](const ReaderConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
                         std::move(named_compile_args),
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
-                [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig> {
                     return WriterDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
@@ -272,7 +266,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                    -> std::variant<DataMovementConfig, ComputeConfig> {
                     return DataMovementConfig{
                         .processor = dm_descriptor.processor,
                         .noc = dm_descriptor.noc,
@@ -284,7 +278,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                     };
                 },
                 [&](const ComputeConfigDescriptor& compute_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
+                    -> std::variant<DataMovementConfig, ComputeConfig> {
                     return ComputeConfig{
                         .math_fidelity = compute_descriptor.math_fidelity,
                         .fp32_dest_acc_en = compute_descriptor.fp32_dest_acc_en,
@@ -296,18 +290,6 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .defines = std::move(defines),
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
-                    };
-                },
-                [&](const EthernetConfigDescriptor& ethernet_descriptor)
-                    -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
-                    return EthernetConfig{
-                        .eth_mode = ethernet_descriptor.eth_mode,
-                        .noc = ethernet_descriptor.noc,
-                        .processor = ethernet_descriptor.processor,
-                        .compile_args = std::move(compile_args),
-                        .defines = std::move(defines),
-                        .named_compile_args = std::move(named_compile_args),
-                        .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::Os),
                     };
                 },
             },
@@ -427,7 +409,7 @@ KernelGroup::KernelGroup(
     kernel_config.brisc_noc_mode() = NOC_MODE::DM_DEDICATED_NOC;
 
     // Slow dispatch uses fixed addresses for the kernel config, configured here statically
-    // Fast dispatch kernel config mangement happens under the CQ and will re-program the base
+    // Fast dispatch kernel config management happens under the CQ and will re-program the base
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         kernel_config.kernel_config_base()[index] =
@@ -437,16 +419,14 @@ KernelGroup::KernelGroup(
     std::set<NOC_MODE> noc_modes;
     for (auto kernel_id : this->kernel_ids) {
         const auto kernel = program.get_kernel(kernel_id);
-        auto processor_class = kernel->get_kernel_processor_class();
         auto num_binaries = kernel->expected_num_binaries();
         for (uint32_t i = 0; i < num_binaries; i++) {
-            auto processor_type = kernel->get_kernel_processor_type(i);
-            auto processor_index = hal.get_processor_index(
-                hal.get_programmable_core_type(programmable_core_type_index), processor_class, processor_type);
-            kernel_config.watcher_kernel_ids()[processor_index] = kernel->get_watcher_kernel_id();
-            kernel_config.enables() |= 1u << processor_index;
+            std::vector<uint32_t> processor_indices = kernel->get_processor_indices_for_binary(i);
+            for (uint32_t processor_index : processor_indices) {
+                kernel_config.watcher_kernel_ids()[processor_index] = kernel->get_watcher_kernel_id();
+                kernel_config.enables() |= 1u << processor_index;
+            }
         }
-        auto class_id = kernel->dispatch_class();
 
         // Dynamic NOC assignment is only supported on certain core types
         const bool is_tensix_core =
@@ -461,7 +441,7 @@ KernelGroup::KernelGroup(
                     if constexpr (std::is_same_v<T, DataMovementConfig> || std::is_same_v<T, EthernetConfig>) {
                         // The code below sets the brisc_noc_id for use by the device firmware
                         // Use 0 if neither brisc nor ncrisc specify a noc
-                        if (class_id ==
+                        if (kernel->get_kernel_processor_type(0) ==
                             ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_0)) {
                             noc_modes.insert(arg.noc_mode);
                             // Use brisc's noc if brisc specifies a noc
@@ -472,7 +452,7 @@ KernelGroup::KernelGroup(
                                 kernel_config.brisc_noc_mode() = NOC_MODE::DM_DYNAMIC_NOC;
                             }
                         } else if (
-                            class_id ==
+                            kernel->get_kernel_processor_type(0) ==
                             ttsl::as_underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
                             noc_modes.insert(arg.noc_mode);
                             // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
@@ -488,6 +468,70 @@ KernelGroup::KernelGroup(
                     }
                 },
                 kernel->config());
+        }
+
+        // Quasar: set per-processor num_sw_threads and kernel_thread_id for dm/runtime access
+        if (auto* qk = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(kernel.get())) {
+            auto config = std::get<experimental::quasar::QuasarDataMovementConfig>(qk->config());
+            const auto& dm_cores = qk->get_dm_processors();
+            for (uint32_t thread_idx = 0; thread_idx < dm_cores.size(); thread_idx++) {
+                uint32_t processor_index = hal.get_processor_index(
+                    hal.get_programmable_core_type(programmable_core_type_index),
+                    HalProcessorClassType::DM,
+                    qk->get_kernel_processor_type(static_cast<int>(thread_idx)));
+                kernel_config.num_sw_threads()[processor_index] = config.num_threads_per_cluster;
+                kernel_config.kernel_thread_id()[processor_index] = thread_idx;
+            }
+        }
+        // Quasar: set per-processor num_sw_threads and kernel_thread_id for trisc/runtime access
+        if (auto* qk = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get())) {
+            auto config = std::get<experimental::quasar::QuasarComputeConfig>(qk->config());
+            const auto& compute_cores = qk->get_compute_processors();
+            // Track which NEOs have been used to ensure we don't use the same NEO multiple times
+
+            // Every trisc core in a single NEO/Tensix engine shares the same num_sw_threads and kernel_thread_id
+            std::set<uint32_t> neo_indices_set;
+            for (auto compute_core : compute_cores) {
+                switch (compute_core) {
+                    case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_0:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_1:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_2:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_3:
+                        neo_indices_set.insert(0);
+                        break;
+                    case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_0:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_1:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_2:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_3:
+                        neo_indices_set.insert(1);
+                        break;
+                    case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_0:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_1:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_2:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_3:
+                        neo_indices_set.insert(2);
+                        break;
+                    case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_0:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_1:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_2:
+                    case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_3:
+                        neo_indices_set.insert(3);
+                        break;
+                }
+            }
+            std::vector<uint32_t> neo_indices_used(neo_indices_set.begin(), neo_indices_set.end());
+            TT_ASSERT(
+                neo_indices_used.size() == config.num_threads_per_cluster,
+                "Number of NEOs used must match number of threads per cluster");
+            // Now that we know which NEOs have been used, we can set the num_sw_threads and kernel_thread_id for each
+            // Tensix engine
+            for (uint32_t thread_idx = 0; thread_idx < config.num_threads_per_cluster; thread_idx++) {
+                uint32_t neo_id = neo_indices_used[thread_idx];
+                // First set of indices are used for DM cores, second set are used for Tensix engines
+                uint32_t config_index = experimental::quasar::QUASAR_NUM_DM_CORES_PER_CLUSTER + neo_id;
+                kernel_config.num_sw_threads()[config_index] = config.num_threads_per_cluster;
+                kernel_config.kernel_thread_id()[config_index] = thread_idx;
+            }
         }
     }
     TT_FATAL(noc_modes.size() <= 1, "KernelGroup must have the same noc mode for all kernels");
@@ -695,9 +739,19 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 num_dfbs);
             local_cb_mask = (num_dfbs > 0 && local_cb_mask == 0) ? num_dfbs : local_cb_mask;
             std::vector<KernelHandle> kernel_ids(kernels.begin(), kernels.end());
-            // Sort kernel ids by dispatch class, so loops over this array will be in dispatch class order
-            std::sort(kernel_ids.begin(), kernel_ids.end(), [&handle_to_kernel](KernelHandle a, KernelHandle b) {
-                return handle_to_kernel.at(a)->dispatch_class() < handle_to_kernel.at(b)->dispatch_class();
+            // Sort kernel ids by processor index, so loops over this array will be in processor order
+            std::sort(kernel_ids.begin(), kernel_ids.end(), [&](KernelHandle a, KernelHandle b) {
+                auto ka = handle_to_kernel.at(a);
+                auto kb = handle_to_kernel.at(b);
+                auto idx_a = hal.get_processor_index(
+                    hal.get_programmable_core_type(programmable_core_type_index),
+                    ka->get_kernel_processor_class(),
+                    ka->get_kernel_processor_type(0));
+                auto idx_b = hal.get_processor_index(
+                    hal.get_programmable_core_type(programmable_core_type_index),
+                    kb->get_kernel_processor_class(),
+                    kb->get_kernel_processor_type(0));
+                return idx_a < idx_b;
             });
             kernel_groups_[programmable_core_type_index].push_back(std::make_shared<KernelGroup>(
                 *this,
@@ -853,7 +907,61 @@ std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges()
             }
         }
     }
-    return core_ranges;
+
+    // Fast path: if no ranges overlap, return as-is.
+    bool has_overlap = false;
+    for (size_t i = 0; i < core_ranges.size() && !has_overlap; ++i) {
+        for (size_t j = i + 1; j < core_ranges.size(); ++j) {
+            if (core_ranges[i].intersects(core_ranges[j])) {
+                has_overlap = true;
+                break;
+            }
+        }
+    }
+    if (!has_overlap) {
+        return core_ranges;
+    }
+
+    // Make ranges non-overlapping so that each core is targeted by exactly one
+    // multicast during CB config dispatch.
+    //
+    // During dispatch, each CoreRange's payload is built from all CBs whose
+    // core_ranges intersect it. If a range intersects two CBs with the same
+    // buffer index but different configs (valid when their core_ranges don't
+    // overlap), the second CB overwrites the first in the payload and the
+    // multicast sends the wrong config to cores that need the other.
+    //
+    // Split every overlapping pair into three non-overlapping pieces (A\B, A∩B,
+    // B\A) and repeat until no overlaps remain. Each resulting piece's boundaries
+    // align with all original CB CoreRange edges, so it cannot straddle two
+    // different configs for the same buffer index.
+    std::vector<CoreRange> result = std::move(core_ranges);
+    size_t i = 0;
+    while (i < result.size()) {
+        // Find the first range that overlaps with result[i].
+        size_t j = i + 1;
+        for (; j < result.size(); ++j) {
+            if (result[i].intersects(result[j])) {
+                break;
+            }
+        }
+        if (j == result.size()) {
+            ++i;  // No overlap, advance.
+            continue;
+        }
+        // Split the overlapping pair into non-overlapping pieces: A\B, A∩B, B\A.
+        CoreRangeSet a_set(result[i]), b_set(result[j]);
+        result.erase(result.begin() + j);
+        result.erase(result.begin() + i);
+        auto a_only = a_set.subtract(b_set);
+        auto b_only = b_set.subtract(a_set);
+        auto common = a_set.intersection(b_set);
+        result.insert(result.end(), a_only.ranges().begin(), a_only.ranges().end());
+        result.insert(result.end(), b_only.ranges().begin(), b_only.ranges().end());
+        result.insert(result.end(), common.ranges().begin(), common.ranges().end());
+        i = 0;  // Restart — new pieces may overlap with earlier ranges.
+    }
+    return result;
 }
 
 void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
@@ -942,6 +1050,21 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 cb_allocator.core_range.str(),
                 lowest_address.value(),
                 cb_region_end);
+        }
+    }
+}
+
+void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
+    auto grid_size = device->compute_with_storage_grid_size();
+    for (const auto& cb : circular_buffers_) {
+        for (const auto& cr : cb->core_ranges().ranges()) {
+            TT_FATAL(
+                cr.end_coord.x < grid_size.x && cr.end_coord.y < grid_size.y,
+                "Circular buffer core range {} in program {} exceeds device compute grid ({}x{})",
+                cr.str(),
+                this->id,
+                grid_size.x,
+                grid_size.y);
         }
     }
 }
@@ -1099,7 +1222,8 @@ void detail::ProgramImpl::set_cb_tile_dims(const std::vector<CoreRange>& crs, Ji
 
 void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // Mock devices don't dispatch to hardware, skip dispatch data population
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+    if (tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_cluster().get_target_device_type() ==
+        tt::TargetDevice::Mock) {
         return;
     }
 
@@ -1143,7 +1267,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
             for (size_t sub_kernel_index = 0; sub_kernel_index < binaries.size(); ++sub_kernel_index) {
                 const ll_api::memory& kernel_bin = *binaries[sub_kernel_index];
 
-                // TODO: Pack erisc spans too, and then everthing is
+                // TODO: Pack erisc spans too, and then everything is
                 // one span
                 uint32_t num_spans = kernel_bin.num_spans();
                 dst_base_addrs.resize(dst_base_addrs.size() + num_spans);
@@ -1199,12 +1323,13 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                     KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_id);
                     kernel_ids.push_back(device_local_kernel_id);
                     auto kernel = this->get_kernel(device_local_kernel_id);
-                    auto dispatch_class = kernel->dispatch_class();
-                    int proc_sub_class = 0;
-                    for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
-                        // TODO: ditch this w/ linear writes based on program config kernel_text_offset and size
-                        dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
-                        proc_sub_class++;
+                    auto processor_class = kernel->get_kernel_processor_class();
+                    auto& transfer_info = kernel_transfer_info.at(device_local_kernel_id);
+                    for (uint32_t span_idx = 0; span_idx < transfer_info.dst_base_addrs.size(); span_idx++) {
+                        auto processor_type = transfer_info.processor_ids[span_idx];
+                        auto processor_index = hal.get_processor_index(
+                            hal.get_programmable_core_type(index), processor_class, processor_type);
+                        transfer_info.dst_base_addrs[span_idx] = kernel_group->kernel_text_offsets[processor_index];
                     }
                 }
 
@@ -1226,15 +1351,17 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                 for (auto kernel_id : kernel_group->kernel_ids) {
                     KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_id);
                     auto kernel = this->get_kernel(device_local_kernel_id);
-                    auto dispatch_class = kernel->dispatch_class();
                     kernel_ids.push_back(device_local_kernel_id);
 
                     // Update destination address by kernel config offset
                     if (hal.get_core_kernel_stored_in_config_buffer(hal.get_programmable_core_type(index))) {
-                        int proc_sub_class = 0;
-                        for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
-                            dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
-                            proc_sub_class++;
+                        auto processor_class = kernel->get_kernel_processor_class();
+                        auto& transfer_info = kernel_transfer_info.at(device_local_kernel_id);
+                        for (uint32_t span_idx = 0; span_idx < transfer_info.dst_base_addrs.size(); span_idx++) {
+                            auto processor_type = transfer_info.processor_ids[span_idx];
+                            auto processor_index = hal.get_processor_index(
+                                hal.get_programmable_core_type(index), processor_class, processor_type);
+                            transfer_info.dst_base_addrs[span_idx] = kernel_group->kernel_text_offsets[processor_index];
                         }
                     }
                 }
@@ -1430,6 +1557,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
     const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    ContextId context_id = extract_context_id(device);
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -1451,11 +1579,14 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     std::vector<std::shared_future<void>> events;
 
+    bool is_mock = tt::tt_metal::MetalContext::instance(context_id).get_cluster().get_target_device_type() ==
+                   tt::TargetDevice::Mock;
+
     for (auto& kernels : kernels_) {
         for (auto& [id, kernel] : kernels) {
             validate_kernel_placement(force_slow_dispatch, kernel);
             launch_build_step(
-                [kernel, device, this, &build_env] {
+                [kernel, device, this, &build_env, is_mock] {
                     JitBuildOptions build_options(build_env.build_env);
                     kernel->set_build_options(build_options);
                     if (this->compiled_.empty()) {
@@ -1463,6 +1594,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     }
                     this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
                     this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
+                    this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
+                    this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
 
                     auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
 
@@ -1470,15 +1603,11 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
 
-                    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
-                        tt::TargetDevice::Mock) {
+                    if (!is_mock) {
                         kernel->register_kernel_elf_paths_with_watcher(*device);
                     }
 
-                    bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
-                                   tt::TargetDevice::Mock;
-
-                    if (detail::HashLookup::inst().add(kernel_hash)) {
+                    jit_build_once(kernel_hash, [&] {
                         if (!is_mock) {
                             GenerateBinaries(device, build_options, kernel);
                         } else {
@@ -1486,9 +1615,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
                             kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
                         }
-                        detail::HashLookup::inst().add_generated_bin(kernel_hash);
-                    }
-                    detail::HashLookup::inst().wait_for_bin_generated(kernel_hash);
+                    });
 
                     Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 },
@@ -1498,8 +1625,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     sync_build_steps(events);
 
     // Mock devices don't have binaries to read
-    bool is_mock =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
     if (!is_mock) {
         for (const auto& kernels : kernels_) {
             for (const auto& pair : kernels) {
@@ -1669,8 +1794,6 @@ detail::ProgramImpl::get_cached_program_command_sequences() noexcept {
 void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state) {
     auto& program_config = get_program_config(index);
     program_config.rta_offset = state.rta_offset;
-    program_config.crta_offsets = state.crta_offsets;
-    program_config.crta_sizes = state.crta_sizes;
     program_config.sem_offset = state.sem_offset;
     program_config.sem_size = state.sem_size;
     program_config.cb_offset = state.cb_offset;
@@ -1693,40 +1816,29 @@ void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
     }
 }
 
-using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
-using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;
-using SemaphoresGetter = std::function<const std::vector<Semaphore>&()>;
-using DataflowBuffersGetter =
-    std::function<const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>&()>;
-
 void detail::ProgramImpl::finalize_offsets(IDevice* device) {
     if (is_finalized()) {
         return;
     }
 
     // Create proper function objects that capture 'this'
-    KernelsGetter kernels_getter =
+    detail::KernelsGetter kernels_getter =
         [this](uint32_t index) -> std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& {
         return this->get_kernels(index);
     };
 
-    KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
+    detail::KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
         return this->get_kernel_groups(index);
     };
 
-    SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
-
-    DataflowBuffersGetter dataflow_buffers_getter =
-        [this]() -> const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& {
-        return this->dataflow_buffers_;
-    };
+    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
 
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
     tt::stl::Span<ProgramImpl*> programs(programs_array);
 
     (void)ProgramImpl::finalize_program_offsets(
-        device, kernels_getter, kernel_groups_getter, semaphores_getter, dataflow_buffers_getter, programs);
+        extract_context_id(device), device, kernels_getter, kernel_groups_getter, semaphores_getter, programs);
 
     set_finalized();
 }
@@ -1734,26 +1846,28 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
 // Compute relative offsets (wrt the start of the kernel config ring buffer) and sizes of all
 // program data structures in L1. Will be used when assembling dispatch commands for this program
 uint32_t detail::ProgramImpl::finalize_program_offsets(
+    ContextId context_id,
     IDevice* device,
     const KernelsGetter& kernels_getter,
     const KernelGroupsGetter& kernel_groups_getter,
     const SemaphoresGetter& semaphores_getter,
-    const DataflowBuffersGetter& dataflow_buffers_getter,
     tt::stl::Span<ProgramImpl*> programs) {
     ProgramOffsetsState state;
 
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(context_id).hal();
+
+    // Collect dataflow buffers from all programs
+    std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>> dataflow_buffers;
+    for (ProgramImpl* program : programs) {
+        for (const auto& dfb : program->dataflow_buffers()) {
+            dataflow_buffers.push_back(dfb);
+        }
+    }
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
         state.offset = program_dispatch::finalize_rt_args(
-            kernels_getter(index),
-            kernel_groups_getter(index),
-            state.config_base_offset,
-            index,
-            state.rta_offset,
-            state.crta_offsets,
-            state.crta_sizes);
+            kernels_getter(index), kernel_groups_getter(index), state.config_base_offset, index, state.rta_offset);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
@@ -1770,7 +1884,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
             index,
             kernel_groups_getter(index),
-            dataflow_buffers_getter(),
+            dataflow_buffers,
             state.offset,
             state.dfb_offset,
             state.dfb_size);

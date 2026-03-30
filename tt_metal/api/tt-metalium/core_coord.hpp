@@ -5,9 +5,8 @@
 #pragma once
 
 #include <fmt/base.h>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include <stdint.h>
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstddef>
@@ -17,14 +16,15 @@
 #include <string>
 #include <vector>
 
+// UMD: re-exports tt_xy_pair, aliased as CoreCoord in this header.
 #include <umd/device/types/xy_pair.hpp>
 
-namespace tt::stl::json {
+namespace ttsl::json {
 template <typename T>
 struct from_json_t;
 template <typename T>
 struct to_json_t;
-}  // namespace tt::stl::json
+}  // namespace ttsl::json
 
 namespace tt::tt_metal {
 
@@ -104,13 +104,13 @@ constexpr bool operator<(const CoreRange& left, const CoreRange& right) {
 
 class CoreRangeSet {
 public:
-    CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges);
+    CoreRangeSet(ttsl::Span<const CoreRange> core_ranges);
 
     CoreRangeSet(const std::set<CoreRange>& core_ranges);
 
     CoreRangeSet(const CoreRange& core_range);
 
-    CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords);
+    CoreRangeSet(ttsl::Span<const CoreCoord> core_coords);
 
     CoreRangeSet() = default;
 
@@ -215,7 +215,7 @@ using CoreRange [[deprecated("Use tt::tt_metal::CoreRange")]] = tt::tt_metal::Co
 using CoreRangeSet [[deprecated("Use tt::tt_metal::CoreRangeSet")]] = tt::tt_metal::CoreRangeSet;
 
 // Deprecated function wrappers - use tt::tt_metal namespace versions instead
-// template to depriorize the wrappers in overloading to avoid ambigous selection from compiler.
+// template to depriorize the wrappers in overloading to avoid ambiguous selection from compiler.
 
 template <bool _compiler_deprioritize_this = true>
 [[deprecated("Use tt::tt_metal::corerange_to_cores")]] inline std::vector<CoreCoord> corerange_to_cores(

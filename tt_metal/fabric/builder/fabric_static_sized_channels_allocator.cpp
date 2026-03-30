@@ -11,6 +11,7 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 #include <algorithm>
 #include <numeric>
 
@@ -284,12 +285,14 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         num_receiver_buffer_slots_per_vc,
     std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
         num_remote_receiver_buffer_slots_per_vc) {
-    // Per-VC buffer slot configuration: {vc0_sender, vc0_receiver, vc1_sender, vc1_receiver}
+    // Per-VC buffer slot configuration: {vc0_sender, vc0_receiver, vc1_sender, vc1_receiver, vc2_sender, vc2_receiver}
     struct PerVcBufferSlots {
         size_t vc0_sender_slots;
         size_t vc0_receiver_slots;
         size_t vc1_sender_slots;
         size_t vc1_receiver_slots;
+        size_t vc2_sender_slots;
+        size_t vc2_receiver_slots;
     };
 
     // fabric with tensix extension uses different buffer slots options, since only one or two sender channels are
@@ -298,109 +301,185 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     static const std::vector<std::vector<PerVcBufferSlots>> default_with_tensix_buffer_slot_options = {
         // WORMHOLE_B0
         {
-            {16, 16, 0, 0},  // Option 1
-            {8, 16, 0, 0},   // Option 2
-            {8, 8, 0, 0},    // Option 3
-            {4, 8, 0, 0},    // Option 4
-            {4, 4, 0, 0},    // Option 5: VC0 only, smaller
-            {2, 4, 0, 0},    // Option 6: VC0 only, smaller
-            {2, 2, 0, 0},    // Option 7: VC0 only, smaller
-            {1, 2, 0, 0},    // Option 8: VC0 only, smallest
-            {1, 1, 0, 0},    // Option 9: VC0 only, smallest
-            {4, 8, 4, 4},    // Option 10: supports both VCs
-            {4, 8, 2, 2},    // Option 11: supports both VCs
-            {4, 4, 2, 2},    // Option 12: supports both VCs
-            {2, 2, 2, 2}     // Option 13: supports both VCs
+            {16, 16, 0, 0, 0, 0},  // Option 1
+            {8, 16, 0, 0, 0, 0},   // Option 2
+            {8, 8, 0, 0, 0, 0},    // Option 3
+            {4, 8, 0, 0, 0, 0},    // Option 4
+            {4, 4, 0, 0, 0, 0},    // Option 5: VC0 only, smaller
+            {2, 4, 0, 0, 0, 0},    // Option 6: VC0 only, smaller
+            {2, 2, 0, 0, 0, 0},    // Option 7: VC0 only, smaller
+            {1, 2, 0, 0, 0, 0},    // Option 8: VC0 only, smallest
+            {1, 1, 0, 0, 0, 0},    // Option 9: VC0 only, smallest
+            {4, 8, 4, 4, 0, 0},    // Option 10: supports VC0+VC1
+            {4, 8, 2, 2, 0, 0},    // Option 11: supports VC0+VC1
+            {4, 4, 2, 2, 0, 0},    // Option 12: supports VC0+VC1
+            {2, 2, 2, 2, 0, 0}     // Option 13: supports VC0+VC1
         },
         // BLACKHOLE
         {
-            {32, 32, 0, 0},  // Option 1
-            {16, 32, 0, 0},  // Option 2
-            {16, 16, 0, 0},  // Option 3
-            {8, 16, 0, 0},   // Option 4
-            {8, 8, 0, 0},    // Option 5
-            {4, 8, 0, 0},    // Option 6
-            {4, 4, 0, 0},    // Option 7
-            {2, 4, 0, 0},    // Option 8
-            {2, 2, 0, 0},    // Option 9
-            {1, 2, 0, 0},    // Option 10
-            {1, 1, 0, 0},    // Option 11
-            {4, 8, 2, 4},    // Option 12: supports both VCs
-            {4, 8, 2, 2},    // Option 13: supports both VCs, smaller VC1 receiver
-            {2, 4, 2, 2},    // Option 14: supports both VCs, smaller overall
-            {2, 4, 1, 1},    // Option 15: supports both VCs, smaller overall
-            {2, 2, 1, 1},    // Option 16: supports both VCs, smaller overall
-            {1, 1, 1, 1}     // Option 17: supports both VCs, smaller overall
+            {32, 32, 0, 0, 0, 0},  // Option 1
+            {16, 32, 0, 0, 0, 0},  // Option 2
+            {16, 16, 0, 0, 0, 0},  // Option 3
+            {8, 16, 0, 0, 0, 0},   // Option 4
+            {8, 8, 0, 0, 0, 0},    // Option 5
+            {4, 8, 0, 0, 0, 0},    // Option 6
+            {4, 4, 0, 0, 0, 0},    // Option 7
+            {2, 4, 0, 0, 0, 0},    // Option 8
+            {2, 2, 0, 0, 0, 0},    // Option 9
+            {1, 2, 0, 0, 0, 0},    // Option 10
+            {1, 1, 0, 0, 0, 0},    // Option 11
+            {4, 8, 2, 4, 0, 0},    // Option 12: supports VC0+VC1
+            {4, 8, 2, 2, 0, 0},    // Option 13: supports VC0+VC1, smaller VC1 receiver
+            {2, 4, 2, 2, 0, 0},    // Option 14: supports VC0+VC1, smaller overall
+            {2, 4, 1, 1, 0, 0},    // Option 15: supports VC0+VC1, smaller overall
+            {2, 2, 1, 1, 0, 0},    // Option 16: supports VC0+VC1, smaller overall
+            {1, 1, 1, 1, 0, 0}     // Option 17: supports VC0+VC1, smaller overall
 
         }};
 
-    auto get_num_buffer_slots = [](Topology topology, size_t arch_index) -> const std::vector<PerVcBufferSlots>& {
-        // Architecture-specific buffer slot configurations per VC
-        // Format: {vc0_sender, vc0_receiver, vc1_sender, vc1_receiver}
-        static const std::vector<std::vector<PerVcBufferSlots>> mesh_buffer_slot_options = {
+    auto get_num_buffer_slots = [](Topology topology,
+                                   size_t arch_index,
+                                   bool vc1_present,
+                                   bool vc2_present) -> const std::vector<PerVcBufferSlots>& {
+        // Architecture-specific buffer slot configurations per VC, split by active VC count
+        // Format: {vc0_sender, vc0_receiver, vc1_sender, vc1_receiver, vc2_sender, vc2_receiver}
+
+        // VC0-only mesh options: vc1 slots = 0, vc2 slots = 0
+        static const std::vector<std::vector<PerVcBufferSlots>> vc0_only_mesh_buffer_slot_options = {
             // WORMHOLE_B0
             {
-                {7, 11, 0, 0},  // Option 1: VC0 only
-                {4, 8, 0, 0},   // Option 2: VC0 only, smaller
-                {4, 4, 0, 0},   // Option 3: VC0 only, smaller
-                {2, 4, 0, 0},   // Option 4: VC0 only, smaller
-                {2, 2, 0, 0},   // Option 5: VC0 only, smaller
-                {1, 2, 0, 0},   // Option 6: VC0 only, smallest
-                {1, 1, 0, 0},   // Option 7: VC0 only, smallest
-                {4, 8, 2, 4},   // Option 8: supports both VCs
-                {4, 8, 2, 2},   // Option 9: supports both VCs, smaller VC1 receiver
-                {2, 4, 2, 2},   // Option 10: supports both VCs, smaller overall
-                {2, 4, 1, 1},   // Option 11: supports both VCs, smaller overall
-                {2, 2, 1, 1},   // Option 12: supports both VCs, smaller overall
-                {1, 1, 1, 1}    // Option 13: supports both VCs, smaller overall
+                {7, 11, 0, 0, 0, 0},  // Option 1: VC0 only
+                {4, 8, 0, 0, 0, 0},   // Option 2: VC0 only, smaller
+                {4, 4, 0, 0, 0, 0},   // Option 3: VC0 only, smaller
+                {2, 4, 0, 0, 0, 0},   // Option 4: VC0 only, smaller
+                {2, 2, 0, 0, 0, 0},   // Option 5: VC0 only, smaller
+                {1, 2, 0, 0, 0, 0},   // Option 6: VC0 only, smallest
+                {1, 1, 0, 0, 0, 0}    // Option 7: VC0 only, smallest
             },
             // BLACKHOLE
             {
-                {8, 16, 0, 0},  // Option 1: VC0 only
-                {8, 8, 0, 0},   // Option 2: VC0 only
-                {4, 8, 0, 0},   // Option 3: VC0 only
-                {4, 4, 0, 0},   // Option 4: VC0 only, smaller
-                {2, 4, 0, 0},   // Option 5: VC0 only, smaller
-                {2, 2, 0, 0},   // Option 6: VC0 only, smaller
-                {1, 2, 0, 0},   // Option 7: VC0 only, smallest
-                {1, 1, 0, 0},   // Option 8: VC0 only, smallest
-                {4, 8, 2, 4},   // Option 9: supports both VCs
-                {4, 8, 2, 2},   // Option 10: supports both VCs, smaller VC1 receiver
-                {2, 4, 2, 2},   // Option 11: supports both VCs, smaller overall
-                {2, 4, 1, 1},   // Option 12: supports both VCs, smaller overall
-                {2, 2, 1, 1},   // Option 13: supports both VCs, smaller overall
-                {1, 1, 1, 1}    // Option 14: supports both VCs, smaller overall
+                {8, 16, 0, 0, 0, 0},  // Option 1: VC0 only
+                {8, 8, 0, 0, 0, 0},   // Option 2: VC0 only
+                {4, 8, 0, 0, 0, 0},   // Option 3: VC0 only
+                {4, 4, 0, 0, 0, 0},   // Option 4: VC0 only, smaller
+                {2, 4, 0, 0, 0, 0},   // Option 5: VC0 only, smaller
+                {2, 2, 0, 0, 0, 0},   // Option 6: VC0 only, smaller
+                {1, 2, 0, 0, 0, 0},   // Option 7: VC0 only, smallest
+                {1, 1, 0, 0, 0, 0}    // Option 8: VC0 only, smallest
             }};
+
+        // VC0+VC1 mesh options: vc1 slots > 0, vc2 slots = 0
+        static const std::vector<std::vector<PerVcBufferSlots>> vc0_vc1_mesh_buffer_slot_options = {
+            // WORMHOLE_B0
+            {
+                {4, 8, 2, 4, 0, 0},  // Option 1: supports VC0+VC1
+                {4, 8, 2, 2, 0, 0},  // Option 2: supports VC0+VC1, smaller VC1 receiver
+                {2, 4, 2, 2, 0, 0},  // Option 3: supports VC0+VC1, smaller overall
+                {2, 4, 1, 1, 0, 0},  // Option 4: supports VC0+VC1, smaller overall
+                {2, 2, 1, 1, 0, 0},  // Option 5: supports VC0+VC1, smaller overall
+                {1, 1, 1, 1, 0, 0}   // Option 6: supports VC0+VC1, smallest
+            },
+            // BLACKHOLE
+            {
+                {4, 8, 2, 4, 0, 0},  // Option 1: supports VC0+VC1
+                {4, 8, 2, 2, 0, 0},  // Option 2: supports VC0+VC1, smaller VC1 receiver
+                {2, 4, 2, 2, 0, 0},  // Option 3: supports VC0+VC1, smaller overall
+                {2, 4, 1, 1, 0, 0},  // Option 4: supports VC0+VC1, smaller overall
+                {2, 2, 1, 1, 0, 0},  // Option 5: supports VC0+VC1, smaller overall
+                {1, 1, 1, 1, 0, 0}   // Option 6: supports VC0+VC1, smallest
+            }};
+
+        // VC0+VC1+VC2 mesh options: vc2 mirrors vc1 values in each row
+        static const std::vector<std::vector<PerVcBufferSlots>> vc0_vc1_vc2_mesh_buffer_slot_options = {
+            // WORMHOLE_B0
+            {
+                {4, 8, 2, 4, 2, 4},  // Option 1: supports VC0+VC1+VC2
+                {4, 8, 2, 2, 2, 2},  // Option 2: supports VC0+VC1+VC2, smaller VC1/VC2 receiver
+                {2, 4, 2, 2, 2, 2},  // Option 3: supports VC0+VC1+VC2, smaller overall
+                {2, 4, 1, 1, 1, 1},  // Option 4: supports VC0+VC1+VC2, smaller overall
+                {2, 2, 1, 1, 1, 1},  // Option 5: supports VC0+VC1+VC2, smaller overall
+                {1, 1, 1, 1, 1, 1}   // Option 6: supports VC0+VC1+VC2, smallest
+            },
+            // BLACKHOLE
+            {
+                {4, 8, 2, 4, 2, 4},  // Option 1: supports VC0+VC1+VC2
+                {4, 8, 2, 2, 2, 2},  // Option 2: supports VC0+VC1+VC2, smaller VC1/VC2 receiver
+                {2, 4, 2, 2, 2, 2},  // Option 3: supports VC0+VC1+VC2, smaller overall
+                {2, 4, 1, 1, 1, 1},  // Option 4: supports VC0+VC1+VC2, smaller overall
+                {2, 2, 1, 1, 1, 1},  // Option 5: supports VC0+VC1+VC2, smaller overall
+                {1, 1, 1, 1, 1, 1}   // Option 6: supports VC0+VC1+VC2, smallest
+            }};
+
+        // VC0+VC2 mesh options (no VC1): vc1 slots = 0, vc2 mirrors vc0-only reduced values
+        static const std::vector<std::vector<PerVcBufferSlots>> vc0_vc2_mesh_buffer_slot_options = {
+            // WORMHOLE_B0
+            {
+                {7, 11, 0, 0, 2, 4},  // Option 1: supports VC0+VC2
+                {4, 8, 0, 0, 2, 4},   // Option 2: supports VC0+VC2, smaller VC0
+                {4, 8, 0, 0, 2, 2},   // Option 3: supports VC0+VC2, smaller VC2 receiver
+                {2, 4, 0, 0, 2, 2},   // Option 4: supports VC0+VC2, smaller overall
+                {2, 4, 0, 0, 1, 1},   // Option 5: supports VC0+VC2, smaller overall
+                {2, 2, 0, 0, 1, 1},   // Option 6: supports VC0+VC2, smaller overall
+                {1, 1, 0, 0, 1, 1}    // Option 7: supports VC0+VC2, smallest
+            },
+            // BLACKHOLE
+            {
+                {7, 11, 0, 0, 2, 4},  // Option 1: supports VC0+VC2
+                {4, 8, 0, 0, 2, 4},   // Option 2: supports VC0+VC2, smaller VC0
+                {4, 8, 0, 0, 2, 2},   // Option 3: supports VC0+VC2, smaller VC2 receiver
+                {2, 4, 0, 0, 2, 2},   // Option 4: supports VC0+VC2, smaller overall
+                {2, 4, 0, 0, 1, 1},   // Option 5: supports VC0+VC2, smaller overall
+                {2, 2, 0, 0, 1, 1},   // Option 6: supports VC0+VC2, smaller overall
+                {1, 1, 0, 0, 1, 1}    // Option 7: supports VC0+VC2, smallest
+            }};
+
         static const std::vector<std::vector<PerVcBufferSlots>> other_buffer_slot_options = {
             // WORMHOLE_B0
-            {{16, 16, 0, 0},  // Only VC0 for non-mesh topologies.
-             {8, 16, 0, 0},
-             {8, 8, 0, 0},
-             {4, 8, 0, 0},
-             {4, 4, 0, 0},
-             {2, 4, 0, 0},
-             {2, 2, 0, 0},
-             {1, 2, 0, 0},
-             {1, 1, 0, 0}},
+            {{16, 16, 0, 0, 0, 0},  // Only VC0 for non-mesh topologies.
+             {8, 16, 0, 0, 0, 0},
+             {8, 8, 0, 0, 0, 0},
+             {4, 8, 0, 0, 0, 0},
+             {4, 4, 0, 0, 0, 0},
+             {2, 4, 0, 0, 0, 0},
+             {2, 2, 0, 0, 0, 0},
+             {1, 2, 0, 0, 0, 0},
+             {1, 1, 0, 0, 0, 0}},
             // BLACKHOLE
-            {{32, 32, 0, 0},  // Only VC0 for non-mesh topologies.
-             {16, 32, 0, 0},
-             {16, 16, 0, 0},
-             {8, 16, 0, 0},
-             {8, 8, 0, 0},
-             {4, 8, 0, 0},
-             {4, 4, 0, 0},
-             {2, 4, 0, 0},
-             {2, 2, 0, 0},
-             {1, 2, 0, 0},
-             {1, 1, 0, 0}}};
+            {{32, 32, 0, 0, 0, 0},  // Only VC0 for non-mesh topologies.
+             {16, 32, 0, 0, 0, 0},
+             {16, 16, 0, 0, 0, 0},
+             {8, 16, 0, 0, 0, 0},
+             {8, 8, 0, 0, 0, 0},
+             {4, 8, 0, 0, 0, 0},
+             {4, 4, 0, 0, 0, 0},
+             {2, 4, 0, 0, 0, 0},
+             {2, 2, 0, 0, 0, 0},
+             {1, 2, 0, 0, 0, 0},
+             {1, 1, 0, 0, 0, 0}}};
 
-        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> mesh_slots(mesh_buffer_slot_options);
+        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_only_mesh_slots(
+            vc0_only_mesh_buffer_slot_options);
+        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc1_mesh_slots(
+            vc0_vc1_mesh_buffer_slot_options);
+        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc2_mesh_slots(
+            vc0_vc2_mesh_buffer_slot_options);
+        static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> vc0_vc1_vc2_mesh_slots(
+            vc0_vc1_vc2_mesh_buffer_slot_options);
         static tt::stl::Indestructible<std::vector<std::vector<PerVcBufferSlots>>> other_slots(
             other_buffer_slot_options);
 
         if (topology == Topology::Mesh || topology == Topology::Torus) {
-            return mesh_slots.get()[arch_index];
+            // Select table based on which VCs are actually active
+            if (vc1_present && vc2_present) {
+                return vc0_vc1_vc2_mesh_slots.get()[arch_index];
+            }
+            if (vc2_present) {
+                return vc0_vc2_mesh_slots.get()[arch_index];
+            }
+            if (vc1_present) {
+                return vc0_vc1_mesh_slots.get()[arch_index];
+            }
+            return vc0_only_mesh_slots.get()[arch_index];
         }
         return other_slots.get()[arch_index];
     };
@@ -411,17 +490,24 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                                             size_t num_vc0_receiver_channels,
                                             size_t num_vc1_sender_channels,
                                             size_t num_vc1_receiver_channels,
+                                            size_t num_vc2_sender_channels,
+                                            size_t num_vc2_receiver_channels,
                                             size_t& vc0_sender_buffer_slots,
                                             size_t& vc0_receiver_buffer_slots,
                                             size_t& vc1_sender_buffer_slots,
-                                            size_t& vc1_receiver_buffer_slots) {
+                                            size_t& vc1_receiver_buffer_slots,
+                                            size_t& vc2_sender_buffer_slots,
+                                            size_t& vc2_receiver_buffer_slots) {
         bool vc1_needed = (num_vc1_sender_channels > 0) || (num_vc1_receiver_channels > 0);
+        bool vc2_needed = (num_vc2_sender_channels > 0) || (num_vc2_receiver_channels > 0);
         bool found_valid_option = false;
         for (auto& option : buffer_slot_options) {
             vc0_sender_buffer_slots = option.vc0_sender_slots;
             vc0_receiver_buffer_slots = option.vc0_receiver_slots;
             vc1_sender_buffer_slots = option.vc1_sender_slots;
             vc1_receiver_buffer_slots = option.vc1_receiver_slots;
+            vc2_sender_buffer_slots = option.vc2_sender_slots;
+            vc2_receiver_buffer_slots = option.vc2_receiver_slots;
             // skip the VC0 only options if VC1 is needed (either sender or receiver channels)
             if (vc1_needed) {
                 // Check if we need VC1 sender channels but this option doesn't provide them
@@ -433,15 +519,26 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                     continue;  // Skip this option - VC1 is needed but this option doesn't support it
                 }
             }
+            // skip options without VC2 slots if VC2 is needed
+            if (vc2_needed) {
+                bool skip_due_to_vc2_sender = (num_vc2_sender_channels > 0) && (vc2_sender_buffer_slots == 0);
+                bool skip_due_to_vc2_receiver = (num_vc2_receiver_channels > 0) && (vc2_receiver_buffer_slots == 0);
 
-            // Calculate total slots across both VCs
+                if (skip_due_to_vc2_sender || skip_due_to_vc2_receiver) {
+                    continue;  // Skip this option - VC2 is needed but this option doesn't support it
+                }
+            }
+
+            // Calculate total slots across all VCs
             auto vc0_total_sender_slots = num_vc0_sender_channels * vc0_sender_buffer_slots;
             auto vc0_total_receiver_slots = num_vc0_receiver_channels * vc0_receiver_buffer_slots;
             auto vc1_total_sender_slots = num_vc1_sender_channels * vc1_sender_buffer_slots;
             auto vc1_total_receiver_slots = num_vc1_receiver_channels * vc1_receiver_buffer_slots;
+            auto vc2_total_sender_slots = num_vc2_sender_channels * vc2_sender_buffer_slots;
+            auto vc2_total_receiver_slots = num_vc2_receiver_channels * vc2_receiver_buffer_slots;
 
             auto total_num_bytes = (vc0_total_sender_slots + vc0_total_receiver_slots + vc1_total_sender_slots +
-                                    vc1_total_receiver_slots) *
+                                    vc1_total_receiver_slots + vc2_total_sender_slots + vc2_total_receiver_slots) *
                                    this->channel_buffer_size_bytes;
 
             if (total_num_bytes <= this->available_channel_buffering_space) {
@@ -450,20 +547,51 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             }
         }
 
-        // Validate that we found a valid option, especially if VC1 is needed
+        // Validate that we found a valid option
         if (!found_valid_option) {
+            // Debug: print topology and table info
+            log_warning(tt::LogFabric, "  buffer_slot_options.size(): {}", buffer_slot_options.size());
+            // Debug: print all options tried
+            for (size_t idx = 0; idx < buffer_slot_options.size(); ++idx) {
+                auto& opt = buffer_slot_options[idx];
+                auto total = (num_vc0_sender_channels * opt.vc0_sender_slots +
+                              num_vc0_receiver_channels * opt.vc0_receiver_slots +
+                              num_vc1_sender_channels * opt.vc1_sender_slots +
+                              num_vc1_receiver_channels * opt.vc1_receiver_slots +
+                              num_vc2_sender_channels * opt.vc2_sender_slots +
+                              num_vc2_receiver_channels * opt.vc2_receiver_slots) *
+                             this->channel_buffer_size_bytes;
+                log_warning(
+                    tt::LogFabric,
+                    "  Option {}: vc0({},{}) vc1({},{}) vc2({},{}) = {} bytes (avail: {}, buf_size: {})",
+                    idx,
+                    opt.vc0_sender_slots,
+                    opt.vc0_receiver_slots,
+                    opt.vc1_sender_slots,
+                    opt.vc1_receiver_slots,
+                    opt.vc2_sender_slots,
+                    opt.vc2_receiver_slots,
+                    total,
+                    this->available_channel_buffering_space,
+                    this->channel_buffer_size_bytes);
+            }
             TT_THROW(
-                "Failed to find suitable buffer slot configuration. VC1 needed: {}, VC0 channels: {} senders/{} "
-                "receivers, VC1 channels: {} senders/{} receivers, Available space: {} bytes",
+                "Failed to find suitable buffer slot configuration. VC1 needed: {}, VC2 needed: {}, VC0 channels: {} "
+                "senders/{} "
+                "receivers, VC1 channels: {} senders/{} receivers, VC2 channels: {} senders/{} receivers, Available "
+                "space: {} bytes",
                 vc1_needed,
+                vc2_needed,
                 num_vc0_sender_channels,
                 num_vc0_receiver_channels,
                 num_vc1_sender_channels,
                 num_vc1_receiver_channels,
+                num_vc2_sender_channels,
+                num_vc2_receiver_channels,
                 this->available_channel_buffering_space);
         }
 
-        // Additional validation: ensure VC1 buffer slots are non-zero if VC1 channels are needed
+        // Additional validation: ensure VC1/VC2 buffer slots are non-zero if those channels are needed
     };
 
     // auto axis_index = static_cast<std::size_t>(options.edm_axis);
@@ -483,6 +611,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             uint32_t target_channel = get_worker_connected_sender_channel();
             size_t vc0_sender_buffer_slots, vc0_receiver_buffer_slots;
             size_t vc1_sender_buffer_slots, vc1_receiver_buffer_slots;
+            size_t vc2_sender_buffer_slots, vc2_receiver_buffer_slots;
 
             // get the optimal buffer slots for MUX mode (per-VC)
             get_optimal_num_slots_per_vc(
@@ -491,20 +620,26 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
                 num_used_receiver_channels_per_vc[0],
                 num_used_sender_channels_per_vc[1],
                 num_used_receiver_channels_per_vc[1],
+                num_used_sender_channels_per_vc[2],
+                num_used_receiver_channels_per_vc[2],
                 vc0_sender_buffer_slots,
                 vc0_receiver_buffer_slots,
                 vc1_sender_buffer_slots,
-                vc1_receiver_buffer_slots);
+                vc1_receiver_buffer_slots,
+                vc2_sender_buffer_slots,
+                vc2_receiver_buffer_slots);
 
             // set buffer slots for VC0 worker channel only
             num_sender_buffer_slots_per_vc[0][target_channel] = vc0_sender_buffer_slots;
             num_remote_sender_buffer_slots_per_vc[0][target_channel] = vc0_sender_buffer_slots;
 
-            // Fill receiver buffer slots for both VCs
+            // Fill receiver buffer slots for all VCs
             num_receiver_buffer_slots_per_vc[0].fill(vc0_receiver_buffer_slots);
             num_remote_receiver_buffer_slots_per_vc[0].fill(vc0_receiver_buffer_slots);
             num_receiver_buffer_slots_per_vc[1].fill(vc1_receiver_buffer_slots);
             num_remote_receiver_buffer_slots_per_vc[1].fill(vc1_receiver_buffer_slots);
+            num_receiver_buffer_slots_per_vc[2].fill(vc2_receiver_buffer_slots);
+            num_remote_receiver_buffer_slots_per_vc[2].fill(vc2_receiver_buffer_slots);
             return;
         }
         default: break;
@@ -513,18 +648,27 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     // Default case: Configure buffer slots with per-VC options
     size_t vc0_sender_buffer_slots, vc0_receiver_buffer_slots;
     size_t vc1_sender_buffer_slots, vc1_receiver_buffer_slots;
+    size_t vc2_sender_buffer_slots, vc2_receiver_buffer_slots;
 
-    // Get optimal buffer slots considering both VCs
+    // Determine which VCs are active based on channel usage
+    bool vc1_present = (num_used_sender_channels_per_vc[1] > 0 || num_used_receiver_channels_per_vc[1] > 0);
+    bool vc2_present = (num_used_sender_channels_per_vc[2] > 0 || num_used_receiver_channels_per_vc[2] > 0);
+
+    // Get optimal buffer slots considering active VCs
     get_optimal_num_slots_per_vc(
-        get_num_buffer_slots(topology, arch_index),
+        get_num_buffer_slots(topology, arch_index, vc1_present, vc2_present),
         num_used_sender_channels_per_vc[0],
         num_used_receiver_channels_per_vc[0],
         num_used_sender_channels_per_vc[1],
         num_used_receiver_channels_per_vc[1],
+        num_used_sender_channels_per_vc[2],
+        num_used_receiver_channels_per_vc[2],
         vc0_sender_buffer_slots,
         vc0_receiver_buffer_slots,
         vc1_sender_buffer_slots,
-        vc1_receiver_buffer_slots);
+        vc1_receiver_buffer_slots,
+        vc2_sender_buffer_slots,
+        vc2_receiver_buffer_slots);
 
     // Apply the buffer slot configuration to each VC
     num_sender_buffer_slots_per_vc[0].fill(vc0_sender_buffer_slots);
@@ -536,6 +680,11 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     num_remote_sender_buffer_slots_per_vc[1].fill(vc1_sender_buffer_slots);
     num_receiver_buffer_slots_per_vc[1].fill(vc1_receiver_buffer_slots);
     num_remote_receiver_buffer_slots_per_vc[1].fill(vc1_receiver_buffer_slots);
+
+    num_sender_buffer_slots_per_vc[2].fill(vc2_sender_buffer_slots);
+    num_remote_sender_buffer_slots_per_vc[2].fill(vc2_sender_buffer_slots);
+    num_receiver_buffer_slots_per_vc[2].fill(vc2_receiver_buffer_slots);
+    num_remote_receiver_buffer_slots_per_vc[2].fill(vc2_receiver_buffer_slots);
 }
 
 void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args) const {
@@ -557,6 +706,58 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_
             ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_base_address[vc][i]));
             ct_args.push_back(this->remote_receiver_channels_num_buffers[vc][i]);
         }
+    }
+}
+
+void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
+    std::vector<uint32_t>& ct_args,
+    size_t num_used_vc0_sender_channels,
+    size_t num_used_vc1_sender_channels,
+    size_t num_used_receiver_channels) const {
+    // Tag
+    ct_args.push_back(0xabcd1234);
+
+    // num_entries = total sender + receiver channels in the allocator
+    size_t total_sender_channels = get_num_sender_channels();
+    size_t total_receiver_channels = get_num_receiver_channels();
+    size_t num_entries = total_sender_channels + total_receiver_channels;
+    ct_args.push_back(static_cast<uint32_t>(num_entries));
+
+    // Per-entry data (reuse existing emit_ct_args which emits per-channel data)
+    emit_ct_args(ct_args);
+
+    // Channel-to-entry index mappings
+    // The allocator emits entries in order: VC0 senders, VC1 senders, VC0 receivers, VC1 receivers.
+    // The router may use fewer channels than allocated. When there are unused channels,
+    // VC1 sender entries need to skip over the unused VC0 entry slots.
+    size_t num_used_sender_channels = num_used_vc0_sender_channels + num_used_vc1_sender_channels;
+    size_t num_unused_channels = total_sender_channels - num_used_sender_channels;
+    bool has_unused_channels = (num_unused_channels > 0) && num_used_sender_channels > 0;
+
+    // Sender channel-to-entry index
+    if (has_unused_channels) {
+        for (size_t i = 0; i < num_used_sender_channels; ++i) {
+            if (i < num_used_vc0_sender_channels) {
+                ct_args.push_back(static_cast<uint32_t>(i));
+            } else {
+                // VC1 channels skip the unused VC0 channel entries
+                ct_args.push_back(static_cast<uint32_t>(i + num_unused_channels));
+            }
+        }
+        // Padding for unused channels — map to their actual (unserviced) entry indices
+        for (size_t i = 0; i < num_unused_channels; ++i) {
+            ct_args.push_back(static_cast<uint32_t>(num_used_vc0_sender_channels + i));
+        }
+    } else {
+        for (size_t i = 0; i < num_used_sender_channels; ++i) {
+            ct_args.push_back(static_cast<uint32_t>(i));
+        }
+    }
+
+    // Receiver channel-to-entry index (receivers start after all sender entries)
+    size_t receiver_entry_base = total_sender_channels;
+    for (size_t i = 0; i < num_used_receiver_channels; ++i) {
+        ct_args.push_back(static_cast<uint32_t>(i + receiver_entry_base));
     }
 }
 

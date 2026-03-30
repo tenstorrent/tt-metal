@@ -19,7 +19,7 @@ This document provides advanced users and developers with comprehensive instruct
 #### Option 1: **TT-Installer** Script (recommended)
 - For a quick setup, download and run the **TT-Installer** installation script:
 ```
-curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
+curl -fsSL https://github.com/tenstorrent/tt-installer/releases/download/v2.1.0/install.sh -O
 chmod +x install.sh
 ./install.sh --install-container-runtime=no
 ```
@@ -85,7 +85,7 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
 
 #### Step 2. (For models users only) Set Up Environment for Models:
 
-To try our pre-built models in `models/`, you must:
+To try our pre-built models in [`tt-metal/models/`](https://github.com/tenstorrent/tt-metal/tree/main/models), you must:
 
   - Install their required dependencies
   - Set appropriate environment variables
@@ -151,7 +151,7 @@ ninja install # Installs to build directory by default, required for Python envi
 
 #### Step 3. Virtual Environment Setup
 
-- (Optional) Specify existing python envirionment:
+- (Optional) Specify existing python environment:
 ```
 export PYTHON_ENV_DIR=<path_to_your_env_directory>
 ```

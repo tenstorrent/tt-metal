@@ -9,6 +9,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
+#include "tt_metal/fabric/channel_trimming_import.hpp"
 #include <vector>
 #include <memory>
 #include <array>
@@ -63,6 +64,7 @@ struct IntermeshVCConfig {
     bool requires_vc1 = false;                      // True if VC1 needed for intermesh
     bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
     bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through
+    bool requires_vc2 = false;                      // True if VC2 needed (Blackhole + 2D + no UDM/mux)
 
     IntermeshVCConfig() = default;
 
@@ -154,11 +156,28 @@ public:
     std::optional<std::pair<uint32_t, EDMStatus>> get_fabric_router_ready_address_and_signal() const;
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
 
+    // ============ Diagnostic Buffer Map ============
+    /** Returns the diagnostic buffer locations for all routers.
+     *  The layout is identical across all router cores in the fabric. */
+    FabricRouterDiagnosticBufferMap get_telemetry_and_metadata_buffer_map() const {
+        TT_FATAL(router_config_ != nullptr, "Error, fabric router config is uninitialized");
+        return router_config_->get_telemetry_and_metadata_buffer_map();
+    }
+
+    // ============ Channel Trimming Overrides ============
+    const std::optional<ChannelTrimmingOverrideMap>& get_channel_trimming_overrides() const {
+        return channel_trimming_overrides_;
+    }
+    const ChannelTrimmingGlobalOverrides& get_channel_trimming_global_overrides() const {
+        return channel_trimming_global_overrides_;
+    }
+
     // ============ Intermesh VC Configuration ============
     const IntermeshVCConfig& get_intermesh_vc_config() const { return intermesh_vc_config_; }
     bool requires_intermesh_vc() const { return intermesh_vc_config_.requires_vc1; }
     bool requires_intermesh_vc_full_mesh() const { return intermesh_vc_config_.requires_vc1_full_mesh; }
     bool requires_intermesh_vc_mesh_pass_through() const { return intermesh_vc_config_.requires_vc1_mesh_pass_through; }
+    bool requires_vc2() const { return intermesh_vc_config_.requires_vc2; }
 
 private:
 
@@ -167,6 +186,12 @@ private:
     friend class FabricContext;
 
     const FabricContext& fabric_context_;
+
+    // Channel trimming overrides loaded from profile YAML (if specified)
+    std::optional<ChannelTrimmingOverrideMap> channel_trimming_overrides_;
+
+    // Global channel trimming overrides loaded from override YAML (if specified)
+    ChannelTrimmingGlobalOverrides channel_trimming_global_overrides_;
 
     IntermeshVCConfig intermesh_vc_config_;
 

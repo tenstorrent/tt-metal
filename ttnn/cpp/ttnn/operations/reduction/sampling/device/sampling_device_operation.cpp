@@ -14,17 +14,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-
-SamplingDeviceOperation::program_factory_t SamplingDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return SamplingProgramFactory{};
-}
-
-void SamplingDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void SamplingDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_values_tensor = tensor_args.input_values;
@@ -56,7 +45,10 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         "Input values and indices must have the same shape!");
     auto input_shape = input_values_tensor.logical_shape();
     TT_FATAL(input_shape[0] * input_shape[1] * input_shape[2] == 32, "Input must have 32 users!");
-    TT_FATAL(input_shape[3] % 32 == 0, "Input inner dim ({}) must be divisible by 32, pad if needed!", input_shape[3]);
+    TT_FATAL(
+        input_shape[3] != 0 && input_shape[3] % 32 == 0,
+        "Input inner dim ({}) must be non-zero and divisible by 32, pad if needed!",
+        input_shape[3]);
 
     if (args.sub_core_grids.has_value()) {
         TT_FATAL(

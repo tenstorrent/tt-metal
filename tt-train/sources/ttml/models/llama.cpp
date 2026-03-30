@@ -1,15 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "llama.hpp"
 
-#include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "modules/embedding_module.hpp"
-#include "modules/llama_block.hpp"
-#include "modules/rms_norm_module.hpp"
-#include "ops/rope_op.hpp"
 #include "serialization/safetensors.hpp"
 
 namespace {
@@ -186,7 +181,7 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
 
 ttml::autograd::TensorPtr Llama::operator()(
     const ttml::autograd::TensorPtr& x,
-    const ttml::autograd::TensorPtr& mask,
+    const std::optional<ttml::autograd::TensorPtr>& mask,
     std::shared_ptr<common::transformer::KvCache> kv_cache,
     const uint32_t new_tokens) {
     // Pad input tokens to nearest multiple of 32 before embedding
@@ -199,7 +194,7 @@ ttml::autograd::TensorPtr Llama::operator()(
     if (padded_seq_len != actual_seq_len) {
         // Pad the sequence dimension (last dimension) with zeros
         // Create a new tensor instead of modifying in-place
-        ttnn::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding = {
+        ttsl::SmallVector<ttnn::operations::data_movement::PadSpecDim> padding = {
             {0, 0},                               // batch dimension
             {0, 0},                               // first spatial dimension
             {0, 0},                               // second spatial dimension
@@ -216,13 +211,13 @@ ttml::autograd::TensorPtr Llama::operator()(
     if (padded_seq_len != actual_seq_len) {
         // Slice back to original sequence length (sequence dimension is now at index 2)
         // Create a new tensor instead of modifying in-place
-        ttnn::SmallVector<uint32_t> slice_start = {0, 0, 0, 0};
-        ttnn::SmallVector<uint32_t> slice_end = {
+        ttsl::SmallVector<uint32_t> slice_start = {0, 0, 0, 0};
+        ttsl::SmallVector<uint32_t> slice_end = {
             tok_emb_out->get_value().logical_shape()[0],
             tok_emb_out->get_value().logical_shape()[1],
             actual_seq_len,
             tok_emb_out->get_value().logical_shape()[3]};
-        ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+        ttsl::SmallVector<uint32_t> step = {1, 1, 1, 1};
         auto out_tensor = ttnn::slice(tok_emb_out->get_value(), slice_start, slice_end, step);
         out = autograd::create_tensor(out_tensor);
     }
@@ -235,7 +230,9 @@ ttml::autograd::TensorPtr Llama::operator()(
             auto& block = blocks[block_idx];
             // Cast block to LlamaBlock to access the cache-aware operator
             auto llama_block = std::dynamic_pointer_cast<ttml::modules::LlamaBlock>(block);
-            out = (*llama_block)(out, mask, kv_cache, static_cast<uint32_t>(block_idx), new_tokens);
+
+            TT_FATAL(mask.has_value(), "Mask has to be provided in inference mode with KV cache");
+            out = (*llama_block)(out, mask.value(), kv_cache, block_idx, new_tokens);
         }
     } else {
         // Training mode or inference without cache
@@ -272,7 +269,6 @@ LlamaConfig read_config(const YAML::Node& config) {
     llama_config.theta = config["theta"].as<float>(500000.0F);
     llama_config.runner_type = common::transformer::read_runner_type(config);
     llama_config.weight_tying = common::transformer::read_weight_tying_type(config);
-
     // Read RoPE NTK-aware scaling parameters if they exist
     if (config["rope_scaling"]) {
         const auto& rope_scaling = config["rope_scaling"];
@@ -305,7 +301,6 @@ YAML::Node write_config(const LlamaConfig& llama_config) {
     config["vocab_size"] = llama_config.vocab_size;
     config["max_sequence_length"] = llama_config.max_sequence_length;
     config["theta"] = llama_config.theta;
-
     // Add RoPE scaling parameters if they are set
     if (llama_config.scaling_factor != 0.0F && llama_config.original_context_length != 0U) {
         YAML::Node rope_scaling;

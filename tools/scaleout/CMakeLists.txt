@@ -4,6 +4,7 @@ add_executable(
     run_cluster_validation
     validation/run_cluster_validation.cpp
     validation/utils/ethernet_link_metrics_serialization.cpp
+    validation/utils/ethernet_link_api.cpp
     validation/utils/cluster_validation_utils.cpp
 )
 
@@ -110,7 +111,7 @@ target_link_libraries(
         tt_metal
 )
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
-target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(scaleout_tools TT::CommonPCH)
 
 install(TARGETS scaleout_tools EXPORT Metalium LIBRARY COMPONENT metalium-runtime FILE_SET api COMPONENT metalium-dev)
 
@@ -120,7 +121,7 @@ set_target_properties(
     2d_big_mesh_cabling_gen
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
-            ${CMAKE_BINARY_DIR}/tools/scaleout
+            ${Metalium_BINARY_DIR}/tools/scaleout
 )
 
 add_dependencies(2d_big_mesh_cabling_gen scaleout_generated_protos)
@@ -141,7 +142,7 @@ set_target_properties(
     run_cabling_generator
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
-            ${CMAKE_BINARY_DIR}/tools/scaleout
+            ${Metalium_BINARY_DIR}/tools/scaleout
 )
 
 add_dependencies(run_cabling_generator scaleout_generated_protos)
@@ -162,7 +163,7 @@ set_target_properties(
     generate_cluster_descriptor
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
-            ${CMAKE_BINARY_DIR}/tools/scaleout
+            ${Metalium_BINARY_DIR}/tools/scaleout
 )
 
 add_dependencies(generate_cluster_descriptor scaleout_generated_protos)
@@ -183,6 +184,7 @@ add_library(generate_mgd_lib OBJECT generate_mgd/generate_mgd.cpp)
 add_dependencies(
     generate_mgd_lib
     scaleout_generated_protos
+    fabric_generated_protos
     fabric
 )
 
@@ -197,7 +199,7 @@ target_include_directories(
     SYSTEM
     PUBLIC
         ${CMAKE_CURRENT_BINARY_DIR}
-        ${CMAKE_BINARY_DIR}/tt_metal/fabric
+        $<TARGET_PROPERTY:fabric,BINARY_DIR>
 )
 
 target_link_libraries(
@@ -213,6 +215,7 @@ add_executable(generate_mgd generate_mgd/generate_mgd_main.cpp)
 add_dependencies(
     generate_mgd
     scaleout_generated_protos
+    fabric_generated_protos
     fabric
 )
 
@@ -220,15 +223,15 @@ set_target_properties(
     generate_mgd
     PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY
-            ${CMAKE_BINARY_DIR}/tools/scaleout
+            ${Metalium_BINARY_DIR}/tools/scaleout
 )
 
 target_include_directories(
     generate_mgd
     SYSTEM
     PRIVATE
-        ${CMAKE_BINARY_DIR}/tools/scaleout
-        ${CMAKE_BINARY_DIR}/tt_metal/fabric
+        ${CMAKE_CURRENT_BINARY_DIR}
+        $<TARGET_PROPERTY:fabric,BINARY_DIR>
 )
 
 target_sources(generate_mgd PRIVATE $<TARGET_OBJECTS:fabric>)

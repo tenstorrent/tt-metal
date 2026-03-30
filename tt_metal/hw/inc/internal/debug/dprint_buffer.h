@@ -6,15 +6,14 @@
 
 #include "hostdevcommon/dprint_common.h"
 #include "hostdev/dev_msgs.h"
+#include "internal/hw_thread.h"
 
 #include "hostdevcommon/dprint_common.h"
 // Returns the buffer address for current thread+core. Differs for NC/BR/ER/TR0-2.
 inline volatile tt_l1_ptr DebugPrintMemLayout* get_debug_print_buffer() {
-#if defined(ARCH_QUASAR)
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
-    return GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[hartid]);
-#else
-    return GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[PROCESSOR_INDEX]);
-#endif
+    return GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[internal_::get_hw_thread_idx()]);
+}
+
+inline volatile tt_l1_ptr DevicePrintMemoryLayout* get_device_print_buffer() {
+    return GET_MAILBOX_ADDRESS_DEV(dprint_buf.shared_data);
 }

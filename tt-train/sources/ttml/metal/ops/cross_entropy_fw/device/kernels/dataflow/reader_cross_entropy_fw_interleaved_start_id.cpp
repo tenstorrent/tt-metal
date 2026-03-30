@@ -10,6 +10,7 @@
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t runtime_args_counter = 0U;
     uint32_t input_address = get_arg_val<uint32_t>(runtime_args_counter++);        // input buffer address
     uint32_t target_address = get_arg_val<uint32_t>(runtime_args_counter++);       // target buffer address

@@ -35,14 +35,15 @@ void validate_supported_arch_dtype(DataType input_datatype, DataType output_data
                 static_cast<int>(op_type));
             break;
         case UnaryOpType::FMOD:
+        case UnaryOpType::LGAMMA:
             TT_FATAL(
                 (input_datatype == DataType::BFLOAT16 || input_datatype == DataType::FLOAT32),
-                "Unsupported input data type '{}' for UnaryOpType '{}' (FMOD operation).",
+                "Unsupported input data type '{}' for UnaryOpType '{}'.",
                 static_cast<int>(input_datatype),
                 static_cast<int>(op_type));
             TT_FATAL(
                 (output_datatype == DataType::BFLOAT16 || output_datatype == DataType::FLOAT32),
-                "Unsupported output data type '{}' for UnaryOpType '{}' (FMOD operation).",
+                "Unsupported output data type '{}' for UnaryOpType '{}'.",
                 static_cast<int>(output_datatype),
                 static_cast<int>(op_type));
             break;
@@ -60,11 +61,6 @@ UnaryDeviceOperation::program_factory_t UnaryDeviceOperation::select_program_fac
         return UnarySubCoreGridProgramFactory{};
     }
     return UnaryProgramFactory{};
-}
-
-void UnaryDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 void UnaryDeviceOperation::validate_on_program_cache_miss(
@@ -155,7 +151,7 @@ Tensor UnaryDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_shape = input_tensor.padded_shape();

@@ -10,6 +10,7 @@
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
+    using namespace tt::constants;
     uint32_t runtime_args_counter = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);

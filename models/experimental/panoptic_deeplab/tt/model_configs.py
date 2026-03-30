@@ -309,6 +309,39 @@ class ModelOptimisations:
                     ),
                 }
             )
+        elif compute_grid.x == 11 and compute_grid.y == 10:
+            self.default_matmul_overrides.update(
+                {
+                    "final_upsample_mm_config1": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(8, 8),
+                        in0_block_w=8,
+                        out_subblock_h=1,
+                        out_subblock_w=4,
+                        out_block_h=16,
+                        out_block_w=4,
+                        per_core_M=16,
+                        per_core_N=4,
+                        fuse_batch=True,
+                        fused_activation=None,
+                        transpose_mcast=False,
+                    ),
+                    "final_upsample_mm_config2": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(4, 8),
+                        in0_block_w=4,
+                        out_subblock_h=4,
+                        out_subblock_w=1,
+                        out_block_h=16,
+                        out_block_w=1,
+                        per_core_M=16,
+                        per_core_N=1,
+                        fuse_batch=False,
+                        fused_activation=None,
+                        mcast_in0=True,
+                        gather_in0=False,
+                        untilize_out=False,
+                    ),
+                }
+            )
         else:
             # Auto-config for other grid sizes
             self.default_matmul_overrides.update(
@@ -913,8 +946,8 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
         # Dilated conv branches
         dilated_configs = [
             ("aspp.convs.0", 256),  # 1x1 convolution
-            ("aspp.convs.1", 128),  # dilation=6, act_block_h=32
-            ("aspp.convs.2", 64),  # dilation=12, act_block_h=32
+            ("aspp.convs.1", 128),  # dilation=6, act_block_h=128
+            ("aspp.convs.2", 64),  # dilation=12, act_block_h=64
             ("aspp.convs.4", 512),  # pooling conv
             ("aspp.project", 512),  # project conv
         ]
@@ -1028,6 +1061,8 @@ class HundredTenCoreOptimiser(BaseModelOptimiser):
 
         self.config.register_layer_override(
             "semantic_head.predictor",
+            slice_strategy=L1FullSliceStrategyConfiguration(),
+            sharding_strategy=HeightShardedStrategyConfiguration(act_block_h_override=320),
             activation=None,  # Raw logits, no ReLU
             deallocate_activation=True,
             enable_weights_double_buffer=True,

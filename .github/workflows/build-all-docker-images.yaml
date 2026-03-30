@@ -48,6 +48,9 @@ on:
       manylinux-tag:
         description: "Docker tag for ManyLinux image"
         value: ${{ jobs.check-images.outputs.manylinux-tag }}
+      llk-ci-tag:
+        description: "Docker tag for LLK CI image (Ubuntu 22.04)"
+        value: ${{ jobs.check-images.outputs.llk-ci-tag }}
   workflow_dispatch:
 
 permissions:
@@ -75,11 +78,15 @@ jobs:
       # ManyLinux
       manylinux-tag: ${{ steps.manylinux-tags.outputs.manylinux-tag }}
       manylinux-needs-build: ${{ steps.manylinux-check.outputs.needs-build }}
+      # LLK (submodule; tag from hashed Dockerfiles inside tt_llk)
+      llk-ci-tag: ${{ steps.llk-check.outputs.llk-ci-tag }}
+      llk-needs-build: ${{ steps.llk-check.outputs.llk-needs-build }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          submodules: recursive
 
       # Compute Ubuntu 22.04 tags
       - name: Compute Ubuntu 22.04 tags
@@ -160,6 +167,28 @@ jobs:
             echo "needs-build=true" >> $GITHUB_OUTPUT
           fi
 
+      - name: Check LLK CI image
+        id: llk-check
+        run: |
+          set -euo pipefail
+          LLK="tt_metal/third_party/tt_llk"
+          # MIGRATION: Uses migrated script in parent repo (.github/scripts/llk-get-docker-tag.sh)
+          # instead of the submodule's script, so changes to build scripts trigger rebuilds
+          if [ ! -d "$LLK" ] || [ ! -f "$LLK/.github/Dockerfile.base" ]; then
+            echo "::error::tt_llk submodule is missing or not checked out (expected $LLK with .github/Dockerfile.base). Initialize submodules in CI checkout or fix .gitmodules."
+            exit 1
+          fi
+          DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
+          TAG="ghcr.io/${{ github.repository }}/tt-llk-ci-ubuntu-22-04:${DOCKER_TAG}"
+          echo "llk-ci-tag=$TAG" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "$TAG" > /dev/null 2>&1; then
+            echo "LLK CI image exists"
+            echo "llk-needs-build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "LLK CI image needs to be built"
+            echo "llk-needs-build=true" >> "$GITHUB_OUTPUT"
+          fi
+
   # Build Ubuntu 22.04 images
   build-ubuntu-2204:
     name: "🐳 Ubuntu 22.04"
@@ -179,60 +208,70 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push CI Build image
+        id: build-ci-build
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-build
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2204-ci-build-tag }}
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
+        id: build-ci-test
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-test
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2204-ci-test-tag }}
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
+        id: build-dev
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: dev
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2204-dev-tag }}
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
+        id: build-basic-dev
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: base
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2204-basic-dev-tag }}
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
+        id: build-basic-ttnn-runtime
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
           build-args: UBUNTU_VERSION=22.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Build Ubuntu 24.04 images
   build-ubuntu-2404:
@@ -253,60 +292,70 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push CI Build image
+        id: build-ci-build
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-build
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2404-ci-build-tag }}
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
+        id: build-ci-test
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-test
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2404-ci-test-tag }}
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
+        id: build-dev
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: dev
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2404-dev-tag }}
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
+        id: build-basic-dev
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: base
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2404-basic-dev-tag }}
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
+        id: build-basic-ttnn-runtime
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
-          push: true
           tags: ${{ needs.check-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
           build-args: UBUNTU_VERSION=24.04
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Build ManyLinux image
   build-manylinux:
@@ -327,23 +376,53 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push ManyLinux image
+        id: build-manylinux
         uses: docker/build-push-action@v6
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.manylinux
-          push: true
           tags: ${{ needs.check-images.outputs.manylinux-tag }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
+  # MIGRATION STAGING: LLK images unused by CI today; revisit when consumers exist.
+  build-llk:
+    name: "🐳 LLK (Ubuntu 22.04)"
+    needs: check-images
+    if: needs.check-images.outputs.llk-needs-build == 'true'
+    timeout-minutes: 90
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push LLK images
+        shell: bash
+        env:
+          # Use Google Mirror for Docker Hub (Harbor doesn't proxy docker.io)
+          LLK_UBUNTU_BASE_IMAGE: mirror.gcr.io/ubuntu:22.04
+        run: .github/scripts/llk-build-docker-images.sh
 
   # Update latest tags on main
   tag-latest:
     name: "🔄 Update latest tags"
-    needs: [check-images, build-ubuntu-2204, build-ubuntu-2404, build-manylinux]
+    needs: [check-images, build-ubuntu-2204, build-ubuntu-2404, build-manylinux, build-llk]
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/push-latest-image-to-ghcr
+          sparse-checkout-cone-mode: false
 
       - name: "Push latest Ubuntu 22.04 Dev tag"
         if: needs.check-images.outputs.ubuntu-2204-needs-build != 'true' || needs.build-ubuntu-2204.result == 'success'
@@ -364,4 +443,11 @@ jobs:
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ needs.check-images.outputs.manylinux-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Push latest LLK CI tag"
+        if: needs.check-images.outputs.llk-needs-build != 'true' || needs.build-llk.result == 'success'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-images.outputs.llk-ci-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}

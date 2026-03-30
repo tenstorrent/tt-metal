@@ -13,7 +13,6 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -155,14 +154,14 @@ void run_eltwise_binary_test(
 
 }  // namespace
 
-TEST_F(UnitMeshCQSingleCardFixture, EltwiseBinaryAdd) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinaryAdd) {
     run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::ADD));
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, EltwiseBinarySub) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinarySub) {
     run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::SUB));
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, EltwiseBinaryMul) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, EltwiseBinaryMul) {
     run_eltwise_binary_test(devices_[0], devices_[0]->mesh_command_queue(), static_cast<int>(EltwiseOp::MUL));
 }

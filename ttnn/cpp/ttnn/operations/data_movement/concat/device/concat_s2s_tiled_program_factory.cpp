@@ -159,6 +159,16 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     constexpr uint32_t MAX_1_BYTE_TILES_PER_BATCH = 16;
     const uint32_t batch_size = MAX_1_BYTE_TILES_PER_BATCH / input_tensors[0].element_size();
 
+    // Calculate stride sizes to determine if we can use single-packet NOC reads
+    // For BF8, the kernel uses bf16_tile_size (2048 bytes) for stride calculation
+    const uint32_t stride_tile_size = is_bf8 ? cb_tile_size : tile_size;
+    const uint32_t input0_stride = stride_tile_size * num_tiles_for_each_input_shard[0].second / groups;
+    const uint32_t input1_stride = stride_tile_size * num_tiles_for_each_input_shard[1].second / groups;
+
+    // NOC_MAX_BURST_SIZE from noc_parameters.h: Wormhole = 8192, Blackhole = 16384
+    const uint32_t noc_max_burst_size = (input_tensors[0].device()->arch() == tt::ARCH::BLACKHOLE) ? 16384 : 8192;
+    const bool use_single_packet_read = (input0_stride <= noc_max_burst_size && input1_stride <= noc_max_burst_size);
+
     std::vector<uint32_t> compile_time_args_0 = {
         0,
         1,
@@ -178,6 +188,9 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     std::map<std::string, std::string> reader_defines;
     if (is_bf8) {
         reader_defines["BF8"] = "1";
+    }
+    if (use_single_packet_read) {
+        reader_defines["USE_SINGLE_PACKET_READ"] = "1";
     }
     CreateKernel(
         program,
@@ -199,7 +212,8 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
         all_cores,
         ComputeConfig{
             .math_fidelity = MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
+            .fp32_dest_acc_en = data_format == tt::DataFormat::Float32 || data_format == tt::DataFormat::Int32 ||
+                                data_format == tt::DataFormat::UInt32,
             .math_approx_mode = false,
             .compile_args = compile_time_args_0});
 

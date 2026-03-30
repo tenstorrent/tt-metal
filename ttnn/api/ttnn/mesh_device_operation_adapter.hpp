@@ -43,10 +43,23 @@ struct MeshDeviceOperationAdapter {
     using tensor_return_value_t = typename DeviceOperation::tensor_return_value_t;
     using program_factory_t = typename DeviceOperation::program_factory_t;
 
-    // Delegate to base operation methods
+    // Early validation: if program_factory_t has more than one variant alternative,
+    // the operation must provide select_program_factory to choose between them.
+    static_assert(
+        HasSelectProgramFactory<DeviceOperation> || std::variant_size_v<program_factory_t> == 1,
+        "DeviceOperation must implement select_program_factory when program_factory_t has more than one type. "
+        "For single-variant program_factory_t, the framework auto-selects it.");
+
+    // Delegate to base operation methods.
+    // Uses the framework helper: if the operation provides select_program_factory, it is called;
+    // otherwise, for single-variant program_factory_t, returns the sole type automatically.
     static program_factory_t select_program_factory(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        return DeviceOperation::select_program_factory(attrs, tensor_args);
+        if constexpr (HasSelectProgramFactory<DeviceOperation>) {
+            return DeviceOperation::select_program_factory(attrs, tensor_args);
+        } else {
+            return program_factory_t{std::variant_alternative_t<0, program_factory_t>{}};
+        }
     }
 
     template <typename... Args>
@@ -57,11 +70,15 @@ struct MeshDeviceOperationAdapter {
     // Returns type name of the underlying device operation.
     // Used for logging and debugging; in particular, Tracy profiler uses this to identify operations.
     static std::string get_type_name(const operation_attributes_t& /* attribute */) {
-        return std::string(tt::stl::get_type_name<device_operation_t>());
+        return std::string(ttsl::get_type_name<device_operation_t>());
     }
 
     static void validate_on_program_cache_hit(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        DeviceOperation::validate_on_program_cache_hit(attrs, tensor_args);
+        if constexpr (HasValidateOnProgramCacheHit<DeviceOperation>) {
+            DeviceOperation::validate_on_program_cache_hit(attrs, tensor_args);
+        } else {
+            DeviceOperation::validate_on_program_cache_miss(attrs, tensor_args);
+        }
     }
 
     static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
@@ -78,13 +95,13 @@ struct MeshDeviceOperationAdapter {
         return DeviceOperation::create_output_tensors(attrs, tensor_args);
     }
 
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
             return DeviceOperation::compute_program_hash(attrs, tensor_args);
         } else {
-            return tt::stl::hash::hash_objects_with_default_seed(
-                tt::stl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
+            return ttsl::hash::hash_objects_with_default_seed(
+                ttsl::hash::type_hash<DeviceOperation>, attrs, tensor_args);
         }
     }
 
@@ -135,14 +152,14 @@ struct MeshDeviceOperationAdapter {
         }
     };
 
-    static tt::stl::hash::hash_t compute_mesh_workload_hash(
+    static ttsl::hash::hash_t compute_mesh_workload_hash(
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
         // Hash the program hash and the tensor coordinates the workload is targeting.
         auto hash = compute_program_hash(attrs, tensor_args);
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
-            ttsl::hash::hash_combine(hash, coord);
+            hash = ttsl::hash::hash_objects(hash, coord);
         }
         return hash;
     }

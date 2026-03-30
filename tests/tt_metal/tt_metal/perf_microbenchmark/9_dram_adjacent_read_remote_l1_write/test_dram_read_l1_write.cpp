@@ -33,12 +33,11 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -350,14 +349,11 @@ bool validation(
 }
 
 uint32_t get_dram_bandwidth(tt::ARCH arch) {
-    constexpr uint32_t GS_DRAM_BANDWIDTH_GB_PER_SEC = 100;
     constexpr uint32_t WH_DRAM_BANDWIDTH_GB_PER_SEC = 384;
 
     uint32_t dram_bandwidth_gb_per_sec = 0;
     if (arch == tt::ARCH::WORMHOLE_B0) {
         dram_bandwidth_gb_per_sec = WH_DRAM_BANDWIDTH_GB_PER_SEC;
-    } else if (arch == tt::ARCH::GRAYSKULL) {
-        dram_bandwidth_gb_per_sec = GS_DRAM_BANDWIDTH_GB_PER_SEC;
     }
     return dram_bandwidth_gb_per_sec;
 }

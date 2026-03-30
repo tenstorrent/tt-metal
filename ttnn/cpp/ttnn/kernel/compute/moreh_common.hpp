@@ -16,19 +16,19 @@
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 #endif
 
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/binary_max_min.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
-#include "compute_kernel_api/eltwise_unary/comp.h"
-#include "compute_kernel_api/eltwise_unary/negative.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/rsqrt.h"
-#include "compute_kernel_api/mask.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/bcast.h"
+#include "api/compute/binary_max_min.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/comp.h"
+#include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "api/compute/mask.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tile_move_copy.h"
 
 // Deprecated
 ALWI void ACQ() { acquire_dst(); }
@@ -89,7 +89,7 @@ ALWI void sub_bcast_rows_init_short_with_dt(uint32_t icb0 = 0, uint32_t icb1 = 1
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0, icb1);
 #endif
-    MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::ROW, MATH_FIDELITY>()));  // TODO(AP)
+    MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::ROW, MathFidelity::LoFi>()));  // TODO(AP)
     // FIXME: API Update needed in compute kernel?
     UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(icb0, icb1)));
 }
@@ -686,7 +686,7 @@ ALWI void sub_tiles_bcast_rows_to_cb(
 #endif
     // sub_bcast_rows_init_short();
     {
-        MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::ROW, MATH_FIDELITY>()));
+        MATH((llk_math_eltwise_binary_init<ELWSUB, BroadcastType::ROW, MathFidelity::LoFi>()));
         UNPACK((llk_unpack_AB_init<BroadcastType::ROW>(0, 1)));
     }
     sub_tiles_bcast<BroadcastType::ROW>(icb0, icb1, itile0, itile1, dst0);

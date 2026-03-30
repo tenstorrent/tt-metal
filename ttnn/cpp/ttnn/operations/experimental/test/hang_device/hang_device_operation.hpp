@@ -36,8 +36,6 @@ struct ExecuteTestHangDeviceOperation {
     };
 
     using program_factory_t = std::variant<SingleCore>;
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
@@ -51,12 +49,8 @@ struct ExecuteTestHangDeviceOperation {
 
 }  // namespace ttnn::prim
 
-namespace ttnn {
-struct TestHangOp {
-    static Tensor invoke(const Tensor& input) {
-        return device_operation::launch<ttnn::prim::ExecuteTestHangDeviceOperation>({}, {input});
-    }
-};
+namespace ttnn::operations::experimental::test {
 
-constexpr auto hang_device_operation = ttnn::register_operation<"ttnn::hang_device_operation", ttnn::TestHangOp>();
-}  // namespace ttnn
+Tensor test_hang_device_operation(const Tensor& input_tensor);
+
+}  // namespace ttnn::operations::experimental::test

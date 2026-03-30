@@ -13,11 +13,6 @@
 
 namespace ttnn::operations::moreh::moreh_adamw {
 
-MorehAdamWDeviceOperation::program_factory_t MorehAdamWDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return MultiCore{};
-}
-
 void MorehAdamWDeviceOperation::validate_inputs(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     check_tensor(tensor_args.param_in, "moreh_adamw", "param_in", {DataType::BFLOAT16, DataType::BFLOAT8_B});
@@ -58,11 +53,6 @@ void MorehAdamWDeviceOperation::validate_inputs(
 }
 
 void MorehAdamWDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(attributes, tensor_args);
-}
-
-void MorehAdamWDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }
@@ -141,12 +131,12 @@ MorehAdamWDeviceOperation::tensor_return_value_t MorehAdamWDeviceOperation::crea
     return result;
 }
 
-tt::stl::hash::hash_t MorehAdamWDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t MorehAdamWDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto operation_attributes_without_step_and_lr = operation_attributes;
     operation_attributes_without_step_and_lr.step = 0;
     operation_attributes_without_step_and_lr.lr = 0.0f;
-    return tt::stl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(operation_attributes_without_step_and_lr, tensor_args);
 }
 }  // namespace ttnn::operations::moreh::moreh_adamw
 

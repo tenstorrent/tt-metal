@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -23,11 +23,14 @@
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
 #include "ops/multi_head_utils.hpp"
+#include "ops/rand_op.hpp"
+#include "ops/randn_op.hpp"
 #include "ops/reshape_op.hpp"
 #include "ops/rmsnorm_op.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/sampling_op.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "ops/swiglu_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::nanobind::ops {
@@ -56,12 +59,18 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("reshape");
     m.def_submodule("rmsnorm");
     m.def_submodule("sample");
+    m.def_submodule("swiglu");
     m.def_submodule("unary");
 }
 
 void py_module(nb::module_& m) {
     {
         auto py_binary = static_cast<nb::module_>(m.attr("binary"));
+        py_binary.def(
+            "add",
+            static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const ttnn::Tensor&)>(&ops::operator+),
+            nb::arg("a"),
+            nb::arg("b"));
         py_binary.def(
             "add",
             static_cast<autograd::TensorPtr (*)(const autograd::TensorPtr&, const autograd::AutocastTensor&)>(
@@ -119,12 +128,16 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
+        nb::enum_<ttml::ops::distributed::GradOutputType>(py_distributed, "GradOutputType")
+            .value("REPLICATED", ttml::ops::distributed::GradOutputType::REPLICATED)
+            .value("SHARDED", ttml::ops::distributed::GradOutputType::SHARDED);
         py_distributed.def(
             "all_gather",
             &ttml::ops::distributed::all_gather,
             nb::arg("tensor"),
             nb::arg("dim"),
-            nb::arg("cluster_axis") = nb::none());
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("grad_output_type") = ttml::ops::distributed::GradOutputType::SHARDED);
         py_distributed.def(
             "broadcast", &ttml::ops::distributed::broadcast, nb::arg("tensor"), nb::arg("cluster_axis") = nb::none());
     }
@@ -146,13 +159,14 @@ void py_module(nb::module_& m) {
 
     {
         auto py_layernorm = static_cast<nb::module_>(m.attr("layernorm"));
-        py_layernorm.def("layernorm", &ttml::ops::layernorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("beta"));
+        py_layernorm.def(
+            "layernorm", &ttml::ops::layernorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("beta") = nb::none());
         py_layernorm.def(
             "composite_layernorm",
             &ttml::ops::composite_layernorm,
             nb::arg("tensor"),
             nb::arg("gamma"),
-            nb::arg("beta"));
+            nb::arg("beta") = nb::none());
     }
 
     {
@@ -263,6 +277,19 @@ void py_module(nb::module_& m) {
             nb::arg("key"),
             nb::arg("value"),
             nb::arg("mask") = std::nullopt);
+
+        py_attention.def(
+            "scaled_dot_product_attention_composite",
+            [](const autograd::TensorPtr& query,
+               const autograd::TensorPtr& key,
+               const autograd::TensorPtr& value,
+               const std::optional<autograd::TensorPtr>& mask) -> autograd::TensorPtr {
+                return ttml::ops::scaled_dot_product_attention_composite(query, key, value, mask);
+            },
+            nb::arg("query"),
+            nb::arg("key"),
+            nb::arg("value"),
+            nb::arg("mask") = std::nullopt);
     }
 
     {
@@ -274,7 +301,8 @@ void py_module(nb::module_& m) {
             nb::arg("head_dim"),
             nb::arg("sequence_length"),
             nb::arg("theta"),
-            nb::arg("rope_scaling_params"));
+            nb::arg("rope_scaling_params"),
+            nb::arg("mesh_mapper") = nullptr);
         py_rope.def(
             "build_rope_params",
             &ttml::ops::build_rope_params,
@@ -339,6 +367,28 @@ void py_module(nb::module_& m) {
             nb::arg("epsilon"));
     }
 
+    m.def(
+        "rand",
+        &ttml::ops::rand,
+        nb::arg("shape"),
+        nb::arg("a") = 0.0f,
+        nb::arg("b") = 1.0f,
+        nb::kw_only(),
+        nb::arg("seed") = std::nullopt,
+        nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
+        nb::arg("layout") = tt::tt_metal::Layout::TILE);
+
+    m.def(
+        "randn",
+        &ttml::ops::randn,
+        nb::arg("shape"),
+        nb::arg("mean") = 0.0f,
+        nb::arg("std") = 1.0f,
+        nb::kw_only(),
+        nb::arg("seed") = std::nullopt,
+        nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
+        nb::arg("layout") = tt::tt_metal::Layout::TILE);
+
     {
         auto py_sample = static_cast<nb::module_>(m.attr("sample"));
         py_sample.def(
@@ -348,6 +398,19 @@ void py_module(nb::module_& m) {
             nb::arg("temperature"),
             nb::arg("seed"),
             nb::arg("logits_padding_mask") = nb::none());
+    }
+
+    {
+        auto py_swiglu = static_cast<nb::module_>(m.attr("swiglu"));
+        py_swiglu.def(
+            "swiglu",
+            &ttml::ops::swiglu,
+            nb::arg("tensor"),
+            nb::arg("w1"),
+            nb::arg("w2"),
+            nb::arg("w3"),
+            nb::arg("dropout_prob") = 0.0F,
+            nb::arg("use_per_device_seed") = true);
     }
 
     {

@@ -105,7 +105,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     bool bias_is_sharded,
     bool output_is_sharded,
     bool untilize_out,
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    CoreCoord sub_device_start_core = {0, 0}) {
     using tt::tt_metal::num_cores_to_corerangeset;
 
     // currently only support transpose of the full tile
@@ -183,7 +184,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
-    CoreCoord start_core = {0, 0};
+    CoreCoord start_core = sub_device_start_core;
     uint32_t start_core_x = start_core.x;
     uint32_t start_core_y = start_core.y;
     uint32_t num_cores_c = compute_with_storage_grid_size.x;
@@ -201,11 +202,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         num_cores_to_corerangeset(start_core, num_cores, compute_with_storage_grid_size, row_major);
 
     CoreRangeSet in0_mcast_sender_cores =
-        num_cores_to_corerangeset(in0_sender_num_cores, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset(start_core, in0_sender_num_cores, compute_with_storage_grid_size, row_major);
     CoreCoord in0_mcast_sender_cores_grid = in0_mcast_sender_cores.bounding_box().grid_size();
 
     CoreRangeSet all_cores_with_work =
-        num_cores_to_corerangeset(num_cores_with_work, compute_with_storage_grid_size, row_major);
+        num_cores_to_corerangeset(start_core, num_cores_with_work, compute_with_storage_grid_size, row_major);
     CoreRange in0_mcast_receiver_cores_bounding_box = all_cores_with_work.bounding_box();
     uint32_t in0_mcast_receiver_num_cores = in0_mcast_receiver_cores_bounding_box.size();  // always mcast to full grid
     uint32_t in0_mcast_receiver_num_dests = std::min(
@@ -250,10 +251,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         in0_mcast_noc_x.reserve(in0_mcast_sender_cores_grid.x);
         in0_mcast_noc_y.reserve(in0_mcast_sender_cores_grid.y);
         for (uint32_t core_idx_x = 0; core_idx_x < in0_mcast_sender_cores_grid.x; ++core_idx_x) {
-            in0_mcast_noc_x.push_back(device->worker_core_from_logical_core({core_idx_x, 0}).x);
+            in0_mcast_noc_x.push_back(
+                device->worker_core_from_logical_core({start_core_x + core_idx_x, start_core_y}).x);
         }
         for (uint32_t core_idx_y = 0; core_idx_y < in0_mcast_sender_cores_grid.y; ++core_idx_y) {
-            in0_mcast_noc_y.push_back(device->worker_core_from_logical_core({0, core_idx_y}).y);
+            in0_mcast_noc_y.push_back(
+                device->worker_core_from_logical_core({start_core_x, start_core_y + core_idx_y}).y);
         }
     } else {
         in0_mcast_cores_with_work_and_in_receiver_grid = CoreRangeSet({CoreRange(start_core, start_core)});
@@ -278,10 +281,22 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
     const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
-    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
+    // When transpose_a is true, the K dimension maps to the row dimension of the raw tile,
+    // which is already zero-padded during tile layout conversion. pad_last_ktile operates on
+    // columns, so applying it would incorrectly zero valid data that becomes output rows
+    // after the compute kernel transposes the tile.
+    const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
+    TT_FATAL(
+        in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
+        "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
+        in0_last_ktile_w,
+        in0_last_ktile_h);
 
-    const auto in0_tensor_stride_w = transpose_a ? M : 1;
-    const auto in0_tensor_stride_h = transpose_a ? 1 : K;
+    const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
+    const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
+    const auto [in0_tensor_stride_w, in0_tensor_stride_h] =
+        operations::matmul::utilities::get_in0_transpose_strides(M, M_per_batch, transpose_a, K);
     const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
     const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
     const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
@@ -301,6 +316,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
             (std::uint32_t)in0_last_ktile_w,
+            (std::uint32_t)in0_last_ktile_h,
 
             // in0/in1 common args
             (std::uint32_t)num_blocks,        // num_blocks
@@ -334,6 +350,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             (std::uint32_t)in0_block_h,          // in0_block_h
             (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
             (std::uint32_t)in0_last_ktile_w,
+            (std::uint32_t)in0_last_ktile_h,
             (std::uint32_t)false,  // extract_shard_sub_blocks (not used for interleaved)
             (std::uint32_t)0,      // shard_width_in_tiles (not used for interleaved)
             (std::uint32_t)0,      // shard_height_in_tiles (not used for interleaved)
@@ -349,6 +366,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             // batch args
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B,      // batch
+            (std::uint32_t)B,      // batch
+            (std::uint32_t)false,  // reuse_in0_in_CB
             // sparsity args
             (std::uint32_t)0,     // batchB
             (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -550,7 +569,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
-            .defines = mm_kernel_in0_sender_writer_defines});
+            .defines = mm_kernel_in0_sender_writer_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in0_sharded", tt::CBIndex::c_2},
+                {"cb_l1_array", tt::CBIndex::c_6},
+                {"cb_sparsity", tt::CBIndex::c_6},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+            }});
 
     tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_in_receiver_grid_id = 0;
     tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_and_not_in_receiver_grid_id = 0;
@@ -567,7 +593,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
                     .compile_args = in0_sender_compile_time_args,
-                    .defines = mm_kernel_in0_sender_writer_defines});
+                    .defines = mm_kernel_in0_sender_writer_defines,
+                    .named_compile_args = {
+                        {"cb_in0", tt::CBIndex::c_0},
+                        {"cb_in0_sharded", tt::CBIndex::c_2},
+                        {"cb_l1_array", tt::CBIndex::c_6},
+                    }});
         }
         if (in0_mcast_cores_without_work_and_not_in_receiver_grid.num_cores() > 0) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
@@ -581,7 +612,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
                     .compile_args = in0_sender_compile_time_args,
-                    .defines = mm_kernel_in0_sender_writer_defines});
+                    .defines = mm_kernel_in0_sender_writer_defines,
+                    .named_compile_args = {
+                        {"cb_in0", tt::CBIndex::c_0},
+                        {"cb_in0_sharded", tt::CBIndex::c_2},
+                        {"cb_l1_array", tt::CBIndex::c_6},
+                    }});
         }
     }
 
@@ -594,7 +630,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
-                .compile_args = in0_receiver_compile_time_args});
+                .compile_args = in0_receiver_compile_time_args,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                }});
     }
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -605,7 +644,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines});
+            .defines = mm_kernel_in1_sender_writer_defines,
+            .named_compile_args = {
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_sparsity", tt::CBIndex::c_7},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+            }});
 
     // Compute kernel compile time args
 
@@ -655,7 +701,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_intermed0", tt::CBIndex::c_5},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+                {"cb_in0_transposed", tt::CBIndex::c_10},
+            }});
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -1009,7 +1065,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
-    uint32_t B,
+    uint32_t in0_B,
+    uint32_t in1_B,
     uint32_t M,
     uint32_t N,
     uint32_t K,
@@ -1038,7 +1095,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     tt::DataFormat output_data_format,
     bool in0_is_sharded,
     bool output_is_sharded,
-    bool untilize_out) {
+    bool untilize_out,
+    CoreCoord sub_device_start_core = {0, 0}) {
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
@@ -1074,15 +1132,32 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     uint32_t in0_block_tiles = in0_block_h * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_tiles;
-    if (in0_is_sharded) {
-        in0_CB_tiles = num_blocks * per_core_M * in0_block_w * B;
-    } else if (B * num_blocks > 1) {
+
+    bool reuse_in0_in_CB =
+        ((in0_B == 1 && in1_B > 1) && !in0_is_sharded && !output_is_sharded && !bcast_batch &&
+         !fused_activation.has_value());
+
+    if (reuse_in0_in_CB) {
+        in0_CB_tiles = per_core_M * num_blocks * in0_block_w;
+    } else if (in0_is_sharded) {
+        in0_CB_tiles = num_blocks * per_core_M * in0_block_w * in0_B;
+    } else if (in0_B * num_blocks > 1) {
         in0_CB_tiles = in0_CB_tiles * 2;  // double buffer
     }
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
     const auto& a_shape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
-    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
+    // When transpose_a is true, the K dimension maps to the row dimension of the raw tile,
+    // which is already zero-padded during tile layout conversion. pad_last_ktile operates on
+    // columns, so applying it would incorrectly zero valid data that becomes output rows
+    // after the compute kernel transposes the tile.
+    const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
+    TT_FATAL(
+        in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
+        "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
+        in0_last_ktile_w,
+        in0_last_ktile_h);
 
     bool extract_shard_sub_blocks = false;
     uint32_t in0_shard_height_in_tiles = 0;
@@ -1104,9 +1179,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
 
     uint32_t in1_block_tiles = out_block_w * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_tiles;
-    if (B * num_blocks > 1) {
+    if (in1_B * num_blocks > 1) {
         in1_CB_tiles = in1_CB_tiles * 2;  // double buffer
     }
+
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
     uint32_t out_block_tiles = out_block_h * out_block_w;
@@ -1123,7 +1199,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     uint32_t in3_CB_tiles = in3_block_tiles;  // No double buffer
     uint32_t in3_CB_size = in3_CB_tiles * bias_single_tile_size;
 
-    CoreCoord start_core = {0, 0};
+    CoreCoord start_core = sub_device_start_core;
 
     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
@@ -1155,8 +1231,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    const auto in0_tensor_stride_w = transpose_a ? M : 1;
-    const auto in0_tensor_stride_h = transpose_a ? 1 : K;
+    const auto& a_padded_shape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
+    const uint32_t M_per_batch = a_padded_shape[-2] / in0_tile.get_height();
+    const auto [in0_tensor_stride_w, in0_tensor_stride_h] =
+        operations::matmul::utilities::get_in0_transpose_strides(M, M_per_batch, transpose_a, K);
     const auto in0_tensor_next_block_stride = in0_block_w * in0_tensor_stride_w;
     const auto in0_tensor_next_h_dim_block_stride = in0_block_h * in0_tensor_stride_h;
     const auto in0_tensor_start_tile_id_stride = per_core_M * in0_tensor_stride_h;
@@ -1178,6 +1256,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)in0_block_h,                // in0_block_h
         (std::uint32_t)in0_block_w * in0_block_h,  // in0_block_num_tiles
         (std::uint32_t)in0_last_ktile_w,
+        (std::uint32_t)in0_last_ktile_h,
 
         (std::uint32_t)extract_shard_sub_blocks,
         (std::uint32_t)in0_shard_width_in_tiles,
@@ -1192,9 +1271,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)0,  // in0_mcast_num_dests
         (std::uint32_t)0,  // in0_mcast_num_cores
         // batch args
-        (std::uint32_t)M * K,  // MtKt
-        (std::uint32_t)B,      // batch
-
+        (std::uint32_t)M * K,            // MtKt
+        (std::uint32_t)in0_B,            // batch
+        (std::uint32_t)in1_B,            // batch
+        (std::uint32_t)reuse_in0_in_CB,  // reuse_in0_in_CB
         // sparsity args
         (std::uint32_t)0,     // batchB
         (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -1226,9 +1306,9 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)num_cores - 1,                     // in1_mcast_num_dests
         (std::uint32_t)in1_mcast_receiver_num_cores - 1,  // in1_mcast_num_cores
         // batch args
-        (std::uint32_t)K * N,        // KtNt
-        (std::uint32_t)B,            // batch
-        (std::uint32_t)bcast_batch,  // bcast_B
+        (std::uint32_t)K * N,                              // KtNt
+        (std::uint32_t)(reuse_in0_in_CB ? in1_B : in0_B),  // batch
+        (std::uint32_t)bcast_batch,                        // bcast_B
         // sparsity args
         (std::uint32_t)0,  // batchB
         (std::uint32_t)0,  // sparsity_pagesize (placeholder since sparsity not used in this case)
@@ -1248,6 +1328,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         // batch args
         (std::uint32_t)M * N  // MtNt
     };
+
     if (bias_buffer != nullptr) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)1);  // in3_tensor_stride_w
     } else {
@@ -1277,7 +1358,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         (std::uint32_t)in1_mcast_sender_semaphore_id,
         (std::uint32_t)in1_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)B,  // batch
+        (std::uint32_t)(reuse_in0_in_CB ? in1_B : in0_B),  // batch
 
         // WRITER
         // out tensor args
@@ -1397,7 +1478,13 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .compile_args = in0_sender_compile_time_args,
-            .defines = mm_kernel_in0_sender_defines});
+            .defines = mm_kernel_in0_sender_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in0_sharded", tt::CBIndex::c_2},
+                {"cb_sparsity", tt::CBIndex::c_6},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+            }});
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
@@ -1407,7 +1494,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines});
+            .defines = mm_kernel_in1_sender_writer_defines,
+            .named_compile_args = {
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_sparsity", tt::CBIndex::c_7},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+            }});
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
     if (in1_mcast_receivers.num_cores() > 0) {
@@ -1420,7 +1514,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_noc,
                 .compile_args = in1_receiver_writer_compile_time_args,
-                .defines = mm_kernel_in1_receiver_writer_defines});
+                .defines = mm_kernel_in1_receiver_writer_defines,
+                .named_compile_args = {
+                    {"cb_in1", tt::CBIndex::c_1},
+                    {"cb_bias", tt::CBIndex::c_3},
+                    {"cb_out", tt::CBIndex::c_4},
+                }});
     }
 
     // Compute kernel compile time args
@@ -1449,11 +1548,11 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
         out_num_blocks_x,  // out_num_blocks_x
         out_num_blocks_y,  // out_num_blocks_y
 
-        out_subblock_h,          // out_subblock_h
-        out_subblock_w,          // out_subblock_w
-        out_subblock_num_tiles,  // out_subblock_num_tiles
-        B,                       // batch
-        out_block_tiles,         // out_block_num_tiles
+        out_subblock_h,                     // out_subblock_h
+        out_subblock_w,                     // out_subblock_w
+        out_subblock_num_tiles,             // out_subblock_num_tiles
+        (reuse_in0_in_CB ? in1_B : in0_B),  // batch
+        out_block_tiles,                    // out_block_num_tiles
 
         untilize_out,  // untilize_out
         false,         // get_batch_from_reader
@@ -1473,7 +1572,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_intermed0", tt::CBIndex::c_5},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+                {"cb_in0_transposed", tt::CBIndex::c_10},
+            }});
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -1839,8 +1948,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     }
     for (const auto& cr : subdevice_cores.ranges()) {
         auto intersection = non_idle_cores.intersection(cr);
-        if (!intersection.empty()) {
+        if (intersection.empty()) {
+            continue;
+        }
+        bool is_rectangular = cr.end_coord.x > cr.start_coord.x && cr.end_coord.y > cr.start_coord.y;
+        if (is_rectangular) {
             non_idle_cores_vec.push_back(intersection.bounding_box());
+        } else {
+            for (const auto& ir : intersection.ranges()) {
+                non_idle_cores_vec.push_back(ir);
+            }
         }
     }
     all_cores = CoreRangeSet(non_idle_cores_vec);
@@ -2075,8 +2192,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         (std::uint32_t)batch,       // batch
         (std::uint32_t)ring_size,   // ring_size
         (std::uint32_t)in0_signal_semaphore_id,
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src2_cb_index,
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -2091,10 +2206,6 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         (std::uint32_t)in1_block_page_size_last,
         (std::uint32_t)in1_block_width_num_pages,
         (std::uint32_t)in1_shard_width_in_dram,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)sync_cb_index,
-        (std::uint32_t)sync_cb2_index,
-        (std::uint32_t)remote_cb_index,
         (std::uint32_t)fused_op_signaler.has_value(),
     };
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
@@ -2127,18 +2238,19 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         untilize_out,             // untilize_out
         in1_is_dram_interleaved,  // in1_is_dram_interleaved
         in1_is_dram_sharded,      // in1_is_dram_sharded
-        src0_cb_index,
-        src1_cb_index,
-        src2_cb_index,
-        sync_cb_index,
-        sync_cb2_index,
     };
-    compute_kernel_args.push_back(compute_kernel_args.size() + 1);  // The CT index of the output_cbs
+    std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
+        {"cb_in0", src0_cb_index},
+        {"cb_in1", src1_cb_index},
+        {"cb_in2", src2_cb_index},
+        {"cb_sync", sync_cb_index},
+        {"cb_sync2", sync_cb2_index},
+    };
     for (uint32_t i = 0; i < num_output_cb; ++i) {
-        compute_kernel_args.push_back(output_cb_indices[i]);
+        compute_named_compile_args["cb_mm_out_" + std::to_string(i)] = output_cb_indices[i];
     }
     for (uint32_t i = 0; i < num_output_cb; ++i) {
-        compute_kernel_args.push_back(interm_cb_indices[i]);
+        compute_named_compile_args["cb_mm_partials_" + std::to_string(i)] = interm_cb_indices[i];
     }
 
     /* Kernel defines */
@@ -2192,7 +2304,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .noc_mode = noc_mode,
-            .compile_args = in0_sender_compile_time_args});
+            .compile_args = in0_sender_compile_time_args,
+            .named_compile_args = {{"cb_in0", src0_cb_index}, {"cb_in2", src2_cb_index}}});
     // Each core needs to signal to all RS cores, need to get a count of how many cores are in all_cores
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
@@ -2203,7 +2316,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .noc = in1_noc,
             .noc_mode = noc_mode,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_in1_kernel_defines});
+            .defines = mm_in1_kernel_defines,
+            .named_compile_args = {
+                {"cb_in1", src1_cb_index},
+                {"cb_sync", sync_cb_index},
+                {"cb_sync2", sync_cb2_index},
+                {"cb_remote", remote_cb_index}}});
 
     auto mm_kernel = tt_metal::CreateKernel(
         program,
@@ -2215,7 +2333,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .dst_full_sync_en = dst_full_sync_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = compute_named_compile_args});
 
     // for all the cores in the rect grid, we send one rt arg to determine if they are worker core
     auto all_cores_vec = corerange_to_cores(all_cores, std::nullopt, row_major);
@@ -2255,28 +2374,81 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     }
 
     /* Runtime args */
-    std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_first_col_mapping;
-    std::map<uint32_t, uint32_t> worker_coord_y_to_dram_bank_second_col_mapping;
+    // Mapping from worker core y-coordinate (and column group) to DRAM bank IDs.
+    // The DRAM banks are split into two column groups (left and right halves of the chip).
+    // On Wormhole: hardcoded mapping; banks 0-3 left column (x <= 3), banks 4-11 right column.
+    // On Blackhole: dynamically derived from optimal DRAM bank API; banks split at x <= 6.
+    std::map<uint32_t, uint32_t> worker_y_to_dram_bank_first_col;
+    std::map<uint32_t, uint32_t> worker_y_to_dram_bank_second_col;
+    uint32_t first_col_max_x = device->arch() == tt::ARCH::WORMHOLE_B0 ? 3 : 7;
+    uint32_t num_receiver_cores_per_dram = 2;  // default to 2 for wormhole b0 and blackhole
     if (in1_is_dram_sharded) {
+        num_receiver_cores_per_dram = ring_size / in1_buffer->shard_spec().grid().num_cores();
         if (device->arch() == tt::ARCH::WORMHOLE_B0) {
-            worker_coord_y_to_dram_bank_first_col_mapping[0] = 1;
-            worker_coord_y_to_dram_bank_first_col_mapping[4] = 2;
-            worker_coord_y_to_dram_bank_first_col_mapping[5] = 3;
-            worker_coord_y_to_dram_bank_first_col_mapping[9] = 0;
+            worker_y_to_dram_bank_first_col[0] = 1;
+            worker_y_to_dram_bank_first_col[4] = 2;
+            worker_y_to_dram_bank_first_col[5] = 3;
+            worker_y_to_dram_bank_first_col[9] = 0;
 
-            worker_coord_y_to_dram_bank_second_col_mapping[0] = 4;
-            worker_coord_y_to_dram_bank_second_col_mapping[1] = 6;
-            worker_coord_y_to_dram_bank_second_col_mapping[2] = 9;
-            worker_coord_y_to_dram_bank_second_col_mapping[4] = 10;
-            worker_coord_y_to_dram_bank_second_col_mapping[5] = 11;
-            worker_coord_y_to_dram_bank_second_col_mapping[6] = 8;
-            worker_coord_y_to_dram_bank_second_col_mapping[7] = 7;
-            worker_coord_y_to_dram_bank_second_col_mapping[9] = 5;
-
-        } else if (device->arch() == tt::ARCH::BLACKHOLE) {
-            TT_THROW("ring gather MM currently not supporting blackhole when in1 is dram sharded");
+            worker_y_to_dram_bank_second_col[0] = 4;
+            worker_y_to_dram_bank_second_col[1] = 6;
+            worker_y_to_dram_bank_second_col[2] = 9;
+            worker_y_to_dram_bank_second_col[4] = 10;
+            worker_y_to_dram_bank_second_col[5] = 11;
+            worker_y_to_dram_bank_second_col[6] = 8;
+            worker_y_to_dram_bank_second_col[7] = 7;
+            worker_y_to_dram_bank_second_col[9] = 5;
         } else {
-            TT_THROW("ring gather MM currently not supporting this device arch");
+            // Dynamically derive mapping from optimal DRAM bank API
+            auto optimal_dram_workers = device->get_optimal_dram_bank_to_logical_worker_assignment(in1_noc);
+            uint32_t num_banks = optimal_dram_workers.size();
+            uint32_t banks_in_first_col = num_banks / 2;
+
+            std::vector<std::pair<uint32_t, uint32_t>> first_col_anchors;   // (y, bank_id)
+            std::vector<std::pair<uint32_t, uint32_t>> second_col_anchors;  // (y, bank_id)
+
+            for (uint32_t bank = 0; bank < num_banks; ++bank) {
+                const auto& core = optimal_dram_workers[bank];
+                if (bank < banks_in_first_col) {
+                    first_col_anchors.push_back({core.y, bank});
+                } else {
+                    second_col_anchors.push_back({core.y, bank});
+                }
+            }
+
+            // Sort anchors by y-coordinate for nearest-neighbor lookup
+            auto sort_by_y = [](const auto& a, const auto& b) { return a.first < b.first; };
+            std::sort(first_col_anchors.begin(), first_col_anchors.end(), sort_by_y);
+            std::sort(second_col_anchors.begin(), second_col_anchors.end(), sort_by_y);
+
+            // Helper to find nearest bank for a given y-coordinate
+            auto find_nearest_bank = [](uint32_t y,
+                                        const std::vector<std::pair<uint32_t, uint32_t>>& anchors) -> uint32_t {
+                if (anchors.empty()) {
+                    return 0;  // Fallback
+                }
+                uint32_t best_bank = anchors[0].second;
+                uint32_t best_dist = std::abs((int)y - (int)anchors[0].first);
+                for (const auto& [anchor_y, bank] : anchors) {
+                    uint32_t dist = std::abs((int)y - (int)anchor_y);
+                    if (dist < best_dist) {
+                        best_dist = dist;
+                        best_bank = bank;
+                    }
+                }
+                return best_bank;
+            };
+
+            // Build complete maps for all possible y-coordinates (0 to max worker y)
+            auto compute_grid = device->compute_with_storage_grid_size();
+            for (uint32_t y = 0; y < compute_grid.y; ++y) {
+                if (!first_col_anchors.empty()) {
+                    worker_y_to_dram_bank_first_col[y] = find_nearest_bank(y, first_col_anchors);
+                }
+                if (!second_col_anchors.empty()) {
+                    worker_y_to_dram_bank_second_col[y] = find_nearest_bank(y, second_col_anchors);
+                }
+            }
         }
     }
 
@@ -2319,15 +2491,54 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             i,                      // ring_idx
         };
         if (in1_is_dram_sharded) {
-            if (core.x <= 3) {
-                bank_id = worker_coord_y_to_dram_bank_first_col_mapping[core.y];
+            // Look up bank_id based on core.y and which column group core.x belongs to
+            if (core.x <= first_col_max_x) {
+                auto it = worker_y_to_dram_bank_first_col.find(core.y);
+                if (it == worker_y_to_dram_bank_first_col.end()) {
+                    log_info(
+                        tt::LogOp,
+                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in first-col map! Available y values:",
+                        core.x,
+                        core.y,
+                        core.y);
+                    for (const auto& [y, bank] : worker_y_to_dram_bank_first_col) {
+                        log_info(tt::LogOp, "  y={}", y);
+                    }
+                }
+                bank_id = it->second;
             } else {
-                bank_id = worker_coord_y_to_dram_bank_second_col_mapping[core.y];
+                auto it = worker_y_to_dram_bank_second_col.find(core.y);
+                if (it == worker_y_to_dram_bank_second_col.end()) {
+                    log_info(
+                        tt::LogOp,
+                        "ERROR: Worker core ({}, {}) y={} NOT FOUND in second-col map! Available y values:",
+                        core.x,
+                        core.y,
+                        core.y);
+                    for (const auto& [y, bank] : worker_y_to_dram_bank_second_col) {
+                        log_info(tt::LogOp, "  y={}", y);
+                    }
+                }
+                bank_id = it->second;
             }
+
             uint32_t dram_read_offset = 0;
-            if (core.x % 2 == 0) {
-                dram_read_offset = 1;
+            /* TODO: This is a temporary solution to handle the dram read offset for the wormhole b0. */
+            /* TODO: The dram read offset is x coordinate dependent for wormhole because all usage on wormhole assumes
+             * input core range is column major, whereas blackhole usage is row major*/
+            /* TODO: The correct behaviour is that first core next to dram bank always has offset 0 and then offset
+             * increases by 1 for each core in the same row*/
+            /* TODO: This logic should be removed once all usage of ring matmul asserts that the input core ranges are
+             * arranged in row major order*/
+            if (device->arch() == tt::ARCH::WORMHOLE_B0) {
+                if (core.x % 2 == 0) {
+                    dram_read_offset = 1;
+                }
+            } else {
+                // For iterating through ring matmul cores in row major order
+                dram_read_offset = i % num_receiver_cores_per_dram;
             }
+
             bank_ids.push_back(bank_id);
             uint32_t vc = 0;
             for (uint32_t j = 0; j < i; ++j) {
@@ -2739,7 +2950,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     ////////////////////////////////////////////////////////////////////////////
     // NOTE: Pads matmul input dims to 512 x 512 multiples (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])
-    const auto B = fuse_batch ? 1 : get_batch_size(ashape);
+    const auto in0_B = fuse_batch ? 1 : get_batch_size(ashape);
+    const auto in1_B = fuse_batch ? 1 : get_batch_size(bshape);
     const auto Mt = operations::matmul::utilities::get_M_dim(ashape, in0_tile, fuse_batch);
     const auto Kt = operations::matmul::utilities::get_K_dim(ashape, in0_tile);
     const auto Nt = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
@@ -2805,7 +3017,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             compute_with_storage_grid_size,
             throttle_level,
             start_cb_index,
-            B,
+            in0_B,
             Mt,
             Nt,
             Kt,
@@ -2834,6 +3046,18 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             fused_op_signaler);
     }
     TT_FATAL(start_cb_index == tt::CBIndex::c_0, "mcast does not support a non-zero start cb index");
+
+    ////////////////////////////////////////////////////////////////////////////
+    //                      Sub-device start core
+    ////////////////////////////////////////////////////////////////////////////
+    CoreCoord sub_device_start_core = {0, 0};
+    if (sub_device_id.has_value()) {
+        auto sub_device_cores =
+            device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+        auto bbox = sub_device_cores.bounding_box();
+        sub_device_start_core = bbox.start_coord;
+    }
+
     if (mcast_in0) {
         return reuse_mcast_1d_optimized_helpers::process_mcast_in0_program_and_create_override_variables(
             program,
@@ -2845,7 +3069,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             packer_l1_acc,
             compute_with_storage_grid_size,
             throttle_level,
-            B,
+            in0_B,
             Mt,
             Nt,
             Kt,
@@ -2877,7 +3101,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             bias.has_value() ? bias->memory_config().is_sharded() : false,
             output.memory_config().is_sharded(),
             untilize_out,
-            fused_op_signaler);
+            fused_op_signaler,
+            sub_device_start_core);
     }
     return reuse_mcast_1d_optimized_helpers::process_mcast_in1_program_and_create_override_variables(
         program,
@@ -2889,7 +3114,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         packer_l1_acc,
         compute_with_storage_grid_size,
         throttle_level,
-        B,
+        in0_B,
+        in1_B,
         Mt,
         Nt,
         Kt,
@@ -2918,7 +3144,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         output_data_format,
         a.memory_config().is_sharded(),
         output.memory_config().is_sharded(),
-        untilize_out);
+        untilize_out,
+        sub_device_start_core);
 }
 
 MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t MatmulMultiCoreReuseMcast1DProgramFactory::create(

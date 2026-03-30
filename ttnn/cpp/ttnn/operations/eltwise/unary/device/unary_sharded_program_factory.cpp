@@ -88,8 +88,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
 
     // tmp sharded CB
     uint32_t tmp_cb_id = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::CBRT ||
-        ops_chain[0].type() == UnaryOpType::LOGIT) {
+    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK || ops_chain[0].type() == UnaryOpType::LOGIT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{tmp_cb_id, act_df}})
                 .set_page_size(tmp_cb_id, in_cb_pagesize);
@@ -154,6 +153,7 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     if (!ops_chain[0].empty()) {
         switch (ops_chain[0].type()) {
             case UnaryOpType::HARDSHRINK:
+            case UnaryOpType::MISH:
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 break;
             case UnaryOpType::WHERE_TSS:
@@ -166,7 +166,8 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
                 packed_scalar1 = utils::pack_scalar_runtime_arg_impl(value1, input.dtype());
                 packed_scalar2 = utils::pack_scalar_runtime_arg_impl(value2, input.dtype());
                 if (value1 > 0.5f) {
-                    unary_defines["WHERE"] = "where_tile";
+                    const char* data_format = (input.dtype() == DataType::FLOAT32) ? "Float32" : "Float16_b";
+                    unary_defines["WHERE"] = fmt::format("where_tile<DataFormat::{0}>", data_format);
                     unary_defines["CLAMP"] = "clamp_tile";
                 } else if (value1 >= 0.0f) {
                     unary_defines["CLAMP"] = "clamp_tile";
@@ -180,12 +181,18 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     auto path =
         fmt::format("{}/{}", compute_root_sharded, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole (less likely to give bad results).
+    const auto default_fp32_acc_math_fidelity =
+        (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3
+                                                                                   : MathFidelity::HiFi4;
+
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         path,
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = default_fp32_acc_math_fidelity,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,

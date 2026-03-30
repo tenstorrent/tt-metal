@@ -18,11 +18,10 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -30,6 +29,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -88,68 +89,136 @@ void run_single_core_copy_block_matmul_partials(
     auto dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
-    uint32_t src0_cb_index = test_config.src0_cb_index;
     uint32_t num_input_tiles = test_config.reader_ublock;
-
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, single_tile_size);
-
-    if (test_config.fp32_dest_acc_en) {
-        cb_src0_config = tt_metal::CircularBufferConfig(
-                             num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float32}})
-                             .set_page_size(src0_cb_index, single_tile_size);
-    }
-    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
-
-    uint32_t ouput_cb_index = test_config.ouput_cb_index;
     uint32_t num_output_tiles = test_config.writer_ublock;
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(
-            num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(ouput_cb_index, single_tile_size);
-    if (test_config.fp32_dest_acc_en) {
-        cb_output_config = tt_metal::CircularBufferConfig(
-                               num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float32}})
-                               .set_page_size(ouput_cb_index, single_tile_size);
+
+    uint32_t input_id = 0;
+    uint32_t output_id = 0;
+
+    uint32_t src0_dfb = 0;
+    uint32_t dst_dfb = 0;
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        tt_metal::experimental::dfb::DataflowBufferConfig dfb_src0_config = {
+            .entry_size = single_tile_size,
+            .num_entries = num_input_tiles,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b};
+        src0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_src0_config);
+        input_id = src0_dfb;
+
+        tt_metal::experimental::dfb::DataflowBufferConfig dfb_output_config = {
+            .entry_size = single_tile_size,
+            .num_entries = num_output_tiles,
+            .num_producers = 1,
+            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .num_consumers = 1,
+            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
+            .enable_implicit_sync = false,
+            .data_format = test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b,
+        };
+        dst_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_output_config);
+        output_id = dst_dfb;
+    } else {
+        uint32_t src0_cb_index = test_config.src0_cb_index;
+        input_id = src0_cb_index;
+        tt_metal::CircularBufferConfig cb_src0_config =
+            tt_metal::CircularBufferConfig(
+                num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(src0_cb_index, single_tile_size);
+
+        if (test_config.fp32_dest_acc_en) {
+            cb_src0_config = tt_metal::CircularBufferConfig(
+                                 num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float32}})
+                                 .set_page_size(src0_cb_index, single_tile_size);
+        }
+        tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
+
+        uint32_t ouput_cb_index = test_config.ouput_cb_index;
+        output_id = ouput_cb_index;
+        tt_metal::CircularBufferConfig cb_output_config =
+            tt_metal::CircularBufferConfig(
+                num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
+                .set_page_size(ouput_cb_index, single_tile_size);
+        if (test_config.fp32_dest_acc_en) {
+            cb_output_config = tt_metal::CircularBufferConfig(
+                                   num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float32}})
+                                   .set_page_size(ouput_cb_index, single_tile_size);
+        }
+        tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
     }
-    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
-    auto unary_reader_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+    KernelHandle unary_reader_kernel;
+    KernelHandle unary_writer_kernel;
+    KernelHandle compute_kernel;
 
-    auto unary_writer_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_pop_n.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        unary_reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+
+        unary_writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_pop_n.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+    } else {
+        unary_reader_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n.cpp",
+            core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+
+        unary_writer_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_pop_n.cpp",
+            core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    }
 
     vector<uint32_t> compute_kernel_args = {
         uint(num_tiles),                   // total tiles to transfer
         uint(test_config.compute_ublock),  // tiles to transfer in a single iteration/copy_block call
-        uint(src0_cb_index),               // Input CB idx
-        uint(ouput_cb_index)               // Output CB idx
+        uint(input_id),                    // Input CB idx or DFB id
+        uint(output_id)                    // Output CB idx or DFB id
     };
 
     std::map<std::string, std::string> defines;
     if (test_config.fp32_dest_acc_en) {
         defines["DST_ACCUM_MODE"] = "1";
     }
-    tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
-        core,
-        tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
-            .compile_args = compute_kernel_args,
-            .defines = defines});
-
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        compute_kernel = tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
+            core,
+            tt_metal::experimental::quasar::QuasarComputeConfig{
+                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                .dst_full_sync_en = test_config.dst_full_sync_en,
+                .compile_args = compute_kernel_args,
+                .defines = defines});
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, src0_dfb, unary_reader_kernel, compute_kernel);
+        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
+            program_, dst_dfb, compute_kernel, unary_writer_kernel);
+    } else {
+        compute_kernel = tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
+            core,
+            tt_metal::ComputeConfig{
+                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                .dst_full_sync_en = test_config.dst_full_sync_en,
+                .compile_args = compute_kernel_args,
+                .defines = defines});
+    }
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
@@ -172,7 +241,7 @@ void run_single_core_copy_block_matmul_partials(
         {dram_buffer_src_addr,
          (uint32_t)0,  // dram bank id
          num_tiles,
-         src0_cb_index,
+         input_id,
          test_config.reader_ublock,
          false});
 
@@ -183,11 +252,15 @@ void run_single_core_copy_block_matmul_partials(
         {dram_buffer_dst_addr,
          (uint32_t)0,  // dram bank id
          num_tiles,
-         ouput_cb_index,
+         output_id,
          test_config.writer_ublock,
          false});
 
-    distributed::EnqueueMeshWorkload(cq, workload, false);
+    auto blocking = device->arch() == ARCH::QUASAR;
+    distributed::EnqueueMeshWorkload(cq, workload, blocking);
+    if (not blocking) {
+        distributed::Finish(cq);
+    }
 
     std::vector<uint32_t> result_vec_bf16;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec_bf16);
@@ -210,10 +283,6 @@ void run_single_core_copy_block_matmul_partials(
 
 TEST_F(MeshDeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
     for (bool fp32_dest_acc_en : {true, false}) {
-        // FP32 dest acc not possible for GS
-        if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-            continue;
-        }
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
             unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
@@ -225,32 +294,32 @@ TEST_F(MeshDeviceFixture, DISABLED_TensixComputeCopyBlockSingle) {
 }
 TEST_F(MeshDeviceFixture, TensixComputeCopyBlockMultiple) {
     for (bool fp32_dest_acc_en : {true, false}) {
-        // FP32 dest acc not possible for GS
-        if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-            continue;
-        }
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
             unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
                 .num_tiles = 8,
                 .reader_ublock = 8,
                 .writer_ublock = 8,
-                .compute_ublock = 8,
+                .compute_ublock = 4,  // compute_ublock must be <= get_dest_max_tiles (4 for SyncHalf+FP32)
                 .fp32_dest_acc_en = fp32_dest_acc_en,
                 .dst_full_sync_en = dst_full_sync_en};
             unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
                 this->devices_.at(0), test_config);
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }
 
 TEST_F(MeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
     for (bool fp32_dest_acc_en : {true, false}) {
-        // FP32 dest acc not possible for GS
-        if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-            continue;
-        }
         for (bool dst_full_sync_en : {true, false}) {
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR && fp32_dest_acc_en &&
+                !dst_full_sync_en) {
+                // TODO (#40827): AM; Remove when correct 32bit dest address is used
+                continue;
+            }
             log_info(LogTest, "FP32DestAcc = {}, DstSyncFull = {}", fp32_dest_acc_en, dst_full_sync_en);
             unit_tests::compute::matmul_partials::CopyBlockMatmulPartialsConfig test_config = {
                 .num_tiles = 8,
@@ -261,6 +330,9 @@ TEST_F(MeshDeviceFixture, TensixComputeCopyBlockComputeBottleneck) {
                 .dst_full_sync_en = dst_full_sync_en};
             unit_tests::compute::matmul_partials::run_single_core_copy_block_matmul_partials(
                 this->devices_.at(0), test_config);
+            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+                return;
+            }
         }
     }
 }

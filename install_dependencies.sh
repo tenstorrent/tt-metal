@@ -24,7 +24,7 @@ detect_os() {
         . /etc/os-release
         OS_ID="$ID"
         OS_VERSION="$VERSION_ID"
-        OS_CODENAME="${UBUNTU_CODENAME:VERSION_CODENAME}"
+        OS_CODENAME="${UBUNTU_CODENAME:-$VERSION_CODENAME}"
         OS_ID_LIKE="$ID_LIKE"
     else
         echo "Error: /etc/os-release not found. Unsupported system."
@@ -169,21 +169,19 @@ init_packages() {
         debian)
             # Determine g++ version based on Ubuntu version
             local gpp_package="g++"
-            if [[ "$OS_ID" == "ubuntu" ]]; then
-                case "$OS_VERSION" in
-                    "22.04")
-                        gpp_package="g++-12"
-                        echo "[INFO] Using g++-12 for Ubuntu 22.04 (gcc-12 will be installed as dependency)"
-                        ;;
-                    "24.04")
-                        gpp_package="g++-14"
-                        echo "[INFO] Using g++-14 for Ubuntu 24.04 (gcc-14 will be installed as dependency)"
-                        ;;
-                    *)
-                        echo "[INFO] Using default g++ for Ubuntu $OS_VERSION"
-                        ;;
-                esac
-            fi
+            case "$UBUNTU_CODENAME" in
+                "jammy") # 22.04
+                    gpp_package="g++-12"
+                    echo "[INFO] Using g++-12 for Ubuntu 22.04 (gcc-12 will be installed as dependency)"
+                    ;;
+                "noble") # 24.04
+                    gpp_package="g++-14"
+                    echo "[INFO] Using g++-14 for Ubuntu 24.04 (gcc-14 will be installed as dependency)"
+                    ;;
+                *)
+                    echo "[INFO] Using default g++ for $OS_ID $OS_VERSION"
+                    ;;
+            esac
 
             # All packages needed for TT-Metal development
             PACKAGES=(
@@ -200,6 +198,7 @@ init_packages() {
                 "python3-dev"
                 "python3-pip"
                 "python3-venv"
+                "python3-pkg-resources" # needed for setuptools
                 "libhwloc-dev"
                 "libnuma-dev"
                 "libatomic1"
@@ -293,14 +292,12 @@ prep_ubuntu_system() {
     apt-get install -y --no-install-recommends kitware-archive-keyring
 
     # Add GCC toolchain repository for specific g++ versions if needed
-    if [[ "$OS_ID" == "ubuntu" ]]; then
-        case "$OS_VERSION" in
-            "24.04")
-                echo "[INFO] Adding toolchain repository for g++-14 on Ubuntu 24.04"
-                add-apt-repository -y ppa:ubuntu-toolchain-r/test
-                ;;
-        esac
-    fi
+    case "$UBUNTU_CODENAME" in
+        "noble")
+            echo "[INFO] Adding toolchain repository for g++-14 on Ubuntu 24.04"
+            add-apt-repository -y ppa:ubuntu-toolchain-r/test
+            ;;
+    esac
 
     apt-get update
 }
@@ -401,10 +398,10 @@ install_mpi_ulfm() {
     fi
 
     # Only install MPI ULFM for Ubuntu 24.04 or older
-    local VERSION_NUM=$(echo "$VERSION" | sed 's/\.//')
+    local VERSION_NUM=$(echo "$OS_VERSION" | sed 's/\.//')
 
-    if [ "$VERSION_NUM" -gt "2404" ]; then
-        echo "[INFO] Skipping MPI ULFM installation for Ubuntu $VERSION (only needed for 24.04 or older)"
+    if [[ "$OS_ID" == "ubuntu" ]] && [ "$VERSION_NUM" -gt "2404" ]; then
+        echo "[INFO] Skipping MPI ULFM installation for Ubuntu $OS_VERSION (only needed for 24.04 or older)"
         return
     fi
 

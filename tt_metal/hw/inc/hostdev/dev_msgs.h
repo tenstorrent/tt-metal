@@ -29,6 +29,7 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
+#include "hostdev/device_print_common.h"
 
 #ifdef HAL_BUILD
 // HAL will include this file for different arch/cores, resulting in conflicting definitions that
@@ -99,6 +100,11 @@ constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MSG_ALL_INIT = 0x40404040;
 constexpr uint32_t RUN_SYNC_MSG_ALL_SUBORDINATES_DONE = 0;
 constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE = 0;
+constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT = 0x40404040404040;
+
+// Per-processor "shared globals ready" signal for Quasar DM kernel startup (dm.cc sets WAIT; thread 0 in dmk sets GO).
+constexpr uint8_t SHARED_GLOBALS_READY_WAIT = 0;
+constexpr uint8_t SHARED_GLOBALS_READY_GO = 1;
 
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;
@@ -162,6 +168,12 @@ struct kernel_config_msg_t {
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
     volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 12];  // CODEGEN:skip
 
+    // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel;
+    // values fit in 8 bits) The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of
+    // 16 bytes for the pair).
+    volatile uint8_t num_sw_threads[MaxProcessorsForThreadingVariables];
+    volatile uint8_t kernel_thread_id[MaxProcessorsForThreadingVariables];
+
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
 
@@ -191,7 +203,7 @@ struct launch_msg_t {  // must be cacheline aligned
     kernel_config_msg_t kernel_config;
 } __attribute__((packed));
 
-// save space for the structure, device side will cast to the corrrect structure
+// save space for the structure, device side will cast to the correct structure
 struct subordinate_sync_msg_t {
     volatile uint8_t map[subordinate_map_size];
 };
@@ -240,12 +252,17 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeL1AddrOverflow = 14,
     DebugSanitizeEthSrcL1AddrOverflow = 15,
     DebugSanitizeEthDestL1AddrOverflow = 16,
+    DebugSanitizeCBOutOfBounds = 17,
+    // Applicable only on Quasar: multiple DMs share one NOC, so CAS is used to prevent race conditions
+    // This transient value indicates a DM is writing error metadata, host should ignore
+    DebugSanitizeWriteInProgress = 0xDEAD,
 };
 
 struct debug_assert_msg_t {
     volatile uint16_t line_num;
     volatile uint8_t tripped;
     volatile uint8_t which;
+    volatile uint64_t hw_fault_info;
 };
 
 enum debug_assert_type_t {
@@ -256,7 +273,11 @@ enum debug_assert_type_t {
     DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped = 6,
     DebugAssertNCriscNOCPostedWritesSentTripped = 7,
     DebugAssertRtaOutOfBounds = 8,
-    DebugAssertCrtaOutOfBounds = 9
+    DebugAssertCrtaOutOfBounds = 9,
+    DebugAssertHwFault = 10,
+    // Applicable only on Quasar: multiple DMs share one NOC, so CAS is used to prevent race conditions
+    // This transient value indicates a DM is writing error metadata, host should ignore
+    DebugAssertWriteInProgress = 0xFF,
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
@@ -315,11 +336,16 @@ struct watcher_msg_t {
 // Host code does not need to use dprint_buf_msg_t (it uses DebugPrintMemLayout directly), skip because codegen can't
 // see DebugPrintMemLayout.
 struct dprint_buf_msg_t {
-    DebugPrintMemLayout data[PROCESSOR_COUNT];
+    union {
+        DebugPrintMemLayout data[PROCESSOR_COUNT];
+        DevicePrintMemoryLayout shared_data;
+    };
+
+    static_assert(sizeof(data) == sizeof(shared_data));
 };
 #endif
 
-// NOC aligment max from BH
+// NOC alignment max from BH
 constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
 enum class AddressableCoreType : uint8_t {
@@ -389,6 +415,8 @@ struct mailboxes_t {
     volatile struct go_msg_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
     volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
+    volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +1 for
+                                                           // the compute kernel.
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;

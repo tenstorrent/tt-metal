@@ -6,7 +6,6 @@
 
 #include <nanobind/nanobind.h>
 
-#include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_nanobind.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/reshard_nanobind.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_nanobind.hpp"
@@ -23,6 +22,7 @@
 #include "ttnn/operations/data_movement/moe_expert_token_remap/moe_expert_token_remap_nanobind.hpp"
 #include "ttnn/operations/data_movement/moe_routing_remap/moe_routing_remap_nanobind.hpp"
 #include "ttnn/operations/data_movement/move/move_nanobind.hpp"
+#include "ttnn/operations/data_movement/narrow/narrow_nanobind.hpp"
 #include "ttnn/operations/data_movement/non_zero_indices/non_zero_indices_nanobind.hpp"
 #include "ttnn/operations/data_movement/pad/pad_nanobind.hpp"
 #include "ttnn/operations/data_movement/permute/permute_nanobind.hpp"
@@ -64,6 +64,7 @@ void py_module(nb::module_& mod) {
     detail::bind_permute(mod);
     detail::bind_repeat_interleave(mod);
     detail::bind_slice(mod);
+    detail::bind_slice_descriptor(mod);
     detail::bind_split(mod);
     detail::bind_tilize(mod);
     detail::bind_tilize_with_val_padding(mod);
@@ -84,6 +85,7 @@ void py_module(nb::module_& mod) {
     bind_expand(mod);
     bind_interleaved_to_sharded(mod);
     bind_interleaved_to_sharded_partial(mod);
+    bind_narrow(mod);
     bind_repeat(mod);
     bind_reshape_enum(mod);
     bind_reshape(mod);

@@ -8,7 +8,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 
 namespace ttnn::operations::reduction::detail {
@@ -19,13 +19,13 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
             If no :attr:`dim` is provided, it will return the indices of maximum value of all elements in given :attr:`input_tensor`.
 
             Args:
-                input_tensor (ttnn.Tensor): the input tensor.
+                input_tensor (ttnn.Tensor): the input tensor. Must be on the device.
 
             Keyword args:
                 dim (int, optional): dimension to reduce. Defaults to `None`.
                 keepdim (bool, optional): whether to keep the reduced dimension. Defaults to `False`.
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+                output_tensor (ttnn.Tensor, optional): Preallocated output tensor. If specified, must be on the same device as :attr:`input_tensor`. Defaults to `None`.
 
             Returns:
                 ttnn.Tensor: Output tensor containing the indices of the maximum value.
@@ -64,29 +64,17 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
 
             Limitations:
                 - All input tensors must be on-device.
-                - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1).
+                - Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1 or :attr:`dim` = rank - 1).
                 - Sharding is not supported for this operation
                 - Reduction over all elements (when dim=None) is not supported with the TILE input tensor layout
-                - The (optional) preallocated output tensor must have ROW_MAJOR layout
+                - The (optional) preallocated output tensor must have ROW_MAJOR layout and must be on the same device as :attr:`input_tensor`
         )doc";
 
-    using OperationType = decltype(ttnn::argmax);
-    bind_registered_operation(
+    ttnn::bind_function<"argmax">(
         mod,
-        ttnn::argmax,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<int> dim,
-               const bool keepdim,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               const bool use_multicore,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& optional_output_tensor) {
-                return self(
-                    input_tensor, dim, keepdim, sub_core_grids, use_multicore, memory_config, optional_output_tensor);
-            },
+        ttnn::overload_t(
+            &ttnn::argmax,
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim") = nb::none(),
             nb::arg("keepdim") = false,
@@ -94,7 +82,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
             nb::arg("sub_core_grids") = nb::none(),
             nb::arg("use_multicore") = false,
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+            nb::arg("output_tensor") = nb::none()));
 }
 
 }  // namespace ttnn::operations::reduction::detail

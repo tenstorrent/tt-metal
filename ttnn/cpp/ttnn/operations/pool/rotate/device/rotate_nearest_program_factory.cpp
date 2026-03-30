@@ -24,7 +24,7 @@ using namespace tt::tt_metal;
 
 constexpr uint32_t NEAREST_BUFFERING_FACTOR = 2;
 constexpr uint32_t NUM_TILES_DEST = 8;
-constexpr uint32_t MAX_BATCH_SIZE = 5;
+constexpr uint32_t MAX_BURST_SIZE = 5;
 
 // Helper to convert float to bfloat16 representation using tie-to-even rounding (matches PyTorch)
 static uint16_t nearest_float_to_bfloat16(float value) {
@@ -97,6 +97,7 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
             input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED;
         is_width_sharded =
             input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
+        TT_FATAL(!is_width_sharded, "Width sharding is not supported for rotate operation");
         num_cores_x = input_shard_spec.grid.bounding_box().grid_size().x;
         shard_width = input_shard_spec.shape[1];
     } else if (is_nd_sharded) {
@@ -136,6 +137,14 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
     const uint32_t max_sticks_per_core =
         any_sharded ? input_nsticks_per_core : std::max(num_sticks_per_core_group_1, num_sticks_per_core_group_2);
     uint32_t num_cb_pages = std::min(max_sticks_per_core, max_cb_pages_from_l1);
+    TT_FATAL(
+        num_cb_pages > 0,
+        "Not enough L1 for even a single CB page: aligned_input_stick_nbytes={} exceeds l1_for_cb={}",
+        aligned_input_stick_nbytes,
+        l1_for_cb);
+    const uint32_t burst_size = num_cb_pages < MAX_BURST_SIZE ? num_cb_pages : MAX_BURST_SIZE;
+    // CB total size must be an even multiple of burst_size (required by cb_push_back/cb_pop_front API)
+    num_cb_pages = round_down(num_cb_pages, burst_size);
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_page_size = aligned_input_stick_nbytes;
@@ -166,7 +175,8 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         any_sharded ? output_tensor.buffer() : nullptr);
 
     const bool fill_is_zero = (fill_value_bf16 == 0);
-    const uint32_t batch_size = num_cb_pages < MAX_BATCH_SIZE ? num_cb_pages : MAX_BATCH_SIZE;
+
+    const uint32_t effective_stick_nbytes = any_sharded ? effective_channels * element_size : input_stick_nbytes;
 
     std::vector<uint32_t> reader_compile_time_args = {
         output_cb_index,
@@ -174,24 +184,28 @@ RotateDeviceOperation::NearestProgramFactory::cached_program_t RotateDeviceOpera
         input_batch,
         input_height,
         input_width,
-        input_channels,
+        effective_channels,
         num_cb_pages,
         fill_cb_index,
-        input_stick_nbytes,
+        effective_stick_nbytes,
         static_cast<uint32_t>(fill_is_zero),
-        batch_size,
+        burst_size,
     };
 
-    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
+    auto* input_buffer = input_tensor.buffer();
+    TT_FATAL(input_buffer != nullptr, "Input tensor must be allocated on device for rotate operation");
+    tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         output_cb_index,
         aligned_output_stick_nbytes,
         num_cb_pages,
-        batch_size,
+        burst_size,
     };
 
-    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
+    auto* output_buffer = output_tensor.buffer();
+    TT_FATAL(output_buffer != nullptr, "Output tensor must be allocated on device for rotate operation");
+    tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -301,6 +315,9 @@ void RotateDeviceOperation::NearestProgramFactory::override_runtime_arguments(
 
     auto* src_buffer = tensor_args.input.buffer();
     auto* dst_buffer = output.buffer();
+
+    TT_FATAL(src_buffer != nullptr, "Input tensor buffer must not be null in override_runtime_arguments");
+    TT_FATAL(dst_buffer != nullptr, "Output tensor buffer must not be null in override_runtime_arguments");
 
     const float angle_rad = operation_attributes.angle * M_PI / 180.0f;
     const float cos_angle = std::cos(angle_rad);

@@ -1,8 +1,10 @@
-set(UNIT_TESTS_NOC_DEBUGGING_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_reads_writes.cpp)
+# Include source file lists (module owners maintain sources.cmake)
+include(sources.cmake)
 
 add_executable(unit_tests_noc_debugging ${UNIT_TESTS_NOC_DEBUGGING_SRC})
 
 TT_ENABLE_UNITY_BUILD(unit_tests_noc_debugging)
+target_precompile_headers(unit_tests_noc_debugging REUSE_FROM metal_common_pch)
 
 target_link_libraries(unit_tests_noc_debugging PRIVATE test_metal_common_libs)
 

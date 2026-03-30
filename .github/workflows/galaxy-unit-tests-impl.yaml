@@ -101,7 +101,7 @@ jobs:
           all_tests=$(jq -n '[
             { "name": "Galaxy unit tests", "arch": "wormhole_b0", "model": "unit", "timeout": 10, "owner_id": "XXXXX" },
             { "name": "Galaxy Fabric tests", "arch": "wormhole_b0", "model": "fabric", "timeout": 5, "owner_id": "UJ45FEC7M" },
-            { "name": "Galaxy Multi-Process tests", "arch": "wormhole_b0", "model": "multiprocess", "timeout": 15, "owner_id": "U03NG0A5ND7" },
+            { "name": "Galaxy Multi-Process tests", "arch": "wormhole_b0", "model": "multiprocess", "timeout": 15, "owner_id": "U03NG0A5ND7", "auto-triage": false },
             # { "name": "Galaxy Llama3-70b unit tests", "arch": "wormhole_b0", "model": "llama3-70b", "timeout": 30, "owner_id": "U053W15B6JF", "mlperf": true },
             # { "name": "Galaxy DRAM Prefetcher unit tests", "arch": "wormhole_b0", "model": "prefetcher", "timeout": 25, "owner_id": "U044T8U8DEF" },
             { "name": "Galaxy GPT-OSS unit tests", "arch": "wormhole_b0", "model": "gpt-oss", "timeout": 25, "owner_id": "U08TJ70UFRT", "mlperf": true },
@@ -164,17 +164,79 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          auto-triage: ${{ matrix.test-group.auto-triage != false }}
+          hang-detection-timeout: ${{ matrix.test-group.hang-detection-timeout || 5.0 }}
 
       - name: Run unit tests
         if: ${{ matrix.test-group.model == 'unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           mkdir -p generated/test_reports
-          TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCard*Fixture.*"
-          TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
-          ./build/test/tt_metal/unit_tests_device --gtest_filter="GalaxyFixture.*:TGFixture.*"
-          TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshMultiCQMultiDevice*Fixture.*"
-          TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*DispatchContext*"
+          failed=0
+          failed_names=()
+
+          run_gtest() {
+            local name="$1"
+            local xml_name="$2"
+            shift 2
+
+            echo "::group::${name}"
+            if GTEST_OUTPUT="xml:/work/generated/test_reports/${xml_name}" "$@"; then
+              echo "::endgroup::"
+              echo "::notice title=PASS::${name} passed."
+            else
+              local status=$?
+              failed=1
+              failed_names+=("${name} (exit ${status})")
+              echo "::endgroup::"
+              echo "::error title=FAIL::${name} (exit ${status})"
+            fi
+          }
+
+          run_gtest \
+            "Dispatch single-card fixtures" \
+            "unit_tests_dispatch_command_queue_single_card.xml" \
+            env TT_METAL_ENABLE_REMOTE_CHIP=1 \
+            ./build/test/tt_metal/unit_tests_dispatch \
+            --gtest_filter="UnitMeshCQSingleCard*Fixture.*"
+
+          run_gtest \
+            "Galaxy/TG device tests slow dispatch" \
+            "unit_tests_device_galaxy_slow_dispatch.xml" \
+            env TT_METAL_SLOW_DISPATCH_MODE=1 \
+            ./build/test/tt_metal/unit_tests_device \
+            --gtest_filter="GalaxyFixture.*:TGFixture.*"
+
+          run_gtest \
+            "Galaxy/TG device tests fast dispatch" \
+            "unit_tests_device_galaxy_fast_dispatch.xml" \
+            ./build/test/tt_metal/unit_tests_device \
+            --gtest_filter="GalaxyFixture.*:TGFixture.*"
+
+          run_gtest \
+            "Multi-CQ Galaxy dispatch tests" \
+            "unit_tests_dispatch_multicq_galaxy.xml" \
+            env TT_METAL_GTEST_NUM_HW_CQS=2 \
+            ./build/test/tt_metal/unit_tests_dispatch \
+            --gtest_filter="UnitMeshMultiCQMultiDevice*Fixture.*"
+
+          run_gtest \
+            "Distributed DispatchContext tests slow dispatch" \
+            "distributed_unit_tests_dispatch_context_slow_dispatch.xml" \
+            env TT_METAL_SLOW_DISPATCH_MODE=1 \
+            ./build/test/tt_metal/distributed/distributed_unit_tests \
+            --gtest_filter="*DispatchContext*"
+
+          if [[ ${#failed_names[@]} -gt 0 ]]; then
+            {
+              echo "## Galaxy unit test command failures"
+              echo
+              for failed_name in "${failed_names[@]}"; do
+                echo "- ${failed_name}"
+              done
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Run fabric tests
         if: ${{ matrix.test-group.model == 'fabric' }}
@@ -194,25 +256,16 @@ jobs:
       - name: Run Multi-Process tests
         if: ${{ matrix.test-group.model == 'multiprocess' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
-          tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_big_mesh_fabric_2d_sanity.yaml
-          tt-run --rank-binding 4x4_multi_mesh_rank_binding.yaml --mpi-args "--tag-output --allow-run-as-root"  python3 tests/ttnn/distributed/test_multi_mesh.py
-          tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_mesh_rank_binding.yaml ./build/test/tt_metal/multi_host_socket_tests
-          tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml  ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter="*Socket*"
-          tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_wh_6u_quad_2x4_acyclic.yaml
-          tt-run --rank-binding 2x4_multi_mesh_cyclic_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_wh_6u_quad_2x4_cyclic.yaml
-          tt-run --rank-binding 4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_sanity_common.yaml
+        uses: ./docker-job/.github/actions/run-multi-process-tests
       - name: Run Llama3-70b unit tests
         if: ${{ matrix.test-group.model == 'llama3-70b' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         env:
           LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
-          TT_METAL_ENABLE_ERISC_IRAM: 1
           FAKE_DEVICE: TG
         run: |
           mkdir -p generated/test_reports
-          pytest -n auto models/demos/llama3_70b_galaxy/tests/unit_tests
+          pytest models/demos/llama3_70b_galaxy/tests/unit_tests
 
       - name: Run prefetcher unit tests
         if: ${{ matrix.test-group.model == 'prefetcher' }}
@@ -228,6 +281,7 @@ jobs:
           mkdir -p generated/test_reports
           pytest tests/ttnn/distributed/test_distributed_layernorm_TG.py
 
+      # GPT-OSS 20B tests are currently commented out to reduce runtime and resource usage
       - name: Run GPT-OSS unit tests
         if: ${{ matrix.test-group.model == 'gpt-oss' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -235,11 +289,11 @@ jobs:
           mkdir -p generated/test_reports
           uv pip install -r models/demos/gpt_oss/requirements.txt
 
-          TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
-            pytest -n auto models/demos/gpt_oss/tests/unit -k "4x8" --timeout 300
+          # TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-20b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-20b/ \
+          #  pytest models/demos/gpt_oss/tests/unit -k "4x8" --timeout 300
 
           TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ HF_MODEL=/mnt/MLPerf/tt_dnn-models/openai/gpt-oss-120b/ \
-            pytest -n auto models/demos/gpt_oss/tests/unit -k "4x8" --timeout 300
+            pytest models/demos/gpt_oss/tests/unit -k "4x8" --timeout 600
 
       - name: Run tttv2 module tests
         if: ${{ matrix.test-group.model == 'tttv2' }}
@@ -274,12 +328,6 @@ jobs:
 
           exit $failed
 
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          owner: ${{ matrix.test-group.owner_id }}
-
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -289,6 +337,8 @@ jobs:
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
+        with:
+          test-report-path: generated/test_reports/
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

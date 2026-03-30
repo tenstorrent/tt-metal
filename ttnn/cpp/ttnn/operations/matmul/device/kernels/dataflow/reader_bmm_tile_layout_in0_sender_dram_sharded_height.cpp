@@ -13,6 +13,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/endpoints.h"
 
 void kernel_main() {
     // COMPILE TIME ARGS
@@ -34,10 +37,12 @@ void kernel_main() {
     const uint32_t input_storage_noc_y = get_arg_val<uint32_t>(2);
     const uint32_t input_shard_l1_addr = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t cb_id_in0 = 0;
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
     // Build NOC address for the remote input storage core
-    uint64_t remote_shard_base_noc_addr = get_noc_addr(input_storage_noc_x, input_storage_noc_y, input_shard_l1_addr);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+    experimental::UnicastEndpoint src_core;
 
     // Process each batch
     for (uint32_t batch = 0; batch < num_batches_per_core; ++batch) {
@@ -45,16 +50,19 @@ void kernel_main() {
 
         // Process K blocks within each batch
         for (uint32_t block = 0; block < num_blocks; ++block) {
-            cb_reserve_back(cb_id_in0, in0_block_num_tiles);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+            cb_in0.reserve_back(in0_block_num_tiles);
 
             // NOC read block from REMOTE input storage core to local CB
             uint32_t read_offset = batch_offset + block * in0_block_size_bytes;
-            uint64_t src_noc_addr = remote_shard_base_noc_addr + read_offset;
-            noc_async_read(src_noc_addr, l1_write_addr, in0_block_size_bytes);
-            noc_async_read_barrier();
+            noc.async_read(
+                src_core,
+                cb_in0,
+                in0_block_size_bytes,
+                {.noc_x = input_storage_noc_x, .noc_y = input_storage_noc_y, .addr = input_shard_l1_addr + read_offset},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
 
-            cb_push_back(cb_id_in0, in0_block_num_tiles);
+            cb_in0.push_back(in0_block_num_tiles);
         }
     }
 }

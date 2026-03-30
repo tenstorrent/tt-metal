@@ -15,6 +15,7 @@
 #include "layernorm_op_multi_core.hpp"
 #include "layernorm_op_multi_core_sharded.hpp"
 #include "layernorm_types.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
 namespace ttnn::prim {
 
@@ -26,9 +27,6 @@ struct LayerNormDeviceOperation {
     using program_factory_t = std::variant<LayerNormMultiCoreProgramFactory, LayerNormShardedProgramFactory>;
 
     static program_factory_t select_program_factory(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
-    static void validate_on_program_cache_hit(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static void validate_on_program_cache_miss(
@@ -53,6 +51,8 @@ Tensor layer_norm(
     const std::optional<DataType>& dtype = std::nullopt,
     LayerNormType norm_type = LayerNormType::LAYERNORM,
     DistributedLayerNormStage distributed_norm_stage = DistributedLayerNormStage::NOT_DISTRIBUTED,
-    const std::optional<const Tensor>& stats = std::nullopt);
+    const std::optional<const Tensor>& stats = std::nullopt,
+    const std::optional<const Tensor>& recip_tensor = std::nullopt,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation = std::nullopt);
 
 }  // namespace ttnn::prim

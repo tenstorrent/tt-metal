@@ -142,9 +142,21 @@ using byte = std::uint8_t;
 #define RISCV_DEBUG_REG_INSTRN_BUF_CTRL1 (RISCV_DEBUG_REGS_START_ADDR | 0x0A4)
 #define RISCV_DEBUG_REG_INSTRN_BUF_STATUS (RISCV_DEBUG_REGS_START_ADDR | 0x0A8)
 #define RISCV_DEBUG_REG_FPU_STICKY_BITS (RISCV_DEBUG_REGS_START_ADDR | 0x0B4)
+#define RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0 (RISCV_DEBUG_REGS_START_ADDR | 0x00C)
+#define RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK1 (RISCV_DEBUG_REGS_START_ADDR | 0x010)
+#define RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK2 (RISCV_DEBUG_REGS_START_ADDR | 0x014)
 #define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0 (RISCV_DEBUG_REGS_START_ADDR | 0x0F0)
 #define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK1 (RISCV_DEBUG_REGS_START_ADDR | 0x0F4)
 #define RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK2 (RISCV_DEBUG_REGS_START_ADDR | 0x0F8)
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD (RISCV_DEBUG_REGS_START_ADDR | 0x100)
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_H_INSTRN_THREAD (RISCV_DEBUG_REGS_START_ADDR | 0x104)
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK (RISCV_DEBUG_REGS_START_ADDR | 0x108)
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_H_TDMA_UNPACK (RISCV_DEBUG_REGS_START_ADDR | 0x10C)
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK (RISCV_DEBUG_REGS_START_ADDR | 0x110)
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_H_TDMA_PACK (RISCV_DEBUG_REGS_START_ADDR | 0x114)
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1 (RISCV_DEBUG_REGS_START_ADDR | 0x118)
+#define RISCV_DEBUG_REG_PERF_CNT_OUT_H_DBG_L1 (RISCV_DEBUG_REGS_START_ADDR | 0x11C)
+#define RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL (RISCV_DEBUG_REGS_START_ADDR | 0x218)
 #define RISCV_DEBUG_REG_WALL_CLOCK_L (RISCV_DEBUG_REGS_START_ADDR | 0x1F0)
 #define RISCV_DEBUG_REG_WALL_CLOCK_H (RISCV_DEBUG_REGS_START_ADDR | 0x1F8)
 #define RISCV_DEBUG_REG_TIMESTAMP (RISCV_DEBUG_REGS_START_ADDR | 0x1FC)
@@ -212,7 +224,7 @@ union riscv_debug_reg_dbg_l1_mem_reg2_u {
     (0x49000000 | (arg))  // Load indirect from address specified in a TDMA register, with offset specified in TDMA
                           // register to a TDMA register. Supports autoincrementing offset
 #define INSTRN_AT_INCR_GET(arg) \
-    (0x61000000 | (arg))  // Atomic increment and get - will read value in targetted memory location and return it to
+    (0x61000000 | (arg))  // Atomic increment and get - will read value in targeted memory location and return it to
                           // TDMA register and post-increment it atomically
 #define INSTRN_AT_INCR_GET_PTR(arg) \
     (0x62000000 |                   \
@@ -220,7 +232,7 @@ union riscv_debug_reg_dbg_l1_mem_reg2_u {
              // (contains a 32b read pointer and a 32b write pointer), return the pointer value to TDMA register and
              // post-increment it unless the FIFO condition precludes that. For example, write pointer will not be
              // incremented if FIFO is full. Read pointer will not be incremented if FIFO is empty. FIFO full or empty
-             // conditions are returned as an unsuccessfull return condition code, so that the thread controller can
+             // conditions are returned as an unsuccessful return condition code, so that the thread controller can
              // retry until success (retry reads if FIFO empty, retry writes if FIFO full.)
 #define INSTRN_AT_SWAP(arg) \
     (0x63000000 | (arg))  // Atomic unconditional SWAP. Swaps selected 16b chunks of memory location with new ones
@@ -248,7 +260,7 @@ union riscv_debug_reg_dbg_l1_mem_reg2_u {
 #define INSTRN_SETADC(arg) (0x50000000 | (arg))        // Set address counter for one channel and one dimension.
 #define INSTRN_SETADCXY(arg) (0x51000000 | (arg))      // Set address counters for X and Y dimensions for all channels
 #define INSTRN_SETADCZW(arg) (0x54000000 | (arg))      // Set address counters for Z and W dimensions for all channels
-#define INSTRN_FLUSH(arg) (0x81000000 | (arg))         // Flush all buffers of oustanding instructions, reads/writes.
+#define INSTRN_FLUSH(arg) (0x81000000 | (arg))         // Flush all buffers of outstanding instructions, reads/writes.
 #define INSTRN_NOP(arg) (0x02000000 | (arg))           // Do nothing and consume an instruction slot and a cycle
 #define INSTRN_MOVA2D(arg) (0x1a000000 | (arg))        // Move SRCA register to DST
 #define INSTRN_ZEROSRC(arg) (0x1b000000 | (arg))       // Clear SRC registers

@@ -17,6 +17,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include "common/core_coord.hpp"
+#include "impl/context/context_types.hpp"
+#include "impl/context/metal_env_impl.hpp"
 
 namespace tt {
 
@@ -33,7 +35,6 @@ struct core_descriptor_t {
 
 inline const std::string& get_product_name(tt::ARCH arch, uint32_t num_harvested_on_axis) {
     const static std::map<tt::ARCH, std::map<uint32_t, std::string>> product_name = {
-        {tt::ARCH::GRAYSKULL, {{0, "E150"}, {2, "E75"}}},
         {tt::ARCH::WORMHOLE_B0, {{0, "galaxy"}, {1, "nebula_x1"}, {2, "nebula_x2"}}},
         {tt::ARCH::BLACKHOLE, {{0, "unharvested"}, {1, "1xharvested"}, {2, "2xharvested"}}},
         {tt::ARCH::QUASAR, {{0, "unharvested"}}}};
@@ -42,32 +43,50 @@ inline const std::string& get_product_name(tt::ARCH arch, uint32_t num_harvested
 }
 
 const core_descriptor_t& get_core_descriptor_config(
-    ChipId device_id, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
+    uint8_t num_hw_cqs,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
 const std::tuple<uint32_t, CoreRange>& get_physical_worker_grid_config(
-    ChipId device_id, uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config);
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
+    uint8_t num_hw_cqs,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
 inline const CoreCoord& get_compute_grid_size(
-    ChipId device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
+    const uint8_t num_hw_cqs,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config) {
+    const core_descriptor_t& core_desc = get_core_descriptor_config(env, device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.compute_grid_size;
 }
 
 inline const std::vector<CoreCoord>& get_logical_compute_cores(
-    ChipId device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
+    const uint8_t num_hw_cqs,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config) {
+    const core_descriptor_t& core_desc = get_core_descriptor_config(env, device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.logical_compute_cores;
 }
 
 inline const std::vector<CoreCoord>& get_logical_dispatch_cores(
-    ChipId device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
+    const uint8_t num_hw_cqs,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config) {
+    const core_descriptor_t& core_desc = get_core_descriptor_config(env, device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.logical_dispatch_cores;
 }
 
 inline const std::vector<CoreCoord>& get_logical_fabric_mux_cores(
-    ChipId device_id, const uint8_t num_hw_cqs, const tt_metal::DispatchCoreConfig& dispatch_core_config) {
-    const core_descriptor_t& core_desc = get_core_descriptor_config(device_id, num_hw_cqs, dispatch_core_config);
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
+    const uint8_t num_hw_cqs,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config) {
+    const core_descriptor_t& core_desc = get_core_descriptor_config(env, device_id, num_hw_cqs, dispatch_core_config);
     return core_desc.logical_fabric_mux_cores;
 }
 

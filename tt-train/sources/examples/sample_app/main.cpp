@@ -2,10 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <core/ttnn_all_includes.hpp>
 #include <iostream>
 
+#include "tt-metalium/bfloat16.hpp"
+#include "tt-metalium/host_api.hpp"
 #include "ttml.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 std::shared_ptr<tt::tt_metal::distributed::MeshDevice> device;
 
@@ -15,13 +19,10 @@ void print_tensor(const tt::tt_metal::Tensor& tensor) {
 
     // Get the shape of the tensor
     auto shape = tensor.logical_shape();
-    // compyte the size of the tensor
-    size_t size = 1;
-    for (size_t i = 0; i < shape.size(); i++) size *= shape[i];
 
-    // prepare a buffer to copy the tensor data to the host
-    std::vector<bfloat16> data(size);
-    tt::tt_metal::memcpy(device->mesh_command_queue(), data.data(), tensor);
+    // Move tensor to host and get data as a span
+    auto host_tensor = tensor.cpu();
+    auto data = tt::tt_metal::host_buffer::get_as<bfloat16>(host_tensor);
 
     // print the data
     for (size_t dim0 = 0; dim0 < shape[0]; dim0++) {

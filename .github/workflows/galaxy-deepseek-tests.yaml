@@ -11,6 +11,8 @@ on:
           - all
           - unit
           - module
+          - long-seq-module
+          - final-op-unit
         default: 'all'
       platform:
         required: false
@@ -36,8 +38,27 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      recreate_weights_cache:
+        description: 'Recreate weights cache in a new directory'
+        required: false
+        type: choice
+        default: "No"
+        options:
+          - "No"
+          - "Yes"
+      new_cache_dir:
+        description: 'New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recreating weights cache.'
+        required: false
+        type: string
+        default: ''
+      enable-tracy:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Tracy-based device perf for final-op-unit tests"
   schedule:
     - cron: "0 3 * * *" # Run at 3:00 AM UTC (11:00 PM EST) every day
+    - cron: "30 3 * * *" # Separate daily run for final-op-unit with Tracy enabled
 
 jobs:
   build-artifact:
@@ -50,6 +71,59 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      tracy: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || inputs.enable-tracy || false }}
+
+  # ── T3K fast gate ──────────────────────────────────────────────────────
+  # Runs the x migrated module tests on T3K (~30-40s). x = # of migrated tests
+  # These tests use a 1x8 submesh
+  t3k-deepseek-gate:
+    needs: build-artifact
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule != '30 3 * * *') && contains(fromJSON('["all","module"]'), inputs.test-type || 'all') }}
+    name: (T3K) DeepSeek module gate
+    runs-on:
+      - arch-wormhole_b0
+      - config-t3000
+      - pipeline-functional
+      - in-service
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        ARCH_NAME: wormhole_b0
+        MESH_DEVICE: T3K
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+        DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Run DeepSeek module tests (T3K gate)
+        timeout-minutes: 10
+        run: |
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          pytest models/demos/deepseek_v3/tests -m t3k_compat --timeout 120 --durations=0
+
+  # ── Galaxy tests (N-x module tests, runs in parallel with T3K gate) ────
   Galaxy-DeepSeek-tests:
     needs: build-artifact
     secrets: inherit
@@ -59,4 +133,57 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       topology: topology-6u
-      test-type: ${{ inputs.test-type || 'all' }}
+      test-type: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *' && 'final-op-unit') || inputs.test-type || 'all' }}
+      recreate_weights_cache: ${{ inputs.recreate_weights_cache || 'No' }}
+      new_cache_dir: ${{ inputs.new_cache_dir || '' }}
+      enable-tracy: ${{ (github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || inputs.enable-tracy || false }}
+
+  # ── Galaxy confirmation (gated behind T3K) ─────────────────────────────
+  # Re-runs the same x migrated tests on Galaxy after T3K gate passes.
+  Galaxy-DeepSeek-confirmation:
+    needs: [build-artifact, t3k-deepseek-gate]
+    if: ${{ (github.event_name != 'schedule' || github.event.schedule != '30 3 * * *') && contains(fromJSON('["all","module"]'), inputs.test-type || 'all') }}
+    name: (Galaxy) DeepSeek module confirmation
+    runs-on:
+      - arch-wormhole_b0
+      - topology-6u
+      - bare-metal
+      - pipeline-functional
+      - in-service
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        ARCH_NAME: wormhole_b0
+        MESH_DEVICE: TG
+        DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized
+        DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Run DeepSeek module tests (Galaxy confirmation)
+        timeout-minutes: 10
+        run: |
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          pytest models/demos/deepseek_v3/tests -m t3k_compat --timeout 120 --durations=0

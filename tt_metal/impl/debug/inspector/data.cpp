@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "data.hpp"
 #include <stdexcept>
 #include "rpc_server_controller.hpp"
@@ -11,11 +12,29 @@
 #include "distributed/mesh_workload_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "device/device_manager.hpp"
-#include <tt_stl/reflection.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+
+#include <fmt/format.h>
 
 namespace tt::tt_metal::inspector {
 
+std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) {
+    if (tensor_specs.empty()) {
+        return "Not captured";
+    }
+
+    constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
+    fmt::memory_buffer buf;
+    buf.reserve(TENSOR_ARGS_BUFFER_SIZE);
+    for (size_t i = 0; i < tensor_specs.size(); ++i) {
+        if (i > 0) {
+            fmt::format_to(std::back_inserter(buf), ", ");
+        }
+        fmt::format_to(std::back_inserter(buf), "[{}]: {}", i, tensor_specs[i]);
+    }
+    return std::string(buf.data(), buf.size());
+}
 
 Data::Data()
     : logger(MetalContext::instance().rtoptions().get_inspector_log_path()) {
@@ -31,14 +50,15 @@ Data::Data()
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
             get_rpc_server().setGetMeshDevicesCallback([this](auto result) { this->rpc_get_mesh_devices(result); });
             get_rpc_server().setGetMeshWorkloadsCallback([this](auto result) { this->rpc_get_mesh_workloads(result); });
-            get_rpc_server().setGetMeshWorkloadsRuntimeIdsCallback(
-                [this](auto result) { this->rpc_get_mesh_workloads_runtime_ids(result); });
+            get_rpc_server().setGetMeshWorkloadRuntimeEntriesCallback(
+                [this](auto result) { this->rpc_get_mesh_workload_runtime_entries(result); });
             get_rpc_server().setGetDevicesInUseCallback([this](auto result) { this->rpc_get_devices_in_use(result); });
             get_rpc_server().setGetKernelCallback(
                 [this](auto params, auto result) { this->rpc_get_kernel(params, result); });
             get_rpc_server().setGetAllBuildEnvsCallback([this](auto result) { this->rpc_get_all_build_envs(result); });
             get_rpc_server().setGetAllDispatchCoreInfosCallback(
                 [this](auto result) { this->rpc_get_all_dispatch_core_infos(result); });
+            get_rpc_server().setGetBlocksByTypeCallback([this](auto result) { this->rpc_get_blocks_by_type(result); });
             get_rpc_server().setGetMetalDeviceIdMappingsCallback(
                 [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
         } catch (const std::exception& e) {
@@ -130,8 +150,6 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
     for (const auto& [mesh_workload_id, mesh_workload_data] : mesh_workloads_data) {
         auto mesh_workload = mesh_workloads[i++];
         mesh_workload.setMeshWorkloadId(mesh_workload_id);
-        mesh_workload.setName(mesh_workload_data.name);
-        mesh_workload.setParameters(mesh_workload_data.parameters);
 
         const auto& programs = mesh_workload_data.mesh_workload->get_programs();
         auto programs_data = mesh_workload.initPrograms(programs.size());
@@ -151,7 +169,8 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
             }
         }
 
-        auto binary_status_list = mesh_workload.initBinaryStatusPerMeshDevice(mesh_workload_data.binary_status_per_device.size());
+        auto binary_status_list =
+            mesh_workload.initBinaryStatusPerMeshDevice(mesh_workload_data.binary_status_per_device.size());
         j = 0;
         for (const auto& [mesh_id, status] : mesh_workload_data.binary_status_per_device) {
             auto binary_status = binary_status_list[j++];
@@ -161,13 +180,21 @@ void Data::rpc_get_mesh_workloads(rpc::Inspector::GetMeshWorkloadsResults::Build
     }
 }
 
-void Data::rpc_get_mesh_workloads_runtime_ids(rpc::Inspector::GetMeshWorkloadsRuntimeIdsResults::Builder& results) {
-    std::lock_guard<std::mutex> lock(runtime_ids_mutex);
-    auto all_runtime_ids = results.initRuntimeIds(runtime_ids.size());
-    for (size_t i = 0; i < runtime_ids.size(); ++i) {
-        auto entry = all_runtime_ids[i];
-        entry.setWorkloadId(runtime_ids[i].workload_id);
-        entry.setRuntimeId(runtime_ids[i].runtime_id);
+void Data::rpc_get_mesh_workload_runtime_entries(
+    rpc::Inspector::GetMeshWorkloadRuntimeEntriesResults::Builder& results) {
+    std::lock_guard<std::mutex> lock(runtime_entries_mutex);
+    auto write_pos = runtime_entries_write_pos;
+    size_t count = std::min(write_pos, kRuntimeEntriesCapacity);
+    size_t start = write_pos - count;
+
+    auto all_runtime_entries = results.initRuntimeEntries(count);
+    for (size_t i = 0; i < count; ++i) {
+        const auto& re = runtime_entries[(start + i) % kRuntimeEntriesCapacity];
+        auto entry = all_runtime_entries[i];
+        entry.setWorkloadId(re.workload_id);
+        entry.setRuntimeId(re.runtime_id);
+        entry.setOperationName(std::string(re.operation_name));
+        entry.setOperationParameters(stringify_tensor_specs(re.tensor_specs));
     }
 }
 
@@ -281,6 +308,41 @@ void Data::rpc_get_all_dispatch_core_infos(rpc::Inspector::GetAllDispatchCoreInf
         auto category = list[category_index++];
         Data::populate_core_entries_by_category(
             category, rpc::CoreCategory::PREFETCH, prefetcher_core_info, cq_to_event_by_device);
+    }
+}
+
+void Data::rpc_get_blocks_by_type(rpc::Inspector::GetBlocksByTypeResults::Builder results) {
+    auto& control_plane = tt_metal::MetalContext::instance().get_control_plane();
+    auto device_ids = tt_metal::MetalContext::instance().device_manager()->get_all_active_device_ids();
+
+    auto chips_builder = results.initChips(device_ids.size());
+    size_t chip_idx = 0;
+
+    for (ChipId device_id : device_ids) {
+        auto chip_entry = chips_builder[chip_idx++];
+        chip_entry.setChipId(static_cast<uint64_t>(device_id));
+
+        std::vector<std::pair<uint32_t, uint32_t>> active_eth_xy;
+        std::vector<std::pair<uint32_t, uint32_t>> idle_eth_xy;
+
+        for (const CoreCoord& logical_core : control_plane.get_active_ethernet_cores(device_id)) {
+            active_eth_xy.emplace_back(logical_core.x, logical_core.y);
+        }
+
+        for (const CoreCoord& logical_core : control_plane.get_inactive_ethernet_cores(device_id)) {
+            idle_eth_xy.emplace_back(logical_core.x, logical_core.y);
+        }
+
+        auto blocks = chip_entry.initBlocks();
+        auto set_coords = [](auto list_builder, const std::vector<std::pair<uint32_t, uint32_t>>& xy) {
+            auto list = list_builder(xy.size());
+            for (size_t i = 0; i < xy.size(); ++i) {
+                list[i].setX(xy[i].first);
+                list[i].setY(xy[i].second);
+            }
+        };
+        set_coords([&blocks](size_t n) { return blocks.initActiveEth(n); }, active_eth_xy);
+        set_coords([&blocks](size_t n) { return blocks.initIdleEth(n); }, idle_eth_xy);
     }
 }
 

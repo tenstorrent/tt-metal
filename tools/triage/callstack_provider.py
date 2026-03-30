@@ -25,6 +25,7 @@ import io
 from triage import (
     ScriptConfig,
     TTTriageError,
+    log_warning,
     recurse_field,
     triage_field,
     hex_serializer,
@@ -129,6 +130,58 @@ def get_callstack(
         return KernelCallstackWithMessage(callstack=[], message=str(e))
 
 
+def get_function_die(entry: CallstackEntry) -> "ElfDie | None":
+    """Navigate from a callstack entry's argument/local dies to the parent function die."""
+    from ttexalens.elf.die import ElfDie
+
+    for var in entry.arguments + entry.locals:
+        die = getattr(var, "die", None)
+        if die is None:
+            continue
+        current = getattr(die, "parent", None)
+        while current is not None:
+            if current.tag == "DW_TAG_subprogram":
+                return current
+            if current.tag == "DW_TAG_inlined_subroutine":
+                abstract_origin = current.get_DIE_from_attribute("DW_AT_abstract_origin")
+                if abstract_origin is not None:
+                    return abstract_origin
+                return current
+            current = current.parent
+    return None
+
+
+def extract_template_params(function_die) -> list[tuple[str | None, str]]:
+    """Extract template parameters (name, display_value) from a function die."""
+    actual_die = function_die
+    if "DW_AT_specification" in actual_die.attributes:
+        spec_die = actual_die.get_DIE_from_attribute("DW_AT_specification")
+        if spec_die is not None:
+            actual_die = spec_die
+
+    template_params = []
+    for child in actual_die.iter_children():
+        if child.tag == "DW_TAG_template_type_param":
+            param_name = child.name
+            type_die = child.resolved_type
+            type_name = type_die.name if type_die and type_die is not child else None
+            template_params.append((param_name, type_name or "?"))
+        elif child.tag == "DW_TAG_template_value_param":
+            param_name = child.name
+            value = child.value
+            template_params.append((param_name, f"{value}" if value is not None else "?"))
+        elif child.tag == "DW_TAG_GNU_template_parameter_pack":
+            for pack_child in child.iter_children():
+                if pack_child.tag == "DW_TAG_template_type_param":
+                    type_die = pack_child.resolved_type
+                    type_name = type_die.name if type_die and type_die is not pack_child else None
+                    template_params.append((pack_child.name, type_name or "?"))
+                elif pack_child.tag == "DW_TAG_template_value_param":
+                    value = pack_child.value
+                    template_params.append((pack_child.name, f"{value}" if value is not None else "?"))
+    return template_params
+
+
 def _format_callstack(callstack: list[CallstackEntry]) -> list[str]:
     """Return string representation of the callstack."""
     frame_number_width = len(str(len(callstack) - 1))
@@ -209,11 +262,50 @@ class CallstackProvider:
         self.gdb_callstack = gdb_callstack
         self.gdb_server = gdb_server
         self.force_active_eth = force_active_eth
+        self._callstack_cache: dict[tuple, CallstacksData] = {}
+        self.lock = threading.Lock()  # For thread-safe cache access
 
     def __del__(self):
         # After all callstacks are dumped, stop GDB server if it was started
         if self.gdb_server is not None:
             self.gdb_server.stop()
+
+    def get_cached_callstacks(
+        self,
+        location: OnChipCoordinate,
+        risc_name: str,
+        rewind_pc_for_ebreak: bool = False,
+        use_full_callstack: bool | None = None,
+        use_gdb_callstack: bool | None = None,
+    ) -> CallstacksData:
+        full = use_full_callstack if use_full_callstack is not None else self.full_callstack
+        gdb = use_gdb_callstack if use_gdb_callstack is not None else self.gdb_callstack
+
+        cache_key = (
+            location._device.id,
+            location.to_str("noc0"),
+            risc_name,
+            full,
+            gdb,
+            rewind_pc_for_ebreak,
+        )
+
+        with self.lock:
+            if cache_key in self._callstack_cache:
+                return self._callstack_cache[cache_key]
+
+        callstacks = self.get_callstacks(
+            location,
+            risc_name,
+            rewind_pc_for_ebreak=rewind_pc_for_ebreak,
+            use_full_callstack=use_full_callstack,
+            use_gdb_callstack=use_gdb_callstack,
+        )
+
+        with self.lock:
+            self._callstack_cache[cache_key] = callstacks
+
+        return callstacks
 
     def get_callstacks(
         self,
@@ -225,12 +317,14 @@ class CallstackProvider:
     ) -> CallstacksData:
         dispatcher_core_data = self.dispatcher_data.get_cached_core_data(location, risc_name)
         risc_debug = location.noc_block.get_risc_debug(risc_name)
+
         if risc_debug.is_in_reset():
             return CallstacksData(
                 dispatcher_core_data=dispatcher_core_data,
                 pc=None,
                 kernel_callstack_with_message=KernelCallstackWithMessage(callstack=[], message="Core is in reset"),
             )
+
         if location in location._device.active_eth_block_locations and not self.force_active_eth:
             callstack_with_message = get_callstack(
                 location,
@@ -366,6 +460,17 @@ def run(args, context: Context):
     gdb_callstack: bool = args["--gdb-callstack"]
     active_eth: bool = args["--active-eth"]
     force_active_eth = (full_callstack or gdb_callstack) and active_eth
+
+    if context.devices[0].is_blackhole():
+        if full_callstack:
+            log_warning(
+                "Full callstack is currently disabled for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/902"
+            )
+        if gdb_callstack:
+            log_warning(
+                "GDB callstack is currently disabled for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/902"
+            )
+
     if force_active_eth:
         WARN(
             "Getting full or gdb callstack may break active eth core. Use tt-smi reset to fix. See issue #661 in tt-exalens for more details."

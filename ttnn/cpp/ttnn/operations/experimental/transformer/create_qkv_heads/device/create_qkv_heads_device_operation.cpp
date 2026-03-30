@@ -12,17 +12,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-CreateQKVHeadsDeviceOperation::program_factory_t CreateQKVHeadsDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return CreateQKVHeadsProgramFactory{};
-}
-
-void CreateQKVHeadsDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void CreateQKVHeadsDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
@@ -135,7 +124,7 @@ CreateQKVHeadsResult CreateQKVHeadsDeviceOperation::create_output_tensors(
     };
 }
 
-tt::stl::hash::hash_t CreateQKVHeadsDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t CreateQKVHeadsDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
 

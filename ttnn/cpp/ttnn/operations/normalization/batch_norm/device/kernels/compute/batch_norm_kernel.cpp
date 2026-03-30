@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "compute_kernel_api/eltwise_binary.h"
+#include "api/compute/eltwise_binary.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 #include <cstdint>
+
+#include "experimental/circular_buffer.h"
 
 ALWI void batchnorm_bcast_tiles(
     uint32_t cb_bcast,
@@ -28,9 +30,20 @@ ALWI void batchnorm_bcast_tiles(
     auto cb_affine_or_out = (weight_has_value || bias_has_value) ? cb_tmp_1 : cb_output_0;
     auto cb_scaled_output = (bias_has_value) ? cb_tmp_1 : cb_output_0;
 
+    experimental::CircularBuffer cb_bcast_obj(cb_bcast);
+    experimental::CircularBuffer cb_other_obj(cb_other);
+    experimental::CircularBuffer cb_batch_var_obj(cb_batch_var);
+    experimental::CircularBuffer cb_den_obj(cb_den);
+    experimental::CircularBuffer cb_weight_obj(cb_weight);
+    experimental::CircularBuffer cb_bias_obj(cb_bias);
+    experimental::CircularBuffer cb_tmp_1_obj(cb_tmp_1);
+    experimental::CircularBuffer cb_output_0_obj(cb_output_0);
+    experimental::CircularBuffer cb_affine_or_out_obj(cb_affine_or_out);
+    experimental::CircularBuffer cb_scaled_output_obj(cb_scaled_output);
+
     // 1/(sqrt(batch_var + eps))
-    cb_reserve_back(cb_den, onetile);
-    cb_wait_front(cb_batch_var, onetile);
+    cb_den_obj.reserve_back(onetile);
+    cb_batch_var_obj.wait_front(onetile);
 
     tile_regs_acquire();
     add_tiles_init_with_dt(cb_batch_var, cb_eps);
@@ -43,21 +56,21 @@ ALWI void batchnorm_bcast_tiles(
     pack_tile_with_dt(dst0, cb_den);
     tile_regs_release();
 
-    cb_pop_front(cb_batch_var, onetile);
-    cb_push_back(cb_den, onetile);
+    cb_batch_var_obj.pop_front(onetile);
+    cb_den_obj.push_back(onetile);
 
-    cb_wait_front(cb_bcast, onetile);
-    cb_wait_front(cb_den, onetile);
+    cb_bcast_obj.wait_front(onetile);
+    cb_den_obj.wait_front(onetile);
     if (weight_has_value) {
-        cb_wait_front(cb_weight, onetile);
+        cb_weight_obj.wait_front(onetile);
     }
     if (bias_has_value) {
-        cb_wait_front(cb_bias, onetile);
+        cb_bias_obj.wait_front(onetile);
     }
     for (uint32_t j = tile_start; j < freq; ++j) {
         // input - batch_mean
-        cb_wait_front(cb_other, onetile);
-        cb_reserve_back(cb_affine_or_out, onetile);
+        cb_other_obj.wait_front(onetile);
+        cb_affine_or_out_obj.reserve_back(onetile);
 
         tile_regs_acquire();
         sub_tiles_init(cb_other, cb_bcast);
@@ -72,13 +85,13 @@ ALWI void batchnorm_bcast_tiles(
         pack_tile_with_dt(0, cb_affine_or_out);
         tile_regs_release();
 
-        cb_push_back(cb_affine_or_out, onetile);
-        cb_pop_front(cb_other, onetile);
+        cb_affine_or_out_obj.push_back(onetile);
+        cb_other_obj.pop_front(onetile);
 
         // result = result * weight
         if (weight_has_value) {
-            cb_reserve_back(cb_scaled_output, onetile);
-            cb_wait_front(cb_affine_or_out, 1);
+            cb_scaled_output_obj.reserve_back(onetile);
+            cb_affine_or_out_obj.wait_front(1);
 
             tile_regs_acquire();
             mul_tiles_init_with_dt(cb_affine_or_out, cb_weight);
@@ -89,14 +102,14 @@ ALWI void batchnorm_bcast_tiles(
             pack_tile_with_dt(dst0, cb_scaled_output);
             tile_regs_release();
 
-            cb_pop_front(cb_affine_or_out, 1);
-            cb_push_back(cb_scaled_output, onetile);
+            cb_affine_or_out_obj.pop_front(1);
+            cb_scaled_output_obj.push_back(onetile);
         }
 
         // result = result + bias
         if (bias_has_value) {
-            cb_reserve_back(cb_output_0, onetile);
-            cb_wait_front(cb_tmp_1, onetile);
+            cb_output_0_obj.reserve_back(onetile);
+            cb_tmp_1_obj.wait_front(onetile);
 
             tile_regs_acquire();
             add_tiles_init_with_dt(cb_tmp_1, cb_bias);
@@ -107,17 +120,17 @@ ALWI void batchnorm_bcast_tiles(
             pack_tile_with_dt(dst0, cb_output_0);
             tile_regs_release();
 
-            cb_pop_front(cb_tmp_1, onetile);
-            cb_push_back(cb_output_0, onetile);
+            cb_tmp_1_obj.pop_front(onetile);
+            cb_output_0_obj.push_back(onetile);
         }
     }
-    cb_pop_front(cb_bcast, onetile);
-    cb_pop_front(cb_den, onetile);
+    cb_bcast_obj.pop_front(onetile);
+    cb_den_obj.pop_front(onetile);
     if (weight_has_value) {
-        cb_pop_front(cb_weight, onetile);
+        cb_weight_obj.pop_front(onetile);
     }
     if (bias_has_value) {
-        cb_pop_front(cb_bias, onetile);
+        cb_bias_obj.pop_front(onetile);
     }
 }
 
@@ -152,7 +165,8 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     constexpr uint32_t onetile = 1;
-    cb_wait_front(cb_eps, onetile);
+    experimental::CircularBuffer cb_eps_obj(cb_eps);
+    cb_eps_obj.wait_front(onetile);
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         batchnorm_bcast_tiles(
@@ -187,5 +201,5 @@ void kernel_main() {
             bias_has_value);
     }
 
-    cb_pop_front(cb_eps, onetile);
+    cb_eps_obj.pop_front(onetile);
 }

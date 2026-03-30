@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.tt_transformers.tt.ccl import get_num_links
 
 
 class CCL:
@@ -54,15 +55,7 @@ class CCL:
         """
         Get the maximum number of links for the given axis.
         """
-
-        return 1  # Multi-link has PCC issues
-
-        if axis == 0:
-            return 4
-        elif axis == 1:
-            return 3
-        else:
-            raise ValueError("Axis must be 0 or 1.")
+        return get_num_links(self.mesh_device, cluster_axis=axis)
 
     def _get_sem_and_update_counter(self, sem_list, counter_list, axis):
         """

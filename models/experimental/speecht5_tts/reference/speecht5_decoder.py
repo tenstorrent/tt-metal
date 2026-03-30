@@ -25,7 +25,7 @@ class SpeechT5DecoderConfig:
     num_layers: int = 6
     num_heads: int = 12
     ffn_dim: int = 3072
-    dropout: float = 0.1
+    dropout: float = 0.0  # Disabled for inference - prevents noise accumulation
     layer_norm_eps: float = 1e-5
     max_position_embeddings: int = 4000
     max_relative_distance: int = 160
@@ -144,7 +144,7 @@ class SpeechDecoderPrenet(nn.Module):
         self.speaker_embeds_layer = nn.Linear(config.hidden_size + config.speaker_embedding_dim, config.hidden_size)
 
         self.dropout_p = config.dropout
-        self.prenet_dropout_p = 0.5  # Fixed dropout for prenet layers
+        self.prenet_dropout_p = 0.0  # Disabled for inference - prevents noise accumulation
         self.positional_dropout_p = config.dropout  # Dropout for positional encoding
 
     def _consistent_dropout(self, inputs_embeds: torch.Tensor, p: float) -> torch.Tensor:

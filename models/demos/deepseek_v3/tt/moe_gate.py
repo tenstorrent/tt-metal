@@ -26,6 +26,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     TOPK_MIN_WIDTH,
     even_int_div,
+    get_dequantized_tensor,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -53,11 +54,15 @@ class MoEGate(AbstractModule):
     ) -> WeightConfig:
         (state_dict,) = state_dicts
         assert state_dict is not None
+        gate_weight = get_dequantized_tensor(state_dict, f"{prefix}weight")
+        score_correction_bias = get_dequantized_tensor(
+            state_dict, f"{prefix}e_score_correction_bias", dtype=torch.float32
+        )
         return {
             "gate_proj": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"gate_proj.input_tensor_b",
-                    state_dict[f"{prefix}weight"].T.unsqueeze(0).unsqueeze(0),
+                    gate_weight.T.unsqueeze(0).unsqueeze(0),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.bfloat16,
@@ -68,7 +73,7 @@ class MoEGate(AbstractModule):
             "add_score_correction_bias": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"e_score_correction_bias.input_tensor_b",
-                    state_dict[f"{prefix}e_score_correction_bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0),
+                    score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.float32,
@@ -373,6 +378,7 @@ class MoEGate(AbstractModule):
             dim=cfg["scatter_top_expert_groups"]["dim"],
         )
         ttnn.deallocate(topk_expert_groups_indices)
+        active_groups_mask = ttnn.to_layout(active_groups_mask, ttnn.TILE_LAYOUT)
         active_groups_mask = ttnn.reshape(active_groups_mask, **cfg["reshape_group_mask"])
 
         # expand active_groups_mask to all the experts

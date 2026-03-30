@@ -10,9 +10,9 @@
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::test_utils {
 

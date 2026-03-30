@@ -3,17 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import glob
 import os
+
 import pathlib
-import shutil
 import sys
-import time
-import traceback
 import types
 
 from contextlib import contextmanager
-from datetime import datetime
 from functools import wraps
 from importlib.machinery import ModuleSpec
 from importlib.util import module_from_spec
@@ -23,6 +19,7 @@ from loguru import logger
 
 import ttnn
 import ttnn.database
+import ttnn.operation_tracer
 
 
 def compare_tensors_using_pcc(
@@ -213,13 +210,31 @@ def set_tensor_id(tensor, force=False):
         raise RuntimeError(f"Unsupported input to set_tensor_id: {type(tensor)}")
 
 
+def get_output_tensor_ids(output):
+    """Return the list of tensor_id ints from all tensors in *output*.
+
+    Tensor IDs must already be assigned (via ``set_tensor_id``).
+    """
+    ids = []
+    for t in get_all_tensors(output):
+        tid = getattr(t, "tensor_id", None)
+        if tid is not None:
+            ids.append(int(tid))
+    return ids
+
+
+def set_output_tensor_id_decorator(function):
+    @wraps(function)
+    def call_wrapper(*function_args, **function_kwargs):
+        output = function(*function_args, **function_kwargs)
+        output_tensors = get_all_tensors(output)
+        set_tensor_id(output_tensors, force=True)
+        return output
+
+    return call_wrapper
+
+
 OPERATION_CALL_STACK = []
-
-
-@dataclasses.dataclass
-class OutputWithDuration:
-    output: any
-    duration: float
 
 
 def default_preprocess_golden_function_inputs(function_args, function_kwargs):
@@ -444,6 +459,15 @@ class FastOperation:
         elif "cq_id" in function_kwargs:
             cq_id = function_kwargs.pop("cq_id")
 
+        tracking = ttnn.graph.is_graph_capture_active()
+        if tracking:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
+
+            ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+
+            input_tensors = get_all_tensors((function_args, function_kwargs))
+            set_tensor_id(input_tensors)
+
         try:
             if cq_id is None:
                 result = self.function(*function_args, **function_kwargs)
@@ -455,6 +479,13 @@ class FastOperation:
             if enhanced_msg:
                 raise TypeError(enhanced_msg) from e
             raise
+        finally:
+            if tracking:
+                ttnn.graph.track_function_end()
+
+        if tracking:
+            set_tensor_id(get_all_tensors(result), force=True)
+            ttnn.graph.store_output_tensor_ids(get_output_tensor_ids(result))
 
         return result
 
@@ -498,7 +529,8 @@ class Operation:
         return hash(self.python_fully_qualified_name)
 
     def __post_init__(self):
-        function = self.function
+        # Wrap function for parameter tracing (if tracing enabled)
+        function = ttnn.operation_tracer.wrap_function_for_tracing(self.function, self.python_fully_qualified_name)
 
         self.preprocess_golden_function_inputs = (
             self.preprocess_golden_function_inputs or default_preprocess_golden_function_inputs
@@ -506,28 +538,6 @@ class Operation:
         self.postprocess_golden_function_outputs = (
             self.postprocess_golden_function_outputs or default_postprocess_golden_function_outputs
         )
-
-        def set_output_tensor_id_decorator(function):
-            @wraps(function)
-            def call_wrapper(*function_args, **function_kwargs):
-                output = function(*function_args, **function_kwargs)
-                output_tensors = get_all_tensors(output)
-                # Set new tensor id to store the outputs of in-place operations correctly
-                set_tensor_id(output_tensors, force=True)
-                return output
-
-            return call_wrapper
-
-        def duration_decorator(function):
-            @wraps(function)
-            def call_wrapper(*function_args, **function_kwargs):
-                start = time.time()
-                output = function(*function_args, **function_kwargs)
-                end = time.time()
-                duration = end - start
-                return OutputWithDuration(output, duration)
-
-            return call_wrapper
 
         def comparison_decorator(function):
             @wraps(function)
@@ -558,10 +568,7 @@ class Operation:
                         [],
                     )
 
-                if isinstance(function_return_value, OutputWithDuration):
-                    output = function_return_value.output
-                else:
-                    output = function_return_value
+                output = function_return_value
 
                 logger.debug(f"{self.python_fully_qualified_name}: Comparing against CPU")
                 local_golden_function_output = self.golden_function(
@@ -615,18 +622,6 @@ class Operation:
         def runtime_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
-                if ttnn.CONFIG.report_path is not None:
-                    # If the database already exists, get the operation_id from the latest operation
-                    latest_operation = ttnn.database.query_latest_operation(ttnn.CONFIG.report_path)
-                    if latest_operation is not None:
-                        operation_id = latest_operation.operation_id + 1
-                        ttnn._ttnn.set_python_operation_id(operation_id)
-
-                    latest_tensor = ttnn.database.query_latest_tensor(ttnn.CONFIG.report_path)
-                    if latest_tensor is not None:
-                        tensor_id = latest_tensor.tensor_id + 1
-                        ttnn._ttnn.set_tensor_id(tensor_id)
-
                 operation_id = ttnn._ttnn.get_python_operation_id()
                 is_top_level_operation = len(OPERATION_CALL_STACK) == 1
 
@@ -657,6 +652,11 @@ class Operation:
                         self.python_fully_qualified_name, decorated_function
                     )
 
+                # Record Python I/O BEFORE set_tensor_id mutates tensor IDs.
+                # This ensures input_tensor_ids match the previous op's output_tensor_ids.
+                if ttnn.graph.is_graph_capture_active():
+                    ttnn.graph.record_python_operation(self.python_fully_qualified_name, function_args, function_kwargs)
+
                 if ttnn.CONFIG.enable_logging or ttnn.CONFIG.enable_comparison_mode:
                     input_tensors = get_all_tensors((function_args, function_kwargs))
                     set_tensor_id(input_tensors)
@@ -669,35 +669,14 @@ class Operation:
 
                     logger.debug(f"Started {self.python_fully_qualified_name:50}")
 
-                    if ttnn.CONFIG.report_path is not None:
-                        cluster_descriptor_path = pathlib.Path(ttnn.CONFIG.report_path) / "cluster_descriptor.yaml"
-                        if not cluster_descriptor_path.exists():
-                            save_cluster_descriptor(str(cluster_descriptor_path))
-                        if not glob.glob(str(ttnn.CONFIG.report_path) + "/physical_chip_mesh_coordinate_mapping*.yaml"):
-                            save_mesh_descriptor(ttnn.CONFIG.report_path)
-                        ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, None)
-                        ttnn.database.insert_stack_trace(
-                            ttnn.CONFIG.report_path, operation_id, traceback.format_stack()
-                        )
-                        ttnn.database.insert_operation_arguments(
-                            ttnn.CONFIG.report_path, operation_id, function_args, function_kwargs
-                        )
-                        ttnn.database.insert_input_tensors(ttnn.CONFIG.report_path, operation_id, input_tensors)
-
-                    decorated_function = duration_decorator(decorated_function)
-
                 if ttnn.CONFIG.enable_comparison_mode:
                     decorated_function = comparison_decorator(decorated_function)
 
-                # Initialize variables that may be needed in finally block
-                output = None
-                duration = None
-                captured_graph = None
+                # Initialize variables for comparison mode
                 local_tensor_comparison_records = []
                 local_golden_function_output = []
                 global_tensor_comparison_records = []
                 global_golden_function_output = []
-                output_tensors = []
 
                 ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
 
@@ -708,25 +687,7 @@ class Operation:
                         with command_queue(cq_id):
                             output = decorated_function(*function_args, **function_kwargs)
 
-                except Exception as e:
-                    # Record error to database if reporting is enabled
-                    if ttnn.CONFIG.report_path is not None:
-                        operation_id = ttnn._ttnn.get_python_operation_id()
-                        error_type = type(e).__name__
-                        error_message = str(e)
-                        stack_trace = traceback.format_exc()
-                        timestamp = datetime.now().isoformat()
-                        ttnn.database.insert_error(
-                            ttnn.CONFIG.report_path,
-                            operation_id,
-                            self.python_fully_qualified_name,
-                            error_type,
-                            error_message,
-                            stack_trace,
-                            timestamp,
-                        )
-                    raise
-                else:
+                    # Success path - only runs if no exception
                     if ttnn.CONFIG.enable_comparison_mode:
                         (
                             output,
@@ -741,50 +702,31 @@ class Operation:
                     if ttnn.CONFIG.enable_logging:
                         for device in devices:
                             ttnn.synchronize_device(device)
-
-                        output, duration = output.output, output.duration
                         logger.debug(f"Finished {self.python_fully_qualified_name:50}")
 
-                        output_tensors = get_all_tensors(output)
-
-                        if ttnn.CONFIG.report_path is not None:
-                            ttnn.database.insert_output_tensors(ttnn.CONFIG.report_path, operation_id, output_tensors)
-                            ttnn.database.insert_tensor_comparison_records(
-                                ttnn.CONFIG.report_path,
-                                "local_tensor_comparison_records",
-                                local_tensor_comparison_records,
-                            )
-                            if local_golden_function_output is not None:
-                                ttnn.database.store_tensors(ttnn.CONFIG.report_path, local_golden_function_output)
-                            ttnn.database.insert_tensor_comparison_records(
-                                ttnn.CONFIG.report_path,
-                                "global_tensor_comparison_records",
-                                global_tensor_comparison_records,
-                            )
-                            if global_golden_function_output is not None:
-                                ttnn.database.store_tensors(ttnn.CONFIG.report_path, global_golden_function_output)
-
-                            if ttnn.CONFIG.enable_graph_report:
-                                ttnn.tracer.visualize(
-                                    ttnn.tracer.GRAPH_STACK[-1],
-                                    file_name=ttnn.CONFIG.report_path
-                                    / ttnn.database.GRAPHS_PATH
-                                    / f"{operation_id}.svg",
-                                )
-                                # ttnn.database.store_graph(operation_id, ttnn.tracer.GRAPH_STACK[-1])
+                    # Comparison mode: persist golden tensor comparison records (Python-specific)
+                    if ttnn.CONFIG.enable_comparison_mode and ttnn.CONFIG.report_path is not None:
+                        ttnn.database.insert_tensor_comparison_records(
+                            ttnn.CONFIG.report_path,
+                            "local_tensor_comparison_records",
+                            local_tensor_comparison_records,
+                        )
+                        if local_golden_function_output is not None:
+                            ttnn.database.store_tensors(ttnn.CONFIG.report_path, local_golden_function_output)
+                        ttnn.database.insert_tensor_comparison_records(
+                            ttnn.CONFIG.report_path,
+                            "global_tensor_comparison_records",
+                            global_tensor_comparison_records,
+                        )
+                        if global_golden_function_output is not None:
+                            ttnn.database.store_tensors(ttnn.CONFIG.report_path, global_golden_function_output)
 
                 finally:
                     captured_graph = ttnn.graph.end_graph_capture()
 
-                    if ttnn.CONFIG.enable_logging and ttnn.CONFIG.report_path is not None:
-                        ttnn.database.insert_devices(ttnn.CONFIG.report_path, devices)
-                        ttnn.database.insert_operation(ttnn.CONFIG.report_path, operation_id, self, duration)
-                        ttnn.database.insert_buffers(ttnn.CONFIG.report_path, operation_id, devices)
-                        if ttnn.CONFIG.enable_detailed_buffer_report:
-                            ttnn.database.insert_buffer_pages(ttnn.CONFIG.report_path, operation_id, devices)
-
-                        if captured_graph is not None:
-                            ttnn.database.insert_captured_graph(ttnn.CONFIG.report_path, operation_id, captured_graph)
+                if ttnn.graph.is_graph_capture_active():
+                    ttnn.graph.store_output_tensor_ids(get_output_tensor_ids(output))
+                    ttnn.graph.store_captured_graph(captured_graph)
 
                 for hook in POST_OPERATION_HOOKS:
                     hook_return_value = hook(self, function_args, function_kwargs, output)
@@ -801,6 +743,9 @@ class Operation:
         self.decorated_function = function
 
     def __call__(self, *function_args, **function_kwargs):
+        tracking = ttnn.graph.is_graph_capture_active()
+        if tracking:
+            ttnn.graph.track_function_start(self.python_fully_qualified_name)
         try:
             if not OPERATION_CALL_STACK:
                 ttnn._ttnn.fetch_and_increment_python_operation_id()
@@ -808,6 +753,8 @@ class Operation:
             output = self.decorated_function(*function_args, **function_kwargs)
         finally:
             OPERATION_CALL_STACK.pop()
+            if tracking:
+                ttnn.graph.track_function_end()
         return output
 
     __doc__ = property(lambda self: self.decorated_function.__doc__)
@@ -1048,27 +995,3 @@ def register_ttl_operation_as_ttnn_operation(python_fully_qualified_name, functi
         is_experimental=True,
     )(function)
     return function
-
-
-def save_cluster_descriptor(dest_path):
-    temp_path = ttnn._ttnn.cluster.serialize_cluster_descriptor()
-
-    if not temp_path:
-        return None
-
-    shutil.copy(temp_path, dest_path)
-
-
-def save_mesh_descriptor(dest_path):
-    if not "TT_METAL_HOME" in os.environ:
-        logger.warning("Not copying mesh descriptor - TT_METAL_HOME not set")
-        return
-
-    mesh_descriptor_paths = glob.glob(f"{os.environ['TT_METAL_HOME']}/generated/fabric/*.yaml")
-
-    if not mesh_descriptor_paths:
-        logger.warning("Mesh descriptor not found")
-        return
-
-    for path in mesh_descriptor_paths:
-        shutil.copy(path, dest_path)

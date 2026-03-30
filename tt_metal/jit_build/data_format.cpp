@@ -61,6 +61,11 @@ DataFormat check_consistent_format_across_buffers(std::span<const DataFormat> da
             continue;
         }
 
+        // Special case where Fp8_e4m3 can be used with any format
+        if (format == DataFormat::Fp8_e4m3) {
+            continue;
+        }
+
         if (format != DataFormat::Invalid) {
             TT_FATAL(ALL_VALID_FORMATS.contains(format), "Format = {} not supported", format);
 
@@ -122,8 +127,6 @@ DataFormat get_single_unpack_dst_format(
                 (unpack_conditional_dst_format == DataFormat::Float32),
             "fp32 conditional format can only be fp16a/b or fp32");
         dst_format = unpack_conditional_dst_format;
-    } else if (is_bfp_format(src_format)) {
-        dst_format = is_exp_b_format(src_format) ? DataFormat::Bfp8_b : DataFormat::Bfp8;
     }
 
     return dst_format;
@@ -215,9 +218,11 @@ DataFormat get_single_pack_src_format(
     } else if (data_format == DataFormat::Invalid) {
         pack_src_format = DataFormat::Invalid;
     } else if (data_format == DataFormat::Fp8_e4m3) {
-        pack_src_format = DataFormat::Float16;
+        pack_src_format = is_exp_b_format(unpack_conditional_dst_format) ? DataFormat::Float16_b : DataFormat::Float16;
     } else if (fp32_dest_acc_en) {
-        if (is_bfp_format(data_format)) {
+        if (arch == tt::ARCH::QUASAR && !tt::is_integer_format(data_format)) {
+            pack_src_format = DataFormat::Float32;
+        } else if (is_bfp_format(data_format)) {
             if (bfp8_pack_precise) {
                 pack_src_format = DataFormat::Float32;
             } else {
@@ -243,7 +248,7 @@ DataFormat get_single_pack_src_format(
     } else if (int_fpu_en) {
         TT_THROW("Integer math is not supported");
         // If output is integer, then pack_src_format is integer as conversion in packer is not supported
-        // If output if float, then pack_src_format is Float32 as sfpu outut if Float32
+        // If output if float, then pack_src_format is Float32 as sfpu output if Float32
         if (tt::is_integer_format(data_format)) {
             pack_src_format = data_format;
         } else {

@@ -15,14 +15,7 @@
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_device_operation.hpp"
 
 #include "ttnn/operations/experimental/ccl/all_gather_matmul_async/device/all_gather_matmul_async_program_factory.hpp"
-#include <tt-metalium/core_coord.hpp>
-
 namespace ttnn::experimental::prim {
-
-AllGatherMatmulAsyncDeviceOperation::program_factory_t AllGatherMatmulAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return AllGatherMatmulAsyncMeshWorkloadFactory{};
-}
 
 void AllGatherMatmulAsyncDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -120,7 +113,7 @@ AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t AllGatherMatmulAsyncD
     return {all_gather_output_tensor, matmul_output_tensor};
 }
 
-tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllGatherMatmulAsyncDeviceOperation::compute_program_hash is called");
 
@@ -128,9 +121,6 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<AllGatherMatmulAsyncDeviceOperation>(
         operation_attributes.all_gather_async_attributes.dim,
         operation_attributes.all_gather_async_attributes.num_links,
@@ -146,8 +136,7 @@ tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
         operation_attributes.matmul,
         operation_attributes.all_gather_core_grid_offset,
         subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim
@@ -183,7 +172,7 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
 
     /* All Gather setup */
     const auto [all_gather_async_operation_attributes, all_gather_async_tensor_args] =
-        ttnn::experimental::prim::AllGatherAsyncDeviceOperation::invoke(
+        ttnn::experimental::prim::all_gather_async_build_operation_args(
             input_tensor,
             persistent_output_buffer,
             dim,
@@ -195,6 +184,7 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
             /*cluster_axis=*/std::nullopt,
             /*use_optimal_ccl_for_llama=*/false,
             /*use_all_gather_async_llama_sharded=*/false,
+            /*use_all_gather_async_via_broadcast*/ false,
             barrier_semaphore,
             chunks_per_sync,
             num_workers_per_link,

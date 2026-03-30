@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -17,14 +18,12 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -128,7 +127,6 @@ std::vector<bfloat16> gold_broadcast(
     uint16_t srcb_fid_mask = 0xFFFF;
 
     std::vector<bfloat16> golden(num_cols * num_rows);
-    auto arch = get_arch_from_string(get_umd_arch_name());
 
     switch (math_fidelity) {
         case MathFidelity::HiFi4:
@@ -136,12 +134,12 @@ std::vector<bfloat16> gold_broadcast(
             break;
         }
         case MathFidelity::HiFi2: {
-            srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            srcb_fid_mask = 0xFFFE;
             break;
         }
         case MathFidelity::LoFi: {
             srca_fid_mask = 0xFFF8;
-            srcb_fid_mask = (arch == tt::ARCH::GRAYSKULL) ? 0xFFF8 : 0xFFFE;
+            srcb_fid_mask = 0xFFFE;
             break;
         }
         default: {
@@ -373,6 +371,7 @@ void run_single_core_broadcast(
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
     distributed::ReadShard(cq, dest_buffer_data, dst_dram_buffer, zero_coord);

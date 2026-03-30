@@ -19,13 +19,11 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
-#include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
+#include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -500,37 +498,37 @@ bool test_interleaved_l1_datacopy(
 
 }  // namespace
 
-TEST_F(UnitMeshCQSingleCardFixture, WriteInterleavedSticksAndReadBack) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, WriteInterleavedSticksAndReadBack) {
     ASSERT_TRUE(test_write_interleaved_sticks_and_then_read_interleaved_sticks(
         devices_[0], devices_[0]->mesh_command_queue()));
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, InterleavedStickReaderSingleBankTilizedWriter) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, InterleavedStickReaderSingleBankTilizedWriter) {
     ASSERT_TRUE(interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(
         devices_[0], devices_[0]->mesh_command_queue()));
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, InterleavedTilizedReaderInterleavedStickWriter) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, InterleavedTilizedReaderInterleavedStickWriter) {
     ASSERT_TRUE(interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
         devices_[0], devices_[0]->mesh_command_queue()));
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, InterleavedL1DatacopyL1ToL1) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, InterleavedL1DatacopyL1ToL1) {
     ASSERT_TRUE(
         (test_interleaved_l1_datacopy<true, true>(devices_[0], devices_[0]->mesh_command_queue())));
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, InterleavedL1DatacopyDramToL1) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, InterleavedL1DatacopyDramToL1) {
     ASSERT_TRUE(
         (test_interleaved_l1_datacopy<false, true>(devices_[0], devices_[0]->mesh_command_queue())));
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, InterleavedL1DatacopyL1ToDram) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, InterleavedL1DatacopyL1ToDram) {
     ASSERT_TRUE(
         (test_interleaved_l1_datacopy<true, false>(devices_[0], devices_[0]->mesh_command_queue())));
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, InterleavedL1DatacopyDramToDram) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, InterleavedL1DatacopyDramToDram) {
     ASSERT_TRUE(
         (test_interleaved_l1_datacopy<false, false>(devices_[0], devices_[0]->mesh_command_queue())));
 }

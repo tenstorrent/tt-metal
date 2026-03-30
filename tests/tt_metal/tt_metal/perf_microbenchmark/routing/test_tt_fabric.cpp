@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include <vector>
 #include <string>
 #include <unordered_map>
@@ -112,6 +113,8 @@ int main(int argc, char** argv) {
 
     cmdline_parser.apply_overrides(raw_test_configs);
 
+    raw_test_configs = tt::tt_fabric::fabric_tests::expand_channel_trimming(std::move(raw_test_configs));
+
     if (raw_test_configs.empty()) {
         log_fatal(tt::LogTest, "No test configurations loaded or generated. Exiting.");
         return 1;
@@ -171,13 +174,18 @@ int main(int argc, char** argv) {
             tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_bw_telemetry(true);
         }
 
+        if (test_config.fabric_setup.use_vc2) {
+            tt::tt_metal::MetalContext::instance().rtoptions().set_enable_fabric_vc2(true);
+        }
+
         log_info(
             tt::LogTest,
             "Opening devices with topology: {} and fabric_tensix_config: {}",
             topology,
             fabric_tensix_config);
 
-        bool open_devices_success = test_context.open_devices(test_config.fabric_setup);
+        bool open_devices_success = test_context.open_devices(
+            test_config.fabric_setup, test_config.channel_trimming_mode);
         if (!open_devices_success) {
             log_warning(
                 tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);

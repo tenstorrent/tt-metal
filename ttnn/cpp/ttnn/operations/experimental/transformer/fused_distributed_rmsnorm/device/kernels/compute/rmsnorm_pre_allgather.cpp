@@ -13,10 +13,10 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/layernorm.h"
+#include "api/compute/reduce.h"
+#include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/layernorm.h"
 #include "api/debug/dprint_pages.h"
 
 void kernel_main() {
@@ -58,7 +58,7 @@ void kernel_main() {
 
             tile_regs_wait();
             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                // Pack tiles onto eachother in the intermediate_cb
+                // Pack tiles onto each other in the intermediate_cb
                 pack_tile<true>(i /*index into DST*/, intermediate_cb, 0 /*index into intermediate CB*/);
 
                 if (col_tile == 0 && i == 0) {

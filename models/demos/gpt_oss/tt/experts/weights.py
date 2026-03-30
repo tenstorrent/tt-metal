@@ -52,16 +52,25 @@ def load_expert_weights(
     # Calculate sharded dimensions
     intermediate_size_per_device = mesh_config.shard_size(config.intermediate_size, mode=Mode.DECODE)
 
-    # Extract gate and up projections from fused weight
-    gate_proj = state_dict["gate_up_proj"][..., ::2].reshape(
-        1, config.num_experts, config.hidden_size, config.intermediate_size
-    )
-    up_proj = state_dict["gate_up_proj"][..., 1::2].reshape(
-        1, config.num_experts, config.hidden_size, config.intermediate_size
-    )
-    gate_proj_bias = state_dict["gate_up_proj_bias"][..., ::2].reshape(1, config.num_experts, config.intermediate_size)
-    up_proj_bias = state_dict["gate_up_proj_bias"][..., 1::2].reshape(1, config.num_experts, config.intermediate_size)
-
+    if state_dict:
+        # Extract gate and up projections from fused weight
+        gate_proj = state_dict["gate_up_proj"][..., ::2].reshape(
+            1, config.num_experts, config.hidden_size, config.intermediate_size
+        )
+        up_proj = state_dict["gate_up_proj"][..., 1::2].reshape(
+            1, config.num_experts, config.hidden_size, config.intermediate_size
+        )
+        gate_proj_bias = state_dict["gate_up_proj_bias"][..., ::2].reshape(
+            1, config.num_experts, config.intermediate_size
+        )
+        up_proj_bias = state_dict["gate_up_proj_bias"][..., 1::2].reshape(
+            1, config.num_experts, config.intermediate_size
+        )
+    else:
+        gate_proj = None
+        up_proj = None
+        gate_proj_bias = None
+        up_proj_bias = None
     # Get mesh mappers
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
     row_mesh_mapper = mesh_config.row_parallel(mesh_device)
@@ -95,7 +104,7 @@ def load_expert_weights(
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj_bias_{gate_proj_bias.shape}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"gate_proj_bias"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -106,13 +115,22 @@ def load_expert_weights(
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj_bias_{up_proj_bias.shape}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"up_proj_bias"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
     # Load down projection
-    down_proj = state_dict["down_proj"].reshape(1, config.num_experts, config.intermediate_size, config.hidden_size)
-    down_proj_bias = state_dict["down_proj_bias"].reshape(1, config.num_experts, config.hidden_size)
+    if state_dict:
+        down_proj = state_dict["down_proj"].reshape(1, config.num_experts, config.intermediate_size, config.hidden_size)
+        down_proj_bias = state_dict["down_proj_bias"].reshape(1, config.num_experts, config.hidden_size)
+        # Handle row-parallel bias (must not be replicated across TP devices)
+        if mesh_config.decode.tp > 1:
+            down_proj_bias = torch.cat(
+                [down_proj_bias] + [torch.zeros_like(down_proj_bias)] * (mesh_config.decode.tp - 1), dim=-1
+            )
+    else:
+        down_proj = None
+        down_proj_bias = None
 
     down_proj_tt = ttnn.as_tensor(
         down_proj,
@@ -124,19 +142,13 @@ def load_expert_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # Handle row-parallel bias (must not be replicated across TP devices)
-    if mesh_config.decode.tp > 1:
-        down_proj_bias = torch.cat(
-            [down_proj_bias] + [torch.zeros_like(down_proj_bias)] * (mesh_config.decode.tp - 1), dim=-1
-        )
-
     down_proj_bias_tt = ttnn.as_tensor(
         down_proj_bias,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=bias_dtype,
         mesh_mapper=col_mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj_bias_{down_proj_bias.shape}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"down_proj_bias"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 

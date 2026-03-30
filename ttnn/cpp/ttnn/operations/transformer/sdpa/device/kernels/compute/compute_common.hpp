@@ -2,25 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cstdint>
 
 #define REDUCE_OP (PoolType::MAX)
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 #include "api/debug/assert.h"
-#include "compute_kernel_api.h"
-#include "compute_kernel_api/binary_max_min.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/eltwise_unary/exp.h"
-#include "compute_kernel_api/eltwise_unary/recip.h"
-#include "compute_kernel_api/eltwise_unary/softplus.h"
-#include "compute_kernel_api/eltwise_unary/negative.h"
-#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/reduce_custom.h"
+#include "api/compute/compute_kernel_api.h"
+#include "api/compute/binary_max_min.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/eltwise_unary/recip.h"
+#include "api/compute/eltwise_unary/softplus.h"
+#include "api/compute/eltwise_unary/negative.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/bcast.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reduce.h"
+#include "api/compute/reduce_custom.h"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -110,7 +112,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
 
 #if defined REDUCE_GRANULARITY
     constexpr uint32_t dst_tiles = (rows < REDUCE_GRANULARITY) ? rows : REDUCE_GRANULARITY;
-    constexpr uint32_t granularity = (rows >= REDUCE_GRANULARITY) ? (rows >> LOG2_REDUCE_GRANULARITY) : 1;
+    constexpr uint32_t granularity = (rows >= REDUCE_GRANULARITY) ? (rows / REDUCE_GRANULARITY) : 1;
 #else
     constexpr uint32_t dst_tiles = 1;
     constexpr uint32_t granularity = rows;
@@ -305,7 +307,12 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // Postcondition: in1_cb has rows produced
     sub_bcast_cols_init_short(in0_cb, in1_cb);
 
-    exp_tile_init<true, true, scale_fp32>();
+    // The exponential function uses InputClamping::None for better performance. This version
+    // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
+    // Enable packer ReLU to zero any negative values produced by the exponential approximation.
+    exp_tile_init<true /* approx */, true /* fast+approx */, scale_fp32, InputClamping::None>();
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+
     cb_wait_front(in0_cb, rows * cols);
     cb_wait_front(in1_cb, rows);
     if constexpr (do_reduce) {
@@ -314,7 +321,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
 
 #ifdef SUB_EXP_GRANULARITY
     uint32_t dst_tiles = (cols < SUB_EXP_GRANULARITY) ? cols : SUB_EXP_GRANULARITY;
-    uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols >> LOG2_SUB_EXP_GRANULARITY) : 1;
+    uint32_t granularity = (cols >= SUB_EXP_GRANULARITY) ? (cols / SUB_EXP_GRANULARITY) : 1;
 #else
     uint32_t dst_tiles = cols;
     uint32_t granularity = 1;
@@ -325,7 +332,15 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
-                exp_tile<true, true>(j, vector_mode);
+                constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 : 8;
+                constexpr int vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
+                exp_tile<
+                    true /* approx */,
+                    true /* fast+approx */,
+                    false /* scale_en */,
+                    false /* skip +ve check */,
+                    InputClamping::None,
+                    iterations>(j, vector_mode_exp);
             }
             tile_regs_commit();
 
@@ -368,6 +383,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     if constexpr (do_reduce) {
         cb_push_back(reduce_cb, rows);
     }
+
+    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
 }
 
 /**
@@ -412,7 +429,7 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
     } else {
 #ifdef DHT_GRANULARITY
         constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
-        constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
+        constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols / DHT_GRANULARITY) : 1;
 #else
         constexpr uint32_t dst_tiles = 1;
         constexpr uint32_t granularity = cols;
@@ -464,7 +481,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
 
 #ifdef DHT_GRANULARITY
     constexpr uint32_t dst_tiles = (cols < DHT_GRANULARITY) ? cols : DHT_GRANULARITY;
-    constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols >> LOG2_DHT_GRANULARITY) : 1;
+    constexpr uint32_t granularity = (cols >= DHT_GRANULARITY) ? (cols / DHT_GRANULARITY) : 1;
 #else
     constexpr uint32_t dst_tiles = 1;
     constexpr uint32_t granularity = cols;
@@ -502,7 +519,7 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
 
 #ifdef STATS_GRANULARITY
     constexpr uint32_t dst_tiles = STATS_GRANULARITY;
-    constexpr uint32_t granularity = num_tiles >> LOG2_STATS_GRANULARITY;
+    constexpr uint32_t granularity = num_tiles / STATS_GRANULARITY;
 #else
     constexpr uint32_t dst_tiles = 1;
     constexpr uint32_t granularity = num_tiles;
@@ -602,7 +619,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     }
 }
 
-#ifdef TRISC_MATH
+#if defined(TRISC_MATH) || defined(TRISC_PACK)
 
 constexpr auto bits = [](float x) constexpr { return __builtin_bit_cast(std::uint32_t, x); };
 constexpr auto lo16 = [](float x) constexpr { return static_cast<std::uint16_t>(bits(x) & 0xFFFFu); };
@@ -663,8 +680,8 @@ void calculate_exponential_polynomial() {
     constexpr float LN2_RECIP = 1.44269504088896340736f;  // 1/ln(2)
     constexpr float M_LN2 = -0.69314718055994530942f;     // -ln(2)
 
-    if (!USE_SFPARECIP_INSTR) {
-        ASSERT(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
+    if constexpr (!USE_SFPARECIP_INSTR) {
+        static_assert(POLY_DEGREE >= 1 && POLY_DEGREE <= 4);
 
         // Evaluate polynomial f(x) = c0 + c1 * x + c2 * x^2 + ... using Horner's method.
         constexpr float c0 = (POLY_DEGREE == 1)   ? 1.03022936050163882354355235184958220293399209290987f
@@ -682,25 +699,24 @@ void calculate_exponential_polynomial() {
                                                 : 0.16792157982882225102649214918047336097544632172075f;
         constexpr float c4 = 4.1959439860014343843000081999668024587178974865521e-2;
 
-        switch (POLY_DEGREE) {
-            case 4:
-                TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
-                TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
-                [[fallthrough]];
-            case 3:
-                TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3));
-                TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
-                [[fallthrough]];
-            case 2:
-                TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2));
-                TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
-                [[fallthrough]];
-            case 1:
-                TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1));
-                TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
-                TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0));
-                TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
-            default: break;
+        // Load polynomial coefficients.
+        if constexpr (POLY_DEGREE >= 4) {
+            TTI_SFPLOADI(p_sfpu::LREG3, 0xA, lo16(c4));
+            TTI_SFPLOADI(p_sfpu::LREG3, 0x8, hi16(c4));
+        }
+        if constexpr (POLY_DEGREE >= 3) {
+            TTI_SFPLOADI(p_sfpu::LREG4, 0xA, lo16(c3));
+            TTI_SFPLOADI(p_sfpu::LREG4, 0x8, hi16(c3));
+        }
+        if constexpr (POLY_DEGREE >= 2) {
+            TTI_SFPLOADI(p_sfpu::LREG5, 0xA, lo16(c2));
+            TTI_SFPLOADI(p_sfpu::LREG5, 0x8, hi16(c2));
+        }
+        if constexpr (POLY_DEGREE >= 1) {
+            TTI_SFPLOADI(p_sfpu::LREG6, 0xA, lo16(c1));
+            TTI_SFPLOADI(p_sfpu::LREG6, 0x8, hi16(c1));
+            TTI_SFPLOADI(p_sfpu::LREG7, 0xA, lo16(c0));
+            TTI_SFPLOADI(p_sfpu::LREG7, 0x8, hi16(c0));
         }
     }
 
@@ -841,7 +857,7 @@ void exp_tile_first_column(uint32_t idst) {
     _llk_math_eltwise_unary_sfpu_params_<false /*APPROXIMATE*/>(
         calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, (int)VectorMode::C);
 }
-#endif
+#endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
 
 /**
  * out_cb = exp((in0_cb - in1_cb) * scale_fp32)
@@ -1138,9 +1154,11 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     cb_push_back(out_cb, num_tiles);
 }
 
-void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
-    // out_cb = in0_cb - in1_cb
-
+/**
+ * out_cb = in0_cb - in1_cb
+ * Compile with size optimization to prevent binary size exceeding the limit.
+ */
+__attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
@@ -1245,7 +1263,7 @@ ALWI void matmul_blocks(
 template <uint32_t M>
 void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     // precondition: in0_cb has M*K produced
-    // preconditino: in1_cb has K*N produced
+    // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
 
@@ -1255,7 +1273,7 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     // Reuse the Sq_chunk_t granularity chosen for sub_exp_block
 #ifdef STATS_GRANULARITY
     constexpr uint32_t subblock_h = STATS_GRANULARITY;
-    constexpr uint32_t in0_num_subblocks = M >> LOG2_STATS_GRANULARITY;
+    constexpr uint32_t in0_num_subblocks = M / STATS_GRANULARITY;
 #else
     constexpr uint32_t subblock_h = 1;
     constexpr uint32_t in0_num_subblocks = M;
@@ -1295,6 +1313,180 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
         cb_push_back(out_cb, subblock_h);
     }
 }
+
+/**
+ * Lightweight padded-K mask: L1-accumulate a single permanently-fronted -inf tile onto padded
+ * tile positions in out_cb. Runtime version for ring joint SDPA where num_padded varies per chunk.
+ *
+ * @param neginf_cb  CB holding mask tiles (tile 0 = -inf), permanently fronted
+ * @param neginf_tile_idx  Tile index of the -inf tile within the CB (typically 0)
+ * @param out_cb     QK intermediate CB (Sq_chunk_t * Sk_chunk_t tiles, already wait-fronted)
+ * @param num_padded Number of fully padded K tile columns per row
+ * @param num_cols   Total K tiles per row (Sk_chunk_t)
+ * @param num_rows   Q tiles per chunk (Sq_chunk_t)
+ */
+void apply_padded_mask_lightweight_runtime(
+    uint32_t neginf_cb,
+    uint32_t neginf_tile_idx,
+    uint32_t out_cb,
+    uint32_t num_padded,
+    uint32_t num_cols,
+    uint32_t num_rows) {
+    uint32_t start = num_cols - num_padded;
+
+    copy_tile_to_dst_init_short(neginf_cb);
+    PACK((llk_pack_reconfig_l1_acc(1)));
+
+    constexpr uint32_t DST_BATCH = 8;
+    for (uint32_t row = 0; row < num_rows; row++) {
+        uint32_t row_offset = row * num_cols;
+        for (uint32_t base = start; base < num_cols; base += DST_BATCH) {
+            uint32_t batch = (num_cols - base < DST_BATCH) ? (num_cols - base) : DST_BATCH;
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < batch; i++) {
+                copy_tile(neginf_cb, neginf_tile_idx, i);  // Index into the single CB
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < batch; i++) {
+                pack_tile<true>(i, out_cb, row_offset + base + i);
+            }
+            tile_regs_release();
+        }
+    }
+
+    PACK((llk_pack_reconfig_l1_acc(0)));
+}
+
+/**
+ * Lightweight partial mask: L1-accumulate a partial mask tile (0 for valid, -inf for padded columns)
+ * onto the boundary tile position in out_cb. The partial tile is permanently fronted in the CB.
+ *
+ * @param mask_cb          CB holding mask tiles, permanently fronted
+ * @param partial_tile_idx Index of the partial tile within the CB
+ * @param out_cb           QK intermediate CB (already wait-fronted)
+ * @param boundary_col     Column index within the chunk where the boundary tile is
+ * @param num_cols         Total K tiles per row (Sk_chunk_t)
+ * @param num_rows         Q tiles per chunk (Sq_chunk_t)
+ */
+void apply_partial_mask_lightweight(
+    uint32_t mask_cb,
+    uint32_t partial_tile_idx,
+    uint32_t out_cb,
+    uint32_t boundary_col,
+    uint32_t num_cols,
+    uint32_t num_rows) {
+    copy_tile_to_dst_init_short(mask_cb);
+    PACK((llk_pack_reconfig_l1_acc(1)));
+
+    for (uint32_t row = 0; row < num_rows; row++) {
+        tile_regs_acquire();
+        copy_tile(mask_cb, partial_tile_idx, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile<true>(0, out_cb, row * num_cols + boundary_col);
+        tile_regs_release();
+    }
+
+    PACK((llk_pack_reconfig_l1_acc(0)));
+}
+
+/**
+ * Context for lightweight mask application in ring joint SDPA.
+ * All mask tiles reside in a single CB. A default-constructed instance disables lightweight masking.
+ */
+struct LightweightMaskContext {
+    bool enabled = false;
+    uint32_t neginf_tile_idx = 0;            // Index of -inf tile in the mask CB
+    uint32_t global_n_padded_tiles = 0;      // Fully padded K tile columns for global_n chunk
+    uint32_t local_n_padded_tiles = 0;       // Fully padded K tile columns for local_n chunk
+    uint32_t joint_n_padded_tiles = 0;       // Fully padded K tile columns for joint_l chunk
+    uint32_t global_n_partial_col = 0;       // Column within tile where global_n padding starts (0 = no partial)
+    uint32_t joint_l_partial_col = 0;        // Column within tile where joint_l padding starts (0 = no partial)
+    uint32_t global_n_partial_tile_idx = 0;  // Index of global_n partial tile in the mask CB
+    uint32_t joint_l_partial_tile_idx = 0;   // Index of joint_l partial tile in the mask CB
+
+    /**
+     * Resolve which mask type applies for a given K chunk and return pre-resolved params.
+     * Called once per K chunk; the resolved values are then used per subblock.
+     */
+    void resolve_for_chunk(
+        uint32_t Sk_chunk_t,
+        uint32_t k_chunk,
+        uint32_t num_local_k_chunks,
+        bool ring_iter_needs_global_n_mask,
+        bool ring_iter_needs_joint_n_mask,
+        bool local_n_needs_masking,
+        uint32_t global_n_mask_chunk_id,
+        uint32_t local_n_mask_chunk_id,
+        uint32_t joint_n_mask_chunk_id,
+        uint32_t& out_num_padded,
+        uint32_t& out_boundary_col,
+        uint32_t& out_partial_tile_idx,
+        bool& out_has_partial) const {
+        out_num_padded = 0;
+        out_has_partial = false;
+        out_boundary_col = 0;
+        out_partial_tile_idx = 0;
+
+        if (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) {
+            out_num_padded = global_n_padded_tiles;
+            out_has_partial = (global_n_partial_col > 0);
+            out_boundary_col = Sk_chunk_t - out_num_padded - (out_has_partial ? 1 : 0);
+            out_partial_tile_idx = global_n_partial_tile_idx;
+        } else if (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) {
+            out_num_padded = local_n_padded_tiles;
+        } else if (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id) {
+            out_num_padded = joint_n_padded_tiles;
+            out_has_partial = (joint_l_partial_col > 0);
+            out_boundary_col = Sk_chunk_t - out_num_padded - (out_has_partial ? 1 : 0);
+            out_partial_tile_idx = joint_l_partial_tile_idx;
+        }
+    }
+
+    /**
+     * Apply the lightweight mask for a given K chunk (non-streaming path).
+     */
+    void apply(
+        uint32_t cb_mask_in,
+        uint32_t cb_qk_im,
+        uint32_t Sk_chunk_t,
+        uint32_t Sq_chunk_t,
+        uint32_t k_chunk,
+        uint32_t num_local_k_chunks,
+        bool ring_iter_needs_global_n_mask,
+        bool ring_iter_needs_joint_n_mask,
+        bool local_n_needs_masking,
+        uint32_t global_n_mask_chunk_id,
+        uint32_t local_n_mask_chunk_id,
+        uint32_t joint_n_mask_chunk_id) const {
+        uint32_t num_padded, boundary_col, partial_tile_idx;
+        bool has_partial;
+        resolve_for_chunk(
+            Sk_chunk_t,
+            k_chunk,
+            num_local_k_chunks,
+            ring_iter_needs_global_n_mask,
+            ring_iter_needs_joint_n_mask,
+            local_n_needs_masking,
+            global_n_mask_chunk_id,
+            local_n_mask_chunk_id,
+            joint_n_mask_chunk_id,
+            num_padded,
+            boundary_col,
+            partial_tile_idx,
+            has_partial);
+
+        if (has_partial) {
+            apply_partial_mask_lightweight(
+                cb_mask_in, partial_tile_idx, cb_qk_im, boundary_col, Sk_chunk_t, Sq_chunk_t);
+        }
+        if (num_padded > 0) {
+            apply_padded_mask_lightweight_runtime(
+                cb_mask_in, neginf_tile_idx, cb_qk_im, num_padded, Sk_chunk_t, Sq_chunk_t);
+        }
+    }
+};
 
 enum SDPAType {
     STANDARD = 0,
@@ -1390,10 +1582,10 @@ template <
     uint32_t cb_scale_in,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
+    uint32_t NH,
     uint32_t DHt,
     uint32_t vDHt,
     bool use_attention_sink,
-    bool is_causal,
     bool use_provided_mask,
     bool use_padded_mask,
     bool use_joint_mask,
@@ -1423,6 +1615,7 @@ void sdpa_inner_loop(
     const uint32_t iter_k_chunk_end,
     const uint32_t q_chunk_tiles,
     const uint32_t k_chunk_tiles,
+    const uint32_t v_chunk_tiles,
     const uint32_t qk_chunk_tiles,
     const uint32_t out_chunk_tiles,
     const uint32_t mask_chunk_0,
@@ -1453,8 +1646,13 @@ void sdpa_inner_loop(
     const uint32_t cb_lse_in,
     const uint32_t cb_lse_out,
     const uint32_t cb_prev_out,
-    const uint32_t cb_out) {
+    const uint32_t cb_out,
+    const LightweightMaskContext& lw_mask = {},
+    const bool is_causal = false,
+    const bool is_balanced = false,
+    const bool is_last_ring_iter = true) {
     uint32_t KV_chunks_processed_in_iter = 0;
+    const uint32_t q_per_core = iter_q_end - iter_q_start;
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_low_idx;
@@ -1477,10 +1675,23 @@ void sdpa_inner_loop(
                 q_chunk = chunked_q_chunk_offset + q_chunk;
             }
             q_low_idx = q_chunk * Sq_chunk_t;  // This is the sequence index of the first tile of this chunk
-            if constexpr (is_causal) {
+            if (is_causal) {
                 q_high_idx = q_low_idx + Sq_chunk_t;
             } else {
                 q_high_idx = Skt;
+            }
+        } else if (sdpa_type == RING) {
+            const uint32_t q_chunk = q_iter % q_num_chunks;
+
+            if (is_causal) {
+                q_low_idx = q_chunk * Sq_chunk_t;
+                q_high_idx = q_low_idx + Sq_chunk_t;
+                q_high_idx = (q_high_idx + Sk_chunk_t - 1) / Sk_chunk_t;
+            }
+            if (is_balanced) {
+                if (q_chunk < q_num_chunks / 2) {
+                    continue;
+                }
             }
         }
 
@@ -1515,11 +1726,21 @@ void sdpa_inner_loop(
 
             KV_chunks_processed_in_iter++;
 
+            if (sdpa_type == RING && k_chunk >= q_high_idx && is_causal) {
+                cb_wait_front(cb_k_in, k_chunk_tiles);
+                cb_wait_front(cb_v_in, v_chunk_tiles);
+                cb_pop_front(cb_k_in, k_chunk_tiles);
+                cb_pop_front(cb_v_in, v_chunk_tiles);
+
+                continue;
+            }
+
             /**
              * QK = Q_CHUNK @ K_CHUNK
              *
              * matmul_blocks internally waits on both inputs
              */
+            reconfig_data_format(cb_k_in, cb_q_in);
             pack_reconfig_data_format(cb_qk_im);
             matmul_blocks(
                 cb_q_in,
@@ -1544,11 +1765,11 @@ void sdpa_inner_loop(
              */
 
             bool apply_mask = false;
-            if constexpr (sdpa_type == RING) {
+            if (sdpa_type == RING && !is_causal) {
                 apply_mask = (ring_iter_needs_global_n_mask && k_chunk == global_n_mask_chunk_id) ||
                              (local_n_needs_masking && k_chunk == local_n_mask_chunk_id) ||
                              (ring_iter_needs_joint_n_mask && (k_chunk - num_local_k_chunks) == joint_n_mask_chunk_id);
-            } else if constexpr (is_causal || sliding_window_size > 0) {
+            } else if (is_causal || sliding_window_size > 0) {
                 // Finding the diagonal is harder now that q_chunk_size and k_chunk_size can differ
                 // Q-range = [q_low, q_high)
                 // K-range = [k_low, k_high)
@@ -1571,7 +1792,23 @@ void sdpa_inner_loop(
             if (apply_mask) {
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
-                add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                if (lw_mask.enabled) {
+                    lw_mask.apply(
+                        cb_mask_in,
+                        cb_qk_im,
+                        Sk_chunk_t,
+                        Sq_chunk_t,
+                        k_chunk,
+                        num_local_k_chunks,
+                        ring_iter_needs_global_n_mask,
+                        ring_iter_needs_joint_n_mask,
+                        local_n_needs_masking,
+                        global_n_mask_chunk_id,
+                        local_n_mask_chunk_id,
+                        joint_n_mask_chunk_id);
+                } else {
+                    add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
+                }
             }
 
             /**
@@ -1582,8 +1819,8 @@ void sdpa_inner_loop(
              *  cur_max = max(qk, dim=-1)
              */
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
-                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
+                alias_cur_max, alias_prev_max, processed_k_chunks > 0);
 
             /**
              * sub_exp fuses a few operations.
@@ -1597,6 +1834,10 @@ void sdpa_inner_loop(
              */
             sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
                 alias_cur_max, alias_cur_sum, Sk_chunk_t);
+
+            // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in matmul)
+            reconfig_data_format(cb_v_in, cb_qk_im);
+            pack_reconfig_data_format(alias_mm2_cur_out);
 
             /* OUT_IM = QK @ V_CHUNK */
             matmul_blocks(
@@ -1676,8 +1917,8 @@ void sdpa_inner_loop(
             //    This compares the previous max with the sink logit
             reconfig_data_format(cb_attention_sink, cb_identity_scale_in);
 
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_attention_sink, cb_identity_scale_in, Sq_chunk_t>(
-                alias_cur_max, alias_prev_max, 1, true);
+            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_attention_sink, cb_identity_scale_in, Sq_chunk_t, 1>(
+                alias_cur_max, alias_prev_max, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
@@ -1740,7 +1981,7 @@ void sdpa_inner_loop(
                 sub_block(cb_prev_out, alias_cur_out, alias_sub, out_chunk_tiles);
                 // alias_sub *= alias_sig
                 reconfig_data_format(alias_sub, alias_sig);
-                mul_block_bcast_cols_inplace<Sq_chunk_t, DHt>(alias_sub, alias_sig);
+                mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_sub, alias_sig);
                 // cb_out = cb_prev_out - alias_sub
                 reconfig_data_format(cb_prev_out, alias_sub);
                 pack_reconfig_data_format(cb_out);
@@ -1778,15 +2019,19 @@ void sdpa_inner_loop(
             cb_pop_front(alias_prev_max, Sq_chunk_t);
         }
 
-        cb_pop_front(cb_q_in, q_chunk_tiles);
+        // When q_per_core == 1, Q is identical across ring iterations so we keep it
+        // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
+        if (q_per_core > 1 || is_last_ring_iter) {
+            cb_pop_front(cb_q_in, q_chunk_tiles);
+        }
     }
 
     if constexpr (sdpa_type == RING) {
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_wait_front(cb_k_in, k_chunk_tiles);
-            cb_wait_front(cb_v_in, k_chunk_tiles);
+            cb_wait_front(cb_v_in, v_chunk_tiles);
             cb_pop_front(cb_k_in, k_chunk_tiles);
-            cb_pop_front(cb_v_in, k_chunk_tiles);
+            cb_pop_front(cb_v_in, v_chunk_tiles);
         }
     }
 
@@ -1839,6 +2084,7 @@ void sdpa_standard(
     const uint32_t k_num_chunks,
     const uint32_t q_chunk_tiles,
     const uint32_t k_chunk_tiles,
+    const uint32_t v_chunk_tiles,
     const uint32_t qk_chunk_tiles,
     const uint32_t out_chunk_tiles,
     const uint32_t cb_q_in,
@@ -1862,10 +2108,10 @@ void sdpa_standard(
         0,  // cb_scale_in (not used)
         Sq_chunk_t,
         Sk_chunk_t,
+        0,  // NH (not used)
         DHt,
         vDHt,
         use_attention_sink,
-        is_causal,
         use_provided_mask,
         use_padded_mask,
         false,  // use_joint_mask (not used)
@@ -1894,6 +2140,7 @@ void sdpa_standard(
         k_num_chunks,  // iter_k_chunk_end
         q_chunk_tiles,
         k_chunk_tiles,
+        v_chunk_tiles,
         qk_chunk_tiles,
         out_chunk_tiles,
         0,      // mask_chunk_0 (not used)
@@ -1924,7 +2171,9 @@ void sdpa_standard(
         0,  // cb_lse_in (not used)
         0,  // cb_lse_out (not used)
         0,  // cb_prev_out (not used)
-        cb_out);
+        cb_out,
+        {},  // lw_mask (not used)
+        is_causal);
 }
 
 /**
@@ -1982,10 +2231,10 @@ void sdpa_joint(
         0,  // cb_scale_in (not used)
         Sq_chunk_t,
         Sk_chunk_t,
+        0,  // NH (not used)
         DHt,
         DHt,    // vDHt = DHt
         false,  // use_attention_sink (not used)
-        false,  // is_causal (not used)
         false,  // use_provided_mask (not used)
         false,  // use_padded_mask (not used)
         use_joint_mask,
@@ -2013,6 +2262,7 @@ void sdpa_joint(
         0,             // iter_k_chunk_start
         k_num_chunks,  // iter_k_chunk_end
         q_chunk_tiles,
+        k_chunk_tiles,
         k_chunk_tiles,
         qk_chunk_tiles,
         out_chunk_tiles,
@@ -2056,7 +2306,9 @@ template <
     uint32_t cb_scale_in,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
+    uint32_t NH,
     uint32_t DHt,
+    uint32_t vDHt,
     uint32_t scale_fp32>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
@@ -2073,10 +2325,12 @@ void sdpa_ring(
     const uint32_t out_num_blocks,
     const uint32_t global_q_start,
     const uint32_t global_q_end,
+    const uint32_t q_num_chunks,
     const uint32_t iter_k_chunk_start,
     const uint32_t iter_k_chunk_end,
     const uint32_t q_chunk_tiles,
     const uint32_t k_chunk_tiles,
+    const uint32_t v_chunk_tiles,
     const uint32_t qk_chunk_tiles,
     const uint32_t out_chunk_tiles,
     const uint32_t ring_iter,
@@ -2105,7 +2359,11 @@ void sdpa_ring(
     const uint32_t cb_lse_in,
     const uint32_t cb_lse_out,
     const uint32_t cb_prev_out,
-    const uint32_t cb_out) {
+    const uint32_t cb_out,
+    const LightweightMaskContext& lw_mask,
+    const bool is_causal,
+    const bool is_balanced,
+    const bool is_last_ring_iter) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2114,10 +2372,10 @@ void sdpa_ring(
         cb_scale_in,
         Sq_chunk_t,
         Sk_chunk_t,
+        NH,
         DHt,
-        DHt,    // vDHt = DHt
+        vDHt,
         false,  // use_attention_sink (not used)
-        false,  // is_causal (not used)
         false,  // use_provided_mask (not used)
         false,  // use_padded_mask (not used)
         false,  // use_joint_mask (not used)
@@ -2139,13 +2397,14 @@ void sdpa_ring(
         out_num_blocks,
         global_q_start,  // iter_q_start
         global_q_end,    // iter_q_end
-        0,               // q_num_chunks (not used)
+        q_num_chunks,    // q_num_chunks (number of local q chunks)
         0,               // local_q_start (not used)
         0,               // chunked_q_chunk_offset (not used)
-        iter_k_chunk_start,
+        0,
         iter_k_chunk_end,
         q_chunk_tiles,
         k_chunk_tiles,
+        v_chunk_tiles,
         qk_chunk_tiles,
         out_chunk_tiles,
         0,  // mask_chunk_0 (not used)
@@ -2176,7 +2435,11 @@ void sdpa_ring(
         cb_lse_in,
         cb_lse_out,
         cb_prev_out,
-        cb_out);
+        cb_out,
+        lw_mask,
+        is_causal,
+        is_balanced,
+        is_last_ring_iter);
 }
 
 /**
@@ -2230,10 +2493,10 @@ void sdpa_windowed(
         0,  // cb_scale_in (not used)
         Sq_chunk_t,
         Sk_chunk_t,
+        0,  // NH (not used)
         DHt,
         DHt,    // vDHt = DHt
         false,  // use_attention_sink (not used)
-        false,  // is_causal (not used)
         true,   // use_provided_mask (used)
         false,  // use_padded_mask (not used)
         false,  // use_joint_mask (not used)
@@ -2261,6 +2524,7 @@ void sdpa_windowed(
         0,  // iter_k_chunk_start
         0,  // iter_k_chunk_end (not used -- uses Skt)
         q_chunk_tiles,
+        k_chunk_tiles,
         k_chunk_tiles,
         qk_chunk_tiles,
         out_chunk_tiles,

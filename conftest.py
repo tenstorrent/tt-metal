@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import pytest
 import torch
 import random
@@ -454,6 +455,10 @@ def device(request, device_params):
     device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
 
+    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+    device.cache_entries_counter = CacheEntriesCounter(device)
+
     yield device
 
     # Restore the original default device BEFORE closing the test-specific one
@@ -576,6 +581,10 @@ def mesh_device(request, silicon_arch_name, device_params):
     set_fabric(fabric_config, reliability_mode, fabric_tensix_config, fabric_manager, fabric_router_config)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **updated_device_params)
 
+    from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+    mesh_device.cache_entries_counter = CacheEntriesCounter(mesh_device)
+
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
 
@@ -687,16 +696,12 @@ def bh_1d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
     del mesh_device
 
 
-@pytest.fixture(scope="function")
-def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
-    # Generic blackhole configuration
-    # This preserves the 2D mesh configuration in rackbox and galaxy
+@contextlib.contextmanager
+def bh_2d_mesh_device_context(device_params):
     import ttnn
 
     if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
-        pytest.skip()
-
-    request.node.pci_ids = ttnn.get_pcie_device_ids()
+        raise RuntimeError("bh_2d_mesh_device requires 1, 2, 4, 8, or 32 devices (got %s)" % ttnn.get_num_devices())
     updated_device_params = get_updated_device_params(device_params)
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
@@ -720,14 +725,62 @@ def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device
             **updated_device_params,
         )
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
-    yield mesh_device
+    try:
+        yield mesh_device
+    finally:
+        for submesh in mesh_device.get_submeshes():
+            ttnn.close_mesh_device(submesh)
+        ttnn.close_mesh_device(mesh_device)
+        reset_fabric(fabric_config)
+        del mesh_device
 
-    for submesh in mesh_device.get_submeshes():
-        ttnn.close_mesh_device(submesh)
 
-    ttnn.close_mesh_device(mesh_device)
-    reset_fabric(fabric_config)
-    del mesh_device
+@pytest.fixture(scope="function")
+def bh_2d_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+    import ttnn
+
+    if ttnn.get_num_devices() not in [1, 2, 4, 8, 32]:
+        pytest.skip()
+
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    with bh_2d_mesh_device_context(device_params) as mesh_device:
+        yield mesh_device
+
+
+def _check_requires_grid_size(device_or_mesh, marker):
+    """Skip the test if device worker grid (compute_with_storage_grid_size) is smaller than required by the mark."""
+    if marker is None or len(marker.args) == 0:
+        return
+    required = marker.args[0]
+    grid = device_or_mesh.compute_with_storage_grid_size()
+    if isinstance(required, tuple):
+        min_x, min_y = required
+        if grid.x < min_x or grid.y < min_y:
+            pytest.skip(
+                f"Test requires device worker grid at least {min_x}x{min_y} but "
+                f"got {grid.x}x{grid.y} ({grid.x * grid.y} cores)"
+            )
+    else:
+        min_cores = int(required)
+        total = grid.x * grid.y
+        if total < min_cores:
+            pytest.skip(f"Test requires at least {min_cores} worker cores but got {total} ({grid.x}x{grid.y})")
+
+
+@pytest.fixture(autouse=True)
+def check_requires_grid_size(request):
+    """Autouse fixture: skips the test when it has requires_grid_size mark and device worker grid is too small. Supports device, bh_2d_mesh_device, and mesh_device. Tests only need @pytest.mark.requires_grid_size((x,y)) or @pytest.mark.requires_grid_size(n_cores)."""
+    marker = request.node.get_closest_marker("requires_grid_size")
+    if marker is None:
+        return
+    for name in ("bh_2d_mesh_device", "mesh_device", "device"):
+        if name in request.fixturenames:
+            device_or_mesh = request.getfixturevalue(name)
+            _check_requires_grid_size(device_or_mesh, marker)
+            return
+    pytest.skip(
+        "requires_grid_size mark requires one of: device, bh_2d_mesh_device, mesh_device (none requested by test)"
+    )
 
 
 @pytest.fixture()
@@ -834,12 +887,6 @@ def pytest_addoption(parser):
     )
     parser.addoption("--cli-input", action="store", default=None, help="Enter prompt if --input-method=cli")
     parser.addoption(
-        "--metal-timeout",
-        action="store",
-        default=None,
-        help="Enable process timeout",
-    )
-    parser.addoption(
         "--didt-workload-iterations",
         action="store",
         default=None,
@@ -857,6 +904,21 @@ def pytest_addoption(parser):
         default=None,
         help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
     )
+    parser.addoption(
+        "--trace-params",
+        action="store_true",
+        default=False,
+        help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). By default, only tensor metadata is saved. To include tensor values, call ttnn.operation_tracer.enable_tensor_value_serialization(True). See tech_reports/ttnn/operation-tracing.md for details.",
+    )
+
+
+def pytest_configure(config):
+    """Set a flag in ttnn.operation_tracer when --trace-params is enabled."""
+    if config.getoption("--trace-params", default=False):
+        # Set a module-level flag that can be checked by operation_tracer
+        import ttnn.operation_tracer
+
+        ttnn.operation_tracer._ENABLE_TRACE = True
 
 
 @pytest.fixture
@@ -1039,204 +1101,18 @@ def pytest_runtest_makereport(item, call):
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_teardown(item, nextitem):
     yield
-    metal_timeout_enabled = item.config.getoption("--metal-timeout")
-    using_xdist = int(os.getenv("PYTEST_XDIST_WORKER_COUNT", "0"))
-
-    if metal_timeout_enabled is not None or using_xdist:
-        report = item.stash[phase_report_key]
-        test_failed = report.get("call", None) and report["call"].failed
-        if test_failed:
-            # pci_ids may be on the test item (function-scoped device) or on the
-            # parent module node (module-scoped device via use_module_device marker)
-            pci_ids = getattr(item, "pci_ids", None)
-            if pci_ids is None and item.parent is not None:
-                pci_ids = getattr(item.parent, "pci_ids", None)
-            if pci_ids is not None:
-                logger.info(f"In custom teardown, open device ids: {set(pci_ids)}")
-                reset_tensix(set(pci_ids))
-
-
-# Session-scoped watchdog IPC keys
-watchdog_cmd_queue_key = pytest.StashKey()
-watchdog_process_key = pytest.StashKey()
-
-
-# Session watchdog process that supervises per-test timeouts from out-of-process
-def _ensure_watchdog_started(config):
-    cmd_queue = config.stash.get(watchdog_cmd_queue_key, None)
-    process = config.stash.get(watchdog_process_key, None)
-
-    # If watchdog process is already running, and the command queue is still valid, return it.
-    if cmd_queue is not None and process is not None and process.is_alive():
-        return cmd_queue
-
-    parent_pid = os.getpid()
-    worker_id = os.environ.get("PYTEST_XDIST_WORKER", "main")
-
-    # Clean up stale process reference if present
-    if process is not None and not process.is_alive():
-        logger.warning(f"Stale watchdog process found, joining and cleaning up")
-        try:
-            process.join(timeout=1)
-        except Exception as e:
-            logger.warning(f"Exception during watchdog process cleanup: {e}")
-
-    try:
-        cmd_queue = multiprocess.Queue()
-        time.sleep(1)
-        process = multiprocess.Process(target=_watchdog_main, args=(parent_pid, cmd_queue), daemon=True)
-        process.start()
-        time.sleep(1)
-        config.stash[watchdog_cmd_queue_key] = cmd_queue
-        config.stash[watchdog_process_key] = process
-        logger.info(f"Watchdog[{worker_id}] started: watchdog_pid={process.pid} parent_pid={parent_pid}")
-        time.sleep(1)
-        return cmd_queue
-    except Exception as e:
-        logger.error(f"Failed to start watchdog for parent={parent_pid}: {e}")
-        return None
-
-
-# This function is the watchdog process.
-# It is started once for every pytest-xdist worker.
-# It listens for commands via a queue and executes them.
-# The commands are:
-# - "start": arm a timeout for a given test
-# - "cancel": cancel a timeout for a given test
-# - "shutdown": shutdown the watchdog process
-#
-# The watchdog process runs in a loop and checks for any expired deadlines.
-# If a deadline is expired, it kills the parent process.
-def _watchdog_main(parent_pid, cmd_queue):
-    """Simple watchdog loop.
-
-    Commands received via cmd_queue (dicts):
-      {"cmd": "start", "test_id": str, "timeout": float}
-      {"cmd": "cancel", "test_id": str}
-      {"cmd": "shutdown"}
-    """
-    logger.debug(f"Watchdog started for parent={parent_pid} pid={os.getpid()}")
-
-    # Dictionary of test_id -> deadline (float)
-    # This is used to track the deadline for each test.
-    # The deadline is the time when the test is expected to complete.
-    # If the test does not complete by the deadline, the watchdog will kill the parent process.
-    deadlines = {}
-
-    while True:
-        # Process incoming command, if any
-        try:
-            msg = cmd_queue.get(timeout=1)
-        except Empty:
-            msg = None  # normal: nothing arrived
-        except Exception as e:
-            logger.error(f"Watchdog {os.getpid()}: fatal while reading queue: {e!r}")
-            break
-
-        now = time.monotonic()
-
-        # Check for any expired deadlines
-        if deadlines:
-            expired = [tid for tid, deadline in deadlines.items() if deadline <= now]
-            if expired:
-                logger.debug(f"Watchdog detected timeout for {expired}")
-                logger.debug(f"Watchdog killing parent process {parent_pid}")
-                os.kill(parent_pid, signal.SIGKILL)
-                break
-
-        # If no command is received, continue to the next iteration of the loop.
-        if not msg:
-            continue
-
-        cmd = msg.get("cmd")
-        if cmd == "start":
-            logger.debug(f"Watchdog received start command: {msg}")
-            try:
-                test_id = str(msg["test_id"])
-                timeout_secs = float(msg["timeout"])
-                deadlines[test_id] = time.monotonic() + timeout_secs
-                logger.debug(f"Watchdog armed for {test_id} in {timeout_secs} seconds")
-            except Exception as e:
-                logger.error(f"Watchdog failed to arm: {e}")
-        elif cmd == "cancel":
-            logger.debug(f"Watchdog received cancel command: {msg}")
-            try:
-                test_id = str(msg.get("test_id", ""))
-                deadlines.pop(test_id, None)
-            except Exception as e:
-                logger.error(f"Watchdog failed to cancel: {e}")
-        elif cmd == "shutdown":
-            logger.debug(f"Watchdog received shutdown command: {msg}; shutting down")
-            break
-        else:
-            logger.warning(f"Watchdog received unknown command: {cmd}")
-
-    logger.debug(f"Watchdog process {os.getpid()} exiting")
-
-
-@pytest.hookimpl(trylast=True)
-def pytest_sessionfinish(session, exitstatus):
-    """Shutdown watchdog process if running."""
-    cmd_queue = session.config.stash.get(watchdog_cmd_queue_key, None)
-    p = session.config.stash.get(watchdog_process_key, None)
-    if cmd_queue and p:
-        try:
-            cmd_queue.put({"cmd": "shutdown"})
-            p.join(timeout=2.0)
-            if p.is_alive():
-                p.terminate()
-                p.join(timeout=1.0)
-        except Exception as e:
-            logger.error(f"Failed to terminate watchdog process cleanly: {e}")
-
-
-# This overrides the timer setup hook from pytest-timeout.
-# If --metal-timeout is passed or when using xdist, we use a watchdog process per worker to supervise the timeout.
-@pytest.hookimpl(tryfirst=True)
-def pytest_timeout_set_timer(item, settings):
-    metal_timeout_enabled = item.config.getoption("--metal-timeout")
-    using_xdist = int(os.getenv("PYTEST_XDIST_WORKER_COUNT", "0"))
-
-    needs_watchdog = metal_timeout_enabled is not None or using_xdist
-
-    if needs_watchdog:
-        cmd_queue = _ensure_watchdog_started(item.config)
-        process = item.config.stash.get(watchdog_process_key, None)
-
-        if process is not None and not process.is_alive():
-            logger.warning("Watchdog process not alive; restarting")
-            cmd_queue = _ensure_watchdog_started(item.config)
-
-        if cmd_queue is None:
-            logger.warning(f"Watchdog missing command queue; NOT arming timeout for {item.nodeid}")
-        else:
-            secs = float(settings.timeout)
-            worker_id = os.environ.get("PYTEST_XDIST_WORKER", "main")
-            parent_pid = os.getpid()
-            try:
-                cmd_queue.put({"cmd": "start", "test_id": item.nodeid, "timeout": secs})
-                logger.debug(f"Watchdog[{worker_id}] armed {item.nodeid}: timeout={secs}s parent_pid={parent_pid}")
-            except Exception as e:
-                logger.error(f"Failed to arm watchdog timer for {item.nodeid}: {e}")
-
-            def cancel():
-                try:
-                    logger.debug("Cancelling watchdog timer")
-                    cmd_queue.put({"cmd": "cancel", "test_id": item.nodeid})
-                except Exception as e:
-                    logger.error(f"Failed to cancel watchdog timer: {e}")
-
-            item.cancel_timeout = cancel
-
-    return True
-
-
-# This is a hook used in pytest-xdist to handle when a worker crashes out
-# In our case, combined with pytest-timeout thread method, the worker will crash out for a hang and
-# then it should get cleaned up by the controller through this fixture
-@pytest.hookimpl(tryfirst=True)
-def pytest_handlecrashitem(crashitem, report, sched):
-    reset_tensix()
+    # Reset devices on test failure
+    report = item.stash[phase_report_key]
+    test_failed = report.get("call", None) and report["call"].failed
+    if test_failed:
+        # pci_ids may be on the test item (function-scoped device) or on the
+        # parent module node (module-scoped device via use_module_device marker)
+        pci_ids = getattr(item, "pci_ids", None)
+        if pci_ids is None and item.parent is not None:
+            pci_ids = getattr(item.parent, "pci_ids", None)
+        if pci_ids is not None:
+            logger.info(f"In custom teardown, open device ids: {set(pci_ids)}")
+            # reset_tensix(set(pci_ids))
 
 
 def reset_tensix(tt_open_devices=None):
@@ -1269,9 +1145,65 @@ def reset_tensix(tt_open_devices=None):
         logger.info("tt-smi reset completed successfully")
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_xdist_auto_num_workers(config):
-    return 1
+@pytest.fixture(autouse=True)
+def ttnn_graph_report(request):
+    """
+    Automatically generate graph reports when config enables it.
+
+    Only activates when enable_logging, enable_graph_report, and report_path
+    are all set. Skipped when a graph capture is already active (e.g. a test
+    that manages its own capture).
+    """
+    import ttnn
+
+    if not getattr(ttnn.CONFIG, "enable_logging", False):
+        yield
+        return
+    if not getattr(ttnn.CONFIG, "enable_graph_report", False):
+        yield
+        return
+    report_path = getattr(ttnn.CONFIG, "report_path", None)
+    report_name = getattr(ttnn.CONFIG, "report_name", None)
+    if report_path is None or not report_name or str(report_name).strip() == "":
+        yield
+        return
+    if ttnn.graph.is_graph_capture_active():
+        yield
+        return
+
+    # Ensure we are torn down before device fixtures: request whichever device
+    # the test uses so pytest tears us down first, then the device.
+    if "mesh_device" in request.fixturenames:
+        request.getfixturevalue("mesh_device")
+    if "device" in request.fixturenames:
+        request.getfixturevalue("device")
+
+    report_path = Path(report_path)
+    enable_detailed_buffer_report = getattr(ttnn.CONFIG, "enable_detailed_buffer_report", False)
+
+    if enable_detailed_buffer_report:
+        ttnn.graph.enable_detailed_buffer_tracing()
+
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    try:
+        yield
+    finally:
+        if not ttnn.graph.is_graph_capture_active():
+            logger.warning("Graph capture was already stopped (device may have been closed); skipping report.")
+        else:
+            report_path.mkdir(parents=True, exist_ok=True)
+            json_path = report_path / "graph_capture.json"
+            ttnn.graph.end_graph_capture_to_file(str(json_path))
+            if json_path.exists():
+                from ttnn.graph_report import import_report
+
+                import_report(json_path, report_path)
+
+            config_path = report_path / "config.json"
+            ttnn.save_config_to_json_file(config_path)
+
+        if enable_detailed_buffer_report:
+            ttnn.graph.disable_detailed_buffer_tracing()
 
 
 @pytest.fixture(scope="function", autouse=True)

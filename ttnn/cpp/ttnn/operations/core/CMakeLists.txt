@@ -1,7 +1,7 @@
 add_library(ttnn_op_core ${LIB_TYPE})
 add_library(TTNN::Ops::Core ALIAS ttnn_op_core)
 
-target_precompile_headers(ttnn_op_core REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(ttnn_op_core TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_core)
 
 target_sources(
@@ -21,6 +21,7 @@ target_sources(
         core.cpp
         to_layout/to_layout_op.cpp
         to_dtype/to_dtype_op.cpp
+        to_memory_config/to_memory_config_op.cpp
 )
 
 target_include_directories(ttnn_op_core PRIVATE ${FixmeOpIncDirs})

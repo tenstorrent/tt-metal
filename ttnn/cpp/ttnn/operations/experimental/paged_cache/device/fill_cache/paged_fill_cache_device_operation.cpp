@@ -19,11 +19,6 @@ PagedFillCacheDeviceOperation::program_factory_t PagedFillCacheDeviceOperation::
     return PagedFillCacheProgramFactory{};
 }
 
-void PagedFillCacheDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void PagedFillCacheDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& cache_tensor = tensor_args.cache_tensor;
@@ -73,7 +68,7 @@ Tensor PagedFillCacheDeviceOperation::create_output_tensors(
     return tensor_args.cache_tensor;
 }
 
-tt::stl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t PagedFillCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(args, tensor_args);
 

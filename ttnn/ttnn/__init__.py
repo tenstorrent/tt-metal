@@ -158,10 +158,15 @@ from ttnn._ttnn.fabric import (
     FabricTensixConfig,
     FabricUDMMode,
     FabricManagerMode,
+    FabricRouterConfig,
     set_fabric_config,
+    get_fabric_config,
+    get_tt_fabric_packet_header_size_bytes,
+    get_tt_fabric_max_payload_size_bytes,
     MeshId,
     FabricNodeId,
     setup_fabric_connection,
+    setup_routing_plane_connection,
 )
 
 # Import cluster functions and types
@@ -180,6 +185,13 @@ from ttnn._ttnn.mesh_socket import (
     SocketMemoryConfig,
     SocketConnection,
     MeshCoreCoord,
+    SocketEndpoint,
+)
+
+from ttnn._ttnn.hd_socket import (
+    H2DSocket,
+    D2HSocket,
+    H2DMode,
 )
 
 from ttnn.types import (
@@ -227,7 +239,6 @@ from ttnn.types import (
     ThrottleLevel,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
-    GrayskullComputeKernelConfig,
     MeshShape,
     MeshCoordinate,
     MeshCoordinateRange,
@@ -254,11 +265,16 @@ from ttnn.types import (
     SemaphoreDescriptor,
     ProgramDescriptor,
     MeshProgramDescriptor,
+    merge_program_descriptors,
     cb_descriptor_from_sharded_tensor,
+    get_cb_address,
+    UnpackToDestMode,
+    compute_program_descriptor_hash,
     TensorAccessorArgs,
 )
 
 from ttnn.device import (
+    Arch,
     Device,
     DispatchCoreType,
     DispatchCoreAxis,
@@ -270,6 +286,9 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_max_worker_l1_unreserved_size,
+    get_optimal_dram_bank_to_logical_worker_assignment,
+    enable_asynchronous_slow_dispatch,
+    disable_asynchronous_slow_dispatch,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -356,6 +375,8 @@ import ttnn.experimental_loader.golden_functions
 
 import ttnn.operations
 
+from ttnn.operations.unary import SigmoidMode
+
 divide = ttnn.div
 sub = ttnn.subtract
 sub_ = ttnn.subtract_
@@ -386,6 +407,11 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
+    MatmulParams,
+    MatmulInputs,
+    MatmulDeviceOperation,
+    MatmulMultiCoreReuseOptimizedProgramFactory,
+    create_matmul_attributes,
 )
 
 from ttnn.operations.normalization import (
@@ -394,12 +420,25 @@ from ttnn.operations.normalization import (
     SoftmaxShardedMultiCoreProgramConfig,
     LayerNormDefaultProgramConfig,
     LayerNormShardedMultiCoreProgramConfig,
+    LayerNormType,
+    DistributedLayerNormStage,
+    LayerNormParams,
+    LayerNormInputs,
+    LayerNormDeviceOperation,
+    LayerNormMultiCoreProgramFactory,
+    LayerNormShardedProgramFactory,
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
     create_group_norm_weight_bias_rm,
     create_group_norm_reciprocals,
+    create_layer_norm_reciprocals,
     determine_expected_group_norm_sharded_config_and_grid_size,
+    determine_expected_group_norm_dram_grid_size,
+    get_group_norm_cores_across_channel,
     dram_group_norm_params_from_torch,
+    layernorm_default_compute_config,
+    rmsnorm_default_compute_config,
+    create_layernorm_program_config,
 )
 
 from ttnn.operations.embedding import (
@@ -414,7 +453,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import Topology
+from ttnn.operations.ccl import Topology, DispatchAlgorithm, WorkerMode
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,
@@ -460,6 +499,12 @@ def get_arch_name():
 
 
 from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
+from ttnn._ttnn.operations.data_movement import (
+    SliceParams,
+    SliceInputs,
+    SliceDeviceOperation,
+    SliceTileProgramFactory,
+)
 
 import pathlib
 import importlib.util

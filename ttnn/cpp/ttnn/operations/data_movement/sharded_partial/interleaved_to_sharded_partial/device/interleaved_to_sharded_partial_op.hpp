@@ -16,15 +16,8 @@ struct InterleavedToShardedPartialDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<InterleavedToShardedPartialProgramFactory>;
-
-    static program_factory_t select_program_factory(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
-
-    static void validate_on_program_cache_hit(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
     static spec_return_value_t compute_output_specs(
         const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
@@ -32,7 +25,7 @@ struct InterleavedToShardedPartialDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
 
-    static tt::stl::hash::hash_t compute_program_hash(
+    static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& operation_attributes, const Tensor& input_tensor);
 };
 

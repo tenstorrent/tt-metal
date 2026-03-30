@@ -48,12 +48,16 @@ Both API versions run the same test cases but use different underlying implement
 | Deinterleave                | 200-201                         | Tests deinterleaving. **(Slow Dispatch)**                                               |
 | All to all                  | 300-308                         | Write transactions from multiple cores to multiple cores.                               |
 | All from all                | 310-318                         | Read transactions from multiple cores to multiple cores.                                |
-| Atomic Semaphore Increment  | 319-320                         | Atomic semaphore increment + atomic barrier performance tests.  |
+| Atomic Semaphore Increment  | 319-320                         | Atomic semaphore increment + atomic barrier performance tests.                          |
+| Multicast Atomic Semaphore  | 321-328                         | Multicast atomic semaphore increment using `noc_semaphore_inc_multicast`.               |
 | I2S Hardcoded               | 400-405                         | Tests interleaved to sharded data movement operations for different memory layouts.     |
-| Inline Direct Write         | 500-501                         | Inline DW transactions between two Tensix cores.                                        |
+| Inline Direct Write         | 500-501, 507                    | Inline DW transactions between two (unicast) or multiple (multicast) Tensix cores.      |
+| DRAM Neighbour Tests        | 502-505                         | Each core reads from its clostest DRAM.                                                 |
 | Transaction ID              | 600-602, 610-611                | Tests the usage and effects of transaction IDs in NOC transactions.                     |
-| PCIe Read Bandwidth         | 603                             | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
+| PCIe Read Bandwidth         | 603, 605                        | Measures PCIe read bandwidth from host memory to L1 on a single Tensix core.            |
+| PCIe Write Bandwidth        | 604                             | Measures PCIe write bandwidth from L1 to host memory on a single Tensix core.           |
 | NOC API Latency             | 700-706                         | Measures latency (cycles) of NOC API calls using experimental dataflow 2.0 API.         |
+| NOC Estimator               | 800-817                         | Comprehensive bandwidth sweeps for NOC estimation across all patterns and mechanisms.    |
 
 
 ## Running Tests

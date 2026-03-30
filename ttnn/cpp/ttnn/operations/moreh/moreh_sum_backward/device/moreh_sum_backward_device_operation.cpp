@@ -95,17 +95,7 @@ void MorehSumBackwardOperation::validate_inputs(
     }
 }
 
-MorehSumBackwardOperation::program_factory_t MorehSumBackwardOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-}
-
 void MorehSumBackwardOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-};
-
-void MorehSumBackwardOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 };
@@ -136,7 +126,7 @@ namespace ttnn::prim {
 ttnn::operations::moreh::moreh_sum_backward::MorehSumBackwardOperation::tensor_return_value_t moreh_sum_backward(
     const Tensor& output_grad,
     const std::optional<Tensor>& input,
-    tt::stl::Span<const int64_t> dims,
+    ttsl::Span<const int64_t> dims,
     bool keepdim,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,

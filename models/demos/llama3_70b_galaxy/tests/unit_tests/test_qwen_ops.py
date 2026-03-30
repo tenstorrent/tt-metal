@@ -16,7 +16,7 @@ from tests.ttnn.unit_tests.operations.fused.test_distributed_layernorm_sharded i
     compute_pre_allgather_stats,
     compute_post_allgather_output,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_scaled_dot_product_attention_decode import (
+from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
     run_test_sdpa_decode_paged_attention_single_iter,
 )
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_create_qkv_heads_decode import (
@@ -26,7 +26,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_nlp_concat_heads_d
 from tests.ttnn.unit_tests.operations.transformers.test_paged_fused_update_cache import (
     run_test_paged_fused_update_cache_decode,
 )
-from tests.tt_eager.python_api_testing.unit_testing.misc.test_rotary_embedding_llama import (
+from tests.ttnn.nightly.unit_tests.operations.experimental.test_rotary_embedding_llama import (
     run_test_rotary_embedding_llama,
     run_test_row_major_rotary_embedding_llama,
 )

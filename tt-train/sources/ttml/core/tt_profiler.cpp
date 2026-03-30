@@ -4,6 +4,12 @@
 
 #include "tt_profiler.hpp"
 
+#include <fmt/format.h>
+
+#include <chrono>
+#include <cstdlib>
+#include <tt-metalium/distributed.hpp>
+
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 
@@ -21,9 +27,18 @@ void TTProfiler::read_results(
     const size_t number_of_noops,
     tt::tt_metal::ProfilerReadState read_state) const {
     assert(device);
-    if (!m_enabled) {
+    if (!m_enabled && !get_naive_profiling()) {
         return;
     }
+
+    if (get_naive_profiling()) {
+        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+        auto now = std::chrono::high_resolution_clock::now();
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+        fmt::print("[NAIVE_PROFILER] {} timestamp_us={}\n", noop_identifier, us);
+        return;
+    }
+
     call_device_noop(device, number_of_noops, noop_identifier);
     tt::tt_metal::ReadMeshDeviceProfilerResults(*device, read_state);
     call_device_noop(device, number_of_noops, noop_identifier);
@@ -54,8 +69,15 @@ void TTProfiler::disable() {
     m_enabled = false;
 }
 
+bool TTProfiler::get_naive_profiling() const {
+    static bool naive_profiling = std::getenv("TTML_NAIVE_PROFILER") != nullptr;
+    return naive_profiling;
+}
+
 TTProfiler::TTProfiler() : m_enabled(false) {
-    if (is_tracy_enabled) {
+    const char* env_value = std::getenv("TT_METAL_DEVICE_PROFILER");
+    bool runtime_profiler_enabled = env_value != nullptr && std::string(env_value) == "1";
+    if (is_tracy_enabled && runtime_profiler_enabled) {
         enable();
 
         tt::tt_metal::detail::ProfilerSync(tt::tt_metal::ProfilerSyncState::INIT);
@@ -63,7 +85,7 @@ TTProfiler::TTProfiler() : m_enabled(false) {
 }
 
 TTProfiler::~TTProfiler() {
-    if (is_tracy_enabled) {
+    if (is_enabled()) {
         tt::tt_metal::detail::ProfilerSync(tt::tt_metal::ProfilerSyncState::CLOSE_DEVICE);
     }
 }

@@ -91,7 +91,7 @@ class TtSpatialCrossAttention:
         for j in range(bs):
             for i, reference_points_per_img in enumerate(reference_points_cam):
                 index_query_per_img = indexes[i]
-                index_query_per_img = ttnn.to_torch(index_query_per_img)
+                index_query_per_img = ttnn.to_torch(index_query_per_img).long()
                 queries_rebatch[j, i, : len(index_query_per_img)] = query[j, index_query_per_img]
                 reference_points_rebatch[j, i, : len(index_query_per_img)] = reference_points_per_img[
                     j, index_query_per_img
@@ -123,7 +123,7 @@ class TtSpatialCrossAttention:
         queries = ttnn.to_torch(queries)
         for j in range(bs):
             for i, index_query_per_img in enumerate(indexes):
-                index_query_per_img = ttnn.to_torch(index_query_per_img)
+                index_query_per_img = ttnn.to_torch(index_query_per_img).long()
 
                 slots[j, index_query_per_img] += queries[j, i, : len(index_query_per_img)]
         for j in range(bs):
@@ -320,7 +320,6 @@ class TtMSDeformableAttention3D:
 
             ttnn.deallocate(reference_xy_reshaped)
             ttnn.deallocate(sampling_locations_reshaped)
-            ttnn.deallocate(sampling_locations_add)
 
             bs, num_query, num_heads, num_levels, num_points, num_Z_anchors, xy = sampling_locations.shape
             assert num_all_points == num_points * num_Z_anchors
@@ -338,6 +337,8 @@ class TtMSDeformableAttention3D:
         output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights, self.device)
         ttnn.deallocate(value)
         ttnn.deallocate(sampling_locations)
+        if reference_points.shape[-1] == 2:
+            ttnn.deallocate(sampling_locations_add)
         ttnn.deallocate(attention_weights)
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))

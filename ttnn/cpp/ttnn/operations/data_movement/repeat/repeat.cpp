@@ -4,8 +4,6 @@
 
 #include <functional>
 
-#include <tt-metalium/host_api.hpp>
-
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
@@ -16,19 +14,13 @@
 #include "device/repeat_device_operation.hpp"
 #include "repeat.hpp"
 
-namespace ttnn::operations::data_movement {
-
-namespace detail {
+namespace ttnn::operations::data_movement::detail {
 
 struct UpperRepeatDims {
     static constexpr uint32_t collapsed_upper = 0;
     static constexpr uint32_t repeat = 1;
     static constexpr uint32_t collapsed_lower = 2;
     static constexpr uint32_t page_size = 3;
-};
-struct LastRepeatDims {
-    static constexpr uint32_t collapsed_upper = 0;
-    static constexpr uint32_t repeat = 1;
 };
 
 ttnn::Tensor repeat_upper_dims_rm(
@@ -121,38 +113,44 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
 
     return std::tie(working_tensor, working_repetition_vector);
 }
-}  // namespace detail
 
-ttnn::Tensor RepeatOperation::invoke(
-    const ttnn::Tensor& tensor,
-    const ttnn::SmallVector<uint32_t>& provided_repetition_vector,
-    const std::optional<MemoryConfig>& provided_output_mem_config) {
-    auto [working_tensor, repetition_vector] = detail::match_input_rank(tensor, provided_repetition_vector);
-    MemoryConfig output_mem_config = provided_output_mem_config.value_or(tensor.memory_config());
+}  // namespace ttnn::operations::data_movement::detail
+
+namespace ttnn {
+
+ttnn::Tensor repeat(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<uint32_t>& repetition_vector,
+    const std::optional<MemoryConfig>& memory_config) {
+    auto [working_tensor, working_repetition_vector] =
+        operations::data_movement::detail::match_input_rank(input_tensor, repetition_vector);
+    MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
     auto working_output_mem_config = output_mem_config;
 
-    if (std::any_of(repetition_vector.cbegin(), repetition_vector.cend(), [](auto x) { return x == 0; })) {
+    if (std::any_of(
+            working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](auto x) { return x == 0; })) {
         const auto& shape = working_tensor.logical_shape();
         std::transform(
             shape.cbegin(),
             shape.cend(),
-            repetition_vector.cbegin(),
-            repetition_vector.begin(),
+            working_repetition_vector.cbegin(),
+            working_repetition_vector.begin(),
             std::multiplies<uint32_t>());
-        return ttnn::reshape(tensor, ttnn::Shape(repetition_vector));
+        return ttnn::reshape(input_tensor, ttnn::Shape(working_repetition_vector));
     }
 
     TT_FATAL(working_tensor.logical_shape().rank() > 0, "repeat does not support rank 0 tensors");
 
     // nothing to do!
-    if (std::all_of(repetition_vector.cbegin(), repetition_vector.cend(), [](auto x) { return x == 1; })) {
-        return tensor;
+    if (std::all_of(
+            working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](auto x) { return x == 1; })) {
+        return input_tensor;
     }
 
     // Sharded -> interleaved
-    if (tensor.memory_config().is_sharded()) {
-        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
-        working_tensor = ttnn::sharded_to_interleaved(tensor, working_memory_config, std::nullopt);
+    if (input_tensor.memory_config().is_sharded()) {
+        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+        working_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
     }
     if (working_output_mem_config.is_sharded()) {
         working_output_mem_config =
@@ -165,25 +163,27 @@ ttnn::Tensor RepeatOperation::invoke(
     }
 
     // loop over dims in repetition vector, backwards because repeat pages first is faster
-    for (auto it = repetition_vector.crbegin(); it != repetition_vector.crend(); ++it) {
+    for (auto it = working_repetition_vector.crbegin(); it != working_repetition_vector.crend(); ++it) {
         // no op for unit repetitions
         if (*it == 1) {
             continue;
         }
         // if last dim
-        if (it == repetition_vector.crbegin()) {
-            working_tensor = detail::repeat_last_dim_rm(working_tensor, *it, working_output_mem_config);
+        if (it == working_repetition_vector.crbegin()) {
+            working_tensor =
+                operations::data_movement::detail::repeat_last_dim_rm(working_tensor, *it, working_output_mem_config);
         }
         // if not last dim
         else {
-            auto i = repetition_vector.crend() - it - 1;  // forward index
-            working_tensor = detail::repeat_upper_dims_rm(working_tensor, i, *it, working_output_mem_config);
+            auto i = working_repetition_vector.crend() - it - 1;  // forward index
+            working_tensor = operations::data_movement::detail::repeat_upper_dims_rm(
+                working_tensor, i, *it, working_output_mem_config);
         }
     }
 
     // RM -> OG page layout
-    if (tensor.layout() == ttnn::TILE_LAYOUT) {
-        working_tensor = ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, tensor.dtype());
+    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+        working_tensor = ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, input_tensor.dtype());
     }
 
     // Interleaved to OG mem layout
@@ -194,9 +194,8 @@ ttnn::Tensor RepeatOperation::invoke(
     return working_tensor;
 }
 
-ttnn::Tensor RepeatOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims) {
-    return RepeatOperation::invoke(
-        input_tensor, SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt);
+ttnn::Tensor repeat(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims) {
+    return ttnn::repeat(input_tensor, SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn

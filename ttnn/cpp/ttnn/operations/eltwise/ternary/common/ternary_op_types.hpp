@@ -13,11 +13,15 @@ namespace ttnn::operations::ternary {
 // Supports float, int, and Tensor types
 using TensorScalarVariant = std::variant<float, int, Tensor>;
 
+// Scalar variant for addcmul(float, int32, uint32)
+using ScalarVariant = std::variant<float, int32_t, uint32_t>;
+
 // Ternary operation types
 enum class TernaryOpType {
     WHERE,    // conditional selection: out = predicate ? value_true : value_false
     LERP,     // linear interpolation: out = input + weight * (end - input)
     ADDCMUL,  // fused multiply-add: out = input_a + value * input_b * input_c
+    ADDCDIV,  // fused divide-add: out = input_a + value * input_b / input_c
 };
 
 // Variant types for ternary operations
@@ -35,6 +39,7 @@ enum class TernaryBroadcastType {
     COL_BCAST,       // bcast for W-dim and outer dims -5, -4, -3.
     ROW_BCAST,       // Row broadcast for H-dim
     SCALAR_BCAST,    // Scalar broadcast for TTT: Either A or B or C can be (1,1)
+    ROW_COL_BCAST,   // Mixed row+col broadcast: some tensors broadcast H, others broadcast W
     SCALAR_A_BCAST,  // A = (1,1) B = (H,W )
     SCALAR_B_BCAST,  // A = (H,W) B = (1,1)
     INVALID_BCAST,   // All other unsupported bcast cases go here for now

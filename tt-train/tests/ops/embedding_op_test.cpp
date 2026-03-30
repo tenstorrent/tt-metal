@@ -6,10 +6,9 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
-
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 
@@ -31,7 +30,7 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
     uint32_t num_embeddings = 32;
     uint32_t embedding_dim = 32;
     auto weight_tensor = ttml::core::zeros(ttnn::Shape({1, 1, num_embeddings, embedding_dim}), device);
-    autograd::TensorPtr weight = autograd::create_tensor(weight_tensor);
+    autograd::TensorPtr weight = autograd::create_tensor(weight_tensor, /* requires_grad */ true);
 
     uint32_t batch_size = 1;
     uint32_t sentence_size = 32;

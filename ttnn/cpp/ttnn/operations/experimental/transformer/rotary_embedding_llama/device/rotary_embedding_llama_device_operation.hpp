@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "rotary_embedding_llama_device_operation_types.hpp"
 #include "rotary_embedding_llama_multi_core_program_factory.hpp"
+#include "rotary_embedding_llama_multi_core_prefill_sharded_program_factory.hpp"
 #include "rotary_embedding_llama_sharded_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -18,14 +19,16 @@ struct RotaryEmbeddingLlamaDeviceOperation {
     using tensor_args_t = RotaryEmbeddingLlamaInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = tt::tt_metal::Tensor;
-    using program_factory_t = std::variant<RotaryEmbeddingLlamaMultiCore, RotaryEmbeddingLlamaMultiCoreSharded>;
+    using program_factory_t = std::variant<
+        RotaryEmbeddingLlamaMultiCore,
+        RotaryEmbeddingLlamaMultiCoreSharded,
+        RotaryEmbeddingLlamaMultiCorePrefillSharded>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim

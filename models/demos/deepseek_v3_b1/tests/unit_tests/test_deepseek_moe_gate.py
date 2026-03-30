@@ -7,9 +7,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39472")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201, 512])
@@ -149,5 +151,5 @@ def test_deepseek_moe_gate(device, batch_size, enable_sigmoid, seed):
     top8_indices, i = torch.sort(top8_indices, dim=-1)
     top8_scores = torch.gather(top8_scores, dim=-1, index=i)
 
-    assert torch.equal(sorted_output_indices_torch, top8_indices), "Output indices do not match"
+    assert torch.equal(sorted_output_indices_torch.to(top8_indices.dtype), top8_indices), "Output indices do not match"
     assert torch.allclose(sorted_output_torch, top8_scores, atol=1e-2, rtol=1e-4), "Output scores do not match"

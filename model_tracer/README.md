@@ -10,6 +10,19 @@ Automatically extracts real-world operation configurations from model tests and 
 - ✅ Simple 2-step integration into sweep tests
 - ✅ Captures shapes, dtypes, layouts, and exact shard specs
 
+## New Simple Tracer (Updated Jan 2026)
+
+The tracer has been updated to use the new `--trace-params` flag instead of graph tracing. This provides:
+- ✅ Simpler implementation (no C++ graph tracing dependencies)
+- ✅ Individual JSON files per operation for easier debugging
+- ✅ Works with both pytest tests and standalone Python scripts
+
+**How it works:**
+1. Runs your test/script with `--trace-params` flag
+2. Collects individual operation JSON files from `generated/ttnn/reports/operation_parameters/`
+3. Filters valid operations (from `Allops.txt`)
+4. Merges into master JSON with deduplication and source tracking
+
 ### Currently Traced Models
 
 The following models have been traced and their configurations are available in `ttnn_operations_master.json`:
@@ -29,7 +42,7 @@ The following models have been traced and their configurations are available in 
 | efficientnetb0 | EfficientNet-B0 vision model | `python model_tracer/generic_ops_tracer.py models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model` |
 | vit | Vision Transformer | `python model_tracer/generic_ops_tracer.py models/demos/vision/classification/vit/wormhole/demo/demo_vit_performant_imagenet_inference.py` |
 | ssd512 | Object detection | `python model_tracer/generic_ops_tracer.py models/experimental/SSD512/tests/perf/test_device_perf_ssd.py` |
-| stable-diffusion-xl | Image generation | `python model_tracer/generic_ops_tracer.py models/experimental/stable_diffusion_xl_base/demo/demo_img2img.py` |
+| stable-diffusion-xl | Image generation | `python model_tracer/generic_ops_tracer.py models/demos/stable_diffusion_xl_base/demo/demo_img2img.py` |
 | whisper | Audio transcription | `python model_tracer/generic_ops_tracer.py models/demos/audio/whisper/demo/demo.py` |
 | gemma-3 | Language model | `python model_tracer/generic_ops_tracer.py models/demos/multimodal/gemma3/demo/text_demo.py` |
 | falcon7b | Language model | `python model_tracer/generic_ops_tracer.py models/demos/wormhole/falcon7b/demo_wormhole.py` |
@@ -65,18 +78,24 @@ These traced configurations provide real-world operation patterns from productio
 
 ## Quick Reference
 
+See **[GUIDE.md](GUIDE.md)** for the full workflow: tracing, loading into the database, managing the sweep manifest, and reconstructing configs for CI or branch testing.
+
 ### Common Commands
 
 | Task | Command |
 |------|---------|
 | **Trace a model** | `python model_tracer/generic_ops_tracer.py <test_path>` |
-| **View configurations** | `python model_tracer/analyze_operations.py <operation_name>` |
+| **Load into DB** | `python tests/sweep_framework/load_ttnn_ops_data_v2.py load` |
+| **Reconstruct from manifest** | `python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest` |
+| **List traces in DB** | `python tests/sweep_framework/load_ttnn_ops_data_v2.py list-traces` |
 | **Generate sweep vectors** | `python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name <op_name>` |
 | **Run single sweep test** | `python3 tests/sweep_framework/sweeps_runner.py --module-name <op_name> --suite-name model_traced --vector-source file --file-path <vector_file> --result-dest results_export` |
 
 ### Key Files
 
-- **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [graph tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/graph-tracing.md)
+- **Tracer**: `model_tracer/generic_ops_tracer.py` - Employs methodology described in the [operation tracing tech report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/operation-tracing.md)
+- **Guide**: `model_tracer/GUIDE.md` - Full workflow, manifest format, schema, CLI reference
+- **Sweep Manifest**: `model_tracer/sweep_manifest.yaml` - Controls which traces are included in test reconstruction
 - **Master JSON**: `model_tracer/traced_operations/ttnn_operations_master.json` - Contains all traced configurations
 - **Analyzer**: `model_tracer/analyze_operations.py` - Query and view configurations
 - **Config Loader**: `tests/sweep_framework/master_config_loader.py` - Converts JSON configs to sweep test parameters
@@ -85,24 +104,47 @@ These traced configurations provide real-world operation patterns from productio
 
 ## Master JSON Format
 
-The `ttnn_operations_master.json` file stores traced configurations in a structured format. The loader supports both legacy and new formats for backward compatibility.
+The `ttnn_operations_master.json` file stores traced configurations in a structured format. Each configuration contains its arguments, a `config_hash` for deduplication, and one or more `executions` recording where and on what hardware it was traced.
 
-### Configuration Formats
+### Configuration Format
 
-**Legacy Format (Single Source):**
 ```json
 {
   "operations": {
     "ttnn::silu": {
       "configurations": [
         {
-          "arguments": [...],
-          "source": "models/demos/model_name/demo.py",
-          "machine_info": [
+          "config_hash": "abc123...",
+          "arguments": {
+            "arg0": {
+              "type": "ttnn.Tensor",
+              "original_shape": [1, 1, 32, 128],
+              "original_dtype": "DataType.BFLOAT16",
+              "layout": "Layout.TILE",
+              "storage_type": "StorageType.DEVICE",
+              "memory_config": {
+                "memory_layout": "TensorMemoryLayout.INTERLEAVED",
+                "buffer_type": "BufferType.DRAM",
+                "shard_spec": null
+              },
+              "tensor_placement": {
+                "placement": "['PlacementShard(2)']",
+                "distribution_shape": "[1, 2]",
+                "mesh_device_shape": "[1, 2]"
+              }
+            }
+          },
+          "executions": [
             {
-              "board_type": "Wormhole",
-              "device_series": "n300",
-              "card_count": 1
+              "source": "models/demos/deepseek_v3/demo/demo.py",
+              "machine_info": {
+                "board_type": "Wormhole",
+                "device_series": "tt-galaxy-wh",
+                "card_count": 32,
+                "mesh_device_shape": [4, 8],
+                "device_count": 32
+              },
+              "count": 128
             }
           ]
         }
@@ -112,65 +154,42 @@ The `ttnn_operations_master.json` file stores traced configurations in a structu
 }
 ```
 
-**New Format (Contexts with Multiple Sources):**
+### Required Fields for DB Loading
 
-The new format supports multiple execution contexts per configuration, enabling the same operation arguments to be traced from different models and hardware configurations:
+The loader (`load_ttnn_ops_data_v2.py`) validates every execution and rejects traces with missing fields. All of the following must be present:
 
-```json
-{
-  "operations": {
-    "ttnn::silu": {
-      "configurations": [
-        {
-          "arguments": [...],
-          "contexts": [
-            {
-              "source": ["models/demos/deepseek_v3/demo/demo.py"],
-              "machine_info": [
-                {
-                  "board_type": "Wormhole",
-                  "device_series": "tt-galaxy-wh",
-                  "card_count": 32,
-                  "tensor_placements": [
-                    {
-                      "mesh_device_shape": "[4, 8]"
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    }
-  }
-}
-```
+| Field | Location | Description |
+|-------|----------|-------------|
+| `config_hash` | `config.config_hash` | SHA-256 config identity |
+| `source` | `execution.source` | File path (optionally with `[HF_MODEL:...]` suffix) |
+| `board_type` | `execution.machine_info.board_type` | e.g. `"Wormhole"`, `"Blackhole"` |
+| `device_series` | `execution.machine_info.device_series` | e.g. `"n300"`, `"tt-galaxy-wh"`, `"p150b"` |
+| `card_count` | `execution.machine_info.card_count` | e.g. `1`, `32` |
+| `mesh_device_shape` | `execution.machine_info.mesh_device_shape` | Mesh topology array, e.g. `[1, 1]`, `[4, 8]` |
+| `device_count` | `execution.machine_info.device_count` | Total device count, e.g. `1`, `32` |
+
+If any field is absent the loader raises a `ValueError` identifying the operation, `config_hash`, and which fields are missing.
 
 ### Multi-Chip Mesh Configuration
 
-For multi-chip operations (Galaxy, T3K, etc.), the `machine_info` should include `tensor_placements` with `mesh_device_shape` to enable proper runner assignment in CI:
+`mesh_device_shape` and `device_count` live directly in `machine_info` (not inside a nested `tensor_placements` array):
 
 ```json
 {
-  "machine_info": [
-    {
-      "board_type": "Wormhole",
-      "device_series": "tt-galaxy-wh",
-      "card_count": 32,
-      "tensor_placements": [
-        {
-          "mesh_device_shape": "[4, 8]"
-        }
-      ]
-    }
-  ]
+  "machine_info": {
+    "board_type": "Wormhole",
+    "device_series": "tt-galaxy-wh",
+    "card_count": 32,
+    "mesh_device_shape": [4, 8],
+    "device_count": 32
+  }
 }
 ```
 
-**Note:** Only `mesh_device_shape` is used by the sweep framework for runner assignment. Other tensor placement fields (like `shard_mesh`, `tensor_layout`) may be captured during tracing for informational purposes but are not used for CI routing.
+Per-tensor placement details (`placement`, `distribution_shape`, `mesh_device_shape`) remain in `arguments.argN.tensor_placement` for tensors that have them.
 
 **Mesh Shape Values:**
+
 | Mesh Shape | Description | Runner Assignment |
 |------------|-------------|-------------------|
 | `[1, 1]` | Single-chip | N150 runner |
@@ -237,6 +256,17 @@ python model_tracer/generic_ops_tracer.py models/experimental/some_model/run_inf
 
 # Keep trace files (default: auto-deleted after adding to master)
 python model_tracer/generic_ops_tracer.py <test_path> --store
+
+# Import traces from another machine
+# 1. On Machine A: Trace with --store to keep JSON files
+python model_tracer/generic_ops_tracer.py test.py --store
+# This creates: generated/ttnn/reports/operation_parameters/<test_name>_<timestamp>/
+
+# 2. Copy trace directory to Machine B
+# scp -r generated/ttnn/reports/operation_parameters/<test_name>_<timestamp>/ machine_b:/tmp/traces/
+
+# 3. On Machine B: Import the traces
+python model_tracer/generic_ops_tracer.py --from-trace-dir /tmp/traces/<test_name>_<timestamp>
 ```
 
 **Detection Logic:**
@@ -250,9 +280,8 @@ python model_tracer/generic_ops_tracer.py <test_path> --store
 - Data types (e.g., `BFLOAT8_B`, `BFLOAT16`)
 - Memory layouts (e.g., `HEIGHT_SHARDED`, `INTERLEAVED`)
 - Exact shard specifications (grid, shard_shape, orientation)
-- Machine information (board type and device series, e.g., `Wormhole n300`, `Blackhole tt-galaxy-bh`)
-- Mesh device shape for multi-chip configurations (e.g., `[4, 8]` for 32-chip Galaxy)
-- Tensor placements for distributed operations
+- Machine information: `board_type`, `device_series`, `card_count`, `mesh_device_shape`, `device_count`
+- Per-tensor placements for distributed operations (in `arguments.argN.tensor_placement`)
 
 **Output:**
 - Updates `model_tracer/traced_operations/ttnn_operations_master.json`
@@ -287,14 +316,14 @@ python model_tracer/analyze_operations.py sigmoid_accurate
 ```bash
 # Generate test vectors
 python3 tests/sweep_framework/sweeps_parameter_generator.py \
-  --module-name model_traced.pad_model_traced
+  --module-name model_traced.add_model_traced
 
 # Run model_traced suite
 python3 tests/sweep_framework/sweeps_runner.py \
-  --module-name model_traced.pad_model_traced \
+  --module-name model_traced.add_model_traced \
   --suite model_traced \
   --vector-source vectors_export \
-  --result-dest results_export
+  --result-dest results_export --summary
 ```
 
 ---
@@ -345,5 +374,7 @@ parameters = {"model_traced": loader.get_suite_parameters("your_op")}
 ```
 
 ---
+
+For the full model tracer and database workflow, see [GUIDE.md](GUIDE.md).
 
 For complete documentation on running sweep tests, see [Sweep Framework README](tests/sweep_framework/README.md).

@@ -15,6 +15,10 @@
 #
 # === Evaluated ===
 #
+# modernize-use-pragma-once:
+#   Intentionally enabled. Enforces #pragma once in all header files instead
+#   of #ifndef/#define include guards. Requires clang-tidy >= 18 (project uses clang-20).
+#
 # bugprone-unchecked-optional-access:
 #   Attempted, no fixit, lots of violations. Extensive usage of std::optional in this codebase.
 #
@@ -59,6 +63,7 @@ Checks: >
   -cppcoreguidelines-pro-bounds-pointer-arithmetic,
   -cppcoreguidelines-pro-type-const-cast,
   -cppcoreguidelines-pro-type-cstyle-cast,
+  -cppcoreguidelines-pro-type-member-init,
   -cppcoreguidelines-pro-type-reinterpret-cast,
   -cppcoreguidelines-pro-type-union-access,
   -cppcoreguidelines-pro-type-vararg,
@@ -150,6 +155,7 @@ Checks: >
   -hicpp-explicit-conversions,
   -hicpp-function-size,
   -hicpp-invalid-access-moved,
+  -hicpp-member-init,
   -hicpp-move-const-arg,
   -hicpp-multiway-paths-covered,
   -hicpp-named-parameter,

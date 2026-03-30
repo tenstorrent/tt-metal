@@ -16,10 +16,11 @@
 #include "ttnn-nanobind/fabric.hpp"
 #include "ttnn-nanobind/global_circular_buffer.hpp"
 #include "ttnn-nanobind/global_semaphore.hpp"
+#include "ttnn-nanobind/hd_socket.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
+#include "ttnn-nanobind/bfp_utils.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
 #include "ttnn-nanobind/operations/core.hpp"
-#include "ttnn-nanobind/operations/creation.hpp"
 #include "ttnn-nanobind/operations/trace.hpp"
 #include "ttnn-nanobind/profiler.hpp"
 #include "ttnn-nanobind/program_descriptors.hpp"
@@ -34,6 +35,7 @@
 #include "ttnn/operations/bernoulli/bernoulli_nanobind.hpp"
 #include "ttnn/operations/ccl/ccl_nanobind.hpp"
 #include "ttnn/operations/conv/conv_nanobind.hpp"
+#include "ttnn/operations/creation/creation_nanobind.hpp"
 #include "ttnn/operations/debug/debug_nanobind.hpp"
 #include "ttnn/operations/data_movement/data_movement_nanobind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_nanobind.hpp"
@@ -129,7 +131,7 @@ void py_module(nb::module_& mod) {
     debug::py_module(m_debug);
 
     auto m_creation = mod.def_submodule("creation", "creation operations");
-    creation::py_module(m_creation);
+    creation::bind_creation_operations(m_creation);
 
     auto m_embedding = mod.def_submodule("embedding", "embedding operations");
     embedding::py_module(m_embedding);
@@ -236,6 +238,7 @@ NB_MODULE(_ttnn, mod) {
     auto m_events = mod.def_submodule("events", "ttnn events");
     auto m_global_circular_buffer = mod.def_submodule("global_circular_buffer", "ttnn global circular buffer");
     auto m_global_semaphore = mod.def_submodule("global_semaphore", "ttnn global semaphore");
+    auto m_hd_socket = mod.def_submodule("hd_socket", "ttnn host-device sockets");
     auto m_mesh_socket = mod.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = mod.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = mod.def_submodule("reports", "ttnn reports");
@@ -259,6 +262,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::events::py_module_types(m_events);
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);
     ttnn::global_semaphore::py_module_types(m_global_semaphore);
+    ttnn::hd_socket::py_module_types(m_hd_socket);
     ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
@@ -284,6 +288,9 @@ NB_MODULE(_ttnn, mod) {
     tracy_decorator(m_depr_operations);
 #endif
 
+    auto m_bfp_utils = mod.def_submodule("bfp_utils", "BFP tile pack/unpack utilities");
+    ttnn::bfp_utils::py_module(m_bfp_utils);
+
     ttnn::types::py_module(m_types);
     ttnn::activation::py_module(m_activation);
     ttnn::cluster::py_cluster_module(m_cluster);
@@ -292,6 +299,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::events::py_module(m_events);
     ttnn::global_circular_buffer::py_module(m_global_circular_buffer);
     ttnn::global_semaphore::py_module(m_global_semaphore);
+    ttnn::hd_socket::py_module(m_hd_socket);
     ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);

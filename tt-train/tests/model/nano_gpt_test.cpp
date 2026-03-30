@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <fstream>
+#include <tt-metalium/distributed.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
@@ -19,11 +19,16 @@
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "tt-metalium/host_api.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "utils/memory_utils.hpp"
 namespace {
 /*
 Nightly tests could be enabled by setting the environment variable ENABLE_NIGHTLY_TT_TRAIN_TESTS=1
-or setting 'is_nigthly_tt_train_tests_enabled' variable to true.
+or setting 'is_nightly_tt_train_tests_enabled' variable to true.
 */
+// TODO: Disabled due to differences exceeding the threshold when comparing loss value.
+// Tracking issue: https://github.com/tenstorrent/tt-metal/issues/37337
 constexpr bool is_nigthly_tt_train_tests_enabled = false;
 
 [[nodiscard]] bool is_wormhole_b0() {
@@ -39,6 +44,8 @@ constexpr bool is_nigthly_tt_train_tests_enabled = false;
 [[nodiscard]] bool should_run_nightly_tests() {
     const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
     bool is_whb0 = is_wormhole_b0();
+    // TODO: Disabled due to differences exceeding the threshold when comparing loss value.
+    // Tracking issue: https://github.com/tenstorrent/tt-metal/issues/37337
     bool is_ci = env_var && is_nigthly_tt_train_tests_enabled;
     return is_whb0 && is_ci;
 }
@@ -92,9 +99,6 @@ struct TrainingConfig {
     uint32_t max_steps = 100;
     float learning_rate = 3e-4F;
     float weight_decay = 1e-2F;
-    bool use_moreh_adamw = false;
-    // works only for AdamW
-    bool use_kahan_summation = false;
     // accumulate batches for gradient update
     uint32_t gradient_accumulation_steps = 1;
     std::string model_path;
@@ -127,6 +131,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
 
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
+    ttml::autograd::ctx().initialize_parallelism_context({.enable_ddp = use_ddp, .enable_tp = use_tensor_parallel});
 
     std::string text;
     // reading training data from txt file
@@ -244,7 +249,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     adamw_params.lr = config.learning_rate;
     adamw_params.weight_decay = config.weight_decay;
 
-    auto optimizer = std::make_shared<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
+    auto optimizer = std::make_shared<ttml::optimizers::AdamW>(model->parameters(), adamw_params);
 
     auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});

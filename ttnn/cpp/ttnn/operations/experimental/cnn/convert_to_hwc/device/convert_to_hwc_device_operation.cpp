@@ -12,17 +12,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-ConvertToHWCDeviceOperation::program_factory_t ConvertToHWCDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*args*/, const tensor_args_t& /*tensor_args*/) {
-    return ConvertToHWCProgramFactory{};
-}
-
-void ConvertToHWCDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void ConvertToHWCDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
@@ -67,10 +56,10 @@ Tensor ConvertToHWCDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t ConvertToHWCDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t ConvertToHWCDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return tt::stl::hash::hash_objects_with_default_seed(
-        tt::stl::hash::type_hash<ConvertToHWCDeviceOperation>, args, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<ConvertToHWCDeviceOperation>, args, tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

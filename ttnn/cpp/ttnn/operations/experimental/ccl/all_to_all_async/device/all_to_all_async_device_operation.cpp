@@ -8,11 +8,6 @@
 
 namespace ttnn::experimental::prim {
 
-AllToAllAsyncDeviceOperation::program_factory_t AllToAllAsyncDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return AllToAllAsyncProgram{};
-}
-
 void AllToAllAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(operation_attributes, tensor_args);
@@ -178,7 +173,7 @@ AllToAllAsyncDeviceOperation::tensor_return_value_t AllToAllAsyncDeviceOperation
     return tensor_args.persistent_output_buffer;
 }
 
-tt::stl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllToAllAsyncDeviceOperation::compute_program_hash is called");
 
@@ -186,9 +181,6 @@ tt::stl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<AllToAllAsyncDeviceOperation>(
         operation_attributes.in_dim,
         operation_attributes.out_dim,
@@ -197,8 +189,7 @@ tt::stl::hash::hash_t AllToAllAsyncDeviceOperation::compute_program_hash(
         operation_attributes.output_mem_config,
         operation_attributes.topology,
         subdevice_core_range_set,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 Tensor all_to_all_async(

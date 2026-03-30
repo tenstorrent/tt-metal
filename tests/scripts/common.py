@@ -25,11 +25,6 @@ def is_wormhole_b0():
     return "wormhole_b0" in ARCH_NAME
 
 
-def is_grayskull():
-    ARCH_NAME = os.getenv("ARCH_NAME")
-    return "grayskull" in ARCH_NAME
-
-
 class TestSuiteType(Enum):
     BUILD_KERNELS_FOR_RISCV = auto()
     LLRT = auto()
@@ -44,10 +39,6 @@ TestEntry = namedtuple("TestEntry", ["test_name", "executable_name", "extra_para
 
 def void_for_whb0(x):
     return (not is_wormhole_b0()) and x or None
-
-
-def void_for_gs(x):
-    return (not is_grayskull()) and x or None
 
 
 def void_for_bh(x):
@@ -209,7 +200,7 @@ def run_single_test(
     namespace: str,
     test_entry: TestEntry,
     timeout,
-    tt_arch="grayskull",
+    tt_arch="wormhole_b0",
     capture_output=False,
     build_full_path_to_test=default_build_full_path_to_test,
 ):
@@ -233,9 +224,7 @@ def run_single_test(
 
     if reset_tensix:
         logger.warning("Detected error on test that uses silicon - resetting")
-        if tt_arch == "grayskull":
-            run_process_and_get_result("tt-smi -tr all")
-        elif tt_arch == "wormhole_b0":
+        if tt_arch in ("wormhole_b0", "blackhole"):
             run_process_and_get_result("tt-smi -wr all wait")
         else:
             raise Exception(f"Unrecognized arch for tensix-reset: {tt_arch}")

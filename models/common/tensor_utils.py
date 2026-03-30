@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -14,6 +14,40 @@ import ttnn
 
 # Standard tile size - hardware constant
 TILE_SIZE = ttnn.TILE_SIZE  # 32
+
+
+def get_rot_transformation_mat(dhead: int = TILE_SIZE) -> torch.Tensor:
+    """
+    Create rotation transformation matrix for RoPE.
+
+    Constructs a permutation matrix that pairs adjacent dimensions with
+    signs (+1, -1) for the RoPE rotation:
+        [0, 1] → +1 at (0,1), -1 at (1,0)
+        [2, 3] → +1 at (2,3), -1 at (3,2)
+        ...
+
+    Used by ttnn.experimental.rotary_embedding_llama.
+
+    Args:
+        dhead: Matrix dimension. Must equal TILE_SIZE. Use TILE_SIZE for decode.
+
+    Returns:
+        torch.Tensor of shape [1, 1, dhead, dhead].
+    """
+    rot_emb_matrix = torch.zeros(1, 1, dhead, dhead)
+    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = 1
+    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = -1
+    return rot_emb_matrix
+
+
+def zeros_like_kv_cache(batch_size: int, n_kv_heads: int, max_seq_len: int, head_dim: int) -> torch.Tensor:
+    """Create zeros tensor for standard KV cache."""
+    return torch.zeros((batch_size, n_kv_heads, max_seq_len, head_dim))
+
+
+def zeros_like_paged_cache(paged_config, n_kv_heads: int, head_dim: int) -> torch.Tensor:
+    """Create zeros tensor for paged KV cache."""
+    return torch.zeros((paged_config.max_num_blocks, n_kv_heads, paged_config.block_size, head_dim))
 
 
 # todo)) add a on-device pad_dim_to_size function?
@@ -119,13 +153,13 @@ def program_config_to_str(program_config: ttnn.MatmulMultiCoreReuseMultiCastDRAM
     return serialize_config(cfg)
 
 
-def program_config_to_dict(program_config: ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig):
-    return {
-        "in0_block_w": program_config.in0_block_w,
-        "per_core_M": program_config.per_core_M,
-        "per_core_N": program_config.per_core_N,
-        "fused_activation": str(program_config.fused_activation),
-    }
+def program_config_to_dict(program_config):
+    if hasattr(program_config, "to_json"):
+        d = json.loads(program_config.to_json())
+        d["type"] = type(program_config).__name__
+        return d
+    else:
+        return {"type": type(program_config).__name__, "repr": repr(program_config)}
 
 
 def serialize_config(cfg_dict: dict, fmt: str = "json") -> str:

@@ -11,14 +11,30 @@ This script:
 Usage:
     python prepare_test_matrix.py <tests_yaml_path> <enabled_skus> <sku_config_yaml_path>
 
-Example:
+enabled_skus is a comma-separated list, or the literal ALL_SKUS_IN_TESTS to enable every SKU
+key that appears under any test entry's skus mapping in the tests YAML.
+
+Examples:
     python prepare_test_matrix.py tests/pipeline_reorg/galaxy_e2e_tests.yaml "wh_galaxy,bh_galaxy" .github/sku_config.yaml
+    python prepare_test_matrix.py tests/pipeline_reorg/galaxy_demo_tests.yaml ALL_SKUS_IN_TESTS .github/sku_config.yaml
 """
 
 import yaml
 import json
 import sys
 import os
+
+ALL_SKUS_IN_TESTS = "ALL_SKUS_IN_TESTS"
+
+
+def collect_skus_from_tests(tests):
+    """Return sorted unique SKU names referenced in tests' skus mappings."""
+    names = set()
+    for test in tests:
+        test_skus = test.get("skus")
+        if isinstance(test_skus, dict):
+            names.update(test_skus.keys())
+    return sorted(names)
 
 
 def parse_enabled_skus(enabled_skus_str):
@@ -63,6 +79,23 @@ def load_sku_config(sku_config_path):
     return config["skus"]
 
 
+def substitute_cmd_placeholders(entry):
+    """
+    Replace placeholders in entry["cmd"] with values from the same entry.
+
+    Placeholders use the form {key_name}; e.g. {tt_cache_path} is replaced with
+    entry["tt_cache_path"]. This allows per-SKU values (e.g. different TT_CACHE_PATH
+    paths) to be injected into the same base command.
+    """
+    cmd = entry.get("cmd")
+    if not cmd or not isinstance(cmd, str):
+        raise ValueError(f"cmd is not a string: {cmd}")
+    for key, value in entry.items():
+        placeholder = "{" + key + "}"
+        if placeholder in cmd:
+            entry["cmd"] = entry["cmd"].replace(placeholder, str(value))
+
+
 def load_tests(tests_yaml_path):
     """
     Load test definitions from YAML file.
@@ -89,15 +122,21 @@ def load_tests(tests_yaml_path):
 
 def build_test_matrix(tests, enabled_skus, sku_config):
     """
-    Filter tests based on enabled SKUs and add runs_on labels.
+    Filter tests based on enabled SKUs and expand multi-SKU entries into flat matrix entries.
+
+    Each test entry may define multiple SKUs in its 'skus' dict. This function
+    expands each test into one matrix entry per enabled SKU, with the appropriate
+    timeout and runs_on labels.
 
     Args:
-        tests: List of test dictionaries
+        tests: List of test dictionaries (with 'skus' dict)
         enabled_skus: List of enabled SKU strings
         sku_config: Dictionary mapping SKU names to their configuration
 
     Returns:
-        Filtered list of test dictionaries with runs_on added
+        Filtered list of flat test dictionaries. Each entry has all keys from the
+        test (e.g. name, cmd, model, owner_id, team) with skus removed and sku,
+        timeout, and runs_on set for the selected SKU.
     """
     if not enabled_skus:
         print("::error::No SKUs enabled. At least one SKU must be specified.")
@@ -112,24 +151,40 @@ def build_test_matrix(tests, enabled_skus, sku_config):
     filtered_tests = []
 
     for test in tests:
-        test_sku = test.get("sku")
         test_name = test.get("name", "Unnamed Test")
+        test_skus = test.get("skus")
 
-        # Skip tests without a SKU
-        if not test_sku:
-            print(f"::warning::Test '{test_name}' has no SKU, skipping")
+        # Skip tests without skus
+        if not test_skus or not isinstance(test_skus, dict):
+            print(f"::warning::Test '{test_name}' has no valid 'skus' mapping, skipping")
             continue
 
-        # Filter: only include tests whose SKU is in the enabled list
-        if test_sku in enabled_skus:
-            # Add runs_on from SKU config
-            if test_sku in sku_config:
-                test_with_runs_on = test.copy()
-                test_with_runs_on["runs_on"] = sku_config[test_sku].get("runs_on", [])
-                filtered_tests.append(test_with_runs_on)
-            else:
-                print(f"::warning::SKU '{test_sku}' for test '{test_name}' not found in SKU config, skipping")
+        # Determine which of this test's SKUs are enabled
+        matching_skus = [s for s in test_skus if s in enabled_skus]
+
+        # Append SKU to name when the same test runs on more than one SKU
+        append_sku_to_name = len(matching_skus) > 1
+
+        for sku_name in matching_skus:
+            sku_test_config = test_skus[sku_name]
+
+            if sku_name not in sku_config:
+                print(f"::warning::SKU '{sku_name}' for test '{test_name}' not found in SKU config, skipping")
                 continue
+
+            # Start from test copy so all keys (model, arch, etc.) are preserved
+            entry = test.copy()
+            entry.pop("skus", None)
+            entry["sku"] = sku_name
+            entry["timeout"] = sku_test_config.get("timeout", 0)
+            entry["runs_on"] = sku_config[sku_name].get("runs_on", [])
+            if append_sku_to_name:
+                entry["name"] = f"{test_name} [{sku_name}]"
+            for key, value in sku_test_config.items():
+                if key != "timeout" and value is not None:
+                    entry[key] = value
+            substitute_cmd_placeholders(entry)
+            filtered_tests.append(entry)
 
     if not filtered_tests:
         print(f"::error::No tests selected for enabled SKUs '{','.join(enabled_skus)}'. Failing pipeline.")
@@ -141,6 +196,7 @@ def build_test_matrix(tests, enabled_skus, sku_config):
 def main():
     if len(sys.argv) != 4:
         print("Usage: python prepare_test_matrix.py <tests_yaml_path> <enabled_skus> <sku_config_yaml_path>")
+        print("  enabled_skus: comma-separated list, or ALL_SKUS_IN_TESTS")
         print(
             'Example: python prepare_test_matrix.py tests/pipeline_reorg/galaxy_e2e_tests.yaml "wh_galaxy,bh_galaxy" .github/sku_config.yaml'
         )
@@ -154,15 +210,19 @@ def main():
     print(f"Loading SKU config from: {sku_config_path}")
     print(f"Enabled SKUs: '{enabled_skus_str}'")
 
-    # Parse enabled SKUs
-    enabled_skus = parse_enabled_skus(enabled_skus_str)
-    print(f"Parsed enabled SKUs: {enabled_skus}")
-
-    # Load configurations
     sku_config = load_sku_config(sku_config_path)
     tests = load_tests(tests_yaml_path)
 
-    # Build filtered matrix
+    if enabled_skus_str.strip().upper() == ALL_SKUS_IN_TESTS:
+        enabled_skus = collect_skus_from_tests(tests)
+        print(f"Resolved {ALL_SKUS_IN_TESTS} to: {enabled_skus}")
+        if not enabled_skus:
+            print("::error::No SKU keys found under skus in the tests YAML.")
+            sys.exit(1)
+    else:
+        enabled_skus = parse_enabled_skus(enabled_skus_str)
+        print(f"Parsed enabled SKUs: {enabled_skus}")
+
     filtered_matrix = build_test_matrix(tests, enabled_skus, sku_config)
 
     # Output as JSON

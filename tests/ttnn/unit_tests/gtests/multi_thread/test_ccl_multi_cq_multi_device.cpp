@@ -21,19 +21,18 @@
 #include "common_test_utils.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/all_gather/all_gather.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/unit_mesh/unit_mesh_utils.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/event.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/host_api.hpp>
 
@@ -122,17 +121,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
                     host_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
 
-                // TODO (#25340): Switch to use create_device_tensor? (TensorTopology logic should mirror
-                // create_device_tensor)
                 auto& single_mesh = single_meshes[dev_idx];
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), tensor_spec);
-                auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {MeshCoordinate(0, 0)}};
-                Tensor input_tensor = Tensor(input_storage, tensor_spec, TensorTopology{});
-
-                auto output_buffer =
-                    tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), output_tensor_spec);
-                auto output_storage = tt::tt_metal::DeviceStorage{output_buffer, {MeshCoordinate(0, 0)}};
-                Tensor output_tensor = Tensor(output_storage, output_tensor_spec, TensorTopology{});
+                Tensor input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
+                Tensor output_tensor = tt::tt_metal::create_device_tensor(output_tensor_spec, single_mesh.get());
 
                 // Enqueue write_buffer to the read/write command queue and record the event
                 ttnn::write_buffer(QueueId(op_cq_id), input_tensor, {host_data});
@@ -182,10 +173,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
                 auto& single_mesh = single_meshes[dev_idx];
-                auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), tensor_spec);
-                auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer, {MeshCoordinate(0, 0)}};
-
-                Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, TensorTopology{});
+                Tensor dummy_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
                 ttnn::test_utils::dispatch_ops_to_device(dummy_tensor, ttnn::QueueId(op_cq_id));
 
@@ -296,17 +284,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 }
 
                 auto& single_mesh = single_meshes[dev_idx];
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), tensor_spec);
-                auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {MeshCoordinate(0, 0)}};
-
-                // TODO (#25340): Switch to use create_device_tensor? (TensorTopology logic should mirror
-                // create_device_tensor)
-                Tensor input_tensor = Tensor(input_storage, tensor_spec, TensorTopology{});
-
-                auto output_buffer =
-                    tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), output_tensor_spec);
-                auto output_storage = tt::tt_metal::DeviceStorage{output_buffer, {MeshCoordinate(0, 0)}};
-                Tensor output_tensor = Tensor(output_storage, output_tensor_spec, TensorTopology{});
+                Tensor input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
+                Tensor output_tensor = tt::tt_metal::create_device_tensor(output_tensor_spec, single_mesh.get());
 
                 // Enqueue write_buffer to the operation`s command queue and record the event
                 ttnn::write_buffer(op_cq_id, input_tensor, {host_data});
@@ -367,10 +346,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 for (int j = 0; j < num_elems; j++) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
-                auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), tensor_spec);
-                auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer, {MeshCoordinate(0, 0)}};
-
-                Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, TensorTopology{});
+                Tensor dummy_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
                 ttnn::write_buffer(op_cq_id, dummy_tensor, {dummy_data});
                 ttnn::test_utils::dispatch_ops_to_device(dummy_tensor, op_cq_id);
 
@@ -502,17 +478,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
                 }
 
                 auto& single_mesh = single_meshes[dev_idx];
-                auto input_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), tensor_spec);
-                auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {MeshCoordinate(0, 0)}};
-
-                // TODO (#25340): Switch to use create_device_tensor? (TensorTopology logic should mirror
-                // create_device_tensor)
-                Tensor input_tensor = Tensor(input_storage, tensor_spec, TensorTopology{});
-
-                auto output_buffer =
-                    tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), output_tensor_spec);
-                auto output_storage = tt::tt_metal::DeviceStorage{output_buffer, {MeshCoordinate(0, 0)}};
-                Tensor output_tensor = Tensor(output_storage, output_tensor_spec, TensorTopology{});
+                Tensor input_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
+                Tensor output_tensor = tt::tt_metal::create_device_tensor(output_tensor_spec, single_mesh.get());
 
                 // Enqueue write_buffer to the operation`s command queue and record the event
                 ttnn::write_buffer(mem_cq_id, input_tensor, {host_data});
@@ -571,10 +538,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
                 for (int j = 0; j < num_elems; j++) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
-                auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(single_mesh.get(), tensor_spec);
-                auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer, {MeshCoordinate(0, 0)}};
-
-                Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, TensorTopology{});
+                Tensor dummy_tensor = tt::tt_metal::create_device_tensor(tensor_spec, single_mesh.get());
                 ttnn::write_buffer(op_ccl_cq_id, dummy_tensor, {dummy_data});
                 ttnn::test_utils::dispatch_ops_to_device(dummy_tensor, op_ccl_cq_id);
 

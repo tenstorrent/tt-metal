@@ -7,6 +7,10 @@
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc_semaphore.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     // READER
@@ -46,8 +50,6 @@ void kernel_main() {
     constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(2);
     constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(3);
     // in1 mcast args
-    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(4));
-    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(5));
     // batch args
     constexpr uint32_t batch = get_compile_time_arg_val(6);
 
@@ -73,7 +75,7 @@ void kernel_main() {
     // in3 block args
     constexpr uint32_t in3_block_w = get_compile_time_arg_val(17);
 
-    constexpr uint32_t cb_id_in3 = 3;
+    constexpr uint32_t cb_id_in3 = get_named_compile_time_arg_val("cb_bias");
 #endif
     constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(18);
 
@@ -84,24 +86,27 @@ void kernel_main() {
     }
     // WRITER
 
-    constexpr uint32_t cb_id_in1 = 1;
+    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
 
     // WRITER
-    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
+    constexpr uint32_t cb_id_out0 = get_named_compile_time_arg_val("cb_out");
 
     // WRITER
     // single-tile
     const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
     constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
 
-    volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+    experimental::CircularBuffer cb_out(cb_id_out0);
+    experimental::Semaphore<> sender_sem(get_compile_time_arg_val(4));
+    experimental::Semaphore<> receiver_sem(get_compile_time_arg_val(5));
+#ifdef FUSE_BIAS
+    experimental::CircularBuffer cb_in3(cb_id_in3);
+#endif
 
     // WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr, output_single_tile_size_bytes);
-
-    const uint64_t in1_mcast_sender_semaphore_noc_addr =
-        get_noc_addr(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, in1_mcast_sender_semaphore_addr);
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
@@ -110,36 +115,36 @@ void kernel_main() {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     // Operand 1
-                    cb_reserve_back(cb_id_in1, in1_block_num_tiles);
+                    cb_in1.reserve_back(in1_block_num_tiles);
 
                     // Set in1 semaphore value to INVALID
-                    noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, INVALID);
+                    receiver_sem.set(INVALID);
 
                     // Atomic increment source core counter
-                    noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
+                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
 
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+                    receiver_sem.wait(VALID);
 
-                    cb_push_back(cb_id_in1, in1_block_num_tiles);
+                    cb_in1.push_back(in1_block_num_tiles);
                 }
 
 #ifdef FUSE_BIAS
                 // Only read bias on first batch, or we have multiple output blocks
                 if ((b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     // Operand 2
-                    cb_reserve_back(cb_id_in3, in3_block_w);
+                    cb_in3.reserve_back(in3_block_w);
 
                     // Set in1 semaphore value to INVALID
-                    noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, INVALID);
+                    receiver_sem.set(INVALID);
 
                     // Atomic increment source core counter
-                    noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
+                    sender_sem.up(noc, in1_mcast_sender_noc_x, in1_mcast_sender_noc_y, 1);
 
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+                    receiver_sem.wait(VALID);
 
-                    cb_push_back(cb_id_in3, in3_block_w);
+                    cb_in3.push_back(in3_block_w);
                 }
 #endif
 
@@ -172,41 +177,46 @@ void kernel_main() {
                             subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
                         }
 
-                        cb_wait_front(cb_id_out0, out_subblock_tile_count);
-                        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+                        cb_out.wait_front(out_subblock_tile_count);
+                        uint32_t out_read_offset = 0;
 
                         for (uint32_t h = 0; h < out_subblock_h_; ++h) {
                             uint32_t out_tensor_tile_id = out_tensor_sb_row_start_tile_id;
                             for (uint32_t w = 0; w < out_subblock_w_; ++w) {
                                 if (bh < num_blocks_h_dim_ && bw < num_blocks_w_dim_) {
-                                    noc_async_write_tile(out_tensor_tile_id, s, l1_read_addr);
+                                    noc.async_write(
+                                        experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+                                        s,
+                                        output_single_tile_size_bytes,
+                                        {.offset_bytes = out_read_offset},
+                                        {.page_id = out_tensor_tile_id});
                                 }
 
-                                l1_read_addr += output_single_tile_size_bytes;
+                                out_read_offset += output_single_tile_size_bytes;
 
                                 out_tensor_tile_id += out_tensor_stride_w;
                             }
                             // Skip padded tiles in subblock along row
-                            l1_read_addr += subblock_tiles_addr_skip;
+                            out_read_offset += subblock_tiles_addr_skip;
                             out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
                         }
 
-                        noc_async_write_barrier();
+                        noc.async_write_barrier();
 
-                        cb_pop_front(cb_id_out0, out_subblock_tile_count);
+                        cb_out.pop_front(out_subblock_tile_count);
                         out_tensor_sbw_start_tile_id += out_tensor_next_subblock_stride_w;
                     }
                     // Pop fully padded subblocks along the row
                     if (bw == num_blocks_w_dim_ - 1) {
-                        cb_wait_front(cb_id_out0, padded_block_tiles_w_skip);
-                        cb_pop_front(cb_id_out0, padded_block_tiles_w_skip);
+                        cb_out.wait_front(padded_block_tiles_w_skip);
+                        cb_out.pop_front(padded_block_tiles_w_skip);
                     }
                     out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
                 }
                 // Pop row(s) of fully padded subblocks
                 if (bh == num_blocks_h_dim_ - 1) {
-                    cb_wait_front(cb_id_out0, padded_block_tiles_h_skip);
-                    cb_pop_front(cb_id_out0, padded_block_tiles_h_skip);
+                    cb_out.wait_front(padded_block_tiles_h_skip);
+                    cb_out.pop_front(padded_block_tiles_h_skip);
                 }
 #endif
                 out_tensor_current_w_dim_block_tile_id += out_tensor_next_w_dim_block_stride;
@@ -222,8 +232,7 @@ void kernel_main() {
     }
 
 #if OUT_SHARDED
-    cb_wait_front(
-        cb_id_out0,
+    cb_out.wait_front(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
 }

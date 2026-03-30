@@ -1,0 +1,238 @@
+name: "Fabric Test on a BH Quad"
+
+on:
+  schedule:
+    - cron: "0 9 * * 1-5" # Runs weekdays at 10:00 AM GMT+1 (9:00 UTC)
+  workflow_dispatch:
+
+run-name: Fabric Test on a BH Quad
+jobs:
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      platform: 'Ubuntu 22.04'
+      skip-tt-train: false
+      ref: ${{ github.sha }}
+
+  create-allocation:
+    name: Create Allocation for 32x4 RINGxRING
+    needs: build-artifact
+    timeout-minutes: 30
+    outputs:
+      ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
+      mgd: ${{ steps.mgd.outputs.mgd }}
+    runs-on:
+      group: exabox
+      labels: exabox-multihost
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: MGD
+        id: mgd
+        run: |
+          MGD_CONFIG='
+            mesh_descriptors {
+              name: \"M0\"
+              arch: BLACKHOLE
+              device_topology { dims: [ 32,4 ] dim_types: [ RING,RING ] }
+              host_topology   { dims: [ 4,1 ] }
+              channels { count: 2 policy: RELAXED }
+            }
+            top_level_instance { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } }
+          '
+          echo "mgd<<EOF" >> $GITHUB_OUTPUT
+          echo "$MGD_CONFIG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create allocation
+        id: allocation
+        uses: ./.github/actions/ttop-create-allocation
+        with:
+          allocationName: ci-${{ github.run_id }}-metal
+          spec: |
+            allocationType: MGD
+            matchLabels:
+              exabox.tenstorrent.com/purpose: ci-metal
+            topologyKeys:
+              - exabox.tenstorrent.com/quad-id
+            mgd: |-
+              ${{ steps.mgd.outputs.mgd }}
+
+      - name: Get Allocation data
+        uses: ./.github/actions/ttop-get-allocation-data
+        id: get-allocation-data
+        with:
+          allocationName: ci-${{ github.run_id }}-metal
+
+  reset:
+    name: Reset cards
+    needs: [build-artifact, create-allocation]
+    timeout-minutes: 15
+    runs-on:
+      group: exabox
+      labels: exabox-multihost
+    env:
+      OMPI_MCA_btl_tcp_if_exclude: docker0,lo
+      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
+      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
+      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create environment
+        uses: ./.github/actions/ttop-create-environment
+        timeout-minutes: 5
+        with:
+          environmentName:  ci-${{ github.run_id }}-reset
+          allocationName:  ci-${{ github.run_id }}-metal
+          workerImage: ${{ needs.build-artifact.outputs.dev-docker-image }}
+
+      # We use setup-tt-run just to setup MPI, MGD can be dummy
+      - name: Setup tt-run
+        uses: ./.github/actions/ttop-configure-tt-run
+        timeout-minutes: 5
+        with:
+          directory: /ci/ttrun
+          mgdFile: /tmp/dummy/doesnotexist.textproto
+          copyToWorkers: false
+          ranksData: ${{ needs.create-allocation.outputs.ranksData }}
+
+      - name: Print hostnames
+        working-directory: /tmp
+        run: |
+          mpirun --tag-output --pernode \
+            hostname
+
+      - name: Reset cards
+        working-directory: /tmp
+        timeout-minutes: 10
+        run: |
+          mpirun --tag-output --pernode \
+            bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 120'
+
+      - name: Delete environment
+        if: always()
+        uses: ./.github/actions/ttop-delete-environment
+        with:
+          environmentName:  ci-${{ github.run_id }}-reset
+
+  run:
+    name: Run test
+    needs: [build-artifact, create-allocation, reset]
+    runs-on:
+      group: exabox
+      labels: exabox-multihost-with-nfs
+    env:
+      OMPI_MCA_btl_tcp_if_exclude: docker0,lo
+      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
+      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
+      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
+      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
+      TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
+      TT_METAL_CACHE: /home/user/.cache
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create environment
+        uses: ./.github/actions/ttop-create-environment
+        timeout-minutes: 5
+        with:
+          environmentName:  ci-${{ github.run_id }}-metal
+          allocationName:  ci-${{ github.run_id }}-metal
+          workerImage: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          sharedVolumeEnabled: 'true'
+
+      - name: Setup tt-run
+        uses: ./.github/actions/ttop-configure-tt-run
+        timeout-minutes: 5
+        with:
+          directory: /ci/ttrun
+          mgd: ${{ needs.create-allocation.outputs.mgd }}
+          copyToWorkers: false
+          ranksData: ${{ needs.create-allocation.outputs.ranksData }}
+
+      - name: 📦 Download Build Artifact
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          path: /ci/artifacts
+
+      - name: 🧪 Download Python Wheel
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: ${{ needs.wheel-artifact.outputs.wheel-artifact-name }}
+          path: /ci/artifacts
+
+      - name: Unpack artifacts & install
+        run: |
+          # Move the cloned directory to workers. TODO: Clone directly to NFS
+          cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
+          mpirun --pernode cp -r /ci/tt-metal /home/user
+          mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
+
+          # Unpack artifacts
+          mpirun --pernode tar --zstd -xf /ci/artifacts/ttm_any.tar.zst -C /home/user/tt-metal
+          mpirun --pernode pip install $(find /ci/artifacts | grep whl)
+
+      - name: Run Physical discovery test
+        timeout-minutes: 10
+        run: |
+            mpirun --tag-output -x LD_LIBRARY_PATH -x TT_METAL_RUNTIME_ROOT --pernode /home/user/tt-metal/build/test/tt_metal/tt_fabric/test_physical_discovery
+
+      - name: Run Fabric Test
+        run: |
+          tt-run --skip-executable-check --rank-binding /ci/ttrun/rank_bindings.yaml --mpi-args "--tag-output --host $(paste -sd, /ci/ttrun/hostfile)" \
+            /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_superpod_short_running.yaml
+
+      - name: Run Pipeline Test
+        timeout-minutes: 30
+        run: |
+          PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+          PIPELINE_DIR=/ci/pipeline-${{ github.run_id }}
+          mkdir -p $PIPELINE_DIR
+          python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
+            --mpi-user user \
+            --hostfile /ci/ttrun/hostfile \
+            --worker-tt-metal-home /home/user/tt-metal \
+            --output-dir $PIPELINE_DIR \
+            models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
+          tt-run --skip-executable-check \
+            --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+            --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
+            /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
+
+  cleanup:
+    name: Cleanup
+    needs: [run, reset, create-allocation]
+    if: always()
+    runs-on:
+      group: exabox
+      labels: exabox-multihost
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Delete environment
+        uses: ./.github/actions/ttop-delete-environment
+        with:
+          environmentName:  ci-${{ github.run_id }}-metal
+
+      # Redundantly try to drop reset env - reset job might have failed
+      - name: Delete reset environment
+        uses: ./.github/actions/ttop-delete-environment
+        with:
+          environmentName:  ci-${{ github.run_id }}-reset
+
+      - name: Delete allocation
+        uses: ./.github/actions/ttop-delete-allocation
+        with:
+          allocationName:  ci-${{ github.run_id }}-metal

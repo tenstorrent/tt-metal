@@ -4,13 +4,13 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/pack_untilize.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/pack_untilize.h"
+#include "api/compute/tile_move_copy.h"
+#include "experimental/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
-#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
@@ -23,15 +23,16 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
+    experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
-    cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
+    mm_partials_cb.wait_front(out_subblock_num_tiles);
 
     uint32_t start_dst_index = 0;
     uint32_t start_tile_index = 0;
     copy_block_matmul_partials(mm_partials_cb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
 
-    cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
+    mm_partials_cb.pop_front(out_subblock_num_tiles);
     // Reconfigure srcA back
     mm_block_init_short_with_dt(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
@@ -130,6 +131,55 @@ FORCE_INLINE void update_rd_ptr_to_ring_index(
     }
 }
 
+// Named CB arg lookup tables for batch-indexed output and partials CBs.
+// The factory emits "cb_mm_out_0" .. "cb_mm_out_N" and "cb_mm_partials_0" .. "cb_mm_partials_N"
+// as named compile-time args. These tables let fill_named_cb_array resolve them by index.
+constexpr const char* mm_out_cb_names[] = {
+    "cb_mm_out_0",
+    "cb_mm_out_1",
+    "cb_mm_out_2",
+    "cb_mm_out_3",
+    "cb_mm_out_4",
+    "cb_mm_out_5",
+    "cb_mm_out_6",
+    "cb_mm_out_7",
+    "cb_mm_out_8",
+    "cb_mm_out_9",
+    "cb_mm_out_10",
+    "cb_mm_out_11",
+    "cb_mm_out_12",
+    "cb_mm_out_13",
+    "cb_mm_out_14",
+    "cb_mm_out_15",
+};
+constexpr const char* mm_partials_cb_names[] = {
+    "cb_mm_partials_0",
+    "cb_mm_partials_1",
+    "cb_mm_partials_2",
+    "cb_mm_partials_3",
+    "cb_mm_partials_4",
+    "cb_mm_partials_5",
+    "cb_mm_partials_6",
+    "cb_mm_partials_7",
+    "cb_mm_partials_8",
+    "cb_mm_partials_9",
+    "cb_mm_partials_10",
+    "cb_mm_partials_11",
+    "cb_mm_partials_12",
+    "cb_mm_partials_13",
+    "cb_mm_partials_14",
+    "cb_mm_partials_15",
+};
+
+template <uint32_t N>
+constexpr std::array<uint32_t, N> fill_named_cb_array(const char* const* names) {
+    std::array<uint32_t, N> arr{};
+    for (uint32_t i = 0; i < N; ++i) {
+        arr[i] = get_named_compile_time_arg_val(names[i]);
+    }
+    return arr;
+}
+
 void kernel_main() {
     // Compile time args
     constexpr uint32_t in0_block_w = get_compile_time_arg_val(0);        // inner block size in tiles
@@ -153,17 +203,18 @@ void kernel_main() {
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
     constexpr bool in1_is_dram_interleaved = get_compile_time_arg_val(16);     // in1 is in dram
     constexpr bool in1_is_dram_sharded = get_compile_time_arg_val(17);
-    constexpr uint32_t in0_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t in1_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t in2_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t sync_cb = get_compile_time_arg_val(21);
-    constexpr uint32_t sync_cb2 = get_compile_time_arg_val(22);
-    constexpr uint32_t OUTPUT_CB_ARRAY_IDX = get_compile_time_arg_val(23);
-    constexpr std::array<uint32_t, batch> mm_out_cb_ids =
-        fill_array_with_next_n_args<uint32_t, OUTPUT_CB_ARRAY_IDX, batch>();
-    constexpr uint32_t INTERM_CB_ARRAY_IDX = OUTPUT_CB_ARRAY_IDX + batch;
-    constexpr std::array<uint32_t, batch> mm_partials_cb_ids =
-        fill_array_with_next_n_args<uint32_t, INTERM_CB_ARRAY_IDX, batch>();
+    constexpr uint32_t in0_cb_id = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t in1_cb_id = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t in2_cb_id = get_named_compile_time_arg_val("cb_in2");
+    constexpr uint32_t sync_cb = get_named_compile_time_arg_val("cb_sync");
+    constexpr uint32_t sync_cb2 = get_named_compile_time_arg_val("cb_sync2");
+
+    experimental::CircularBuffer in1_cb(in1_cb_id);
+    experimental::CircularBuffer sync_buf(sync_cb);
+    experimental::CircularBuffer sync2_buf(sync_cb2);
+
+    constexpr std::array<uint32_t, batch> mm_out_cb_ids = fill_named_cb_array<batch>(mm_out_cb_names);
+    constexpr std::array<uint32_t, batch> mm_partials_cb_ids = fill_named_cb_array<batch>(mm_partials_cb_names);
 
     constexpr uint32_t ring_size = num_blocks;
     constexpr bool in1_is_dram = in1_is_dram_interleaved || in1_is_dram_sharded;
@@ -211,6 +262,8 @@ void kernel_main() {
 #endif
         const uint32_t mm_out_cb_id = mm_out_cb_ids[b];
         const uint32_t mm_partials_cb_id = mm_partials_cb_ids[b];
+        experimental::CircularBuffer mm_out_cb(mm_out_cb_id);
+        experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
 
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -227,8 +280,8 @@ void kernel_main() {
         }
 
         // Wait to receive in1
-        cb_wait_front(sync_cb2, 1);
-        cb_pop_front(sync_cb2, 1);
+        sync2_buf.wait_front(1);
+        sync2_buf.pop_front(1);
 
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t curr_ring_idx = (ring_idx + block) % ring_size;
@@ -236,10 +289,11 @@ void kernel_main() {
 
             // Wait for in1 block
             if constexpr (in1_is_dram) {
-                cb_wait_front(in1_cb_id, in1_block_num_tiles);
+                in1_cb.wait_front(in1_block_num_tiles);
             }
 
             const uint32_t input0_cb_id = block == 0 ? in0_cb_id : in2_cb_id;
+            experimental::CircularBuffer input0_cb(input0_cb_id);
             bool last_out = block == (num_blocks - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
@@ -251,10 +305,10 @@ void kernel_main() {
 
             // Wait to receive in0 block
             if (block == 0) {
-                cb_reserve_back(input0_cb_id, in0_block_num_tiles);
-                cb_push_back(input0_cb_id, in0_block_num_tiles);
+                input0_cb.reserve_back(in0_block_num_tiles);
+                input0_cb.push_back(in0_block_num_tiles);
             }
-            cb_wait_front(input0_cb_id, in0_block_num_tiles);
+            input0_cb.wait_front(in0_block_num_tiles);
 
 #ifdef ENABLE_GLOBAL_CB
             UNPACK((calculate_next_block_index_and_update_rd_ptr(
@@ -296,11 +350,11 @@ void kernel_main() {
                     uint32_t dst_index = 0;  // start at 0, each call to matmul_block internally increments dst_index
                     uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                     uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                    // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
+                    // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
                     for (uint32_t inner_dim_idx = 0; inner_dim_idx < unpadded_in0_block_w; ++inner_dim_idx) {
                         // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                         // accumulation is done by iterating matmul_block across inner dim
-                        // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
+                        // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
                         matmul_block(
                             input0_cb_id,
                             in1_cb_id,
@@ -330,7 +384,7 @@ void kernel_main() {
                         }
                         tile_regs_commit();
                         // Pack out to output buffer
-                        cb_reserve_back(mm_out_cb_id, out_subblock_num_tiles);
+                        mm_out_cb.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
@@ -353,12 +407,12 @@ void kernel_main() {
                         if constexpr (untilize_out) {
                             pack_untilize_uninit(mm_out_cb_id);
                         }
-                        cb_push_back(mm_out_cb_id, out_subblock_num_tiles);
+                        mm_out_cb.push_back(out_subblock_num_tiles);
 
                     } else if (spill) {
                         tile_regs_commit();
                         // Move partial result to interm buffer
-                        cb_reserve_back(mm_partials_cb_id, out_subblock_num_tiles);
+                        mm_partials_cb.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
@@ -373,7 +427,7 @@ void kernel_main() {
                         pack_tile_block(start_dst_index, mm_partials_cb_id, out_subblock_num_tiles);
 
                         tile_regs_release();
-                        cb_push_back(mm_partials_cb_id, out_subblock_num_tiles);
+                        mm_partials_cb.push_back(out_subblock_num_tiles);
                     }
 
                     in1_index_subblock_offset += out_subblock_w;
@@ -385,8 +439,8 @@ void kernel_main() {
 
             // Last iteration does spill and reload to output buffer
             if (block < num_blocks - 2 && spill) {
-                cb_wait_front(mm_partials_cb_id, out_block_num_tiles);
-                cb_pop_front(mm_partials_cb_id, out_block_num_tiles);
+                mm_partials_cb.wait_front(out_block_num_tiles);
+                mm_partials_cb.pop_front(out_block_num_tiles);
             }
             if (block == num_blocks - 2 && spill) {
                 enable_reload = true;
@@ -397,9 +451,9 @@ void kernel_main() {
             }
 #endif
 
-            cb_pop_front(input0_cb_id, in0_block_num_tiles);
+            input0_cb.pop_front(in0_block_num_tiles);
             if constexpr (in1_is_dram) {
-                cb_pop_front(in1_cb_id, in1_block_num_tiles);
+                in1_cb.pop_front(in1_block_num_tiles);
             }
 #ifdef ENABLE_GLOBAL_CB
             curr_in1_block_index = next_in1_block_index;
@@ -409,8 +463,8 @@ void kernel_main() {
 
 #ifdef ENABLE_GLOBAL_CB
         // Release in1
-        cb_reserve_back(sync_cb, 1);
-        cb_push_back(sync_cb, 1);
+        sync_buf.reserve_back(1);
+        sync_buf.push_back(1);
         UNPACK((update_local_cb_rd_ptr(in1_cb_id, in1_rd_ptr_start_addr)));  // reset rd_ptr back to the initial addr
         UNPACK((update_rd_ptr_to_ring_index(
             in1_cb_id, in1_block_size_bytes, ring_size, in1_tensor_split)));  // update to next tensor addr

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <tt_stl/overloaded.hpp>
-#include <tt_stl/reflection.hpp>
 #include <type_traits>
 
 #include "ttnn/tensor/tensor.hpp"
@@ -32,31 +31,31 @@ void validate_datatype(const Tensor& tensor) {
     } else if constexpr (std::is_same_v<BaseType, uint8_t>) {
         TT_FATAL(tensor.dtype() == DataType::UINT8, "Incorrect data type {}", tensor.dtype());
     } else {
-        static_assert(tt::stl::concepts::always_false_v<BaseType>, "Unsupported DataType");
+        static_assert(sizeof(BaseType) == 0, "Unsupported DataType");
     }
 }
 
 HostBuffer get_host_buffer(const Tensor& tensor);
 
 template <typename T>
-tt::stl::Span<const T> get_as(const HostBuffer& buffer) {
+ttsl::Span<const T> get_as(const HostBuffer& buffer) {
     return buffer.view_as<T>();
 }
 
 template <typename T>
-tt::stl::Span<T> get_as(HostBuffer& buffer) {
+ttsl::Span<T> get_as(HostBuffer& buffer) {
     return buffer.view_as<T>();
 }
 
 template <typename T>
-tt::stl::Span<const T> get_as(const Tensor& tensor) {
+ttsl::Span<const T> get_as(const Tensor& tensor) {
     validate_datatype<T>(tensor);
     HostBuffer buffer = get_host_buffer(tensor);
     return buffer.template view_as<T>();
 }
 
 template <typename T>
-tt::stl::Span<T> get_as(Tensor& tensor) {
+ttsl::Span<T> get_as(Tensor& tensor) {
     validate_datatype<T>(tensor);
     HostBuffer buffer = get_host_buffer(tensor);
     return buffer.template view_as<T>();

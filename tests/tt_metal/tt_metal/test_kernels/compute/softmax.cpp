@@ -7,11 +7,11 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/bcast.h"
-#include "compute_kernel_api/softmax.h"
-#include "compute_kernel_api/reduce.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/compute/bcast.h"
+#include "api/compute/softmax.h"
+#include "api/compute/reduce.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -141,7 +141,7 @@ void kernel_main() {
         cb_wait_front(cb_recipsumexps, 1);  // will reuse Wt times for bcast
 
         // now cb_sumexps has exp tiles, need to multiply by our DST[2]
-        // by now we already did a umulative wait for Wt tiles in cb_exps
+        // by now we already did a cumulative wait for Wt tiles in cb_exps
         mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             ACQ();

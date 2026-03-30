@@ -4,12 +4,12 @@
 
 #include <gtest/gtest.h>
 
-#include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
 #include <umd/device/cluster.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "datasets/dataloader.hpp"
@@ -18,6 +18,7 @@
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace {
@@ -54,6 +55,8 @@ using DataLoader = ttml::datasets::DataLoader<
     BatchType>;
 
 TEST_F(LinearRegressionDDPTest, Full) {
+    // Skip with watcher enabled github issue #37193
+    SKIP_FOR_WATCHER();
     const size_t training_samples_count = 1000;
     const size_t num_features = 64;
     const size_t num_targets = 32;

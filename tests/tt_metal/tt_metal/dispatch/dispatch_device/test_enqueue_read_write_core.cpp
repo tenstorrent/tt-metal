@@ -13,7 +13,7 @@
 
 using namespace tt::tt_metal;
 
-TEST_F(UnitMeshCQSingleCardFixture, TensixTestBasicReadWriteL1) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestBasicReadWriteL1) {
     const uint32_t num_elements = 1000;
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
@@ -42,7 +42,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestBasicReadWriteL1) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, TensixTestBasicReadL1) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestBasicReadL1) {
     const uint32_t num_elements = 1000;
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
@@ -69,7 +69,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestBasicReadL1) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, TensixTestBasicWriteL1) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestBasicWriteL1) {
     const uint32_t num_elements = 1000;
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
@@ -96,7 +96,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestBasicWriteL1) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, TensixTestInvalidReadWriteAddressL1) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestInvalidReadWriteAddressL1) {
     const uint32_t num_elements = 1010;
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
@@ -127,7 +127,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestInvalidReadWriteAddressL1) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, TensixTestReadWriteMultipleCoresL1) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestReadWriteMultipleCoresL1) {
     const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t num_elements = 1000;
@@ -171,7 +171,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestReadWriteMultipleCoresL1) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, TensixTestReadWriteZeroElementsL1) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestReadWriteZeroElementsL1) {
     const CoreCoord logical_core = {0, 0};
     const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -195,7 +195,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestReadWriteZeroElementsL1) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, TensixTestReadWriteEntireL1) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, TensixTestReadWriteEntireL1) {
     const CoreCoord logical_core = {0, 0};
     const DeviceAddr address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -222,7 +222,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestReadWriteEntireL1) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, ActiveEthTestReadWriteEntireL1) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, ActiveEthTestReadWriteEntireL1) {
     const DeviceAddr address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     const uint32_t size =
@@ -254,7 +254,7 @@ TEST_F(UnitMeshCQSingleCardFixture, ActiveEthTestReadWriteEntireL1) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, ActiveEthTestReadWriteMultipleCoresL1) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, ActiveEthTestReadWriteMultipleCoresL1) {
     const DeviceAddr address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
     const uint32_t num_elements = 1000;
@@ -298,7 +298,9 @@ TEST_F(UnitMeshCQSingleCardFixture, ActiveEthTestReadWriteMultipleCoresL1) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteEntireL1) {
+// Skips on Galaxy MMIO: all 16 ethernet cores are active (used for tunnel routing and
+// forced-active channels 0,1,2,3,15), leaving no idle cores available.
+TEST_F(UnitMeshCQSingleCardSharedFixture, IdleEthTestReadWriteEntireL1) {
     const DeviceAddr address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     const uint32_t size =
@@ -331,7 +333,9 @@ TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteEntireL1) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestInvalidReadWriteAddressL1) {
+// Skips on Galaxy MMIO: all 16 ethernet cores are active (used for tunnel routing and
+// forced-active channels 0,1,2,3,15), leaving no idle cores available.
+TEST_F(UnitMeshCQSingleCardSharedFixture, IdleEthTestInvalidReadWriteAddressL1) {
     const uint32_t num_elements = 1010;
     const std::vector<uint32_t> src_data = generate_arange_vector(num_elements * sizeof(uint32_t));
 
@@ -368,7 +372,9 @@ TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestInvalidReadWriteAddressL1) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteMultipleCoresL1) {
+// Skips on Galaxy MMIO: all 16 ethernet cores are active (used for tunnel routing and
+// forced-active channels 0,1,2,3,15), leaving no idle cores available.
+TEST_F(UnitMeshCQSingleCardSharedFixture, IdleEthTestReadWriteMultipleCoresL1) {
     const DeviceAddr address =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     const uint32_t num_elements = 1000;
@@ -422,7 +428,7 @@ TEST_F(UnitMeshCQSingleCardFixture, IdleEthTestReadWriteMultipleCoresL1) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, TestInvalidReadWriteAddressDRAM) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, TestInvalidReadWriteAddressDRAM) {
     for (const auto& mesh_device : this->devices_) {
         auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
         auto* device = mesh_device->get_devices()[0];
@@ -454,7 +460,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TestInvalidReadWriteAddressDRAM) {
     }
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, TestReadWriteMultipleCoresDRAM) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, TestReadWriteMultipleCoresDRAM) {
     for (const auto& mesh_device : this->devices_) {
         auto& fd_cq = dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
         auto* device = mesh_device->get_devices()[0];

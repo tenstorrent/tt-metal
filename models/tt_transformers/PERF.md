@@ -35,13 +35,16 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Llama-3.2-11B     | T3K         | 90        | 98        | 62.7          | 47        |
 | Llama-3.2-11B     | TG          | 87        | 97        | 29.5          |           |
 | Llama-3.1-70B     | T3K         | 96        | 100       | 16.6          | 164       |
+| Llama-3.3-70B     | T3K         | 96        | 100       | 16.6          | 164       |
 | Llama-3.1-70B     | TG          | 95        | 100       | 12.7          |           |
+| Llama-3.3-70B     | TG          | 95        | 100       | 12.7          |           |
 | Llama-3.1-70B     | TG   (DP=4) |           |           | 14.8          | 189       |
 | Llama-3.2-90B     | T3K         | 96        | 100       | 6             | 5535      |
 | Qwen2.5-7B        | N300        | 84        | 96        | 24.6          | 92        |
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.2          | 225       |
 | Qwen2.5-Coder-32B | T3K         | 96        | 99        | 22.4          | 190       |
 | Qwen3-32B         | T3K         | 89        | 97        | 22.9          | 123       |
+| QwQ-32B           | T3K         | 96        | 100       | 20.7          | 105       |
 | Phi3.5-mini       | N150        |           |           | 43.2          | 98        |
 | Phi3.5-mini       | N300        |           |           | 57.8          | 62        |
 | Phi3.5-mini       | T3K         |           |           | 48.8          | 51        |
@@ -84,6 +87,7 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Qwen2.5-72B       | T3K         | 99        | 100       | 15.1          | 216       |
 | Qwen2.5-Coder-32B | T3K         | 95        | 99        | 19.7          | 183       |
 | Qwen3-32B         | T3K         | 95        | 100       | 19.6          | 119       |
+| QwQ-32B           | T3K         | 99        | 100       | 18.3          | 120       |
 | Phi3.5-mini       | N150        |           |           | 38.8          | 92        |
 | Phi3.5-mini       | N300        |           |           | 53.9          | 63        |
 | Phi3.5-mini       | T3K         |           |           | 48.6          | 53        |

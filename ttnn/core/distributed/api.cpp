@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/distributed/api.hpp"
 
 #include <memory>
@@ -64,7 +65,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
 void close_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device) { mesh_device->close(); }
 
 std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
-    if (std::holds_alternative<tt::tt_metal::HostStorage>(tensor.storage())) {
+    if (is_cpu_tensor(tensor)) {
         std::vector<ttnn::Tensor> tensors;
         auto gathered_tensor = host_ccl::all_gather(tensor);
         const auto& distributed_buffer = gathered_tensor.host_storage().buffer();
@@ -72,9 +73,9 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.tensor_spec()}); });
         return tensors;
     }
-    if (std::holds_alternative<tt::tt_metal::DeviceStorage>(tensor.storage())) {
-        const auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(tensor.storage());
-        if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
+    if (is_device_tensor(tensor)) {
+        const auto& device_storage = tensor.device_storage();
+        if (const auto& mesh_buffer = device_storage.get_mesh_buffer_leak_ownership(); mesh_buffer != nullptr) {
             std::vector<ttnn::Tensor> tensors;
             tensors.reserve(device_storage.coords.size());
             for (const auto& coord : device_storage.coords) {
@@ -107,7 +108,7 @@ Tensor from_host_shards(const std::vector<Tensor>& tensor_shards, const MeshShap
     }
 
     TensorTopology topology = TensorTopology::create_sharded_tensor_topology(mesh_shape, shard_dim);
-    return Tensor(HostStorage{std::move(distributed_host_buffer)}, reference_shard.tensor_spec(), std::move(topology));
+    return Tensor(HostTensor(std::move(distributed_host_buffer), reference_shard.tensor_spec(), std::move(topology)));
 }
 
 Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shard_dim) {
@@ -119,7 +120,7 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
             shard.tensor_spec() == reference_shard.tensor_spec(), "All tensor shards must have the same tensor spec");
     }
 
-    auto mesh_buffer = reference_shard.device_storage().mesh_buffer;
+    auto mesh_buffer = reference_shard.device_storage().get_mesh_buffer_leak_ownership();
     TT_FATAL(
         mesh_buffer != nullptr,
         "Error aggregating multichip tensors: tensors shards must be allocated on a mesh buffer.");
@@ -127,7 +128,7 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
     for (const auto& shard : tensor_shards) {
         const auto& shard_storage = shard.device_storage();
         TT_FATAL(
-            shard_storage.mesh_buffer == mesh_buffer,
+            shard_storage.get_mesh_buffer_leak_ownership() == mesh_buffer,
             "Error aggregating multichip tensors: tensor shards must be allocated on the same mesh buffer. "
             "Consider moving tensors to host, aggregating, and re-uploading on device storage.");
         for (const auto& coord : shard_storage.coords) {

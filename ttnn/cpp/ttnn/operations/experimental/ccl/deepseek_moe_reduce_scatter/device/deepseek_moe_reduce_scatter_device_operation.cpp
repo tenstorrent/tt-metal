@@ -14,12 +14,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
-
-DeepseekMoEReduceScatterDeviceOperation::program_factory_t
-DeepseekMoEReduceScatterDeviceOperation::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {
-    return DeepseekMoEReduceScatterMeshWorkloadFactory{};
-}
-
 void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     // lightweight validation for cache hits
@@ -53,8 +47,8 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_miss(
 
     // input tensor properties
     const ttnn::Tensor& first_input_tensor = input_tensors.at(0);
-    const uint32_t input_tensor_rank = first_input_tensor.logical_shape().rank();
-    const auto& input_tensor_shape = first_input_tensor.logical_shape();
+    const uint32_t input_tensor_rank = first_input_tensor.padded_shape().rank();
+    const auto& input_tensor_shape = first_input_tensor.padded_shape();
     TT_FATAL(
         first_input_tensor.buffer()->page_size() % first_input_tensor.buffer()->alignment() == 0,
         "deepseek_moe_reduce_scatter requires aligned pages");
@@ -86,7 +80,7 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_miss(
         "deepseek_moe_reduce_scatter requires nd sharded input tensors");
     const uint32_t num_pages_per_shard =
         first_input_tensor.nd_shard_spec().value().shard_shape.volume() / num_tile_elements;
-    const uint32_t num_shards = first_input_tensor.logical_volume() / (num_tile_elements * num_pages_per_shard);
+    const uint32_t num_shards = first_input_tensor.physical_volume() / (num_tile_elements * num_pages_per_shard);
     TT_FATAL(num_pages_per_shard % 2 == 0, "deepseek_moe_reduce_scatter requires shards have an even number pages");
     TT_FATAL(
         num_shards <= num_directions_per_link * num_links,
@@ -189,19 +183,15 @@ std::vector<ttnn::Tensor> DeepseekMoEReduceScatterDeviceOperation::create_output
     };
 }
 
-tt::stl::hash::hash_t DeepseekMoEReduceScatterDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t DeepseekMoEReduceScatterDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "DeepseekMoEReduceScatterDeviceOperation::compute_program_hash is called");
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
     return tt::tt_metal::operation::hash_operation<DeepseekMoEReduceScatterDeviceOperation>(
         operation_attributes.output_memory_config,
         operation_attributes.dim,
         operation_attributes.num_links,
         operation_attributes.cluster_axis,
-        tensor_args,
-        program_factory.index());
+        tensor_args);
 }
 
 }  // namespace ttnn::experimental::prim

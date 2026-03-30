@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "debug_tools.hpp"
 
 #include <cstdint>
@@ -14,7 +15,9 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include "allocator/allocator.hpp"
 #include "command_queue_common.hpp"
+#include "device/device_manager.hpp"
 #include "dispatch_settings.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
@@ -40,6 +43,26 @@ T val(T v) {
     return v;
 }
 }  // namespace
+
+void read_cq_memory_for_dump(
+    void* dst,
+    uint32_t size_bytes,
+    uint64_t byte_addr,
+    ChipId mmio_device_id,
+    uint16_t channel,
+    const SystemMemoryManager& sysmem_manager) {
+    auto& cluster = MetalContext::instance().get_cluster();
+    if (sysmem_manager.is_dram_backed()) {
+        const uint32_t dram_channel = MetalContext::instance()
+                                          .device_manager()
+                                          ->get_active_device(mmio_device_id)
+                                          ->allocator_impl()
+                                          ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
+        cluster.read_dram_vec(dst, size_bytes, mmio_device_id, dram_channel, byte_addr);
+    } else {
+        cluster.read_sysmem(dst, size_bytes, byte_addr, mmio_device_id, channel);
+    }
+}
 
 void match_device_program_data_with_host_program_data(const char* host_file, const char* device_file) {
     std::ifstream host_dispatch_dump_file;
@@ -186,6 +209,12 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                     val(cmd->write_packed_large.count),
                     val(cmd->write_packed_large.alignment));
                 break;
+            case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE_UNICAST:
+                cq_file << fmt::format(
+                    " (count={}, alignment={})",
+                    val(cmd->write_packed_large_unicast.count),
+                    val(cmd->write_packed_large_unicast.alignment));
+                break;
             case CQ_DISPATCH_CMD_WAIT:
                 cq_file << fmt::format(
                     " (flags={}, count={}, addr={:#010x}, stream={})",
@@ -259,6 +288,17 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                     val(cmd->relay_paged_packed.stride));
                 stride = cmd->relay_paged_packed.stride;
                 break;
+            case CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED:
+            case CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_H: {
+                iq_file << fmt::format(
+                    " (count={}, noc_xy_addr={:#010x}, total_length={:#010x}, stride={:#010x})",
+                    val(cmd->relay_linear_packed.count),
+                    val(cmd->relay_linear_packed.noc_xy_addr),
+                    val(cmd->relay_linear_packed.total_length),
+                    val(cmd->relay_linear_packed.stride));
+                stride = cmd->relay_linear_packed.stride;
+                break;
+            }
             case CQ_PREFETCH_CMD_RELAY_INLINE:
             case CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH:
             case CQ_PREFETCH_CMD_EXEC_BUF_END:
@@ -342,8 +382,7 @@ void dump_completion_queue_entries(
     print_progress_bar(0.0, true);
     for (uint32_t page_offset = 0; page_offset < completion_q_bytes;) {  // page_offset increment at end of loop
         uint32_t page_addr = base_addr + page_offset;
-        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-            read_data.data(), read_data.size(), page_addr, mmio_device_id, channel);
+        read_cq_memory_for_dump(read_data.data(), read_data.size(), page_addr, mmio_device_id, channel, sysmem_manager);
 
         // Check if this page starts with a valid command id
         CQDispatchCmd* cmd = (CQDispatchCmd*)read_data.data();
@@ -439,8 +478,8 @@ void dump_issue_queue_entries(
     uint32_t first_page_addr = issue_q_base_addr - (issue_q_base_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
     uint32_t end_of_curr_page =
         first_page_addr + DispatchSettings::TRANSFER_PAGE_SIZE - 1;  // To track offset of latest page read out
-    tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-        read_data.data(), read_data.size(), first_page_addr, mmio_device_id, channel);
+    read_cq_memory_for_dump(
+        read_data.data(), read_data.size(), first_page_addr, mmio_device_id, channel, sysmem_manager);
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t offset = 0; offset < issue_q_bytes;) {  // offset increments at end of loop
         uint32_t curr_addr = issue_q_base_addr + offset;
@@ -449,8 +488,8 @@ void dump_issue_queue_entries(
         // Check if we need to read a new page
         if (curr_addr > end_of_curr_page) {
             uint32_t page_base = curr_addr - (curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
-            tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-                read_data.data(), read_data.size(), page_base, mmio_device_id, channel);
+            read_cq_memory_for_dump(
+                read_data.data(), read_data.size(), page_base, mmio_device_id, channel, sysmem_manager);
             end_of_curr_page = page_base + DispatchSettings::TRANSFER_PAGE_SIZE - 1;
         }
 
@@ -506,8 +545,8 @@ void dump_issue_queue_entries(
                     if (dispatch_curr_addr > end_of_curr_page) {
                         uint32_t page_base =
                             dispatch_curr_addr - (dispatch_curr_addr % DispatchSettings::TRANSFER_PAGE_SIZE);
-                        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-                            read_data.data(), read_data.size(), page_base, mmio_device_id, channel);
+                        read_cq_memory_for_dump(
+                            read_data.data(), read_data.size(), page_base, mmio_device_id, channel, sysmem_manager);
                         end_of_curr_page = page_base + DispatchSettings::TRANSFER_PAGE_SIZE - 1;
                     }
 
@@ -610,8 +649,7 @@ void dump_command_queue_raw_data(
         print_progress_bar(((float)page_offset / bytes_to_read) + 0.005);
 
         // Print in 16B per line
-        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
-            read_data.data(), read_data.size(), page_addr, mmio_device_id, channel);
+        read_cq_memory_for_dump(read_data.data(), read_data.size(), page_addr, mmio_device_id, channel, sysmem_manager);
         TT_ASSERT(read_data.size() % 16 == 0);
         for (uint32_t line_offset = 0; line_offset < read_data.size(); line_offset += 16) {
             uint32_t line_addr = page_addr + line_offset;

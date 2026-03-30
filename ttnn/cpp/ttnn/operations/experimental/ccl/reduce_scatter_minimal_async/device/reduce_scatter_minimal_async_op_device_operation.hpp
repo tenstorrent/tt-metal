@@ -30,7 +30,7 @@ struct ReduceScatterMinimalAsyncDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -54,6 +54,7 @@ std::vector<Tensor> reduce_scatter_minimal_async(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel);
+    std::optional<uint32_t> num_buffers_per_channel,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn::prim

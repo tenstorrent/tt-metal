@@ -10,15 +10,6 @@
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
-IsInDeviceOperation::program_factory_t IsInDeviceOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
-    return IsInProgramFactory{};
-}
-
-void IsInDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
 
 void IsInDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
@@ -62,7 +53,7 @@ IsInDeviceOperation::tensor_return_value_t IsInDeviceOperation::create_output_te
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.elements_tensor.device());
 }
 
-tt::stl::hash::hash_t IsInDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t IsInDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_memory_layout = tensor_args.elements_tensor.layout();
     const auto& input_dtype = tensor_args.elements_tensor.dtype();

@@ -5,6 +5,7 @@
 #include "all_gather_async_device_operation.hpp"
 #include "all_gather_async_device_operation_types.hpp"
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -26,6 +27,9 @@ AllGatherAsyncVersion select_version(const AllGatherAsyncParams& operation_attri
             "all_gather_async_reversed.");
         return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
     }
+    if (operation_attributes.use_all_gather_async_via_broadcast) {
+        return AllGatherAsyncVersion::VIA_BROADCAST;
+    }
     TT_FATAL(operation_attributes.semaphore.size() == 2, "Default implementation requires 2 semaphores");
     return AllGatherAsyncVersion::MINIMAL_DEFAULT;
 }
@@ -38,16 +42,14 @@ AllGatherAsyncDeviceOperation::program_factory_t AllGatherAsyncDeviceOperation::
         case AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED: {
             return LlamaShardedMeshWorkloadFactory{};
         }
+        case AllGatherAsyncVersion::VIA_BROADCAST: {
+            return AllGatherViaBroadcastFactory{};
+        }
         case AllGatherAsyncVersion::MINIMAL_DEFAULT:
         default: {
             return DefaultMeshWorkloadFactory{};
         }
     }
-}
-
-void AllGatherAsyncDeviceOperation::validate_on_program_cache_hit(
-    const AllGatherAsyncParams& args, const AllGatherAsyncInputs& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
 }
 
 void AllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
@@ -188,7 +190,7 @@ AllGatherAsyncDeviceOperation::tensor_return_value_t AllGatherAsyncDeviceOperati
     return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
-tt::stl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllGatherAsyncDeviceOperation::compute_program_hash is called");
 
@@ -222,7 +224,7 @@ tt::stl::hash::hash_t AllGatherAsyncDeviceOperation::compute_program_hash(
         program_factory.index());
 }
 
-std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> AllGatherAsyncDeviceOperation::invoke(
+std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_operation_args(
     const Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     int32_t dim,
@@ -234,6 +236,7 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> AllGatherAsyncDeviceOpera
     const std::optional<uint32_t>& cluster_axis,
     bool use_optimal_ccl_for_llama,
     bool use_all_gather_async_llama_sharded,
+    bool use_all_gather_async_via_broadcast,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<uint32_t>& chunks_per_sync,
     const std::optional<uint32_t>& num_workers_per_link,
@@ -290,6 +293,7 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> AllGatherAsyncDeviceOpera
             cluster_axis,
             use_all_gather_async_llama_sharded,
             use_optimal_ccl_for_llama,
+            use_all_gather_async_via_broadcast,
             barrier_semaphore,
             using_persistent_buffers,
             chunks_per_sync,
@@ -301,3 +305,50 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> AllGatherAsyncDeviceOpera
 }
 
 }  // namespace ttnn::experimental::prim
+
+namespace ttnn::prim {
+
+Tensor all_gather_async(
+    const Tensor& input_tensor,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links,
+    const std::optional<MemoryConfig>& memory_config,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    const std::optional<uint32_t>& cluster_axis,
+    bool use_optimal_ccl_for_llama,
+    bool use_all_gather_async_llama_sharded,
+    bool use_all_gather_async_via_broadcast,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::optional<uint32_t>& chunks_per_sync,
+    const std::optional<uint32_t>& num_workers_per_link,
+    const std::optional<uint32_t>& num_buffers_per_channel,
+    bool reverse_order,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const MeshDevice* optional_mesh_device) {
+    auto [params, inputs] = experimental::prim::all_gather_async_build_operation_args(
+        input_tensor,
+        persistent_output_buffer,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        memory_config,
+        topology,
+        sub_device_id,
+        cluster_axis,
+        use_optimal_ccl_for_llama,
+        use_all_gather_async_llama_sharded,
+        use_all_gather_async_via_broadcast,
+        barrier_semaphore,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel,
+        reverse_order,
+        sub_core_grid,
+        optional_mesh_device);
+    return ttnn::device_operation::launch<experimental::prim::AllGatherAsyncDeviceOperation>(params, inputs);
+}
+
+}  // namespace ttnn::prim

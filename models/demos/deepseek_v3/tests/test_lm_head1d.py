@@ -14,7 +14,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
-from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -38,10 +38,11 @@ class DeepseekV3LMHead(nn.Module):
         return self.lm_head(hidden_states)
 
 
+@pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": get_fabric_config()},
     ],
     indirect=True,
 )
@@ -69,7 +70,14 @@ def test_forward_pass(
     reference_output = reference_model(torch_input)
 
     weight_config = get_test_weight_config(
-        LMHead1D, hf_config, (state_dict,), cache_path, mesh_device, force_recalculate=False
+        LMHead1D,
+        hf_config,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate=False,
+        test_name="test_lm_head1d",
+        real_weights=False,
     )
     model_config = get_model_config(LMHead1D, mode, mesh_device)
     model_state = LMHead1D.create_state(mesh_device, ccl)

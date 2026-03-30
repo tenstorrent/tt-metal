@@ -18,9 +18,6 @@ struct NeighborPadAsyncDeviceOperation {
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<NeighborPadAsyncMeshWorkloadFactory>;
 
-    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
-
-    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
@@ -28,7 +25,7 @@ struct NeighborPadAsyncDeviceOperation {
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
 
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::experimental::prim
@@ -42,12 +39,17 @@ Tensor neighbor_pad_async(
     uint32_t padding_right,
     const std::string& padding_mode,
     uint32_t cluster_axis,
-    const GlobalSemaphore& final_semaphore,
+    const GlobalSemaphore& h_neighbor_semaphore,
+    const GlobalSemaphore& w_neighbor_semaphore,
     const GlobalSemaphore& barrier_semaphore,
     std::optional<size_t> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
-    std::optional<uint32_t> secondary_cluster_axis,
-    const std::optional<std::vector<uint32_t>>& secondary_mesh_shape);
+    std::optional<uint32_t> pad_dim2 = std::nullopt,
+    uint32_t pad2_left = 0,
+    uint32_t pad2_right = 0,
+    std::optional<uint32_t> pad2_cluster_axis = std::nullopt,
+    std::optional<size_t> pad2_num_links = std::nullopt,
+    const std::optional<Tensor>& persistent_output_buffer = std::nullopt);
 
 }  // namespace ttnn::prim

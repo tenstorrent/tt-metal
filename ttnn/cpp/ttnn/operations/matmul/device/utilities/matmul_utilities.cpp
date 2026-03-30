@@ -27,7 +27,7 @@ uint32_t get_estimated_size_of_cbs(
     // src1   CB: per_core_N * in0_block_w * 2 (for double buffer)
     // interm CB: per_core_M * per_core_N * interm_single_tile_size
     // out    CB: per_core_M * per_core_N
-    // bias   CB: per_core_M * in0_block_w
+    // bias   CB: per_core_N
     // Ignore optional intermediate CB because not needed when need to create a
     // program config.
     tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.dtype());
@@ -41,10 +41,6 @@ uint32_t get_estimated_size_of_cbs(
         auto* in0_buffer = input_tensor_a.buffer();
         const auto in0_tile = utilities::get_matmul_tile(input_tensor_a, transpose_a);
         in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_width();
-        if (transpose_a) {
-            // An intermediate CB (c_10) of same size is needed to hold the transposed data
-            in0_shard_width_in_tiles *= 2;
-        }
     }
     in2_block_tiles = per_core_M * in0_shard_width_in_tiles;
 
@@ -54,8 +50,14 @@ uint32_t get_estimated_size_of_cbs(
     uint32_t out_size = per_core_M * per_core_N * output_single_tile_size;
     uint32_t in2_size = in2_block_tiles * in0_single_tile_size;
     uint32_t interm_size = per_core_M * per_core_N * interm_single_tile_size;
-    uint32_t bias_size = in0_block_w * bias_single_tile_size;
-    return in0_size + in1_size + out_size + interm_size + bias_size + in2_size;
+    uint32_t bias_size = per_core_N * bias_single_tile_size;
+
+    uint32_t in0_transpose_size = 0;
+    if (transpose_a) {
+        // An extra intermediate CB (c_10) is needed to hold the transposed A data
+        in0_transpose_size = input_tensor_a.is_sharded() ? in2_size : in0_size;
+    }
+    return in0_size + in1_size + out_size + interm_size + bias_size + in2_size + in0_transpose_size;
 }
 
 uint32_t estimate_interm_tile_size(
@@ -157,6 +159,14 @@ ttnn::Shape compute_matmul_output_shape(
         output_shape = ttnn::Shape(new_shape);
     }
 
+    // Optimization: Reuse input A (in0) across batches when A's batch dimension is 1
+    // and B's batch dimension is > 1. For matmul shapes BxHaxMxK / BxHbxKxN where Ha=1 and Hb>1,
+    // the same A tensor can be reused for each batch element of B rather than reading A repeatedly.
+    // Restrict to rank-4 tensors to ensure dim 1 is correctly identified as the batch dimension
+    // and to prevent out-of-bounds indexing with lower-rank shapes.
+    if (a_rank == 4 && b_rank == 4 && input_shape_a[1] == 1 && input_shape_b[1] > 1) {
+        output_shape[1] = input_shape_b[1];
+    }
     return output_shape;
 }
 

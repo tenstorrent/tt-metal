@@ -6,7 +6,10 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "sfpu/ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_conversions.h"
 #include "sfpu/ckernel_sfpu_converter.h"
+#include "sfpu/ckernel_sfpu_polyval.h"
 
 using namespace sfpi;
 
@@ -154,8 +157,117 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     return y;
 }
 
+sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_(sfpi::vFloat z) {
+    sfpi::vFloat low = -126.99999237060546875f;
+    // Handle underflow
+    sfpi::vec_min_max(low, z);
+
+    sfpi::vInt k_int;
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
+
+    // Compute val = z * ln(2), then r = val - k*ln(2) in extended precision.
+    constexpr float LN2 = 0.693147180559945309f;
+    constexpr float LN2_HI = -0.6931152343750000f;
+    constexpr float LN2_LO = -3.19461832987e-05f;
+
+    sfpi::vFloat val = z * LN2;
+    sfpi::vFloat r_hi = k * LN2_HI + val;
+    sfpi::vFloat r = k * LN2_LO + r_hi;
+
+    sfpi::vFloat p = PolynomialEvaluator::eval(
+        r, sfpi::vConst1, sfpi::vConst1, 0.5f, 1.0f / 6.0f, 1.0f / 24.0f, 1.0f / 120.0f, 1.0f / 720.0f, 1.0f / 5040.0f);
+
+    sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp_nodebias(p) + k_int);
+
+    // Handle overflow
+    v_if(z >= 128.0f) { result = std::numeric_limits<float>::infinity(); }
+    v_endif;
+
+    return result;
+}
+
+template <bool IS_POSITIVE_EXPONENT>
+sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base, const sfpi::vFloat& pow) {
+    // The algorithm works in two steps:
+    // 1) Compute log2(base)
+    // 2) Compute base**pow = 2**(pow * log2(base))
+
+    // Step 1: Compute log2(base) using improved log
+    // Normalize base to calculation range
+    sfpi::vFloat abs_base = sfpi::abs(base);
+    sfpi::vFloat m = sfpi::setexp(abs_base, 127);
+    sfpi::vInt exp = sfpi::exexp(abs_base);
+
+    // Range reduction: ensure m in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
+    constexpr float SQRT2 = 1.4142135381698608f;
+    v_if(m >= SQRT2) {
+        m = sfpi::addexp(m, -1);
+        exp = exp + 1;
+    }
+    v_endif;
+
+    // Transform to z = (m - 1) / (m + 1)
+    sfpi::vFloat m_plus_1 = m + sfpi::vConst1;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
+    sfpi::vFloat m_minus_1 = m - sfpi::vConst1;
+    // 1/t: initial guess 1.003f - 0.244f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 - t*y).
+    sfpi::vFloat recip = 1.003f - 0.244f * m_plus_1;
+    recip = recip * (2.0f - m_plus_1 * recip);  // 1st NR
+    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR for float32
+    sfpi::vFloat z = m_minus_1 * recip;
+
+    // Compute z**2 for polynomial evaluation
+    sfpi::vFloat z2 = z * z;
+    // Polynomial approximation using odd powers
+    sfpi::vFloat p = PolynomialEvaluator::eval(
+        z2, sfpi::vConst1, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f, 0.09090909090909091f);
+    sfpi::vFloat ln_m = 2.0f * (z * p);
+
+    sfpi::vInt sign_bit = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(exp) >> 31);  // 0 or 1
+    sfpi::vInt exp_sign = sfpi::vInt(0) - sign_bit;    // 0 or 0xFFFFFFFF (arithmetic right shift equivalent)
+    sfpi::vInt exp_abs = (exp ^ exp_sign) - exp_sign;  // Take two's complement if negative exponent
+    // setsgn reads sign from bit 31, so use exp_sign directly (0 or 0xFFFFFFFF) not (exp_sign & 1)
+    sfpi::vFloat exp_f32 = sfpi::int32_to_float(sfpi::setsgn(exp_abs, exp_sign), 0);
+
+    // log2(base) = ln(base)/ln(2) = exp + ln_m/ln(2)
+    const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;
+    sfpi::vFloat log2_result = exp_f32 + ln_m * vConst1Ln2;
+
+    // Step 2: base**pow = 2**(pow*log2(base))
+    sfpi::vFloat y = _sfpu_pow2_f32_accurate_(pow * log2_result);
+
+    // Division by 0 when base is 0 and pow is negative => set to NaN (only for negative exponents)
+    if constexpr (!IS_POSITIVE_EXPONENT) {
+        v_if(abs_base == 0.f) {
+            y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
+        }
+        v_endif;
+    }
+
+    v_if(base < 0.0f) {  // negative base
+        // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
+        // Check valid base range
+        sfpi::vInt pow_int =
+            sfpi::float_to_int16(pow, 0);  // int16 should be plenty, since large powers will approach 0/Inf
+        sfpi::vFloat pow_rounded = sfpi::int32_to_float(pow_int, 0);
+
+        // If pow is odd integer then result is negative
+        // If power is even, then result is positive
+        // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
+        y = sfpi::setsgn(y, pow_int << 31);
+
+        // Check for integer power, if it is not then overwrite result with NaN
+        v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
+            y = sfpi::vConstFloatPrgm2;
+        }
+        v_endif;
+    }
+    v_endif;
+
+    return y;
+}
+
 template <int ITERATIONS>
-inline void _sfpu_unary_power_(const uint32_t exponent) {
+inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
     // Convert exponent to float
     const float pow_scalar = Converter::as_float(exponent);
     const sfpi::vFloat pow = pow_scalar;
@@ -177,40 +289,69 @@ inline void _sfpu_unary_power_(const uint32_t exponent) {
     }
 }
 
+template <int ITERATIONS>
+inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
+    // Convert exponent to float
+    const float pow_scalar = Converter::as_float(exponent);
+    const sfpi::vFloat pow = pow_scalar;
+
+    if (pow_scalar >= 0.0f) {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat base = sfpi::dst_reg[0];
+            sfpi::dst_reg[0] = _sfpu_unary_power_61f_updated_<true>(base, pow);
+            sfpi::dst_reg++;
+        }
+    } else {
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat base = sfpi::dst_reg[0];
+            sfpi::dst_reg[0] = _sfpu_unary_power_61f_updated_<false>(base, pow);
+            sfpi::dst_reg++;
+        }
+    }
+}
+
 /**
  * @brief Compute power operation
  *
  * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_unary_power(const uint32_t exponent) {
-    _sfpu_unary_power_<ITERATIONS>(exponent);
+    if constexpr (is_fp32_dest_acc_en) {
+        _sfpu_unary_power_fp32_<ITERATIONS>(exponent);
+    } else {
+        _sfpu_unary_power_bf16_<ITERATIONS>(exponent);
+    }
 }
 
 /**
  * @brief Compute power operation using iterative approach
  *
- * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
+ * @param exponent Non-negative integer exponent value
  */
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_unary_power_iterative(const uint32_t exponent) {
     // iterative approach for positive integer exponents
-    // exponent contains IEEE 754 float bits - convert to integer
-    const float exp_float = Converter::as_float(exponent);
-    const uint exp = (uint)exp_float;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result = 1.0f;
-        uint e = exp;
-        while (e > 0) {
-            if (e & 1) {
-                result *= in;
+        if (exponent == 0) {
+            sfpi::dst_reg[0] = 1.0f;
+        } else {
+            sfpi::vFloat result = in;
+            uint32_t exp = exponent - 1;
+
+            while (exp > 0) {
+                if (exp & 1) {
+                    result *= in;
+                }
+                in *= in;
+                exp >>= 1;
             }
-            in *= in;
-            e >>= 1;
+            sfpi::dst_reg[0] = result;
         }
-        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }

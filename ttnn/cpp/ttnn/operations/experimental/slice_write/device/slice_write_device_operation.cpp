@@ -38,11 +38,6 @@ SliceWriteDeviceOperation::program_factory_t SliceWriteDeviceOperation::select_p
     }
 }
 
-void SliceWriteDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void SliceWriteDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
@@ -94,7 +89,7 @@ TensorSpec SliceWriteDeviceOperation::compute_output_specs(
     return tensor_args.output.tensor_spec();
 }
 
-tt::stl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t SliceWriteDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "SliceWriteDeviceOperation::compute_program_hash is called");
 

@@ -6,25 +6,48 @@
 
 #include <string>
 #include <sstream>
+#include <filesystem>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/unordered_set.h>
+#include <nanobind/stl/filesystem.h>
 #include <nlohmann/json.hpp>
 
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/graph/graph_consts.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace ttnn::graph {
 
 using IGraphProcessor = tt::tt_metal::IGraphProcessor;
+using GraphTracker = tt::tt_metal::GraphTracker;
 
 void py_graph_module_types(nb::module_& m) {
-    nb::enum_<IGraphProcessor::RunMode>(m, "RunMode")
-        .value("NORMAL", IGraphProcessor::RunMode::NORMAL)
-        .value("NO_DISPATCH", IGraphProcessor::RunMode::NO_DISPATCH);
+    nb::enum_<IGraphProcessor::RunMode>(m, "RunMode", R"doc(
+        Run mode for graph capture.
+
+        NORMAL: Operations execute normally on the device while being traced.
+                Programs are cached for future reuse.
+
+        NO_DISPATCH: Operations are traced but NOT executed on the device.
+                     Buffer allocations are mocked (address=0), and programs are
+                     compiled but not dispatched. This mode is useful for:
+                     - Measuring memory usage of models that don't fit in device memory
+                     - Analyzing operation graphs without hardware execution
+
+                     IMPORTANT: Programs are NOT cached during NO_DISPATCH mode because
+                     they contain invalid buffer addresses. This ensures that subsequent
+                     runs in NORMAL mode will create fresh programs with valid addresses.
+    )doc")
+        .value("NORMAL", IGraphProcessor::RunMode::NORMAL, "Execute operations normally while tracing")
+        .value(
+            "NO_DISPATCH",
+            IGraphProcessor::RunMode::NO_DISPATCH,
+            "Trace operations without executing on device (no program caching)");
 }
 
 void py_graph_module(nb::module_& m) {
@@ -80,7 +103,36 @@ void py_graph_module(nb::module_& m) {
         });
 
     const auto* doc_begin =
-        R"doc(begin_graph_capture()
+        R"doc(
+        Begin capturing a graph of operations.
+
+        This function starts recording all ttnn operations into a graph that can be
+        analyzed for memory usage, operation dependencies, and other metrics.
+
+        Args:
+            run_mode: Determines how operations are executed during capture.
+                - RunMode.NORMAL (default): Operations execute on the device normally.
+                  Programs are compiled and cached for reuse.
+                - RunMode.NO_DISPATCH: Operations are traced but NOT executed on device.
+                  Buffer allocations are mocked and programs are not dispatched.
+                  This allows profiling models that exceed device memory.
+
+                  NOTE: In NO_DISPATCH mode, programs are intentionally NOT cached
+                  because they contain invalid buffer addresses (address=0). This
+                  ensures that when you later run in NORMAL mode, fresh programs
+                  with valid addresses will be created.
+
+        Example:
+            >>> # Profile memory without execution
+            >>> ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+            >>> output = model(input_tensor)
+            >>> trace = ttnn.graph.end_graph_capture()
+            >>> peak_memory = ttnn.graph.extract_peak_L1_memory_usage(trace)
+
+            >>> # Normal execution with tracing
+            >>> ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            >>> output = model(input_tensor)
+            >>> trace = ttnn.graph.end_graph_capture()
     )doc";
 
     m.def(
@@ -90,8 +142,12 @@ void py_graph_module(nb::module_& m) {
         nb::arg("run_mode") = IGraphProcessor::RunMode::NORMAL);
 
     const auto* doc_end =
-        R"doc(end_graph_capture() -> Union[None, bool, int, float, list, dict]
-        returns the value captured graph as a json object converted to python object
+        R"doc(end_graph_capture() -> list
+        Ends graph capture and returns the captured graph trace.
+
+        Returns:
+            List of graph nodes, where each node is a dict with keys like
+            'node_type', 'counter', 'params', 'connections', etc.
     )doc";
 
     m.def(
@@ -103,6 +159,32 @@ void py_graph_module(nb::module_& m) {
             return json_module.attr("loads")(json_object_str);
         },
         doc_end);
+
+    const auto* doc_end_to_file =
+        R"doc(end_graph_capture_to_file(report_path) -> str
+        Ends graph capture and writes a full report to a JSON file.
+
+        The report file contains: graph trace, device info, and metadata.
+        Useful for offline analysis without Python at capture time.
+
+        Args:
+            report_path: Path to write the JSON report file
+
+        Returns:
+            The captured graph trace as a JSON string
+    )doc";
+
+    m.def(
+        "end_graph_capture_to_file",
+        [](const std::filesystem::path& report_path) {
+            nlohmann::json json_object = GraphProcessor::end_graph_capture_to_file(report_path);
+            return json_object.dump();
+        },
+        doc_end_to_file,
+        nb::arg("report_path"));
+
+    // Expose report version constant
+    m.attr("REPORT_VERSION") = kCurrentReportVersion;
 
     m.def(
         "extract_calltrace",
@@ -210,6 +292,69 @@ void py_graph_module(nb::module_& m) {
         )doc",
         nb::arg("trace"),
         nb::arg("interleaved_storage_cores"));
+
+    m.def(
+        "is_graph_capture_active",
+        [] { return GraphTracker::instance().is_enabled(); },
+        R"doc(is_graph_capture_active() -> bool
+
+        Check if a graph capture session is currently active.
+
+        Returns:
+            True if begin_graph_capture() was called and capture is in progress.
+        )doc");
+
+    m.def(
+        "track_function_start",
+        [](const std::string& function_name) {
+            GraphTracker::instance().track_function_start(std::string_view(function_name));
+        },
+        R"doc(track_function_start(function_name: str) -> None
+
+        Emit a function_start node into the active graph capture.
+
+        This is used by Python-level operation decorators to wrap high-level
+        operations (e.g. ttnn.fold, ttnn.conv2d) so that the graph trace
+        correctly nests their internal C++ sub-operations.
+
+        Args:
+            function_name: The operation name (e.g. "ttnn.fold")
+        )doc",
+        nb::arg("function_name"));
+
+    m.def(
+        "track_function_end",
+        [] { GraphTracker::instance().track_function_end(); },
+        R"doc(track_function_end() -> None
+
+        Emit a function_end node into the active graph capture.
+
+        Must be paired with a prior track_function_start() call.
+        )doc");
+
+    m.def(
+        "enable_detailed_buffer_tracing",
+        &GraphProcessor::enable_detailed_buffer_tracing,
+        R"doc(enable_detailed_buffer_tracing() -> None
+
+        Enable detailed per-page buffer tracing for graph reports.
+        )doc");
+
+    m.def(
+        "disable_detailed_buffer_tracing",
+        &GraphProcessor::disable_detailed_buffer_tracing,
+        R"doc(disable_detailed_buffer_tracing() -> None
+
+        Disable detailed per-page buffer tracing.
+        )doc");
+
+    m.def(
+        "is_detailed_buffer_tracing_enabled",
+        &GraphProcessor::is_detailed_buffer_tracing_enabled,
+        R"doc(is_detailed_buffer_tracing_enabled() -> bool
+
+        Check if detailed per-page buffer tracing is currently enabled.
+        )doc");
 }
 
 }  // namespace ttnn::graph

@@ -18,6 +18,7 @@
 
 #include "buffer.hpp"
 #include "common/TracyTTDeviceData.hpp"
+#include "context/context_types.hpp"
 #include "core_coord.hpp"
 #include "mesh_device.hpp"
 #include "profiler_optional_metadata.hpp"
@@ -70,6 +71,9 @@ private:
 
     // Device ID
     ChipId device_id{};
+
+    // ContextID extracted from the device
+    ContextId context_id;
 
     // Device frequency
     int device_core_frequency{};
@@ -342,18 +346,27 @@ public:
 
     void setProfileBufferBankSizeBytes(uint32_t size, uint32_t num_dram_banks);
 
+    // Clear internal state when device is re-initialized. This prevents stale data from previous
+    // device sessions from being used.
+    void clearStateForDeviceReinit();
+
+    // Reset active DRAM buffer indices to 0 for all cores. This should be called when
+    // clearing device-side profiler control buffers to keep host and device state in sync.
+    void resetActiveDramBufferIndices();
+
     // Read control buffer for each core, check if the host buffer for any risc is full. If it's full,
     // swap the active DRAM buffer to unblock the risc and then read out the buffer
     void pollDebugDumpResults(IDevice* device, const std::vector<CoreCoord>& virtual_cores, bool is_final_poll);
 };
 
-bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device);
+bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device, ContextId context_id);
 
 void writeToCoreControlBuffer(
     distributed::MeshDevice* mesh_device,
     IDevice* device,
     const CoreCoord& virtual_core,
     const std::vector<uint32_t>& data,
-    bool force_slow_dispatch);
+    bool force_slow_dispatch,
+    ContextId context_id);
 
 }  // namespace tt::tt_metal

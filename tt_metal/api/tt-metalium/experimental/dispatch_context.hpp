@@ -21,11 +21,22 @@ namespace experimental {
 // removed once we implement a proper weight loading solution for Low Latency Decode.
 // As such its exposed as experimental.
 
+// Note: Slow Dispatch is a "Back-Door" way of running programs on compute cores.
+// This is productized for extremely application specific use cases.
+
 class DispatchContext {
 public:
     static DispatchContext& get();
     void initialize_fast_dispatch(distributed::MeshDevice* mesh_device);
     void terminate_fast_dispatch(distributed::MeshDevice* mesh_device);
+    void enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
+    void disable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
+
+    // Reset DispatchContext state to allow reinitialization
+    void reset() {
+        num_fd_inits_ = 0;
+        fast_dispatch_enabled_ = false;
+    }
 
 private:
     DispatchContext() = default;

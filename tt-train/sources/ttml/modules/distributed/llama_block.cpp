@@ -4,17 +4,24 @@
 
 #include "llama_block.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "grouped_query_attention.hpp"
 #include "linear.hpp"
 #include "modules/dropout_module.hpp"
+#include "modules/linear_module.hpp"
 #include "modules/rms_norm_module.hpp"
 #include "ops/binary_ops.hpp"
+#include "ops/swiglu_op.hpp"
 #include "ops/unary_ops.hpp"
 
 namespace ttml::modules::distributed {
 
 DistributedLlamaMLP::DistributedLlamaMLP(
     uint32_t embedding_size, float dropout_prob, std::optional<uint32_t> intermediate_dim) {
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    auto tp_axis = pctx.get_tp_axis();
+    bool use_tp = pctx.is_tp_enabled();
+
     uint32_t multiple_of = 256U;
     uint32_t hidden_size = 0U;
     if (intermediate_dim) {
@@ -23,12 +30,24 @@ DistributedLlamaMLP::DistributedLlamaMLP(
         const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4U * embedding_size) * (2.0F / 3.0F));
         hidden_size = ((unrounded_size + multiple_of - 1U) / multiple_of) * multiple_of;
     }
-    m_w1 = std::make_shared<ColumnParallelLinear>(
-        embedding_size, hidden_size, /* has_bias */ false, /* gather_output */ false);
-    m_w3 = std::make_shared<ColumnParallelLinear>(
-        embedding_size, hidden_size, /* has_bias */ false, /* gather_output */ false);
-    m_w2 = std::make_shared<RowParallelLinear>(
-        hidden_size, embedding_size, /* has_bias */ false, /* input_is_parallel */ true);
+
+    m_dropout_prob = dropout_prob;
+
+    if (use_tp) {
+        m_w1 = std::make_shared<ColumnParallelLinear>(
+            embedding_size, hidden_size, /* has_bias */ false, /* gather_output */ false, tp_axis);
+        m_w3 = std::make_shared<ColumnParallelLinear>(
+            embedding_size, hidden_size, /* has_bias */ false, /* gather_output */ false, tp_axis);
+        m_w2 = std::make_shared<RowParallelLinear>(
+            hidden_size, embedding_size, /* has_bias */ false, /* input_is_parallel */ true, tp_axis);
+    } else {
+        m_w1_linear = std::make_shared<ttml::modules::LinearLayer>(embedding_size, hidden_size, /* has_bias */ false);
+        m_w3_linear = std::make_shared<ttml::modules::LinearLayer>(embedding_size, hidden_size, /* has_bias */ false);
+        m_w2_linear = std::make_shared<ttml::modules::LinearLayer>(hidden_size, embedding_size, /* has_bias */ false);
+        m_w1 = m_w1_linear;
+        m_w3 = m_w3_linear;
+        m_w2 = m_w2_linear;
+    }
     m_dropout = std::make_shared<DropoutLayer>(dropout_prob, /* use_per_device_seed */ false);
 
     create_name("llama_mlp");
@@ -39,6 +58,19 @@ DistributedLlamaMLP::DistributedLlamaMLP(
 }
 
 autograd::TensorPtr DistributedLlamaMLP::operator()(const autograd::TensorPtr& input) {
+    const float dropout_prob = (get_run_mode() == RunMode::EVAL) ? 0.0F : m_dropout_prob;
+    // Fused path is available only for non-TP where local LinearLayer weights exist.
+    if (m_w1_linear && m_w2_linear && m_w3_linear) {
+        // Keep distributed MLP RNG behavior aligned with DropoutLayer(use_per_device_seed=false).
+        return ops::swiglu(
+            input,
+            m_w1_linear->get_weight(),
+            m_w2_linear->get_weight(),
+            m_w3_linear->get_weight(),
+            dropout_prob,
+            false);
+    }
+
     auto swished = ops::silu((*m_w1)(input));
     auto gate = (*m_w3)(input);
     auto gated = swished * gate;
@@ -73,7 +105,7 @@ DistributedLlamaBlock::DistributedLlamaBlock(
 }
 
 autograd::TensorPtr DistributedLlamaBlock::operator()(
-    const autograd::TensorPtr& input, const autograd::TensorPtr& mask) {
+    const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) {
     auto residual = input;
     auto h = (*m_attention_norm)(input);
     h = (*m_attention)(h, mask);  // TODO: pass in start_pos, freqs_cis for RoPE here

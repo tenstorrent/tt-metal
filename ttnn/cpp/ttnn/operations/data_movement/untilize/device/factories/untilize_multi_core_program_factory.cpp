@@ -6,13 +6,13 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/buffer_distribution_spec.hpp>
 #include "untilize_multi_core_program_factory.hpp"
 #include "ttnn/operations/data_movement/untilize/device/untilize_device_operation.hpp"
 
@@ -29,7 +29,6 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     const auto& a = tensor_args.input;
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
-    const auto& use_pack_untilize = operation_attributes.use_pack_untilize;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -48,6 +47,8 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t tile_width = tile_shape[1];
 
     bool input_is_sharded = a.is_sharded();
+    std::vector<CoreCoord> ordered_cores_with_data;
+    bool has_ordered_cores_with_data = false;
 
     uint32_t num_tiles_per_row = tensor_width / tile_width;
     uint32_t num_tiles_per_col = tensor_height / tile_height;
@@ -69,15 +70,14 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     uint32_t num_input_blocks_per_full_core = num_rows_per_full_core;
     uint32_t num_input_blocks_per_cliff_core = num_rows_per_cliff_core;
     uint32_t num_shards = 0;
+    uint32_t num_shards_height = 0;
+    uint32_t input_shard_height = 0;
+    uint32_t input_shard_width = 0;
     if (input_is_sharded) {
         ShardSpec input_shard_spec = a.shard_spec().value();
-        uint32_t input_shard_height = input_shard_spec.shape[0];
-        uint32_t input_shard_width = input_shard_spec.shape[1];
-
+        input_shard_height = input_shard_spec.shape[0];
+        input_shard_width = input_shard_spec.shape[1];
         num_compute_cores = input_shard_spec.grid.num_cores();
-        compute_core_range = input_shard_spec.grid;
-        full_compute_core_range = input_shard_spec.grid;
-        cliff_compute_core_range = CoreRangeSet();
 
         // Note: Accounting for uneven input shards
         num_input_blocks_across_width = tt::div_up(tensor_width, input_shard_width);
@@ -85,24 +85,47 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         num_input_blocks_per_full_core = input_shard_height / tile_height;
         num_input_blocks_per_cliff_core = 0;
 
-        uint32_t num_shards_height = tt::div_up(tensor_height, input_shard_height);
+        num_shards_height = tt::div_up(tensor_height, input_shard_height);
         num_shards = num_shards_height * num_input_blocks_across_width;
+        if (num_compute_cores >
+            num_shards) {  // If the user specified more compute cores than there are data, we need to figure out which
+                           // cores have data on them and only activate those cores.
+            ordered_cores_with_data = a.buffer()->buffer_distribution_spec().value().cores_with_data();
+            has_ordered_cores_with_data = true;
+            compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
+
+            full_compute_core_range = compute_core_range;
+        } else {
+            compute_core_range = input_shard_spec.grid;
+            full_compute_core_range = input_shard_spec.grid;
+        }
+        cliff_compute_core_range = CoreRangeSet();
     }
+
+    // Detect if sharding is uneven - works for HEIGHT, WIDTH, and BLOCK sharding
+    bool has_uneven_sharding = false;
+    if (input_is_sharded) {
+        uint32_t height_remainder = tensor_height % input_shard_height;
+        uint32_t width_remainder = tensor_width % input_shard_width;
+        has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
+    }
+
+    // Block reader: unbacked double-buffer CB, reads from L1 shard block-by-block.
+    // Required for uneven sharding where CB backing has a size mismatch.
+    // Even sharding uses zero-copy backed CB (fast production path).
+    bool use_block_reader = input_is_sharded && has_uneven_sharding;
 
     // Input CB
     uint32_t input_cb_num_tiles;
-    if (input_is_sharded) {
-        // Have compute core untilize the entire shard at once
+    if (input_is_sharded && !use_block_reader) {
+        // Even sharding with pack_untilize: CB is backed by the sharded buffer (zero-copy)
         input_cb_num_tiles = num_tiles_per_input_block * num_input_blocks_per_full_core;
     } else {
-        if (num_input_blocks_per_full_core == 1) {
-            // No need to double buffer if the core is only processing a single block
-            input_cb_num_tiles = num_tiles_per_input_block;
-        } else {
-            // Double buffer if the core is processing 2+ blocks
-            input_cb_num_tiles = num_tiles_per_input_block * 2;
-        }
+        // Block reader (sharded) or interleaved: double-buffer
+        input_cb_num_tiles =
+            (num_input_blocks_per_full_core == 1) ? num_tiles_per_input_block : num_tiles_per_input_block * 2;
     }
+    Buffer* cb_backing_buffer = (input_is_sharded && !use_block_reader) ? src0_buffer : nullptr;
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
         program,
@@ -110,7 +133,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         input_single_tile_size,
         input_cb_num_tiles,
         input_cb_data_format,
-        input_is_sharded ? src0_buffer : nullptr);
+        cb_backing_buffer);
 
     // Output CB
     uint32_t output_cb_num_tiles;
@@ -131,14 +154,26 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     // Reader compile-time args and kernel
     KernelHandle unary_reader_kernel_id;
-    if (input_is_sharded) {
-        // Sharded input
+    if (use_block_reader) {
+        // Block reader: copies from L1 shard into double-buffered CB one block at a time
+        std::vector<uint32_t> reader_compile_time_args = {
+            (uint32_t)src0_cb_index,
+            (uint32_t)num_tiles_per_input_block,
+        };
+        unary_reader_kernel_id = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+            "reader_unary_sharded_blocks.cpp",
+            compute_core_range,
+            ReaderDataMovementConfig(reader_compile_time_args));
+    } else if (input_is_sharded) {
+        // Even sharding with pack_untilize: CB is backed by the sharded buffer, reader just pushes
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
-        unary_reader_kernel_id = tt::tt_metal::CreateKernel(
+        unary_reader_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
             compute_core_range,
-            tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+            ReaderDataMovementConfig(reader_compile_time_args));
     } else {
         // Interleaved input
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
@@ -152,21 +187,24 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     }
 
     // Writer compile-time args
+    uint32_t output_element_size = output.element_size();
+    uint32_t output_page_width =
+        tensor_width;  // In height-sharded and interleaved cases, the output page is the entire tensor row
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-        uint32_t output_shard_width;
+        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        output.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
         if (output.shard_spec().has_value()) {
-            output_shard_width = output.shard_spec().value().shape[1];
+            output_page_width = output.shard_spec().value().shape[1];
         } else {
-            output_shard_width = output.nd_shard_spec().value().shard_shape[-1];
+            output_page_width = output.nd_shard_spec().value().shard_shape[-1];
         }
-        output_num_blocks_across_width = tensor_width / output_shard_width;
+        output_num_blocks_across_width = tt::div_up(tensor_width, output_page_width);
     }
-    uint32_t output_stick_size = tensor_width * output.element_size() / output_num_blocks_across_width;
-    uint32_t output_element_size = output.element_size();
+
     uint32_t num_cols_per_input_block = num_tiles_per_input_block * tile_width;
-    uint32_t num_cols_per_output_block = tensor_width / output_num_blocks_across_width;
+    uint32_t num_cols_per_output_block = output_page_width;
+    uint32_t output_stick_size = num_cols_per_output_block * output_element_size;
     std::vector<uint32_t> writer_compile_time_args = {
         (uint32_t)output_cb_index,
         (uint32_t)output_stick_size,
@@ -193,20 +231,8 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     }
 
     // Compute kernel file
-    std::string compute_kernel;
-    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
-        (a.dtype() == DataType::FLOAT32 && num_tiles_per_input_block > MAX_PACK_UNTILIZE_WIDTH)) {
-        log_debug(tt::LogOp, "Using slow untilize.");
-        compute_kernel = std::string(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
-        unpack_to_dest_mode[src0_cb_index] =
-            UnpackToDestMode::Default;  // TODO: We need SFPU untilize for FP32 (#30400, #33795)
-    } else {
-        log_debug(tt::LogOp, "Using fast pack untilize.");
-        compute_kernel = std::string(
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/"
-            "pack_untilize_variable_num_blocks.cpp");
-    }
+    std::string compute_kernel(
+        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
 
     // Compute compile-time args and kernel
     // Note: This condition is always true for sharded input
@@ -253,10 +279,10 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
     // Run-time args (full cores)
     // Note: For sharded input, these are the only cores used
     bool is_row_major = input_is_sharded ? a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR : true;
-    std::vector<CoreCoord> full_cores = corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
-    uint32_t num_full_cores =
-        input_is_sharded ? std::min(static_cast<uint32_t>(full_cores.size()), num_shards) : full_cores.size();
-    for (uint32_t i = 0; i < num_full_cores; ++i) {
+    std::vector<CoreCoord> full_cores = has_ordered_cores_with_data
+                                            ? ordered_cores_with_data
+                                            : corerange_to_cores(full_compute_core_range, std::nullopt, is_row_major);
+    for (uint32_t i = 0; i < full_cores.size(); ++i) {
         CoreCoord core = full_cores[i];
         uint32_t height_wise_input_block_start_index =
             (i / num_input_blocks_across_width) * num_input_blocks_per_full_core;
@@ -290,8 +316,12 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         // Reader run-time args
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
         std::vector<uint32_t> reader_run_time_args;
-        if (input_is_sharded) {
-            // Sharded input
+        if (use_block_reader) {
+            reader_run_time_args = {
+                src0_buffer->address(),
+                num_input_blocks_to_process,
+            };
+        } else if (input_is_sharded) {
             reader_run_time_args = {num_tiles_to_read};
         } else {
             // Interleaved input
@@ -383,7 +413,12 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     return cached_program_t{
         std::move(program),
-        {unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output, cores_with_run_time_args}};
+        {unary_reader_kernel_id,
+         unary_writer_kernel_id,
+         cb_src0,
+         cb_output,
+         cores_with_run_time_args,
+         use_block_reader}};
 }
 
 void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
@@ -401,16 +436,17 @@ void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
     auto* dst_buffer = tensor_return_value.buffer();
 
     bool input_is_sharded = tensor_args.input.is_sharded();
+    bool block_reader = cached_program.shared_variables.has_uneven_sharding;
 
     // Reader
-    if (input_is_sharded) {
-        // Sharded input
+    if (input_is_sharded && !block_reader) {
+        // Even sharding with pack_untilize: CB is backed by the sharded buffer
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     } else {
-        // Interleaved input
-        auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        // Block reader (sharded) or interleaved: update src_addr in reader runtime args
+        auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const CoreCoord& core : cores_with_runtime_args) {
-            auto& runtime_args = runtime_args_by_core[core.x][core.y];
+            auto& runtime_args = reader_args_by_core[core.x][core.y];
             runtime_args[0] = src_buffer->address();
         }
     }

@@ -8,11 +8,6 @@
 
 namespace ttnn::operations::moreh::moreh_nll_loss_step1 {
 
-MorehNllLossStep1DeviceOperation::program_factory_t MorehNllLossStep1DeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return Factory{};
-}
-
 void MorehNllLossStep1DeviceOperation::validate_inputs(
     const operation_attributes_t& /*attributes*/, const tensor_args_t& tensor_args) {
     const auto& target_tensor = tensor_args.target_tensor;
@@ -28,16 +23,11 @@ void MorehNllLossStep1DeviceOperation::validate_inputs(
         TT_FATAL(
             weight_tensor.value().buffer() != nullptr,
             "Operands to nll_loss need to be allocated in buffers on device!");
-        TT_FATAL(weight_tensor.value().dtype() == DataType::BFLOAT16, "weigth tensor dtype must be bfloat16");
+        TT_FATAL(weight_tensor.value().dtype() == DataType::BFLOAT16, "weight tensor dtype must be bfloat16");
     }
 }
 
 void MorehNllLossStep1DeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(attributes, tensor_args);
-}
-
-void MorehNllLossStep1DeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     validate_inputs(attributes, tensor_args);
 }

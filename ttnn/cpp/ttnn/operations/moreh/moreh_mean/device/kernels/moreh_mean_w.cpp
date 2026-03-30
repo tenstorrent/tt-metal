@@ -4,11 +4,11 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/matmul.h"
-#include "compute_kernel_api/eltwise_binary.h"
-#include "compute_kernel_api/mask.h"
-#include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/tile_move_copy.h"
+#include "api/compute/matmul.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/mask.h"
+#include "api/compute/reduce.h"
+#include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 
 void kernel_main() {

@@ -49,6 +49,11 @@ bool operator<=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(rhs
 
 bool operator>=(const FabricNodeId& lhs, const FabricNodeId& rhs) { return !(lhs < rhs); }
 
+std::ostream& operator<<(std::ostream& os, const MeshId& mesh_id) {
+    os << *mesh_id;
+    return os;
+}
+
 std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id) {
     using ::operator<<;  // Enable ADL for StrongType operator<<
     os << "M" << fabric_node_id.mesh_id << "D" << fabric_node_id.chip_id;
@@ -59,11 +64,40 @@ std::ostream& operator<<(std::ostream& os, const FabricNodeId& fabric_node_id) {
 
 namespace std {
 size_t hash<tt::tt_fabric::FabricNodeId>::operator()(const tt::tt_fabric::FabricNodeId& fabric_node_id) const noexcept {
-    return tt::stl::hash::hash_objects_with_default_seed(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+    return ttsl::hash::hash_objects_with_default_seed(fabric_node_id.mesh_id, fabric_node_id.chip_id);
 }
 }  // namespace std
 
 auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
     const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator {
     return fmt::format_to(ctx.out(), "(M{}, D{})", *node_id.mesh_id, node_id.chip_id);
+}
+
+auto fmt::formatter<tt::tt_fabric::MeshId>::format(const tt::tt_fabric::MeshId& mesh_id, format_context& ctx) const
+    -> format_context::iterator {
+    return fmt::format_to(ctx.out(), "{}", *mesh_id);
+}
+
+namespace tt::tt_metal {
+
+std::ostream& operator<<(std::ostream& os, const AsicID& asic_id) {
+    os << *asic_id;
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const TrayID& tray_id) {
+    os << *tray_id;
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const ASICLocation& asic_location) {
+    os << *asic_location;
+    return os;
+}
+
+}  // namespace tt::tt_metal
+
+auto fmt::formatter<tt::tt_metal::AsicID>::format(const tt::tt_metal::AsicID& asic_id, format_context& ctx) const
+    -> format_context::iterator {
+    return fmt::format_to(ctx.out(), "{}", *asic_id);
 }

@@ -1,70 +1,50 @@
-# Default profile
-PROFILE="loudboxes"
-USER=""
-CONFIG_FILE=""
-HOST_FILE=""
-RANK_BINDINGS_FILE=""
-MPI_EXTRA_ARGS=""
+#!/bin/bash
+#SBATCH --job-name=pipeline_parallel_training_batch_1
+#SBATCH --output=pipeline_parallel_training_%j.out
+#SBATCH --error=pipeline_parallel_training_%j.err
 
-# Parse arguments
-while [[ "$#" -gt 0 ]]; do
-    case $1 in
-        --profile)
-            shift
-            PROFILE="$1"
-            ;;
-        --hostfile)
-            shift
-            HOST_FILE="$1"
-            ;;
-        --user)
-            shift
-            USER="$1"
-            ;;
-        --rank-bindings)
-            shift
-            RANK_BINDINGS_FILE="$1"
-            ;;
-        --config)
-            shift
-            CONFIG_FILE="$1"
-            ;;
-        --mpi-extra-args)
-            shift
-            MPI_EXTRA_ARGS="$1"
-            ;;
-        *)
-            echo "Unknown argument: $1"
-            echo "Usage: $0 [--profile loudboxes|galaxies] [--user USER] [--hostfile PATH] [--rank-bindings PATH] [--config CONFIG_FILE] [--mpi-extra-args ARGS]"
-            exit 1
-            ;;
-    esac
-    shift
-done
+# Note: Manually set the workload here
+WORKLOAD="llama70b_16stage"
 
-# Set defaults based on profile if not explicitly provided
-if [[ "$PROFILE" == "loudboxes" ]]; then
-    USER="${USER:-ttuser}"
-    CONFIG_FILE="${CONFIG_FILE:-training_shakespeare_llama8b_pp_fabric.yaml}"
-    HOST_FILE="${HOST_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5loudboxes/hosts.txt}"
-    RANK_BINDINGS_FILE="${RANK_BINDINGS_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5loudboxes/rank_bindings.yaml}"
-elif [[ "$PROFILE" == "galaxies" ]]; then
-    USER="${USER:-local-rfurko}"
-    CONFIG_FILE="${CONFIG_FILE:-training_shakespeare_llama8b_pp_fabric_galaxy.yaml}"
-    HOST_FILE="${HOST_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5galaxies/hosts.txt}"
-    RANK_BINDINGS_FILE="${RANK_BINDINGS_FILE:-${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/configurations/5galaxies/rank_bindings.yaml}"
-    MPI_EXTRA_ARGS="${MPI_EXTRA_ARGS:---allow-run-as-root --mca btl self,tcp --mca btl_tcp_if_include ens5f0np0}"
+# Common environmental variables
+if [ -z "${TT_METAL_HOME:-}" ]; then
+    TT_METAL_HOME="/data/${USER}/tt-metal"
+fi
+export TT_METAL_HOME
+export PYTHONPATH="${TT_METAL_HOME}"
+source ${TT_METAL_HOME}/python_env/bin/activate
+export LD_LIBRARY_PATH="/opt/openmpi-v5.0.7-ulfm/lib:$LD_LIBRARY_PATH"
+export TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
+PP_ROOT="${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training"
+
+# Make sure all galaxies are in a good state
+srun tt-smi -glx_reset
+
+# Select config and host config based on workload
+RANKS_PER_HOST="4"
+if [[ "$WORKLOAD" == "llama8b" ]]; then
+    CONFIG_FILE="training_configs/training_shakespeare_llama8b_intrahost_pp4.yaml"
+    HOST_CONFIG="1galaxy_pp4"
+elif [[ "$WORKLOAD" == "llama70b_4stage" ]]; then
+    CONFIG_FILE="training_configs/training_shakespeare_llama70b_pp4_tp32_fabric_galaxy.yaml"
+    HOST_CONFIG="4galaxy_pp4"
+    RANKS_PER_HOST="1"
+elif [[ "$WORKLOAD" == "llama70b_16stage" ]]; then
+    CONFIG_FILE="training_configs/training_shakespeare_llama70b_pp16_fabric_galaxy.yaml"
+    HOST_CONFIG="4galaxy_pp16"
+elif [[ "$WORKLOAD" == "llama405b" ]]; then
+    CONFIG_FILE="training_configs/training_shakespeare_llama405b_pp_fabric.yaml"
+    HOST_CONFIG="4galaxy_pp16"
 else
-    echo "Error: Unknown profile '$PROFILE'. Use 'loudboxes' or 'galaxies'."
+    echo "Unknown workload: $WORKLOAD"
     exit 1
 fi
 
-# copy all files to all machines (pass user and hostfile)
-${TT_METAL_HOME}/tt-train/sources/examples/nano_gpt/3tier/all_machines_copy.sh --run --sync --user "$USER" --hostfile "$HOST_FILE"
+# generate rankfile to /tmp so there are no dashes in the name (workaround for parsing error)
+scontrol show hostnames | python make_rankfile.py -n ${RANKS_PER_HOST} -o /tmp/rankfile.txt
 
-# install requirements
-mpirun-ulfm --hostfile ${HOST_FILE} --tag-output pip install -r ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/requirements.txt
-
-CMD="python3 ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/pipeline_parallel_training/training.py -c ${CONFIG_FILE}"
-# use tt-run to run the training script across all machines
-${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py --rank-binding ${RANK_BINDINGS_FILE} --mpi-args "--hostfile ${HOST_FILE} ${MPI_EXTRA_ARGS} --tag-output" ${CMD}
+# run training
+tt-run --verbose \
+    --mpi-args "--oversubscribe --map-by rankfile:file=/tmp/rankfile.txt" \
+    --rank-binding ${PP_ROOT}/configurations/${HOST_CONFIG}/rank_bindings.yaml \
+    python ${PP_ROOT}/training.py -c ${CONFIG_FILE}

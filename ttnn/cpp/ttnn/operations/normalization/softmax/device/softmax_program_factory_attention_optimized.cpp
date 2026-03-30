@@ -8,10 +8,10 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include <bit>
 #include <utility>
 
 namespace ttnn::prim {
@@ -110,11 +110,12 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     // Program specific checks
     if ((tensor_args.input_tensor.device()->l1_size_per_core() * 0.9) < cb_size_sum_bytes) {
         use_large_kernel = true;
-        cb_length = 80;
-        in0_t = 80;
-        im4_t = 80;
-        im0_t = 80;
-        im3_t = 80;
+        uint32_t large_kernel_cb_size = (80 / block_size) * block_size;
+        cb_length = large_kernel_cb_size;
+        in0_t = large_kernel_cb_size;
+        im4_t = large_kernel_cb_size;
+        im0_t = large_kernel_cb_size;
+        im3_t = large_kernel_cb_size;
         TT_FATAL(!attributes.inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
     }
     if (!use_large_kernel) {
@@ -160,7 +161,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         reader_compile_time_args.push_back(num_tiles_causal_mask);
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {num_datum_padded};
+    std::vector<uint32_t> writer_compile_time_args = {num_datum_padded, tile_height * tile_width};
     tt::tt_metal::TensorAccessorArgs(out0_buffer).append_to(writer_compile_time_args);
     std::map<std::string, std::string> softmax_defines, writer_defines;
     if (tensor_args.mask.has_value()) {
@@ -281,21 +282,18 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
     uint32_t out_addr = out0_buffer->address();
 
     uint32_t curr_row = 0;
-    union {
-        float f;
-        uint32_t u;
-    } s{};
-    s.f = attributes.scale.value_or(1.0f);  // scale for fused scale-mask-softmax
+    uint32_t scale_value =
+        std::bit_cast<uint32_t>(attributes.scale.value_or(1.0f));  // scale for fused scale-mask-softmax
     for (uint32_t i = 0; i < grid_size.x * grid_size.y; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
         if (i >= num_cores) {
             if (attributes.is_causal_mask) {
-                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0, 0});
+                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0, 0, 0});
             } else {
-                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80});
+                SetRuntimeArgs(program, reader_kernels_id, core, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3f803f80, 0});
             }
 
-            SetRuntimeArgs(program, softmax_kernels_id, core, {0, 0, 0, 0, 0, 0});
+            SetRuntimeArgs(program, softmax_kernels_id, core, {0, 0, 0, 0, 0, 0, 0});
             SetRuntimeArgs(program, writer_kernels_id, core, {0, 0, 0, 0, 0, 0});
             continue;
         }
@@ -323,7 +321,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
                 core,
                 {src_addr,
                  block_size,
-                 s.u,
+                 scale_value,
                  num_tile_rows_per_core,
                  tile_offset,
                  Wt,
@@ -342,7 +340,7 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
                 core,
                 {src_addr,
                  block_size,
-                 s.u,
+                 scale_value,
                  num_tile_rows_per_core,
                  tile_offset,
                  Wt,
@@ -418,11 +416,12 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
 
     if (use_large_kernel) {
         // Use fixed sizes matching create() for large kernel
-        in0_t = 80;
+        uint32_t large_kernel_cb_size = (80 / block_size) * block_size;
+        in0_t = large_kernel_cb_size;
         out0_t = block_size * 2;
-        im0_t = 80;
-        im3_t = 80;
-        im4_t = 80;
+        im0_t = large_kernel_cb_size;
+        im3_t = large_kernel_cb_size;
+        im4_t = large_kernel_cb_size;
     } else {
         // Standard calculation for regular kernel
         in0_t = attributes.numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
@@ -502,11 +501,8 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
     }
 
     uint32_t curr_row = 0;
-    union {
-        float f;
-        uint32_t u;
-    } s{};
-    s.f = attributes.scale.value_or(1.0f);  // scale for fused scale-mask-softmax
+    uint32_t scale_value =
+        std::bit_cast<uint32_t>(attributes.scale.value_or(1.0f));  // scale for fused scale-mask-softmax
 
     auto& cached_reader_args =
         GetRuntimeArgs(cached_program.program, cached_program.shared_variables.reader_kernels_id);
@@ -550,7 +546,7 @@ void SoftmaxProgramFactoryAttentionOptimized::override_runtime_arguments(
 
         reader_kernel_args[0] = src_buffer_address;
         reader_kernel_args[1] = block_size;
-        reader_kernel_args[2] = s.u;
+        reader_kernel_args[2] = scale_value;
         reader_kernel_args[3] = num_tile_rows_per_core;
         reader_kernel_args[4] = tile_offset;
         reader_kernel_args[5] = Wt;

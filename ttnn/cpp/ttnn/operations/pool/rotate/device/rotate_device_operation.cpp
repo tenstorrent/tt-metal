@@ -4,6 +4,7 @@
 
 #include <ttnn/operations/pool/rotate/device/rotate_device_operation.hpp>
 
+#include <cmath>
 #include <ttnn/tensor/types.hpp>
 #include <ttnn/tensor/tensor_spec.hpp>
 #include <tt-metalium/constants.hpp>
@@ -11,7 +12,10 @@
 namespace ttnn::operations::rotate {
 
 RotateDeviceOperation::program_factory_t RotateDeviceOperation::select_program_factory(
-    const operation_attributes_t& /* operation_attributes */, const tensor_args_t& /* tensor_args */) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /* tensor_args */) {
+    if (operation_attributes.interpolation_mode == "bilinear") {
+        return BilinearProgramFactory{};
+    }
     return NearestProgramFactory{};
 }
 
@@ -47,17 +51,36 @@ void RotateDeviceOperation::validate_inputs(
 
     // Interpolation mode validation
     TT_FATAL(
-        operation_attributes.interpolation_mode == "nearest",
-        "Only 'nearest' interpolation_mode is supported, got '{}'",
+        operation_attributes.interpolation_mode == "nearest" || operation_attributes.interpolation_mode == "bilinear",
+        "Only 'nearest' and 'bilinear' interpolation_mode are supported, got '{}'",
         operation_attributes.interpolation_mode);
+
+    // Memory layout validation - only height sharding is supported
+    if (input.is_sharded()) {
+        auto mem_layout = input.memory_config().memory_layout();
+        TT_FATAL(
+            mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
+            "Only height sharding is supported for rotate operation. Got memory layout {}",
+            static_cast<int>(mem_layout));
+    }
+
+    // Wide reduction validation for bilinear mode
+    if (operation_attributes.interpolation_mode == "bilinear") {
+        constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
+        const uint32_t input_channels = input.padded_shape()[-1];
+        const uint32_t in_ntiles_c =
+            static_cast<uint32_t>(std::ceil(static_cast<float>(input_channels) / tt::constants::TILE_WIDTH));
+        TT_FATAL(
+            in_ntiles_c <= MAX_TILES_PER_REDUCTION,
+            "Wide reduction (in_ntiles_c > MAX_TILES_PER_REDUCTION) is not supported for bilinear rotate. "
+            "in_ntiles_c={} exceeds MAX_TILES_PER_REDUCTION={}. Reduce channel count to <= {}.",
+            in_ntiles_c,
+            MAX_TILES_PER_REDUCTION,
+            MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH);
+    }
 }
 
 void RotateDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_inputs(operation_attributes, tensor_args);
-}
-
-void RotateDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_inputs(operation_attributes, tensor_args);
 }
@@ -100,9 +123,9 @@ RotateDeviceOperation::tensor_return_value_t RotateDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-tt::stl::hash::hash_t RotateDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RotateDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tt::stl::hash::hash_objects_with_default_seed(
+    return ttsl::hash::hash_objects_with_default_seed(
         operation_attributes.memory_config,
         operation_attributes.interpolation_mode,
         tensor_args.input.logical_shape(),
@@ -110,7 +133,7 @@ tt::stl::hash::hash_t RotateDeviceOperation::compute_program_hash(
 }
 
 std::tuple<RotateDeviceOperation::operation_attributes_t, RotateDeviceOperation::tensor_args_t>
-RotateDeviceOperation::invoke(
+rotate_build_operation_args(
     const Tensor& input,
     float angle,
     const std::optional<std::tuple<float, float>>& center,
@@ -119,9 +142,26 @@ RotateDeviceOperation::invoke(
     const std::string& interpolation_mode,
     const std::optional<MemoryConfig>& memory_config) {
     return {
-        operation_attributes_t{
+        RotateDeviceOperation::operation_attributes_t{
             angle, center, fill, expand, interpolation_mode, memory_config.value_or(input.memory_config())},
-        tensor_args_t{input}};
+        RotateDeviceOperation::tensor_args_t{input}};
 }
 
 }  // namespace ttnn::operations::rotate
+
+namespace ttnn::prim {
+
+Tensor rotate(
+    const Tensor& input,
+    float angle,
+    const std::optional<std::tuple<float, float>>& center,
+    float fill,
+    bool expand,
+    const std::string& interpolation_mode,
+    const std::optional<MemoryConfig>& memory_config) {
+    auto [attrs, tensor_args] = operations::rotate::rotate_build_operation_args(
+        input, angle, center, fill, expand, interpolation_mode, memory_config);
+    return ttnn::device_operation::launch<operations::rotate::RotateDeviceOperation>(attrs, tensor_args);
+}
+
+}  // namespace ttnn::prim

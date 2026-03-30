@@ -53,11 +53,6 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     return ConcatS2IProgramFactory{};
 }
 
-void ConcatDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
-
 void ConcatDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
@@ -66,7 +61,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
 
     const auto& first_input = input_tensors[0];
-    auto shape_first = first_input.padded_shape();
+    auto shape_first = first_input.logical_shape();
     TT_FATAL(args.dim < shape_first.rank(), "ConcatDeviceOperation dim specified is larger than input tensor rank.");
     shape_first[args.dim] = 0;
     bool shard_first = input_tensors[0].is_sharded();
@@ -79,7 +74,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(in_ref.device() == first_input.device(), "Operands to concat need to be on the same device.");
         TT_FATAL(in_ref.layout() == first_input.layout(), "All Tensors should have same layouts.");
         TT_FATAL(in_ref.dtype() == first_input.dtype(), "All Tensors should have same dtypes.");
-        auto curr_shape = in_ref.padded_shape();
+        auto curr_shape = in_ref.logical_shape();
         TT_FATAL(curr_shape.rank() == shape_first.rank(), "Input tensor ranks must be equal");
         curr_shape[args.dim] = 0;
         // last tensor can support without any kernel changes
@@ -296,7 +291,8 @@ Tensor concat_impl(
     const std::vector<Tensor>& input_tensors,
     const std::int64_t dim,
     const unsigned int groups,
-    const MemoryConfig& output_mem_config) {
+    const MemoryConfig& output_mem_config,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
     for (const auto& input_tensor : input_tensors) {
         TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
@@ -337,7 +333,7 @@ Tensor concat_impl(
             }
 
             // Recursively concat this batch
-            Tensor batch_result = concat_impl(batch, dim, groups, output_mem_config);
+            Tensor batch_result = concat_impl(batch, dim, groups, output_mem_config, sub_core_grids);
             intermediate_results.push_back(std::move(batch_result));
 
             // Clear batch to release references
@@ -345,11 +341,11 @@ Tensor concat_impl(
         }
 
         // Final concat
-        return concat_impl(intermediate_results, dim, groups, output_mem_config);
+        return concat_impl(intermediate_results, dim, groups, output_mem_config, sub_core_grids);
     }
 
-    uint32_t ref_rank = input_tensors[0].padded_shape().rank();
-    uint32_t normalized_dim = input_tensors[0].padded_shape().get_normalized_index(dim);
+    uint32_t ref_rank = input_tensors[0].logical_shape().rank();
+    uint32_t normalized_dim = input_tensors[0].logical_shape().get_normalized_index(dim);
 
     if (input_tensors[0].is_sharded()) {
         return ttnn::prim::concat(input_tensors, dim, groups, output_mem_config);
@@ -386,11 +382,13 @@ Tensor concat_impl(
             // Already in target layout
             formatted_tensors.push_back(input_tensor);
         } else {
-            formatted_tensors.push_back(ttnn::to_layout(input_tensor, target_layout));
+            // Pass sub_core_grids to to_layout if provided (now supported for INTERLEAVED tensors)
+            formatted_tensors.push_back(
+                ttnn::to_layout(input_tensor, target_layout, std::nullopt, std::nullopt, sub_core_grids));
         }
     }
 
-    return ttnn::prim::concat(formatted_tensors, dim, groups, output_mem_config);
+    return ttnn::prim::concat(formatted_tensors, dim, groups, output_mem_config, sub_core_grids);
 }
 
 }  // namespace ttnn::operations::data_movement
@@ -400,14 +398,16 @@ ttnn::prim::ConcatDeviceOperation::tensor_return_value_t concat(
     const std::vector<Tensor>& input_tensors,
     std::int64_t dim,
     unsigned int groups,
-    const tt::tt_metal::MemoryConfig& output_mem_config) {
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::prim::ConcatDeviceOperation;
-    uint32_t normalized_dim = input_tensors[0].padded_shape().get_normalized_index(dim);
+    uint32_t normalized_dim = input_tensors[0].logical_shape().get_normalized_index(dim);
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dim = normalized_dim,
             .groups = groups,
             .output_mem_config = output_mem_config,
+            .sub_core_grids = sub_core_grids,
         },
         OperationType::tensor_args_t{.input_tensors = input_tensors});
 }

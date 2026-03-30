@@ -6,16 +6,17 @@
 #include "device/reduce_scatter_minimal_async_op_device_operation.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
+ttnn::Tensor reduce_scatter_minimal_async(
     const ttnn::Tensor& input_tensor,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
-    const uint32_t num_links,
+    std::optional<uint32_t> num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::MemoryConfig>& intermediate_memory_config,
     const ttnn::ccl::Topology topology,
@@ -23,7 +24,13 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     std::optional<uint32_t> cluster_axis,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel) {
+    std::optional<uint32_t> num_buffers_per_channel,
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    auto* mesh_device = input_tensor.device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device is required for reduce_scatter_minimal_async operation");
+    uint32_t resolved_num_links =
+        num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis));
+
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
@@ -47,7 +54,7 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
         return composite_common::composite_reduce_scatter(
             input_tensor,
             dim,
-            num_links,
+            resolved_num_links,
             usable_topology,
             memory_config,
             sub_device_id,
@@ -78,7 +85,7 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
         optional_intermediate_tensor,
         optional_output_tensor,
         scatter_dim,
-        num_links,
+        resolved_num_links,
         num_devices,
         memory_config.value_or(input_tensor.memory_config()),
         intermediate_memory_config,
@@ -90,10 +97,11 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
         cluster_axis,
         chunks_per_sync,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        compute_kernel_config);
 
     // Return the output tensor (index 1, intermediate is at index 0)
     return result.at(1);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

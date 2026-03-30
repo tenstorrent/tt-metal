@@ -15,18 +15,16 @@
 #include <system_error>
 
 #include <tt-logger/tt-logger.hpp>
-#include "impl/context/metal_context.hpp"
 
 namespace tt::jit_build::utils {
 
-bool run_command(const std::string& cmd, const std::string& log_file, const bool verbose) {
+bool run_command(const std::string& cmd, const std::string& log_file, bool verbose) {
     // ZoneScoped;
     // ZoneText( cmd.c_str(), cmd.length());
     int ret;
     static std::mutex io_mutex;
-    // Use cached env var from rtoptions instead of calling getenv() on every invocation
-    const bool dump_commands = tt::tt_metal::MetalContext::instance().rtoptions().get_dump_build_commands();
-    if (dump_commands || verbose) {
+
+    if (verbose) {
         {
             std::lock_guard<std::mutex> lk(io_mutex);
             std::cout << "===== RUNNING SYSTEM COMMAND:\n";
@@ -57,15 +55,17 @@ uint64_t FileRenamer::unique_id_ = []() {
     return distr(rd);
 }();
 
-FileRenamer::FileRenamer(const std::string& target_path) : target_path_(target_path) {
+std::string FileRenamer::generate_temp_path(const std::filesystem::path& target_path) {
     std::filesystem::path path(target_path);
     if (path.has_extension()) {
         path.replace_extension(fmt::format("{}{}", unique_id_, path.extension().string()));
-        temp_path_ = path.string();
-    } else {
-        temp_path_ = fmt::format("{}.{}", target_path, unique_id_);
+        return path.string();
     }
+    return fmt::format("{}.{}", target_path.string(), unique_id_);
 }
+
+FileRenamer::FileRenamer(const std::string& target_path) :
+    temp_path_(generate_temp_path(target_path)), target_path_(target_path) {}
 
 FileRenamer::~FileRenamer() {
     std::error_code ec;

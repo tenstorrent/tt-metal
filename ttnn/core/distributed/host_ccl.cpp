@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/distributed/host_ccl.hpp"
 
 #include <tt_stl/assert.hpp>
@@ -103,6 +104,6 @@ Tensor all_gather(const Tensor& tensor) {
     }
 
     return Tensor(
-        tt::tt_metal::HostStorage{std::move(all_gather_buffer)}, tensor.tensor_spec(), tensor.tensor_topology());
+        tt::tt_metal::HostTensor(std::move(all_gather_buffer), tensor.tensor_spec(), tensor.tensor_topology()));
 }
 }  // namespace ttnn::distributed::host_ccl

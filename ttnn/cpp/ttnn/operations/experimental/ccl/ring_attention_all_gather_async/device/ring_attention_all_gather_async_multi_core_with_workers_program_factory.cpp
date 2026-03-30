@@ -28,6 +28,12 @@
 
 namespace ttnn::experimental::prim {
 
+// Runtime-arg indices for worker sender semaphore addresses.
+// Keeping these as named constants avoids desynchronization with the
+// runtime-arg layout used when constructing the command streams.
+constexpr std::size_t kWorkerReaderSemaphoreRtArgIndex = 2;
+constexpr std::size_t kWorkerWriterSemaphoreRtArgIndex = 4;
+
 RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::cached_program_shared_variable_t
 RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
     const operation_attributes_t& operation_attributes,
@@ -37,34 +43,23 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
     tt::tt_metal::Program program{};
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto* mesh_device = tensor_args.input_tensor[0].device();
-    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : mesh_device;
-    std::vector<IDevice*> devices_to_use = {};
-    // User specified the cluster-axis. Derive devices based on the current coordinate
-    // and the cluster-axis.
-    const auto& mesh_view = mesh_device->get_view();
-    devices_to_use = (operation_attributes.cluster_axis.value() == 0)
-                         ? mesh_view.get_devices_on_column(mesh_coordinate[1])
-                         : mesh_view.get_devices_on_row(mesh_coordinate[0]);
 
-    std::optional<IDevice*> forward_device = std::nullopt;
-    std::optional<IDevice*> backward_device = std::nullopt;
-    uint32_t device_index = 0;  // Initialize device index
-    for (uint32_t i = 0; i < operation_attributes.ring_size; ++i) {
-        if (devices_to_use.at(i) == target_device) {
-            device_index = i;
-            if (i != 0) {
-                backward_device = devices_to_use.at(i - 1);
-            } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                backward_device = devices_to_use.at(operation_attributes.ring_size - 1);
-            }
-            if (i != operation_attributes.ring_size - 1) {
-                forward_device = devices_to_use.at(i + 1);
-            } else if (operation_attributes.topology == ttnn::ccl::Topology::Ring) {
-                forward_device = devices_to_use.at(0);
-            }
-        }
-    }
+    uint32_t device_index = ttnn::ccl::get_linearized_index_from_physical_coord(
+        tensor_args.input_tensor[0], mesh_coordinate, operation_attributes.cluster_axis);
+
+    std::optional<MeshCoordinate> forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor[0],
+        mesh_coordinate,
+        1,
+        operation_attributes.topology,
+        operation_attributes.cluster_axis);
+
+    std::optional<MeshCoordinate> backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.input_tensor[0],
+        mesh_coordinate,
+        -1,
+        operation_attributes.topology,
+        operation_attributes.cluster_axis);
     auto
         [worker_sender_reader_forward_kernel_id,
          worker_sender_writer_forward_kernel_id,
@@ -78,9 +73,9 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
             ring_attention_all_gather_async_multi_core_with_workers_helper(
                 program,
                 tensor_args.input_tensor,
-                target_device,
-                forward_device,
-                backward_device,
+                mesh_coordinate,
+                forward_coord,
+                backward_coord,
                 tensor_return_value,
                 operation_attributes.dim,
                 operation_attributes.num_links,
@@ -146,9 +141,9 @@ RingAttentionAllGatherAsyncMultiCoreWithWorkersSharedVariables
 ring_attention_all_gather_async_multi_core_with_workers_helper(
     tt::tt_metal::Program& program,
     const std::vector<Tensor>& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    const MeshCoordinate& target_device_coord,
+    std::optional<MeshCoordinate> forward_device_coord,
+    std::optional<MeshCoordinate> backward_device_coord,
     std::vector<Tensor>& output_tensor,
     int32_t dim,
     uint32_t num_links,
@@ -158,7 +153,8 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
-    const CoreCoord core_grid_offset) {
+    const CoreCoord core_grid_offset,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
     auto* mesh_device = input_tensor[0].device();
     [[maybe_unused]] const bool is_first_chip = ring_index == 0;
     [[maybe_unused]] const bool is_last_chip = ring_index == ring_size - 1;
@@ -194,8 +190,14 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Get worker cores
     // 2 sender (forward/backward, each with a reader/writer)
     uint32_t num_senders_per_link = 2;
-    const auto [sender_worker_core_range, sender_worker_cores] =
-        ttnn::ccl::choose_worker_cores(num_links, num_senders_per_link, mesh_device, sub_device_id, core_grid_offset);
+    const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
+        num_links,
+        num_senders_per_link,
+        mesh_device,
+        sub_device_id,
+        core_grid_offset,
+        std::nullopt,
+        core_allocation_strategy);
 
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
@@ -215,7 +217,9 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     const uint32_t max_scatter_write_pages = 2;
     const uint32_t num_pages_per_packet =
         std::min((uint32_t)(packet_size_bytes / l1_scratch_cb_page_size_bytes), max_scatter_write_pages);
-    const uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
+    // Must be >= 2 * PREFETCH_PACKETS(=4) * num_pages_per_packet for deadlock-free double-buffering
+    // (see PREFETCH_PACKETS in ring_attention_all_gather_reader.cpp).
+    const uint32_t cb_num_pages = 8 * num_pages_per_packet;
     const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
@@ -251,9 +255,6 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     CreateCircularBuffer(program, sender_backward_core_ranges, cb_reserved_packet_header_backward_config);
 
     // Tensor Info
-    const auto input_tensor_num_pages = input_tensor[0].buffer()->num_pages();
-    const auto input_tensor_shape = input_tensor[0].padded_shape();
-    const auto output_tensor_shape = output_tensor[0].padded_shape();
     const uint32_t num_inputs = input_tensor.size();
 
     uint32_t tiles_to_write_per_packet = 1;
@@ -406,33 +407,44 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t writer_sender_rt_offset = 0;
     for (uint32_t link = 0; link < num_links; link++) {
         // Set Sender Reader runtime args
-        const uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
 
-        uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
-        const uint32_t base_pages_per_worker = single_batch_head_num_pages / num_links;
-        const uint32_t remainder = single_batch_head_num_pages % num_links;
-        const uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
-        const uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
+        std::vector<uint32_t> tensor_descriptor_args;
+        for (uint32_t i = 0; i < num_inputs; i++) {
+            const auto input_tensor_num_pages = input_tensor[i].buffer()->num_pages();
+            const auto input_tensor_shape = input_tensor[i].padded_shape();
+            const auto output_tensor_shape = output_tensor[i].padded_shape();
+            const uint32_t batch_head_size = input_tensor_shape[0] * input_tensor_shape[1];
 
-        TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
-        TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
-        const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
-        const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_WIDTH;
-        const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
-        const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_WIDTH;
+            uint32_t single_batch_head_num_pages = input_tensor_num_pages / batch_head_size;
+            const uint32_t base_pages_per_worker = single_batch_head_num_pages / num_links;
+            const uint32_t remainder = single_batch_head_num_pages % num_links;
+            const uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
+            const uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
+
+            const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+            const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_WIDTH;
+            const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
+            const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_WIDTH;
+            TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
+            TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
+
+            tensor_descriptor_args.push_back(input_tensor_Wt);      // 0 == input_tensor_Wt
+            tensor_descriptor_args.push_back(input_tensor_Ht);      // 1 == input_tensor_Ht
+            tensor_descriptor_args.push_back(output_tensor_Wt);     // 2 == output_tensor_Wt
+            tensor_descriptor_args.push_back(output_tensor_Ht);     // 3 == output_tensor_Ht
+            tensor_descriptor_args.push_back(batch_head_size);      // 4 == batch_head_size
+            tensor_descriptor_args.push_back(input_tile_id_start);  // 5 == input_tile_id_start
+            tensor_descriptor_args.push_back(input_tile_id_end);    // 6 == input_tile_id_end
+        }
 
         std::vector<uint32_t> reader_forward_rt_args = {
-            input_tensor_Wt,            // width in tiles of the input shard
-            input_tensor_Ht,            // height in tiles of the input shard
-            output_tensor_Wt,           // width in tiles of the entire output
-            output_tensor_Ht,           // height in tiles of the entire output
             dim,                        // dim to gather on
-            batch_head_size,            // product of the first two dims
-            input_tile_id_start,        //
-            input_tile_id_end,          // slice_num_pages
             ring_size,                  // ring_size
             semaphore.at(1).address(),  // out_ready_semaphore_backward
         };
+        for (auto tensor_descriptor_arg : tensor_descriptor_args) {
+            reader_forward_rt_args.push_back(tensor_descriptor_arg);
+        }
         reader_sender_rt_offset = reader_forward_rt_args.size();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_forward_rt_args.push_back(input_tensor[input_idx].buffer()->address());
@@ -450,17 +462,13 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             reader_forward_rt_args);
 
         std::vector<uint32_t> reader_backward_rt_args = {
-            input_tensor_Wt,            // width in tiles of the input shard
-            input_tensor_Ht,            // height in tiles of the input shard
-            output_tensor_Wt,           // width in tiles of the entire output
-            output_tensor_Ht,           // height in tiles of the entire output
             dim,                        // dim to gather on
-            batch_head_size,            // product of the first two dims
-            input_tile_id_start,        // slice_num_pages
-            input_tile_id_end,          // slice_num_pages
             ring_size,                  // ring_size
             semaphore.at(0).address(),  // out_ready_semaphore_backward
         };
+        for (auto tensor_descriptor_arg : tensor_descriptor_args) {
+            reader_backward_rt_args.push_back(tensor_descriptor_arg);
+        }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             reader_backward_rt_args.push_back(input_tensor[input_idx].buffer()->address());
         }
@@ -480,30 +488,24 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
 
         // Writer
         std::vector<uint32_t> writer_forward_rt_args = {
-            input_tensor_Wt,               // width in tiles of the input shard
-            input_tensor_Ht,               // height in tiles of the input shard
-            output_tensor_Wt,              // width in tiles of entire output
-            output_tensor_Ht,              // height in tiles of entire output
             dim,                           // dim to gather on
-            batch_head_size,               // product of the first two dims
-            input_tile_id_start,           //
-            input_tile_id_end,             //
             sender_forward_worker_core.x,  // out_ready_sem_noc0_x
             sender_forward_worker_core.y,  // out_ready_sem_noc0_y
             ring_size,                     // ring_size
             semaphore.at(1).address()      // out_ready_semaphore_backward
         };
+        for (auto tensor_descriptor_arg : tensor_descriptor_args) {
+            writer_forward_rt_args.push_back(tensor_descriptor_arg);
+        }
         writer_sender_rt_offset = writer_forward_rt_args.size();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_forward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
         }
         writer_forward_rt_args.push_back(false);
-        writer_forward_rt_args.push_back(backward_device.has_value());
-        if (backward_device.has_value()) {
-            const auto target_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto backward_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
+        writer_forward_rt_args.push_back(backward_device_coord.has_value());
+        if (backward_device_coord.has_value()) {
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
+            const auto backward_fabric_node_id = mesh_device->get_fabric_node_id(backward_device_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id,
                 backward_fabric_node_id,
@@ -523,28 +525,22 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
             writer_forward_rt_args);
 
         std::vector<uint32_t> writer_backward_rt_args = {
-            input_tensor_Wt,                // width in tiles of the input shard
-            input_tensor_Ht,                // height in tiles of the input shard
-            output_tensor_Wt,               // width in tiles of entire output
-            output_tensor_Ht,               // height in tiles of entire output
             dim,                            // dim to gather on
-            batch_head_size,                // product of the first two dims
-            input_tile_id_start,            //
-            input_tile_id_end,              //
             sender_backward_worker_core.x,  // out_ready_sem_noc0_x
             sender_backward_worker_core.y,  // out_ready_sem_noc0_y
             ring_size,                      // ring_size
             semaphore.at(0).address()       // out_ready_semaphore_backward
         };
+        for (auto tensor_descriptor_arg : tensor_descriptor_args) {
+            writer_backward_rt_args.push_back(tensor_descriptor_arg);
+        }
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(output_tensor[input_idx].buffer()->address());
         }
-        writer_backward_rt_args.push_back(forward_device.has_value());
-        if (forward_device.has_value()) {
-            const auto target_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
-            const auto forward_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
+        writer_backward_rt_args.push_back(forward_device_coord.has_value());
+        if (forward_device_coord.has_value()) {
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(target_device_coord);
+            const auto forward_fabric_node_id = mesh_device->get_fabric_node_id(forward_device_coord.value());
             tt::tt_fabric::append_fabric_connection_rt_args(
                 target_fabric_node_id,
                 forward_fabric_node_id,
@@ -614,10 +610,10 @@ void ring_attention_all_gather_async_multicore_with_workers_override_runtime_arg
             worker_writer_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
                                                               [sender_worker_cores[0 + (link * 2)].y];
 
-        worker_reader_sender_forward_runtime_args[9] = semaphore.at(1).address();
-        worker_reader_sender_backward_runtime_args[9] = semaphore.at(0).address();
-        worker_writer_sender_forward_runtime_args[11] = semaphore.at(1).address();
-        worker_writer_sender_backward_runtime_args[11] = semaphore.at(0).address();
+        worker_reader_sender_forward_runtime_args[experimental::prim::kWorkerReaderSemaphoreRtArgIndex] = semaphore.at(1).address();
+        worker_reader_sender_backward_runtime_args[experimental::prim::kWorkerReaderSemaphoreRtArgIndex] = semaphore.at(0).address();
+        worker_writer_sender_forward_runtime_args[experimental::prim::kWorkerWriterSemaphoreRtArgIndex] = semaphore.at(1).address();
+        worker_writer_sender_backward_runtime_args[experimental::prim::kWorkerWriterSemaphoreRtArgIndex] = semaphore.at(0).address();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             // sender reader
             worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + input_idx] =

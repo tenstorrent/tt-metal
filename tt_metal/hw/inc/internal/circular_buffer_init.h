@@ -98,7 +98,6 @@ FORCE_INLINE void setup_local_cb_read_write_interfaces(
         ".if %[init_wr_tile_ptr]\n\t"
         "    sw zero, %[off_fifo_tile_wr_ptr](%[liptr])\n\t"  // local_interface.fifo_wr_tile_ptr = 0;
         ".endif\n\t"
-
         // Advance to next cb config.
         "    addi %[cbconfig], %[cbconfig], %[circular_buffer_byte_size]\n\t"
 

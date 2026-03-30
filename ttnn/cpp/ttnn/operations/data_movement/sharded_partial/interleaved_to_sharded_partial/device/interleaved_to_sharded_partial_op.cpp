@@ -6,18 +6,10 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operation.hpp>
 
 namespace ttnn::prim {
-
-InterleavedToShardedPartialDeviceOperation::program_factory_t
-InterleavedToShardedPartialDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const Tensor& /*input_tensor*/) {
-    return InterleavedToShardedPartialProgramFactory{};
-}
-
 void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
     const auto& num_slices = operation_attributes.num_slices;
@@ -54,11 +46,6 @@ void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_miss(
         "Grid size for sharding must be less than or equal to total grid available");
 }
 
-void InterleavedToShardedPartialDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 TensorSpec InterleavedToShardedPartialDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
     auto shape = input_tensor.padded_shape();
@@ -84,9 +71,8 @@ Tensor InterleavedToShardedPartialDeviceOperation::create_output_tensors(
     return create_device_tensor(output_spec, input_tensor.device());
 }
 
-tt::stl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const Tensor& input_tensor) {
-    auto program_factory = select_program_factory(operation_attributes, input_tensor);
     return tt::tt_metal::operation::hash_operation<InterleavedToShardedPartialDeviceOperation>(
         operation_attributes.grid_size,
         operation_attributes.shard_spec,
@@ -94,7 +80,6 @@ tt::stl::hash::hash_t InterleavedToShardedPartialDeviceOperation::compute_progra
         operation_attributes.slice_index,
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
-        program_factory.index(),
         input_tensor.dtype(),
         input_tensor.layout());
 }

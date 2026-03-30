@@ -5,12 +5,12 @@
 #include <fmt/format.h>
 
 #include <CLI/CLI.hpp>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdlib>
 #include <string>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/distributed/distributed.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 #include "datasets/dataloader.hpp"
@@ -19,6 +19,7 @@
 #include "modules/linear_module.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/sgd.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
 using ttml::autograd::TensorPtr;
@@ -52,10 +53,10 @@ int main(int argc, char** argv) {
     CLI::App app{"Linear Regression DDP Example"};
     argv = app.ensure_utf8(argv);
 
-    uint32_t batch_size = 128;
-    const size_t training_samples_count = 1000;
-    const size_t num_features = 32;
-    const size_t num_targets = 32;
+    uint32_t batch_size = 1024;
+    const size_t training_samples_count = 100000;
+    const size_t num_features = 64;
+    const size_t num_targets = 64;
     const float noise = 0.0F;
     const bool bias = true;
 
@@ -64,18 +65,32 @@ int main(int argc, char** argv) {
 
     CLI11_PARSE(app, argc, argv);
 
-    uint32_t mesh_rows = 0;
-    uint32_t mesh_cols = 0;
+    uint32_t mesh_rows = 32;
+    uint32_t mesh_cols = 1;
     if (!parse_mesh_shape(mesh_shape_str, mesh_rows, mesh_cols)) {
         fmt::print(stderr, "Error: invalid --mesh_shape '{}', expected RxC like 32x1\n", mesh_shape_str);
         return 1;
     }
+
+    TT_FATAL(
+        mesh_rows > 0 && mesh_cols > 0 && mesh_rows * mesh_cols == 32,
+        "mesh_rows and mesh_cols must be greater than 0 and their product must be 32 (whole galaxy).");
 
     const auto logical_mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_rows, mesh_cols);
     const auto num_devices = logical_mesh_shape[0] * logical_mesh_shape[1];
 
     ttml::ttnn_fixed::distributed::enable_fabric(num_devices);
     ttml::autograd::ctx().open_device(logical_mesh_shape);
+
+    // Initialize parallelism context for DDP only
+    ttml::autograd::ctx().initialize_parallelism_context({.enable_ddp = true, .enable_tp = false});
+
+    // Get parallelism parameters from context
+    const auto& pctx = ttml::autograd::ctx().get_parallelism_context();
+    const auto dp_axis = pctx.get_ddp_axis();
+    const auto dp_size = pctx.get_ddp_size();
+
+    fmt::print("DDP enabled: {} devices, dp_axis: {}\n", dp_size, dp_axis.value_or(0));
 
     auto training_params = ttml::datasets::MakeRegressionParams{
         .n_samples = training_samples_count,
@@ -100,7 +115,7 @@ int main(int argc, char** argv) {
             std::move(target.begin(), target.end(), std::back_inserter(targets));
         }
 
-        const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
+        const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0, /* cluster_axis */ 0);
         auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
             data, ttnn::Shape{batch_size, 1, 1, num_features}, device, ttnn::Layout::TILE, mapper.get()));
         auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
@@ -135,6 +150,10 @@ int main(int argc, char** argv) {
             float loss_float_1 = loss_xtensors[1](0);
             fmt::print("Step: {} Loss: {} {} {}\n", training_step++, loss_float_0, loss_float_1, mean_loss);
             loss->backward();
+
+            // Synchronize gradients across DDP devices
+            ttml::core::distributed::synchronize_gradients(model->parameters());
+
             optimizer.step();
             ttml::autograd::ctx().reset_graph();
         }

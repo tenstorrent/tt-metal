@@ -17,13 +17,12 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -33,6 +32,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/kernels/kernel.hpp"
 #include "llrt/hal.hpp"
 
 using namespace tt;
@@ -104,7 +104,6 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
 
     CoreCoord unharvested_logical_grid_size;
     switch (arch) {
-        case tt::ARCH::GRAYSKULL: unharvested_logical_grid_size = CoreCoord(12, 10); break;
         case tt::ARCH::WORMHOLE_B0: unharvested_logical_grid_size = CoreCoord(8, 10); break;
         case tt::ARCH::BLACKHOLE: unharvested_logical_grid_size = CoreCoord(14, 10); break;
         default: TT_THROW("Unsupported arch {}", get_umd_arch_name());

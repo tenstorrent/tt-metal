@@ -23,11 +23,6 @@ void verify_no_duplicate_mesh_coord_ranges(
     }
 }
 
-GenericOpDeviceOperation::program_factory_t GenericOpDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return program::GenericMeshProgramFactory{};
-}
-
 void GenericOpDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& /*tensor_args*/) {
     verify_no_duplicate_mesh_coord_ranges(attributes.mesh_programs);
@@ -50,7 +45,7 @@ tensor_return_value_t GenericOpDeviceOperation::create_output_tensors(
     return tensor_args.output_tensor;
 }
 
-tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor) {
     if (program_descriptor.custom_program_hash) {
         return *program_descriptor.custom_program_hash;
     }
@@ -61,6 +56,7 @@ tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::Progra
             kernel.source_type,
             kernel.core_ranges,
             kernel.compile_time_args,
+            kernel.named_compile_time_args,
             kernel.defines,
             kernel.common_runtime_args.size(),
             kernel.runtime_args.size(),
@@ -77,7 +73,7 @@ tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::Progra
     };
 
     auto hash_circular_buffer = [&](const CBDescriptor& cb) -> size_t {
-        size_t hash = cb.core_ranges.size();
+        size_t hash = cb.total_size;
         for (const auto& core_range : cb.core_ranges.ranges()) {
             ttsl::hash::hash_combine(hash, core_range);
         }
@@ -112,7 +108,7 @@ tt::stl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::Progra
     return hash;
 }
 
-tt::stl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     size_t hash = 0;
     for (const auto& [mesh_coord_range, program_descriptor] : operation_attributes.mesh_programs) {

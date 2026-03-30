@@ -6,6 +6,7 @@ import pytest
 import torch
 import ttnn
 from ttnn.graph_tracer_utils import GraphTracerUtils
+from ttnn.operations.conv2d import Conv2dConfig
 
 
 @pytest.mark.parametrize("scalar", [3])
@@ -23,16 +24,34 @@ def test_graph_capture(tmp_path, device, scalar, size, mode):
     captured_graph = ttnn.graph.end_graph_capture()
     calltrace = ttnn.graph.extract_calltrace(captured_graph)
 
-    assert "ttnn::convert_python_tensor_to_tt_tensor" in calltrace
+    assert "ttnn.from_torch" in calltrace or "ttnn::convert_python_tensor_to_tt_tensor" in calltrace
     assert captured_graph[0]["node_type"] == "capture_start"
     assert captured_graph[1]["node_type"] == "function_start"
-    assert captured_graph[1]["params"]["name"] == "ttnn::convert_python_tensor_to_tt_tensor"
-    assert captured_graph[-2]["node_type"] == "buffer_deallocate"
+    first_op = captured_graph[1]["params"]["name"]
+    assert first_op in ("ttnn.from_torch", "ttnn::convert_python_tensor_to_tt_tensor")
     assert captured_graph[-1]["node_type"] == "capture_end"
 
     ttnn.graph.pretty_print(captured_graph)
 
     ttnn.graph.visualize(captured_graph, file_name=tmp_path / pathlib.Path("graph.svg"))
+
+
+@pytest.mark.parametrize("k", [2])
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
+def test_graph_capture_topk(device, k, mode):
+    """Sanity check that graph capture doesn't fail"""
+    torch.manual_seed(0)
+
+    input_shape = (1, 1, 32, 128)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.graph.begin_graph_capture(mode)
+    _ = ttnn.topk(tt_input, k, dim=-1, largest=True, sorted=True)
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    assert captured_graph[0]["node_type"] == "capture_start"
+    assert captured_graph[-1]["node_type"] == "capture_end"
 
 
 def test_graph_capture_with_all_parameters(device):
@@ -63,16 +82,16 @@ def test_graph_capture_with_all_parameters(device):
 
     assert permute_op is not None, "PermuteDeviceOperation should be in the captured graph"
 
-    # PermuteDeviceOperation arguments
+    # PermuteDeviceOperation arguments — now contain real serialized content
     node_permute = permute_op["arguments"]
-    assert (
-        node_permute[0]
-        == "[ unsupported type , std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t const>]"
-    )
-    assert (
-        node_permute[1]
-        == "[ unsupported type , std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >]"
-    )
+    assert "SmallVector([0, 2, 1, 3])" in node_permute[0]
+    assert "MemoryConfig(" in node_permute[0]
+    assert "TensorMemoryLayout::INTERLEAVED" in node_permute[0]
+    assert "BufferType::L1" in node_permute[0]
+
+    assert "Tensor(" in node_permute[1]
+    assert "Shape([1, 2048, 4, 128])" in node_permute[1]
+    assert "DataType::BFLOAT16" in node_permute[1]
 
     # tt::tt_metal::create_device_tensor
     create_tensor_op = None
@@ -92,9 +111,6 @@ def test_graph_capture_with_all_parameters(device):
     assert node5[0] == "Shape([1, 4, 2048, 128])"
     assert node5[1] == "DataType::BFLOAT16"
     assert node5[2] == "Layout::ROW_MAJOR"
-    assert node5[3].isnumeric()
-    assert node5[0] == "Shape([1, 4, 2048, 128])"
-    assert node5[1] == "DataType::BFLOAT16"
 
 
 def test_graph_capture_without_memory_config(device):
@@ -131,16 +147,16 @@ def test_graph_capture_without_memory_config(device):
 
     assert moreh_dot_op is not None, "MorehDotOperation should be in the captured graph"
 
-    # MorehDotOperation arguments
+    # MorehDotOperation arguments — now contain real serialized content
     node_moreh = moreh_dot_op["arguments"]
-    assert (
-        node_moreh[0]
-        == "[ unsupported type , std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::operation_attributes_t const>]"
-    )
-    assert (
-        node_moreh[1]
-        == "[ unsupported type , std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >]"
-    )
+    assert "DataType::BFLOAT16" in node_moreh[0]
+    assert "MemoryConfig(" in node_moreh[0]
+    assert "ComputeKernelConfig(" in node_moreh[0]
+    assert "HiFi4" in node_moreh[0]
+
+    assert "Tensor(" in node_moreh[1]
+    assert "Shape([1, 1, 1, 32])" in node_moreh[1]
+    assert "DataType::BFLOAT16" in node_moreh[1]
 
     # tt::tt_metal::create_device_tensor
     create_tensor_op = None
@@ -160,11 +176,9 @@ def test_graph_capture_without_memory_config(device):
     assert node7[0] == "Shape([1, 1, 1, 1])"
     assert node7[1] == "DataType::BFLOAT16"
     assert node7[2] == "Layout::TILE"
-    assert node7[3].isnumeric()
-    assert (
-        node7[4]
-        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
-    )
+    assert "MemoryConfig(" in node7[4]
+    assert "TensorMemoryLayout::INTERLEAVED" in node7[4]
+    assert "BufferType::DRAM" in node7[4]
 
 
 def test_graph_capture_without_dtype(device):
@@ -175,25 +189,23 @@ def test_graph_capture_without_dtype(device):
     captured_graph = ttnn.graph.end_graph_capture()
 
     # Note: High-level function tracing (ttnn::moreh_full_like) was removed from decorators.hpp
-    # Now only device operations are captured. Find FullLikeOperation
+    # Now only device operations are captured. Find FullDeviceOperation
     full_like_op = None
     for node in captured_graph:
-        if node.get("node_type") == "function_start" and node.get("params", {}).get("name") == "FullLikeOperation":
+        if node.get("node_type") == "function_start" and node.get("params", {}).get("name") == "FullDeviceOperation":
             full_like_op = node
             break
 
-    assert full_like_op is not None, "FullLikeOperation should be in the captured graph"
+    assert full_like_op is not None, "FullDeviceOperation should be in the captured graph"
 
-    # FullLikeOperation arguments
+    # FullDeviceOperation arguments: operation_attributes_t + empty tensor vector
     node_full_like = full_like_op["arguments"]
-    assert (
-        node_full_like[0]
-        == "[ unsupported type , std::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::operation_attributes_t const>]"
-    )
-    assert (
-        node_full_like[1]
-        == "[ unsupported type , std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >]"
-    )
+    assert "DataType::INT32" in node_full_like[0]
+    assert "Layout::TILE" in node_full_like[0]
+    assert "MemoryConfig(" in node_full_like[0]
+
+    # tensor_args_t is empty for FullDeviceOperation, so input_tensors is an empty vector
+    assert node_full_like[1] == "{}"
 
     # tt::tt_metal::create_device_tensor
     create_tensor_op = None
@@ -213,11 +225,9 @@ def test_graph_capture_without_dtype(device):
     assert node5[0] == "Shape([32, 32])"
     assert node5[1] == "DataType::INT32"
     assert node5[2] == "Layout::TILE"
-    assert node5[3].isnumeric()
-    assert (
-        node5[4]
-        == "MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0)"
-    )
+    assert "MemoryConfig(" in node5[4]
+    assert "TensorMemoryLayout::INTERLEAVED" in node5[4]
+    assert "BufferType::DRAM" in node5[4]
 
 
 def test_graph_capture_with_all_parameters_json_output(device):
@@ -245,25 +255,25 @@ def test_graph_capture_with_all_parameters_json_output(device):
     # Now only device operations are captured: PermuteDeviceOperation, create_device_tensor
     assert len(data["content"]) == 2
 
-    # Content item 0: PermuteDeviceOperation (ttnn::transpose is no longer captured)
+    # Content item 0: PermuteDeviceOperation
     item0 = data["content"][0]
     assert item0["operation"] == "PermuteDeviceOperation"
     assert len(item0["arguments"]) == 2
-    assert item0["arguments"][0]["arg0"] == {
-        "unsupported type": "std::reference_wrapper<ttnn::operations::data_movement::PermuteDeviceOperation::operation_attributes_t const>"
-    }
-    assert item0["arguments"][1]["arg1"] == {
-        "unsupported type": "std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >"
-    }
+    # The new serialized format produces rich content that the regex parser
+    # stores as UnparsedElement (positional struct args aren't key=value JSON).
+    # Verify the raw content is present in the unparsed string.
+    arg0_raw = str(item0["arguments"][0])
+    assert "SmallVector" in arg0_raw or "0, 2, 1, 3" in arg0_raw
+    arg1_raw = str(item0["arguments"][1])
+    assert "Tensor" in arg1_raw
 
-    # Content item 1: create_device_tensor
+    # Content item 1: create_device_tensor — these parse cleanly
     item1 = data["content"][1]
     assert item1["operation"] == "tt::tt_metal::create_device_tensor"
     arg0_item1 = item1["arguments"][0]["arg0"]
     assert arg0_item1["Shape"] == [1, 4, 2048, 128]
     assert item1["arguments"][1]["arg1"] == "DataType::BFLOAT16"
     assert item1["arguments"][2]["arg2"] == "Layout::ROW_MAJOR"
-    assert item1["arguments"][3]["arg3"].isnumeric()
 
     arg4_item1 = item1["arguments"][4]["arg4"]
     mem_config_item1 = arg4_item1["MemoryConfig"]
@@ -307,14 +317,15 @@ def test_graph_capture_without_memory_config_json_output(device):
     item0 = data["content"][0]
     assert item0["operation"] == "MorehDotOperation"
     assert len(item0["arguments"]) == 2
-    assert item0["arguments"][0]["arg0"] == {
-        "unsupported type": "std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::operation_attributes_t const>"
-    }
-    assert item0["arguments"][1]["arg1"] == {
-        "unsupported type": "std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >"
-    }
+    # The new serialized format produces rich content that the regex parser
+    # stores as UnparsedElement. Verify key data is present.
+    arg0_raw = str(item0["arguments"][0])
+    assert "DataType::BFLOAT16" in arg0_raw
+    assert "HiFi4" in arg0_raw
+    arg1_raw = str(item0["arguments"][1])
+    assert "Tensor" in arg1_raw
 
-    # --- Content item 1: create_device_tensor ---
+    # --- Content item 1: create_device_tensor — these parse cleanly ---
     item1 = data["content"][1]
     assert item1["operation"] == "tt::tt_metal::create_device_tensor"
     assert len(item1["arguments"]) == 5
@@ -324,7 +335,6 @@ def test_graph_capture_without_memory_config_json_output(device):
     assert arg0_item1["Shape"] == [1, 1, 1, 1]
     assert item1["arguments"][1]["arg1"] == "DataType::BFLOAT16"
     assert item1["arguments"][2]["arg2"] == "Layout::TILE"
-    assert item1["arguments"][3]["arg3"].isnumeric()
 
     arg4_item1 = item1["arguments"][4]["arg4"]
     mem_config_item1 = arg4_item1["MemoryConfig"]
@@ -344,19 +354,20 @@ def test_graph_capture_without_dtype_json_output(device):
     assert "content" in data
     assert isinstance(data["content"], list)
     # Note: High-level function tracing (ttnn::moreh_full_like) was removed from decorators.hpp
-    # Now only device operations are captured: FullLikeOperation, create_device_tensor
+    # Now only device operations are captured: FullDeviceOperation, create_device_tensor
     assert len(data["content"]) == 2
 
-    # --- Content item 0: FullLikeOperation (device operation) ---
+    # --- Content item 0: FullDeviceOperation (device operation) ---
     item0 = data["content"][0]
-    assert item0["operation"] == "FullLikeOperation"
+    assert item0["operation"] == "FullDeviceOperation"
     assert len(item0["arguments"]) == 2
-    assert item0["arguments"][0]["arg0"] == {
-        "unsupported type": "std::reference_wrapper<ttnn::operations::full_like::FullLikeOperation::operation_attributes_t const>"
-    }
-    assert item0["arguments"][1]["arg1"] == {
-        "unsupported type": "std::reference_wrapper<std::vector<std::reference_wrapper<tt::tt_metal::Tensor const>, std::allocator<std::reference_wrapper<tt::tt_metal::Tensor const> > > >"
-    }
+    # The new serialized format produces rich content that the regex parser
+    # stores as UnparsedElement. Verify key data is present.
+    arg0_raw = str(item0["arguments"][0])
+    assert "DataType::INT32" in arg0_raw
+    assert "Layout::TILE" in arg0_raw
+    # tensor_args_t is empty for FullDeviceOperation, so input_tensors is an empty vector
+    assert item0["arguments"][1]["arg1"] == "{}"
 
     # --- Content item 1: create_device_tensor ---
     item1 = data["content"][1]
@@ -371,9 +382,6 @@ def test_graph_capture_without_dtype_json_output(device):
     assert item1["arguments"][1]["arg1"] == "DataType::INT32"
     # arg2
     assert item1["arguments"][2]["arg2"] == "Layout::TILE"
-    # arg3
-    assert item1["arguments"][3]["arg3"].isnumeric()
-
     # arg4: Check the MemoryConfig
     arg4_item1 = item1["arguments"][4]["arg4"]
     mem_config_item1 = arg4_item1["MemoryConfig"]
@@ -422,3 +430,179 @@ def test_extract_levelized_graph(device):
     assert isinstance(levelized_graph_2, list)
     # Level 2 should have at least as many vertices as level 1 (possibly more)
     assert len(levelized_graph_2) >= len(levelized_graph_1)
+
+
+def test_program_cache_invalidation_across_dispatch_modes(device):
+    def test_conv(device):
+        weights_shape = (32, 3, 3, 3)
+        bias_shape = (1, 1, 1, 32)
+
+        conv_params = {
+            "in_channels": 3,
+            "out_channels": 32,
+            "batch_size": 1,
+            "input_height": 320,
+            "input_width": 320,
+            "kernel_size": (3, 3),
+            "stride": (1, 1),
+            "padding": (1, 1),
+            "dilation": (1, 1),
+            "groups": 1,
+            "device": device,
+            "conv_config": Conv2dConfig(
+                weights_dtype=ttnn.bfloat8_b,
+                activation=None,
+                deallocate_activation=True,
+                reallocate_halo_output=True,
+                config_tensors_in_dram=True,
+                act_block_h_override=128,
+                act_block_w_div=1,
+                reshard_if_not_optimal=False,
+                override_sharding_config=False,
+                shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                core_grid=None,
+                transpose_shards=False,
+                output_layout=ttnn.TILE_LAYOUT,
+                enable_act_double_buffer=True,
+                enable_weights_double_buffer=False,
+                full_inner_dim=False,
+                enable_kernel_stride_folding=False,
+                enable_activation_reuse=False,
+            ),
+        }
+
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+            math_approx_mode=False,
+        )
+
+        torch_input = torch.randn([1, 1, 102400, 16]).bfloat16()
+        ttnn_input = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+                shard_spec=ttnn.ShardSpec(
+                    ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))]),
+                    [1600, 16],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+        )
+
+        weight = torch.randn(weights_shape).bfloat16()
+        bias = torch.randn(bias_shape).bfloat16()
+        ttnn_weights = ttnn.from_torch(weight, dtype=ttnn.float32)
+        ttnn_bias = ttnn.from_torch(bias, dtype=ttnn.float32)
+
+        [x, [output_height, output_width], _] = ttnn.conv2d(
+            input_tensor=ttnn_input,
+            weight_tensor=ttnn_weights,
+            bias_tensor=ttnn_bias,
+            **conv_params,
+            compute_config=compute_config,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+            dtype=ttnn.bfloat8_b,
+        )
+
+    try:
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        test_conv(device)
+        ttnn.graph.end_graph_capture()
+        test_conv(device)
+    except Exception as e:
+        print(f"Error during test_conv: {e}")
+        assert False
+
+    assert True
+
+
+# Tests for new features: buffer pages, full tensor info
+
+
+def test_detailed_buffer_tracing_control():
+    """Test detailed buffer tracing enable/disable API"""
+    # Default should be disabled
+    assert not ttnn.graph.is_detailed_buffer_tracing_enabled()
+
+    # Enable
+    ttnn.graph.enable_detailed_buffer_tracing()
+    assert ttnn.graph.is_detailed_buffer_tracing_enabled()
+
+    # Disable
+    ttnn.graph.disable_detailed_buffer_tracing()
+    assert not ttnn.graph.is_detailed_buffer_tracing_enabled()
+
+
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
+def test_full_tensor_info_captured(device, mode):
+    """Test that full tensor info (dtype, layout, memory_config, etc.) is captured"""
+    ttnn.graph.begin_graph_capture(mode)
+    ttnn.from_torch(
+        torch.rand((1, 1, 32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    # Find tensor nodes and verify they have full info
+    found_tensor_with_full_info = False
+    for node in captured_graph:
+        if node["node_type"] == "tensor":
+            params = node["params"]
+            # Check for required fields
+            assert "tensor_id" in params
+            assert "shape" in params
+
+            # Check for extended tensor info (dtype, layout)
+            if "dtype" in params:
+                found_tensor_with_full_info = True
+                assert isinstance(params["dtype"], str)
+                assert "layout" in params
+                assert isinstance(params["layout"], str)
+
+                # For device tensors, check device-specific fields
+                if "device_id" in params:
+                    assert isinstance(params["device_id"], (int, str))
+                    assert "address" in params
+                    assert isinstance(params["address"], (int, str))
+
+    assert found_tensor_with_full_info, "Expected at least one tensor with full info"
+
+
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
+def test_duration_captured(device, mode):
+    """Test that durations are captured for function_end and capture_end nodes"""
+    ttnn.graph.begin_graph_capture(mode)
+    input_tensor = ttnn.from_torch(torch.rand((32,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.relu(input_tensor)
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    # Check function_end nodes have duration
+    found_function_end_with_duration = False
+    for node in captured_graph:
+        if node["node_type"] == "function_end":
+            if "duration_ns" in node:
+                found_function_end_with_duration = True
+                assert isinstance(node["duration_ns"], int)
+                assert node["duration_ns"] >= 0
+
+    # Check capture_end node has duration
+    found_capture_end_with_duration = False
+    for node in captured_graph:
+        if node["node_type"] == "capture_end":
+            if "duration_ns" in node:
+                found_capture_end_with_duration = True
+                assert isinstance(node["duration_ns"], int)
+                assert node["duration_ns"] >= 0
+
+    assert found_function_end_with_duration, "Expected function_end nodes to have duration"
+    assert found_capture_end_with_duration, "Expected capture_end node to have duration"

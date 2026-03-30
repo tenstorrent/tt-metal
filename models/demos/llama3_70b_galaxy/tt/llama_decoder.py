@@ -129,6 +129,7 @@ class TtTransformerBlock(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
     ) -> ttnn.Tensor:
@@ -164,6 +165,7 @@ class TtTransformerBlock(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
             kv_cache=kv_cache,
             batch_size=batch_size,
         )
@@ -180,7 +182,7 @@ class TtTransformerBlock(LightweightModule):
             attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
-        ff_out = self.feed_forward.forward(ff_in_sharded, mode)
+        ff_out = self.feed_forward.forward(ff_in_sharded, mode, batch_size=batch_size)
         if self.layer_num == self.n_layers - 1 or mode == "prefill":
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
             if mode == "decode":

@@ -232,6 +232,7 @@ Pointwise Unary
    ttnn.trunc
    ttnn.unary_chain
    ttnn.var_hw
+   ttnn.xielu
 
 Pointwise Binary
 ================
@@ -296,8 +297,6 @@ Pointwise Binary
    ttnn.rpow
    ttnn.rsub
    ttnn.rsub_
-   ttnn.scatter
-   ttnn.scatter_add
    ttnn.squared_difference
    ttnn.squared_difference_
    ttnn.subalpha
@@ -400,6 +399,8 @@ Data Movement
    ttnn.reshape_on_device
    ttnn.reshard
    ttnn.roll
+   ttnn.scatter
+   ttnn.scatter_add
    ttnn.sharded_to_interleaved
    ttnn.sharded_to_interleaved_partial
    ttnn.slice

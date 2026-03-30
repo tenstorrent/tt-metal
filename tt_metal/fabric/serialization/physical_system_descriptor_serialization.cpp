@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "physical_system_descriptor_serialization.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/physical_system_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt_metal/llrt/tt_target_device.hpp>
@@ -166,6 +166,7 @@ void physical_system_descriptor_to_proto(
         proto_asic_desc->set_asic_location(*asic_desc.asic_location);
         proto_asic_desc->set_board_type(board_type_to_proto(asic_desc.board_type));
         proto_asic_desc->set_unique_id(*asic_desc.unique_id);
+        proto_asic_desc->set_umd_unique_id(asic_desc.umd_unique_id);
         proto_asic_desc->set_host_name(asic_desc.host_name);
     }
 
@@ -199,6 +200,33 @@ void physical_system_descriptor_to_proto(
     proto_desc->mutable_ethernet_firmware_version()->set_major(descriptor.get_ethernet_firmware_version().major);
     proto_desc->mutable_ethernet_firmware_version()->set_minor(descriptor.get_ethernet_firmware_version().minor);
     proto_desc->mutable_ethernet_firmware_version()->set_patch(descriptor.get_ethernet_firmware_version().patch);
+
+    // Convert pcie_devices_per_tray map
+    for (const auto& [host_name, tray_map] : descriptor.get_pcie_devices_per_tray()) {
+        auto* proto_host_pcie_map = proto_desc->add_pcie_devices_per_tray();
+        proto_host_pcie_map->set_host_name(host_name);
+
+        for (const auto& [tray_id, pcie_device_set] : tray_map) {
+            auto* proto_pcie_per_tray = proto_host_pcie_map->add_pcie_devices_per_tray();
+            proto_pcie_per_tray->set_tray_id(tray_id);
+
+            for (const auto& pcie_device_id : pcie_device_set) {
+                proto_pcie_per_tray->add_pcie_device_ids(pcie_device_id);
+            }
+        }
+    }
+
+    // Convert pcie_id_to_asic_location map
+    for (const auto& [host_name, pcie_map] : descriptor.get_pcie_id_to_asic_location()) {
+        auto* proto_host_map = proto_desc->add_pcie_id_to_asic_location();
+        proto_host_map->set_host_name(host_name);
+
+        for (const auto& [pcie_id, asic_location] : pcie_map) {
+            auto* proto_entry = proto_host_map->add_pcie_id_to_asic_location();
+            proto_entry->set_pcie_id(pcie_id);
+            proto_entry->set_asic_location(*asic_location);
+        }
+    }
 }
 
 // Convert protobuf to PhysicalSystemDescriptor
@@ -208,12 +236,7 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     if (!target_device_type.has_value()) {
         throw std::runtime_error("Invalid target device type: " + std::to_string(proto_desc.target_device_type()));
     }
-    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(
-        PhysicalSystemDescriptor::null_cluster,
-        nullptr,
-        nullptr,
-        *target_device_type,
-        false);  // Don't run discovery
+    auto descriptor = std::make_unique<PhysicalSystemDescriptor>(*target_device_type);
 
     // Convert system graph
     auto& system_graph = descriptor->get_system_graph();
@@ -238,6 +261,11 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
         asic_desc.asic_location = ASICLocation{proto_asic_desc.asic_location()};
         asic_desc.board_type = proto_to_board_type(proto_asic_desc.board_type());
         asic_desc.unique_id = AsicID{proto_asic_desc.unique_id()};
+        // For backward compatibility: if umd_unique_id is not set (defaults to 0 in proto3),
+        // we need to find the ChipId from the cluster descriptor. However, since we don't have
+        // access to cluster_desc_ here, we use -1 as a sentinel (0 is a valid ChipId).
+        asic_desc.umd_unique_id =
+            proto_asic_desc.has_umd_unique_id() ? proto_asic_desc.umd_unique_id() : static_cast<ChipId>(-1);
         asic_desc.host_name = proto_asic_desc.host_name();
 
         asic_descriptors[asic_id] = asic_desc;
@@ -271,6 +299,33 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     descriptor->get_ethernet_firmware_version().major = proto_desc.ethernet_firmware_version().major();
     descriptor->get_ethernet_firmware_version().minor = proto_desc.ethernet_firmware_version().minor();
     descriptor->get_ethernet_firmware_version().patch = proto_desc.ethernet_firmware_version().patch();
+
+    // Convert pcie_devices_per_tray map
+    auto& pcie_devices_per_tray = descriptor->get_pcie_devices_per_tray();
+    for (const auto& proto_host_pcie_map : proto_desc.pcie_devices_per_tray()) {
+        const std::string& host_name = proto_host_pcie_map.host_name();
+        auto& tray_map = pcie_devices_per_tray[host_name];
+
+        for (const auto& proto_pcie_per_tray : proto_host_pcie_map.pcie_devices_per_tray()) {
+            uint32_t tray_id = proto_pcie_per_tray.tray_id();
+            auto& pcie_device_set = tray_map[tray_id];
+
+            for (const auto& pcie_device_id : proto_pcie_per_tray.pcie_device_ids()) {
+                pcie_device_set.insert(pcie_device_id);
+            }
+        }
+    }
+
+    // Convert pcie_id_to_asic_location map
+    auto& pcie_id_to_asic_location = descriptor->get_pcie_id_to_asic_location();
+    for (const auto& proto_host_map : proto_desc.pcie_id_to_asic_location()) {
+        const std::string& host_name = proto_host_map.host_name();
+        auto& pcie_map = pcie_id_to_asic_location[host_name];
+
+        for (const auto& proto_entry : proto_host_map.pcie_id_to_asic_location()) {
+            pcie_map[proto_entry.pcie_id()] = ASICLocation{proto_entry.asic_location()};
+        }
+    }
 
     return descriptor;
 }
@@ -313,13 +368,18 @@ std::vector<uint8_t> serialize_physical_system_descriptor_to_bytes(const Physica
     return result;
 }
 
+PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_proto(
+    const tt::fabric::proto::PhysicalSystemDescriptor& psd_proto) {
+    return std::move(*proto_to_physical_system_descriptor(psd_proto));
+}
+
 PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_bytes(const std::vector<uint8_t>& data) {
     tt::fabric::proto::PhysicalSystemDescriptor proto_desc;
     if (!proto_desc.ParseFromArray(data.data(), data.size())) {
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from protobuf binary format");
     }
 
-    return std::move(*proto_to_physical_system_descriptor(proto_desc));
+    return deserialize_physical_system_descriptor_from_proto(proto_desc);
 }
 
 PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_file(
@@ -336,6 +396,6 @@ PhysicalSystemDescriptor deserialize_physical_system_descriptor_from_text_proto_
         throw std::runtime_error("Failed to parse PhysicalSystemDescriptor from text proto file: " + text_proto_file);
     }
 
-    return std::move(*proto_to_physical_system_descriptor(physical_system_descriptor));
+    return deserialize_physical_system_descriptor_from_proto(physical_system_descriptor);
 }
 }  // namespace tt::tt_metal

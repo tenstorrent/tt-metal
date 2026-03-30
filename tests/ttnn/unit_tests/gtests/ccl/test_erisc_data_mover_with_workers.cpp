@@ -30,11 +30,10 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -51,8 +50,6 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "common/tt_backend_api_types.hpp"
-
-// #include <tt-metalium/kernel_types.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -706,14 +703,9 @@ int TestEntrypoint(
     // argv[1]: buffer_size_bytes
     // argv[2]: num_loops
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 2) {
         log_info(tt::LogTest, "This test can only be run on n300 devices");
-        return 0;
-    }
-    if (arch == tt::ARCH::GRAYSKULL) {
-        log_info(tt::LogTest, "Test must be run on WH");
         return 0;
     }
 

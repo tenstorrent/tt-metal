@@ -32,11 +32,14 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+// UMD: re-exports tt::ARCH (used in MeshDevice::arch return type).
 #include <umd/device/types/arch.hpp>
+// UMD: re-exports CoreType (used in MeshDevice::virtual_core_from_logical_core parameter).
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
 class Allocator;
+class MetalEnv;
 class SubDevice;
 class SystemMemoryManager;
 
@@ -71,9 +74,13 @@ using DeviceIds = std::vector<int>;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
     friend class MeshDeviceImpl;
+    friend class tt::tt_metal::MetalEnv;
 
 private:
     MeshDevice() = default;
+    // [[Experimental]] Creates a MeshDevice that uses the given MetalEnv instance.
+    // This is used by MetalEnv::create_mesh_device and MetalEnv::create_unit_mesh_device.
+    explicit MeshDevice(MetalEnv& metal_env);
 
     std::unique_ptr<MeshDeviceImpl> pimpl_;
 
@@ -96,6 +103,10 @@ public:
     int num_dram_channels() const override;
     uint32_t l1_size_per_core() const override;
     uint32_t dram_size_per_channel() const override;
+    // Returns the AI clock frequency in MHz for this device.
+    // This value is queried from the actual hardware via the cluster API
+    // and reflects the device's current operating frequency.
+    int get_clock_rate_mhz() const override;
 
     CoreCoord grid_size() const override;
     CoreCoord logical_grid_size() const override;
@@ -130,7 +141,7 @@ public:
     uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const override;
     std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
-        tt::stl::Span<const SubDeviceId> sub_device_ids) const override;
+        ttsl::Span<const SubDeviceId> sub_device_ids) const override;
     const std::set<CoreCoord>& ethernet_cores() const override;
     const std::set<CoreCoord>& storage_only_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
@@ -154,13 +165,8 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    void init_command_queue_host() override;
-    void init_command_queue_device() override;
-    bool compile_fabric() override;
-    void configure_fabric() override;
-    void init_fabric() override;
     bool close() override;
     void enable_program_cache() override;
     void clear_program_cache() override;
@@ -177,17 +183,21 @@ public:
     SubDeviceManagerId create_sub_device_manager(
         std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     SubDeviceManagerId create_sub_device_manager(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+        ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
     CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const override;
     const std::vector<SubDeviceId>& get_sub_device_ids() const override;
     const std::vector<SubDeviceId>& get_sub_device_stall_group() const override;
-    void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
+    void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
+    // Returns true if this MeshDevice contains only remote devices (no local devices on this host).
+    // Remote-only MeshDevices cannot perform operations requiring local device access like
+    // allocator(), create_sub_device_manager(), etc. Use this to check before calling such methods.
+    bool is_remote_only() const;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
@@ -242,6 +252,14 @@ public:
     void reshape(const MeshShape& new_shape);
     const MeshDeviceView& get_view() const;
 
+    // Returns the system mesh ID from the underlying view.
+    // This ID is programmed in the Mesh Graph Descriptor that a user provides for a Multi-Mesh Topology.
+    // This value defaults to zero, for all workloads running within a single process.
+    // For distributed Multi-Mesh workloads, this value represents which Fabric Mesh the MeshDevice belongs to,
+    // in the Logical Graph.
+    // TODO: https://github.com/tenstorrent/tt-metal/issues/38385
+    uint32_t get_system_mesh_id() const;
+
     std::string to_string() const;
     bool is_parent_mesh() const;
 
@@ -278,7 +296,7 @@ public:
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     static std::shared_ptr<MeshDevice> create_unit_mesh(
         int device_id,
@@ -286,7 +304,7 @@ public:
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
         const std::vector<int>& device_ids,
@@ -294,7 +312,7 @@ public:
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
     // Only for internal and testing purposes

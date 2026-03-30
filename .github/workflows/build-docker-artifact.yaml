@@ -31,6 +31,11 @@ on:
         required: false
         type: string
         default: "amd64"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref to checkout (defaults to github.sha if not provided)"
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -50,6 +55,10 @@ on:
       manylinux-tag:
         description: "Docker tag for the manylinux Docker image for building TT-Metalium et al"
         value: ${{ jobs.check-docker-images.outputs.manylinux-tag }}
+      llk-ci-tag:
+        # MIGRATION STAGING: requires tt_llk submodule; simplify when LLK moves in-tree
+        description: "Docker tag for the LLK CI Docker image (Ubuntu 22.04); requires tt_llk submodule checkout"
+        value: ${{ jobs.check-docker-images.outputs.llk-ci-tag }}
   workflow_dispatch:
     inputs:
       platform:
@@ -85,17 +94,35 @@ jobs:
       manylinux-tag: ${{ steps.tags.outputs.manylinux-tag }}
       distro: ${{ steps.platform.outputs.distro }}
       version: ${{ steps.platform.outputs.version }}
+      python-version: ${{ steps.python-version.outputs.version }}
+      llk-ci-exists: ${{ steps.llk-images.outputs.llk-ci-exists }}
+      llk-ci-tag: ${{ steps.llk-images.outputs.llk-ci-tag }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
+          submodules: recursive
 
       - name: Parse platform
         id: platform
         uses: ./.github/actions/parse-platform
         with:
           platform: ${{ inputs.platform }}
+
+      - name: Determine Python version
+        id: python-version
+        run: |
+          VERSION="${{ steps.platform.outputs.version }}"
+          # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
+          if [ "$VERSION" = "24.04" ]; then
+            PYTHON_VERSION="3.12"
+          else
+            PYTHON_VERSION="3.10"
+          fi
+          echo "version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+          echo "Determined Python version: $PYTHON_VERSION for version=$VERSION"
 
       - name: Set environment variables
         run: |
@@ -168,6 +195,28 @@ jobs:
             echo "manylinux-exists=false" >> $GITHUB_OUTPUT
           fi
 
+      # MIGRATION: Uses migrated script in parent repo that includes both submodule
+      # Dockerfiles and parent build scripts in the hash computation.
+      - name: Check LLK CI image
+        id: llk-images
+        run: |
+          set -euo pipefail
+          LLK="tt_metal/third_party/tt_llk"
+          if [ ! -d "$LLK" ] || [ ! -f "$LLK/.github/Dockerfile.base" ]; then
+            echo "::error::tt_llk submodule is missing or not checked out (expected $LLK with .github/Dockerfile.base). Initialize submodules in CI checkout or fix .gitmodules."
+            exit 1
+          fi
+          DOCKER_TAG=$(./.github/scripts/llk-get-docker-tag.sh)
+          TAG="ghcr.io/${{ github.repository }}/tt-llk-ci-ubuntu-22-04:${DOCKER_TAG}"
+          echo "llk-ci-tag=$TAG" >> "$GITHUB_OUTPUT"
+          if docker manifest inspect "$TAG" > /dev/null 2>&1; then
+            echo "LLK CI image exists: $TAG"
+            echo "llk-ci-exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "LLK CI image missing: $TAG"
+            echo "llk-ci-exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # Build Ubuntu images
   build-ubuntu-images:
     name: "🐳️ Build Ubuntu images"
@@ -179,6 +228,7 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -193,11 +243,14 @@ jobs:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-build
-          push: true
           tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+            PYTHON_VERSION=${{ needs.check-docker-images.outputs.python-version }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
@@ -205,11 +258,14 @@ jobs:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: ci-test
-          push: true
           tags: ${{ needs.check-docker-images.outputs.ci-test-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+            PYTHON_VERSION=${{ needs.check-docker-images.outputs.python-version }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
         uses: docker/build-push-action@v6
@@ -217,11 +273,14 @@ jobs:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
           target: dev
-          push: true
           tags: ${{ needs.check-docker-images.outputs.dev-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+            PYTHON_VERSION=${{ needs.check-docker-images.outputs.python-version }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
         if: needs.check-docker-images.outputs.basic-dev-exists != 'true'
         uses: docker/build-push-action@v6
@@ -229,11 +288,14 @@ jobs:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: base
-          push: true
           tags: ${{ needs.check-docker-images.outputs.basic-dev-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+            PYTHON_VERSION=${{ needs.check-docker-images.outputs.python-version }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
         if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true'
         uses: docker/build-push-action@v6
@@ -241,11 +303,14 @@ jobs:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
           target: basic-ttnn-runtime
-          push: true
           tags: ${{ needs.check-docker-images.outputs.basic-ttnn-runtime-tag }}
-          build-args: UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+          build-args: |
+            UBUNTU_VERSION=${{ needs.check-docker-images.outputs.version }}
+            PYTHON_VERSION=${{ needs.check-docker-images.outputs.python-version }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
 
   # Build ManyLinux image (runs in parallel with Ubuntu)
   build-manylinux-image:
@@ -258,6 +323,7 @@ jobs:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
@@ -270,10 +336,36 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.manylinux
-          push: true
           tags: ${{ needs.check-docker-images.outputs.manylinux-tag }}
           cache-to: type=inline
           pull: true
+          outputs: |
+            type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
+
+  build-llk-images:
+    name: "🐳️ Build LLK Docker images"
+    needs: check-docker-images
+    if: needs.check-docker-images.outputs.llk-ci-exists != 'true'
+    timeout-minutes: 90
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          submodules: recursive
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push LLK images
+        shell: bash
+        env:
+          # Use Google Mirror for Docker Hub (Harbor doesn't proxy docker.io)
+          LLK_UBUNTU_BASE_IMAGE: mirror.gcr.io/ubuntu:22.04
+        run: .github/scripts/llk-build-docker-images.sh
 
   # Cannot use needs.build-*-images to ensure this job runs sequentially after the build jobs because it would break when the build jobs are skipped
   # Instead, this setup causes the tag-latest job to lag one run behind the actual build.
@@ -286,6 +378,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/push-latest-image-to-ghcr
+          sparse-checkout-cone-mode: false
 
       - name: "Push latest CI Build tag"
         if: needs.check-docker-images.outputs.ci-build-exists == 'true'
@@ -327,4 +422,11 @@ jobs:
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ needs.check-docker-images.outputs.manylinux-tag }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: "Push latest LLK CI tag"
+        if: needs.check-docker-images.outputs.llk-ci-exists == 'true'
+        uses: ./.github/actions/push-latest-image-to-ghcr
+        with:
+          docker-image-tag: ${{ needs.check-docker-images.outputs.llk-ci-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}

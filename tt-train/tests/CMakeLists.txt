@@ -32,8 +32,12 @@ set(SOURCES
     datasets/utils_test.cpp
     datasets/generators_test.cpp
     datasets/dataloader_test.cpp
+    optimizers/adamw_composite_test.cpp
+    optimizers/sgd_test.cpp
     optimizers/adamw_test.cpp
-    optimizers/sgd_fused_test.cpp
+    optimizers/muon_composite_test.cpp
+    ops/newton_schulz_op_test.cpp
+    optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
     serialization/model_serializer_test.cpp
@@ -45,6 +49,7 @@ set(SOURCES
     ops/layer_norm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/distributed/ring_shift_test.cpp
+    ops/distributed/ring_sdpa_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
     ops/cross_entropy_bw_op_test.cpp
@@ -53,6 +58,7 @@ set(SOURCES
     ops/unary_ops_test.cpp
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
+    ops/softmax_backward_op_test.cpp
     ops/silu_op_test.cpp
     ops/sdpa_fw_op_test.cpp
     ops/sdpa_bw_op_test.cpp
@@ -68,6 +74,19 @@ target_link_libraries(
     GTest::gmock_main
     ttml
 )
+
+# Reuse the ttml precompiled header for test compilation.
+# Force -fPIC to match ttml's compile flags (executables default to -fPIE,
+# which is incompatible with library PCH in Clang).
+set_target_properties(
+    ttml_tests
+    PROPERTIES
+        POSITION_INDEPENDENT_CODE
+            TRUE
+)
+target_compile_options(ttml_tests PRIVATE -fPIC)
+target_precompile_headers(ttml_tests REUSE_FROM ttml_pch)
+
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
 
 # Define the target file location
@@ -88,7 +107,7 @@ else()
 endif()
 
 add_definitions(-DTEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
-add_definitions(-DTEST_LOCAL_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/local_data")
+add_definitions(-DTEST_LOCAL_DATA_DIR="${CMAKE_SOURCE_DIR}/tt-train/tests/local_data")
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")
@@ -110,21 +129,36 @@ endif()
 include(GoogleTest)
 gtest_discover_tests(ttml_tests)
 
+add_executable(swiglu_fusion_benchmark benchmark/swiglu_fusion_benchmark.cpp)
+target_link_libraries(
+    swiglu_fusion_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
+
 ############################################################################################################################
 # Benchmark tests (using Google Benchmark)
 # Only available when building via tt-metal (Build from tt-train would require adding new dependency)
 ############################################################################################################################
 
 if(TARGET benchmark::benchmark)
-    set(BENCHMARK_SOURCES benchmark/matmuls_benchmark.cpp)
-
-    add_executable(ttml_benchmarks ${BENCHMARK_SOURCES})
-    target_link_libraries(
-        ttml_benchmarks
-        PUBLIC
-            ttml
-            TTNN::TTNN
-            benchmark::benchmark
+    set(BENCHMARK_SOURCES
+        benchmark/matmuls_benchmark.cpp
+        benchmark/from_vector_benchmark.cpp
+        benchmark/adamw_benchmark.cpp
     )
-    target_include_directories(ttml_benchmarks PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
+
+    foreach(BENCH_SRC ${BENCHMARK_SOURCES})
+        get_filename_component(BENCH_TARGET ${BENCH_SRC} NAME_WE)
+        add_executable(${BENCH_TARGET} ${BENCH_SRC})
+        target_link_libraries(
+            ${BENCH_TARGET}
+            PUBLIC
+                ttml
+                TTNN::TTNN
+                benchmark::benchmark
+        )
+        target_include_directories(${BENCH_TARGET} PRIVATE "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>")
+    endforeach()
 endif()

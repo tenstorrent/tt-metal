@@ -34,9 +34,9 @@ on:
         type: boolean
   workflow_run:
     workflows:
-      - "All post-commit tests"
-      - "PR - All post-commit tests"
-      - "apc nightly debug run"
+      - "Sanity tests"
+      - "PR - Sanity tests"
+      - "Sanity tests nightly debug run"
       - "(Single-card) Model perf tests"
       - "(Single-card) Device perf regressions"
       - "(Single-card) Demo tests"
@@ -57,10 +57,8 @@ on:
       - "ttnn - Run sweeps"
       - "ttnn stress tests"
       - "Blackhole post-commit tests"
-      - "(Blackhole) Blackhole nightly tests"
+      - "(Blackhole) e2e tests"
       - "(Blackhole) Demo tests"
-      - "(Blackhole) Multi-card Demo tests"
-      - "(Blackhole) Multi-card unit tests"
       - "PR Gate"
       - "Merge Gate"
       - "Nightly tt-metal L2 tests"
@@ -71,8 +69,8 @@ on:
       - "Multi-Host Deployment (Physical)"
       - "(Galaxy) Multi-user Isolation Tests"
       - "(Galaxy) demo tests"
-      - "(Galaxy) frequent tests"
-      - "(Galaxy) model perf tests"
+      - "(Galaxy) integration tests"
+      - "(Galaxy) perf tests"
       - "(Galaxy) e2e tests"
       - "(Galaxy) profiler tests"
       - "(Galaxy) Stress"
@@ -84,9 +82,9 @@ on:
       - "(TM-DM) Data Movement Test Suite"
       - "(TM-Fabric) Fabric Tests"
       - "Profiler CI"
-      - "(APC) Select and Run Post-Commit Tests"
       - "Git bisect dispatch"
       - "Custom test dispatch"
+      - "Validate installation step from instructions"
     types:
       - completed
 
@@ -104,6 +102,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            infra
+          sparse-checkout-cone-mode: true
       - name: Output (safe) pipeline values
         run: |
           echo "pipeline_id (id / run #): ${{ github.run_id }}/${{ github.run_attempt }}"
@@ -213,6 +216,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github
+            infra
+          sparse-checkout-cone-mode: true
       - uses: actions/setup-python@v5.0.0
         with:
           python-version: '3.10'

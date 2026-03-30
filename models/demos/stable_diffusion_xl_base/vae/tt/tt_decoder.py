@@ -1,0 +1,242 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+import math
+
+from loguru import logger
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
+from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
+from models.demos.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
+from models.demos.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
+from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_slice_config, get_DRAM_GN_shape
+
+
+class TtDecoder(LightweightModule):
+    def __init__(self, device, state_dict, model_config, debug_mode=False):
+        super().__init__()
+
+        self.device = device
+
+        self.norm_groups = 32
+        self.norm_eps = 1e-5
+
+        self.stride = (1, 1)
+        self.padding = (1, 1)
+        self.dilation = (1, 1)
+        self.groups = 1
+        self.debug_mode = debug_mode
+
+        num_up_blocks = 4
+
+        self.mid_block = TtUNetMidBlock2D(device, state_dict, "decoder.mid_block", model_config, debug_mode=debug_mode)
+        self.up_blocks = []
+        for block_id in range(num_up_blocks):
+            self.up_blocks.append(
+                TtUpDecoderBlock2D(
+                    device,
+                    state_dict,
+                    f"decoder.up_blocks.{block_id}",
+                    model_config,
+                    has_upsample=block_id < 3,
+                    conv_shortcut=block_id > 1,
+                    debug_mode=debug_mode,
+                )
+            )
+
+        norm_out_weights = state_dict[f"decoder.conv_norm_out.weight"]
+        norm_out_bias = state_dict[f"decoder.conv_norm_out.bias"]
+
+        conv_in_weights = state_dict[f"decoder.conv_in.weight"]
+        conv_in_bias = state_dict[f"decoder.conv_in.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
+
+        conv_out_weights = state_dict[f"decoder.conv_out.weight"]
+        conv_out_bias = state_dict[f"decoder.conv_out.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
+
+        (
+            self.groupnorm_config,
+            self.groupnorm_memory_config,
+            self.input_mask,
+            self.input_negative_mask,
+            self.gamma_t,
+            self.beta_t,
+        ) = model_config.get_groupnorm_params(None, norm_out_weights, norm_out_bias, self.norm_groups, device)
+        assert (
+            self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            or self.groupnorm_memory_config == ttnn.DRAM_MEMORY_CONFIG
+        ), "Only L1_BLOCK_SHARDED_MEMORY_CONFIG and DRAM_MEMORY_CONFIG is supported for GN"
+
+        N, C, H, W = get_DRAM_GN_shape(None, 1)
+        torch_reciprocals = ttnn.create_group_norm_reciprocals(
+            N, C, H, W, self.norm_groups, self.groupnorm_config["core_grid"]
+        )
+        self.reciprocals_tensor = ttnn.from_torch(
+            torch_reciprocals,
+            dtype=ttnn.DataType.FLOAT32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        self.compute_in_config = model_config.get_conv_compute_config(module_path="decoder.conv_in")
+        self.conv_in_config = model_config.get_conv_config(conv_path="decoder.conv_in")
+        (
+            self.tt_conv_in_weights,
+            self.tt_conv_in_bias,
+            self.conv_in_params,
+        ) = prepare_conv_params(
+            conv_in_weights,
+            conv_in_bias,
+            self.conv_in_config.weights_dtype,
+        )
+        self.conv_in_slice_config = ttnn.Conv2dL1FullSliceConfig  # one slice
+
+        self.compute_out_config = model_config.get_conv_compute_config(module_path="decoder.conv_out")
+        self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
+        (
+            self.tt_conv_out_weights,
+            self.tt_conv_out_bias,
+            self.conv_out_params,
+        ) = prepare_conv_params(
+            conv_out_weights,
+            conv_out_bias,
+            self.conv_out_config.weights_dtype,
+        )
+        self.conv_out_slice_config = get_DRAM_conv_slice_config("decoder.conv_out")
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
+
+    def forward(self, sample, input_shape):
+        B, C, H, W = input_shape
+        hidden_states = sample
+
+        [hidden_states, [H, W], [tt_conv_in_weights, tt_conv_in_bias]] = ttnn.conv2d(
+            input_tensor=hidden_states,
+            weight_tensor=self.tt_conv_in_weights,
+            in_channels=self.conv_in_params["input_channels"],
+            out_channels=self.conv_in_params["output_channels"],
+            device=self.device,
+            bias_tensor=self.tt_conv_in_bias,
+            kernel_size=self.conv_in_params["kernel_size"],
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            batch_size=B,
+            input_height=H,
+            input_width=W,
+            conv_config=self.conv_in_config,
+            compute_config=self.compute_in_config,
+            groups=self.groups,
+            memory_config=None,
+            slice_config=self.conv_in_slice_config,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
+        )
+        C = self.conv_in_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_conv_in_weights = tt_conv_in_weights
+            self.tt_conv_in_bias = tt_conv_in_bias
+
+        logger.info("Starting mid-block")
+        hidden_states, [C, H, W] = self.mid_block.forward(hidden_states, [B, C, H, W])
+
+        for idx, up_block in enumerate(self.up_blocks):
+            logger.info(f"Starting {idx}. up-block")
+            hidden_states, [C, H, W] = up_block.forward(hidden_states, [B, C, H, W])
+
+        logger.info("Executing out ops")
+        sharded_mem_config = ttnn.create_sharded_memory_config(
+            shape=self.reciprocals_tensor.shape,
+            core_grid=self.groupnorm_config["core_grid"],
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor, sharded_mem_config)
+        mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+        if self.groupnorm_memory_config == ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG:
+            mem_cfg = ttnn.create_sharded_memory_config(
+                shape=hidden_states.shape,
+                core_grid=self.groupnorm_config["core_grid"],
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+
+        hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+        # NOTE: On Blackhole, using welford causes PCC drop in unit tests
+        use_welford_decoder = True
+        hidden_states = ttnn.group_norm(
+            hidden_states,
+            num_groups=self.norm_groups,
+            input_mask=self.input_mask,
+            negative_mask=self.input_negative_mask,
+            weight=self.gamma_t,
+            bias=self.beta_t,
+            epsilon=self.norm_eps,
+            memory_config=hidden_states.memory_config(),
+            use_welford=use_welford_decoder,
+            reciprocals=reciprocals_tensor if use_welford_decoder else None,
+            **self.groupnorm_config,
+        )
+
+        hidden_states = ttnn.silu(hidden_states)
+
+        [hidden_states, [H, W], [tt_conv_out_weights, tt_conv_out_bias]] = ttnn.conv2d(
+            input_tensor=hidden_states,
+            weight_tensor=self.tt_conv_out_weights,
+            in_channels=self.conv_out_params["input_channels"],
+            out_channels=self.conv_out_params["output_channels"],
+            device=self.device,
+            bias_tensor=self.tt_conv_out_bias,
+            kernel_size=self.conv_out_params["kernel_size"],
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            batch_size=B,
+            input_height=H,
+            input_width=W,
+            conv_config=self.conv_out_config,
+            compute_config=self.compute_out_config,
+            groups=self.groups,
+            memory_config=None,
+            slice_config=self.conv_out_slice_config,
+            return_output_dim=True,
+            return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
+        )
+
+        # Move output to [1, 1, C, N*H*W]
+        compute_grid_size = self.device.compute_with_storage_grid_size()
+        if is_blackhole():
+            total_num_cores = compute_grid_size.x * compute_grid_size.y
+            _, _, height, width = hidden_states.padded_shape
+            height_padded = math.ceil(height / (total_num_cores * 32)) * (total_num_cores * 32)
+            shard_height = height_padded // total_num_cores
+
+            height_sharded_mem_config = ttnn.create_sharded_memory_config(
+                shape=[shard_height, width],
+                core_grid=ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+        else:
+            height_sharded_mem_config = ttnn.create_sharded_memory_config(
+                shape=hidden_states.padded_shape,
+                core_grid=ttnn.CoreGrid(y=compute_grid_size.y, x=compute_grid_size.x),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            )
+
+        hidden_states = ttnn.to_memory_config(hidden_states, height_sharded_mem_config)
+        hidden_states = ttnn.experimental.convert_to_chw(hidden_states, dtype=ttnn.bfloat16)
+        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+
+        C = self.conv_out_params["output_channels"]
+        if not self.debug_mode:
+            self.tt_conv_out_weights = tt_conv_out_weights
+            self.tt_conv_out_bias = tt_conv_out_bias
+
+        return hidden_states, [C, H, W]

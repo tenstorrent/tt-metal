@@ -114,6 +114,8 @@ struct ResolvedGraphInstance {
     std::string template_name;  // Graph template name (e.g., "n300_t3k_superpod")
     std::string instance_name;  // Instance name (e.g., "superpod1", "pod2")
 
+    std::vector<std::pair<std::string, bool>> children_order;  // (name, is_node) in template order
+
     // Direct child nodes at this level (not nested)
     std::map<std::string, Node> nodes;
 
@@ -176,6 +178,9 @@ public:
     // Method to emit merged cabling descriptor
     void emit_cabling_descriptor(const std::string& output_path) const;
 
+    // Method to emit deployment descriptor (one host per node in host_id order; use for merged output)
+    void emit_deployment_descriptor(const std::string& output_path) const;
+
 private:
     // Track which node_descriptors were explicitly present in source files (not inferred)
     std::unordered_set<std::string> explicit_node_descriptors_;
@@ -219,6 +224,12 @@ private:
 
     // Recreate all nodes from templates to reset port availability for graph-level connections
     void recreate_nodes_from_templates(ResolvedGraphInstance& graph);
+
+    void reassign_host_ids_dfs();
+
+    // Rebuild deployment_hosts_ in DFS (template children) order.
+    // all_hosts maps every hostname that could appear in the graph to its Host metadata.
+    void rebuild_deployment_hosts_in_dfs_order(const std::unordered_map<std::string, Host>& all_hosts);
 
     void get_all_connections_of_type(
         const std::vector<PortType>& port_types, std::vector<PortConnection>& conn_list) const;

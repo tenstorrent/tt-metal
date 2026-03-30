@@ -1,16 +1,17 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
 """Tests for NanoGPT Python implementation.
 
 This test suite verifies that the Python NanoGPT modules work correctly:
-- Embedding layer
 - GPTMLP (feed-forward layer)
 - MultiHeadAttention
 - GPTBlock (transformer block)
 - NanoGPT (full model)
 """
+
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -19,16 +20,19 @@ import ml_dtypes
 import ttnn
 import ttml
 from ttml.common.data import build_causal_mask
+from ttml.models import memory_efficient_runner
 from ttml.models.nanogpt import (
     NanoGPT,
     NanoGPTConfig,
     create_nanogpt,
-    Embedding,
+    PositionalEmbedding,
+    TrainablePositionalEmbedding,
     GPTBlock,
 )
+from ttml.modules import Embedding
 from ttml.models.nanogpt.gpt_mlp import GPTMLP
 from ttml.models.nanogpt.multi_head_attention import MultiHeadAttention
-from ttml.modules import Parameter, RunMode
+from ttml.modules import Parameter, RunMode, LinearLayer
 
 
 # =============================================================================
@@ -73,98 +77,7 @@ def tiny_config():
 def create_causal_mask(seq_len: int) -> ttml.autograd.Tensor:
     """Create a causal attention mask as a tensor using common utility."""
     mask_np = build_causal_mask(seq_len)
-    return ttml.autograd.Tensor.from_numpy(
-        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
-    )
-
-
-# =============================================================================
-# Embedding Tests
-# =============================================================================
-
-
-class TestEmbedding:
-    """Tests for Embedding layer."""
-
-    def test_embedding_creation(self):
-        """Test that Embedding layer can be created."""
-        num_embeddings = 100
-        embedding_dim = 64
-
-        embedding = Embedding(num_embeddings, embedding_dim)
-
-        assert embedding is not None
-        assert hasattr(embedding, "weight")
-        assert isinstance(embedding.weight, Parameter)
-
-    def test_embedding_weight_shape(self):
-        """Test that embedding weight has correct shape."""
-        num_embeddings = 100
-        embedding_dim = 64
-
-        embedding = Embedding(num_embeddings, embedding_dim)
-        weight_np = embedding.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
-
-        assert weight_np.shape == (1, 1, num_embeddings, embedding_dim)
-
-    def test_embedding_forward_shape(self):
-        """Test that embedding forward pass produces correct shape."""
-        num_embeddings = 128  # Tile-aligned
-        embedding_dim = 64  # Tile-aligned
-        batch_size = 4
-        seq_len = 32  # Tile-aligned
-
-        embedding = Embedding(num_embeddings, embedding_dim)
-
-        # Create input token indices
-        indices = np.random.randint(
-            0, num_embeddings, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            indices, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-        )
-
-        # Forward pass
-        output = embedding(input_tensor)
-        output_shape = output.shape()
-
-        # Output should be [batch_size, 1, seq_len, embedding_dim] (4D)
-        assert len(output_shape) == 4
-        assert output_shape[0] == batch_size
-        assert output_shape[1] == 1
-        assert output_shape[2] == seq_len
-        assert output_shape[3] == embedding_dim
-
-        ttml.autograd.AutoContext.get_instance().reset_graph()
-
-    def test_embedding_backward(self):
-        """Test that embedding backward pass computes gradients."""
-        num_embeddings = 64  # Tile-aligned
-        embedding_dim = 64  # Tile-aligned
-        batch_size = 2
-        seq_len = 32  # Tile-aligned (must be divisible by tile width)
-
-        embedding = Embedding(num_embeddings, embedding_dim)
-
-        # Create input
-        indices = np.random.randint(
-            0, num_embeddings, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            indices, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-        )
-
-        # Forward and backward
-        output = embedding(input_tensor)
-        loss = ttml.ops.unary.mean(output)
-        loss.backward(False)
-
-        # Check gradient exists on weight
-        assert (
-            embedding.weight.tensor.is_grad_initialized()
-        ), "Embedding weight should have gradient"
-
-        ttml.autograd.AutoContext.get_instance().reset_graph()
+    return ttml.autograd.Tensor.from_numpy(mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16)
 
 
 # =============================================================================
@@ -184,8 +97,8 @@ class TestGPTMLP:
         assert mlp is not None
         assert hasattr(mlp, "fc1")
         assert hasattr(mlp, "fc2")
-        assert isinstance(mlp.fc1, Parameter)
-        assert isinstance(mlp.fc2, Parameter)
+        assert isinstance(mlp.fc1, LinearLayer)
+        assert isinstance(mlp.fc2, LinearLayer)
 
     def test_mlp_weight_shapes(self):
         """Test that MLP weights have correct shapes."""
@@ -193,8 +106,8 @@ class TestGPTMLP:
 
         mlp = GPTMLP(embedding_dim, dropout=0.0)
 
-        fc1_np = mlp.fc1.tensor.to_numpy(ttnn.DataType.FLOAT32)
-        fc2_np = mlp.fc2.tensor.to_numpy(ttnn.DataType.FLOAT32)
+        fc1_np = mlp.fc1.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
+        fc2_np = mlp.fc2.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
 
         # fc1: embedding_dim -> embedding_dim * 4
         assert fc1_np.shape == (1, 1, embedding_dim * 4, embedding_dim)
@@ -211,12 +124,8 @@ class TestGPTMLP:
         mlp.eval()  # Disable dropout
 
         # Create input: [batch_size, 1, seq_len, embedding_dim] (4D matching embedding output)
-        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            ml_dtypes.bfloat16
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            input_data, layout=ttnn.Layout.TILE
-        )
+        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(ml_dtypes.bfloat16)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
 
         # Forward pass
         output = mlp(input_tensor)
@@ -237,12 +146,8 @@ class TestGPTMLP:
         mlp.eval()
 
         # Create input (4D matching embedding output)
-        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            ml_dtypes.bfloat16
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            input_data, layout=ttnn.Layout.TILE
-        )
+        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(ml_dtypes.bfloat16)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
 
         # Forward and backward
         output = mlp(input_tensor)
@@ -250,8 +155,8 @@ class TestGPTMLP:
         loss.backward(False)
 
         # Check gradients exist
-        assert mlp.fc1.tensor.is_grad_initialized(), "fc1 should have gradient"
-        assert mlp.fc2.tensor.is_grad_initialized(), "fc2 should have gradient"
+        assert mlp.fc1.weight.tensor.is_grad_initialized(), "fc1 should have gradient"
+        assert mlp.fc2.weight.tensor.is_grad_initialized(), "fc2 should have gradient"
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
@@ -285,8 +190,8 @@ class TestMultiHeadAttention:
         attention = MultiHeadAttention(embedding_dim, num_heads, dropout=0.0)
 
         assert attention is not None
-        assert hasattr(attention, "qkv")
-        assert hasattr(attention, "out_proj")
+        assert hasattr(attention, "qkv_linear")
+        assert hasattr(attention, "out_linear")
         assert attention.num_heads == num_heads
         assert attention.head_dim == embedding_dim // num_heads
 
@@ -297,8 +202,8 @@ class TestMultiHeadAttention:
 
         attention = MultiHeadAttention(embedding_dim, num_heads, dropout=0.0)
 
-        qkv_np = attention.qkv.get_weight_numpy()
-        out_np = attention.out_proj.get_weight_numpy()
+        qkv_np = attention.qkv_linear.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
+        out_np = attention.out_linear.weight.tensor.to_numpy(ttnn.DataType.FLOAT32)
 
         # QKV projection: embedding_dim -> embedding_dim * 3
         assert qkv_np.shape == (1, 1, embedding_dim * 3, embedding_dim)
@@ -316,12 +221,8 @@ class TestMultiHeadAttention:
         attention.eval()
 
         # Create input: [batch_size, 1, seq_len, embedding_dim] (4D matching embedding output)
-        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            ml_dtypes.bfloat16
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            input_data, layout=ttnn.Layout.TILE
-        )
+        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(ml_dtypes.bfloat16)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
 
         # Create causal mask
         mask = create_causal_mask(seq_len)
@@ -346,12 +247,8 @@ class TestMultiHeadAttention:
         attention.eval()
 
         # Create input (4D matching embedding output)
-        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            ml_dtypes.bfloat16
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            input_data, layout=ttnn.Layout.TILE
-        )
+        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(ml_dtypes.bfloat16)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
         mask = create_causal_mask(seq_len)
 
         # Forward and backward
@@ -360,12 +257,8 @@ class TestMultiHeadAttention:
         loss.backward(False)
 
         # Check gradients exist
-        assert (
-            attention.qkv.get_weight().is_grad_initialized()
-        ), "qkv should have gradient"
-        assert (
-            attention.out_proj.get_weight().is_grad_initialized()
-        ), "out_proj should have gradient"
+        assert attention.qkv_linear.weight.tensor.is_grad_initialized(), "qkv should have gradient"
+        assert attention.out_linear.weight.tensor.is_grad_initialized(), "out_proj should have gradient"
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
@@ -394,8 +287,8 @@ class TestGPTBlock:
         assert block is not None
         assert hasattr(block, "attention")
         assert hasattr(block, "mlp")
-        assert hasattr(block, "ln1_gamma")
-        assert hasattr(block, "ln2_gamma")
+        assert hasattr(block, "ln1")
+        assert hasattr(block, "ln2")
 
     def test_block_forward_shape(self):
         """Test that GPTBlock forward pass preserves shape."""
@@ -408,12 +301,8 @@ class TestGPTBlock:
         block.eval()
 
         # Create input (4D matching embedding output)
-        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            ml_dtypes.bfloat16
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            input_data, layout=ttnn.Layout.TILE
-        )
+        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(ml_dtypes.bfloat16)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
         mask = create_causal_mask(seq_len)
 
         # Forward pass
@@ -436,12 +325,8 @@ class TestGPTBlock:
         block.eval()
 
         # Create input (4D matching embedding output)
-        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(
-            ml_dtypes.bfloat16
-        )
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            input_data, layout=ttnn.Layout.TILE
-        )
+        input_data = np.random.randn(batch_size, 1, seq_len, embedding_dim).astype(ml_dtypes.bfloat16)
+        input_tensor = ttml.autograd.Tensor.from_numpy(input_data, layout=ttnn.Layout.TILE)
         mask = create_causal_mask(seq_len)
 
         # Forward and backward
@@ -450,12 +335,8 @@ class TestGPTBlock:
         loss.backward(False)
 
         # Check gradients exist on layer norms
-        assert (
-            block.ln1_gamma.tensor.is_grad_initialized()
-        ), "ln1_gamma should have gradient"
-        assert (
-            block.ln2_gamma.tensor.is_grad_initialized()
-        ), "ln2_gamma should have gradient"
+        assert block.ln1.gamma.tensor.is_grad_initialized(), "ln1 should have gradient"
+        assert block.ln2.gamma.tensor.is_grad_initialized(), "ln2 should have gradient"
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
 
@@ -474,6 +355,44 @@ class TestGPTBlock:
         assert block.get_run_mode() == RunMode.TRAIN
         assert block.attention.get_run_mode() == RunMode.TRAIN
         assert block.mlp.get_run_mode() == RunMode.TRAIN
+
+
+# =============================================================================
+# Memory-Efficient Runner Tests
+# =============================================================================
+
+
+class TestMemoryEfficientRunner:
+    """Tests for memory efficient runner."""
+
+    def test_no_intermediate_backward_functions(self):
+        """Test that intermediate backward functions are not recorded."""
+        input = ttml.autograd.Tensor.from_numpy(
+            np.random.randn(1, 1, 32, 32).astype(ml_dtypes.bfloat16),
+            layout=ttnn.Layout.TILE,
+        )
+        input.set_requires_grad(True)
+        mask = ttml.autograd.Tensor.from_numpy(
+            np.random.randn(1, 1, 32, 32).astype(ml_dtypes.bfloat16),
+            layout=ttnn.Layout.TILE,
+        )
+
+        captured = {}
+
+        def forward_fn(input, m):
+            inter = ttml.ops.binary.mul(input, np.random.rand())
+            captured["inter"] = inter
+            return ttml.ops.unary.relu(inter)
+
+        # Baseline
+        _ = forward_fn(input, mask)
+        captured["inter"].backward(retain_graph=False)
+
+        # Memory-efficient runner
+        _ = memory_efficient_runner(forward_fn, input, mask)
+
+        with pytest.raises(RuntimeError):
+            captured["inter"].backward(retain_graph=False)
 
 
 # =============================================================================
@@ -497,40 +416,74 @@ class TestNanoGPT:
         model = create_nanogpt(tiny_config)
 
         # Embeddings
-        assert hasattr(model, "wte")
-        assert hasattr(model, "wpe")
-        assert isinstance(model.wte, Embedding)
-        assert isinstance(model.wpe, Embedding)
+        assert hasattr(model, "tok_emb")
+        assert hasattr(model, "pos_emb")
+        assert isinstance(model.tok_emb, Embedding)
+        assert isinstance(
+            model.pos_emb,
+            (PositionalEmbedding, TrainablePositionalEmbedding),
+        )
 
         # Blocks
         assert hasattr(model, "blocks")
         assert len(model.blocks) == tiny_config.n_layer
-        for i, block in enumerate(model.blocks):
+        for block in model.blocks:
             assert isinstance(block, GPTBlock)
-            assert hasattr(model, f"block_{i}")
 
         # Final layer norm
         assert hasattr(model, "ln_f_gamma")
         assert isinstance(model.ln_f_gamma, Parameter)
 
         # LM head (weight tied with wte)
-        assert hasattr(model, "lm_head_weight")
-        assert model.lm_head_weight is model.wte.weight
+        assert hasattr(model, "fc")
+        assert isinstance(model.fc, LinearLayer)
 
-    def test_weight_tying(self, tiny_config):
+    def test_weight_tying_disabled(self, tiny_config):
+        """Test that LM head weight is not tied to token embedding."""
+        cfg = replace(tiny_config, weight_tying=ttml.models.WeightTyingType.Disabled)
+        model = create_nanogpt(cfg)
+
+        tok_emb_before = model.tok_emb.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
+        fc_before = model.fc.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
+
+        # Set fc weights to a random value
+        model.fc.weight.tensor.set_value(ttml.core.ones_like(model.fc.weight.tensor.get_value()) * np.random.rand())
+
+        tok_emb_after = model.tok_emb.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
+        fc_after = model.fc.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
+
+        # fc weight got updated
+        assert not np.allclose(fc_before, fc_after)
+        # tok_emb weight did not get updated
+        assert np.allclose(tok_emb_before, tok_emb_after)
+
+        # tok_emb and fc have different values after fc update
+        assert not np.allclose(tok_emb_after, fc_after)
+
+    def test_weight_tying_enabled(self, tiny_config):
         """Test that LM head weight is tied to token embedding."""
-        model = create_nanogpt(tiny_config)
+        cfg = replace(tiny_config, weight_tying=ttml.models.WeightTyingType.Enabled)
+        model = create_nanogpt(cfg)
 
-        # Same Parameter object
-        assert model.lm_head_weight is model.wte.weight
+        tok_emb_before = model.tok_emb.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
+        fc_before = model.fc.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
 
-        # Modifying one should affect the other
-        weight_before = model.wte.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
-        lm_head_before = model.lm_head_weight.tensor.to_numpy(
-            ttnn.DataType.FLOAT32
-        ).copy()
+        # tok_emb and fc have the same initial value
+        assert np.allclose(tok_emb_before, fc_before)
 
-        np.testing.assert_array_equal(weight_before, lm_head_before)
+        # Set weights to a random value
+        model.fc.weight.tensor.set_value(ttml.core.ones_like(model.fc.weight.tensor.get_value()) * np.random.rand())
+
+        tok_emb_after = model.tok_emb.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
+        fc_after = model.fc.weight.tensor.to_numpy(ttnn.DataType.FLOAT32).copy()
+
+        # fc weight got updated
+        assert not np.allclose(fc_before, fc_after)
+        # tok_emb weight got updated
+        assert not np.allclose(tok_emb_before, tok_emb_after)
+
+        # tok_emb and fc have the same new value
+        assert np.allclose(tok_emb_after, fc_after)
 
     def test_model_forward_shape(self, tiny_config):
         """Test that NanoGPT forward pass produces correct output shape."""
@@ -538,12 +491,10 @@ class TestNanoGPT:
         model.eval()
 
         batch_size = 2
-        seq_len = 32  # Tile-aligned
+        seq_len = tiny_config.block_size
 
         # Create input tokens
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -569,11 +520,9 @@ class TestNanoGPT:
         model.eval()
 
         batch_size = 2
-        seq_len = 32  # Tile-aligned
+        seq_len = tiny_config.block_size
 
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -593,14 +542,14 @@ class TestNanoGPT:
 
         params = model.parameters()
 
-        assert isinstance(params, dict)
+        assert isinstance(params, ttml.NamedParameters)
         assert len(params) > 0
 
         # Check some expected parameter names
         param_names = list(params.keys())
 
         # Should have token embedding weight
-        wte_params = [k for k in param_names if "wte" in k.lower() or "weight" in k]
+        wte_params = [k for k in param_names if "tok_emb" in k.lower() or "weight" in k]
         assert len(wte_params) > 0
 
     def test_model_train_eval_propagation(self, tiny_config):
@@ -610,16 +559,16 @@ class TestNanoGPT:
         # Set to eval
         model.eval()
         assert model.get_run_mode() == RunMode.EVAL
-        assert model.wte.get_run_mode() == RunMode.EVAL
-        assert model.wpe.get_run_mode() == RunMode.EVAL
+        assert model.tok_emb.get_run_mode() == RunMode.EVAL
+        assert model.pos_emb.get_run_mode() == RunMode.EVAL
         for block in model.blocks:
             assert block.get_run_mode() == RunMode.EVAL
 
         # Set to train
         model.train()
         assert model.get_run_mode() == RunMode.TRAIN
-        assert model.wte.get_run_mode() == RunMode.TRAIN
-        assert model.wpe.get_run_mode() == RunMode.TRAIN
+        assert model.tok_emb.get_run_mode() == RunMode.TRAIN
+        assert model.pos_emb.get_run_mode() == RunMode.TRAIN
         for block in model.blocks:
             assert block.get_run_mode() == RunMode.TRAIN
 
@@ -629,12 +578,10 @@ class TestNanoGPT:
         model.eval()  # Disable dropout for deterministic test
 
         batch_size = 2
-        seq_len = 32  # Tile-aligned
+        seq_len = tiny_config.block_size
 
         # Create input
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -659,11 +606,9 @@ class TestNanoGPT:
         model.eval()
 
         batch_size = 2
-        seq_len = 32  # Tile-aligned
+        seq_len = tiny_config.block_size
 
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -726,13 +671,18 @@ class TestNanoGPTConfig:
 class TestNanoGPTIntegration:
     """Integration tests for NanoGPT."""
 
-    def test_training_step(self, tiny_config):
+    @pytest.mark.parametrize(
+        "runner_type",
+        [ttml.models.RunnerType.Default, ttml.models.RunnerType.MemoryEfficient],
+    )
+    def test_training_step(self, tiny_config, runner_type):
         """Test a single training step with optimizer."""
-        model = create_nanogpt(tiny_config)
+        cfg = replace(tiny_config, runner_type=runner_type)
+        model = create_nanogpt(cfg)
         model.train()
 
         batch_size = 2
-        seq_len = 32  # Tile-aligned
+        seq_len = tiny_config.block_size
 
         # Create optimizer
         params = model.parameters()
@@ -740,15 +690,11 @@ class TestNanoGPTIntegration:
         optimizer = ttml.optimizers.SGD(params, opt_cfg)
 
         # Create input and targets
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
-        targets = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, seq_len)
-        ).astype(np.uint32)
+        targets = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, seq_len)).astype(np.uint32)
         target_tensor = ttml.autograd.Tensor.from_numpy(
             targets, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -757,9 +703,7 @@ class TestNanoGPTIntegration:
         # Training step
         optimizer.zero_grad()
         logits = model(input_tensor, mask)
-        loss = ttml.ops.loss.cross_entropy_loss(
-            logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN
-        )
+        loss = ttml.ops.loss.cross_entropy_loss(logits, target_tensor, reduce=ttml.ops.ReduceType.MEAN)
         loss.backward(False)
         optimizer.step()
 
@@ -775,11 +719,9 @@ class TestNanoGPTIntegration:
         model.eval()
 
         batch_size = 2
-        seq_len = 32  # Tile-aligned
+        seq_len = tiny_config.block_size
 
-        tokens = np.random.randint(
-            0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)
-        ).astype(np.uint32)
+        tokens = np.random.randint(0, tiny_config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
         input_tensor = ttml.autograd.Tensor.from_numpy(
             tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
         )
@@ -819,14 +761,10 @@ def test_model_various_configs(n_layer, n_head):
     model.eval()
 
     batch_size = 2
-    seq_len = 32  # Tile-aligned
+    seq_len = config.block_size
 
-    tokens = np.random.randint(
-        0, config.vocab_size, size=(batch_size, 1, 1, seq_len)
-    ).astype(np.uint32)
-    input_tensor = ttml.autograd.Tensor.from_numpy(
-        tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-    )
+    tokens = np.random.randint(0, config.vocab_size, size=(batch_size, 1, 1, seq_len)).astype(np.uint32)
+    input_tensor = ttml.autograd.Tensor.from_numpy(tokens, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32)
 
     output = model(input_tensor)
 

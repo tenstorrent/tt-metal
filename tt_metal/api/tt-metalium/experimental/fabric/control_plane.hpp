@@ -6,6 +6,9 @@
 
 #include <unordered_set>
 
+// UMD: EthCoord is a UMD type alias used in the private method
+// get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -19,7 +22,19 @@
 #include <memory>
 #include <vector>
 
+namespace tt {
+
+class Cluster;
+
+namespace llrt {
+class RunTimeOptions;
+}
+
+}  // namespace tt
+
 namespace tt::tt_metal {
+
+class Hal;
 
 class PhysicalSystemDescriptor;
 
@@ -75,11 +90,47 @@ using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId
 
 class ControlPlane {
 public:
-    ControlPlane();
-    explicit ControlPlane(const std::string& mesh_graph_desc_file);
+    // Create control plane with auto-discovery
     explicit ControlPlane(
+        const ::tt::Cluster& cluster,
+        const ::tt::llrt::RunTimeOptions& rtoptions,
+        const ::tt::tt_metal::Hal& hal,
+        const tt_metal::distributed::multihost::DistributedContext& distributed_context,
+        FabricConfig fabric_config = FabricConfig::DISABLED,
+        FabricReliabilityMode fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
+        FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
+        FabricRouterConfig fabric_router_config = FabricRouterConfig{},
+        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+
+    // Create control plane with custom mesh graph descriptor
+    explicit ControlPlane(
+        const ::tt::Cluster& cluster,
+        const ::tt::llrt::RunTimeOptions& rtoptions,
+        const ::tt::tt_metal::Hal& hal,
+        const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const std::string& mesh_graph_desc_file,
-        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
+        FabricConfig fabric_config = FabricConfig::DISABLED,
+        FabricReliabilityMode fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
+        FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
+        FabricRouterConfig fabric_router_config = FabricRouterConfig{},
+        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
+
+    // Create control plane with custom mesh graph descriptor and logical mesh chip id to physical chip id mapping
+    explicit ControlPlane(
+        const ::tt::Cluster& cluster,
+        const ::tt::llrt::RunTimeOptions& rtoptions,
+        const ::tt::tt_metal::Hal& hal,
+        const tt_metal::distributed::multihost::DistributedContext& distributed_context,
+        const std::string& mesh_graph_desc_file,
+        const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
+        FabricConfig fabric_config = FabricConfig::DISABLED,
+        FabricReliabilityMode fabric_reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+        FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED,
+        FabricUDMMode fabric_udm_mode = FabricUDMMode::DISABLED,
+        FabricRouterConfig fabric_router_config = FabricRouterConfig{},
+        FabricManagerMode fabric_manager = FabricManagerMode::DEFAULT);
 
     ~ControlPlane();
 
@@ -90,8 +141,7 @@ public:
     void print_all_ethernet_connections() const;
 
     // Converts chip level routing tables to per ethernet channel
-    void configure_routing_tables_for_fabric_ethernet_channels(
-        tt::tt_fabric::FabricConfig fabric_config, tt_fabric::FabricReliabilityMode reliability_mode);
+    void configure_routing_tables_for_fabric_ethernet_channels();
     void write_routing_tables_to_all_chips() const;
     void write_fabric_telemetry_to_all_chips(const FabricNodeId& fabric_node_id) const;
 
@@ -125,7 +175,7 @@ public:
     // Returns the distributed context with only one host.
     const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& get_host_local_context() const;
 
-    // Return valid ethernet channels on the specificed routing plane
+    // Return valid ethernet channels on the specified routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
         FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const;
 
@@ -176,12 +226,12 @@ public:
     // TODO: remove this converter, we should consolidate the directions here
     eth_chan_directions routing_direction_to_eth_direction(RoutingDirection direction) const;
 
+    RoutingDirection eth_direction_to_routing_direction(eth_chan_directions direction) const;
+
     // Return ethernet channels on a chip that face external meshes (inter-mesh exit nodes)
     std::vector<chan_id_t> get_intermesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
     // Return ethernet channels on a chip that face other chips within the same mesh (intra-mesh)
     std::vector<chan_id_t> get_intramesh_facing_eth_chans(FabricNodeId fabric_node_id) const;
-
-    void initialize_fabric_context(tt_fabric::FabricConfig fabric_config, const FabricRouterConfig& router_config);
 
     FabricContext& get_fabric_context() const;
 
@@ -226,6 +276,15 @@ public:
     std::vector<ChipId> get_switch_mesh_device_ids() const;
 
     tt::tt_metal::AsicID get_asic_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const;
+    const tt::tt_metal::PhysicalSystemDescriptor& get_physical_system_descriptor() const;
+
+    // Getters
+    FabricConfig get_fabric_config() const { return fabric_config_; }
+    FabricReliabilityMode get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
+    FabricTensixConfig get_fabric_tensix_config() const { return fabric_tensix_config_; }
+    FabricUDMMode get_fabric_udm_mode() const { return fabric_udm_mode_; }
+    FabricRouterConfig get_fabric_router_config() const { return fabric_router_config_; }
+    FabricManagerMode get_fabric_manager_mode() const { return fabric_manager_; }
 
 private:
     // Check if the provided mesh is local to this host
@@ -237,6 +296,30 @@ private:
             logical_mesh_chip_id_to_physical_chip_id_mapping = std::nullopt);
 
     void init_control_plane_auto_discovery();
+
+    // Initialize fabric context if fabric is enabled
+    void initialize_fabric_context();
+
+    // Dependencies
+    std::reference_wrapper<const ::tt::Cluster> cluster_;
+    std::reference_wrapper<const ::tt::llrt::RunTimeOptions> rtoptions_;
+    std::reference_wrapper<const ::tt::tt_metal::Hal> hal_;
+    std::reference_wrapper<const tt_metal::distributed::multihost::DistributedContext> distributed_context_;
+
+    // Fabric Settings
+    tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+
+    // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
+    // is expected that any downed devices/links will result in some sort of error condition being
+    // reported. When set to false, the control plane is free to instantiate fewer routing planes
+    // according to which links are available.
+    tt_fabric::FabricReliabilityMode fabric_reliability_mode_ =
+        tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+
+    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
+    tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
+    tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
+    tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
 
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
@@ -384,7 +467,7 @@ private:
     // Multi-Host Intermesh Connectivity Helper Function:
     // Runs on all hosts: Given the local port descriptors, this function will return the full list of intermesh
     // connections.
-    AnnotatedIntermeshConnections convert_port_desciptors_to_intermesh_connections(
+    AnnotatedIntermeshConnections convert_port_descriptors_to_intermesh_connections(
         PortDescriptorTable& port_descriptors);
 
     // Single-Host Intermesh Connectivity Helper Function:

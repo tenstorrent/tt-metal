@@ -8,10 +8,6 @@
 # - name: Human-readable test name
 # - comment: (optional) Additional notes about test behavior and performance
 #
-# Additional metadata fields for NOC estimator consumption:
-# These fields are required for tests that generate CSV reports used by the NOC estimator
-# for offline model training. Only "Packet Sizes" tests need these fields.
-#
 # Required fields for packet sizes tests:
 #   - memory_type: Memory type being accessed
 #       Values: "l1" | "dram"
@@ -20,14 +16,20 @@
 #   - pattern: Communication pattern between cores
 #       Values: "one_to_one" | "one_from_one" | "one_to_all" | "one_from_all" | "all_to_all" | "all_from_all"
 #
-# Optional fields supported by the estimator:
-#   - num_subordinates: Number of destination cores (for *_to_all patterns with fixed grid sizes)
-#       Examples: 4 (for 2x2), 25 (for 5x5)
-#       Omit for tests with variable grid sizes or non-*_to_all patterns
-#       Leave empty to use real kernel data (num_subordinates = "")
-#   - same_axis: Whether the source and destination core share one axis
-#       Examples: true for (0,0)->(0,5), false for (0,0)->(2,2)
-#       Leave empty to use real kernel data (same_axis = "")
+# Bandwidth calculation mode:
+#   - bandwidth_mode: How bandwidth is calculated and reported
+#       Values: "per_core" (default) | "combined"
+#       - "per_core": Reports median/average bandwidth per individual core
+#       - "combined": Reports aggregate bandwidth across all cores
+#           combined_bandwidth = total_bytes / wall_clock_time
+#           where wall_clock_time = max(duration) across all cores
+#           Use this for multi-core DRAM tests where cores are synchronized
+#
+# Bandwidth unit:
+#   - bandwidth_unit: Unit for bandwidth in plots and reports
+#       Values: "bpc" (default) | "gbps"
+#       - "bpc": bytes/cycle
+#       - "gbps": GB/s (requires clock frequency from device or fallback constant)
 #
 # These metadata fields are automatically injected into CSV files when using the --report flag.
 
@@ -71,77 +73,63 @@ tests:
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_all"
-    num_subordinates: ""
 
   7:
     name: "One to All Unicast 5x5 Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_all"
-    num_subordinates: ""
 
   8:
     name: "One to All Unicast Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_to_all"
-    num_subordinates: ""
 
   9:
     name: "One to All Multicast 2x2 Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_subordinates: ""
 
   10:
     name: "One to All Multicast 5x5 Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_subordinates: ""
 
   11:
     name: "One to All Multicast Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_subordinates: ""
 
   12:
     name: "One to All Multicast Linked 2x2 Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_subordinates: ""
-    linked: true
 
   13:
     name: "One to All Multicast Linked 5x5 Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_subordinates: ""
-    linked: true
 
   14:
     name: "One to All Multicast Linked Packet Sizes"
     memory_type: "l1"
     mechanism: "multicast"
     pattern: "one_to_all"
-    num_subordinates: ""
-    linked: true
 
   15:
     name: "One from All Packet Sizes"
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "one_from_all"
-    num_subordinates: ""
 
   16:
     name: "Loopback Packet Sizes"
-    # TODO issue #35917
 
   17:
     name: "Reshard Hardcoded Small"
@@ -231,7 +219,6 @@ tests:
 
   40:
     name: "DRAM Packet Sizes 2.0"
-    # TODO issue #35917
 
   50:
     name: "One to One Directed Ideal"
@@ -298,11 +285,9 @@ tests:
 
   80:
     name: "One Packet Read Sizes"
-    # TODO issue #35917
 
   81:
     name: "One Packet Write Sizes"
-    # TODO issue #35917
 
   82:
     name: "One Packet Read Directed Ideal"
@@ -333,68 +318,78 @@ tests:
 
   110:
     name: "Multi Interleaved Directed Ideal"
+    bandwidth_mode: "combined"
 
   111:
     name: "Multi Interleaved Sizes"
-    # TODO issue #35917
+    bandwidth_mode: "combined"
 
   112:
     name: "Multi Interleaved Read Directed Ideal"
+    bandwidth_mode: "combined"
 
   113:
     name: "Multi Interleaved Read Sizes"
     memory_type: "dram"
     mechanism: "unicast"
     pattern: "one_from_one"
+    bandwidth_mode: "combined"
 
   114:
     name: "Multi Interleaved Write Directed Ideal"
+    bandwidth_mode: "combined"
 
   115:
     name: "Multi Interleaved Write Sizes"
-    # TODO issue #35917
+    bandwidth_mode: "combined"
 
   116:
     name: "Multi Interleaved 2x2 Directed Ideal"
+    bandwidth_mode: "combined"
 
   117:
     name: "Multi Interleaved 2x2 Sizes"
-    # TODO issue #35917
+    bandwidth_mode: "combined"
 
   118:
     name: "Multi Interleaved 2x2 Read Directed Ideal"
+    bandwidth_mode: "combined"
 
   119:
     name: "Multi Interleaved 2x2 Read Sizes"
-    # TODO issue #35917
+    bandwidth_mode: "combined"
 
   120:
     name: "Multi Interleaved 2x2 Write Directed Ideal"
+    bandwidth_mode: "combined"
 
   121:
     name: "Multi Interleaved 2x2 Write Sizes"
-    # TODO issue #35917
+    bandwidth_mode: "combined"
 
   122:
     name: "Multi Interleaved 6x6 Directed Ideal"
+    bandwidth_mode: "combined"
 
   123:
     name: "Multi Interleaved 6x6 Sizes"
-    # TODO issue #35917
+    bandwidth_mode: "combined"
 
   124:
     name: "Multi Interleaved 6x6 Read Directed Ideal"
+    bandwidth_mode: "combined"
 
   125:
     name: "Multi Interleaved 6x6 Read Sizes"
-    # TODO issue #35917
+    bandwidth_mode: "combined"
 
   126:
     name: "Multi Interleaved 6x6 Write Directed Ideal"
+    bandwidth_mode: "combined"
 
   127:
     name: "Multi Interleaved 6x6 Write Sizes"
-    # TODO issue #35917
+    bandwidth_mode: "combined"
 
   140:
     name: "Core Bidirectional Directed Ideal Same Kernel"
@@ -416,11 +411,9 @@ tests:
 
   146:
     name: "Core Bidirectional Packet Sizes Same Kernel"
-    # TODO issue #35917
 
   147:
     name: "Core Bidirectional Packet Sizes Different Kernels"
-    # TODO issue #35917
 
   148:
     name: "Core Bidirectional Custom"
@@ -448,6 +441,12 @@ tests:
 
   157:
     name: "One from All Custom"
+
+  158:
+    name: "One to One Packet Sizes 2.0"
+
+  159:
+    name: "One from One Packet Sizes 2.0"
 
   170:
     name: "One to All Unicast 2x2 Packet Sizes 2.0"
@@ -535,7 +534,6 @@ tests:
     memory_type: "l1"
     mechanism: "unicast"
     pattern: "all_from_all"
-    num_subordinates: ""
 
   312:
     name: "All from All 2x2 From 1x1 Directed Ideal"
@@ -563,6 +561,30 @@ tests:
 
   320:
     name: "Atomic Semaphore Non Adjacent Bandwidth Sweep"
+
+  321:
+    name: "Single source Multicast Atomic Increment"
+
+  322:
+    name: "Multi source Multicast Atomic Increment"
+
+  323:
+    name: "Single source Multicast Atomic Increment - NOC 1"
+
+  324:
+    name: "Multi source Multicast Atomic Increment - NOC 1"
+
+  325:
+    name: "Multicast Atomic Larger Increment"
+
+  326:
+    name: "Multicast Atomic Larger Increment - NOC 1"
+
+  327:
+    name: "Single source Multicast Atomic Increment 2.0 API"
+
+  328:
+    name: "Multicast Atomic Larger Increment 2.0 API"
 
   400:
     name: "I2S - DRAM Sharded Row Major Writer"
@@ -623,6 +645,14 @@ tests:
       Evaluates the performance impact of stateful versus stateless approaches under scenarios
       involving both identical and differing values and destinations.
 
+  503:
+    name: "Number of Pages Sweep for DRAM Closest Neighbour"
+    bandwidth_mode: "combined"
+
+  505:
+    name: "Number of Pages Sweep for Single Row DRAM"
+    bandwidth_mode: "combined"
+
   600:
     name: "Transaction ID - Read After Write"
 
@@ -634,6 +664,20 @@ tests:
 
   603:
     name: "PCIe Read Bandwidth"
+
+  604:
+    name: "PCIe Write Bandwidth Sweep"
+    bandwidth_unit: "gbps"
+
+  605:
+    name: "PCIe Read Bandwidth Sweep"
+    bandwidth_unit: "gbps"
+
+  606:
+    name: "PCIe Host Write (H2D) Bandwidth Sweep"
+
+  607:
+    name: "PCIe Host Read (D2H) Bandwidth Sweep"
 
   610:
     name: "Transaction ID - Write After Read"
@@ -709,3 +753,61 @@ tests:
       covering all compute cores in the device.
       Important: Since the multicast is transferring a lot of data, the NoC gets congested quickly.
       Because of this, for larger number of transactions, the noc api latency is increasing.
+
+  800:
+    name: "Noc Estimator - L1 One to One"
+
+  801:
+    name: "Noc Estimator - L1 One from One"
+
+  802:
+    name: "Noc Estimator - L1 One to All"
+
+  803:
+    name: "Noc Estimator - L1 One from All"
+
+  804:
+    name: "Noc Estimator - L1 All to All"
+
+  805:
+    name: "Noc Estimator - L1 All from All"
+
+  806:
+    name: "Noc Estimator - L1 One to Row"
+
+  807:
+    name: "Noc Estimator - L1 Row to Row"
+
+  808:
+    name: "Noc Estimator - L1 One to Column"
+
+  809:
+    name: "Noc Estimator - L1 Column to Column"
+
+  810:
+    name: "Noc Estimator - DRAM Sharded One from One"
+
+  811:
+    name: "Noc Estimator - DRAM Sharded All from All"
+    bandwidth_mode: "combined"
+
+  812:
+    name: "Noc Estimator - DRAM Interleaved One from All"
+
+  813:
+    name: "Noc Estimator - DRAM Interleaved All from All"
+    bandwidth_mode: "combined"
+
+  814:
+    name: "Noc Estimator - DRAM Sharded One to One"
+
+  815:
+    name: "Noc Estimator - DRAM Sharded All to All"
+    bandwidth_mode: "combined"
+
+  816:
+    name: "Noc Estimator - DRAM Interleaved One to All"
+
+  817:
+    name: "Noc Estimator - DRAM Interleaved All to All"
+    bandwidth_mode: "combined"

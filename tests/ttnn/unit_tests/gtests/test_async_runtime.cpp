@@ -8,15 +8,12 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/event.hpp>
 #include <cmath>
 #include <memory>
 #include <optional>
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -25,7 +22,7 @@
 #include <tt_stl/strong_type.hpp>
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

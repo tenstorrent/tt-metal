@@ -27,6 +27,11 @@ on:
         required: false
         default: "Ubuntu 22.04"
         type: string
+      tests-yaml-gist-url:
+        description: "URL to gist containing release_tests.yaml (optional, falls back to local file if not provided)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: write
@@ -53,7 +58,23 @@ jobs:
         with:
           platform: ${{ inputs.platform }}
 
-  build-artifact:
+  build-artifact-tracy:
+      name: "Build artifact with tracy (for testing)"
+      needs: parse-platform
+      uses: ./.github/workflows/build-artifact.yaml
+      permissions:
+        packages: write
+      secrets: inherit
+      with:
+        platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+        build-wheel: true
+        tracy: true
+        fetch-depth: 0
+        skip-tt-train: false
+        enable-lto: false
+
+  build-artifact-release:
+      name: "Build artifact for release (without tracy)"
       needs: parse-platform
       uses: ./.github/workflows/build-artifact.yaml
       permissions:
@@ -67,97 +88,38 @@ jobs:
         skip-tt-train: false
         enable-lto: false
 
-  single-card-demo-tests:
-    needs: build-artifact
+  determine-test-skus:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled-skus: ${{ steps.select-skus.outputs.enabled-skus }}
+    steps:
+      - name: Select SKUs based on platform
+        id: select-skus
+        run: |
+          if [[ "${{ inputs.platform }}" == "${{ inputs.main-platform }}" ]]; then
+            # Main platform runs all tests including multi-card
+            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf,wh_llmbox_perf_release,wh_galaxy_release,bh_p100,bh_p150,bh_p150_perf,bh_llmbox,bh_loudbox,bh_p300" >> "$GITHUB_OUTPUT"
+          else
+            # Other platforms run only single-card tests
+            echo "enabled-skus=wh_n150,wh_n150_civ2,wh_n300,wh_n300_civ2,wh_n300_perf" >> "$GITHUB_OUTPUT"
+          fi
+
+  release-demo-tests:
+    needs: [build-artifact-tracy, determine-test-skus]
     if: ${{ inputs.tag-version != '' }}
     secrets: inherit
-    uses: ./.github/workflows/single-card-demo-tests-impl.yaml
+    uses: ./.github/workflows/release-demo-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      arch: wormhole_b0
+      docker-image: ${{ needs.build-artifact-tracy.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-tracy.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-tracy.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.determine-test-skus.outputs.enabled-skus }}
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
-
-  t3000-demo-tests:
-    needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
-    secrets: inherit
-    uses: ./.github/workflows/t3000-demo-tests-impl.yaml
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
-      extra-tag: "in-release"
-
-  galaxy-demos:
-    needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
-    uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
-    secrets: inherit
-    with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: topology-6u
-      mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
-      extra-tag: "in-release"
-
-  blackhole-demo-tests:
-    needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ["P100", "P150", "p150b"]
-    with:
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      regenerate-ttnn-cache: false
-
-  blackhole-multi-card-demo-tests:
-    needs: build-artifact
-    if: ${{ inputs.version == inputs.main-os-version && inputs.tag-version != '' }}
-    secrets: inherit
-    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group:
-          - name: LLMBox Demo tests
-            runner-label: BH-LLMBox
-            extra-tag: pipeline-perf
-            num_devices: 4
-          - name: LoudBox Demo tests
-            runner-label: BH-LoudBox
-            extra-tag: pipeline-functional
-            num_devices: 8
-          - name: P300 Demo tests
-            runner-label: P300-viommu
-            extra-tag: pipeline-yyz2-lfc
-            num_devices: 2
-          # - name: QuietBox Global Edition tests
-          #   runner-label: BH-QB-GE
-          #   extra-tag: pipeline-perf
-          #   num_devices: 4
-    with:
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      extra-tag: ${{ matrix.test-group.extra-tag }}
-      num_devices: ${{ matrix.test-group.num_devices }}
-      regenerate-ttnn-cache: false
-      model: "all"
+      tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
 
   # We need to tag the image used to reproduce the release later
   push-image-to-ghcr:
-    needs: build-artifact
+    needs: build-artifact-release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -165,39 +127,43 @@ jobs:
       - name: Push dev docker image to GHCR with release tag
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker-image-tag: ${{ needs.build-artifact-release.outputs.dev-docker-image }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
           new-tag: ${{ inputs.tag-version || 'latest' }}
 
   create-docker-release-image:
+    strategy:
+      matrix:
+        image: [release, release-models]
     needs:
-      - build-artifact
+      - build-artifact-release
       - parse-platform
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
     with:
-      os: ${{ needs.parse-platform.outputs.distro }}-${{ needs.parse-platform.outputs.version }}
+      platform: ${{ needs.parse-platform.outputs.distro }}-${{ needs.parse-platform.outputs.version }}
       version: ${{ inputs.tag-version }}
       tag-latest:  ${{ inputs.is-release-candidate != 'true' }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
+      image: ${{ matrix.image }}
 
   # Only run docs release once per run on the main platform
   release-docs:
-    needs: [build-artifact, parse-platform]
+    needs: [build-artifact-release, parse-platform]
     if: ${{ inputs.platform == inputs.main-platform && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ inputs.tag-version }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact-release.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
     secrets: inherit
 
   publish-wheels:
     name: "Publish wheels to internal PyPI"
-    needs: build-artifact
+    needs: build-artifact-release
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for AWS OIDC
@@ -221,7 +187,7 @@ jobs:
       - name: Download wheel artifacts
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
           path: ./wheels
 
       - name: Publish wheels to internal PyPI

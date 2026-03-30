@@ -31,11 +31,6 @@ PagedFusedUpdateCacheDeviceOperation::program_factory_t PagedFusedUpdateCacheDev
     TT_FATAL(false, "input_tensor1 and input_tensor2 must be either both tiled or both row-major");
 }
 
-void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(operation_attributes, tensor_args);
-}
-
 void PagedFusedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& cache_tensor1 = tensor_args.cache_tensor1;
@@ -248,7 +243,7 @@ PagedFusedUpdateCacheDeviceOperation::tensor_return_value_t PagedFusedUpdateCach
     return std::make_tuple(tensor_args.cache_tensor1, tensor_args.cache_tensor2);
 }
 
-tt::stl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 

@@ -27,11 +27,10 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -265,6 +264,7 @@ void run_single_core_tilize_program(
     tt_metal::SetRuntimeArgs(program_, unary_writer_kernel, core, {dram_buffer_dst_addr, (uint32_t)0, num_tiles});
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
@@ -350,10 +350,6 @@ TEST_F(MeshDeviceFixture, TensixComputeUnpackTilize) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
-            // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
             for (bool dst_full_sync_en : {true, false}) {
                 unit_tests::compute::tilize::TestConfig test_config = {
                     .dst_full_sync_en = dst_full_sync_en,
@@ -374,10 +370,6 @@ TEST_F(MeshDeviceFixture, TensixComputeFastTilize) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {false}) {
-            // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
             for (bool dst_full_sync_en : {false}) {
                 unit_tests::compute::tilize::TestConfig test_config = {
                     .dst_full_sync_en = dst_full_sync_en,
@@ -396,10 +388,6 @@ TEST_F(MeshDeviceFixture, TensixComputeFastTilize) {
 }
 
 TEST_F(MeshDeviceFixture, TensixComputeUnpackTilizeA_B) {
-    auto arch = this->arch_;
-    if (arch == tt::ARCH::GRAYSKULL) {
-        GTEST_SKIP();
-    }
     for (bool dst_full_sync_en : {true, false}) {
         unit_tests::compute::tilize::TestConfig test_config = {
             .dst_full_sync_en = dst_full_sync_en,
@@ -421,10 +409,6 @@ TEST_F(MeshDeviceFixture, TensixComputeUnpackUntilize) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
-            // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
             for (bool dst_full_sync_en : {true, false}) {
                 unit_tests::compute::tilize::TestConfig test_config = {
                     .dst_full_sync_en = dst_full_sync_en,
@@ -448,10 +432,6 @@ TEST_F(MeshDeviceFixture, TensixComputePackUntilize) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}, {10, 10}, {2, 40}};
     for (auto num_tile : num_tiles) {
         for (bool fp32_dest_acc_en : {true, false}) {
-            // FP32 dest acc not possible for GS
-            if ((fp32_dest_acc_en) && (this->arch_ == tt::ARCH::GRAYSKULL)) {
-                continue;
-            }
             for (bool dst_full_sync_en : {true, false}) {
                 unit_tests::compute::tilize::TestConfig test_config = {
                     .dst_full_sync_en = dst_full_sync_en,

@@ -121,6 +121,35 @@ void detect_broadcasts(
         pred_is_bcast = (pred_row_bcast && pred_col_bcast);
         true_is_bcast = (true_row_bcast && true_col_bcast);
         false_is_bcast = (false_row_bcast && false_col_bcast);
+    } else if (broadcast_type == TernaryBroadcastType::ROW_COL_BCAST) {
+        // Mixed row+col broadcast: is_bcast = true for col-broadcast (W=1) tensors,
+        // which are pushed before the tw loop and waited on outside the compute freq loop.
+        auto pred_w = pred_shape[-1];
+
+        if (variant == TernaryVariant::TTT) {
+            auto true_shape = value_true_tensor.value().logical_shape();
+            auto false_shape = value_false_tensor.value().logical_shape();
+            auto true_w = true_shape[-1];
+            auto false_w = false_shape[-1];
+            auto max_w = std::max({pred_w, true_w, false_w});
+            pred_is_bcast = (pred_w == 1 && max_w > 1);
+            true_is_bcast = (true_w == 1 && max_w > 1);
+            false_is_bcast = (false_w == 1 && max_w > 1);
+        } else if (variant == TernaryVariant::TTS) {
+            auto true_shape = value_true_tensor.value().logical_shape();
+            auto true_w = true_shape[-1];
+            auto max_w = std::max(pred_w, true_w);
+            pred_is_bcast = (pred_w == 1 && max_w > 1);
+            true_is_bcast = (true_w == 1 && max_w > 1);
+            false_is_bcast = false;
+        } else if (variant == TernaryVariant::TST) {
+            auto false_shape = value_false_tensor.value().logical_shape();
+            auto false_w = false_shape[-1];
+            auto max_w = std::max(pred_w, false_w);
+            pred_is_bcast = (pred_w == 1 && max_w > 1);
+            true_is_bcast = false;
+            false_is_bcast = (false_w == 1 && max_w > 1);
+        }
     } else if (broadcast_type == TernaryBroadcastType::SCALAR_A_BCAST) {
         // Scalar broadcast detection (H and W dimensions of condition tensor must be broadcast for TTS/TST)
         pred_is_bcast = true;
@@ -202,8 +231,11 @@ void overwrite_compute_kernel_name_and_defines(
     const ttnn::operations::ternary::TernaryBroadcastType broadcast_type,
     const ttnn::operations::ternary::TernaryOpType op_type) {
     if (broadcast_type == TernaryBroadcastType::ROW_BCAST) {
-        kernel_name =
-            op_type == TernaryOpType::ADDCMUL ? KernelName::ComputeRowBcastAddcmul : KernelName::ComputeRowBcastTTT;
+        if (op_type == TernaryOpType::ADDCMUL || op_type == TernaryOpType::ADDCDIV) {
+            kernel_name = KernelName::ComputeRowBcastAddcOp;
+        } else {
+            kernel_name = KernelName::ComputeRowBcastTTT;
+        }
     }
 }
 
@@ -267,76 +299,6 @@ uint32_t get_shards_per_width(const tt::tt_metal::ShardSpec& shard_spec, TensorM
     return (shard_spec.orientation == ShardOrientation::ROW_MAJOR ? end.x - start.x : end.y - start.y) + 1;
 }
 
-// Helper functions for TensorSpec
-const std::optional<ShardSpec>& get_shard_spec(const TensorSpec& tensor_spec) {
-    return tensor_spec.memory_config().shard_spec();
-}
-
-inline auto is_uneven(const TensorSpec& t) {
-    if (not t.memory_config().is_sharded()) {
-        return false;
-    }
-
-    const auto& shape = t.padded_shape();
-    const auto& shard = get_shard_spec(t)->shape;
-    const auto rank = shape.rank();
-
-    // Compute product of all dimensions except the last
-    uint64_t volume_except_last = 1;
-    for (int i = 0; i < static_cast<int>(rank) - 1; ++i) {
-        volume_except_last *= shape[i];
-    }
-
-    return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
-}
-
-bool is_native_L1_sharding(
-    const TensorSpec& predicate_spec,
-    const std::optional<TensorSpec>& true_spec,
-    const std::optional<TensorSpec>& false_spec,
-    const TensorSpec& output_spec) {
-    // Only support TTT variant
-    if (!true_spec.has_value() || !false_spec.has_value()) {
-        return false;
-    }
-
-    // Output must be sharded
-    if (!output_spec.memory_config().is_sharded()) {
-        return false;
-    }
-
-    // All shapes must be identical and predicate/true/false must have matching layouts
-    if (predicate_spec.logical_shape() == true_spec->logical_shape() &&
-        predicate_spec.logical_shape() == false_spec->logical_shape() &&
-        predicate_spec.memory_config() == true_spec->memory_config() &&
-        predicate_spec.memory_config() == false_spec->memory_config()) {
-        if (is_uneven(predicate_spec) || is_uneven(*true_spec) || is_uneven(*false_spec) || is_uneven(output_spec)) {
-            return false;
-        }
-        if (predicate_spec.memory_config().buffer_type() == BufferType::DRAM ||
-            true_spec->memory_config().buffer_type() == BufferType::DRAM ||
-            false_spec->memory_config().buffer_type() == BufferType::DRAM ||
-            output_spec.memory_config().buffer_type() == BufferType::DRAM) {
-            return false;
-        }
-        if ((predicate_spec.memory_config().is_sharded() &&
-             predicate_spec.memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if ((true_spec->memory_config().is_sharded() && true_spec->memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if ((false_spec->memory_config().is_sharded() && false_spec->memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-        if ((output_spec.memory_config().is_sharded() && output_spec.memory_config().buffer_type() == BufferType::L1)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 std::optional<AllShardSpecs> get_shard_specs(
     const TensorSpec& predicate_spec,
     const std::optional<TensorSpec>& true_spec,
@@ -356,7 +318,10 @@ std::optional<AllShardSpecs> get_shard_specs(
         return std::nullopt;
     }
 
-    if (!is_native_L1_sharding(predicate_spec, true_spec, false_spec, output_spec)) {
+    // Check if output is unevenly sharded. If so, fall back to tensor accessor mode instead of direct
+    // L1 sharding to avoid kernel deadlocks when cores have different shard sizes.
+    if (!is_native_L1_sharding(predicate_spec, true_spec, false_spec, output_spec.memory_config()) ||
+        is_uneven(output_spec)) {
         // treat as interleaved
         return std::nullopt;
     }
@@ -799,15 +764,14 @@ void set_or_update_runtime_arguments(
         if (variant == TernaryVariant::TTS) {
             scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_b.value(), output.dtype());
         } else if (
-            variant == TernaryVariant::TST || (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
+            variant == TernaryVariant::TST || ((operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL ||
+                                                operation_attributes.ternary_op_type == TernaryOpType::ADDCDIV) &&
                                                operation_attributes.scalar_input_a.has_value())) {
             scalar_arg = pack_scalar_runtime_arg(operation_attributes.scalar_input_a.value(), output.dtype());
         }
         auto [freq, counter] = [&] {
             switch (broadcast_type) {
-                // TODO: test for TTS and TST
-                // case TernaryBroadcastType::ROW_B_COL_A:
-                // case TernaryBroadcastType::ROW_A_COL_B:
+                case TernaryBroadcastType::ROW_COL_BCAST:
                 case TernaryBroadcastType::COL_BCAST: {
                     uint32_t start_t = start_tile_id % (output_dims.Ht * output_dims.Wt);
                     uint32_t start_tw = start_t % output_dims.Wt;
@@ -918,7 +882,7 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     uint32_t value_false_single_tile_size = tt::tile_size(value_false_data_format);
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
 
-    // Get shard volumes (using TensorSpec like binary_ng)
+    // Get shard volumes (using TensorSpec)
     const auto shard_volumes = get_shard_volumes(
         predicate_tensor.tensor_spec(),
         value_true_tensor.has_value() ? value_true_tensor->tensor_spec() : std::optional<TensorSpec>{},
@@ -1063,6 +1027,50 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         false_is_bcast,
         has_sharding);
 
+    // For mixed row+col broadcast: add per-tensor row-bcast and scalar defines for the reader
+    if (broadcast_type == TernaryBroadcastType::ROW_COL_BCAST) {
+        auto pred_shape = predicate_tensor.logical_shape();
+        auto pred_h = pred_shape[-2];
+        auto pred_w = pred_shape[-1];
+
+        if (variant == TernaryVariant::TTT) {
+            auto true_shape = value_true_tensor.value().logical_shape();
+            auto false_shape = value_false_tensor.value().logical_shape();
+            auto max_h = std::max({pred_h, true_shape[-2], false_shape[-2]});
+            auto max_w = std::max({pred_w, true_shape[-1], false_shape[-1]});
+
+            bool pred_h1 = (pred_h == 1 && max_h > 1);
+            bool pred_w1 = (pred_w == 1 && max_w > 1);
+            bool true_h1 = (true_shape[-2] == 1 && max_h > 1);
+            bool true_w1 = (true_shape[-1] == 1 && max_w > 1);
+            bool false_h1 = (false_shape[-2] == 1 && max_h > 1);
+            bool false_w1 = (false_shape[-1] == 1 && max_w > 1);
+
+            reader_defines["SRC_ROW_BCAST_A"] = (pred_h1 && !pred_w1) ? "1" : "0";
+            reader_defines["SRC_ROW_BCAST_B"] = (true_h1 && !true_w1) ? "1" : "0";
+            reader_defines["SRC_ROW_BCAST_C"] = (false_h1 && !false_w1) ? "1" : "0";
+            reader_defines["SRC_SCALAR_A"] = (pred_h1 && pred_w1) ? "1" : "0";
+            reader_defines["SRC_SCALAR_B"] = (true_h1 && true_w1) ? "1" : "0";
+            reader_defines["SRC_SCALAR_C"] = (false_h1 && false_w1) ? "1" : "0";
+        } else {
+            const auto& tensor_op =
+                (variant == TernaryVariant::TTS) ? value_true_tensor.value() : value_false_tensor.value();
+            auto tensor_shape = tensor_op.logical_shape();
+            auto max_h = std::max(pred_h, tensor_shape[-2]);
+            auto max_w = std::max(pred_w, tensor_shape[-1]);
+
+            bool pred_h1 = (pred_h == 1 && max_h > 1);
+            bool pred_w1 = (pred_w == 1 && max_w > 1);
+            bool tensor_h1 = (tensor_shape[-2] == 1 && max_h > 1);
+            bool tensor_w1 = (tensor_shape[-1] == 1 && max_w > 1);
+
+            reader_defines["SRC_ROW_BCAST_A"] = (pred_h1 && !pred_w1) ? "1" : "0";
+            reader_defines["SRC_SCALAR_A"] = (pred_h1 && pred_w1) ? "1" : "0";
+            reader_defines["SRC_ROW_BCAST_CB1"] = (tensor_h1 && !tensor_w1) ? "1" : "0";
+            reader_defines["SRC_SCALAR_CB1"] = (tensor_h1 && tensor_w1) ? "1" : "0";
+        }
+    }
+
     std::map<std::string, std::string> kernel_defines;
     if (variant == TernaryVariant::TTT) {
         if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(
@@ -1121,7 +1129,8 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
 
     bool is_fpu = false;
 
-    if (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL) {
+    if (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL ||
+        operation_attributes.ternary_op_type == TernaryOpType::ADDCDIV) {
         is_fpu = (predicate_tensor.dtype() == value_true_tensor.value().dtype()) &&
                  (predicate_tensor.dtype() == value_false_tensor.value().dtype()) &&
                  (predicate_tensor.dtype() != DataType::FLOAT32 && predicate_tensor.dtype() != DataType::INT32 &&
@@ -1198,8 +1207,8 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         kernel_defines["BCAST_C"] = false_is_bcast ? "1" : "0";
     } else if (
         (variant == TernaryVariant::TTS || variant == TernaryVariant::TST) &&
-        broadcast_type == TernaryBroadcastType::COL_BCAST) {
-        // Unified TTS/TST column broadcast configuration
+        (broadcast_type == TernaryBroadcastType::COL_BCAST || broadcast_type == TernaryBroadcastType::ROW_COL_BCAST)) {
+        // Unified TTS/TST column and mixed broadcast configuration
         kernel_defines["BCAST_A"] = pred_is_bcast ? "1" : "0";
         if (variant == TernaryVariant::TTS) {
             kernel_defines["BCAST_B"] = true_is_bcast ? "1" : "0";
@@ -1232,7 +1241,10 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
     // Add common fill defines
     kernel_defines["FILL_LLK"] = "fill_tile";
     if (predicate_tensor.dtype() == DataType::INT32) {
-        kernel_defines["FILL_LLK"] = "fill_tile_int";
+        kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
+        kernel_defines["FILL_WITH_VALUE_INT"] = "1";
+    } else if (predicate_tensor.dtype() == DataType::UINT32) {
+        kernel_defines["FILL_LLK"] = "fill_tile_uint<DataFormat::UInt32>";
         kernel_defines["FILL_WITH_VALUE_INT"] = "1";
     } else {
         kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
@@ -1244,8 +1256,11 @@ TernaryDeviceOperation::TernaryProgramFactory::cached_program_t TernaryDeviceOpe
         .compile_args = compute_kernel_args,
         .defines = kernel_defines};
 
-    auto compute_kernel_id =
-        tt_metal::CreateKernel(program, get_kernel_file_path(compute_kernel, is_fpu), all_device_cores, compute_config);
+    std::string compute_kernel_path = (operation_attributes.ternary_op_type == TernaryOpType::ADDCMUL &&
+                                       operation_attributes.dtype == DataType::INT32)
+                                          ? override_addcmul_compute_kernel(compute_kernel)
+                                          : get_kernel_file_path(compute_kernel, is_fpu);
+    auto compute_kernel_id = tt_metal::CreateKernel(program, compute_kernel_path, all_device_cores, compute_config);
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
