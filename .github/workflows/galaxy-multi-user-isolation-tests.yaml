@@ -118,6 +118,11 @@ jobs:
       - ${{ inputs.extra-tag || 'in-service' }}
     name: "${{ matrix.arch }} - ${{ matrix.scenario }} (${{ matrix.num_containers }}x${{ matrix.chips_per_container }})"
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: ⬇️ Checkout
         uses: ./.github/actions/checkout
         with:

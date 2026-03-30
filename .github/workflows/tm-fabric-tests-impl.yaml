@@ -121,6 +121,11 @@ jobs:
         working-directory: /work
     name: Wormhole T3K UDM tests
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: 🧬 Checkout Repository
         uses: ./.github/actions/checkout
         with:
@@ -171,6 +176,11 @@ jobs:
         shell: bash
         working-directory: /work
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: 🧬 Checkout Repository
         uses: ./.github/actions/checkout
         with:
@@ -361,6 +371,11 @@ jobs:
         shell: bash
         working-directory: /work
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: 🧬 Checkout Repository
         uses: ./.github/actions/checkout
         with:

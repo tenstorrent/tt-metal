@@ -29,6 +29,11 @@ jobs:
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_deepseek_prefill_tests.yaml
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: Checkout the repository
         uses: ./.github/actions/checkout
         with:
@@ -96,6 +101,11 @@ jobs:
         shell: bash
         working-directory: /work
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: 🧬 Checkout Repository
         uses: ./.github/actions/checkout
         with:

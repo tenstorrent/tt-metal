@@ -804,6 +804,11 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.runner_label)
       }}
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: 🧬 Checkout Repository
         uses: ./.github/actions/checkout
         with:
@@ -900,6 +905,11 @@ jobs:
     timeout-minutes: 30
     runs-on: tt-ubuntu-2204-n300-llmbox-viommu-stable
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: 🧬 Checkout Repository
         uses: ./.github/actions/checkout
         with:
@@ -1030,6 +1040,11 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
       }}
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: 🧬 Checkout Repository
         uses: ./.github/actions/checkout
         with:
@@ -1173,6 +1188,11 @@ jobs:
     timeout-minutes: 60
     runs-on: ${{ matrix.runs_on }}
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: 🧬 Checkout Repository
         uses: ./.github/actions/checkout
         with:
@@ -1319,6 +1339,11 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     runs-on: ubuntu-latest
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: 🧬 Checkout Repository
         uses: ./.github/actions/checkout
         with:

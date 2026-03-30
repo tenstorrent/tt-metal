@@ -64,6 +64,11 @@ jobs:
       old-sha: ${{ steps.update.outputs.old-sha }}
       new-sha: ${{ steps.update.outputs.new-sha }}
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: Setup
         uses: ./.github/actions/checkout
         with:

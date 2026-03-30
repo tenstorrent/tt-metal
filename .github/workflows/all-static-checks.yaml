@@ -80,6 +80,11 @@ jobs:
     # Issue 21637: Disable check-docs-links for now to unblock developers
     if: false  # ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
     steps:
+      - name: Bootstrap local actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
       - name: Checkout repo
         uses: ./.github/actions/checkout
         with:
