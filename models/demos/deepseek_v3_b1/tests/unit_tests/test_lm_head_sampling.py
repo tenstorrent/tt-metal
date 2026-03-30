@@ -314,12 +314,8 @@ def _mtp_golden_weights(hf_state_dict) -> tuple[torch.Tensor, torch.Tensor, torc
     return embedding, h_gamma, e_gamma, eh_projection
 
 
-def _mtp_shared_head_golden_weights(hf_state_dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    mtp_layer_idx = _infer_mtp_layer_idx(hf_state_dict)
-    gamma = hf_state_dict[f"model.layers.{mtp_layer_idx}.shared_head.norm.weight"].reshape(1, -1)
-    vocab = hf_state_dict[f"model.layers.{mtp_layer_idx}.shared_head.head.weight"].T
-    indices = torch.arange(vocab.shape[-1], dtype=torch.int32).reshape(1, -1)
-    return gamma, vocab, indices
+def _verification_lm_head_golden_weights(hf_state_dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    return _lm_head_golden_weights(hf_state_dict)
 
 
 def _rms_norm_golden(input_tensor: torch.Tensor, gamma: torch.Tensor, *, epsilon: float = 1e-6) -> torch.Tensor:
@@ -574,7 +570,7 @@ def test_golden_reference_payload_mtp_verification(lm_head_sampling_reference_pa
     assert mtp_speculation_positions.numel() == mtp_speculation_tokens.numel()
     assert base_output_positions.numel() == base_output_tokens.numel()
 
-    gamma, vocab, indices = _mtp_shared_head_golden_weights(hf_state_dict)
+    gamma, vocab, indices = _verification_lm_head_golden_weights(hf_state_dict)
 
     reference_token_by_request_pos = {}
     for row_idx in range(base_output_tokens.numel()):
@@ -1274,16 +1270,6 @@ class _ReferencePayloadMTPWeightProvider:
             move_to_device=True,
         )
 
-    def load_mtp_shared_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
-        return prepare_lm_head_weights(
-            {
-                "lm_head.weight": self._hf_state_dict[f"model.layers.{self._mtp_layer_idx}.shared_head.head.weight"],
-                "model.norm.weight": self._hf_state_dict[f"model.layers.{self._mtp_layer_idx}.shared_head.norm.weight"],
-            },
-            device,
-            move_to_device=True,
-        )
-
     def load_mtp_weights(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         return _prepare_reference_mtp_weights(device, self._hf_state_dict)
 
@@ -1320,7 +1306,7 @@ def _create_reference_spec_decode_pipeline_configuration(
 
     def stage_3(device: ttnn.MeshDevice):
         return SpecLMHeadStage(
-            weights=weight_provider.load_mtp_shared_head(device),
+            weights=weight_provider.load_base_lm_head(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
         )
@@ -1377,7 +1363,7 @@ def _compute_reference_payload_mtp_metrics_teacher_forced(
 
     gamma, vocab, indices = _lm_head_golden_weights(hf_state_dict)
     embedding, h_gamma, e_gamma, eh_projection = _mtp_golden_weights(hf_state_dict)
-    shared_head_gamma, shared_head_vocab, shared_head_indices = _mtp_shared_head_golden_weights(hf_state_dict)
+    shared_head_gamma, shared_head_vocab, shared_head_indices = _verification_lm_head_golden_weights(hf_state_dict)
     mtp_layer_idx, decoder_layer = _load_mtp_decoder_layer_golden(hf_model_path, hf_state_dict)
 
     reference_token_by_request_pos = {}
