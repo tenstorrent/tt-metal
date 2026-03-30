@@ -1,0 +1,83 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
+import os
+
+import pytest
+from loguru import logger
+
+from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
+from models.perf.device_perf_utils import run_device_perf_detailed
+
+os.environ.setdefault("MESH_DEVICE", "TG")
+
+THRESHOLD = 0.5
+THRESHOLD_PERCENTAGE = 0.03
+
+
+@pytest.fixture(autouse=True)
+def ensure_devices():
+    """Skip device initialization since this test spawns child pytest processes."""
+
+
+@pytest.mark.parametrize(
+    "step_name, warmup_iters, perf_target_us",
+    [
+        ("dram_dram_decode", 10, 44.62),
+        ("l1_l1_decode", 10, 41.29),
+        ("l1_dram_decode", 10, 41.26),
+        ("dram_dram_prefill", 10, 77.33),
+        ("l1_l1_prefill", 10, 71.36),
+        ("l1_dram_prefill", 10, 71.37),
+    ],
+    ids=["dram_dram_decode", "l1_l1_decode", "l1_dram_decode", "dram_dram_prefill", "l1_l1_prefill", "l1_dram_prefill"],
+)
+@pytest.mark.models_device_performance_bare_metal
+def test_linear_moe_gate_perf(
+    step_name,
+    warmup_iters,
+    perf_target_us,
+):
+    profiler = BenchmarkProfiler()
+    benchmark_data = BenchmarkData()
+
+    subdir = "deepseek_linear_perf"
+    command = f"pytest models/demos/deepseek_v3/tests/unit/test_linear_single_device.py -k {step_name}"
+    cols = ["DEVICE KERNEL"]
+    op_name = "MatmulDeviceOperation"
+
+    profiler.start("run")
+    profiler.start(step_name)
+    results = run_device_perf_detailed(command, subdir, cols, op_name, has_signposts=True, warmup_iters=warmup_iters)
+    profiler.end(step_name)
+    profiler.end("run")
+
+    # Get the measured performance
+    measured_min = results[cols[0]]["MIN"]
+    measured_max = results[cols[0]]["MAX"]
+    measured_avg = results[cols[0]]["AVG"]
+    measured_std = results[cols[0]]["STD"]
+    measured_avg_us = measured_avg / 1000
+
+    logger.info(f"Measured performance: {measured_avg_us:.3f} us vs. target: {perf_target_us} us")
+
+    # Save the measurement
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-min", measured_min)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-max", measured_max)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-avg", measured_avg)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"{step_name}-std", measured_std)
+    benchmark_data.save_partial_run_json(
+        profiler,
+        run_type=f"tg_deepseek_linear",
+        ml_model_name="deepseek-v3-tg",
+    )
+
+    threshold = max(THRESHOLD, perf_target_us * THRESHOLD_PERCENTAGE)
+
+    assert (
+        measured_avg_us < perf_target_us + threshold
+    ), f"Performance is worse than target: {measured_avg_us} us > {perf_target_us} us, the threshold was {threshold} us"
+    assert (
+        measured_avg_us > perf_target_us - threshold
+    ), f"Performance is more than {threshold} us better than target, update the target: {measured_avg_us} us < {perf_target_us} us"
