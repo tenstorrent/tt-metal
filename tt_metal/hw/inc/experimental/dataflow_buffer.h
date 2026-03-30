@@ -220,10 +220,48 @@ public:
     // Implicit sync APIs end
 #endif
 
-    // from pov of producer need to make sure all the entries get posted (check the raw posted per TC == raw acked per
-    // TC)
-    // also that there are no interrupts remaining...
     void finish() {
+#ifndef COMPILE_FOR_TRISC
+        // Handle case where outstanding transactions do not meet ISR threshold
+        // Each RISC posts credits only for the tiles it read/wrote, by using its local counter (ptiles_read_ / ctiles_written_)
+        if (ptiles_read_ > 0) {
+            // Producer tail: entries read via read_in that didn't fill a full ISR batch
+            uint8_t tail_count = static_cast<uint8_t>(
+                ptiles_read_ % local_dfb_interface_.num_entries_per_txn_id);
+            if (tail_count > 0) {
+                uint8_t N = local_dfb_interface_.num_tcs_to_rr;
+                // tc_idx points one past the last used slot; step back tail_count positions
+                uint8_t tc_tail_start = static_cast<uint8_t>(
+                    (local_dfb_interface_.tc_idx + N - (tail_count % N)) % N);
+                for (uint8_t i = 0; i < tail_count; i++) {
+                    dfb::PackedTileCounter ptc =
+                        local_dfb_interface_.tc_slots[(tc_tail_start + i) % N].packed_tile_counter;
+                    fast_llk_intf_inc_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), 1);
+                }
+                uint8_t txn_id = local_dfb_interface_.txn_ids[ptxn_id_index_];
+                CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, txn_id);
+                asm volatile("nop");
+            }
+        }
+        if (ctiles_written_ > 0) {
+            // Consumer tail: entries written via write_out that didn't fill a full ISR batch
+            uint8_t tail_count = static_cast<uint8_t>(
+                ctiles_written_ % local_dfb_interface_.num_entries_per_txn_id);
+            if (tail_count > 0) {
+                uint8_t N = local_dfb_interface_.num_tcs_to_rr;
+                uint8_t tc_tail_start = static_cast<uint8_t>(
+                    (local_dfb_interface_.tc_idx + N - (tail_count % N)) % N);
+                for (uint8_t i = 0; i < tail_count; i++) {
+                    dfb::PackedTileCounter ptc =
+                        local_dfb_interface_.tc_slots[(tc_tail_start + i) % N].packed_tile_counter;
+                    fast_llk_intf_inc_acked(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), 1);
+                }
+                uint8_t txn_id = local_dfb_interface_.txn_ids[ctxn_id_index_];
+                CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, txn_id);
+                asm volatile("nop");
+            }
+        }
+#endif
         bool all_acked = false;
         while (!all_acked) {
             all_acked = true;

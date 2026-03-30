@@ -100,7 +100,8 @@ void run_single_dfb_program(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     experimental::dfb::DataflowBufferConfig& dfb_config,
     DFBPorCType producer_type,
-    DFBPorCType consumer_type) {
+    DFBPorCType consumer_type,
+    std::optional<uint32_t> num_entries_in_buffer = std::nullopt) {
 
     TT_FATAL(
         !(producer_type == DFBPorCType::TENSIX && consumer_type == DFBPorCType::TENSIX),
@@ -109,7 +110,7 @@ void run_single_dfb_program(
     Program program = CreateProgram();
 
     auto zero_coord = distributed::MeshCoordinate(0, 0);
-    uint32_t buffer_size = dfb_config.entry_size * dfb_config.num_entries;
+    uint32_t buffer_size = dfb_config.entry_size * (num_entries_in_buffer.has_value() ? num_entries_in_buffer.value() : dfb_config.num_entries);
     distributed::DeviceLocalBufferConfig local_buffer_config{.page_size = buffer_size, .buffer_type = BufferType::DRAM};
     distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
     auto in_buffer = distributed::MeshBuffer::create(buffer_config, local_buffer_config, mesh_device.get());
@@ -276,7 +277,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB1Sx1S) {
         .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
-    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
+    uint32_t num_entries_in_buffer = 18;
+    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, num_entries_in_buffer);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB1Sx1S) {
@@ -491,7 +493,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx4S) {
         .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
-    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
+    uint32_t num_entries_in_buffer = 29;
+    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, num_entries_in_buffer);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx4S) {
@@ -538,7 +541,8 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB2Sx4S) {
         .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
-    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
+    uint32_t num_entries_in_buffer = 21;
+    run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, num_entries_in_buffer);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB2Sx4S) {

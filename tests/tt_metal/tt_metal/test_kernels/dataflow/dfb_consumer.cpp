@@ -50,6 +50,14 @@ void kernel_main() {
         }
     }
     DPRINT << "CBW" << ENDL();
-    noc.async_write_barrier();
+    dfb.finish();
+    if constexpr (implicit_sync) {
+        LocalDFBInterface& local_dfb_interface = g_dfb_interface[cb_id];
+        for (uint32_t i = 0; i < local_dfb_interface.num_txn_ids; i++) {
+            noc.async_write_barrier<experimental::Noc::BarrierMode::TXN_ID>(local_dfb_interface.txn_ids[i]);
+        }
+    } else {
+        noc.async_write_barrier();
+    }
     DPRINT << "CBWD" << ENDL();
 }
