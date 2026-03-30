@@ -28,7 +28,7 @@ LABEL org.opencontainers.image.documentation="https://docs.tenstorrent.com/"
 # IMPORTANT: Keep this in sync with OMPI_TAG in Dockerfile.tools
 # OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
 # The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
-ARG OMPI_TAG=v5.0.7
+ARG OMPI_TAG=v5.0.10
 ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
 
 # Environment setup for OpenMPI and build tools

@@ -82,7 +82,7 @@ echo ""
 # The OMPI_COMMIT_SHA in Dockerfile.tools is the dereferenced commit for the tag.
 # To update: git ls-remote --refs https://github.com/open-mpi/ompi.git <new-tag>
 # For annotated tags, dereference: git clone --branch <tag> --depth 1 ... && git rev-parse HEAD
-OMPI_COMMIT_SHA="29341e55efaabf7a6968444b4bb6f1f1fb40d664"
+OMPI_COMMIT_SHA="0d48030d410ae8f56790933135b28be1b3920ba1"
 echo "OMPI_COMMIT_SHA=${OMPI_COMMIT_SHA}"
 echo ""
 

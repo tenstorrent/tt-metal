@@ -86,7 +86,7 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # must be reachable from all nodes. See scripts/install-uv.sh post-install message.
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV OMPI_TAG=v5.0.7
+ENV OMPI_TAG=v5.0.10
 ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
 ENV PATH="${OMPI_PREFIX}/bin:/usr/local/bin:$PATH"
 ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib
