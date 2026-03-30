@@ -1,0 +1,66 @@
+[
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Describe this image in detail."
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What breed of dog is this?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What is the dog doing in this image?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Write a short haiku about this dog."
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What color is the dog's fur?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Is the dog indoors or outdoors?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What object is the dog standing on?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Does this dog look happy or sad?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> How would you describe the dog's expression?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What age does this dog appear to be?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Is this a small or large dog?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What is in the background of this image?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Write a caption for this photo."
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What makes this image funny or cute?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Would this dog make a good pet?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What activity is shown in this picture?"
+    }
+]

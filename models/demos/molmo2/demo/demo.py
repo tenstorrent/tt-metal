@@ -28,7 +28,7 @@ Usage:
 import argparse
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import torch
 from loguru import logger
@@ -124,7 +124,8 @@ class Molmo2Generator:
 
         if self.kv_caches is None:
             if self.use_paged_attention:
-                # Paged KV cache: [num_blocks, num_kv_heads, block_size, head_dim]
+                # Paged KV cache: [batch_size, num_kv_heads, max_seq_len, head_dim]
+                # page_table maps virtual positions to physical blocks within max_seq_len
                 self.kv_caches = init_paged_kv_cache(
                     mesh_device=self.mesh_device,
                     num_layers=self.num_layers,
@@ -133,8 +134,10 @@ class Molmo2Generator:
                     block_size=self.block_size,
                     head_dim=128,
                     dtype=ttnn.bfloat16,
+                    batch_size=self.batch_size,
+                    max_seq_len=self.max_seq_len,
                 )
-                logger.info(f"Initialized paged KV cache: {self.num_blocks} blocks, block_size={self.block_size}")
+                logger.info(f"Initialized paged KV cache: batch={self.batch_size}, max_seq_len={self.max_seq_len}")
             else:
                 # Non-paged KV cache: [batch, num_kv_heads, max_seq_len, head_dim]
                 self.kv_caches = init_kv_cache(
@@ -188,12 +191,29 @@ class Molmo2Generator:
         )
         logger.info(f"Initialized page table: {num_blocks_needed} blocks for seq_len={seq_len}")
 
-    def reset_kv_cache(self, start_pos: int = 0):
-        """Reset KV cache position and RoPE indices for new generation."""
-        self.decode_position = start_pos
+    def reset_kv_cache(self, start_pos: Union[int, List[int]] = 0):
+        """Reset KV cache position and RoPE indices for new generation.
+
+        Args:
+            start_pos: Starting position(s). Can be int (same for all batch) or
+                       List[int] (per-batch positions for parallel processing).
+        """
+        # Track position on host (for simple case, use first position)
+        if isinstance(start_pos, int):
+            self.decode_position = start_pos
+            pos_values = [start_pos] * self.batch_size
+        else:
+            self.decode_position = start_pos[0]  # Use first for tracking
+            pos_values = list(start_pos)
+            # Pad to batch_size if fewer positions provided (for batched inference with < batch_size prompts)
+            if len(pos_values) < self.batch_size:
+                pos_values = pos_values + [0] * (self.batch_size - len(pos_values))
+            assert (
+                len(pos_values) == self.batch_size
+            ), f"start_pos length {len(pos_values)} != batch_size {self.batch_size}"
 
         if self.current_pos is not None:
-            pos_tensor = torch.full((self.batch_size,), start_pos, dtype=torch.int32)
+            pos_tensor = torch.tensor(pos_values, dtype=torch.int32)
             pos_ttnn = ttnn.from_torch(
                 pos_tensor,
                 dtype=ttnn.int32,
@@ -206,7 +226,9 @@ class Molmo2Generator:
         if self.rot_mat_idxs is not None:
             batch = self.batch_size
             pad_size = ((batch + 31) // 32) * 32 - batch
-            rot_idxs_tensor = torch.full((1, batch + pad_size), start_pos, dtype=torch.int32)
+            # For RoPE indices, use the first position value for padding
+            rot_values = pos_values + [pos_values[0]] * pad_size
+            rot_idxs_tensor = torch.tensor([rot_values], dtype=torch.int32)
             rot_idxs_ttnn = ttnn.from_torch(
                 rot_idxs_tensor,
                 dtype=ttnn.uint32,
@@ -615,9 +637,9 @@ class Molmo2Generator:
         ttnn.deallocate(rot_mats[1])
 
         # Allocate page_table trace tensor for paged attention
-        # Shape: [batch_size=1, max_num_blocks]
+        # Shape: [batch_size, max_num_blocks]
         trace_page_table = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, max_num_blocks]),
+            ttnn.Shape([self.batch_size, max_num_blocks]),
             ttnn.int32,
             ttnn.ROW_MAJOR_LAYOUT,
             self.mesh_device,
@@ -816,7 +838,7 @@ class Molmo2Generator:
         if self.use_paged_attention:
             max_num_blocks = 64  # Match decode trace allocation
             trace_page_table = ttnn.allocate_tensor_on_device(
-                ttnn.Shape([1, max_num_blocks]),
+                ttnn.Shape([self.batch_size, max_num_blocks]),
                 ttnn.int32,
                 ttnn.ROW_MAJOR_LAYOUT,
                 self.mesh_device,
@@ -910,7 +932,7 @@ class Molmo2Generator:
         Note: embed_tokens is called INSIDE the trace, not here.
         This just prepares input_ids and other tensors for copying to trace tensors.
         """
-        batch_size = 1
+        batch_size = self.batch_size
         seq_len = input_ids.shape[1]
 
         # Prepare vision inputs -- patch embedding on TTNN (no CPU matmul)
@@ -1215,7 +1237,7 @@ class Molmo2Generator:
             max_num_blocks: Maximum number of blocks per sequence for page_table
         """
         trace_hidden_states = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, 1, hidden_dim]),
+            ttnn.Shape([1, 1, self.batch_size, hidden_dim]),
             ttnn.bfloat16,
             ttnn.TILE_LAYOUT,
             self.mesh_device,
@@ -1223,9 +1245,9 @@ class Molmo2Generator:
         )
 
         # Allocate page_table trace tensor for paged attention
-        # Shape: [batch_size=1, max_num_blocks]
+        # Shape: [batch_size, max_num_blocks]
         trace_page_table = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, max_num_blocks]),
+            ttnn.Shape([self.batch_size, max_num_blocks]),
             ttnn.int32,
             ttnn.ROW_MAJOR_LAYOUT,
             self.mesh_device,
@@ -1351,7 +1373,10 @@ class Molmo2Generator:
             self.init_kv_cache()
 
         # Initialize a page table for warmup (sequential block mapping)
-        warmup_page_table_torch = torch.arange(max_num_blocks, dtype=torch.int32).unsqueeze(0)
+        # Shape: [batch_size, max_num_blocks] - replicate same mapping for all batches
+        warmup_page_table_torch = (
+            torch.arange(max_num_blocks, dtype=torch.int32).unsqueeze(0).expand(self.batch_size, -1).contiguous()
+        )
         warmup_page_table = ttnn.from_torch(
             warmup_page_table_torch,
             device=self.mesh_device,
@@ -1425,7 +1450,12 @@ class Molmo2Generator:
 
             # Initialize page_table trace tensor with sequential block mapping
             if "page_table" in self.decode_trace_tensors:
-                decode_page_table_torch = torch.arange(max_num_blocks, dtype=torch.int32).unsqueeze(0)
+                decode_page_table_torch = (
+                    torch.arange(max_num_blocks, dtype=torch.int32)
+                    .unsqueeze(0)
+                    .expand(self.batch_size, -1)
+                    .contiguous()
+                )
                 decode_page_table = ttnn.from_torch(
                     decode_page_table_torch,
                     device=self.mesh_device,
@@ -1437,10 +1467,10 @@ class Molmo2Generator:
                 ttnn.copy(decode_page_table, self.decode_trace_tensors["page_table"])
                 ttnn.deallocate(decode_page_table)
 
-            # Create dummy hidden states for decode (single token)
-            dummy_decode = torch.zeros(1, 1, hidden_dim, dtype=torch.bfloat16)
+            # Create dummy hidden states for decode (one token per batch element)
+            dummy_decode = torch.zeros(1, self.batch_size, hidden_dim, dtype=torch.bfloat16)
             decode_hidden = ttnn.from_torch(
-                dummy_decode.unsqueeze(0),  # [1, 1, 1, hidden_dim]
+                dummy_decode.unsqueeze(0),  # [1, 1, batch_size, hidden_dim]
                 device=self.mesh_device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
@@ -1491,12 +1521,28 @@ class Molmo2Generator:
                 page_table=effective_page_table,  # Compile paged attention ops
             )
         else:
+            # Non-traced path: use page_table argument if provided, else try trace_tensors
+            if page_table is not None:
+                effective_page_table = page_table
+            elif trace_tensors is not None and self.use_paged_attention:
+                effective_page_table = trace_tensors.get("page_table")
+            else:
+                effective_page_table = None
+
+            # Get rot_mats from trace_tensors if available, else compute them
+            if trace_tensors is not None:
+                rot_mats = [trace_tensors["cos"], trace_tensors["sin"]]
+            else:
+                seq_len = hidden_states_ttnn.shape[-2]
+                rot_mats = self.model.text_model.rotary_setup.get_rot_mats_prefill(seq_len, start_pos=0)
+
             logits, _ = self.model.text_model.forward(
                 hidden_states=hidden_states_ttnn,
                 start_pos=0,
                 attn_mask=None,
                 kv_caches=self.kv_caches,  # Also pass KV cache for non-traced warmup
-                page_table=page_table,  # Pass page_table for paged attention
+                rot_mats=rot_mats,
+                page_table=effective_page_table,  # Pass page_table for paged attention
             )
 
         compile_time = (time.perf_counter() - start) * 1000
@@ -1549,6 +1595,7 @@ class Molmo2Generator:
         use_vision_trace: bool = False,
         use_unified_trace: bool = False,
         page_table: Optional[ttnn.Tensor] = None,
+        user_id: int = 0,
     ) -> Tuple[ttnn.Tensor, dict]:
         """
         Run prefill phase (process prompt + image).
@@ -1561,6 +1608,7 @@ class Molmo2Generator:
             use_vision_trace: Whether to trace vision backbone (ViT + pooling)
             use_unified_trace: Whether to use unified Vision+Prefill trace (eliminates CPU roundtrip)
             page_table: Optional page table for paged attention (vLLM)
+            user_id: Batch index for multi-user batching (determines KV cache slot)
 
         Returns:
             Tuple of (logits, timing_dict)
@@ -1723,6 +1771,7 @@ class Molmo2Generator:
                 attn_mask=None,
                 kv_caches=self.kv_caches,  # Pass pre-allocated cache to fill
                 page_table=effective_page_table,
+                user_id=user_id,
             )
             ttnn.synchronize_device(self.mesh_device)
             timing["ttft_ms"] = (time.perf_counter() - ttft_start) * 1000
@@ -1757,13 +1806,13 @@ class Molmo2Generator:
         argmax -> position increment) runs on device with no CPU roundtrips.
 
         Args:
-            token_id_ttnn: Token ID on device [1, 1] uint32
+            token_id_ttnn: Token ID on device [1, batch_size] uint32
             use_trace: Whether to use tracing
             is_first: Whether this is the first decode step (for warm-up)
             page_table: Optional page table for paged attention (vLLM)
 
         Returns:
-            Tuple of (tt_next_token on device [1, 1] uint32, decode_time_ms)
+            Tuple of (tt_next_token on device [1, batch_size] uint32, decode_time_ms)
         """
         # Use demo's page_table if paged attention is enabled and no external page_table provided
         effective_page_table = page_table
@@ -1824,23 +1873,42 @@ class Molmo2Generator:
 
     def _argmax_on_device(self, logits: ttnn.Tensor) -> ttnn.Tensor:
         """
-        Run argmax on device and return token as [1, 1] uint32 tensor.
+        Run argmax on device and return token as [1, batch_size] uint32 tensor.
 
         Note: ttnn.argmax requires TILE_LAYOUT input -- do NOT untilize first.
         """
-        # Slice to actual sequence length (decode mode outputs single token padded to TILE_SIZE)
-        # Logits shape: [1, 1, padded_seq, vocab_size] -> [1, 1, 1, vocab_size]
-        logits = logits[:, :, :1, :]
+        # Slice to actual batch size (decode mode outputs padded to TILE_SIZE)
+        # Logits shape: [1, 1, padded_batch, vocab_size] -> [1, 1, batch_size, vocab_size]
+        logits = logits[:, :, : self.batch_size, :]
         tt_token = ttnn.argmax(logits, dim=-1, keepdim=False)
-        tt_token = ttnn.reshape(tt_token, [1, 1])
+        tt_token = ttnn.reshape(tt_token, [1, self.batch_size])
         if tt_token.dtype != ttnn.uint32:
             tt_token = ttnn.typecast(tt_token, dtype=ttnn.uint32)
         return tt_token
 
     def _read_token_from_device(self, tt_token: ttnn.Tensor) -> int:
-        """Read a single token value from device (tiny transfer for EOS check)."""
+        """Read first token value from device (tiny transfer for EOS check).
+
+        For batch > 1, returns only the first token since all batch items
+        process the same prompt and should generate the same tokens.
+        """
         mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-        return ttnn.to_torch(tt_token, mesh_composer=mesh_composer)[0].item()
+        tokens_torch = ttnn.to_torch(tt_token, mesh_composer=mesh_composer)[0]
+        # Return first batch item for EOS check (all batch items have same prompt)
+        if tokens_torch.numel() > 1:
+            return tokens_torch[0].item()
+        return tokens_torch.item()
+
+    def _read_all_tokens_from_device(self, tt_token: ttnn.Tensor) -> List[int]:
+        """Read all token values from device for parallel batch processing.
+
+        Returns a list of tokens, one per batch item.
+        """
+        mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        tokens_torch = ttnn.to_torch(tt_token, mesh_composer=mesh_composer)[0]
+        if tokens_torch.dim() == 0:
+            return [tokens_torch.item()]
+        return tokens_torch.flatten().tolist()
 
     def run_inference(
         self,
@@ -1917,8 +1985,10 @@ class Molmo2Generator:
         generated_tokens = [next_token]
 
         # Put first token on device for CPU-free decode loop
+        # Replicate to batch_size for batch processing (all batch items get same token)
+        token_batch = torch.tensor([[next_token] * self.batch_size], dtype=torch.long)
         tt_next_token = ttnn.from_torch(
-            torch.tensor([[next_token]], dtype=torch.long),
+            token_batch,
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -2065,8 +2135,10 @@ class Molmo2Generator:
         generated_tokens = [next_token]
 
         # Put first token on device for CPU-free decode loop
+        # Replicate to batch_size for batch processing (all batch items get same token)
+        token_batch = torch.tensor([[next_token] * self.batch_size], dtype=torch.long)
         tt_next_token = ttnn.from_torch(
-            torch.tensor([[next_token]], dtype=torch.long),
+            token_batch,
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -2130,6 +2202,180 @@ class Molmo2Generator:
 
         return output_text, perf_metrics
 
+    def run_batched_inference(
+        self,
+        image_inputs_list: List[dict],
+        prompts: List[str],
+        max_new_tokens: int = 100,
+        use_trace: bool = False,
+        use_decode_trace: bool = False,
+        use_vision_trace: bool = False,
+    ) -> Tuple[List[str], dict]:
+        """
+        Run batched inference with multiple different prompts in parallel.
+
+        Unlike run_inference which replicates the same token across batch slots,
+        this method processes different prompts simultaneously, following the
+        tt_transformers/qwen3_vl pattern.
+
+        Args:
+            image_inputs_list: List of image input dicts (one per batch item)
+            prompts: List of text prompts (one per batch item)
+            max_new_tokens: Maximum tokens to generate
+            use_trace: Whether to use tracing for prefill
+            use_decode_trace: Whether to use tracing for decode
+            use_vision_trace: Whether to use tracing for vision backbone
+
+        Returns:
+            Tuple of (list of output texts, perf_metrics dict)
+        """
+        batch_size = len(prompts)
+        assert batch_size <= self.batch_size, f"Number of prompts ({batch_size}) exceeds batch_size ({self.batch_size})"
+        assert len(image_inputs_list) == batch_size, "image_inputs_list must match prompts length"
+
+        logger.info(f"Running batched inference with {batch_size} prompts")
+
+        # Step 1: Prefill each prompt sequentially (different image sizes)
+        # Track per-user prefill timing and ending positions
+        prefill_timings = []
+        decoding_positions = []
+        first_tokens = []
+
+        for user_id in range(batch_size):
+            logger.info(f"Prefilling user {user_id}/{batch_size}")
+            image_inputs = image_inputs_list[user_id]
+            prompt = prompts[user_id]
+
+            # Check if text-only prompt
+            is_text_only = IMAGE_PROMPT not in prompt
+
+            if is_text_only:
+                content_with_images = prompt
+                pixel_values = None
+                pooled_patches_idx = None
+            else:
+                image_grid = image_inputs["image_grids"][0]
+                image_tokens_str = get_image_tokens(image_grid)
+                content_with_images = prompt.replace(IMAGE_PROMPT, image_tokens_str)
+                pooled_patches_idx = image_inputs["image_token_pooling"].unsqueeze(0)
+                pixel_values = image_inputs["pixel_values"]
+
+            # Apply chat template
+            messages = [{"role": "user", "content": content_with_images}]
+            full_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+            # Tokenize
+            input_ids = self.tokenizer.encode(full_prompt, return_tensors="pt", add_special_tokens=False)
+
+            # Run prefill for this user (user_id determines KV cache slot)
+            logits, prefill_timing = self.run_prefill(
+                input_ids=input_ids,
+                pixel_values=pixel_values,
+                pooled_patches_idx=pooled_patches_idx,
+                use_trace=use_trace,
+                use_vision_trace=use_vision_trace,
+                use_unified_trace=False,  # Batched mode doesn't support unified trace
+                user_id=user_id,
+            )
+
+            # Get first token from prefill logits
+            original_seq_len = prefill_timing.get("original_seq_len", input_ids.shape[1])
+            mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            logits_torch = ttnn.to_torch(logits, mesh_composer=mesh_composer)[0].squeeze()
+            if logits_torch.dim() == 2:
+                next_token_logits = logits_torch[original_seq_len - 1, :]
+            else:
+                next_token_logits = logits_torch
+
+            first_token = torch.argmax(next_token_logits).item()
+            first_tokens.append(first_token)
+            decoding_positions.append(original_seq_len)
+            prefill_timings.append(prefill_timing)
+
+            logger.debug(f"User {user_id}: prefilled {original_seq_len} tokens, first decode token: {first_token}")
+
+        # Step 2: Set up per-user decode positions
+        self.reset_kv_cache(start_pos=decoding_positions)
+
+        # Step 3: Create batched token tensor (different tokens per user!)
+        # Pad to self.batch_size if fewer prompts
+        tokens_list = first_tokens + [first_tokens[0]] * (self.batch_size - batch_size)
+        token_batch = torch.tensor([tokens_list], dtype=torch.long)
+        tt_next_token = ttnn.from_torch(
+            token_batch,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=self.mesh_mapper,
+        )
+
+        # Step 4: Per-user output tracking
+        all_outputs = [[first_tokens[i]] for i in range(batch_size)]
+        user_done = [False] * batch_size
+        eos_token_id = self.tokenizer.eos_token_id
+
+        # Step 5: Batched decode loop
+        decode_times = []
+        logger.info(f"Starting batched decode for {batch_size} users...")
+
+        for i in range(max_new_tokens - 1):
+            # Check if all users are done
+            if all(user_done):
+                break
+
+            # Run decode step (processes all batch items simultaneously)
+            tt_next_token, decode_time = self.run_decode_step(
+                tt_next_token,
+                use_trace=use_decode_trace,
+                is_first=(i == 0),
+            )
+            decode_times.append(decode_time)
+
+            # Read all tokens from device
+            all_tokens = self._read_all_tokens_from_device(tt_next_token)
+
+            # Track outputs per user
+            for user_id in range(batch_size):
+                if not user_done[user_id]:
+                    token = all_tokens[user_id]
+                    all_outputs[user_id].append(token)
+                    if token == eos_token_id:
+                        user_done[user_id] = True
+                        logger.debug(f"User {user_id} finished at iteration {i}")
+
+            # Log progress
+            if (i + 1) % 10 == 0:
+                active_users = sum(1 for d in user_done if not d)
+                logger.debug(f"Generated {i + 1} tokens, {active_users} users still active")
+
+        # Step 6: Decode outputs for each user
+        output_texts = []
+        for user_id in range(batch_size):
+            text = self.tokenizer.decode(all_outputs[user_id], skip_special_tokens=True)
+            output_texts.append(text)
+            logger.info(f"User {user_id}: '{text[:50]}...'" if len(text) > 50 else f"User {user_id}: '{text}'")
+
+        # Calculate metrics
+        total_decode_time = sum(decode_times) if decode_times else 0.0
+        avg_decode_time = total_decode_time / len(decode_times) if decode_times else 0.0
+        total_tokens = sum(len(out) - 1 for out in all_outputs)  # -1 for first token
+        tokens_per_sec = total_tokens / (total_decode_time / 1000) if total_decode_time > 0 else 0
+
+        perf_metrics = {
+            "batch_size": batch_size,
+            "avg_decode_ms": avg_decode_time,
+            "total_decode_ms": total_decode_time,
+            "total_generated_tokens": total_tokens,
+            "tokens_per_sec": tokens_per_sec,
+            "tokens_per_sec_per_user": tokens_per_sec / batch_size if batch_size > 0 else 0,
+            "per_user_tokens": [len(out) for out in all_outputs],
+        }
+
+        logger.info(f"Batched decode: {tokens_per_sec:.2f} tok/s total ({tokens_per_sec/batch_size:.2f} tok/s/user)")
+
+        return output_texts, perf_metrics
+
 
 def run_video_demo(
     video_path: str,
@@ -2145,6 +2391,7 @@ def run_video_demo(
     use_vision_trace: bool = False,
     use_unified_trace: bool = False,
     use_paged_attention: bool = False,
+    batch_size: int = 1,
 ):
     """
     Run the Molmo2 demo with video input.
@@ -2194,7 +2441,7 @@ def run_video_demo(
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
 
     try:
-        model = create_model(device, state_dict, num_layers)
+        model = create_model(device, state_dict, num_layers, max_batch_size=batch_size)
         text_num_layers = num_layers if num_layers is not None else 36
 
         generator = Molmo2Generator(
@@ -2202,7 +2449,7 @@ def run_video_demo(
             model=model,
             tokenizer=tokenizer,
             num_layers=text_num_layers,
-            batch_size=1,
+            batch_size=batch_size,
             max_seq_len=max_seq_len,
             use_paged_attention=use_paged_attention,
         )
@@ -2261,6 +2508,7 @@ def run_demo(
     use_vision_trace: bool = False,
     use_unified_trace: bool = False,
     use_paged_attention: bool = False,
+    batch_size: int = 1,
 ):
     """
     Run the Molmo2 demo.
@@ -2320,7 +2568,7 @@ def run_demo(
 
     try:
         # Create model
-        model = create_model(device, state_dict, num_layers)
+        model = create_model(device, state_dict, num_layers, max_batch_size=batch_size)
         text_num_layers = num_layers if num_layers is not None else 36
 
         # Create generator
@@ -2329,7 +2577,7 @@ def run_demo(
             model=model,
             tokenizer=tokenizer,
             num_layers=text_num_layers,
-            batch_size=1,
+            batch_size=batch_size,
             max_seq_len=max_seq_len,
             use_paged_attention=use_paged_attention,
         )
@@ -2395,6 +2643,141 @@ def run_demo(
         logger.info("=" * 60)
 
         return perf_metrics
+
+    finally:
+        ttnn.close_mesh_device(device)
+        logger.info("Device closed")
+
+
+def run_batched_demo(
+    input_file: str,
+    max_new_tokens: int = 100,
+    device_id: int = 0,
+    num_layers: Optional[int] = None,
+    max_seq_len: int = 4096,
+    use_trace: bool = False,
+    use_decode_trace: bool = False,
+    use_vision_trace: bool = False,
+    batch_size: int = 4,
+):
+    """
+    Run batched demo with multiple different prompts processed in parallel.
+
+    Args:
+        input_file: Path to JSON file with prompts and images
+        max_new_tokens: Maximum tokens to generate per prompt
+        device_id: TTNN device ID
+        num_layers: Number of text layers (default: 36)
+        max_seq_len: Maximum sequence length for KV cache
+        use_trace: Whether to use tracing for prefill
+        use_decode_trace: Whether to use tracing for decode
+        use_vision_trace: Whether to use tracing for vision backbone
+        batch_size: Maximum batch size for parallel processing
+    """
+    import json
+
+    logger.info("=" * 60)
+    logger.info("Molmo2-8B Batched Demo (Parallel Processing)")
+    logger.info("=" * 60)
+
+    # Load prompts from JSON file
+    input_path = Path(input_file)
+    with open(input_file, "r") as f:
+        prompts_data = json.load(f)
+
+    # Handle both formats:
+    # 1. Flat list: [{"image": "...", "prompt": "..."}, ...]
+    # 2. Nested: {"prompts": [{"image": "...", "prompt": "..."}, ...]}
+    if isinstance(prompts_data, dict) and "prompts" in prompts_data:
+        prompts_data = prompts_data["prompts"]
+    if not isinstance(prompts_data, list):
+        prompts_data = [prompts_data]
+
+    num_prompts = len(prompts_data)
+    logger.info(f"Loaded {num_prompts} prompts from {input_file}")
+
+    # Limit to batch_size
+    if num_prompts > batch_size:
+        logger.warning(f"Truncating {num_prompts} prompts to batch_size={batch_size}")
+        prompts_data = prompts_data[:batch_size]
+        num_prompts = batch_size
+
+    # Load tokenizer
+    tokenizer = load_processor()
+
+    # Preprocess images
+    logger.info("Preprocessing images...")
+    image_inputs_list = []
+    prompts = []
+    for i, item in enumerate(prompts_data):
+        image_path = item.get("image", str(DEFAULT_IMAGE))
+        # Resolve relative paths relative to input file directory
+        if not Path(image_path).is_absolute():
+            image_path = str(input_path.parent / image_path)
+        prompt = item.get("prompt", f"{IMAGE_PROMPT} Describe this image.")
+        # Ensure prompt has image token
+        if IMAGE_PROMPT not in prompt:
+            prompt = f"{IMAGE_PROMPT} {prompt}"
+        prompts.append(prompt)
+        image_inputs = preprocess_image_molmo2(image_path)
+        image_inputs_list.append(image_inputs)
+        logger.info(f"  Prompt {i}: image={Path(image_path).name}, prompt={prompt[:50]}...")
+
+    # Load weights
+    state_dict = load_model_weights()
+
+    # Open device
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+    mesh_shape = ttnn.MeshShape(1, 8)
+    logger.info(f"Opening TTNN mesh device with shape {mesh_shape}")
+    device = ttnn.open_mesh_device(mesh_shape)
+    logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
+
+    try:
+        model = create_model(device, state_dict, num_layers, max_batch_size=batch_size)
+        text_num_layers = num_layers if num_layers is not None else 36
+
+        generator = Molmo2Generator(
+            mesh_device=device,
+            model=model,
+            tokenizer=tokenizer,
+            num_layers=text_num_layers,
+            batch_size=batch_size,
+            max_seq_len=max_seq_len,
+            use_paged_attention=False,  # Batched mode doesn't use paged attention
+        )
+
+        logger.info("\n" + "=" * 60)
+        for i, prompt in enumerate(prompts):
+            logger.info(f"Prompt {i}: {prompt[:80]}...")
+        logger.info("=" * 60)
+
+        output_texts, perf_metrics = generator.run_batched_inference(
+            image_inputs_list=image_inputs_list,
+            prompts=prompts,
+            max_new_tokens=max_new_tokens,
+            use_trace=use_trace,
+            use_decode_trace=use_decode_trace,
+            use_vision_trace=use_vision_trace,
+        )
+
+        logger.info("\n" + "=" * 60)
+        logger.info("Batched Inference Results:")
+        logger.info(f"  Batch size:             {perf_metrics['batch_size']}")
+        logger.info(f"  Total tokens generated: {perf_metrics['total_generated_tokens']}")
+        logger.info(f"  Total decode time:      {perf_metrics['total_decode_ms']:.2f}ms")
+        logger.info(f"  Avg decode time:        {perf_metrics['avg_decode_ms']:.2f}ms/iteration")
+        logger.info(f"  Throughput:             {perf_metrics['tokens_per_sec']:.2f} tok/s")
+        logger.info(f"  Per-user throughput:    {perf_metrics['tokens_per_sec_per_user']:.2f} tok/s/user")
+        logger.info("=" * 60)
+
+        for i, text in enumerate(output_texts):
+            logger.info(f"\n[User {i}] Output:")
+            logger.info(f"  {text[:200]}..." if len(text) > 200 else f"  {text}")
+
+        logger.info("=" * 60)
+
+        return output_texts, perf_metrics
 
     finally:
         ttnn.close_mesh_device(device)
@@ -2478,14 +2861,40 @@ def main():
         help="Enable unified Vision+Prefill trace (eliminates CPU roundtrip, best TTFT)",
     )
     parser.add_argument(
+        "--input-file",
+        type=str,
+        default=None,
+        help='Path to JSON file with multiple prompts for batched inference (format: [{"image": "path", "prompt": "text"}, ...])',
+    )
+    parser.add_argument(
         "--paged-attention",
         action="store_true",
         help="Enable paged attention (for testing vLLM compatibility)",
     )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=1,
+        help="Batch size for inference (default: 1)",
+    )
 
     args = parser.parse_args()
 
-    if args.video is not None:
+    if args.input_file is not None:
+        # Batched inference with multiple prompts
+        max_seq_len = args.max_seq_len if args.max_seq_len is not None else 4096
+        run_batched_demo(
+            input_file=args.input_file,
+            max_new_tokens=args.max_tokens,
+            device_id=args.device,
+            num_layers=args.num_layers,
+            max_seq_len=max_seq_len,
+            use_trace=args.use_trace,
+            use_decode_trace=args.use_decode_trace,
+            use_vision_trace=args.use_vision_trace,
+            batch_size=args.batch_size,
+        )
+    elif args.video is not None:
         prompt = args.prompt if args.prompt is not None else f"{VIDEO_PROMPT} Describe what happens in this video."
         max_seq_len = args.max_seq_len if args.max_seq_len is not None else 16384
         run_video_demo(
@@ -2502,6 +2911,7 @@ def main():
             use_vision_trace=args.use_vision_trace,
             use_unified_trace=args.use_unified_trace,
             use_paged_attention=args.paged_attention,
+            batch_size=args.batch_size,
         )
     else:
         prompt = args.prompt if args.prompt is not None else "<|image|> Describe this image in detail."
@@ -2518,6 +2928,7 @@ def main():
             use_vision_trace=args.use_vision_trace,
             use_unified_trace=args.use_unified_trace,
             use_paged_attention=args.paged_attention,
+            batch_size=args.batch_size,
         )
 
 

@@ -1288,6 +1288,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         use_vision_trace: bool = False,
         use_unified_trace: bool = False,
         page_table: Optional["ttnn.Tensor"] = None,
+        user_id: int = 0,
     ) -> Tuple["ttnn.Tensor", dict]:
         """
         Run prefill forward pass directly on the model.
@@ -1302,6 +1303,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             use_vision_trace: Whether to use vision tracing (ignored for now)
             use_unified_trace: Whether to use unified trace (ignored for now)
             page_table: Page table tensor for paged attention
+            user_id: Batch index for multi-user batching (determines KV cache slot)
 
         Returns:
             Tuple of (logits_ttnn, timing_dict)
@@ -1384,6 +1386,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 kv_caches=prefill_kv_cache,
                 rot_mats=rot_mats,
                 page_table=page_table,
+                user_id=user_id,
             )
 
             # Clean up
@@ -1761,6 +1764,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     use_trace=False,  # DISABLED for video
                     use_vision_trace=False,
                     page_table=page_table_tt,
+                    user_id=user_id,
                 )
 
                 # Convert ttnn tensor to torch tensor (same as image/text path)
@@ -1925,6 +1929,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                     use_vision_trace=False,  # Disabled for vLLM: variable multi-crop sizes
                     use_unified_trace=False,
                     page_table=page_table_tt,
+                    user_id=user_id,
                 )
                 original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
             else:
@@ -1947,6 +1952,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                         use_vision_trace=True,  # Vision trace accuracy bug fixed
                         use_unified_trace=False,
                         page_table=page_table_tt,
+                        user_id=user_id,
                     )
                     original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
                 else:
@@ -1958,6 +1964,7 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                         use_trace=enable_trace,
                         use_vision_trace=False,
                         page_table=page_table_tt,
+                        user_id=user_id,
                     )
                     original_seq_len = prefill_timing.get("original_seq_len", prompt_lens[user_id])
 

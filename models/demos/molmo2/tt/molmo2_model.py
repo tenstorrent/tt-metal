@@ -61,6 +61,7 @@ class Molmo2Model(LightweightModule):
         text_head_dim: int = 128,
         vocab_size: int = 152064,
         max_seq_len: int = 8192,
+        max_batch_size: int = 1,
         rope_theta: float = 1000000.0,
         rms_norm_eps: float = 1e-5,
         # Common config
@@ -134,6 +135,7 @@ class Molmo2Model(LightweightModule):
             head_dim=text_head_dim,
             vocab_size=vocab_size,
             max_seq_len=max_seq_len,
+            max_batch_size=max_batch_size,
             rope_theta=rope_theta,
             rms_norm_eps=rms_norm_eps,
             weight_cache_path=weight_cache_path,
@@ -264,7 +266,7 @@ class Molmo2Model(LightweightModule):
             Fused embeddings [1, 1, seq_len, hidden_dim] on device
         """
         batch_size, seq_len = input_ids.shape
-        assert batch_size == 1, "Only batch_size=1 is currently supported"
+        # Note: batch_size > 1 is now supported
         hidden_dim = self.text_hidden_dim
 
         # DEBUG: Track request count
