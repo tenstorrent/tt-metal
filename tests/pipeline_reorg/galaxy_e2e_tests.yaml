@@ -12,13 +12,14 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # Wormhole Galaxy e2e tests
-- name: Galaxy CCL tests
-  cmd: pytest tests/nightly/tg/ccl --ignore tests/nightly/tg/ccl/moe
-  skus:
-    wh_galaxy:
-      timeout: 37
-  owner_id: U05ACKAJTHS # Naif Tarafdar
-  team: ttnn
+# TODO: Re-enable Galaxy CCL tests after fixing issue https://github.com/ebanerjeeTT/issue_dump/issues/851
+# - name: Galaxy CCL tests
+#   cmd: pytest tests/nightly/tg/ccl --ignore tests/nightly/tg/ccl/moe
+#   skus:
+#     wh_galaxy:
+#       timeout: 37
+#   owner_id: U05ACKAJTHS # Naif Tarafdar
+#   team: ttnn
 
 - name: Galaxy MoE tests
   cmd: TT_MESH_GRAPH_DESC_PATH="tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_torus_graph_descriptor.textproto" pytest tests/nightly/tg/ccl/moe
@@ -67,13 +68,14 @@
   team: fabric
 
 # Blackhole Galaxy e2e tests
-- name: BH Galaxy CCL tests
-  cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly
-  skus:
-    bh_galaxy:
-      timeout: 40
-  owner_id: U05ACKAJTHS # Naif Tarafdar, Camilo Vega
-  team: ttnn
+# TODO: Re-enable BH Galaxy CCL tests after fixing issue https://github.com/ebanerjeeTT/issue_dump/issues/851
+# - name: BH Galaxy CCL tests
+#   cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly
+#   skus:
+#     bh_galaxy:
+#       timeout: 40
+#   owner_id: U05ACKAJTHS # Naif Tarafdar, Camilo Vega
+#   team: ttnn
 
 - name: BH Galaxy Fabric Torus Stability Tests
   cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml
