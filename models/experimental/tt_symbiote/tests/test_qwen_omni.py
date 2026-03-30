@@ -15,6 +15,7 @@ from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
     Qwen3OmniMoeTalkerTextSparseMoeBlock,
     Qwen3OmniMoeThinkerTextAttention,
     Qwen3OmniMoeThinkerTextSparseMoeBlock,
+    Qwen3OmniMoeVisionMLP,
     Qwen3OmniMoeVisionAttention,
 )
 from qwen_omni_utils import process_mm_info
@@ -29,6 +30,7 @@ from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniMoeCo
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3Attention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3OmniAttention
 from models.experimental.tt_symbiote.modules.attention import TTNNQwen3VLMoeVisionAttention
+from models.experimental.tt_symbiote.modules.linear import TTNNQwen3OmniVisionMLP
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 
@@ -39,6 +41,7 @@ NN_TO_TTNN_THINKER = {
     Qwen3OmniMoeThinkerTextSparseMoeBlock: TTNNQwen3OmniThinkerNaiveMoE,
     Qwen3OmniMoeThinkerTextAttention: TTNNQwen3OmniAttention,
     Qwen3OmniMoeVisionAttention: TTNNQwen3VLMoeVisionAttention,
+    Qwen3OmniMoeVisionMLP: TTNNQwen3OmniVisionMLP,
     Qwen3OmniMoeAudioAttention: TTNNQwenAudioAttention,
 }
 NN_TO_TTNN_CODE2WAV = {
@@ -570,6 +573,9 @@ def test_qwen_omni_symbiote_replacements_verified(mesh_device):
         assert isinstance(
             block.attn, TTNNQwen3VLMoeVisionAttention
         ), f"thinker.visual.blocks[{i}].attn expected TTNNQwen3VLMoeVisionAttention, got {type(block.attn)}"
+        assert isinstance(
+            block.mlp, TTNNQwen3OmniVisionMLP
+        ), f"thinker.visual.blocks[{i}].mlp expected TTNNQwen3OmniVisionMLP, got {type(block.mlp)}"
 
     for i in talker_moe_layer_indices:
         assert isinstance(
@@ -678,13 +684,16 @@ def test_qwen_omni(mesh_device):
 
     # Inference: Generation of the output text and audio
     # Use deterministic talker decoding to make waveform quality reproducible.
+    talker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_MAX_NEW_TOKENS", "128"))
+    thinker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_THINKER_MAX_NEW_TOKENS", "32"))
     text_ids, audio = model.generate(
         **inputs,
         speaker="Ethan",
         thinker_return_dict_in_generate=True,
+        max_new_tokens=thinker_max_new_tokens,
         use_audio_in_video=USE_AUDIO_IN_VIDEO,
         talker_do_sample=False,
-        talker_max_new_tokens=1024,
+        talker_max_new_tokens=talker_max_new_tokens,
     )
     DispatchManager.save_stats_to_file("qwen_omni_timing_stats.csv")
 
