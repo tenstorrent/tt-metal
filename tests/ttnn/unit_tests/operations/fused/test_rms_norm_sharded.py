@@ -258,10 +258,14 @@ def test_rms_norm_sharded_padded(device, h, w):
 
     golden_output = rms_norm_golden(torch_input_tensor, weight=None).to(dtype)
 
-    # Assert that the output is close to the golden output
-    rtol = 1.6e-2
-    atol = 1e-5
-    assert torch.allclose(output_ttnn, golden_output, rtol=rtol, atol=atol)
+    assert_numeric_metrics(
+        golden_output,
+        output_ttnn,
+        pcc_threshold=0.99,
+        rtol=1.6e-2,
+        atol=1e-5,
+        frobenius_threshold=0.05,
+    )
 
 
 @pytest.mark.parametrize("h,w", [(32, 2048)])

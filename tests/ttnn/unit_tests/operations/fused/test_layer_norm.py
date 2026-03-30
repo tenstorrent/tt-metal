@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_numeric_metrics, assert_allclose, assert_relative_frobenius
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from dataclasses import dataclass
 
 pytestmark = pytest.mark.use_module_device
@@ -37,15 +37,26 @@ allclose_thresholds = {
 def assert_output_accuracy(torch_output, ttnn_output):
     dtype = ttnn_output.dtype
     if dtype == torch.bfloat16:
-        return assert_allclose(
-            torch_output, ttnn_output, rtol=allclose_thresholds[dtype].rtol, atol=allclose_thresholds[dtype].atol
+        assert_numeric_metrics(
+            torch_output,
+            ttnn_output,
+            pcc_threshold=0.999,
+            rtol=allclose_thresholds[dtype].rtol,
+            atol=allclose_thresholds[dtype].atol,
+            frobenius_threshold=0.05,
         )
     elif dtype == torch.float32:
         # torch.float32 data is not being robustly converted to tt tensors
         # (see https://github.com/tenstorrent/tt-metal/issues/33621).
-        # So we'll use relative Frobenius norm of the error instead, which is
-        # looser than allclose (since it's a global metric), but better than PCC.
-        return assert_relative_frobenius(torch_output, ttnn_output, threshold=0.01)
+        # Use relative Frobenius norm of the error (global metric, looser than allclose).
+        assert_numeric_metrics(
+            torch_output,
+            ttnn_output,
+            pcc_threshold=0.9999,
+            rtol=0.01,
+            atol=0.01,
+            frobenius_threshold=0.01,
+        )
     else:
         raise ValueError(f"Robust checks are not implemented for dtype: {dtype}")
 
@@ -401,7 +412,14 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     output_tensor = ttnn.to_torch(output_tensor)
 
     if dtype == torch.float32 and use_welford and w == 4083 and h == 19:
-        assert_relative_frobenius(torch_output_tensor, output_tensor, threshold=0.0103)
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.9999,
+            rtol=0.02,
+            atol=0.02,
+            frobenius_threshold=0.0103,
+        )
     else:
         assert_output_accuracy(torch_output_tensor, output_tensor)
 
