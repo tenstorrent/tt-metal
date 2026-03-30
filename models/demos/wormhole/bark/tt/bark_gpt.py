@@ -299,7 +299,7 @@ class TtBarkAttention:
                 compute_kernel_config=self.compute_kernel_config,
             )
         else:
-            # Decode mode (seq < 32): matmul-based attention on-device.
+            # Decode/short-seq mode (seq < 32): matmul-based attention on-device.
             # TTNN SDPA requires chunk_size >= 32, so we use explicit matmul.
             # Q: [B, heads, q_seq, head_dim]
             # K: [B, heads, kv_seq, head_dim] (may be large from KV cache)
@@ -309,8 +309,23 @@ class TtBarkAttention:
             ttnn.deallocate(key_t)  # Free transposed key immediately to reduce L1 pressure
             attn_scores = ttnn.multiply(attn_scores, self.scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-            # Causal masking is not needed during decode with KV cache
-            # (q_seq=1, all KV positions are valid past positions)
+            # Causal masking for short prefills (layer_past is None, q == kv).
+            # During decode with KV cache (q_seq=1), masking is not needed
+            # because all KV positions are valid past positions.
+            if self.is_causal and layer_past is None and q_seq_len > 1:
+                kv_len = key.shape[-2]
+                causal_mask = torch.tril(torch.ones(q_seq_len, kv_len, dtype=torch.float32))
+                causal_mask = (1.0 - causal_mask) * -1e9
+                causal_mask = causal_mask.unsqueeze(0).unsqueeze(0)  # [1, 1, q, kv]
+                tt_mask = ttnn.from_torch(
+                    causal_mask,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                )
+                attn_scores = ttnn.add(attn_scores, tt_mask, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(tt_mask)
+
             attn_probs = ttnn.softmax(attn_scores, dim=-1)
             ttnn.deallocate(attn_scores)
 

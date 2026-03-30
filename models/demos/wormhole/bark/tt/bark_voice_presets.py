@@ -40,38 +40,31 @@ BUILTIN_PRESETS = [
 _preset_cache: dict = {}
 
 
-def load_voice_preset(preset_name: str, cache: bool = True) -> Optional[dict]:
+def load_voice_preset(preset_name: str, cache: bool = True) -> Optional[str]:
     """Load a Bark voice preset for consistent speaker characteristics.
 
-    Uses the HuggingFace BarkProcessor to load speaker embeddings.
-    Results are cached in memory for fast switching.
+    Uses the HuggingFace BarkProcessor to validate speaker presets.
+    The processor accepts the preset name string directly as ``voice_preset``.
 
     Args:
         preset_name: Preset identifier (e.g. "v2/en_speaker_0").
-        cache: Whether to cache the loaded preset (default True).
+        cache: Whether to cache the validation result (default True).
 
     Returns:
-        Voice preset dict suitable for BarkProcessor, or None if not found.
+        Voice preset name string suitable for BarkProcessor, or None if invalid.
     """
     if cache and preset_name in _preset_cache:
         return _preset_cache[preset_name]
 
-    try:
-        from transformers import AutoProcessor
-
-        processor = AutoProcessor.from_pretrained("suno/bark-small")
-        # The processor handles voice preset loading internally
-        # We return the preset_name string which the processor accepts directly
-        # Validate it exists first
-        preset_data = {"voice_preset": preset_name}
-
-        if cache:
-            _preset_cache[preset_name] = preset_data
-
-        return preset_data
-    except Exception as exc:
-        print(f"WARNING: Failed to load voice preset '{preset_name}': {exc}")
+    if preset_name not in BUILTIN_PRESETS:
+        print(f"WARNING: '{preset_name}' not in built-in presets")
         return None
+
+    # Return the preset name string — BarkProcessor accepts it directly
+    if cache:
+        _preset_cache[preset_name] = preset_name
+
+    return preset_name
 
 
 def list_available_presets() -> list:
