@@ -184,6 +184,10 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintEnumValue) {
     std::vector<std::string_view> messages = {
         "Enum1 value: {0,/e_I_test::deep::Enum1}\n"sv,
         "Enum1 full name value: {0,/e_I_test::deep::Enum1:#}\n"sv,
+        "Enum1 value: {0,/e_I_test::deep::Enum1}\n"sv,
+        "Enum1 full name value: {0,/e_I_test::deep::Enum1:#}\n"sv,
+        "Enum1 unrecognized value: {0,/e_I_test::deep::Enum1}\n"sv,
+        "Enum1 full name unrecognized value: {0,/e_I_test::deep::Enum1:#}\n"sv,
         "Enum2 value: {0,/e_I_test_shallow::Enum2}\n"sv,
         "Enum2 full name value: {0,/e_I_test_shallow::Enum2:#}\n"sv,
         "EnumClass value: {0,/e_B_EnumClass}\n"sv,

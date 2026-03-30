@@ -45,6 +45,8 @@ constexpr BitEnum operator|(BitEnum a, BitEnum b) {
 void kernel_main() {
     DEVICE_PRINT("Enum1 value: {}\n", test::deep::Value2);
     DEVICE_PRINT("Enum1 full name value: {:#}\n", test::deep::Value3);
+    DEVICE_PRINT("Enum1 unrecognized value: {}\n", (test::deep::Enum1)100);
+    DEVICE_PRINT("Enum1 full name unrecognized value: {:#}\n", (test::deep::Enum1)100);
     DEVICE_PRINT("Enum2 value: {}\n", test_shallow::ValueB);
     DEVICE_PRINT("Enum2 full name value: {:#}\n", test_shallow::ValueC);
     DEVICE_PRINT("EnumClass value: {}\n", EnumClass::ValueY);

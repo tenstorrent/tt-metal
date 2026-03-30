@@ -225,6 +225,8 @@ TEST_F(DevicePrintOutputFixture, PrintEnumValue) {
         "Enum1 value: Value2",
         // Alternate form (#): full qualified type name + value name
         "Enum1 full name value: test::deep::Enum1::Value3",
+        "Enum1 unrecognized value: (test::deep::Enum1)100",
+        "Enum1 full name unrecognized value: (test::deep::Enum1)100",
         "Enum2 value: ValueB",
         "Enum2 full name value: test_shallow::Enum2::ValueC",
         "EnumClass value: ValueY",
