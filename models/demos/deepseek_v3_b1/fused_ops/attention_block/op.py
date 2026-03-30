@@ -1411,11 +1411,10 @@ class AttentionBlock:
             ("dkv_gather_sender_grid_end_x", dkv_gather_sender_grid_end_x),
             ("dkv_gather_sender_grid_end_y", dkv_gather_sender_grid_end_y),
             ("dkv_gather_row_major", 1),  # 1 = row-major linearization
-            ("dkv_gather_dst_cb", kv_rmsnorm_input_cb),  # Destination CB: write directly to kv_rmsnorm_input_cb
         ]
 
-        # Gather receiver compile-time args (named args for BRISC on kv rmsnorm core)
-        # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_id, noc1_receiver_semaphore_id
+        # Gather receiver compile-time args (now on NCRISC via ReceiverOnNCRISC mode)
+        # ReceiverCTArgs: noc0_num_senders, noc1_num_senders, noc0_receiver_semaphore_addr, noc1_receiver_semaphore_addr
         # Plus destination CB info for reserve/push
         # Writes directly to kv_rmsnorm_input_cb
         dkv_gather_receiver_named_compile_time_args = [
@@ -3077,6 +3076,7 @@ class AttentionBlock:
             + dkv_matmul_ncrisc_named_compile_time_args
             + kv_rmsnorm_ncrisc_named_compile_time_args
             + dkv_gather_sender_named_compile_time_args
+            + dkv_gather_receiver_named_compile_time_args
             + krope_ncrisc_named_compile_time_args
             + kv_cache_ncrisc_named_compile_time_args
             + mla_ncrisc_named_compile_time_args
@@ -3091,7 +3091,6 @@ class AttentionBlock:
             + mcast2_brisc_named_compile_time_args
             + matmul3_brisc_named_compile_time_args
             + qrope_brisc_named_compile_time_args
-            + dkv_gather_receiver_named_compile_time_args
             + kv_rmsnorm_brisc_named_compile_time_args
             + kv_cache_brisc_named_compile_time_args
             + mla_brisc_named_compile_time_args
