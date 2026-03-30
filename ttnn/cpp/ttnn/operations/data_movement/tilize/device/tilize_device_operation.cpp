@@ -117,10 +117,10 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
     const TilizeDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     if (can_use_sharded_optimized_factories(operation_attributes, tensor_args)) {
-        log_warning(
-            tt::LogOp,
-            "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
-            "factory is being used");
+        // log_warning(
+        //     tt::LogOp,
+        //     "ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program "
+        //     "factory is being used");
         auto mem_config = operation_attributes.output_mem_config.with_shard_spec(
             input_tensor.memory_config().shard_spec());  // If the input is using the legacy sharded optimized program
                                                          // factory, the output has the same shard spec as the input.
