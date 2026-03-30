@@ -21,13 +21,13 @@ What steps are needed to add TT-NN operation in C++?
 1. There are 2 options for writing a new operation. Option ``a`` is to write a device operation and option ``b`` is to write an operation that calls other operations
    a. Implement device operation in C++. Device operation is a struct that satisfies `DeviceOperationConcept` and specifies how to create output tensors and a program to run on the device.
    b. Implement an operation in C++ that calls other operations. This type of operation simply defines an ``invoke()`` method that calls other operations.
-2. Register the struct using `ttnn::register_operation`.
+2. Expose the operation as a free function under ttnn or ttnn::experimental (e.g. ttnn::tilize or ttnn::experimental::dropout) namespace that invokes the device operation via ``ttnn::device_operation::launch``.
 
 What steps are needed to add TT-NN operation in Python?
 -------------------------------------------------------
-1. Take an existing registered C++ operation and add a Python binding for it using `ttnn::bind_registered_operation`.
-   The operation will be auto-registered in python. If the operation is called `ttnn::add` in C++, then the python binding will be `ttnn.add`.
-2. (Optional) Attach golden function to the operation using `ttnn.attach_golden_function`. This is useful for debugging and testing.
+1. Take an existing C++ operation and add a nanobind Python binding for it using `ttnn::bind_function`.
+   The operation will be accessible in Python. If the operation is called ``ttnn::add`` in C++, then the Python binding will be ``ttnn.add``.
+2. (Optional) Attach golden function to the operation using ``ttnn.attach_golden_function``. This is useful for debugging and testing.
 
 
 Example of Adding a new Device Operation
@@ -171,7 +171,7 @@ Step 3: (Optional) Add example usage to docs
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 It is good practice to include an example demonstrating how to use the new function.
-The simplest method is to add an **Example** section directly in the documentation passed to the ``bind_registered_operation`` function. However, this approach makes it difficult to keep the example up to date and prevents the snippet from being tested.
+The simplest method is to add an **Example** section directly in the documentation passed to the `ttnn::bind_function` function. However, this approach makes it difficult to keep the example up to date and prevents the snippet from being tested.
 
 A better approach is to place the example code in a test file and have it included automatically during the documentation build process.
 
