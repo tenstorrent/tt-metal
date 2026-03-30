@@ -38,7 +38,8 @@ ttnn::Tensor concatenate_heads(const Tensor& input_tensor, const std::optional<M
     const auto& resolved_mem_config = memory_config.value_or(input_tensor.memory_config());
     const auto& actual_input =
         (input_tensor.is_sharded() && !resolved_mem_config.is_sharded())
-            ? ttnn::to_memory_config(input_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM})
+            ? ttnn::to_memory_config(
+                  input_tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, resolved_mem_config.buffer_type()})
             : input_tensor;
 
     auto output = ttnn::prim::nlp_concat_heads(actual_input, memory_config);
