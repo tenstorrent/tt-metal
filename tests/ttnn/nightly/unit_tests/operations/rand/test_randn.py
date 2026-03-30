@@ -157,6 +157,56 @@ def test_randn_callback(shape, seed, dtype, device):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize(
+    "shard_strategy, core_grid",
+    [
+        (ttnn.ShardStrategy.HEIGHT, ttnn.CoreGrid(y=4, x=8)),  # shard (32, 1024)
+        (ttnn.ShardStrategy.WIDTH, ttnn.CoreGrid(y=8, x=4)),  # shard (1024, 32)
+        (ttnn.ShardStrategy.BLOCK, ttnn.CoreGrid(y=8, x=8)),  # shard (128, 128)
+    ],
+)
+def test_randn_sharded_l1(device, dtype, layout, shard_strategy, core_grid):
+    shape = (1024, 1024)
+
+    shard_mem_config = ttnn.create_sharded_memory_config(
+        shape=shape,
+        core_grid=core_grid,
+        strategy=shard_strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    tensor = ttnn.randn(shape, device=device, dtype=dtype, layout=layout, memory_config=shard_mem_config, seed=1234)
+
+    assert tensor.layout == layout
+    assert tensor.dtype == dtype
+    assert tuple(tensor.shape) == shape
+    assert tensor.memory_config().is_sharded()
+
+    torch_tensor = ttnn.to_torch(tensor)
+    assert not torch.isnan(torch_tensor).any(), "Tensor contains NaN values!"
+    assert check_standard_normal_distribution(torch_tensor, dtype), "Random values do not look standard normal!"
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("mem_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+def test_randn_interleaved_distribution(device, dtype, layout, mem_config):
+    shape = (1024, 1024)
+
+    tensor = ttnn.randn(shape, device=device, dtype=dtype, layout=layout, memory_config=mem_config, seed=1234)
+
+    assert tensor.layout == layout
+    assert tensor.dtype == dtype
+    assert tuple(tensor.shape) == shape
+    assert tensor.memory_config() == mem_config
+
+    torch_tensor = ttnn.to_torch(tensor)
+    assert not torch.isnan(torch_tensor).any(), "Tensor contains NaN values!"
+    assert check_standard_normal_distribution(torch_tensor, dtype), "Random values do not look standard normal!"
+
+
 @pytest.mark.parametrize("shape", [[512, 512], [5, 8, 70, 40]])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("compute_kernel_options", compute_kernel_options, ids=compute_kernel_ids)
