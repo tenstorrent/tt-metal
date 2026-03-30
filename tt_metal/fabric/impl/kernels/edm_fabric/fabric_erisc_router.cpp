@@ -2908,12 +2908,18 @@ __attribute__((optimize("Os"))) void teardown(
                 *termination_signal_ptr);
         }
     }
-
     // write barrier should be coordinated for dynamic noc mode. Safest is probably to do a `wait_for_other_local_erisc`
     // followed by master core doing barrier
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Update here when enabling dynamic noc mode");
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    {
+        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+        tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
+        if (!launch_msg->kernel_config.exit_erisc_kernel) {
+            noc_async_write_barrier();
+            noc_async_atomic_barrier();
+        }
+    }
 
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
