@@ -16,7 +16,7 @@ void kernel_main() {
         REDUCE_OP,
         REDUCE_DIM,
         compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         tt::CBIndex::c_0,
         tt::CBIndex::c_2,
         tt::CBIndex::c_3,
