@@ -78,6 +78,13 @@ def _normalize_tensor(tensor):
     return tensor
 
 
+# since torch.norm(error, p="fro"), rejects non-float input
+def _to_float_for_norm(t: torch.Tensor) -> torch.Tensor:
+    if t.dtype in (torch.float32, torch.bfloat16):
+        return t
+    return t.to(torch.float32)
+
+
 def assert_with_pcc(expected_pytorch_result, actual_pytorch_result, pcc=0.9999):
     """
     Assert that two PyTorch tensors are similar within a specified Pearson Correlation Coefficient (PCC) threshold.
@@ -299,6 +306,9 @@ def comp_relative_frobenius(expected_pytorch_result, actual_pytorch_result):
         actual_pytorch_result.shape
     ), f"Shape mismatch: expected {list(expected_pytorch_result.shape)} vs actual {list(actual_pytorch_result.shape)}"
 
+    expected_pytorch_result = _to_float_for_norm(expected_pytorch_result)
+    actual_pytorch_result = _to_float_for_norm(actual_pytorch_result)
+
     error = expected_pytorch_result - actual_pytorch_result
     frob_error = torch.norm(error, p="fro")
     frob_expected = torch.norm(expected_pytorch_result, p="fro")
@@ -519,3 +529,69 @@ def flush_subnormal_values_to_zero(tensor):
     mask = torch.abs(tensor) < SUBNORMAL_THRESHOLD
     tensor[mask] = 0.0
     return tensor
+
+
+def assert_numeric_metrics(
+    expected_result,
+    actual_result,
+    rtol=1e-05,
+    atol=1e-08,
+    frobenius_threshold=0.01,
+    pcc_threshold=0.999,
+    ulp_threshold=10,
+    check_allclose=True,
+    check_frobenius=True,
+    check_pcc=True,
+    check_ulp=False,
+):
+    """
+    Run one or more numeric similarity checks between a golden tensor and an actual tensor.
+
+    Intended for TTNN tests that compare PyTorch reference output against device or CPU
+    round-trip results. Individual checks can be disabled when a metric does not apply
+    (for example, skip Frobenius for degenerate or non-finite cases).
+
+    Args:
+        expected_result (Union[ttnn.Tensor, torch.Tensor]): Reference (golden) tensor.
+        actual_result (Union[ttnn.Tensor, torch.Tensor]): Tensor under test; cast to ``expected_result.dtype`` if dtypes differ.
+        rtol (float, optional): Relative tolerance for ``assert_allclose``. Defaults to 1e-05.
+        atol (float, optional): Absolute tolerance for ``assert_allclose``. Defaults to 1e-08.
+        frobenius_threshold (float, optional): Maximum allowed relative Frobenius error for
+            ``assert_relative_frobenius``. Defaults to 0.01.
+        pcc_threshold (float, optional): Minimum Pearson correlation for ``comp_pcc``. Defaults to 0.999.
+        ulp_threshold (float, optional): Maximum ULP distance for ``assert_with_ulp``. Defaults to 10.
+        check_allclose (bool, optional): If True, run element-wise allclose. Defaults to True.
+        check_frobenius (bool, optional): If True, run relative Frobenius check. Defaults to True.
+        check_pcc (bool, optional): If True, run PCC when the tensor has more than one element. Defaults to True.
+        check_ulp (bool, optional): If True, run ULP comparison (non-finite mismatches fail). Defaults to False.
+
+    Returns:
+        None
+
+    Raises:
+        AssertionError: If any enabled check fails (shape mismatch, tolerance exceeded, or PCC/ULP below threshold).
+
+    Notes:
+        - PCC is skipped when ``torch.numel(expected_result) == 1`` because correlation is undefined for a scalar.
+        - Allclose and Frobenius use helpers that normalize ``ttnn.Tensor`` inputs to PyTorch tensors.
+    """
+    # Align dtypes first so all downstream numeric checks compare values in the same precision.
+    if expected_result.dtype != actual_result.dtype:
+        actual_result = actual_result.type(expected_result.dtype)
+
+    # Element-wise tolerance check (absolute + relative).
+    if check_allclose:
+        assert_allclose(expected_result, actual_result, rtol=rtol, atol=atol)
+
+    # Global error-magnitude check using relative Frobenius norm.
+    if check_frobenius:
+        assert_relative_frobenius(expected_result, actual_result, threshold=frobenius_threshold)
+
+    # PCC is undefined/degenerate for scalars, so only run it for tensors with more than one element.
+    if check_pcc and torch.numel(expected_result) != 1:
+        passing_pcc, pcc_message = comp_pcc(expected_result, actual_result, pcc_threshold)
+        assert passing_pcc, pcc_message
+
+    # ULP-based comparison is stricter for floating-point representation differences.
+    if check_ulp:
+        assert_with_ulp(expected_result, actual_result, ulp_threshold=ulp_threshold, allow_nonfinite=False)

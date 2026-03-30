@@ -8,11 +8,11 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
 def run_moe_test(N, C, H, W, k, E, e, dtype, device):
-    # torch.manual_seed(2005)
+    torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
 
@@ -45,9 +45,17 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
 
         ttnn_weights_1SB1 = ttnn.to_torch(weights_1SB1)
 
-        pcc_values = 0.95
-
-        assert_with_pcc(torch_weights_1SB1, ttnn_weights_1SB1, pcc_values)
+        # test for equivalance
+        assert_numeric_metrics(
+            torch_weights_1SB1,
+            ttnn_weights_1SB1,
+            pcc_threshold=0.999,
+            rtol=0.046,
+            atol=0.012,
+            frobenius_threshold=0.017,
+            check_ulp=True,
+            ulp_threshold=8,
+        )
 
 
 @pytest.mark.parametrize(
