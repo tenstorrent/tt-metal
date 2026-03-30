@@ -718,7 +718,6 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
                 helper_core,
                 {in_addr,
                  y * Mpc,  // tile_offset_row
-                 Mpc,
                  K_tiles,
                  out_addr,
                  y * Mpc,  // M_start_tile (diagonal)
