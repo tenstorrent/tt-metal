@@ -13,6 +13,7 @@ import os
 from copy import deepcopy
 from pathlib import Path
 
+import torch
 import ttnn
 
 
@@ -96,16 +97,31 @@ class TtLingbotVA:
 
         return cls(models, state, message)
 
-    def forward_reset_and_infer(self):
-        """Match ``run_inference`` reset + single infer chunk (``_infer_entry`` twice)."""
+    def forward_reset_and_infer(self) -> ttnn.Tensor:
+        """Match ``run_inference`` reset + single infer chunk (``_infer_entry`` twice).
+
+        Returns the postprocessed action as a TTNN tensor on ``mesh_device`` (from NumPy, see
+        ``_postprocess_action`` in ``demo``).
+        """
         from models.experimental.lingbot_va.tests.demo import demo as lingbot_demo
 
         prompt = self.message.get("prompt", "")
         reset_message = lingbot_demo.build_reset_message(prompt)
         lingbot_demo._infer_entry(self.models, self.state, reset_message)
-        return lingbot_demo._infer_entry(self.models, self.state, self.message)
+        infer = lingbot_demo._infer_entry(self.models, self.state, self.message)
+        action_np = infer["action"]
+        t = torch.as_tensor(action_np, dtype=torch.bfloat16)
+        if t.dim() == 1:
+            t = t.unsqueeze(0)
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.models["mesh_device"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def __call__(self, l1_input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        """Pipeline entrypoint: runs one Lingbot chunk; ``l1_input_tensor`` is unused (inputs are in ``state``)."""
-        self.forward_reset_and_infer()
-        return ttnn.multiply(l1_input_tensor, 0.0)
+        """Pipeline entrypoint: runs one Lingbot chunk."""
+        _ = l1_input_tensor
+        return self.forward_reset_and_infer()
