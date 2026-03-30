@@ -27,6 +27,7 @@
 | Speech Tok Encoder | TTNN | ⚠️ NOT STARTED | - | Reference only |
 | Generator | TTNN | ✅ DONE | - | Tracing: 34.31 tok/s (1.28x speedup) |
 | Demo (voice clone) | Hybrid | ✅ WORKING | - | TTNN gen + PyTorch audio decode |
+| Web Demo | Gradio | ✅ LIVE | - | Port 7777, pre-warms all 9 buckets, pre-captures CP traces |
 
 ## End-to-End Pipeline (Current Working State)
 
