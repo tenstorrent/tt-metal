@@ -270,6 +270,7 @@ class TextAttention(LightweightModule):
         start_pos: int = 0,
         kv_cache: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         page_table: Optional[ttnn.Tensor] = None,
+        user_id: int = 0,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass through GQA attention (prefill mode) with tensor parallelism.
@@ -282,6 +283,7 @@ class TextAttention(LightweightModule):
             kv_cache: Optional (k_cache, v_cache) tuple - tensor parallel sharded
             page_table: Optional page table for paged attention (vLLM)
                 Shape: [batch, max_num_blocks_per_req] mapping positions to block IDs
+            user_id: Batch index for multi-user batching (which user's KV cache slot to fill)
 
         Returns:
             Tuple of (output, updated_kv_cache)
@@ -361,12 +363,12 @@ class TextAttention(LightweightModule):
             k_cache, v_cache = kv_cache
             if page_table is not None:
                 # Paged attention: write to pages specified by page_table
-                ttnn.experimental.paged_fill_cache(k_cache, k, page_table, batch_idx=0)
-                ttnn.experimental.paged_fill_cache(v_cache, v, page_table, batch_idx=0)
+                ttnn.experimental.paged_fill_cache(k_cache, k, page_table, batch_idx=user_id)
+                ttnn.experimental.paged_fill_cache(v_cache, v, page_table, batch_idx=user_id)
             else:
-                # Fallback for non-paged mode (demo)
-                ttnn.fill_cache(k_cache, k, batch_idx=0)
-                ttnn.fill_cache(v_cache, v, batch_idx=0)
+                # Fallback for non-paged mode (demo) - use user_id for multi-user batching
+                ttnn.fill_cache(k_cache, k, batch_idx=user_id)
+                ttnn.fill_cache(v_cache, v, batch_idx=user_id)
 
         new_kv_cache = (k, v)
 
@@ -448,7 +450,10 @@ class TextAttention(LightweightModule):
         Returns:
             Output tensor [1, 1, 1, hidden_dim]
         """
-        batch_size = 1
+        # Derive batch_size from input tensor (shape: [1, 1, batch_size, hidden_dim])
+        # Note: Don't use kv_cache[0].shape[0] because paged cache has shape
+        # [num_blocks, num_kv_heads, block_size, head_dim] where shape[0] is num_blocks
+        batch_size = x.shape[2]
         seq_len = 1  # Decode mode processes one token at a time
 
         # Fused QKV projection (single matmul instead of 3 separate ones)
@@ -488,6 +493,10 @@ class TextAttention(LightweightModule):
         # Apply RoPE using TTNN rotary embedding
         # Note: rot_mats already contain cos/sin for the current position, so we pass 0
         # This avoids reading current_pos from device during traced execution
+        from loguru import logger
+
+        logger.debug(f"Before RoPE: q.shape={q.shape}, k.shape={k.shape}")
+
         q = ttnn.experimental.rotary_embedding(
             q,
             rot_mats[0],  # cos
@@ -502,63 +511,69 @@ class TextAttention(LightweightModule):
             0,  # Position is already embedded in rot_mats
         )
 
-        # Reshape to handle padding from rotary_embedding (pads to 32 heads)
-        # Output shape after RoPE: [1, B, 32, head_dim], need [1, B, num_heads_per_device, head_dim]
-        q = ttnn.reshape(
-            q,
-            (1, batch_size, self.num_heads_per_device, self.head_dim),
-            (1, batch_size, 32, self.head_dim),
-        )
-        k = ttnn.reshape(
-            k,
-            (1, batch_size, self.num_kv_heads_per_device, self.head_dim),
-            (1, batch_size, 32, self.head_dim),
-        )
+        logger.debug(f"After RoPE: q.shape={q.shape}, k.shape={k.shape}")
+
+        # After RoPE, Q and K have shape [1, B, 32, head_dim] due to head padding
+        # Don't reshape here - the slice below will extract the correct number of heads
 
         # Slice to actual number of heads
-        # Note: nlp_create_qkv_heads_decode output shape is [1, H_padded, B, d]
-        # After RoPE/reshape, tensors are [1, B, H_padded, d] for Q,K but V stays [1, H_padded, B, d]
+        # After RoPE/reshape, Q, K, V all have shape [1, B, H_padded, d]
+        # where B = batch_size, H_padded = padded heads (32), d = head_dim
         q = q[:, :, : self.num_heads_per_device]
         k = k[:, :, : self.num_kv_heads_per_device]
-        # V hasn't been through reshape, so heads are in dim 1
-        v = v[:, : self.num_kv_heads_per_device, :, :]
+        v = v[:, :, : self.num_kv_heads_per_device]  # Same slice pattern as K
 
         # Get KV cache references
         k_cache, v_cache = kv_cache
 
-        # Convert K, V to DRAM for permute operation
-        k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
+        # For paged_update_cache, K and V need HEIGHT_SHARDED memory config
+        # K/V shape after slice: logical [1, batch_size, num_kv_heads, head_dim]
+        #                        padded [1, batch_size, 32, head_dim] (due to RoPE padding)
+        from loguru import logger
 
-        # Reshape V for cache - K is already in correct format [1, B, H, d]
-        # V is [1, H, B, d] -> [1, B, H, d] to match K format
-        # paged_update_cache expects input_tensor.shape[1] == page_table.shape[0] (batch_size)
-        v = ttnn.permute(v, (0, 2, 1, 3))  # [1, H, B, d] -> [1, B, H, d]
+        logger.debug(f"K shape before sharding: logical={k.shape}, padded={k.padded_shape}")
+        logger.debug(f"V shape before sharding: logical={v.shape}, padded={v.padded_shape}")
 
-        # Create sharded memory config for paged_update_cache
-        # paged_update_cache requires HEIGHT sharded input tensors in [1, B, H, d] format
-        # Shard across batch dimension (1 core per batch element)
-        grid_size = ttnn.CoreCoord(8, 8)
-        kv_num_cores = batch_size  # 1 core per batch
-        kv_core_grid = ttnn.num_cores_to_corerangeset(kv_num_cores, grid_size, row_wise=True)
-        # For [1, B, H, d], HEIGHT = B * H (padded), WIDTH = head_dim
-        # Shard height must be tile-aligned (multiple of 32)
-        kv_shard_height = ((self.num_kv_heads_per_device + 31) // 32) * 32  # Tile-aligned
-        kv_shard_width = self.head_dim
-        kv_mem_cfg = ttnn.create_sharded_memory_config(
-            shape=(kv_shard_height, kv_shard_width),
-            core_grid=kv_core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            use_height_and_width_as_shard_shape=True,
+        # Compute sharding based on padded shape for correct physical layout
+        # Padded shape: [1, B, 32, d] -> physical height = B * 32, width = d
+        padded_height = k.padded_shape[1] * k.padded_shape[2]  # batch * padded_heads
+
+        # Calculate number of cores to use based on data size
+        # Each shard must be at least 32 rows (one tile) for TILE_LAYOUT
+        TILE_SIZE = 32
+        min_shard_height = TILE_SIZE
+        max_cores = 32  # Maximum cores in 4x8 grid
+        num_cores = min(max_cores, padded_height // min_shard_height)
+        num_cores = max(1, num_cores)  # At least 1 core
+
+        shard_height = padded_height // num_cores
+        shard_width = self.head_dim  # 128
+
+        # Compute grid dimensions (prefer wider grids)
+        grid_x = min(8, num_cores)
+        grid_y = (num_cores + grid_x - 1) // grid_x
+
+        logger.debug(
+            f"Sharding config: padded_height={padded_height}, shard_height={shard_height}, num_cores={num_cores}, grid=({grid_y}, {grid_x})"
         )
 
-        # Convert K, V to sharded memory config for paged_update_cache
+        kv_mem_cfg = ttnn.create_sharded_memory_config(
+            shape=(shard_height, shard_width),
+            core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
         k = ttnn.to_memory_config(k, kv_mem_cfg)
         v = ttnn.to_memory_config(v, kv_mem_cfg)
 
-        # Update KV cache at current position using tensor-based indexing
-        # paged_update_cache expects [1, B, K, D] format where B is batch_size
-        # This matches the format used by tt_transformers (k_heads_1BKD)
+        # Debug shapes
+        from loguru import logger
+
+        logger.debug(
+            f"paged_update_cache: k.shape={k.shape}, page_table.shape={page_table.shape if page_table is not None else None}"
+        )
+        logger.debug(f"paged_update_cache: v.shape={v.shape}, k_cache.shape={k_cache.shape}")
         ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=page_table)
         ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=page_table)
 
@@ -608,12 +623,20 @@ class TextAttention(LightweightModule):
 
         # Convert SDPA output to sharded for nlp_concat_heads_decode
         # SDPA output: [1, B, H, d] needs HEIGHT sharded memory config
+        # nlp_concat_heads_decode requires num_cores == batch_size
+        sdpa_batch = attn_output.shape[1]  # Get actual batch from SDPA output
+        sdpa_shard_height = 32  # One tile height per batch element
+        sdpa_shard_width = self.head_dim
+
+        # Compute grid dimensions for num_cores = batch_size
+        sdpa_grid_x = min(8, sdpa_batch)
+        sdpa_grid_y = (sdpa_batch + sdpa_grid_x - 1) // sdpa_grid_x
+
+        logger.debug(f"SDPA output sharding: batch={sdpa_batch}, grid=({sdpa_grid_y}, {sdpa_grid_x})")
+
         sdpa_output_shard_config = ttnn.create_sharded_memory_config(
-            shape=(
-                (self.num_heads_per_device + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE,
-                self.head_dim,
-            ),
-            core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+            shape=(sdpa_shard_height, sdpa_shard_width),
+            core_grid=ttnn.CoreGrid(y=sdpa_grid_y, x=sdpa_grid_x),
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -626,6 +649,15 @@ class TextAttention(LightweightModule):
             attn_output,
             num_heads=self.num_heads_per_device,
         )
+
+        # Fix batch dimension: nlp_concat_heads_decode uses padded shape for batch
+        # which can cause [1, 1, padded_batch, H*d] when we want [1, 1, batch_size, H*d]
+        # This happens because RoPE pads the head dimension to 32, and concat_heads
+        # may interpret this as the batch dimension.
+        if attn_output.shape[2] != batch_size:
+            # Need to convert to interleaved before slicing to avoid sharding issues
+            attn_output = ttnn.to_memory_config(attn_output, ttnn.DRAM_MEMORY_CONFIG)
+            attn_output = attn_output[:, :, :batch_size, :]
 
         # Output projection (row parallel) - use L1 for decode
         output = ttnn.linear(

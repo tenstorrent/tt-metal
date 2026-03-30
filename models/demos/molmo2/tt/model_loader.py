@@ -43,7 +43,7 @@ def load_model_weights():
     return state_dict
 
 
-def create_model(mesh_device, state_dict, num_layers: Optional[int] = None):
+def create_model(mesh_device, state_dict, num_layers: Optional[int] = None, max_batch_size: int = 1):
     """
     Create the Molmo2 TTNN model.
 
@@ -51,6 +51,7 @@ def create_model(mesh_device, state_dict, num_layers: Optional[int] = None):
         mesh_device: TTNN device or mesh device
         state_dict: Model state dict
         num_layers: Optional number of text layers (default: 36)
+        max_batch_size: Maximum batch size (default: 1)
 
     Returns:
         Molmo2Model instance
@@ -87,6 +88,7 @@ def create_model(mesh_device, state_dict, num_layers: Optional[int] = None):
         text_head_dim=128,
         vocab_size=152064,
         max_seq_len=8192,
+        max_batch_size=max_batch_size,
         rope_theta=1000000.0,
         rms_norm_eps=1e-5,
         dtype=ttnn.bfloat8_b,
