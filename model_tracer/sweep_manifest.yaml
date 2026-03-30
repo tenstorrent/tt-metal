@@ -131,4 +131,4 @@ registry:
     tt_metal_sha: bbac5b652884355862446afb96f1f73158271f10
     config_count: 233
     loaded_at: '2026-03-30'
-    notes: ''
+    notes: 'BH retrace after tt-smi fix'
