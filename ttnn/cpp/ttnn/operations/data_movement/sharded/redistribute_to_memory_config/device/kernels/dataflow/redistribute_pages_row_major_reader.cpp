@@ -72,7 +72,7 @@ void kernel_main() {
                         bytes_per_element;  // part of the output subblock was already written in previous iterations
                     l1_input_subblock_read_addr_offset = 0;
                 }
-                // cb_reserve_back(cb_id_in1, 1);
+
                 uint32_t l1_output_subblock_write_addr =
                     get_write_ptr(cb_id_in1);  // write the output subblock to the output cb
                 tt::data_movement::common::tt_memmove<false, false, true, 0>(

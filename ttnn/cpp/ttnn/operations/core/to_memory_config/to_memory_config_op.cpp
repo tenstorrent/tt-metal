@@ -21,12 +21,6 @@ Tensor to_memory_config(
     const std::optional<Tensor>& output_tensor) {
     using namespace tt::tt_metal;
 
-    if (tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
-        memory_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
-        return ttnn::redistribute_to_memory_config(
-            tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
-    }
-
     // Temporary until we see why buffer data not being populated
     const auto original_memory_config = ttnn::get_memory_config(tensor);
     if (original_memory_config.has_value() && original_memory_config.value() == memory_config &&
@@ -36,6 +30,12 @@ Tensor to_memory_config(
     std::vector<std::optional<Tensor>> optional_output_tensors;
     if (output_tensor.has_value()) {
         optional_output_tensors.push_back(output_tensor);
+    }
+
+    if (tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
+        memory_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        return ttnn::redistribute_to_memory_config(
+            tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
     }
 
     if (memory_config.is_sharded()) {

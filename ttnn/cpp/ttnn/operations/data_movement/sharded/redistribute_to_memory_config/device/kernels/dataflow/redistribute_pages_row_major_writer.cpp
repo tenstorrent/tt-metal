@@ -39,7 +39,6 @@ void kernel_main() {
                                      // the end column of the next output subblock and the end of the tensor row
 
             uint32_t output_page_id = row * num_output_pages_in_row + (output_column / elements_per_output_page);
-            uint64_t output_page_noc_addr = accessor_dst.get_noc_addr(output_page_id);
             uint64_t output_addr_subblock_offset =
                 ((output_column % elements_per_output_page) / elements_per_output_subblock) * bytes_per_output_subblock;
             uint32_t num_bytes_to_write = (output_end_column - output_column + 1) * bytes_per_element;

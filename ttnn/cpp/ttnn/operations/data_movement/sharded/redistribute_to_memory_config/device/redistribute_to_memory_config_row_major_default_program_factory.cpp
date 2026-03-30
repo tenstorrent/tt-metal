@@ -96,7 +96,7 @@ RedistributeToMemoryConfigRowMajorDefaultProgramFactory::create(
             .set_page_size(input_pages_cb_index, input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, input_pages_cb_config);
 
-    // Configuring the CB that stores output pages. This one is double buffered, since it is shred between the reader
+    // Configuring the CB that stores output pages. This one is double buffered, since it is shared between the reader
     // and writer kernels.
     const auto output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::tt_metal::CircularBufferConfig output_pages_cb_config =
