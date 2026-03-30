@@ -1199,10 +1199,13 @@ def ttnn_graph_report(request):
                 rank, world_size = 0, 1
             json_path = report_path / f"graph_capture_{rank}_of_{world_size}.json"
             ttnn.graph.end_graph_capture_to_file(str(json_path))
-            if json_path.exists():
+            if ttnn.distributed_context_is_initialized():
+                ttnn.distributed_context_barrier()
+            if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:
                 from ttnn.graph_report import import_report
 
-                import_report(json_path, report_path)
+                # Merge all ``graph_capture_*_of_*.json`` files under report_path into one DB.
+                import_report(report_path, report_path)
 
             config_path = report_path / "config.json"
             ttnn.save_config_to_json_file(config_path)

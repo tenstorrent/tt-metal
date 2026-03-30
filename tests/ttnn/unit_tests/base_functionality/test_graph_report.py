@@ -1036,14 +1036,14 @@ class TestImportValidation:
         conn.commit()
 
         # Manually insert a dangling reference (simulating the old bug)
-        cursor.execute("INSERT INTO input_tensors VALUES (0, 0, 999)")
+        cursor.execute("INSERT INTO input_tensors VALUES (0, 0, 999, 0)")
         conn.commit()
 
         # Run validation directly
         warnings = graph_report._validate_graph_integrity(
-            operations_batch=[(0, "ttnn::relu", 0.0)],
+            operations_batch=[(0, "ttnn::relu", 0.0, 0)],
             tensors_batch=[],
-            input_tensors_batch=[(0, 0, 999)],
+            input_tensors_batch=[(0, 0, 999, 0)],
             output_tensors_batch=[],
             operation_arguments_batch=[],
             device_tensors_batch=[],

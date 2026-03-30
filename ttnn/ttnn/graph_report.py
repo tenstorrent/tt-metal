@@ -11,7 +11,11 @@ No database operations happen during model execution - everything is offline.
 Workflow:
     1. C++ captures graph to JSON: ttnn::graph::end_graph_capture_to_file("report.json")
     2. Later, import to SQLite: python -m ttnn.graph_report report.json ./visualizer_db/
+       (pass a directory to merge multiple captures, e.g. multi-host ``graph_capture_<rank>_of_<N>.json``)
     3. Open ttnn-visualizer pointing to ./visualizer_db/
+
+Each imported row includes a ``rank`` column (SPMD / process index) so tensor_id and ops from
+different hosts stay distinguishable in one database.
 
 This replaces the invasive approach where decorators.py inserted into SQLite during execution.
 
@@ -22,14 +26,74 @@ CREATE TABLE IF NOT EXISTS to avoid conflicts with comparison mode data.
 
 import json
 import math
+import re
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Union
 
 from loguru import logger
 
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = 2
+DATABASE_SCHEMA_VERSION = 3
+
+
+def _parse_rank_from_filename(path: Path) -> int:
+    """Parse rank from ``graph_capture_<rank>_of_<world>.json``; default 0."""
+    m = re.match(r"^graph_capture_(\d+)_of_(\d+)\.json$", path.name, re.IGNORECASE)
+    return int(m.group(1)) if m else 0
+
+
+def _report_rank(report, path: Path) -> int:
+    """Rank from JSON ``rank`` field (if top-level object is a dict), else from capture filename."""
+    if isinstance(report, dict):
+        r = report.get("rank")
+        if r is not None:
+            return int(r)
+    return _parse_rank_from_filename(path)
+
+
+def _discover_report_json_files(report_path: Path) -> list[Path]:
+    """
+    List graph capture JSON files to import.
+
+    Prefer ``graph_capture_<rank>_of_<world>.json`` (multi-host). The loose glob
+    ``graph_capture_*_of_*.json`` also matches sidecars like
+    ``graph_capture_0_of_1.python_io.json`` (a list, not a report dict), so we
+    keep only names that match the main capture file pattern.
+
+    Otherwise all ``*.json`` except ``config.json`` and ``*.python_io.json``.
+    """
+    if report_path.is_file():
+        return [report_path]
+    loose = sorted(report_path.glob("graph_capture_*_of_*.json"))
+    main_captures = [p for p in loose if re.match(r"^graph_capture_\d+_of_\d+\.json$", p.name, re.IGNORECASE)]
+    if main_captures:
+        return main_captures
+    skip = {"config.json"}
+    return sorted(
+        p for p in report_path.glob("*.json") if p.name not in skip and not p.name.endswith(".python_io.json")
+    )
+
+
+def _remove_stale_database_if_needed(db_path: Path) -> None:
+    """Remove DB file if it was built with an older schema (no migration path)."""
+    if not db_path.exists():
+        return
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT value FROM report_metadata WHERE key = 'schema_version'")
+            row = cur.fetchone()
+            ver = int(row[0]) if row else 0
+        finally:
+            conn.close()
+        if ver < DATABASE_SCHEMA_VERSION:
+            db_path.unlink()
+    except (sqlite3.Error, OSError, ValueError):
+        db_path.unlink(missing_ok=True)
+
 
 _BUFFER_TYPE_MAP = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
 
@@ -58,7 +122,7 @@ def _tid_int(tid):
 def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """Create the full ttnn-visualizer SQLite database schema."""
 
-    # Devices table
+    # Devices table (rank = distributed / SPMD process index for multi-host reports)
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS devices (
@@ -79,7 +143,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             total_l1_for_tensors int,
             total_l1_for_interleaved_buffers int,
             total_l1_for_sharded_buffers int,
-            cb_limit int
+            cb_limit int,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
@@ -90,7 +155,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         CREATE TABLE IF NOT EXISTS operations (
             operation_id int UNIQUE,
             name text,
-            duration float
+            duration float,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
@@ -101,23 +167,26 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         CREATE TABLE IF NOT EXISTS operation_arguments (
             operation_id int,
             name text,
-            value text
+            value text,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
 
-    # Tensors table
+    # Tensors table (tensor_id may repeat across ranks; uniqueness is per rank)
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS tensors (
-            tensor_id int UNIQUE,
+            tensor_id int,
             shape text,
             dtype text,
             layout text,
             memory_config text,
             device_id int,
             address int,
-            buffer_type int
+            buffer_type int,
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(tensor_id, rank)
         )
     """
     )
@@ -128,7 +197,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         CREATE TABLE IF NOT EXISTS device_tensors (
             tensor_id int,
             device_id int,
-            address int
+            address int,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
@@ -142,7 +212,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             address int,
             max_size_per_bank int,
             buffer_type int,
-            buffer_layout int
+            buffer_layout int,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
@@ -152,7 +223,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         """
         CREATE TABLE IF NOT EXISTS captured_graph (
             operation_id int,
-            captured_graph text
+            captured_graph text,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
@@ -164,7 +236,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             operation_id int,
             unique_id int,
             node_operation_id int,
-            name text
+            name text,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
@@ -178,7 +251,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             sink_unique_id int,
             source_output_index int,
             sink_input_index int,
-            key int
+            key int,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
@@ -202,7 +276,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             error_type text,
             error_message text,
             stack_trace text,
-            timestamp text
+            timestamp text,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
@@ -212,7 +287,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         """
         CREATE TABLE IF NOT EXISTS stack_traces (
             operation_id int,
-            stack_trace text
+            stack_trace text,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
@@ -223,7 +299,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         CREATE TABLE IF NOT EXISTS input_tensors (
             operation_id int,
             input_index int,
-            tensor_id int
+            tensor_id int,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
@@ -233,7 +310,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
         CREATE TABLE IF NOT EXISTS output_tensors (
             operation_id int,
             output_index int,
-            tensor_id int
+            tensor_id int,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
@@ -278,7 +356,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             page_index int,
             page_address int,
             page_size int,
-            buffer_type int
+            buffer_type int,
+            rank int NOT NULL DEFAULT 0
         )
     """
     )
@@ -291,7 +370,7 @@ def save_database_schema_version(cursor: sqlite3.Cursor) -> None:
     )
 
 
-def import_devices(cursor: sqlite3.Cursor, devices: list) -> set:
+def import_devices(cursor: sqlite3.Cursor, devices: list, rank: int = 0) -> set:
     """Import device information using batch insert. Returns set of imported device IDs."""
     if not devices:
         return set()
@@ -320,12 +399,13 @@ def import_devices(cursor: sqlite3.Cursor, devices: list) -> set:
                 device.get("total_l1_for_interleaved_buffers", 0),
                 device.get("total_l1_for_sharded_buffers", 0),
                 device.get("cb_limit", 0),
+                rank,
             )
         )
         imported_ids.add(device_id)
 
     cursor.executemany(
-        """INSERT OR REPLACE INTO devices VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", batch
+        """INSERT OR REPLACE INTO devices VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", batch
     )
     return imported_ids
 
@@ -370,7 +450,7 @@ def _validate_graph_integrity(
     device_ids = {dev.get("device_id", 0) for dev in devices} if devices else set()
 
     # input_tensors.tensor_id must reference a known tensor
-    for op_id, idx, tid in input_tensors_batch:
+    for op_id, idx, tid, _rk in input_tensors_batch:
         tid_int = _tid_int(tid)
         if tid_int not in tensor_ids:
             warnings.append(
@@ -380,7 +460,7 @@ def _validate_graph_integrity(
             )
 
     # output_tensors.tensor_id must reference a known tensor
-    for op_id, idx, tid in output_tensors_batch:
+    for op_id, idx, tid, _rk in output_tensors_batch:
         tid_int = _tid_int(tid)
         if tid_int not in tensor_ids:
             warnings.append(
@@ -389,16 +469,16 @@ def _validate_graph_integrity(
             )
 
     # input/output_tensors.operation_id must reference a known operation
-    for op_id, idx, tid in input_tensors_batch:
+    for op_id, idx, tid, _rk in input_tensors_batch:
         if op_id not in operation_ids:
             warnings.append(f"input_tensors references operation_id={op_id} which does not exist in operations table.")
 
-    for op_id, idx, tid in output_tensors_batch:
+    for op_id, idx, tid, _rk in output_tensors_batch:
         if op_id not in operation_ids:
             warnings.append(f"output_tensors references operation_id={op_id} which does not exist in operations table.")
 
     # operation_arguments.operation_id must reference a known operation
-    for op_id, name, val in operation_arguments_batch:
+    for op_id, name, val, _rk in operation_arguments_batch:
         if op_id not in operation_ids:
             warnings.append(
                 f"operation_arguments references operation_id={op_id} which does not exist in operations table."
@@ -406,7 +486,7 @@ def _validate_graph_integrity(
             break  # one warning is enough for args
 
     # device_tensors.tensor_id must reference a known tensor
-    for tid, dev_id, addr in device_tensors_batch:
+    for tid, dev_id, addr, _rk in device_tensors_batch:
         tid_int = _tid_int(tid)
         if tid_int not in tensor_ids:
             warnings.append(f"device_tensors references tensor_id={tid} which does not exist in tensors table.")
@@ -434,6 +514,7 @@ def import_graph(
     devices: list = None,
     python_io: list = None,
     per_operation_buffers: dict = None,
+    rank: int = 0,
 ) -> dict:
     """
     Import graph trace into database using batch inserts for performance.
@@ -454,10 +535,13 @@ def import_graph(
         python_io: Optional list of Python-level I/O records from the decorator.
             Each record has ``name``, ``input_tensor_ids``, and ``output_tensor_ids``.
             When available, these override the heuristic I/O lifting.
+        rank: Distributed / SPMD rank for this capture (disambiguates tensor_id and ops when merging).
 
     Returns dict with stats about what was imported.
     """
     from collections import defaultdict, deque
+
+    r = rank
 
     # Collect data for batch inserts
     nodes_batch = []
@@ -609,7 +693,7 @@ def import_graph(
                 all_scope_output_ids = set()
                 all_nested_input_ids = set()
                 first_child_arguments = None
-                nodes_batch.append((base_operation_id, counter, operation_counter, name))
+                nodes_batch.append((base_operation_id, counter, operation_counter, name, r))
 
             else:
                 op_nesting_depth += 1
@@ -674,7 +758,7 @@ def import_graph(
             duration_s = duration_ns / 1e9 if duration_ns else 0
 
             operation_id = base_operation_id + operation_counter
-            operations_batch.append((operation_id, name, duration_s))
+            operations_batch.append((operation_id, name, duration_s, r))
 
             if start_node:
                 graph_counter_to_op_id[start_node["counter"]] = operation_id
@@ -684,18 +768,18 @@ def import_graph(
 
             if py_io and py_io.get("arguments"):
                 for key, val in py_io["arguments"].items():
-                    operation_arguments_batch.append((operation_id, str(key), str(val)))
+                    operation_arguments_batch.append((operation_id, str(key), str(val), r))
             elif start_node:
                 for idx, arg in enumerate(start_node.get("arguments", [])):
-                    operation_arguments_batch.append((operation_id, f"arg_{idx}", str(arg)))
+                    operation_arguments_batch.append((operation_id, f"arg_{idx}", str(arg), r))
 
             if py_io and py_io.get("python_stack_trace"):
                 py_trace = "\n".join(py_io["python_stack_trace"])
-                stack_traces_batch.append((operation_id, py_trace))
+                stack_traces_batch.append((operation_id, py_trace, r))
 
             if py_io and py_io.get("input_tensor_ids"):
                 for idx, tid in enumerate(py_io["input_tensor_ids"]):
-                    input_tensors_batch.append((operation_id, idx, int(tid)))
+                    input_tensors_batch.append((operation_id, idx, int(tid), r))
             elif start_node:
                 direct_inputs = []
                 for node_counter in start_node.get("input_tensors", []):
@@ -708,7 +792,7 @@ def import_graph(
 
                 if direct_inputs:
                     for idx, tid in enumerate(direct_inputs):
-                        input_tensors_batch.append((operation_id, idx, tid))
+                        input_tensors_batch.append((operation_id, idx, tid, r))
                 elif nested_input_tensor_ids:
                     seen = set()
                     lifted_inputs = []
@@ -720,7 +804,7 @@ def import_graph(
                         seen.add(tid)
                         lifted_inputs.append(tid)
                     for idx, tid in enumerate(lifted_inputs):
-                        input_tensors_batch.append((operation_id, idx, tid))
+                        input_tensors_batch.append((operation_id, idx, tid, r))
 
             # ----- Outputs -----
             output_tensor_nodes = []
@@ -737,7 +821,7 @@ def import_graph(
                     cpp_output_nodes = nested_output_tensor_nodes
 
                 for i, tid in enumerate(py_io["output_tensor_ids"]):
-                    output_tensors_batch.append((operation_id, output_idx, int(tid)))
+                    output_tensors_batch.append((operation_id, output_idx, int(tid), r))
                     emitted_output_tids.add(int(tid))
                     output_idx += 1
                     if i < len(cpp_output_nodes):
@@ -751,7 +835,7 @@ def import_graph(
                             tid = conn_node.get("params", {}).get("tensor_id", "")
                             if tid:
                                 itid = int(tid)
-                                output_tensors_batch.append((operation_id, output_idx, itid))
+                                output_tensors_batch.append((operation_id, output_idx, itid, r))
                                 emitted_output_tids.add(itid)
                                 output_idx += 1
                                 output_tensor_nodes.append(conn_node)
@@ -767,7 +851,7 @@ def import_graph(
                         tensor_node = nested_output_tensor_nodes[i]
                         if tid not in seen:
                             seen.add(tid)
-                            output_tensors_batch.append((operation_id, output_idx, tid))
+                            output_tensors_batch.append((operation_id, output_idx, tid, r))
                             emitted_output_tids.add(tid)
                             output_idx += 1
                             kept_nodes.append(tensor_node)
@@ -808,7 +892,7 @@ def import_graph(
                     if "input_tensors" in nd_copy:
                         nd_copy["input_tensors"] = [old_to_new.get(c, c) for c in nd_copy["input_tensors"]]
                     subgraph.append(nd_copy)
-            captured_graph_batch.append((operation_id, json.dumps(subgraph)))
+            captured_graph_batch.append((operation_id, json.dumps(subgraph), r))
             current_op_nodes = []
 
             # Use real buffer snapshot from get_buffers() when available;
@@ -829,11 +913,12 @@ def import_graph(
                             buf.get("max_size_per_bank", 0),
                             buf.get("buffer_type", 0),
                             buf.get("buffer_layout", 0),
+                            r,
                         )
                     )
             else:
                 for buf in active_buffers:
-                    buffers_batch.append((operation_id, *buf))
+                    buffers_batch.append((operation_id, *buf, r))
 
             operation_counter += 1
 
@@ -866,6 +951,7 @@ def import_graph(
                         device_id,
                         address,
                         buffer_type,
+                        r,
                     )
                 )
 
@@ -874,7 +960,7 @@ def import_graph(
                     device_tensors = json.loads(device_tensors_str)
                     for dt in device_tensors:
                         device_tensors_batch.append(
-                            (tensor_id, dt.get("mesh_device_id", dt.get("device_id")), dt.get("address"))
+                            (tensor_id, dt.get("mesh_device_id", dt.get("device_id")), dt.get("address"), r)
                         )
 
         elif node_type == "buffer_allocate":
@@ -922,7 +1008,7 @@ def import_graph(
             dealloc_tensor_id = None
             if dealloc_address is not None:
                 for t in tensors_batch:
-                    tid, _, _, _, _, _, addr, _ = t
+                    tid, _, _, _, _, _, addr, _, _ = t
                     if addr == dealloc_address:
                         dealloc_tensor_id = _tid_int(tid)
                         break
@@ -931,14 +1017,14 @@ def import_graph(
                 # Synthesize a deallocate operation if not inside a function_start/end pair
                 operation_id = base_operation_id + operation_counter
                 op_name = "ttnn::deallocate"
-                operations_batch.append((operation_id, op_name, 0))
-                nodes_batch.append((base_operation_id, counter, operation_counter, op_name))
+                operations_batch.append((operation_id, op_name, 0, r))
+                nodes_batch.append((base_operation_id, counter, operation_counter, op_name, r))
 
                 if dealloc_tensor_id is not None:
-                    input_tensors_batch.append((operation_id, 0, dealloc_tensor_id))
+                    input_tensors_batch.append((operation_id, 0, dealloc_tensor_id, r))
 
                 for buf in active_buffers:
-                    buffers_batch.append((operation_id, *buf))
+                    buffers_batch.append((operation_id, *buf, r))
 
                 capture_start = {
                     "arguments": [],
@@ -958,7 +1044,7 @@ def import_graph(
                     "params": {},
                     "stacking_level": 0,
                 }
-                captured_graph_batch.append((operation_id, json.dumps([capture_start, node, capture_end])))
+                captured_graph_batch.append((operation_id, json.dumps([capture_start, node, capture_end]), r))
 
                 operation_counter += 1
             else:
@@ -971,7 +1057,7 @@ def import_graph(
             error_type = params.get("error_type", "unknown")
             error_message = params.get("error_message", "")
             error_operation = params.get("error_operation", "")
-            errors_batch.append((base_operation_id, error_operation, error_type, error_message, "", ""))
+            errors_batch.append((base_operation_id, error_operation, error_type, error_message, "", "", r))
 
     # Detect orphan function_start nodes (started but never ended = operation error).
     already_errored = {e[1] for e in errors_batch}
@@ -987,19 +1073,20 @@ def import_graph(
                         f"Operation '{op_name}' started but never completed (likely crashed)",
                         "",
                         "",
+                        r,
                     )
                 )
 
     # Keep host tensors only when referenced in I/O; keep all device tensors as-is.
     referenced_tids = set()
-    for _, _, tid in input_tensors_batch:
+    for _, _, tid, _ in input_tensors_batch:
         referenced_tids.add(_tid_int(tid))
-    for _, _, tid in output_tensors_batch:
+    for _, _, tid, _ in output_tensors_batch:
         referenced_tids.add(_tid_int(tid))
 
     filtered_tensors = []
     for t in tensors_batch:
-        tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt = t
+        tid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, _tr = t
         tid_int = _tid_int(tid)
         if dev_id is None:
             if tid_int in referenced_tids:
@@ -1015,22 +1102,22 @@ def import_graph(
     # entries for them by copying from the nearest tensor at the same address.
     existing_tids = {_tid_int(t[0]) for t in tensors_batch}
     io_tids = set()
-    for _, _, tid in input_tensors_batch:
+    for _, _, tid, _ in input_tensors_batch:
         io_tids.add(_tid_int(tid))
-    for _, _, tid in output_tensors_batch:
+    for _, _, tid, _ in output_tensors_batch:
         io_tids.add(_tid_int(tid))
     missing_tids = io_tids - existing_tids
     if missing_tids:
         addr_to_tensor = {}
         for t in tensors_batch:
-            tid_val, shape, dtype, layout, mem_cfg, dev_id, addr, bt = t
+            tid_val, shape, dtype, layout, mem_cfg, dev_id, addr, bt, _tr = t
             if addr is not None and addr not in addr_to_tensor:
                 addr_to_tensor[addr] = t
         for mtid in missing_tids:
             addr = tensor_address.get(mtid)
             if addr is not None and addr in addr_to_tensor:
-                _, shape, dtype, layout, mem_cfg, dev_id, _, bt = addr_to_tensor[addr]
-                tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt))
+                _, shape, dtype, layout, mem_cfg, dev_id, _, bt, _tr = addr_to_tensor[addr]
+                tensors_batch.append((mtid, shape, dtype, layout, mem_cfg, dev_id, addr, bt, r))
             elif mtid in pyid_to_cpp_tensor:
                 cpp_node = pyid_to_cpp_tensor[mtid]
                 p = cpp_node.get("params", {})
@@ -1048,6 +1135,7 @@ def import_graph(
                         _int_param(p, "device_id"),
                         _int_param(p, "address"),
                         btv,
+                        r,
                     )
                 )
 
@@ -1057,7 +1145,7 @@ def import_graph(
     seen_input = set()
     deduped_inputs = []
     input_idx_counter = {}
-    for op_id, idx, tid in input_tensors_batch:
+    for op_id, idx, tid, rk in input_tensors_batch:
         tid_int = _tid_int(tid)
         if tid_int in kept_tensor_ids:
             key = (op_id, tid_int)
@@ -1065,13 +1153,13 @@ def import_graph(
                 seen_input.add(key)
                 new_idx = input_idx_counter.get(op_id, 0)
                 input_idx_counter[op_id] = new_idx + 1
-                deduped_inputs.append((op_id, new_idx, tid_int))
+                deduped_inputs.append((op_id, new_idx, tid_int, rk))
     input_tensors_batch = deduped_inputs
 
     seen_output = set()
     deduped_outputs = []
     output_idx_counter = {}
-    for op_id, idx, tid in output_tensors_batch:
+    for op_id, idx, tid, rk in output_tensors_batch:
         tid_int = _tid_int(tid)
         if tid_int in kept_tensor_ids:
             key = (op_id, tid_int)
@@ -1079,15 +1167,17 @@ def import_graph(
                 seen_output.add(key)
                 new_idx = output_idx_counter.get(op_id, 0)
                 output_idx_counter[op_id] = new_idx + 1
-                deduped_outputs.append((op_id, new_idx, tid_int))
+                deduped_outputs.append((op_id, new_idx, tid_int, rk))
     output_tensors_batch = deduped_outputs
     device_tensors_batch = [
-        (_tid_int(tid), dev_id, addr) for tid, dev_id, addr in device_tensors_batch if _tid_int(tid) in kept_tensor_ids
+        (_tid_int(tid), dev_id, addr, rk)
+        for tid, dev_id, addr, rk in device_tensors_batch
+        if _tid_int(tid) in kept_tensor_ids
     ]
     seen_dt = set()
     filtered_dt = []
     for dt in device_tensors_batch:
-        key = (dt[0], dt[2])
+        key = (dt[0], dt[1], dt[2], dt[3])
         if key not in seen_dt:
             seen_dt.add(key)
             filtered_dt.append(dt)
@@ -1095,35 +1185,35 @@ def import_graph(
 
     # Batch inserts
     if captured_graph_batch:
-        cursor.executemany("""INSERT INTO captured_graph VALUES (?, ?)""", captured_graph_batch)
-        for op_id, graph_json_str in captured_graph_batch:
+        cursor.executemany("""INSERT INTO captured_graph VALUES (?, ?, ?)""", captured_graph_batch)
+        for op_id, graph_json_str, er in captured_graph_batch:
             subgraph = json.loads(graph_json_str)
             for snode in subgraph:
                 source_id = snode.get("counter", 0)
                 for conn_idx, target_id in enumerate(snode.get("connections", [])):
-                    edges_batch.append((op_id, source_id, target_id, conn_idx, 0, conn_idx))
+                    edges_batch.append((op_id, source_id, target_id, conn_idx, 0, conn_idx, er))
     if nodes_batch:
-        cursor.executemany("""INSERT INTO nodes VALUES (?, ?, ?, ?)""", nodes_batch)
+        cursor.executemany("""INSERT INTO nodes VALUES (?, ?, ?, ?, ?)""", nodes_batch)
     if edges_batch:
-        cursor.executemany("""INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?)""", edges_batch)
+        cursor.executemany("""INSERT INTO edges VALUES (?, ?, ?, ?, ?, ?, ?)""", edges_batch)
     if stack_traces_batch:
-        cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?)""", stack_traces_batch)
+        cursor.executemany("""INSERT INTO stack_traces VALUES (?, ?, ?)""", stack_traces_batch)
     if operations_batch:
-        cursor.executemany("""INSERT OR REPLACE INTO operations VALUES (?, ?, ?)""", operations_batch)
+        cursor.executemany("""INSERT OR REPLACE INTO operations VALUES (?, ?, ?, ?)""", operations_batch)
     if operation_arguments_batch:
-        cursor.executemany("""INSERT INTO operation_arguments VALUES (?, ?, ?)""", operation_arguments_batch)
+        cursor.executemany("""INSERT INTO operation_arguments VALUES (?, ?, ?, ?)""", operation_arguments_batch)
     if input_tensors_batch:
-        cursor.executemany("""INSERT INTO input_tensors VALUES (?, ?, ?)""", input_tensors_batch)
+        cursor.executemany("""INSERT INTO input_tensors VALUES (?, ?, ?, ?)""", input_tensors_batch)
     if output_tensors_batch:
-        cursor.executemany("""INSERT INTO output_tensors VALUES (?, ?, ?)""", output_tensors_batch)
+        cursor.executemany("""INSERT INTO output_tensors VALUES (?, ?, ?, ?)""", output_tensors_batch)
     if tensors_batch:
-        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
+        cursor.executemany("""INSERT OR IGNORE INTO tensors VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""", tensors_batch)
     if device_tensors_batch:
-        cursor.executemany("""INSERT INTO device_tensors VALUES (?, ?, ?)""", device_tensors_batch)
+        cursor.executemany("""INSERT INTO device_tensors VALUES (?, ?, ?, ?)""", device_tensors_batch)
     if buffers_batch:
-        cursor.executemany("""INSERT INTO buffers VALUES (?, ?, ?, ?, ?, ?)""", buffers_batch)
+        cursor.executemany("""INSERT INTO buffers VALUES (?, ?, ?, ?, ?, ?, ?)""", buffers_batch)
     if errors_batch:
-        cursor.executemany("""INSERT INTO errors VALUES (?, ?, ?, ?, ?, ?)""", errors_batch)
+        cursor.executemany("""INSERT INTO errors VALUES (?, ?, ?, ?, ?, ?, ?)""", errors_batch)
 
     # Validate referential integrity
     warnings = _validate_graph_integrity(
@@ -1214,7 +1304,8 @@ def import_report(
     This is the main entry point for offline import.
 
     Args:
-        report_path: Path to JSON report file (or directory containing multiple reports)
+        report_path: Path to a JSON report file, or a directory whose captures are merged
+            (prefers ``graph_capture_*_of_*.json``; otherwise ``*.json`` except ``config.json``).
         output_dir: Directory to create SQLite database in
         db_name: Database filename
         generate_svgs: If True, generate SVG visualizations for each report
@@ -1227,6 +1318,8 @@ def import_report(
     output_dir.mkdir(parents=True, exist_ok=True)
     db_path = output_dir / db_name
 
+    _remove_stale_database_if_needed(db_path)
+
     # Create graphs directory if generating SVGs
     graphs_dir = None
     if generate_svgs:
@@ -1237,14 +1330,15 @@ def import_report(
     cursor = conn.cursor()
 
     try:
+        _prev_trace = sys.gettrace()
+        _prev_profile = sys.getprofile()
+        sys.settrace(None)
+        sys.setprofile(None)
+
         create_database_schema(cursor)
         save_database_schema_version(cursor)
 
-        # Handle single file or directory of reports
-        if report_path.is_file():
-            report_files = [report_path]
-        else:
-            report_files = list(report_path.glob("*.json"))
+        report_files = _discover_report_json_files(report_path)
 
         total_stats = {
             "files": 0,
@@ -1258,9 +1352,12 @@ def import_report(
             "svgs": 0,
         }
 
-        for idx, rpath in enumerate(sorted(report_files)):
+        for idx, rpath in enumerate(report_files):
             with open(rpath, "r") as f:
                 report = json.load(f)
+
+            stats = {}
+            rank = _report_rank(report, rpath)
 
             version = report.get("version", 0)
             if version != SUPPORTED_REPORT_VERSION:
@@ -1297,7 +1394,7 @@ def import_report(
                             page["device_id"] = dev_id_remap.get(page["device_id"], page["device_id"])
 
             if devices_data:
-                device_ids = import_devices(cursor, devices_data)
+                device_ids = import_devices(cursor, devices_data, rank)
                 total_stats["devices"] += len(device_ids)
 
             if "graph" in report:
@@ -1315,6 +1412,7 @@ def import_report(
                     devices=devices_data,
                     python_io=python_io,
                     per_operation_buffers=report.get("per_operation_buffers"),
+                    rank=rank,
                 )
                 total_stats["operations"] += stats["operations"]
                 total_stats["tensors"] += stats["tensors"]
@@ -1431,10 +1529,10 @@ def import_report(
                     for buf in bufs:
                         addr = buf.get("address", 0)
                         for page_tuple in _get_pages_for_addr(addr, end_counter):
-                            buffer_pages_batch.append((op_id, *page_tuple))
+                            buffer_pages_batch.append((op_id, *page_tuple, rank))
                 if buffer_pages_batch:
                     cursor.executemany(
-                        """INSERT INTO buffer_pages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", buffer_pages_batch
+                        """INSERT INTO buffer_pages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", buffer_pages_batch
                     )
                     total_stats["buffer_pages"] = total_stats.get("buffer_pages", 0) + len(buffer_pages_batch)
             elif "buffer_pages" in report and report["buffer_pages"]:
@@ -1451,11 +1549,12 @@ def import_report(
                         page.get("page_address", 0),
                         page.get("page_size", 0),
                         page.get("buffer_type", 0),
+                        rank,
                     )
                     for page in report["buffer_pages"]
                 ]
                 cursor.executemany(
-                    """INSERT INTO buffer_pages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", buffer_pages_batch
+                    """INSERT INTO buffer_pages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", buffer_pages_batch
                 )
                 total_stats["buffer_pages"] = total_stats.get("buffer_pages", 0) + len(buffer_pages_batch)
 
@@ -1485,6 +1584,8 @@ def import_report(
         logger.info("\n".join(summary))
 
     finally:
+        sys.settrace(_prev_trace)
+        sys.setprofile(_prev_profile)
         conn.close()
 
     return db_path
@@ -1502,7 +1603,7 @@ Examples:
     # Import single report
     python -m ttnn.graph_report report.json ./visualizer_db/
 
-    # Import all reports from a directory
+    # Merge all graph_capture_*_of_*.json under a directory (multi-host)
     python -m ttnn.graph_report ./reports/ ./visualizer_db/
 
     # Import with SVG visualization generation
