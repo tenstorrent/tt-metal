@@ -21,11 +21,10 @@ inline void _calculate_clamp_(const int iterations, std::uint32_t param0, std::u
     // param1 = max
 
     // uint format = (param0 >> 16)&0x1;
-    sfpi::s2vFloat16::Format format = sfpi::s2vFloat16::fp16a;
 
     // SFPU microcode
-    sfpi::vFloat min    = sfpi::s2vFloat16(param0, format);
-    sfpi::vFloat max    = sfpi::s2vFloat16(param1, format);
+    sfpi::vFloat min    = sfpi::s2vFloat16a(param0);
+    sfpi::vFloat max    = sfpi::s2vFloat16a(param1);
     sfpi::vFloat offset = sfpi::s2vFloat16b(param2); // 12 bits
 #pragma GCC unroll 0
     for (int d = 0; d < iterations; d++)
