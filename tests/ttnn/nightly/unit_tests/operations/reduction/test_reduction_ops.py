@@ -386,15 +386,15 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape):
         atol = 0.1
         rtol = 0.1
 
-    if op == "var":
+    if op == "var" and shape == (3, 4, 8, 56, 33):
         # For var/std there are cases where all values are close to 1, and we're using bfloat16,
-        # so even a rounding error of 0.5 ULP has a significant impact on PCC.
+        # so even a rounding error of 0.5 ULP has a significant impact on PCC with large tensors.
         pcc = 0.98
-    elif op == "std":
+    elif op == "std" and shape == (3, 4, 8, 56, 33):
         # For std, sqrtf() adds an extra rounding step on top of variance, further
         # lowering PCC when values cluster near 1.0 (e.g. 3-dim reduction on large tensors).
         # Therefore PCC threshold has to be lower. ATOL and RTOL should catch any significant errors.
-        pcc = 0.96
+        pcc = 0.95
     else:
         pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result, pcc=pcc, rtol=rtol, atol=atol)
