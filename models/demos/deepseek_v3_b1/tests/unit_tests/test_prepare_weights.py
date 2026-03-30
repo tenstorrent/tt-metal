@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights,
 from models.demos.deepseek_v3_b1.demo.weight_provider import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.prepare_weights import (
     _MTP_LAYER_IDX,
+    _TRANSFORM_VERSION,
     AttentionWeights,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
@@ -56,6 +57,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     save_routed_expert_weights,
     save_shared_expert_weights,
 )
+from models.demos.deepseek_v3_b1.tensor_cache import FingerprintContext, TensorCache
 
 
 def _deallocate_layer(layer: DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights) -> None:
@@ -138,6 +140,16 @@ def _skip_unless_4x2_mesh(bh_2d_mesh_device):
     """Skip test if mesh device does not have enough devices for a 4x2 submesh."""
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < 8:
         pytest.skip("Test requires 8 devices (4x2 mesh)")
+
+
+def _test_fp_ctx(mesh_shape: tuple[int, int] = (4, 2)) -> FingerprintContext:
+    return FingerprintContext(
+        schema_version=1,
+        hf_model_id="test-model",
+        hf_revision="test-rev",
+        transform_version=_TRANSFORM_VERSION,
+        mesh_shape=mesh_shape,
+    )
 
 
 # Expected placements for 4x2 mesh (mla_tp=2, moe_tp=8)
@@ -1104,3 +1116,165 @@ def test_save_load_mtp_weights_4x2(bh_2d_mesh_device, tmp_path):
     _assert_on_device(loaded.h_gamma)
     _assert_on_device(loaded.e_gamma)
     _assert_on_device(loaded.eh_projection)
+
+
+# ---------------------------------------------------------------------------
+# TensorCache integration tests (Group A standalone tensors)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_embedding_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
+    """Prepare embedding weights via TensorCache on 4x2 mesh: cold miss then warm hit."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache = TensorCache(tmp_path)
+    fp_ctx = _test_fp_ctx()
+
+    state = {}
+    _add_global_weights(state)
+
+    weights = prepare_embedding_weights(state, submesh, cache=cache, fp_ctx=fp_ctx)
+    assert isinstance(weights, DeepSeekV3EmbeddingLayerWeights)
+    expected_shape = (129280, 7168)
+    assert weights.embedding.shape == expected_shape, f"Expected {expected_shape}, got {weights.embedding.shape}"
+
+    ttnn.deallocate(weights.embedding, force=True)
+
+    weights_hit = prepare_embedding_weights(state, submesh, cache=cache, fp_ctx=fp_ctx)
+    assert weights_hit.embedding.shape == expected_shape
+
+    objects_dir = cache.local_root / "objects"
+    assert objects_dir.exists()
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert len(artifact_dirs) >= 1, f"Expected at least 1 cached artifact, found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_lm_head_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
+    """Prepare LM head + final norm via TensorCache on 4x2 mesh: cold miss then warm hit."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache = TensorCache(tmp_path)
+    fp_ctx = _test_fp_ctx()
+
+    state = {}
+    _add_global_weights(state)
+
+    weights = prepare_lm_head_weights(state, submesh, cache=cache, fp_ctx=fp_ctx)
+    assert isinstance(weights, DeepSeekV3LMHeadWeights)
+    expected_lm = (7168, 16160)
+    expected_norm = (1, 7168)
+    assert weights.lm_head.shape == expected_lm, f"Expected lm_head {expected_lm}, got {weights.lm_head.shape}"
+    assert (
+        weights.final_norm.shape == expected_norm
+    ), f"Expected final_norm {expected_norm}, got {weights.final_norm.shape}"
+
+    ttnn.deallocate(weights.lm_head, force=True)
+    ttnn.deallocate(weights.final_norm, force=True)
+
+    weights_hit = prepare_lm_head_weights(state, submesh, cache=cache, fp_ctx=fp_ctx)
+    assert weights_hit.lm_head.shape == expected_lm
+    assert weights_hit.final_norm.shape == expected_norm
+
+    objects_dir = cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert len(artifact_dirs) >= 2, f"Expected at least 2 cached artifacts (lm_head + norm), found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_moe_layer_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
+    """Prepare MoE layer via TensorCache on 4x2 mesh: verifies gate_bias caching (cold miss then warm hit)."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache = TensorCache(tmp_path)
+    fp_ctx = _test_fp_ctx()
+
+    layer_idx = 3
+    state = _layer_state_dict(layer_idx, is_moe=True)
+    bdw = BlitzDecodeWeights(submesh)
+
+    weights = prepare_moe_layer_weights(
+        bdw, state, layer_idx, num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS, cache=cache, fp_ctx=fp_ctx
+    )
+    assert isinstance(weights, DeepSeekV3MoELayerWeights)
+    expected_gate_bias = (16, 16)
+    assert (
+        weights.gate_bias.shape == expected_gate_bias
+    ), f"Expected gate_bias {expected_gate_bias}, got {weights.gate_bias.shape}"
+
+    _deallocate_layer(weights)
+
+    weights_hit = prepare_moe_layer_weights(
+        bdw, state, layer_idx, num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS, cache=cache, fp_ctx=fp_ctx
+    )
+    assert weights_hit.gate_bias.shape == expected_gate_bias
+
+    objects_dir = cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert len(artifact_dirs) >= 1, f"Expected at least 1 cached artifact (gate_bias), found {len(artifact_dirs)}"
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_prepare_mtp_weights_with_cache_4x2(bh_2d_mesh_device, tmp_path):
+    """Prepare MTP weights via TensorCache on 4x2 mesh: cold miss then warm hit for h/e gamma, eh_proj, gate_bias."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    cache = TensorCache(tmp_path)
+    fp_ctx = _test_fp_ctx()
+
+    state = _mtp_state_dict()
+    bdw = BlitzDecodeWeights(submesh)
+    H = LogicalModelDimensions.HIDDEN_SIZE
+
+    weights = prepare_mtp_weights(
+        bdw, state, submesh, num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS, cache=cache, fp_ctx=fp_ctx
+    )
+    assert isinstance(weights, DeepSeekV3MTPWeights)
+    assert weights.h_gamma.shape == (1, H)
+    assert weights.e_gamma.shape == (1, H)
+    assert weights.eh_projection.shape == (2 * H, H)
+    assert isinstance(weights.decoder, DeepSeekV3MoELayerWeights)
+    assert weights.decoder.gate_bias.shape == (16, 16)
+
+    expected_shapes = {
+        "h_gamma": weights.h_gamma.shape,
+        "e_gamma": weights.e_gamma.shape,
+        "eh_projection": weights.eh_projection.shape,
+        "gate_bias": weights.decoder.gate_bias.shape,
+    }
+
+    ttnn.deallocate(weights.h_gamma, force=True)
+    ttnn.deallocate(weights.e_gamma, force=True)
+    ttnn.deallocate(weights.eh_projection, force=True)
+    _deallocate_layer(weights.decoder)
+
+    weights_hit = prepare_mtp_weights(
+        bdw, state, submesh, num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS, cache=cache, fp_ctx=fp_ctx
+    )
+    assert weights_hit.h_gamma.shape == expected_shapes["h_gamma"]
+    assert weights_hit.e_gamma.shape == expected_shapes["e_gamma"]
+    assert weights_hit.eh_projection.shape == expected_shapes["eh_projection"]
+    assert weights_hit.decoder.gate_bias.shape == expected_shapes["gate_bias"]
+
+    objects_dir = cache.local_root / "objects"
+    artifact_dirs = list(objects_dir.rglob("data.tensorbin"))
+    assert (
+        len(artifact_dirs) >= 4
+    ), f"Expected at least 4 cached artifacts (h/e gamma, eh_proj, gate_bias), found {len(artifact_dirs)}"

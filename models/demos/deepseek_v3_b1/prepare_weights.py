@@ -27,6 +27,16 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
+from models.demos.deepseek_v3_b1.tensor_cache import (
+    FingerprintContext,
+    MeshMapperConfig,
+    SourceTensorSelection,
+    TensorCache,
+    TensorTarget,
+)
+
+# Bump when any standalone tensor preprocessing logic changes to invalidate caches.
+_TRANSFORM_VERSION = 1
 
 # Serialization: manifest version and dtype name mapping
 _MANIFEST_VERSION = 1
@@ -276,6 +286,37 @@ _MTP_LAYER_IDX = 61
 _MTP_NUM_DRAM_BANKS = 8
 _MTP_B_TILE = ttnn.Tile([32, 32])
 
+# ---------------------------------------------------------------------------
+# TensorTarget definitions for standalone cached tensors (Group A)
+# (gate_bias and embedding targets only; LM head / norm / MTP targets
+#  are defined after the _LM_HEAD_* constants further below.)
+# ---------------------------------------------------------------------------
+
+_GATE_BIAS_SENDER_CORE = ttnn.CoreCoord(MOE_SENDER_GRID_SIZE[0] - 1, MOE_SENDER_GRID_SIZE[1] - 1)
+_GATE_BIAS_SENDER_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_GATE_BIAS_SENDER_CORE, _GATE_BIAS_SENDER_CORE)])
+
+
+def _gate_bias_target(layer_idx: int) -> TensorTarget:
+    return TensorTarget(
+        name=f"gate_bias_layer{layer_idx}",
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(_GATE_BIAS_SENDER_CORE_GRID, (16, 16), ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+        tile_shape=(16, 16),
+    )
+
+
+_EMBEDDING_TARGET = TensorTarget(
+    name="embedding",
+    dtype=ttnn.bfloat16,
+    layout=ttnn.ROW_MAJOR_LAYOUT,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+)
+
 
 def deinterleave_q_b_proj(q_b_proj: torch.Tensor, num_heads: int | None = None) -> torch.Tensor:
     """Convert q_b_proj.weight from HF interleaved to [ALL_NOPE | ALL_ROPE] layout.
@@ -511,6 +552,8 @@ def prepare_attention_weights(
     *,
     is_moe: bool,
     move_to_device: bool = False,
+    cache: TensorCache | None = None,
+    fp_ctx: FingerprintContext | None = None,
 ) -> AttentionWeights:
     """Prepare attention fusion groups for one layer (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)."""
     logger.debug("Loading raw tensors from state dict for layer {}", layer_idx)
@@ -518,7 +561,6 @@ def prepare_attention_weights(
     q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = get_layer_raw_tensors(
         state_dict, layer_idx
     )
-    # Single-device (mla_tp=1) expects per-TP shapes; slice if state dict has full logical (2-TP) size
     q_b, o_proj, kv_b1, kv_b2 = _slice_attention_weights_for_mla_tp(q_b, o_proj, kv_b1, kv_b2, bdw.mla_tp)
     logger.debug("Loaded raw tensors in {:.3f}s", time.perf_counter() - t0)
     logger.debug("Converting attention fusion groups for layer {} (q_ab_kv_a, kv_b12, o_proj_gate_mm_norms)", layer_idx)
@@ -535,11 +577,27 @@ def prepare_attention_weights(
             o_proj, gate_mm, attn_norm, q_norm, kv_norm, ffn_norm, move_to_device=move_to_device
         )
         o_proj_ot, gate_mm_ot, attn_norm_ot, q_norm_ot, kv_norm_ot, ffn_norm_ot = o_norms
-        gate_bias_tt = create_gate_bias_tensor(
-            state_dict[_key(layer_idx, "mlp.gate.e_score_correction_bias")],
-            bdw._device,
-            move_to_device=move_to_device,
-        )
+
+        _bias_key = _key(layer_idx, "mlp.gate.e_score_correction_bias")
+        if cache is not None and fp_ctx is not None:
+            target = _gate_bias_target(layer_idx)
+            fp = fp_ctx.fingerprint(
+                source=SourceTensorSelection(names=(_bias_key,)),
+                target=target,
+            )
+            gate_bias_tt = cache.get_or_create(
+                fp,
+                bdw._device,
+                preprocess=lambda t: {target.name: t[_bias_key].reshape(16, 16).T.contiguous().to(torch.bfloat16)},
+                raw_tensors=lambda: {_bias_key: state_dict[_bias_key]},
+            )
+        else:
+            gate_bias_tt = create_gate_bias_tensor(
+                state_dict[_bias_key],
+                bdw._device,
+                move_to_device=move_to_device,
+            )
+
         logger.debug("Converted o_proj_gate_mm_norms (MoE) in {:.3f}s", time.perf_counter() - t0)
         return AttentionWeights(
             q_a_proj=q_a_proj,
@@ -680,11 +738,15 @@ def prepare_dense_layer_weights(
     layer_idx: int,
     *,
     move_to_device: bool = False,
+    cache: TensorCache | None = None,
+    fp_ctx: FingerprintContext | None = None,
 ) -> DeepSeekV3DenseLayerWeights:
     """Prepare fused weights for a single dense decoder layer."""
     logger.info("Preparing dense layer {}...", layer_idx)
     t0 = time.perf_counter()
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
+    attn = prepare_attention_weights(
+        bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache=cache, fp_ctx=fp_ctx
+    )
     shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
     routed = prepare_routed_expert_weights(bdw, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device)
     assert isinstance(routed, DenseRoutedExpertWeights)
@@ -717,11 +779,15 @@ def prepare_moe_layer_weights(
     *,
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
     move_to_device: bool = False,
+    cache: TensorCache | None = None,
+    fp_ctx: FingerprintContext | None = None,
 ) -> DeepSeekV3MoELayerWeights:
     """Prepare fused weights for a single MoE decoder layer."""
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
-    attn = prepare_attention_weights(bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device)
+    attn = prepare_attention_weights(
+        bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device, cache=cache, fp_ctx=fp_ctx
+    )
     shared = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=True, move_to_device=move_to_device)
     routed = prepare_routed_expert_weights(
         bdw, state_dict, layer_idx, is_moe=True, num_routed_experts=num_routed_experts, move_to_device=move_to_device
@@ -770,12 +836,27 @@ def prepare_embedding_weights(
     device,
     *,
     move_to_device: bool = False,
+    cache: TensorCache | None = None,
+    fp_ctx: FingerprintContext | None = None,
 ) -> DeepSeekV3EmbeddingLayerWeights:
     """Prepare embedding weights from state dict (model.embed_tokens.weight)."""
     logger.info("Preparing embedding weights...")
-    w = state_dict["model.embed_tokens.weight"]
-    assert w.shape == (129280, 7168), f"Expected embedding shape (129280, 7168), got {w.shape}"
-    embedding_tt = _to_tt_embedding(w, device, move_to_device=move_to_device)
+    if cache is not None and fp_ctx is not None:
+        _src_key = "model.embed_tokens.weight"
+        fp = fp_ctx.fingerprint(
+            source=SourceTensorSelection(names=(_src_key,)),
+            target=_EMBEDDING_TARGET,
+        )
+        embedding_tt = cache.get_or_create(
+            fp,
+            device,
+            preprocess=lambda t: {"embedding": t[_src_key].contiguous()},
+            raw_tensors=lambda: {_src_key: state_dict[_src_key]},
+        )
+    else:
+        w = state_dict["model.embed_tokens.weight"]
+        assert w.shape == (129280, 7168), f"Expected embedding shape (129280, 7168), got {w.shape}"
+        embedding_tt = _to_tt_embedding(w, device, move_to_device=move_to_device)
     return DeepSeekV3EmbeddingLayerWeights(embedding=embedding_tt)
 
 
@@ -832,6 +913,62 @@ _LM_HEAD_N_PER_CORE = 160
 _LM_HEAD_MCAST_CORE = ttnn.CoreCoord(10, 9)
 _LM_HEAD_MCAST_CORE_GRID = ttnn.CoreRangeSet([ttnn.CoreRange(_LM_HEAD_MCAST_CORE, _LM_HEAD_MCAST_CORE)])
 
+# ---------------------------------------------------------------------------
+# TensorTarget definitions continued (require _LM_HEAD_* constants above)
+# ---------------------------------------------------------------------------
+
+_LM_HEAD_TARGET = TensorTarget(
+    name="lm_head",
+    dtype=ttnn.bfloat8_b,
+    layout=ttnn.TILE_LAYOUT,
+    memory_config=ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_LM_HEAD_MATMUL_CORE_GRID, (_LM_HEAD_K, _LM_HEAD_N_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR),
+    ),
+    mesh_mapper_config=MeshMapperConfig("shard", dim=1),
+)
+
+_NORM_MEM_CONFIG = ttnn.MemoryConfig(
+    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    ttnn.BufferType.L1,
+    ttnn.ShardSpec(_LM_HEAD_MCAST_CORE_GRID, (1, _LM_HEAD_K), ttnn.ShardOrientation.ROW_MAJOR),
+)
+_FINAL_NORM_TARGET = TensorTarget(
+    name="final_norm",
+    dtype=ttnn.bfloat16,
+    layout=ttnn.TILE_LAYOUT,
+    memory_config=_NORM_MEM_CONFIG,
+    tile_shape=(1, 32),
+)
+
+
+def _mtp_norm_target(name: str) -> TensorTarget:
+    return TensorTarget(
+        name=name,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=_NORM_MEM_CONFIG,
+        tile_shape=(1, 32),
+    )
+
+
+def _mtp_eh_proj_target(K: int, N: int) -> TensorTarget:
+    n_per_bank = N // _MTP_NUM_DRAM_BANKS
+    eh_shard_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_MTP_NUM_DRAM_BANKS - 1, 0))}
+    )
+    return TensorTarget(
+        name="mtp_eh_projection",
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(eh_shard_grid, (K, n_per_bank), ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    )
+
 
 def _to_tt_lm_head_matrix(
     lm_head_torch: torch.Tensor, device, *, mesh_mapper, move_to_device: bool = False
@@ -882,6 +1019,8 @@ def prepare_lm_head_weights(
     device,
     *,
     move_to_device: bool = False,
+    cache: TensorCache | None = None,
+    fp_ctx: FingerprintContext | None = None,
 ) -> DeepSeekV3LMHeadWeights:
     """Prepare LM head and final norm weights from state dict.
 
@@ -890,23 +1029,45 @@ def prepare_lm_head_weights(
     sampling op: WIDTH_SHARDED in L1 across 101 matmul cores with shard shape (7168, N_per_core).
     """
     logger.info("Preparing LM head weights...")
-    # lm_head.weight: HF (vocab_size, hidden_size) = (129280, 7168) -> (7168, 129280) for matmul
-    lm_w = state_dict["lm_head.weight"]
-    assert lm_w.shape == (
-        _LM_HEAD_VOCAB_SIZE,
-        _LM_HEAD_K,
-    ), f"Expected lm_head shape ({_LM_HEAD_VOCAB_SIZE}, {_LM_HEAD_K}), got {lm_w.shape}"
+    if cache is not None and fp_ctx is not None:
+        _lm_key = "lm_head.weight"
+        fp_lm = fp_ctx.fingerprint(
+            source=SourceTensorSelection(names=(_lm_key,)),
+            target=_LM_HEAD_TARGET,
+        )
+        lm_head_tt = cache.get_or_create(
+            fp_lm,
+            device,
+            preprocess=lambda t: {"lm_head": t[_lm_key].T.contiguous()},
+            raw_tensors=lambda: {_lm_key: state_dict[_lm_key]},
+        )
 
-    lm_head_tt = _to_tt_lm_head_matrix(
-        lm_w.T, device, mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1), move_to_device=move_to_device
-    )
+        _norm_key = "model.norm.weight"
+        fp_norm = fp_ctx.fingerprint(
+            source=SourceTensorSelection(names=(_norm_key,)),
+            target=_FINAL_NORM_TARGET,
+        )
+        final_norm_tt = cache.get_or_create(
+            fp_norm,
+            device,
+            preprocess=lambda t: {"final_norm": t[_norm_key].unsqueeze(0).contiguous()},
+            raw_tensors=lambda: {_norm_key: state_dict[_norm_key]},
+        )
+    else:
+        lm_w = state_dict["lm_head.weight"]
+        assert lm_w.shape == (
+            _LM_HEAD_VOCAB_SIZE,
+            _LM_HEAD_K,
+        ), f"Expected lm_head shape ({_LM_HEAD_VOCAB_SIZE}, {_LM_HEAD_K}), got {lm_w.shape}"
+        lm_head_tt = _to_tt_lm_head_matrix(
+            lm_w.T, device, mesh_mapper=ttnn.ShardTensorToMesh(device, dim=1), move_to_device=move_to_device
+        )
 
-    # model.norm.weight: (7168,) -> (1, 7168), HEIGHT_SHARDED on the mcast core
-    logger.info("Preparing LM head norm...")
-    norm_w = state_dict["model.norm.weight"]
-    assert norm_w.shape == (7168,), f"Expected final norm shape (7168,), got {norm_w.shape}"
+        logger.info("Preparing LM head norm...")
+        norm_w = state_dict["model.norm.weight"]
+        assert norm_w.shape == (7168,), f"Expected final norm shape (7168,), got {norm_w.shape}"
+        final_norm_tt = _to_tt_lm_head_final_norm(norm_w.unsqueeze(0), device, move_to_device=move_to_device)
 
-    final_norm_tt = _to_tt_lm_head_final_norm(norm_w.unsqueeze(0), device, move_to_device=move_to_device)
     return DeepSeekV3LMHeadWeights(lm_head=lm_head_tt, final_norm=final_norm_tt)
 
 
@@ -990,12 +1151,27 @@ def _to_tt_mtp_eh_proj(eh_proj_torch: torch.Tensor, device, *, move_to_device: b
     )
 
 
+def _mtp_eh_proj_preprocess(raw: dict[str, torch.Tensor], src_key: str, target_name: str) -> dict[str, torch.Tensor]:
+    """Preprocess eh_proj for cache: transpose, pad to DRAM bank alignment, tile-shuffle."""
+    eh_proj_t = raw[src_key].T.contiguous()
+    K, N = eh_proj_t.shape
+    assert N % _MTP_NUM_DRAM_BANKS == 0, f"eh_proj N={N} must be divisible by {_MTP_NUM_DRAM_BANKS} DRAM banks"
+    n_per_bank = N // _MTP_NUM_DRAM_BANKS
+    padded_N = _MTP_NUM_DRAM_BANKS * n_per_bank
+    eh_padded = torch.zeros((K, padded_N), dtype=eh_proj_t.dtype)
+    eh_padded[:, :N] = eh_proj_t
+    eh_shuffled = BlitzDecodeWeights._shuffle_dram_tiles(eh_padded, 32, _MTP_NUM_DRAM_BANKS)
+    return {target_name: eh_shuffled.contiguous()}
+
+
 def prepare_mtp_weights(
     state_dict: dict[str, torch.Tensor],
     device,
     *,
     mtp_layer_idx: int = _MTP_LAYER_IDX,
     move_to_device: bool = False,
+    cache: TensorCache | None = None,
+    fp_ctx: FingerprintContext | None = None,
 ) -> DeepSeekV3MTPWeights:
     """Prepare lightweight MTP projection/norm weights from state dict.
 
@@ -1006,14 +1182,45 @@ def prepare_mtp_weights(
     logger.info("Preparing MTP weights (layer {})...", mtp_layer_idx)
     t0 = time.perf_counter()
 
-    h_gamma_w = state_dict[_key(mtp_layer_idx, "hnorm.weight")].unsqueeze(0)
-    h_gamma_tt = _to_tt_lm_head_final_norm(h_gamma_w, device, move_to_device=move_to_device)
+    if cache is not None and fp_ctx is not None:
+        _h_key = _key(mtp_layer_idx, "hnorm.weight")
+        h_target = _mtp_norm_target("mtp_h_gamma")
+        fp_h = fp_ctx.fingerprint(source=SourceTensorSelection(names=(_h_key,)), target=h_target)
+        h_gamma_tt = cache.get_or_create(
+            fp_h,
+            device,
+            preprocess=lambda t: {h_target.name: t[_h_key].unsqueeze(0).contiguous()},
+            raw_tensors=lambda: {_h_key: state_dict[_h_key]},
+        )
 
-    e_gamma_w = state_dict[_key(mtp_layer_idx, "enorm.weight")].unsqueeze(0)
-    e_gamma_tt = _to_tt_lm_head_final_norm(e_gamma_w, device, move_to_device=move_to_device)
+        _e_key = _key(mtp_layer_idx, "enorm.weight")
+        e_target = _mtp_norm_target("mtp_e_gamma")
+        fp_e = fp_ctx.fingerprint(source=SourceTensorSelection(names=(_e_key,)), target=e_target)
+        e_gamma_tt = cache.get_or_create(
+            fp_e,
+            device,
+            preprocess=lambda t: {e_target.name: t[_e_key].unsqueeze(0).contiguous()},
+            raw_tensors=lambda: {_e_key: state_dict[_e_key]},
+        )
 
-    eh_proj_w = state_dict[_key(mtp_layer_idx, "eh_proj.weight")].T.contiguous()
-    eh_proj_tt = _to_tt_mtp_eh_proj(eh_proj_w, device, move_to_device=move_to_device)
+        _eh_key = _key(mtp_layer_idx, "eh_proj.weight")
+        eh_target = _mtp_eh_proj_target(K=2 * _LM_HEAD_K, N=_LM_HEAD_K)
+        fp_eh = fp_ctx.fingerprint(source=SourceTensorSelection(names=(_eh_key,)), target=eh_target)
+        eh_proj_tt = cache.get_or_create(
+            fp_eh,
+            device,
+            preprocess=lambda t: _mtp_eh_proj_preprocess(t, _eh_key, eh_target.name),
+            raw_tensors=lambda: {_eh_key: state_dict[_eh_key]},
+        )
+    else:
+        h_gamma_w = state_dict[_key(mtp_layer_idx, "hnorm.weight")].unsqueeze(0)
+        h_gamma_tt = _to_tt_lm_head_final_norm(h_gamma_w, device, move_to_device=move_to_device)
+
+        e_gamma_w = state_dict[_key(mtp_layer_idx, "enorm.weight")].unsqueeze(0)
+        e_gamma_tt = _to_tt_lm_head_final_norm(e_gamma_w, device, move_to_device=move_to_device)
+
+        eh_proj_w = state_dict[_key(mtp_layer_idx, "eh_proj.weight")].T.contiguous()
+        eh_proj_tt = _to_tt_mtp_eh_proj(eh_proj_w, device, move_to_device=move_to_device)
 
     logger.info("MTP weights prepared in {:.3f}s", time.perf_counter() - t0)
     return DeepSeekV3MTPWeights(
