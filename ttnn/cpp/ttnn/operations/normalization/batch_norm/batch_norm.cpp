@@ -47,6 +47,49 @@ Tensor batch_norm(
         input.logical_shape().rank(),
         input.logical_shape().rank());
 
+    // output must have the same dtype as input
+    if (output.has_value()) {
+        TT_FATAL(
+            output->dtype() == input.dtype(),
+            "batch_norm: output dtype ({}) must match input dtype ({})",
+            output->dtype(),
+            input.dtype());
+    }
+
+    // All user-provided parameters (running_mean, running_var, weight, bias) must share the same dtype
+    auto get_param_dtype = [&]() -> std::optional<DataType> {
+        if (running_mean.has_value()) {
+            return running_mean->dtype();
+        }
+        if (running_var.has_value()) {
+            return running_var->dtype();
+        }
+        if (weight.has_value()) {
+            return weight->dtype();
+        }
+        if (bias.has_value()) {
+            return bias->dtype();
+        }
+        return std::nullopt;
+    };
+    auto param_dtype = get_param_dtype();
+    if (param_dtype.has_value()) {
+        auto check_param = [&](const std::optional<Tensor>& t, std::string_view name) {
+            if (t.has_value()) {
+                TT_FATAL(
+                    t->dtype() == param_dtype.value(),
+                    "batch_norm: {} dtype ({}) must match other parameter tensors dtype ({})",
+                    name,
+                    t->dtype(),
+                    param_dtype.value());
+            }
+        };
+        check_param(running_mean, "running_mean");
+        check_param(running_var, "running_var");
+        check_param(weight, "weight");
+        check_param(bias, "bias");
+    }
+
     // For 0V tensors
     if (input.logical_volume() == 0) [[unlikely]] {
         return ttnn::clone(
@@ -58,6 +101,11 @@ Tensor batch_norm(
 
     Tensor batch_mean, batch_var;
     if (training) {
+        // Note: These generic TTNN ops use the compute_kernel_config as-is. In mixed precision,
+        // the highest-precision accumulation is only enforced inside the batch_norm and
+        // running_statistics prims (via any_float32). If required in the future, we may need to
+        // propagate the precision requirement here so that the output `batch_mean`/`batch_var` are in
+        // higher precision rather than inheriting the `dtype` of input.
         batch_mean = operations::normalization::mean_NHW(input, memory_config, compute_kernel_config);
         auto mean_sq = operations::normalization::mean_NHW(
             ttnn::square(input, memory_config), memory_config, compute_kernel_config);

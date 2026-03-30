@@ -42,7 +42,7 @@ def open_mesh_device():
     device_params = {
         "fabric_config": _fabric_config_for_num_procs(num_procs),
         "fabric_router_config": create_fabric_router_config(15232),
-        "trace_region_size": 573440,
+        "worker_l1_size": 1431568,
     }
     logger.info("Opening mesh device...")
     with bh_2d_mesh_device_context(device_params) as mesh_device:
