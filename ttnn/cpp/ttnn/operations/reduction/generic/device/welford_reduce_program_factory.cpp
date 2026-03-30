@@ -195,8 +195,9 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
         CBIndex partial_cb_index = CBIndex::c_21;
         tt::DataFormat partial_cb_data_format = tt::DataFormat::Float32;
         uint32_t partial_single_tile_size = tt::tile_size(partial_cb_data_format);
+        // Reserve space for 4 tiles to enable double buffering (since compute kernel packs 2 tiles at a time).
         tt_metal::CircularBufferConfig partial_cb_config =
-            tt_metal::CircularBufferConfig(2 * partial_single_tile_size, {{partial_cb_index, partial_cb_data_format}})
+            tt_metal::CircularBufferConfig(4 * partial_single_tile_size, {{partial_cb_index, partial_cb_data_format}})
                 .set_page_size(partial_cb_index, partial_single_tile_size);
         tt_metal::CreateCircularBuffer(program, all_cores, partial_cb_config);
     }
