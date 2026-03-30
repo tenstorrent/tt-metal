@@ -49,14 +49,38 @@ def golden_maxpool2d(
 ttnn.attach_golden_function(ttnn.max_pool2d, golden_maxpool2d)
 
 
-def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
-    import torch
+def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
+    """Global average pooling via avg_pool2d reduction path.
 
-    output_size = (1, 1)
-    return torch.nn.functional.global_avg_pool2d(input_tensor, output_size)
+    Args:
+        input_tensor: Input tensor in (N, H, W, C) format (NHWC).
+        memory_config: Optional memory configuration.
+        dtype: Optional output data type (unused, kept for API compatibility).
+
+    Returns:
+        Output tensor in (N, 1, 1, C) format.
+    """
+    shape = input_tensor.shape
+    N, H, W, C = shape[0], shape[1], shape[2], shape[3]
+    # avg_pool2d expects ROW_MAJOR input
+    if input_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    flat = ttnn.reshape(input_tensor, (1, 1, N * H * W, C))
+    result = ttnn.avg_pool2d(
+        input_tensor=flat,
+        batch_size=N,
+        input_h=H,
+        input_w=W,
+        channels=C,
+        kernel_size=(H, W),
+        stride=(1, 1),
+        padding=(0, 0),
+        memory_config=memory_config,
+    )
+    return ttnn.reshape(result, (N, 1, 1, C))
 
 
-ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)
+ttnn.global_avg_pool2d = global_avg_pool2d
 
 
 def golden_rotate(

@@ -1008,9 +1008,8 @@ static std::vector<Tensor> pool2d(
         auto in_shape = input_tensor_4d.padded_shape();
         uint32_t hw = input_h * input_w;
 
-        // Input is (1, 1, N*H*W, C). First reshape to (N, H, W, C) to establish
-        // proper batch structure, then flatten spatial dims to (N, 1, H*W, C)
-        // following the same approach as global_avg_pool2d.
+        // Input is (1, 1, N*H*W, C). Reshape to (N, H, W, C) to establish
+        // proper batch structure, then flatten spatial dims to (N, 1, H*W, C).
         ttnn::Shape nhwc_logical({batch_size, input_h, input_w, channels});
         ttnn::Shape nhwc_padded({batch_size, input_h, input_w, in_shape[3]});
         Tensor nhwc_input = ttnn::reshape(input_tensor_4d, nhwc_logical, nhwc_padded);
