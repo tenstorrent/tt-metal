@@ -28,7 +28,11 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     RepeatConfig,
     SelectiveReduceCombineConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, is_ring_fabric
+from models.demos.deepseek_v3.utils.config_helpers import (
+    OPTIMIZED_MOE_BLOCK_USERS_PER_ROW,
+    USERS_PER_ROW,
+    is_ring_fabric,
+)
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -126,7 +130,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         # optimized ops (exclusive to quad with ring fabric) require preallocated tensors for all_to_all_dispatch_metadata
         if is_ring_fabric(fabric_config) and num_dispatch_device_rows == 16:
             # NOTE: these do not have to be double buffered, due to the synchronization between all_to_all_dispatch_metadata and selective_reduce_combine inside the MoE block
-            batch = USERS_PER_ROW * mesh_device.shape[0]
+            batch = OPTIMIZED_MOE_BLOCK_USERS_PER_ROW * mesh_device.shape[0]
             preallocated_all_to_all_dispatch_metadata_tensors = (
                 AllToAllDispatchMetadataConfig.create_preallocated_dispatch_output_tensors(
                     mesh_device,
@@ -295,7 +299,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         # configs for optimized ops (exclusive to quad with ring fabric)
         if is_ring_fabric(fabric_config) and mesh_device.shape[0] == 16:
-            batch = USERS_PER_ROW * mesh_device.shape[0]
+            batch = OPTIMIZED_MOE_BLOCK_USERS_PER_ROW * mesh_device.shape[0]
             seq_len = 1
 
             config["quad_ring_all_to_all_dispatch_metadata"] = AllToAllDispatchMetadataConfig(
@@ -306,10 +310,10 @@ class MoE(SharedStateAddOn, AbstractModule):
             config[
                 "quad_ring_all_to_all_dispatch_metadata_sharded_memory_config"
             ] = AllToAllDispatchMetadataConfig.get_metadata_sharded_memory_config(
-                USERS_PER_ROW, hf_config.num_experts_per_tok
+                OPTIMIZED_MOE_BLOCK_USERS_PER_ROW, hf_config.num_experts_per_tok
             )
             config["quad_ring_moreh_full"] = MorehFullConfig(
-                shape=[hf_config.num_experts_per_tok, USERS_PER_ROW, hf_config.hidden_size],
+                shape=[hf_config.num_experts_per_tok, OPTIMIZED_MOE_BLOCK_USERS_PER_ROW, hf_config.hidden_size],
                 fill_value=0,
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
@@ -338,8 +342,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
 
             # TODO: this is a temporary measure until we either a) uplift the optimized ops to support prefill shapes, or b) uplift prefill MMs to read from decode formatted weights
-            DECODE_USERS_PER_ROW_PER_DEVICE = 32
-            config["moe_chunk_size"] = DECODE_USERS_PER_ROW_PER_DEVICE
+            config["moe_chunk_size"] = OPTIMIZED_MOE_BLOCK_USERS_PER_ROW
 
         return config
 

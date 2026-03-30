@@ -38,6 +38,7 @@ def is_quad_mesh() -> bool:
     return os.getenv("MESH_DEVICE") == "QUAD"
 
 
+OPTIMIZED_MOE_BLOCK_USERS_PER_ROW = 32
 USERS_PER_ROW = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
