@@ -48,13 +48,13 @@ _MESH_BLOCKINGS = {
     (2, 4, 384, 192, (1, 3, 3)): (128, 96, 1, 16, 16),
     (2, 4, 192, 96, (1, 3, 3)): (192, 96, 1, 16, 8),
     (2, 4, 384, 768, (3, 1, 1)): (128, 384, 1, 8, 2),
-    # --- BH Galaxy 6U 4x32 (h_factor=4, w_factor=32) — v2: 12x10 grid, verified head-to-head ---
-    # Blockings chosen by lowest weighted total across all decoder levels sharing the same key.
+    # --- BH Galaxy 6U 4x32 (h_factor=4, w_factor=32) — v3: sliding window + fused tilize+matmul ---
+    # Blockings chosen by brute-force sweep across C_in, C_out, H, W combinations.
     (4, 32, 32, 384, (3, 3, 3)): (32, 128, 1, 16, 2),  # conv_in: 1.61x vs original
     (4, 32, 384, 384, (3, 3, 3)): (96, 128, 1, 16, 2),  # latent+up1: best for up1 (1.41x), ~same latent
-    (4, 32, 192, 384, (3, 3, 3)): (96, 128, 1, 16, 2),  # up1 res0: 1.33x vs original
-    (4, 32, 192, 192, (3, 3, 3)): (96, 96, 1, 8, 4),  # up2: original is best
-    (4, 32, 96, 96, (3, 3, 3)): (96, 96, 1, 8, 8),  # up3: original is best
+    (4, 32, 192, 384, (3, 3, 3)): (96, 128, 1, 16, 2),  # up1 res0: 23% faster (2647 us vs 3453 us baseline)
+    (4, 32, 192, 192, (3, 3, 3)): (96, 96, 1, 32, 2),  # up2: 37% faster (4735 us vs 7629 us baseline)
+    (4, 32, 96, 96, (3, 3, 3)): (96, 96, 1, 16, 4),  # up3: 36% faster (5232 us vs 8135 us baseline)
     (4, 32, 96, 3, (3, 3, 3)): (96, 32, 1, 16, 8),  # conv_out: original is best
     (4, 32, 384, 192, (1, 3, 3)): (192, 96, 1, 32, 4),  # up0+up1 spatial: original is best weighted
     (4, 32, 192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),  # up2 spatial: original is best
