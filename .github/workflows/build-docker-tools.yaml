@@ -47,7 +47,7 @@ jobs:
 
   build:
     name: "🔧 Build missing tools"
-    if: fromJson(inputs.tool-data).any_missing == true
+    if: fromJson(inputs.tool-data).any_missing == 'true'
     timeout-minutes: 60
     runs-on: tt-ubuntu-2204-large-stable
     steps:

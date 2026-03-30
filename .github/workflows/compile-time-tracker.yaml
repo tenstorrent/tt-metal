@@ -17,7 +17,7 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     timeout-minutes: 120
     container:
-      image: harbor.ci.tenstorrent.net/ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-ci-build-amd64:latest
+      image: ${{ vars.HARBOR_PREFIX }}ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-24.04-ci-build-amd64:latest
       env:
         TRACY_NO_INVARIANT_CHECK: 1
         TRACY_NO_ISA_EXTENSIONS: 1

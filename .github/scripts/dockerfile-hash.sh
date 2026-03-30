@@ -11,7 +11,7 @@
 #   - Any extra files passed as arguments
 #   - For extra files that are Dockerfiles (basename starts with "Dockerfile"),
 #     also includes their COPY sources (transitive dependencies)
-#   - The BAKE_OUTPUT environment variable (if set)
+#   (BAKE_OUTPUT was previously included but removed — it's a push-time setting, not build content)
 #
 # Example:
 #   dockerfile-hash.sh dockerfile/Dockerfile dockerfile/Dockerfile.tools
@@ -105,5 +105,4 @@ done
 
 # Sort, dedupe, and hash all files
 # Use while-read instead of xargs to avoid ARG_MAX/sysconf issues in some environments
-# Include BAKE_OUTPUT env var in hash to ensure changes to bake settings invalidate cache
-printf '%s\n' "${FILES[@]}" | sort -u | while IFS= read -r f; do cat "$f"; done | { cat; echo "${BAKE_OUTPUT:-}"; } | sha1sum | cut -d' ' -f1
+printf '%s\n' "${FILES[@]}" | sort -u | while IFS= read -r f; do cat "$f"; done | sha1sum | cut -d' ' -f1

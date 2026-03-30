@@ -199,8 +199,8 @@ jobs:
     name: "🐍 Python venvs"
     needs: [metadata]
     if: |
-      fromJson(needs.metadata.outputs.platform_data).ci_build_venv_exists != true ||
-      fromJson(needs.metadata.outputs.platform_data).ci_test_venv_exists != true
+      fromJson(needs.metadata.outputs.platform_data).ci_build_venv_exists != 'true' ||
+      fromJson(needs.metadata.outputs.platform_data).ci_test_venv_exists != 'true'
     uses: ./.github/workflows/build-docker-python-venvs.yaml
     with:
       platform-data: ${{ needs.metadata.outputs.platform_data }}
@@ -213,9 +213,9 @@ jobs:
     if: |
       always() && !failure() && !cancelled() &&
       fromJson(needs.metadata.outputs.platform_data).distro == 'ubuntu' &&
-      (fromJson(needs.metadata.outputs.platform_data).dev_exists != true ||
-       fromJson(needs.metadata.outputs.platform_data).basic_dev_exists != true ||
-       fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists != true)
+      (fromJson(needs.metadata.outputs.platform_data).dev_exists != 'true' ||
+       fromJson(needs.metadata.outputs.platform_data).basic_dev_exists != 'true' ||
+       fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists != 'true')
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -340,7 +340,7 @@ jobs:
     needs: [metadata]
     if: |
       inputs.build-manylinux == true &&
-      fromJson(needs.metadata.outputs.platform_data).manylinux_exists != true
+      fromJson(needs.metadata.outputs.platform_data).manylinux_exists != 'true'
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -449,35 +449,35 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: "Push latest CI Build tag"
-        if: fromJson(needs.metadata.outputs.platform_data).ci_build_exists == true || needs.ubuntu.result == 'success'
+        if: fromJson(needs.metadata.outputs.platform_data).ci_build_exists == 'true' || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).ci_build_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest CI Test tag"
-        if: fromJson(needs.metadata.outputs.platform_data).ci_test_exists == true || needs.ubuntu.result == 'success'
+        if: fromJson(needs.metadata.outputs.platform_data).ci_test_exists == 'true' || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).ci_test_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Dev tag"
-        if: fromJson(needs.metadata.outputs.platform_data).dev_exists == true || needs.ubuntu.result == 'success'
+        if: fromJson(needs.metadata.outputs.platform_data).dev_exists == 'true' || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).dev_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Basic Dev tag"
-        if: fromJson(needs.metadata.outputs.platform_data).basic_dev_exists == true || needs.ubuntu.result == 'success'
+        if: fromJson(needs.metadata.outputs.platform_data).basic_dev_exists == 'true' || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).basic_dev_tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest Basic TTNN Runtime tag"
-        if: fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists == true || needs.ubuntu.result == 'success'
+        if: fromJson(needs.metadata.outputs.platform_data).basic_ttnn_exists == 'true' || needs.ubuntu.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).basic_ttnn_tag }}
@@ -486,7 +486,7 @@ jobs:
       - name: "Push latest Manylinux tag"
         if: |
           inputs.build-manylinux == true &&
-          (fromJson(needs.metadata.outputs.platform_data).manylinux_exists == true || needs.manylinux.result == 'success')
+          (fromJson(needs.metadata.outputs.platform_data).manylinux_exists == 'true' || needs.manylinux.result == 'success')
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ fromJson(needs.metadata.outputs.platform_data).manylinux_tag }}

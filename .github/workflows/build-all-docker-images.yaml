@@ -78,13 +78,18 @@ permissions:
   packages: write
 
 jobs:
-  # Preflight: Harbor check + compute tool and platform data on a single runner
+  # Check Harbor availability via reusable workflow
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
+  # Preflight: compute tool and platform data on a single runner
   # Outputs raw JSON blobs that downstream workflows parse with fromJson()
   preflight:
-    name: "Check Harbor + Calculate Tags"
+    name: "Calculate Tags"
+    needs: [check-harbor]
     runs-on: tt-ubuntu-2204-small-stable
     outputs:
-      harbor-prefix: ${{ steps.harbor.outputs.harbor-prefix }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       tool-data: ${{ steps.tool-data.outputs.data }}
       platform-2204-data: ${{ steps.platform-2204.outputs.data }}
       platform-2404-data: ${{ steps.platform-2404.outputs.data }}
@@ -96,27 +101,6 @@ jobs:
         with:
           fetch-depth: 1
           submodules: recursive
-
-      - name: Check Harbor availability
-        id: harbor
-        run: |
-          HEALTH_RESPONSE=$(curl --max-time 10 -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" 2>/dev/null) || true
-          if [ -n "$HEALTH_RESPONSE" ]; then
-            echo "$HEALTH_RESPONSE" | jq -r '.components[] | select(.status != "healthy") | "\(.name):\(.status)"' | while IFS=: read -r name status; do
-              echo "::warning title=Harbor Component Unhealthy::Component $name has status: $status"
-            done
-            OVERALL_STATUS=$(echo "$HEALTH_RESPONSE" | jq -r '.status')
-            if [ "$OVERALL_STATUS" = "healthy" ]; then
-              echo "harbor-prefix=${{ vars.HARBOR_PREFIX }}" >> $GITHUB_OUTPUT
-              echo "✓ Harbor is available"
-            else
-              echo "harbor-prefix=" >> $GITHUB_OUTPUT
-              echo "⚠ Harbor unhealthy, falling back to direct GHCR"
-            fi
-          else
-            echo "harbor-prefix=" >> $GITHUB_OUTPUT
-            echo "⚠ Harbor unavailable, falling back to direct GHCR"
-          fi
 
       - name: Compute tool data
         id: tool-data
@@ -164,15 +148,19 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Debug - Print computed data
+        env:
+          TOOL_DATA: ${{ steps.tool-data.outputs.data }}
+          PLATFORM_2204_DATA: ${{ steps.platform-2204.outputs.data }}
+          PLATFORM_2404_DATA: ${{ steps.platform-2404.outputs.data }}
         run: |
           echo "::group::Tool Data"
-          echo '${{ steps.tool-data.outputs.data }}' | jq .
+          echo "$TOOL_DATA" | jq .
           echo "::endgroup::"
           echo "::group::Ubuntu 22.04 Platform Data"
-          echo '${{ steps.platform-2204.outputs.data }}' | jq .
+          echo "$PLATFORM_2204_DATA" | jq .
           echo "::endgroup::"
           echo "::group::Ubuntu 24.04 Platform Data"
-          echo '${{ steps.platform-2404.outputs.data }}' | jq .
+          echo "$PLATFORM_2404_DATA" | jq .
           echo "::endgroup::"
 
       - name: Check LLK CI image

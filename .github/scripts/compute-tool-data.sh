@@ -80,19 +80,19 @@ for tool in $TOOLS; do
 done
 
 # Output JSON with tool_tags as nested object, not string
-# Use --argjson for boolean fields to output proper JSON booleans (true/false) not strings
+# Use --arg for existence/boolean fields since they may hold "unknown" (not valid JSON for --argjson)
 jq -n \
     --argjson tool_tags "$TOOL_TAGS" \
-    --argjson any_missing "$ANY_MISSING" \
-    --argjson ccache_exists "${EXISTS[ccache]}" \
-    --argjson mold_exists "${EXISTS[mold]}" \
-    --argjson doxygen_exists "${EXISTS[doxygen]}" \
-    --argjson cba_exists "${EXISTS[cba]}" \
-    --argjson gdb_exists "${EXISTS[gdb]}" \
-    --argjson cmake_exists "${EXISTS[cmake]}" \
-    --argjson yq_exists "${EXISTS[yq]}" \
-    --argjson sfpi_exists "${EXISTS[sfpi]}" \
-    --argjson openmpi_exists "${EXISTS[openmpi]}" \
+    --arg any_missing "$ANY_MISSING" \
+    --arg ccache_exists "${EXISTS[ccache]}" \
+    --arg mold_exists "${EXISTS[mold]}" \
+    --arg doxygen_exists "${EXISTS[doxygen]}" \
+    --arg cba_exists "${EXISTS[cba]}" \
+    --arg gdb_exists "${EXISTS[gdb]}" \
+    --arg cmake_exists "${EXISTS[cmake]}" \
+    --arg yq_exists "${EXISTS[yq]}" \
+    --arg sfpi_exists "${EXISTS[sfpi]}" \
+    --arg openmpi_exists "${EXISTS[openmpi]}" \
     '{
         tool_tags: $tool_tags,
         any_missing: $any_missing,

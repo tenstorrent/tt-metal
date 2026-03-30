@@ -93,11 +93,10 @@ runs:
         last_bake_exit=0
         until [ "$attempt" -gt "$retries" ]; do
           echo "docker buildx bake targets=${CLEAN_TARGETS[*]} attempt ${attempt}/${retries}"
-          if docker buildx bake -f "${INPUT_BAKE_FILE}" "${BAKE_SETS[@]}" "${CLEAN_TARGETS[@]}"; then
+          docker buildx bake -f "${INPUT_BAKE_FILE}" "${BAKE_SETS[@]}" "${CLEAN_TARGETS[@]}" && last_bake_exit=0 || last_bake_exit=$?
+          if [ "$last_bake_exit" -eq 0 ]; then
             bake_success=true
             break
-          else
-            last_bake_exit=$?
           fi
           if [ "$attempt" -lt "$retries" ]; then
             echo "Bake failed, retrying in ${delay}s..."
