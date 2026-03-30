@@ -44,7 +44,9 @@ inline void generate_standard_normal_tiles(uint32_t dst_cb_id) {
     // reg3,reg2 <- U2 * 2pi
     mul_binary_tile_init();
     mul_binary_tile(1, 2, 3);
-    mul_binary_tile(1, 2, 2);
+    if constexpr (EmitZ2) {
+        mul_binary_tile(1, 2, 2);
+    }
 
     // reg3 <- cos(U2 * 2pi)
     cos_tile_init();
