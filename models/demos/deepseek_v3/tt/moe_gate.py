@@ -150,6 +150,18 @@ class MoEGate(AbstractModule):
                 "gate_proj": LinearConfig(
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
+                    program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(7, 10),
+                        in0_block_w=32,
+                        out_subblock_h=1,
+                        out_subblock_w=2,
+                        out_block_h=1,
+                        out_block_w=2,
+                        per_core_M=1,
+                        per_core_N=2,
+                        transpose_mcast=False,
+                        fused_activation=None,
+                    ),
                     compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
                 ),
                 "add_score_correction_bias": BinaryOpConfig(
@@ -229,8 +241,6 @@ class MoEGate(AbstractModule):
             logits = ttnn.linear(x, **cfg["gate_proj"])
 
         mesh_device = cfg["mesh_device"]
-        num_experts = 256
-        assert num_experts == 256, "num_experts should be 256"
         total_batch_size = logits.shape[2]
 
         # create the shard spec and memory config for the input, logits and output

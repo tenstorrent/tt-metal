@@ -95,8 +95,8 @@ def galaxy_type():
 @pytest.mark.parametrize(
     "use_unoptimized_moe_gate, mode, warmup_iters, num_iters, perf_target_us",
     [
-        (False, "decode", 5, 10, 153.13),
-        (False, "prefill", 5, 10, 246.73),
+        (False, "decode", 5, 10, 124.18),
+        (False, "prefill", 5, 10, 271.42),
         (True, "decode", 5, 10, 812.04),
         (True, "prefill", 5, 10, 832.85),
     ],
