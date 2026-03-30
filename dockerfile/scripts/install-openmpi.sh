@@ -28,6 +28,23 @@ fi
 
 cd "${WORKDIR}"
 
+# Backport upstream fix for C23 build failure with GCC 14.
+# OpenMPI's configure auto-detects GCC 14 on manylinux_2_34 and sets CC="gcc -std=gnu23".
+# In C23, `false` is `_Bool`, and `req->req_ompi.req_complete = false` in part_persist.h
+# assigns `_Bool` to `volatile void *` — a constraint violation (hard error, not a warning).
+# -Wno-incompatible-pointer-types cannot suppress constraint violations.
+# Upstream fix (commit aa024ac73d62 on main, not backported to v5.0.10): remove the
+# __opal_attribute_always_inline__ from mca_part_persist_start(). Without forced inlining,
+# the compiler does not require full type-checking of the function body at every inclusion
+# site when the function is never called, allowing the build to succeed.
+# We target only the one occurrence before mca_part_persist_start — there are ~11 others
+# in the same file that must remain untouched.
+echo "Applying C23 part_persist fix (backport of upstream aa024ac73d62)..."
+sed -i '/^__opal_attribute_always_inline__ static inline int$/{
+    N
+    /\nmca_part_persist_start(/s/^__opal_attribute_always_inline__ //
+}' ompi/mca/part/persist/part_persist.h
+
 # Run autogen.pl to generate configure script (required when building from git)
 echo "Running autogen.pl..."
 ./autogen.pl
@@ -38,9 +55,7 @@ echo "Running autogen.pl..."
 # These settings were validated for the current manylinux-based environment.
 # If issues arise with different MPI runtimes or cluster configurations, review with the scaleout team.
 # See: https://github.com/open-mpi/ompi/blob/main/docs/features/ulfm.rst
-# CFLAGS: -Wno-incompatible-pointer-types suppresses the GCC 14 _Bool->void* hard error
-# in part_persist.h that is also addressed by the source patch above.
-CFLAGS="-Wno-incompatible-pointer-types" ./configure \
+./configure \
     --prefix="${OMPI_PREFIX}" \
     --with-ft=ulfm \
     --enable-wrapper-rpath \
