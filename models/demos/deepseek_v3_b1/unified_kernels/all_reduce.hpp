@@ -303,29 +303,54 @@ public:
 
 private:
 #if defined(COMPILE_FOR_TRISC)
-    template <bool acquire_regs, bool pop_cbs>
+    static constexpr uint32_t MAX_DST_TILES = 4;
+
+    template <bool acquire_regs>
     static FORCE_INLINE void batched_add(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint32_t num_tiles) {
+        uint32_t num_batches = (num_tiles + MAX_DST_TILES - 1) / MAX_DST_TILES;
+
+        MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
+
         cb_reserve_back(cb_out, num_tiles);
 
         if constexpr (acquire_regs) {
             tile_regs_acquire();
         }
-        for (uint32_t i = 0; i < num_tiles; i++) {
-            cb_wait_front(cb_a, i + 1);
-            cb_wait_front(cb_b, i + 1);
-            add_tiles(cb_a, cb_b, i, i, i);
+
+        for (uint32_t batch = 0; batch < num_batches; ++batch) {
+            uint32_t start_tile = batch * MAX_DST_TILES;
+            uint32_t batch_size = (start_tile + MAX_DST_TILES <= num_tiles) ? MAX_DST_TILES : (num_tiles - start_tile);
+            uint32_t tiles_needed = start_tile + batch_size;
+
+            // Streaming wait: block only until this batch's tiles are present.
+            // Local CB (cb_a) returns immediately (all pushed at once by reader);
+            // remote CB (cb_b) blocks until enough fabric chunks have arrived.
+            cb_wait_front(cb_a, tiles_needed);
+            cb_wait_front(cb_b, tiles_needed);
+
+            if (batch == num_batches - 1) {
+                tile_regs_wait();
+            } else {
+                PACK(t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU));
+            }
+
+            for (uint32_t i = 0; i < batch_size; ++i) {
+                add_tiles(cb_a, cb_b, start_tile + i, start_tile + i, start_tile + i);
+                pack_tile(start_tile + i, cb_out);
+            }
+
+            if (batch == num_batches - 1) {
+                tile_regs_commit();
+            } else {
+                PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
+                MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
+            }
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        for (uint32_t i = 0; i < num_tiles; i++) {
-            pack_tile(i, cb_out, i);
-        }
+
         tile_regs_release();
 
-        if constexpr (pop_cbs) {
-            cb_pop_front(cb_a, num_tiles);
-            cb_pop_front(cb_b, num_tiles);
-        }
+        cb_pop_front(cb_a, num_tiles);
+        cb_pop_front(cb_b, num_tiles);
         cb_push_back(cb_out, num_tiles);
     }
 #endif
@@ -344,14 +369,11 @@ private:
             }
             cb_pop_front(CT::cb_residual, CT::num_tiles);
             add_tiles_init(CT::cb_local, CT::cb_remote, true);
-            batched_add<false, false>(CT::cb_local, CT::cb_remote, CT::cb_out, CT::num_tiles);
+            batched_add<false>(CT::cb_local, CT::cb_remote, CT::cb_out, CT::num_tiles);
         } else {
             add_tiles_init(CT::cb_local, CT::cb_remote);
-            batched_add<true, false>(CT::cb_local, CT::cb_remote, CT::cb_out, CT::num_tiles);
+            batched_add<true>(CT::cb_local, CT::cb_remote, CT::cb_out, CT::num_tiles);
         }
-
-        cb_pop_front(CT::cb_local, CT::num_tiles);
-        cb_pop_front(CT::cb_remote, CT::num_tiles);
 #endif
     }
 };

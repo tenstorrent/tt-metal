@@ -18,7 +18,7 @@ std::vector<ttnn::Tensor> llama_rs_matmul(
     const GlobalSemaphore& cross_device_semaphore,  // rs4
     uint32_t cluster_axis,                          // rs 5
     const MeshDevice& mesh_device,                  // rs 6
-    uint32_t num_links,                             // rs 7 default 1
+    std::optional<uint32_t> num_links,              // rs 7 auto-detect max available
     const tt::tt_metal::SubDeviceId& subdevice_id,
     const std::optional<const ttnn::Tensor>& second_weight_tensor = std::nullopt,
     const std::optional<const ttnn::Tensor>& rs_tensor = std::nullopt,

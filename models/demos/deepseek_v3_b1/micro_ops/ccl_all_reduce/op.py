@@ -809,6 +809,7 @@ class DeepseekMinimalAllReduce:
                     trisc_compute_config=ttnn.ComputeConfigDescriptor(
                         math_fidelity=ttnn.MathFidelity.HiFi4,
                         fp32_dest_acc_en=True,
+                        dst_full_sync_en=True,
                         math_approx_mode=False,
                     ),
                     unified_compile_time_core_descriptors=[

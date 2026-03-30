@@ -21,6 +21,7 @@ target_sources(
         core.cpp
         to_layout/to_layout_op.cpp
         to_dtype/to_dtype_op.cpp
+        to_memory_config/to_memory_config_op.cpp
 )
 
 target_include_directories(ttnn_op_core PRIVATE ${FixmeOpIncDirs})

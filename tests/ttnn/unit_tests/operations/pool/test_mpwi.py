@@ -7,9 +7,11 @@ import ttnn
 import math
 import pytest
 
-from tests.sweep_framework.sweep_utils.max_pool2d_with_indices_common import run_max_pool2d_with_indices
+from tests.sweep_framework.sweep_utils.pool2d_common import run_max_pool2d_with_indices
+from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize("in_c", [1, 16, 24, 32, 40, 48, 56, 64])
 def test_mpwi_20_core_C_dims(device, in_c):
     in_n = 1
@@ -63,6 +65,7 @@ def test_mpwi_20_core_C_dims(device, in_c):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize(
     "input_spec",
     [
@@ -121,6 +124,7 @@ def test_mpwi_small_kernel_sizes(device, ttnn_dtype, input_spec):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize(
     "input_spec",
     [
@@ -177,6 +181,7 @@ def test_mpwi_large_kernel_sizes(device, ttnn_dtype, input_spec):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize(
     "input_spec",
     [
@@ -240,6 +245,7 @@ def test_mpwi_general(device, ttnn_dtype, sharding_scheme, input_spec):
     )
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize(
     "input_spec",
     [

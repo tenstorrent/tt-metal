@@ -11,6 +11,10 @@
 #include <limits>
 #include <unordered_set>
 #include "metal_env_impl.hpp"
+#include "metal_env_accessor.hpp"
+#include "metal_context.hpp"
+#include "distributed/mesh_device_impl.hpp"
+#include "impl/sub_device/sub_device_impl.hpp"
 #include "firmware_capability.hpp"
 #include "get_platform_architecture.hpp"
 #include "profiler_state_manager.hpp"
@@ -135,7 +139,8 @@ void MetalEnvImpl::initialize_base_objects() {
         platform_arch,
         is_base_routing_fw_enabled,
         this->rtoptions_->get_enable_2_erisc_mode(),
-        get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_));
+        get_profiler_dram_bank_size_for_hal_allocation(*this->rtoptions_),
+        this->rtoptions_->get_dram_backed_cq());
 
     this->rtoptions_->ParseAllFeatureEnv(*hal_);
     this->cluster_->set_hal(hal_.get());
@@ -518,6 +523,7 @@ const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_d
 tt::ARCH MetalEnv::get_arch() const { return impl_->get_cluster().arch(); }
 std::string MetalEnv::get_arch_name() const { return tt::get_string_lowercase(get_arch()); }
 uint32_t MetalEnv::get_num_pcie_devices() const { return impl_->get_cluster().number_of_pci_devices(); }
+uint32_t MetalEnv::get_num_available_devices() const { return impl_->get_cluster().number_of_user_devices(); }
 uint32_t MetalEnv::get_l1_size() const {
     return impl_->get_hal().get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
 }
@@ -535,5 +541,82 @@ float MetalEnv::get_inf() const { return impl_->get_hal().get_inf(); }
 
 tt::tt_fabric::ControlPlane& MetalEnv::get_control_plane() { return impl_->get_control_plane(); }
 distributed::SystemMesh& MetalEnv::get_system_mesh() { return impl_->get_system_mesh(); }
+std::shared_ptr<distributed::MeshDevice> MetalEnv::create_mesh_device(
+    const distributed::MeshDeviceConfig& config,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t num_command_queues,
+    const DispatchCoreConfig& dispatch_core_config,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    size_t worker_l1_size) {
+    // Associate a context ID for the mesh device's dependencies to easily access the MetalContext::instance(contextId)
+    // TODO: Remove this and directly pass in the MetalEnv reference
+    ContextId context_id = MetalContext::create_instance(*this);
+    auto mesh_device = distributed::MeshDeviceImpl::create(
+        context_id,
+        config,
+        l1_small_size,
+        trace_region_size,
+        num_command_queues,
+        dispatch_core_config,
+        l1_bank_remap,
+        worker_l1_size);
+    mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+    return mesh_device;
+}
+
+std::shared_ptr<distributed::MeshDevice> MetalEnv::create_unit_mesh_device(
+    int device_id,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t num_command_queues,
+    const DispatchCoreConfig& dispatch_core_config,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    size_t worker_l1_size) {
+    ContextId context_id = MetalContext::create_instance(*this);
+    auto mesh_device = distributed::MeshDeviceImpl::create_unit_mesh(
+        context_id,
+        device_id,
+        l1_small_size,
+        trace_region_size,
+        num_command_queues,
+        dispatch_core_config,
+        l1_bank_remap,
+        worker_l1_size);
+    mesh_device->impl().set_destroy_metal_context_instance_on_close(true);
+    return mesh_device;
+}
+
+std::map<int, std::shared_ptr<distributed::MeshDevice>> MetalEnv::create_unit_meshes(
+    const std::vector<int>& device_ids,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t num_command_queues,
+    const DispatchCoreConfig& dispatch_core_config,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    size_t worker_l1_size) {
+    ContextId context_id = MetalContext::create_instance(*this);
+    auto result = distributed::MeshDeviceImpl::create_unit_meshes(
+        context_id,
+        device_ids,
+        l1_small_size,
+        trace_region_size,
+        num_command_queues,
+        dispatch_core_config,
+        l1_bank_remap,
+        worker_l1_size);
+    if (!result.empty()) {
+        const auto& parent = result.begin()->second->get_parent_mesh();
+        if (parent) {
+            parent->impl().set_destroy_metal_context_instance_on_close(true);
+        }
+    }
+    return result;
+}
+
+SubDevice MetalEnv::create_sub_device(tt::stl::Span<const CoreRangeSet> cores) {
+    // Use SubDevice constructor marked as internal
+    return SubDevice(SubDeviceImpl(&MetalEnvAccessor(*this).impl(), cores));
+}
 
 }  // namespace tt::tt_metal

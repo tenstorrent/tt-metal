@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from time import perf_counter
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -80,6 +82,11 @@ class MoE(SharedStateAddOn, AbstractModule):
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
         num_dispatch_device_rows = mesh_device.shape[0]
 
+        logger.info(
+            "Creating MoE shared state: expert mapping tensor "
+            f"(num_devices={num_devices}, experts_per_device={num_experts_per_device})..."
+        )
+        expert_mapping_start = perf_counter()
         expert_mapping_tensors = ttnn.from_torch(
             torch.eye(num_devices, dtype=torch.int32)
             .repeat_interleave(num_experts_per_device, dim=0)
@@ -91,7 +98,13 @@ class MoE(SharedStateAddOn, AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
+        logger.info(f"Created MoE expert mapping tensor in {perf_counter() - expert_mapping_start:.2f}s")
 
+        logger.info(
+            "Creating MoE shared state: remap topk mask "
+            f"(dispatch_rows={num_dispatch_device_rows}, experts={hf_config.n_routed_experts})..."
+        )
+        remap_mask_start = perf_counter()
         remap_topk_mask = ttnn.from_torch(
             torch.ones((1, num_dispatch_device_rows, 1, hf_config.n_routed_experts), dtype=torch.bfloat16),
             device=mesh_device,
@@ -100,6 +113,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
+        logger.info(f"Created MoE remap topk mask in {perf_counter() - remap_mask_start:.2f}s")
 
         return {
             "expert_mapping_tensors": expert_mapping_tensors,
@@ -124,13 +138,13 @@ class MoE(SharedStateAddOn, AbstractModule):
             ModelState containing CCL configurations
         """
         # Store CCL object for runtime semaphore initialization
+        num_links = ccl.get_max_links(axis=0)
         return {
-            # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
-                "num_links": 4,
+                "num_links": num_links,
             },
             "all_to_all_combine": {
-                "num_links": 4,
+                "num_links": num_links,
             },
             "ccl": ccl,
         }

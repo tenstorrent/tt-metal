@@ -88,6 +88,18 @@ def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
     return nearest_multiple(vocab_size, ttnn.TILE_SIZE * num_devices)
 
 
+def should_pad_sampling_logits_to_power_of_2(
+    base_model_name: str, padded_vocab_size: int, sampling_splits: int
+) -> bool:
+    # Enable optional sampling padding for models that regress to single-core TopK. More info at issue #40399
+    if sampling_splits < 1:
+        logger.warning(f"Sampling_splits must be >= 1, got {sampling_splits}")
+        return False
+
+    per_device_vocab = padded_vocab_size // sampling_splits
+    return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
+
+
 class MathFidelitySetting(Enum):
     LOFI = "lofi"
     HIFI2 = "hifi2"
@@ -1257,15 +1269,24 @@ class ModelArgs:
                         num_cores=self.mlp2_core_grid.num_cores,
                     )
         elif mode == Mode.PREFILL:
-            return self.matmul_config(
-                m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
-                k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
-                n=self.dim,
-                grid_size=self.mlp2_grid(seq_len),
-                per_core_N=math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
-                if not self.is_galaxy
-                else None,
-            )
+            if seq_len > 128:
+                grid = self.mlp2_grid(seq_len)
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+                )
+            else:
+                return self.matmul_config(
+                    m=min(seq_len, self.prefill_len_cutoff),  # 512 if BH, 1024 if WH
+                    k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
+                    n=self.dim,
+                    grid_size=self.mlp2_grid(seq_len),
+                    per_core_N=math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
+                    if not self.is_galaxy
+                    else None,
+                )
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -1547,26 +1568,36 @@ class ModelArgs:
                 )
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
-            return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
-                in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
-                out_subblock_h=1,  # Must be divisible by per_core_M
-                out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                per_core_M=7
-                if self.device_name == "P100"
-                else (
-                    max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
-                        1,
-                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
-                    )
-                ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                per_core_N=math.ceil(
-                    self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
-                ),  # N / TILE_WIDTH / grid width
-                transpose_mcast=False,
-                fused_activation=None,
-                fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
-            )
+            if seq_len > 128:
+                return ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
+                )
+            else:
+                return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
+                    in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+                    out_subblock_h=1,  # Must be divisible by per_core_M
+                    out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+                    per_core_M=7
+                    if self.device_name == "P100"
+                    else (
+                        max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
+                            1,
+                            8
+                            if seq_len >= self.MAX_QKV_MM_SEQ_LEN
+                            else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
+                        )
+                    ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+                    per_core_N=math.ceil(
+                        self.qkv_size / self.cluster_shape[1] / 32 / self.dram_shard_grid_width
+                    ),  # N / TILE_WIDTH / grid width
+                    transpose_mcast=False,
+                    fused_activation=None,
+                    fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
+                )
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
@@ -2594,6 +2625,17 @@ class ModelArgs:
             raise AssertionError(
                 "Qwen2.5-7B and Qwen2.5-VL-7B is only supported on 2 or 4 devices, run on an N300 or use MESH_DEVICE=N150x4"
             )
+
+        if self.num_devices > 0:
+            sampling_splits = self.num_devices if self.cluster_shape != [1, 1] else 2
+            # Only enable this optimization on the non-multi-step sampling path.
+            # The [1, 1] mesh path splits logits before TopK today and would need
+            # matching input padding in `TTSampling.sample()` to safely use it.
+            self.pad_logits_to_power_of_2 = self.cluster_shape != [1, 1] and (
+                should_pad_sampling_logits_to_power_of_2(self.base_model_name, self.padded_vocab_size, sampling_splits)
+            )
+        else:
+            self.pad_logits_to_power_of_2 = False
 
         self.unpadded_hidden_dim = self.hidden_dim
         # Don't need to pad for CPU runs
