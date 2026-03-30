@@ -113,7 +113,13 @@ def _release_ttnn_runtime_configs(obj, _visited: set[int] | None = None) -> None
             try:
                 setattr(obj, name, None)
             except Exception:
-                pass
+                # Best-effort teardown: setattr can fail on read-only or invalid descriptors.
+                logger.debug(
+                    "Could not clear TTNN runtime config attribute %r on %s",
+                    name,
+                    type(obj).__name__,
+                    exc_info=True,
+                )
 
 
 class _TTTransformerAdapter:

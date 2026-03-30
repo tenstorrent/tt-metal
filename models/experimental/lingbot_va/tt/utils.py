@@ -13,13 +13,17 @@ from __future__ import annotations
 
 import gc
 import os
-from typing import TYPE_CHECKING
 
 import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.parallel.config import VaeHWParallelConfig, ParallelFactor
+from models.tt_dit.parallel.config import (
+    DiTParallelConfig,
+    EncoderParallelConfig,
+    ParallelFactor,
+    VaeHWParallelConfig,
+)
 from models.tt_dit.parallel.manager import CCLManager
 from models.experimental.lingbot_va.tt.vae_encoder import WanVAEEncoder, patch_wan_causal_conv_wormhole_bf16_parity
 from models.experimental.lingbot_va.tt.vae_decoder import WanVAEDecoder
@@ -41,9 +45,6 @@ from .transformer_wan import (
     TEXT_DIM,
     WanTransformer3DModel,
 )
-
-if TYPE_CHECKING:
-    from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig
 
 
 def _safe_deallocate_tensor(tensor, label: str = "") -> None:
@@ -72,7 +73,7 @@ def _local_path(p: str | os.PathLike) -> str:
 def load_transformer(
     transformer_path: str | os.PathLike,
     mesh_device: "ttnn.MeshDevice",
-    parallel_config: "DiTParallelConfig",
+    parallel_config: DiTParallelConfig,
     *,
     ccl_manager: "CCLManager | None" = None,
     num_layers: int | None = None,
@@ -121,7 +122,7 @@ def load_transformer(
 def load_transformer_from_state_dict(
     state_dict: dict[str, torch.Tensor],
     mesh_device: "ttnn.MeshDevice",
-    parallel_config: "DiTParallelConfig",
+    parallel_config: DiTParallelConfig,
     *,
     ccl_manager: "CCLManager | None" = None,
     num_layers: int | None = None,
@@ -178,7 +179,7 @@ def load_text_encoder(
     mesh_device: "ttnn.MeshDevice",
     *,
     ccl_manager: "CCLManager | None" = None,
-    parallel_config: "EncoderParallelConfig | None" = None,
+    parallel_config: EncoderParallelConfig | None = None,
     torch_dtype: torch.dtype = torch.bfloat16,
     max_prompt_length: int = 512,
 ):
@@ -201,9 +202,6 @@ def load_text_encoder(
         TT UMT5Encoder with weights loaded.
     """
     from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder as TTUMT5Encoder
-    from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
-    from models.tt_dit.parallel.manager import CCLManager
-
     from transformers import UMT5EncoderModel
 
     hf_encoder = UMT5EncoderModel.from_pretrained(

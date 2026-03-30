@@ -252,7 +252,7 @@ def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_
     return prompt_embeds.to(device)
 
 
-def _encode_prompt(models, state, prompt, do_classifier_free_guidance=True, max_sequence_length=512):
+def _encode_prompt(models, _state, prompt, do_classifier_free_guidance=True, max_sequence_length=512):
     device = models["device"]
     dtype = models["dtype"]
     config = models["config"]
@@ -310,7 +310,6 @@ def _normalize_latents(latents, latents_mean, latents_std):
 
 def _preprocess_action(models, state, action):
     config = models["config"]
-    device = models["device"]
     actions_q01 = state["actions_q01"]
     actions_q99 = state["actions_q99"]
     action_norm_method = state["action_norm_method"]
@@ -374,7 +373,6 @@ def _prepare_latent_input(
 ):
     device = models["device"]
     dtype = models["dtype"]
-    config = models["config"]
     prompt_embeds = state["prompt_embeds"]
     action_mask = state["action_mask"]
 
@@ -696,7 +694,6 @@ def _infer_impl(models, state, obs, frame_st_id=0):
 
 
 def _compute_kv_cache(models, state, obs):
-    config = models["config"]
     transformer = models["transformer"]
     cache_name = models["cache_name"]
 
@@ -759,8 +756,6 @@ def _infer_entry(models, state, obs):
 
 def _decode_one_video(models, latents, output_type="np"):
     vae = models["vae"]
-    device = models["device"]
-    dtype = models["dtype"]
 
     latents = latents.to(vae.dtype)
     latents_mean = (
