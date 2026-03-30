@@ -20,20 +20,18 @@
  * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication
  *     when input is Tf32 format. Only applicable to ELWMUL.
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB
- * @tparam enable_direct_indexing: When true, uses direct indexing eltwise instructions
  * @param acc_to_dest: Currently unused on Quasar. Will be adding support for accumulation to dest.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
     MathFidelity math_fidelity,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool enable_direct_indexing = false>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary_init([[maybe_unused]] const std::uint32_t acc_to_dest = 0) {
     static_assert(src_b_bcast_type == BroadcastType::NONE, "Broadcast types will be added in a future update");
 
     // TODO: Once runtime asserts are added for Quasar, assert that acc_to_dest is unused
-    _llk_math_eltwise_binary_init_<eltwise_binary_type, math_fidelity, enable_direct_indexing, binary_reuse_dest>(ckernel::DEFAULT_TENSOR_SHAPE);
+    _llk_math_eltwise_binary_init_<eltwise_binary_type, math_fidelity, false /* enable_direct_indexing */, binary_reuse_dest>(ckernel::DEFAULT_TENSOR_SHAPE);
 }
 
 /**
@@ -45,7 +43,6 @@ inline void llk_math_eltwise_binary_init([[maybe_unused]] const std::uint32_t ac
  * @tparam math_fidelity: 0 = LoFi, 2 = HiFi2, 3 = HiFi3, 4 = HiFi4 - controls precision of multiplication
  *     when input is Tf32 format. Only applicable to ELWMUL.
  * @tparam binary_reuse_dest: When not NONE, reuses the destination register as SrcA or SrcB
- * @tparam enable_direct_indexing: When true, uses direct indexing eltwise instructions
  * @param operand_A: Logical dataflow buffer id for input A, used to derive the tensor shape
  * @param operand_B: Unused on Quasar. Present for API compatibility.
  * @param acc_to_dest: Currently unused on Quasar. Will be adding support for accumulation to dest.
@@ -54,8 +51,7 @@ template <
     EltwiseBinaryType eltwise_binary_type,
     BroadcastType src_b_bcast_type,
     MathFidelity math_fidelity,
-    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool enable_direct_indexing = false>
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void llk_math_eltwise_binary_init_with_operands(
     const std::uint32_t operand_A, [[maybe_unused]] const std::uint32_t operand_B, [[maybe_unused]] const std::uint32_t acc_to_dest = 0) {
     static_assert(src_b_bcast_type == BroadcastType::NONE, "Broadcast types will be added in a future update");
@@ -64,7 +60,7 @@ inline void llk_math_eltwise_binary_init_with_operands(
     const std::uint32_t operand_id = get_operand_id(operand_A);
     const ckernel::TensorShape tensor_shape_A = get_operand_tensor_shape(operand_id);
 
-    _llk_math_eltwise_binary_init_<eltwise_binary_type, math_fidelity, enable_direct_indexing, binary_reuse_dest>(tensor_shape_A);
+    _llk_math_eltwise_binary_init_<eltwise_binary_type, math_fidelity, false /* enable_direct_indexing */, binary_reuse_dest>(tensor_shape_A);
 }
 
 /**
