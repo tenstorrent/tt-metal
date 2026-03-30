@@ -96,8 +96,12 @@ def random_weights(config_only):
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        }
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        },
     ],
+    ids=["line", "ring"],
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
