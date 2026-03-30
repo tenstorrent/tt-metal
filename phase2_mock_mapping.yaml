@@ -1,0 +1,9 @@
+rank_to_cluster_mock_cluster_desc:
+  0: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml
+  1: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml
+  2: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml
+  3: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml
+  # 0: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_lb_2x4_cluster_desc.yaml
+  # 1: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_lb_2x4_cluster_desc.yaml
+  # 2: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_lb_2x4_cluster_desc.yaml
+  # 3: /localdev/nzhao/tt-metal/tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_lb_2x4_cluster_desc.yaml
