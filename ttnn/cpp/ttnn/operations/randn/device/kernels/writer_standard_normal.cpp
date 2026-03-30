@@ -30,8 +30,8 @@ void kernel_main() {
         uint32_t dst_cb_read0_ptr = dst_cb_read_base;
         uint32_t dst_cb_read1_ptr = dst_cb_read_base + dst_tile_bytes;
 
-        noc_async_write_tile(i, output_addrg, dst_cb_read0_ptr);
-        noc_async_write_tile(i + 1, output_addrg, dst_cb_read1_ptr);
+        noc_async_write_page(i, output_addrg, dst_cb_read0_ptr);
+        noc_async_write_page(i + 1, output_addrg, dst_cb_read1_ptr);
         noc_async_write_barrier();
         cb_pop_front(dst_cb_id, 2);
     }
@@ -42,7 +42,7 @@ void kernel_main() {
 
         uint32_t dst_cb_read0_ptr = get_read_ptr(dst_cb_id);
 
-        noc_async_write_tile(i, output_addrg, dst_cb_read0_ptr);
+        noc_async_write_page(i, output_addrg, dst_cb_read0_ptr);
         noc_async_write_barrier();
         cb_pop_front(dst_cb_id, 1);
     }
