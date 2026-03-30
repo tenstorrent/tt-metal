@@ -60,10 +60,8 @@ def test_sort_standard(shape, dim, descending, device, torch_dtype, ttnn_dtype):
         assert torch_sort_indices == ttnn.to_torch(ttnn_sort_indices)
     else:
         # Validate sorted values
-        if torch_dtype == torch.float32:
-            assert_allclose(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch_dtype), atol=1e-3, rtol=1e-3)
-        else:
-            assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch_dtype))
+        assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values, dtype=torch_dtype))
+
         # Validate that the indices correctly index into the original tensor
         ttnn_torch_gather_from_indices = torch.gather(input, dim, ttnn.to_torch(ttnn_sort_indices).to(torch.int64))
         assert_equal(torch_sort_values, ttnn_torch_gather_from_indices)

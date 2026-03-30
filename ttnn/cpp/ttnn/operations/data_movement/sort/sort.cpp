@@ -179,6 +179,16 @@ std::vector<Tensor> sort(
         return {input_tensor, ttnn::zeros_like(input_tensor)};
     }
 
+    const int8_t normalized_dim = dim < 0 ? rank + dim : dim;
+    if (original_lshape[normalized_dim] == 1) {
+        if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
+                optional_output_tensors, original_lshape)) {
+            std::get<0>(*optional_output_tensors) = input_tensor;
+            return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
+        }
+        return {input_tensor, ttnn::zeros_like(input_tensor)};
+    }
+
     const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);
     const bool is_rank_le_4d = rank <= 4;
 

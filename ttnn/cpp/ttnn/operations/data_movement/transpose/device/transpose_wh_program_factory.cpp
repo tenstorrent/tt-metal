@@ -314,13 +314,23 @@ TransposeWHProgramFactory::cached_program_t TransposeWHProgramFactory::create(
     if (row_major && (input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::INT32)) {
         compute_defines["DST_ACCUM_MODE"] = "1";
     }
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (src0_cb_data_format == tt::DataFormat::Float32) {
+        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        if (row_major) {
+            unpack_to_dest_mode[24] = UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
     auto compute_kernel_id = CreateKernel(
         program,
         row_major ? "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh_rm.cpp"
                   : "ttnn/cpp/ttnn/operations/data_movement/transpose/device/kernels/compute/transpose_wh.cpp",
         total_cores,
         ComputeConfig{
-            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args, .defines = compute_defines});
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .compile_args = compute_kernel_args,
+            .defines = compute_defines});
 
     if (row_major) {
         set_runtime_args_wh_rm(
