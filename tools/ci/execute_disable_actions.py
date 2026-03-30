@@ -31,12 +31,21 @@ ALLOWED_STATUS = {
 
 
 def run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    proc = subprocess.run(
         cmd,
-        check=check,
+        check=False,
         text=True,
         capture_output=capture,
     )
+    if check and proc.returncode != 0:
+        stdout = proc.stdout.strip() if proc.stdout else ""
+        stderr = proc.stderr.strip() if proc.stderr else ""
+        raise RuntimeError(
+            "Command failed with non-zero exit status "
+            f"{proc.returncode}: {' '.join(shlex.quote(c) for c in cmd)}\n"
+            f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
+        )
+    return proc
 
 
 def run_guarded_gh(tokens: list[str], *, capture: bool = True) -> subprocess.CompletedProcess[str]:
@@ -96,6 +105,16 @@ def parse_agent_json_after_marker(text: str, marker: str) -> dict[str, Any]:
         return json.loads(payload[brace_idx:])
 
 
+def load_disable_command_spec() -> str:
+    command_path = Path(".cursor/commands/ci/ci-disable-test-ci.md")
+    if not command_path.exists():
+        return (
+            "Missing command file .cursor/commands/ci/ci-disable-test-ci.md.\n"
+            "Emit marker ===FINAL_DISABLE_EDIT_SUMMARY=== then compact JSON summary."
+        )
+    return command_path.read_text(encoding="utf-8")
+
+
 def safe_slug(text: str) -> str:
     clean = re.sub(r"[^a-zA-Z0-9._-]+", "_", text).strip("._-")
     return clean or "item"
@@ -115,14 +134,16 @@ def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> tu
     scope_hint = str(action.get("disable_scope_hint", "")).strip()
     slack_link = str(action.get("source_slack_permalink", "")).strip()
 
+    command_spec = load_disable_command_spec()
     prompt = (
-        "Follow .cursor/commands/ci/ci-disable-test-ci.md exactly.\n"
+        "Use the following command specification exactly:\n\n"
+        f"{command_spec}\n\n"
         f"Input issue: {issue_url}\n"
         + (f"Evidence job URLs: {', '.join(job_urls)}\n" if job_urls else "")
         + (f"Disable scope hint: {scope_hint}\n" if scope_hint else "")
         + (f"Source Slack: {slack_link}\n" if slack_link else "")
         + "If evidence is weak, make no code edits and explain in JSON summary.\n"
-        + "You must emit the marker and JSON contract from the command file."
+        + "You must emit the marker and JSON contract from the command specification."
     )
     cmd = ["agent", "--trust", "-p", prompt]
     if model != "auto":
@@ -282,6 +303,15 @@ def state_has_active_pr(item: dict[str, Any]) -> str | None:
         return None
     pr_url = str(disable_pr.get("url", "")).strip()
     return pr_url or None
+
+
+def ensure_git_identity() -> None:
+    name = run(["git", "config", "--get", "user.name"], check=False, capture=True)
+    email = run(["git", "config", "--get", "user.email"], check=False, capture=True)
+    if name.returncode != 0 or not (name.stdout or "").strip():
+        run(["git", "config", "user.name", "CI Auto Disable Bot"], capture=True)
+    if email.returncode != 0 or not (email.stdout or "").strip():
+        run(["git", "config", "user.email", "ci-auto-disable-bot@tenstorrent.invalid"], capture=True)
 
 
 def write_summary(path: Path, data: dict[str, Any]) -> None:
@@ -508,6 +538,7 @@ def main() -> int:
 
             run(["git", "add", "."], capture=True)
             commit_msg = f"ci: disable failing test for #{issue_number}"
+            ensure_git_identity()
             run(["git", "commit", "-m", commit_msg], capture=True)
             run(["git", "push", "-u", "origin", branch], capture=True)
 
