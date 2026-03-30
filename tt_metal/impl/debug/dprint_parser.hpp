@@ -10,8 +10,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
+#include <span>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "device/device_impl.hpp"
@@ -19,8 +23,6 @@
 #include "hostdevcommon/dprint_common.h"
 #include "hostdev/device_print_common.h"
 #include "hostdev/device_print_structures.h"
-
-#include <unordered_map>
 
 namespace tt::tt_metal {
 
