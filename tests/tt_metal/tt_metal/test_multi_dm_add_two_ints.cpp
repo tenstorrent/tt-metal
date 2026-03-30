@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/device_fixture.hpp"
+#include "common/command_queue_fixture.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
@@ -21,7 +22,8 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 // This test requires simulator environment
-TEST_F(MeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
+TEST_F(UnitMeshCQSingleCardFixture, MultiDmAddTwoInts) {
+    // TEST_F(MeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     // Skip if simulator is not available
     if (!MetalContext::instance().rtoptions().get_simulator_enabled()) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";

@@ -56,7 +56,9 @@ inline std::string get_core_descriptor_file(
     if (env.get_rtoptions().get_simulator_enabled()) {
         auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
             env.get_rtoptions().get_simulator_path());
+        log_info(tt::LogMetal, "get_core_descriptor_file: soc_desc = {}", soc_desc);
         tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
+        log_info(tt::LogMetal, "get_core_descriptor_file: grid_size = {}", grid_size);
         if (grid_size.y <= 2 || grid_size.x <= 2) {  // these SOC descriptors declare a 2x2 grid
             use_small_core_desc_yaml = true;
         }
@@ -68,7 +70,7 @@ inline std::string get_core_descriptor_file(
                     "Invalid arch not supported");  // will be overwritten in tt_global_state constructor
             case tt::ARCH::WORMHOLE_B0: return core_desc_dir + "wormhole_b0_versim_1x1_arch.yaml";
             case tt::ARCH::BLACKHOLE: return core_desc_dir + "blackhole_simulation_1x2_arch.yaml";
-            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
+            case tt::ARCH::QUASAR: return core_desc_dir + "quasar_simulation_2x3_arch.yaml";
         };
     } else {
         // Check if fabric tensix is enabled based on fabric tensix config
