@@ -112,7 +112,9 @@ const distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() const {
     return *mesh_buffer;
 }
 
-bool DeviceStorage::is_sole_owner_of_device_memory() const { return mesh_buffer.use_count() == 1; }
+bool DeviceStorage::is_sole_owner_of_device_memory() const {
+    return mesh_buffer.use_count() == 1 && get_root_mesh_buffer().use_count() == 1;
+}
 
 std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer_leak_ownership() const {
     TT_FATAL(mesh_buffer != nullptr, "Buffer is not allocated");
@@ -123,33 +125,14 @@ const std::shared_ptr<distributed::MeshBuffer>& DeviceStorage::get_root_mesh_buf
     return root_mesh_buffer ? root_mesh_buffer : mesh_buffer;
 }
 
-void DeviceStorage::deallocate_root_mesh_buffer() {
-    if (root_mesh_buffer) {
-        root_mesh_buffer->deallocate();
-    } else {
-        mesh_buffer->deallocate();
-    }
-}
-
-void DeviceStorage::reset_root_mesh_buffer() {
-    if (root_mesh_buffer) {
-        root_mesh_buffer.reset();
-    } else {
-        mesh_buffer.reset();
-    }
-}
-
-void DeviceStorage::deallocate(bool force) {
+void DeviceStorage::deallocate() {
     if (!is_allocated()) {
         return;
     }
 
-    const auto& root_buffer = get_root_mesh_buffer();
-    bool can_deallocate = root_buffer.use_count() == 1 || (root_buffer.use_count() > 1 && force);
-    if (can_deallocate) {
-        deallocate_root_mesh_buffer();
-    }
-    reset_root_mesh_buffer();
+    get_root_mesh_buffer()->deallocate();
+    root_mesh_buffer = nullptr;
+    mesh_buffer = nullptr;
 }
 
 bool DeviceStorage::is_allocated() const { return this->mesh_buffer != nullptr && this->mesh_buffer->is_allocated(); }

@@ -32,7 +32,21 @@ TensorSpec make_test_tensor_spec() {
     return TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 }
 
-TEST_F(DeviceStorageOwnershipTest, SoleOwnerAfterCreation) {
+// ======================================================================================
+// DeviceStorage Ownership Tests
+//
+// These tests verify the ownership semantics of DeviceStorage directly.
+// DeviceStorage tracks ownership via mesh_buffer shared_ptr use_count.
+// ======================================================================================
+
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_DefaultConstructedState) {
+    DeviceStorage storage;
+
+    EXPECT_FALSE(storage.is_allocated());
+    EXPECT_TRUE(storage.is_uniform_storage());
+}
+
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_SoleOwnerAfterCreation) {
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
     const auto& storage = tensor.device_storage();
 
@@ -40,33 +54,95 @@ TEST_F(DeviceStorageOwnershipTest, SoleOwnerAfterCreation) {
     EXPECT_TRUE(storage.is_sole_owner_of_device_memory());
 }
 
-TEST_F(DeviceStorageOwnershipTest, CopySharesOwnership) {
-    Tensor tensor1 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
-    EXPECT_TRUE(tensor1.device_storage().is_sole_owner_of_device_memory());
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_CopySharesOwnership) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    const auto& original_storage = tensor.device_storage();
 
-    // Copy constructor shares ownership
-    Tensor tensor2 = tensor1;  // NOLINT(performance-unnecessary-copy-initialization)
-    EXPECT_FALSE(tensor1.device_storage().is_sole_owner_of_device_memory());
-    EXPECT_FALSE(tensor2.device_storage().is_sole_owner_of_device_memory());
+    // Copying DeviceStorage shares the underlying mesh_buffer
+    DeviceStorage storage_copy = original_storage;  // NOLINT(performance-unnecessary-copy-initialization)
 
-    // Copy assignment also shares ownership
-    Tensor tensor3 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
-    tensor3 = tensor1;
-    EXPECT_FALSE(tensor3.device_storage().is_sole_owner_of_device_memory());
+    // Both now share ownership (mesh_buffer.use_count() > 1)
+    EXPECT_FALSE(original_storage.is_sole_owner_of_device_memory());
+    EXPECT_FALSE(storage_copy.is_sole_owner_of_device_memory());
 }
 
-TEST_F(DeviceStorageOwnershipTest, SoleOwnerRestoredAfterCopyDestroyed) {
-    Tensor tensor1 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_SoleOwnerRestoredAfterCopyDestroyed) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    const auto& original_storage = tensor.device_storage();
+    EXPECT_TRUE(original_storage.is_sole_owner_of_device_memory());
 
     {
-        Tensor tensor2 = tensor1;  // NOLINT(performance-unnecessary-copy-initialization)
-        EXPECT_FALSE(tensor1.device_storage().is_sole_owner_of_device_memory());
+        // Copying DeviceStorage shares ownership
+        DeviceStorage storage_copy = original_storage;  // NOLINT(performance-unnecessary-copy-initialization)
+        EXPECT_FALSE(original_storage.is_sole_owner_of_device_memory());
+        EXPECT_FALSE(storage_copy.is_sole_owner_of_device_memory());
     }
 
-    EXPECT_TRUE(tensor1.device_storage().is_sole_owner_of_device_memory());
+    // After copy is destroyed, sole ownership is restored
+    EXPECT_TRUE(original_storage.is_sole_owner_of_device_memory());
 }
 
-TEST_F(DeviceStorageOwnershipTest, MoveTransfersOwnership) {
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ViewSharesOwnership) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    const auto& storage = tensor.device_storage();
+
+    auto coords = storage.get_coords();
+    ASSERT_THAT(coords, SizeIs(2));
+
+    // Create a view with subset of coords
+    std::vector<distributed::MeshCoordinate> subset_coords = {coords[0]};
+    DeviceStorage view_storage(storage, subset_coords);
+
+    EXPECT_TRUE(view_storage.is_allocated());
+    EXPECT_FALSE(storage.is_sole_owner_of_device_memory());
+    EXPECT_FALSE(view_storage.is_sole_owner_of_device_memory());
+    ASSERT_THAT(view_storage.get_coords(), SizeIs(1));
+}
+
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ViewDeallocateAffectsOwner) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    const auto& storage = tensor.device_storage();
+
+    std::vector<distributed::MeshCoordinate> subset_coords = {storage.get_coords()[0]};
+    DeviceStorage view_storage(storage, subset_coords);
+
+    // Deallocate through view affects original
+    view_storage.deallocate();
+    EXPECT_FALSE(view_storage.is_allocated());
+    EXPECT_FALSE(storage.is_allocated());
+}
+
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_OwnerDeallocateAffectsView) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    DeviceStorage owner_storage = tensor.device_storage();
+
+    std::vector<distributed::MeshCoordinate> subset_coords = {owner_storage.get_coords()[0]};
+    DeviceStorage view_storage(owner_storage, subset_coords);
+
+    // Deallocate through owner affects view
+    owner_storage.deallocate();
+    EXPECT_FALSE(owner_storage.is_allocated());
+    EXPECT_FALSE(view_storage.is_allocated());
+}
+
+TEST_F(DeviceStorageOwnershipTest, DeviceStorage_GettersThrowWhenDeallocated) {
+    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
+    tensor.deallocate(/*force=*/true);
+
+    EXPECT_THROW(tensor.device_storage().get_buffer(), std::exception);
+    EXPECT_THROW(tensor.device_storage().get_mesh_buffer(), std::exception);
+    EXPECT_THROW(tensor.device_storage().get_device(), std::exception);
+}
+
+// ======================================================================================
+// Tensor Deallocation Tests
+//
+// These tests verify Tensor-level deallocation behavior.
+// Tensor tracks ownership via tensor_attributes shared_ptr, which is separate from
+// DeviceStorage's mesh_buffer ownership tracking.
+// ======================================================================================
+
+TEST_F(DeviceStorageOwnershipTest, Tensor_MoveTransfersOwnership) {
     Tensor tensor1 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
 
     // Move constructor transfers ownership
@@ -79,9 +155,9 @@ TEST_F(DeviceStorageOwnershipTest, MoveTransfersOwnership) {
     EXPECT_TRUE(tensor3.device_storage().is_sole_owner_of_device_memory());
 }
 
-TEST_F(DeviceStorageOwnershipTest, DeallocateForce_AlwaysDeallocates) {
+TEST_F(DeviceStorageOwnershipTest, Tensor_DeallocateForceAlwaysDeallocates) {
     Tensor tensor1 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
-    Tensor tensor2 = tensor1;
+    Tensor tensor2 = tensor1;  // NOLINT(performance-unnecessary-copy-initialization)
 
     EXPECT_TRUE(tensor1.is_allocated());
     EXPECT_TRUE(tensor2.is_allocated());
@@ -92,9 +168,9 @@ TEST_F(DeviceStorageOwnershipTest, DeallocateForce_AlwaysDeallocates) {
     EXPECT_FALSE(tensor2.is_allocated());
 }
 
-TEST_F(DeviceStorageOwnershipTest, DeallocateNonForce_OnlyWhenSoleOwner) {
+TEST_F(DeviceStorageOwnershipTest, Tensor_DeallocateNonForceOnlyWhenSoleOwner) {
     Tensor tensor1 = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
-    Tensor tensor2 = tensor1;
+    Tensor tensor2 = tensor1;  // NOLINT(performance-unnecessary-copy-initialization)
 
     // Non-force deallocate is no-op when ownership is shared
     tensor1.deallocate(/*force=*/false);
@@ -103,12 +179,11 @@ TEST_F(DeviceStorageOwnershipTest, DeallocateNonForce_OnlyWhenSoleOwner) {
 
     // After copy is gone, non-force deallocate works
     tensor2 = Tensor{};
-    EXPECT_TRUE(tensor1.device_storage().is_sole_owner_of_device_memory());
     tensor1.deallocate(/*force=*/false);
     EXPECT_FALSE(tensor1.is_allocated());
 }
 
-TEST_F(DeviceStorageOwnershipTest, DeallocateIsIdempotent) {
+TEST_F(DeviceStorageOwnershipTest, Tensor_DeallocateIsIdempotent) {
     Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
 
     tensor.deallocate(/*force=*/true);
@@ -118,23 +193,7 @@ TEST_F(DeviceStorageOwnershipTest, DeallocateIsIdempotent) {
     EXPECT_NO_THROW(tensor.deallocate(/*force=*/false));
 }
 
-TEST_F(DeviceStorageOwnershipTest, DefaultConstructedStorageState) {
-    DeviceStorage storage;
-
-    EXPECT_FALSE(storage.is_allocated());
-    EXPECT_TRUE(storage.is_uniform_storage());
-}
-
-TEST_F(DeviceStorageOwnershipTest, GettersThrowWhenDeallocated) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
-    tensor.deallocate(/*force=*/true);
-
-    EXPECT_THROW(tensor.device_storage().get_buffer(), std::exception);
-    EXPECT_THROW(tensor.device_storage().get_mesh_buffer(), std::exception);
-    EXPECT_THROW(tensor.device_storage().get_device(), std::exception);
-}
-
-TEST_F(DeviceStorageOwnershipTest, TensorShardsShareOwnership) {
+TEST_F(DeviceStorageOwnershipTest, Tensor_ShardsShareDeviceStorageOwnership) {
     const auto num_devices = mesh_device_->num_devices();
     if (num_devices < 2) {
         GTEST_SKIP() << "Test requires at least 2 devices";
@@ -158,27 +217,6 @@ TEST_F(DeviceStorageOwnershipTest, TensorShardsShareOwnership) {
     for (size_t i = 1; i < shards.size(); ++i) {
         EXPECT_FALSE(shards[i].is_allocated());
     }
-}
-
-TEST_F(DeviceStorageOwnershipTest, DeviceStorageViewSharesOwnership) {
-    Tensor tensor = create_device_tensor(make_test_tensor_spec(), mesh_device_.get());
-    const auto& storage = tensor.device_storage();
-
-    auto coords = storage.get_coords();
-    ASSERT_THAT(coords, SizeIs(2));
-
-    // Create a view with subset of coords
-    std::vector<distributed::MeshCoordinate> subset_coords = {coords[0]};
-    DeviceStorage view_storage(storage, subset_coords);
-
-    EXPECT_TRUE(view_storage.is_allocated());
-    EXPECT_FALSE(storage.is_sole_owner_of_device_memory());
-    EXPECT_FALSE(view_storage.is_sole_owner_of_device_memory());
-    ASSERT_THAT(view_storage.get_coords(), SizeIs(1));
-
-    // Force deallocate through view affects original
-    view_storage.deallocate(/*force=*/true);
-    EXPECT_FALSE(storage.is_allocated());
 }
 
 }  // namespace

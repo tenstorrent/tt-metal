@@ -163,15 +163,24 @@ void Tensor::deallocate_impl(bool force) {
     bool tracking = GraphTracker::instance().is_enabled();
     if (can_deallocate(tensor_attributes, force)) {
         std::visit(
-            ttsl::overloaded{[](HostStorage&) {}, [force, tracking](DeviceStorage& storage) {
-                if (tracking) {
-                            GraphTracker::instance().track_function_start(std::string_view("Tensor::deallocate"));
-                }
-                storage.deallocate(force);
-                if (tracking) {
-                    GraphTracker::instance().track_function_end();
-                }
-            }},
+            ttsl::overloaded{
+                [](HostStorage&) {},
+                [force, tracking](DeviceStorage& storage) {
+                    // The underlying device memory could be shared by multiple other owners.
+                    if (!storage.is_sole_owner_of_device_memory() && !force) {
+                        return;
+                    }
+
+                    if (tracking) {
+                        GraphTracker::instance().track_function_start(std::string_view("Tensor::deallocate"));
+                    }
+
+                    storage.deallocate();
+
+                    if (tracking) {
+                        GraphTracker::instance().track_function_end();
+                    }
+                }},
             this->tensor_attributes->get_storage());
     }
 }

@@ -146,11 +146,8 @@ struct DeviceStorage {
 
     // Deallocate the underlying device memory.
     // The underlying device memory could be shared by multiple instances of the DeviceStorage.
-    //
-    // If force is set, the underlying device memory will be deallocated irespective of the number of device storage
-    // owners. If force is not set, the underlying device memory will be deallocated only if "this" is the sole owner of
-    // the underlying device memory.
-    void deallocate(bool force);
+    // Deallocate will deallocate the device memory of among all shared instances.
+    void deallocate();
 
     // Returns true if no other DeviceStorage or third party has a shared reference to the device memory (MeshBuffer).
     bool is_sole_owner_of_device_memory() const;
@@ -194,9 +191,6 @@ private:
 
     // Experimental features for viewing an existing DeviceStorage
     const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
-    void deallocate_root_mesh_buffer();
-    void reset_root_mesh_buffer();
-
     std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer;
     // End experimental features
 };
