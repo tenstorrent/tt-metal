@@ -164,6 +164,7 @@ jobs:
               "runner-label": "BH-QB-GE",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
+              "override-tt-config": "{\"trace_region_size\": 67000000}",
               "tt-llama-text-ver": "tt_transformers",
               "structured-output": true,
               "multimodal": false,
