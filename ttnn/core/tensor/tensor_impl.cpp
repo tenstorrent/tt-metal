@@ -478,7 +478,7 @@ std::string to_string_impl(const Tensor& tensor) {
         return to_string_impl<T>(cpu_tensor);
     }
 
-    auto* mesh_device = storage.get_device();
+    auto& mesh_device = storage.get_device();
     // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
     // if (mesh_device->num_devices() == 1) {
     //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
@@ -492,8 +492,8 @@ std::string to_string_impl(const Tensor& tensor) {
     std::stringstream ss;
     for (size_t i = 0; i < buffers.size(); i++) {
         const distributed::MeshCoordinate coord = *coords_it++;
-        if (mesh_device->is_local(coord)) {
-            ss << "device_id: " << mesh_device->get_device(coord)->id() << ", " << coord << std::endl;
+        if (mesh_device.is_local(coord)) {
+            ss << "device_id: " << mesh_device.get_device(coord)->id() << ", " << coord << std::endl;
             detail::to_string(ss, buffers[i].view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
         }
         if (i + 1 != buffers.size()) {

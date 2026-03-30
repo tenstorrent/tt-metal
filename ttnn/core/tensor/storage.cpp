@@ -97,7 +97,7 @@ DeviceStorage::DeviceStorage(
         this->root_mesh_buffer = nullptr;
         return;
     }
-    CMAKE_UNIQUE_NAMESPACE::validate_mesh_coordinates(coords_, *get_device());
+    CMAKE_UNIQUE_NAMESPACE::validate_mesh_coordinates(coords_, get_device());
 }
 
 Buffer* DeviceStorage::get_buffer() const {
@@ -141,12 +141,7 @@ distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() con
     return this->mesh_buffer ? this->mesh_buffer->device() : nullptr;
 }
 
-distributed::MeshDevice* DeviceStorage::get_device() const {
-    if (this->mesh_buffer != nullptr) {
-        return this->mesh_buffer->device();
-    }
-    TT_THROW("Buffer is not allocated");
-}
+distributed::MeshDevice& DeviceStorage::get_device() const { return *get_mesh_buffer().device(); }
 
 bool DeviceStorage::is_uniform_storage() const {
     if (mesh_buffer == nullptr) {

@@ -70,8 +70,8 @@ private:
 //   - The MeshCoordinates obtained from get_coords will be within the boundaries of the underlying device memory.
 //   - Can be switched to the deallocated state by calling deallocate.
 // - Deallocated: the underlying device memory is released.
-//   - Query of device memory state/ coordinates/ device will throw.
-//   - is_uniform_storage will be undefined (currently returns true for backward compatibility).
+//   - Query of device memory state/ device will throw.
+//   - get_coords/ is_uniform_storage will be undefined (for transition, ideally they should all throw).
 //   - Calls to deallocate will have no effect.
 struct DeviceStorage {
     // Construct a DeviceStorage that is deallocated
@@ -115,7 +115,7 @@ struct DeviceStorage {
 
     // Get the device the device memory is allocated on
     // Throws if the DeviceStorage is not allocated.
-    distributed::MeshDevice* get_device() const;
+    distributed::MeshDevice& get_device() const;
 
     // Returns the MeshDevice pointer if mesh_buffer exists, or nullptr otherwise.
     // Unlike get_device(), this does NOT throw when the buffer is deallocated.
@@ -138,7 +138,6 @@ struct DeviceStorage {
     bool is_uniform_storage() const;
 
     // Returns the coordinates the tensor spans across.
-    // Throws if the DeviceStorage is not allocated.
     std::span<const distributed::MeshCoordinate> get_coords() const;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
