@@ -322,6 +322,15 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_sender_idx"),
     };
 
+    // EH matmul CB1 Reset Address
+    uint32_t eh_in1_base_wr = 0;
+    uint32_t eh_in1_base_rd = 0;
+    // if constexpr (Core::is_eh_matmul_core) {
+    //     auto& iface = get_local_cb_interface(eh_in1_cb);
+    //     eh_in1_base_wr = iface.fifo_wr_ptr;
+    //     eh_in1_base_rd = iface.fifo_rd_ptr;
+    // }
+
 #elif defined(COMPILE_FOR_BRISC)
     // ========================================================================
     // BRISC — CCL broadcast reader, mcast sender, argmax writer,
@@ -668,6 +677,7 @@ void kernel_main() {
             uint32_t rmsnorm_buffer_addr = get_read_ptr(rmsnorm_input_cb);
             uint32_t metadata_src = rmsnorm_buffer_addr + activation_size_bytes;
 
+            // Write the metadata to the base token buffer on the argmax final core
             uint64_t metadata_dst = get_noc_addr(argmax_noc_x, argmax_noc_y, verify_output_staging_addr);
             noc_async_write(metadata_src, metadata_dst, metadata_size);
             noc_async_write_barrier();
@@ -801,7 +811,7 @@ void kernel_main() {
 #endif
 
         // ====================================================================
-        // [MTP] Second mcast — multicast [h_norm|e_norm] from sender to all cores
+        // [MTP] Second mcast — multicast [e_norm|h_norm] from sender to all cores
         // ====================================================================
         {
             deepseek_b1_ops::Mcast::Op<
@@ -814,6 +824,17 @@ void kernel_main() {
             DeviceZoneScopedN("MTP_EH_MCAST");
             mcast_eh(mcast_eh_args);
         }
+
+#if defined(COMPILE_FOR_NCRISC)
+        if constexpr (Core::is_eh_matmul_core) {
+            constexpr uint32_t _eh_in0_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
+            invalidate_l1_cache();
+            uint32_t _base = get_read_ptr(_eh_in0_cb);
+            volatile uint16_t* _p0 = reinterpret_cast<volatile uint16_t*>(_base);
+            volatile uint16_t* _p7168 = reinterpret_cast<volatile uint16_t*>(_base + 14336);
+            DPRINT << "EH_IN0[0]=" << BF16(_p0[0]) << " [7168]=" << BF16(_p7168[0]) << ENDL();
+        }
+#endif
 
 #if defined(COMPILE_FOR_TRISC) || defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_eh_matmul_core) {
@@ -875,9 +896,11 @@ void kernel_main() {
             // Read the speculative token from the argmax socket CB (produced by spec stage argmax)
             constexpr uint32_t argmax_socket_cb = ArgmaxCTArgs::socket_cb_id;
             cb_wait_front(argmax_socket_cb, 1);
+            invalidate_l1_cache();
             uint32_t speculative_token =
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
-            invalidate_l1_cache();
+
+            DPRINT << "speculative_token=" << speculative_token << ENDL();
 
             // Read the base token from metadata L1 (transferred by NCRISC during the broadcast phase)
             auto metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_verify_output_staging_addr);
@@ -924,6 +947,7 @@ void kernel_main() {
                     constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages") + 1;
                     constexpr uint32_t eh_gather_total_bytes =
                         get_named_compile_time_arg_val("gather_send_total_bytes");
+
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                         sampling_args.socket_config_addr, eh_gather_dst_cb, eh_gather_num_pages, eh_gather_total_bytes);
                 } else {

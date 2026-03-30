@@ -24,6 +24,7 @@
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/rmsnorm.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
+
 #endif
 
 namespace deepseek_b1_ops {
@@ -156,8 +157,9 @@ struct RMSNorm {
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile_block(0, CTArgs::output_cb, num_tiles);
-                cb_push_back(CTArgs::output_cb, num_tiles);
                 DPRINT << "<rn_pb" << ENDL();
+
+                cb_push_back(CTArgs::output_cb, num_tiles);
                 tile_regs_release();
             }
         }

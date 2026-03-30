@@ -52,6 +52,13 @@ def _is_singleton_prefix_shape(shape, expected_last_dim: int) -> bool:
     return all(d == 1 for d in dims[:-1])
 
 
+# SpecLMHeadStage pads the broadcast/intermediate tensor to (M, K + N) BF16 columns; the last N columns
+# hold token metadata (see demo/stage.py). RMSNorm + gamma still apply only to the first K activations.
+# If we use input_shape[-1] for RMS tile picking, (K+32)//32 can make (num_cols % 32) != 0 and incorrectly
+# select the 16x32 RMS path while rms_num_tiles stays 7 (seven 32x32 tiles = K elements) — wrong norm.
+_SPEC_VERIFY_METADATA_BF16_COLS = 32
+
+
 class LMHeadSampling:
     """
     LM head sampling vocab projection: CCL broadcast + mcast + matmul via ttnn.generic_op.
@@ -411,7 +418,7 @@ class LMHeadSampling:
         in0_tile = input_tensor_sample.get_tile()
         input_shape = input_tensor_sample.shape
         data_format = input_tensor_sample.dtype
-        numel = int(input_shape[0]) * int(input_shape[1])
+        numel = 7168  # int(input_shape[0]) * int(input_shape[1])
         scalar_packed = float_to_uint32(1.0 / math.sqrt(float(numel)))
         epsilon_packed = float_to_uint32(epsilon)
 
@@ -419,10 +426,14 @@ class LMHeadSampling:
         # Matmul shape info from input and vocab tensors
         num_tiles_k = 224  # input_shape[1] // in0_tile.tile_shape[1]
         print(f"[lm_head_sampling] num_tiles_k={num_tiles_k}", flush=True)
+        # RMS tile geometry follows activation width K, not padded (K + metadata) broadcast width.
+        activation_cols_for_rms = int(input_shape[1])
+        if is_mtp_verify_stage:
+            activation_cols_for_rms -= _SPEC_VERIFY_METADATA_BF16_COLS
         # RMSNorm in this path must match broadcast_rms tile/page interpretation.
         full_32x32_tile = ttnn.Tile((32, 32))
         half_16x32_tile = ttnn.Tile((16, 32))
-        is_16x32_tile = (input_shape[1] // full_32x32_tile.tile_shape[1]) % full_32x32_tile.tile_shape[0] != 0
+        is_16x32_tile = (activation_cols_for_rms // full_32x32_tile.tile_shape[1]) % full_32x32_tile.tile_shape[0] != 0
         rms_interpreted_tile = half_16x32_tile if is_16x32_tile else full_32x32_tile
         rms_tile_height, rms_tile_width = rms_interpreted_tile.tile_shape
         rms_tile_size = rms_interpreted_tile.get_tile_size(data_format)
@@ -468,7 +479,7 @@ class LMHeadSampling:
             eh_dtype = eh_projection_tensor_sample.dtype
             eh_proj_tile = eh_projection_tensor_sample.get_tile()
             eh_proj_tile_size = eh_proj_tile.get_tile_size(eh_dtype)
-            eh_subblock_k = eh_subblock_k or eh_concat_rms_tiles
+            eh_subblock_k = eh_concat_rms_tiles
             eh_num_subblocks_k = eh_num_tiles_k // eh_subblock_k
             eh_out_num_tiles = eh_out_w_per_core  # M=1, so out tiles = per_core_n
             # Compute subblock_w: max dest tiles that evenly divide per_core_n
@@ -485,7 +496,7 @@ class LMHeadSampling:
             )
             print("[lm_head_sampling] get_max_page_size_and_num_pages done", flush=True)
             eh_in1_block_size_bytes = eh_subblock_k * eh_proj_tile_size
-            eh_num_in1_buffers = 3  # Double buffering (must match NumBuffers=2 in dram_streaming_matmul.hpp)
+            eh_num_in1_buffers = 3  # Triple buffering (must match NumBuffers=3 in dram_streaming_matmul.hpp)
             eh_in1_CB_tiles = eh_subblock_k * eh_num_in1_buffers
             eh_in1_CB_size = eh_in1_CB_tiles * eh_proj_tile_size
         else:
@@ -980,7 +991,6 @@ class LMHeadSampling:
                     ("gather_sender_grid_end_y", 0),
                     ("gather_row_major", 1),
                     ("gather_receiver_data_addr", eh_gather_receiver_data_addr),
-                    ("gather_sender_idx", 0),
                     ("has_bypass_socket_output", 0),
                     ("has_bypass_socket_input", 0),
                 ]
@@ -1147,10 +1157,10 @@ class LMHeadSampling:
                         int(sender_core_phys.y),  # input_core_noc_y
                         mtp_argmax_output_addr,  # output_index_tensor buffer address (reused for storing argmax final token)
                     ]
-                if is_mtp_verify_stage:
-                    ref_token_dev = ttnn.get_device_tensors(base_token_tensor)[device_idx]
+                if is_mtp_verify_stage and is_exit_device:
+                    base_token_buffer = ttnn.get_device_tensors(base_token_tensor)[device_idx]
                     ncrisc_bcast_common_args += [
-                        int(ref_token_dev.buffer_address()),
+                        int(base_token_buffer.buffer_address()),
                     ]
 
                 brisc_bcast_common_args = bcast_config.get_brisc_common_rt_args(coord) + [
@@ -1165,14 +1175,11 @@ class LMHeadSampling:
                     int(persistent_target_node.chip_id),
                     persistent_next_iter_global_sem_addr,
                 ]
-                if is_mtp_verify_stage:
+                if is_mtp_verify_stage and is_exit_device:
                     brisc_bcast_common_args += [
-                        int(ref_token_dev.buffer_address()),  # [13] verify_output_staging_addr
+                        int(base_token_buffer.buffer_address()),  # [13] verify_output_staging_addr
                     ]
-                    print(
-                        f"[OP:{device_idx}:J] verify_output_staging_addr={int(ref_token_dev.buffer_address())}",
-                        flush=True,
-                    )
+
                 # ================================================================
                 # Circular buffer descriptors
                 # ================================================================

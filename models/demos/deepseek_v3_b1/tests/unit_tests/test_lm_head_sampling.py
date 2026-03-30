@@ -1103,17 +1103,20 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
     Returns list of (base_token, spec_token) tuples.
     """
     K = _EMBED_HIDDEN
-    n_total = _LM_HEAD_N_SYNTHETIC
     num_devices = 8
-
+    base_embed_w = _SyntheticWeightProvider.make_embedding_torch()
     lm_w, norm_w = _SyntheticWeightProvider.make_lm_head_torch()
     torch_gamma = norm_w.unsqueeze(0)
-    torch_b = lm_w[:n_total, :].T
-    torch_indices_flat = torch.arange(n_total, dtype=torch.int32).reshape(1, n_total)
-
+    torch_b = lm_w[:, :].T
+    torch_indices_flat = torch.arange(_VOCAB_SIZE, dtype=torch.int32).reshape(1, _VOCAB_SIZE)
     torch_embedding, torch_h_gamma, torch_e_gamma, torch_eh_proj = _SyntheticWeightProvider.make_mtp_torch(num_devices)
 
+    torch_eh_proj_bf8 = ttnn.from_torch(torch_eh_proj, dtype=ttnn.bfloat8_b)
+    torch_eh_proj = ttnn.to_torch(torch_eh_proj_bf8).to(torch.bfloat16)
+
     results = []
+    debug_info = []
+    chunk_size = K // 8
     for iteration in range(iterations):
         row_idx = iteration % K
         torch_input = torch.zeros((1, K), dtype=torch.bfloat16)
@@ -1134,6 +1137,45 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
         )
         base_token = base_token_tensor.to(torch.uint32).item()
 
+        _h_var = torch_input.float().pow(2).mean(-1, keepdim=True)
+        _h_norm = torch_input.float() * torch.rsqrt(_h_var + 1e-6) * torch_h_gamma.float()
+        _tok_emb = torch_embedding[base_token, :].unsqueeze(0).float()
+        _e_var = _tok_emb.pow(2).mean(-1, keepdim=True)
+        _e_norm = _tok_emb * torch.rsqrt(_e_var + 1e-6) * torch_e_gamma.float()
+        _concat = torch.cat([_e_norm, _h_norm], dim=-1)
+        _logit_chunks = [mtp_logits[0, _i].item() for _i in range(0, K, chunk_size)]
+
+        # Spec stage (verify): same RMSNorm as LMHeadSampling.golden on mtp_logits (pre–vocab matmul).
+        _eps = 1e-6
+        _mtp_f = mtp_logits.float()
+        _spec_var = _mtp_f.pow(2).mean(-1, keepdim=True)
+        _spec_rmsnorm_out = _mtp_f * torch.rsqrt(_spec_var + _eps) * torch_gamma.float()
+        _spec_rms_chunks = [_spec_rmsnorm_out[0, _i].item() for _i in range(0, K, chunk_size)]
+
+        print(
+            f"[SYNTH_GOLDEN] iter {iteration} spec_rmsnorm "
+            f"[0]={_spec_rmsnorm_out[0, 0].item():.6f} "
+            f"[{K // 2}]={_spec_rmsnorm_out[0, K // 2].item():.6f} "
+            f"[{K - 1}]={_spec_rmsnorm_out[0, K - 1].item():.6f} "
+            f"absmax={_spec_rmsnorm_out.abs().max().item():.6f}",
+            flush=True,
+        )
+        _spec_chunk_str = " ".join(f"[{i * chunk_size}]={v:.6f}" for i, v in enumerate(_spec_rms_chunks))
+        print(f"[SYNTH_GOLDEN] iter {iteration} spec_rmsnorm chunks: {_spec_chunk_str}", flush=True)
+
+        debug_info.append(
+            {
+                "concat_0": _concat[0, 0].item(),
+                "concat_7168": _concat[0, 7168].item(),
+                "logit_chunks": _logit_chunks,
+                "spec_rmsnorm_0": _spec_rmsnorm_out[0, 0].item(),
+                "spec_rmsnorm_mid": _spec_rmsnorm_out[0, K // 2].item(),
+                "spec_rmsnorm_last": _spec_rmsnorm_out[0, K - 1].item(),
+                "spec_rmsnorm_absmax": _spec_rmsnorm_out.abs().max().item(),
+                "spec_rmsnorm_chunks": _spec_rms_chunks,
+            }
+        )
+
         spec_token_tensor, _ = LMHeadSampling.golden(
             mtp_logits,
             torch_gamma.float(),
@@ -1145,7 +1187,7 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
         spec_token = spec_token_tensor.to(torch.uint32).item()
 
         results.append((base_token, spec_token))
-    return results
+    return results, debug_info
 
 
 def _prepare_reference_mtp_weights(device: ttnn.MeshDevice, hf_state_dict) -> DeepSeekV3MTPWeights:
@@ -4558,7 +4600,7 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
 
         if pipeline.my_mesh_id == 0:
             print(f"[TEST] computing golden...", flush=True)
-            golden = _compute_expected_spec_decode_tokens_synthetic(iterations)
+            golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
             print(f"[TEST] golden computed, creating config", flush=True)
             for iteration in range(iterations):
                 print(f"[TEST P{pid}] iter {iteration} write_token", flush=True)
@@ -4584,7 +4626,10 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
                 tok1_type = raw[5].item()
                 tok1_pos = raw[6].item()
 
-                # expected_base, expected_spec = golden[iteration]
+                dbg = golden_debug[iteration]
+                chunk_strs = " ".join(f"[{i * 896}]={v:.6f}" for i, v in enumerate(dbg["logit_chunks"]))
+                spec_rms_chunk_strs = " ".join(f"[{i * 896}]={v:.6f}" for i, v in enumerate(dbg["spec_rmsnorm_chunks"]))
+                expected_base, expected_spec = golden[iteration]
                 type_name = {0: "BASE", 1: "SPEC"}
                 print(
                     f"[TEST P{pid}] iter {iteration} "
@@ -4592,6 +4637,19 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
                     f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
                     f"golden base token={golden[iteration][0]}",
                     f"golden spec token={golden[iteration][1]}",
+                    flush=True,
+                )
+                print(
+                    f"[TEST P{pid}] iter {iteration} "
+                    f"golden concat[0]={dbg['concat_0']:.6f} concat[7168]={dbg['concat_7168']:.6f} "
+                    f"mtp_logits: {chunk_strs}",
+                    flush=True,
+                )
+                print(
+                    f"[TEST P{pid}] iter {iteration} "
+                    f"golden spec_rmsnorm[0]={dbg['spec_rmsnorm_0']:.6f} "
+                    f"[mid]={dbg['spec_rmsnorm_mid']:.6f} [last]={dbg['spec_rmsnorm_last']:.6f} "
+                    f"absmax={dbg['spec_rmsnorm_absmax']:.6f} chunks: {spec_rms_chunk_strs}",
                     flush=True,
                 )
         print(f"[TEST P{pid}] all iterations done, barrier", flush=True)

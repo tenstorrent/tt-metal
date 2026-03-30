@@ -123,6 +123,7 @@ struct Gather {
 
                 // Get source address from CB
                 uint32_t input_data_addr = get_read_ptr(args.src_cb);
+
                 noc_async_write_one_packet<true, true>(input_data_addr, dst_data_noc_addr, args.data_size_bytes);
                 // BH does not support posted atomics due to a bug
                 noc_semaphore_inc(dst_semaphore_noc_addr, 1);
@@ -142,7 +143,6 @@ struct Gather {
             if constexpr (IsReceiverCore) {
                 volatile tt_l1_ptr uint32_t* noc0_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)args.noc0_receiver_semaphore_addr;
-                DPRINT << ">gr" << ENDL();
                 // Reserve space in destination CB
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
                 // DPRINT << ">gather 3" << ENDL();
@@ -154,7 +154,7 @@ struct Gather {
                     noc_semaphore_wait(noc1_receiver_semaphore_addr_ptr, args.noc1_num_senders);
                     noc_semaphore_set(noc1_receiver_semaphore_addr_ptr, 0);
                 }
-                DPRINT << "<gr" << ENDL();
+
                 // Push to destination CB after data arrived
                 cb_push_back(args.dst_cb, args.dst_num_pages);
             }

@@ -134,6 +134,7 @@ struct Broadcast {
                         socket_pop_pages(recv, args.socket_num_pages);
                         socket_notify_sender(recv, 1 - noc_index);
                         update_socket_config(recv);
+
                     } else {
 #endif
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);

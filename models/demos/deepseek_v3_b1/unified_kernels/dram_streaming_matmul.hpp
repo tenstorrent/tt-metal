@@ -208,7 +208,8 @@ struct DRAMStreamingMatmul {
             if constexpr (ResetCBIn1) {
                 cb_in1_base = CBIn1ResetAddr;
             } else {
-                cb_in1_base = l1_write_addr_in1;  // fresh kernel: get_write_ptr == CB base
+                auto& cb_in1_iface = get_local_cb_interface(CTArgs::cb_in1);
+                cb_in1_base = cb_in1_iface.fifo_limit - cb_in1_iface.fifo_size;
             }
             uint32_t cb_in1_end = cb_in1_base + num_buffers * CTArgs::in1_block_size_bytes;
 
@@ -279,9 +280,7 @@ struct DRAMStreamingMatmul {
             if constexpr (CTArgs::fuse_silu) {
                 PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
             }
-            DPRINT << ">dsmm wait" << ENDL();
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
-            DPRINT << "<dsmm wait" << ENDL();
             for (uint32_t sb_n = 0; sb_n < num_subblocks_n; sb_n++) {
                 cb_reserve_back(CTArgs::cb_out, CTArgs::subblock_w);
 
@@ -369,11 +368,9 @@ struct DRAMStreamingMatmul {
             if constexpr (CTArgs::fp32_dest_acc_en != DST_ACCUM_MODE) {
                 deepseek_compute_kernel_hw_startup<DST_ACCUM_MODE>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
             }
-            DPRINT << "<dsmm uninit" << ENDL();
             if constexpr (PopIn0) {
                 cb_pop_front(CTArgs::cb_in0, num_tiles_k);
             }
-            DPRINT << "<dsmm popinit" << ENDL();
 #endif
         }
     };  // class Op

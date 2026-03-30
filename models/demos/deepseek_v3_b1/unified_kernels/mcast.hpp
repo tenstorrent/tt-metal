@@ -386,12 +386,7 @@ struct Mcast {
                 DPRINT << ">mcast 1 src=" << args.input_data_addr << " dst=" << args.mcast_receiver_data_addr
                        << " sz=" << args.data_size_bytes << ENDL();
                 cb_wait_front(args.src_cb, args.src_num_pages);
-                {
-                    invalidate_l1_cache();
-                    auto _s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(args.input_data_addr);
-                    DPRINT << ">mcast 2 src[0]=" << (uint32_t)_s[0] << " [1]=" << (uint32_t)_s[1]
-                           << " [2]=" << (uint32_t)_s[2] << " [3]=" << (uint32_t)_s[3] << ENDL();
-                }
+
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -432,7 +427,7 @@ struct Mcast {
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
                 cb_push_back(args.dst_cb, args.dst_num_pages);
-                DPRINT << ">mcast 7" << ENDL();
+
             } else if constexpr (IsMcastGridCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(args.data_receiver_semaphore_addr);
