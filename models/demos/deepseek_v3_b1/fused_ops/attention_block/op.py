@@ -123,9 +123,8 @@ class AttentionBlock:
             return normalized * gamma
 
         position_id = position_ids[0]
-        # RMSNorm -> Matmul: [1, K] @ [K, N] -> [1, N]
-        input_layernorm = rmsnorm(input_tensor, gamma_tensor)
-        matmul_result = input_layernorm @ matmul_weights_tensor
+        # Q path: raw input -> Matmul (no RMSNorm before Q matmul)
+        matmul_result = input_tensor @ matmul_weights_tensor
 
         # RMSNorm2 -> Matmul2: [1, N] @ [N, M] -> [1, M]
         matmul2_result = rmsnorm(matmul_result, rmsnorm2_gamma_tensor) @ matmul2_weights_tensor
@@ -155,7 +154,8 @@ class AttentionBlock:
 
         full_q = torch.concat([qnope_output, qrope_output], dim=-1).reshape(1, 1, num_qnope_heads, combined_head_dim)
 
-        # KV Cache Branch
+        # KV Cache Branch: RMSNorm(raw input) -> DKV Matmul
+        input_layernorm = rmsnorm(input_tensor, gamma_tensor)
         dkv = input_layernorm @ dkv_matmul_weights_tensor
         kv, k_rope = torch.split(dkv, [nope_dim, rope_dim], dim=-1)
         kv = rmsnorm(kv, dkv_rmsnorm_gamma_tensor)
