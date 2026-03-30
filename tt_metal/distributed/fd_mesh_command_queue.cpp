@@ -1397,7 +1397,6 @@ int FDMeshCommandQueue::get_prefetcher_cache_sizeB() const {
     return this->prefetcher_cache_manager_->get_cache_sizeB();
 }
 
-
 void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
     if (in_use_) {
         size_t num_sub_devices = mesh_device_->num_sub_devices();
