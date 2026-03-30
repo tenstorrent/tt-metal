@@ -2,16 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Unified same-NOC multicast sender with M_block x N_block streaming.
-// Row senders (c_0) read M_block rows indexed by m_sub, col senders (c_1) read N_block rows indexed by n_sub.
-// Loop: for m_sub: for n_sub: for blk: read + multicast.
+// Multicast sender — runs on RISCV_0 (row senders) or RISCV_1 (col senders).
+// Reads input tiles from DRAM and multicasts to receiver cores.
+// Row senders (c_0): RISCV_0/NOC_0, read M_block rows indexed by m_sub.
+// Col senders (c_1): RISCV_1/NOC_1, read N_block rows indexed by n_sub.
 // Even K-columns → lower/diag, odd K-columns → upper. One handshake per K-block batch.
 // Pushes own-parity blocks to local CB before multicast (critical for avoiding deadlock).
 
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "metal/common/dataflow_utils.hpp"
+#include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Matmul compute kernel with M_block x N_block streaming for Mpc×Mpc gram matmul.
-// in0: M_block rows per K-block, in1: N_block rows per K-block.
+// Matmul compute kernel — runs on TRISC (all 3 TRISC processors).
+// Computes M_block x N_block output blocks for the Mpc×Mpc gram matmul.
 // Output streamed per (m_sub, n_sub) block:
 //   REDUCE_SENDER/TRANSPOSE: matmul → c_2, pack c_2 → c_5 (row-major), DM sends c_5 to partner
 //   REDUCE_ACCUMULATOR: matmul → c_2, add own c_2(FP32) + partner's c_5(BF16) → c_6
