@@ -76,7 +76,6 @@ void kernel_main() {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
     }
 
-    uint32_t chunk_count = 0;
     uint32_t sem_target = 0;
     uint32_t sem2_target = 0;
 
@@ -182,7 +181,7 @@ void kernel_main() {
             uint32_t output_tiles_read = start_tiles_read;
             auto get_next_output_tile_id = [&]() -> uint32_t { return output_tile_id_start + (output_tiles_read++); };
 
-            chunk_count = 0;
+            uint32_t chunk_count = 0;
             for (uint32_t c = 0; c < slice_C; ++c) {
                 // reset addr counters
                 input_pages_read_in_row = interm_pages_read_in_row = start_pages_read_in_row;
@@ -294,6 +293,7 @@ void kernel_main() {
 
         // Reset the semaphore before the next batch
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out2_ready_sem), 0);
         sem_target = 0;
         sem2_target = 0;
     }

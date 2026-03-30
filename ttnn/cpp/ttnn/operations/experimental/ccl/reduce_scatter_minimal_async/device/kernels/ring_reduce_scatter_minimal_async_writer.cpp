@@ -383,14 +383,16 @@ void kernel_main() {
                             if (i == ring_size / 2 - 1) {
                                 // HACK make this proper, with comments, fix hardcoded conditional
                                 // HACK cleanup semaphore is not handled for this case (of split even/odd sem incrs)
-                                if (is_even_chunk && even_chunk_count % chunks_per_sync == 0) {
+                                if (is_even_chunk && even_chunk_count == chunks_per_sync) {
+                                    even_chunk_count = 0;
                                     fabric_unicast_noc_unicast_atomic_inc_with_state<
                                         UnicastAtomicIncUpdateMask::DstAddr>(
                                         fabric_direction_connection,
                                         pkt_hdr_seminc,
                                         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{even_core_sem_noc_addr, 0});
                                     noc_async_writes_flushed();
-                                } else if (!is_even_chunk && odd_chunk_count % chunks_per_sync == 0) {
+                                } else if (!is_even_chunk && odd_chunk_count == chunks_per_sync) {
+                                    odd_chunk_count = 0;
                                     fabric_unicast_noc_unicast_atomic_inc_with_state<
                                         UnicastAtomicIncUpdateMask::DstAddr>(
                                         fabric_direction_connection,
