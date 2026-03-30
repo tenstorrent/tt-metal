@@ -709,9 +709,16 @@ __attribute__((noinline)) bool are_packers_configured_correctly(
     static_assert(NUM_PACKERS == 1, "NUM_PACKERS must be 1");
     const pack_config_t config     = read_pack_config()[0];
     const pack_counters_t counters = read_pack_counters()[0];
+    // Must match set_packer_config / reconfig_packer_data_format: gasket feeds Float16 into the packer for Fp8_e4m3 L1 output.
+    const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
+    const std::uint32_t pack_output_dst_format = masked_data_format(pack_dst_format);
 
-    const bool isDataFormatCorrect =
-        (config.in_data_format == masked_data_format(pack_src_format)) && (config.out_data_format == masked_data_format(pack_dst_format));
+    // Special case for Fp8_e4m3: Gasket feeds Float16 into the packer for L1 output.
+    const std::uint32_t pack_hw_src_format =
+        ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)) ? to_underlying(DataFormat::Float16) : pack_output_src_format;
+
+    const bool isDataFormatCorrect = (config.in_data_format == pack_hw_src_format) && (config.out_data_format == pack_output_dst_format);
+
     const bool isFaceRDimCorrect = (program_type == PackerProgramType::ProgramByTile) ? true : (counters.pack_reads_per_xy_plane == face_r_dim);
     return isDataFormatCorrect && isFaceRDimCorrect;
 }
