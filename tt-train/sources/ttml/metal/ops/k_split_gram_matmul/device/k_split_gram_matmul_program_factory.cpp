@@ -204,7 +204,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     }
 
     // === Sender kernels ===
-    // Row sender+reduce for (0,0): RISCV_0/NOC_0, sends partial to helper (10,0)
+    // Row sender+reduce for (0,0): RISCV_0/NOC_0, sends partial to helper (grid_dim, 0)
     KernelHandle row_sender_reduce_kid;
     {
         std::vector<uint32_t> ct = {
