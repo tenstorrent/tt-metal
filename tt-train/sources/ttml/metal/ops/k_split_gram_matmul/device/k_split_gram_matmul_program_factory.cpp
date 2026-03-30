@@ -234,27 +234,24 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     }
 
     // Row sender for (0, y>0): RISCV_0/NOC_0, CB c_0
-    KernelHandle row_sender_kid = 0;
-    if (!row_senders.empty()) {
-        std::vector<uint32_t> ct = {
-            num_tiles,
-            tile_sz,
-            row_sender_sem,
-            row_receiver_sem,
-            row_sender_sem2,
-            row_receiver_sem2,
-            (uint32_t)tt::CBIndex::c_0,
-            block_sz,
-            cb_size,
-            num_m_blocks,
-            num_n_blocks};
-        TensorAccessorArgs(*input.buffer()).append_to(ct);
-        row_sender_kid = CreateKernel(
-            program,
-            sender_path,
-            make_core_range_set(row_senders),
-            DataMovementConfig{.processor = risc_0, .noc = noc_0, .compile_args = ct});
-    }
+    std::vector<uint32_t> row_sender_ct = {
+        num_tiles,
+        tile_sz,
+        row_sender_sem,
+        row_receiver_sem,
+        row_sender_sem2,
+        row_receiver_sem2,
+        (uint32_t)tt::CBIndex::c_0,
+        block_sz,
+        cb_size,
+        num_m_blocks,
+        num_n_blocks};
+    TensorAccessorArgs(*input.buffer()).append_to(row_sender_ct);
+    const KernelHandle row_sender_kid = CreateKernel(
+        program,
+        sender_path,
+        make_core_range_set(row_senders),
+        DataMovementConfig{.processor = risc_0, .noc = noc_0, .compile_args = row_sender_ct});
 
     // Col sender: RISCV_1/NOC_1, CB c_1
     KernelHandle col_sender_kid;
@@ -330,153 +327,150 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             row_lower_diag.push_back(c);  // x == y, diagonal
     }
 
-    KernelHandle row_lower_offdiag_kid = 0, row_lower_diag_kid = 0;
-    KernelHandle row_upper_recv_kid = 0;
-    KernelHandle col_lower_recv_kid = 0, col_lower_recv_edge_kid = 0, col_upper_recv_kid = 0;
+    // Lower off-diagonal: REDUCE_SEND
+    const KernelHandle row_lower_offdiag_kid = CreateKernel(
+        program,
+        receiver_writer_path,
+        make_core_range_set(row_lower_offdiag),
+        DataMovementConfig{
+            .processor = risc_0,
+            .noc = noc_0,
+            .compile_args = make_recv_send_ct(row_sender_sem, row_receiver_sem),
+            .defines = {{"REDUCE_SEND", "1"}}});
 
-    if (!row_lower_offdiag.empty()) {
-        auto ct = make_recv_send_ct(row_sender_sem, row_receiver_sem);
-        row_lower_offdiag_kid = CreateKernel(
-            program,
-            receiver_writer_path,
-            make_core_range_set(row_lower_offdiag),
-            DataMovementConfig{
-                .processor = risc_0, .noc = noc_0, .compile_args = ct, .defines = {{"REDUCE_SEND", "1"}}});
-    }
-
-    // Lower diagonal (x == y, y > 0): REDUCE_SEND — send partial to helper (no transpose)
-    if (!row_lower_diag.empty()) {
-        auto ct = make_recv_send_ct(row_sender_sem, row_receiver_sem);
-        row_lower_diag_kid = CreateKernel(
-            program,
-            receiver_writer_path,
-            make_core_range_set(row_lower_diag),
-            DataMovementConfig{
-                .processor = risc_0, .noc = noc_0, .compile_args = ct, .defines = {{"REDUCE_SEND", "1"}}});
-    }
+    // Lower diagonal (x == y, y > 0): REDUCE_SEND to helper
+    const KernelHandle row_lower_diag_kid = CreateKernel(
+        program,
+        receiver_writer_path,
+        make_core_range_set(row_lower_diag),
+        DataMovementConfig{
+            .processor = risc_0,
+            .noc = noc_0,
+            .compile_args = make_recv_send_ct(row_sender_sem, row_receiver_sem),
+            .defines = {{"REDUCE_SEND", "1"}}});
 
     // Row upper receivers (x > y): REDUCE_RECV — receive partner's partial, write combined
-    if (!row_upper_recv.empty()) {
-        auto ct = make_recv_write_ct(row_sender_sem2, row_receiver_sem2);
-        auto recv_defines = std::map<std::string, std::string>{{"REDUCE_RECV", "1"}};
-        if (mirror_active)
-            recv_defines["MIRROR_OUTPUT"] = "1";
-        row_upper_recv_kid = CreateKernel(
-            program,
-            receiver_writer_path,
-            make_core_range_set(row_upper_recv),
-            DataMovementConfig{.processor = risc_0, .noc = noc_0, .compile_args = ct, .defines = recv_defines});
-    }
+    auto upper_recv_defines = std::map<std::string, std::string>{{"REDUCE_RECV", "1"}};
+    if (mirror_active)
+        upper_recv_defines["MIRROR_OUTPUT"] = "1";
+    const KernelHandle row_upper_recv_kid = CreateKernel(
+        program,
+        receiver_writer_path,
+        make_core_range_set(row_upper_recv),
+        DataMovementConfig{
+            .processor = risc_0,
+            .noc = noc_0,
+            .compile_args = make_recv_write_ct(row_sender_sem2, row_receiver_sem2),
+            .defines = upper_recv_defines});
 
     // Col lower receivers (interior, x>0, y≥x): plain receiver
-    if (!col_lower_recv_interior.empty()) {
-        std::vector<uint32_t> ct = {
-            recv_tiles,
-            tile_sz,
-            col_sender_sem,
-            col_receiver_sem,
-            (uint32_t)tt::CBIndex::c_1,
-            block_sz,
-            num_m_blocks,
-            num_n_blocks};
-        col_lower_recv_kid = CreateKernel(
-            program,
-            receiver_path,
-            make_core_range_set(col_lower_recv_interior),
-            DataMovementConfig{.processor = risc_1, .noc = noc_1, .compile_args = ct});
-    }
+    const KernelHandle col_lower_recv_kid = CreateKernel(
+        program,
+        receiver_path,
+        make_core_range_set(col_lower_recv_interior),
+        DataMovementConfig{
+            .processor = risc_1,
+            .noc = noc_1,
+            .compile_args = {
+                recv_tiles,
+                tile_sz,
+                col_sender_sem,
+                col_receiver_sem,
+                (uint32_t)tt::CBIndex::c_1,
+                block_sz,
+                num_m_blocks,
+                num_n_blocks}});
 
     // Col lower receivers (edge, x=0, y>0): REDUCE_SEND to upper core (y, 0)
-    if (!col_lower_recv_edge.empty()) {
-        std::vector<uint32_t> ct = {
-            recv_tiles,
-            tile_sz,
-            col_sender_sem,
-            col_receiver_sem,
-            (uint32_t)tt::CBIndex::c_1,
-            block_sz,
-            send_out_cb,
-            out_tile_sz,
-            Mpc,
-            (uint32_t)tt::CBIndex::c_5,
-            reduce_sem,
-            num_m_blocks,
-            M_block,
-            num_n_blocks};
-        col_lower_recv_edge_kid = CreateKernel(
-            program,
-            receiver_writer_path,
-            make_core_range_set(col_lower_recv_edge),
-            DataMovementConfig{
-                .processor = risc_1, .noc = noc_1, .compile_args = ct, .defines = {{"REDUCE_SEND", "1"}}});
-    }
+    const KernelHandle col_lower_recv_edge_kid = CreateKernel(
+        program,
+        receiver_writer_path,
+        make_core_range_set(col_lower_recv_edge),
+        DataMovementConfig{
+            .processor = risc_1,
+            .noc = noc_1,
+            .compile_args =
+                {recv_tiles,
+                 tile_sz,
+                 col_sender_sem,
+                 col_receiver_sem,
+                 (uint32_t)tt::CBIndex::c_1,
+                 block_sz,
+                 send_out_cb,
+                 out_tile_sz,
+                 Mpc,
+                 (uint32_t)tt::CBIndex::c_5,
+                 reduce_sem,
+                 num_m_blocks,
+                 M_block,
+                 num_n_blocks},
+            .defines = {{"REDUCE_SEND", "1"}}});
 
     // Col upper receivers (y<x, y>0): plain receiver
-    if (!col_upper_recv.empty()) {
-        std::vector<uint32_t> ct = {
-            recv_tiles,
-            tile_sz,
-            col_sender_sem2,
-            col_receiver_sem2,
-            (uint32_t)tt::CBIndex::c_1,
-            block_sz,
-            num_m_blocks,
-            num_n_blocks};
-        col_upper_recv_kid = CreateKernel(
-            program,
-            receiver_path,
-            make_core_range_set(col_upper_recv),
-            DataMovementConfig{.processor = risc_1, .noc = noc_1, .compile_args = ct});
-    }
+    const KernelHandle col_upper_recv_kid = CreateKernel(
+        program,
+        receiver_path,
+        make_core_range_set(col_upper_recv),
+        DataMovementConfig{
+            .processor = risc_1,
+            .noc = noc_1,
+            .compile_args = {
+                recv_tiles,
+                tile_sz,
+                col_sender_sem2,
+                col_receiver_sem2,
+                (uint32_t)tt::CBIndex::c_1,
+                block_sz,
+                num_m_blocks,
+                num_n_blocks}});
 
     // === Diagonal helper kernels (x=grid_dim column) ===
-    KernelHandle helper_recv_kid = 0, helper_dram_reader_kid = 0;
-    {  // helpers
-        // Helper row receiver: REDUCE_RECV on RISCV_0 (receives diagonal's partial)
-        std::vector<uint32_t> ct_recv = {
-            recv_tiles,
-            tile_sz,
-            row_sender_sem2,
-            row_receiver_sem2,
-            (uint32_t)tt::CBIndex::c_0,
-            block_sz,
-            (uint32_t)tt::CBIndex::c_5,
-            reduce_sem,
-            Mpc,
-            num_m_blocks,
-            M_block,
-            num_n_blocks};
-        helper_recv_kid = CreateKernel(
-            program,
-            receiver_path,
-            helper_range,
-            DataMovementConfig{
-                .processor = risc_0, .noc = noc_0, .compile_args = ct_recv, .defines = {{"REDUCE_RECV", "1"}}});
+    // Helper row receiver: REDUCE_RECV on RISCV_0 (receives diagonal's partial)
+    const KernelHandle helper_recv_kid = CreateKernel(
+        program,
+        receiver_path,
+        helper_range,
+        DataMovementConfig{
+            .processor = risc_0,
+            .noc = noc_0,
+            .compile_args =
+                {recv_tiles,
+                 tile_sz,
+                 row_sender_sem2,
+                 row_receiver_sem2,
+                 (uint32_t)tt::CBIndex::c_0,
+                 block_sz,
+                 (uint32_t)tt::CBIndex::c_5,
+                 reduce_sem,
+                 Mpc,
+                 num_m_blocks,
+                 M_block,
+                 num_n_blocks},
+            .defines = {{"REDUCE_RECV", "1"}}});
 
-        // Helper DRAM reader: reads odd col tiles, then writes combined output (c_6) to DRAM
-        std::vector<uint32_t> ct_dram = {
-            recv_tiles,
-            tile_sz,
-            (uint32_t)tt::CBIndex::c_1,
-            block_sz,
-            (uint32_t)tt::CBIndex::c_6,
-            out_tile_sz,
-            Mpc,
-            padded_out_tiles,
-            num_m_blocks,
-            M_block,
-            num_n_blocks};
-        TensorAccessorArgs(*input.buffer()).append_to(ct_dram);
-        TensorAccessorArgs(*output.buffer()).append_to(ct_dram);
-        auto dram_defines = std::map<std::string, std::string>{};
-        if (mirror_active)
-            dram_defines["MIRROR_OUTPUT"] = "1";
-        helper_dram_reader_kid = CreateKernel(
-            program,
-            dram_reader_col_path,
-            helper_range,
-            DataMovementConfig{.processor = risc_1, .noc = noc_1, .compile_args = ct_dram, .defines = dram_defines});
-    }
+    // Helper DRAM reader: reads odd K-columns, writes combined output (c_6) to DRAM
+    std::vector<uint32_t> ct_dram = {
+        recv_tiles,
+        tile_sz,
+        (uint32_t)tt::CBIndex::c_1,
+        block_sz,
+        (uint32_t)tt::CBIndex::c_6,
+        out_tile_sz,
+        Mpc,
+        padded_out_tiles,
+        num_m_blocks,
+        M_block,
+        num_n_blocks};
+    TensorAccessorArgs(*input.buffer()).append_to(ct_dram);
+    TensorAccessorArgs(*output.buffer()).append_to(ct_dram);
+    auto dram_defines = std::map<std::string, std::string>{};
+    if (mirror_active)
+        dram_defines["MIRROR_OUTPUT"] = "1";
+    const KernelHandle helper_dram_reader_kid = CreateKernel(
+        program,
+        dram_reader_col_path,
+        helper_range,
+        DataMovementConfig{.processor = risc_1, .noc = noc_1, .compile_args = ct_dram, .defines = dram_defines});
 
     // === Compute ===
     // Different defines per core group for reduction mode
@@ -492,13 +486,11 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     std::vector<tt::tt_metal::CoreCoord> sender_transpose_cores;
     for (uint32_t y = 1; y < grid_dim; y++)
         for (uint32_t x = 0; x < y; x++) sender_transpose_cores.push_back({x, y});
-    if (!sender_transpose_cores.empty()) {
-        CreateKernel(
-            program,
-            compute_matmul_path,
-            make_core_range_set(sender_transpose_cores),
-            compute_cfg({{"REDUCE_SENDER_TRANSPOSE", "1"}}));
-    }
+    CreateKernel(
+        program,
+        compute_matmul_path,
+        make_core_range_set(sender_transpose_cores),
+        compute_cfg({{"REDUCE_SENDER_TRANSPOSE", "1"}}));
 
     // Diagonal: REDUCE_SENDER
     std::vector<tt::tt_metal::CoreCoord> sender_diag_cores;
@@ -507,22 +499,16 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         program, compute_matmul_path, make_core_range_set(sender_diag_cores), compute_cfg({{"REDUCE_SENDER", "1"}}));
 
     // Upper: REDUCE_ACCUMULATOR
-    const std::string accum_define = "REDUCE_ACCUMULATOR";
-
     std::vector<tt::tt_metal::CoreCoord> accum_cores;
     for (uint32_t y = 0; y < grid_dim; y++)
         for (uint32_t x = y + 1; x < grid_dim; x++) accum_cores.push_back({x, y});
-    if (!accum_cores.empty()) {
-        auto defines = std::map<std::string, std::string>{{accum_define, "1"}};
-        if (mirror_active)
-            defines["MIRROR_OUTPUT"] = "1";
-        CreateKernel(program, compute_matmul_path, make_core_range_set(accum_cores), compute_cfg(defines));
-    }
+    auto accum_defines = std::map<std::string, std::string>{{"REDUCE_ACCUMULATOR", "1"}};
+    if (mirror_active)
+        accum_defines["MIRROR_OUTPUT"] = "1";
+    CreateKernel(program, compute_matmul_path, make_core_range_set(accum_cores), compute_cfg(accum_defines));
 
     // Helpers: REDUCE_ACCUMULATOR (no mirror — diagonal blocks are self-symmetric)
-    {  // helpers
-        CreateKernel(program, compute_matmul_path, helper_range, compute_cfg({{accum_define, "1"}}));
-    }
+    CreateKernel(program, compute_matmul_path, helper_range, compute_cfg({{"REDUCE_ACCUMULATOR", "1"}}));
 
     // === Runtime args ===
 
