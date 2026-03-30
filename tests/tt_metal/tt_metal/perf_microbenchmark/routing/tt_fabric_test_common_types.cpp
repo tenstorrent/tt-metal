@@ -6,7 +6,24 @@
 #include <enchantum/enchantum.hpp>
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_common_types.hpp"
 
+#include "impl/context/metal_context.hpp"
+#include <experimental/fabric/control_plane.hpp>
+#include <experimental/fabric/physical_system_descriptor.hpp>
+
 namespace tt::tt_fabric::fabric_tests {
+
+std::string format_device_label(const FabricNodeId& node_id) {
+    try {
+        auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        auto asic_id = control_plane.get_asic_id_from_fabric_node_id(node_id);
+        auto& psd = control_plane.get_physical_system_descriptor();
+        auto tray_id = psd.get_tray_id(asic_id);
+        auto asic_location = psd.get_asic_location(asic_id);
+        return fmt::format("{} [T{}/N{}]", node_id, *tray_id, *asic_location);
+    } catch (...) {
+        return fmt::format("{}", node_id);
+    }
+}
 
 // Helper functions for fetching pattern parameters
 TrafficPatternConfig fetch_first_traffic_pattern(const TestConfig& config) {
