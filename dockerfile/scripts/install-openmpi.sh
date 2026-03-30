@@ -54,7 +54,7 @@ echo "Running autogen.pl..."
     --with-pic
 
 make -j"$(nproc)"
-make install
+make install -j"$(nproc)"
 cd /
 rm -rf "${WORKDIR}"
 
