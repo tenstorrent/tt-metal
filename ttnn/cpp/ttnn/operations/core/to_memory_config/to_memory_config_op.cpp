@@ -5,7 +5,7 @@
 #include "to_memory_config_op.hpp"
 
 #include "ttnn/core.hpp"
-#include "ttnn/operations/data_movement/sharded/redistribute_to_memory_config/redistribute_to_memory_config.hpp"
+#include "ttnn/operations/data_movement/sharded/copy_to_memory_config/copy_to_memory_config.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp"
@@ -34,8 +34,7 @@ Tensor to_memory_config(
 
     if (tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED ||
         memory_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
-        return ttnn::redistribute_to_memory_config(
-            tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
+        return ttnn::copy_to_memory_config(tensor, memory_config, dtype.value_or(tensor.dtype()), output_tensor);
     }
 
     if (memory_config.is_sharded()) {

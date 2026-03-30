@@ -5,15 +5,15 @@
 #pragma once
 
 #include "ttnn/device_operation.hpp"
-#include "redistribute_to_memory_config_device_operation_types.hpp"
+#include "copy_to_memory_config_device_operation_types.hpp"
 
 namespace ttnn::prim {
 
-struct RedistributeToMemoryConfigTilizedDefaultProgramFactory {
-    using operation_attributes_t = RedistributeToMemoryConfigOperationAttributes;
-    using tensor_args_t = RedistributeToMemoryConfigTensorArgs;
-    using spec_return_value_t = RedistributeToMemoryConfigSpecReturnValue;
-    using tensor_return_value_t = RedistributeToMemoryConfigTensorReturnValue;
+struct CopyToMemoryConfigRowMajorDefaultProgramFactory {
+    using operation_attributes_t = CopyToMemoryConfigOperationAttributes;
+    using tensor_args_t = CopyToMemoryConfigTensorArgs;
+    using spec_return_value_t = CopyToMemoryConfigSpecReturnValue;
+    using tensor_return_value_t = CopyToMemoryConfigTensorReturnValue;
 
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};

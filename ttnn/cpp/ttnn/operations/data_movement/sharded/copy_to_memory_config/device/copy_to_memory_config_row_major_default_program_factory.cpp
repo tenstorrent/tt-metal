@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "redistribute_to_memory_config_row_major_default_program_factory.hpp"
+#include "copy_to_memory_config_row_major_default_program_factory.hpp"
 
 #include <cmath>
 
@@ -22,8 +22,8 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-RedistributeToMemoryConfigRowMajorDefaultProgramFactory::cached_program_t
-RedistributeToMemoryConfigRowMajorDefaultProgramFactory::create(
+CopyToMemoryConfigRowMajorDefaultProgramFactory::cached_program_t
+CopyToMemoryConfigRowMajorDefaultProgramFactory::create(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -135,14 +135,14 @@ RedistributeToMemoryConfigRowMajorDefaultProgramFactory::create(
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/redistribute_to_memory_config/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/copy_to_memory_config/device/kernels/dataflow/"
         "redistribute_pages_row_major_reader.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/redistribute_to_memory_config/device/kernels/dataflow/"
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/copy_to_memory_config/device/kernels/dataflow/"
         "redistribute_pages_row_major_writer.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
@@ -166,7 +166,7 @@ RedistributeToMemoryConfigRowMajorDefaultProgramFactory::create(
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, ordered_cores}};
 }
-void RedistributeToMemoryConfigRowMajorDefaultProgramFactory::override_runtime_arguments(
+void CopyToMemoryConfigRowMajorDefaultProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,

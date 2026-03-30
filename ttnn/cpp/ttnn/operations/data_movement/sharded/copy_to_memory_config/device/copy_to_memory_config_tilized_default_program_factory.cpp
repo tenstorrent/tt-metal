@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "redistribute_to_memory_config_tilized_default_program_factory.hpp"
+#include "copy_to_memory_config_tilized_default_program_factory.hpp"
 
 #include <cmath>
 
@@ -23,8 +23,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-RedistributeToMemoryConfigTilizedDefaultProgramFactory::cached_program_t
-RedistributeToMemoryConfigTilizedDefaultProgramFactory::create(
+CopyToMemoryConfigTilizedDefaultProgramFactory::cached_program_t CopyToMemoryConfigTilizedDefaultProgramFactory::create(
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
@@ -138,7 +137,7 @@ RedistributeToMemoryConfigTilizedDefaultProgramFactory::create(
 
     return {std::move(program), {reader_kernel_id, writer_kernel_id, ordered_cores}};
 }
-void RedistributeToMemoryConfigTilizedDefaultProgramFactory::override_runtime_arguments(
+void CopyToMemoryConfigTilizedDefaultProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*operation_attributes*/,
     const tensor_args_t& tensor_args,

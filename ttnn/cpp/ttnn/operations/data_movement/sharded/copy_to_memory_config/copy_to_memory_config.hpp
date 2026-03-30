@@ -9,7 +9,7 @@
 
 namespace ttnn {
 
-ttnn::Tensor redistribute_to_memory_config(
+ttnn::Tensor copy_to_memory_config(
     const ttnn::Tensor& input_tensor,
     const MemoryConfig& output_memory_config,
     const std::optional<DataType>& data_type_arg,

@@ -70,7 +70,7 @@ target_sources(
             reshape_view/reshape_common.hpp
             sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
             sharded/interleaved_to_sharded/interleaved_to_sharded.hpp
-            sharded/redistribute_to_memory_config/redistribute_to_memory_config.hpp
+            sharded/copy_to_memory_config/copy_to_memory_config.hpp
             sharded/reshard/reshard.hpp
             sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation_types.hpp
             sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp
@@ -238,11 +238,11 @@ target_sources(
             sharded/interleaved_to_sharded/interleaved_to_sharded_nanobind.hpp
             sharded/interleaved_to_sharded/device/interleaved_to_sharded_op_types.hpp
             sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.hpp
-            sharded/redistribute_to_memory_config/redistribute_to_memory_config_nanobind.hpp
-            sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_device_operation.hpp
-            sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_device_operation_types.hpp
-            sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_row_major_default_program_factory.hpp
-            sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_tilized_default_program_factory.hpp
+            sharded/copy_to_memory_config/copy_to_memory_config_nanobind.hpp
+            sharded/copy_to_memory_config/device/copy_to_memory_config_device_operation.hpp
+            sharded/copy_to_memory_config/device/copy_to_memory_config_device_operation_types.hpp
+            sharded/copy_to_memory_config/device/copy_to_memory_config_row_major_default_program_factory.hpp
+            sharded/copy_to_memory_config/device/copy_to_memory_config_tilized_default_program_factory.hpp
             sharded/reshard/reshard_nanobind.hpp
             sharded/reshard/device/reshard_device_operation.hpp
             sharded/reshard/device/reshard_device_operation_types.hpp
@@ -439,10 +439,10 @@ target_sources(
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
         sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
-        sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_device_operation.cpp
-        sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_row_major_default_program_factory.cpp
-        sharded/redistribute_to_memory_config/device/redistribute_to_memory_config_tilized_default_program_factory.cpp
-        sharded/redistribute_to_memory_config/redistribute_to_memory_config.cpp
+        sharded/copy_to_memory_config/device/copy_to_memory_config_device_operation.cpp
+        sharded/copy_to_memory_config/device/copy_to_memory_config_row_major_default_program_factory.cpp
+        sharded/copy_to_memory_config/device/copy_to_memory_config_tilized_default_program_factory.cpp
+        sharded/copy_to_memory_config/copy_to_memory_config.cpp
         sharded/reshard/device/reshard_device_operation.cpp
         sharded/reshard/device/reshard_program_factory_same_width.cpp
         sharded/reshard/device/reshard_program_factory_same_height.cpp

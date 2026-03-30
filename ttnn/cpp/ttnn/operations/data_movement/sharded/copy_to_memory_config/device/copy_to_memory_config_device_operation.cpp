@@ -2,29 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "redistribute_to_memory_config_device_operation.hpp"
+#include "copy_to_memory_config_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <ttnn/operation.hpp>
-#include "redistribute_to_memory_config_device_operation_types.hpp"
+#include "copy_to_memory_config_device_operation_types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::prim {
 
-RedistributeToMemoryConfigDeviceOperation::program_factory_t
-RedistributeToMemoryConfigDeviceOperation::select_program_factory(
+CopyToMemoryConfigDeviceOperation::program_factory_t CopyToMemoryConfigDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
 
     if (input_tensor.layout() == Layout::TILE) {
-        return RedistributeToMemoryConfigTilizedDefaultProgramFactory{};
+        return CopyToMemoryConfigTilizedDefaultProgramFactory{};
     }
-    return RedistributeToMemoryConfigRowMajorDefaultProgramFactory{};
+    return CopyToMemoryConfigRowMajorDefaultProgramFactory{};
 }
 
-void RedistributeToMemoryConfigDeviceOperation::validate_on_program_cache_miss(
+void CopyToMemoryConfigDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& output_mem_config = operation_attributes.output_mem_config;
@@ -67,8 +66,7 @@ void RedistributeToMemoryConfigDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-RedistributeToMemoryConfigDeviceOperation::spec_return_value_t
-RedistributeToMemoryConfigDeviceOperation::compute_output_specs(
+CopyToMemoryConfigDeviceOperation::spec_return_value_t CopyToMemoryConfigDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensor.has_value()) {
         return tensor_args.output_tensor.value().tensor_spec();
@@ -83,8 +81,7 @@ RedistributeToMemoryConfigDeviceOperation::compute_output_specs(
             operation_attributes.output_mem_config));
 }
 
-RedistributeToMemoryConfigDeviceOperation::tensor_return_value_t
-RedistributeToMemoryConfigDeviceOperation::create_output_tensors(
+CopyToMemoryConfigDeviceOperation::tensor_return_value_t CopyToMemoryConfigDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (tensor_args.output_tensor.has_value()) {
         return tensor_args.output_tensor.value();
@@ -95,10 +92,10 @@ RedistributeToMemoryConfigDeviceOperation::create_output_tensors(
     return create_device_tensor(spec, input_tensor.device());
 }
 
-ttsl::hash::hash_t RedistributeToMemoryConfigDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t CopyToMemoryConfigDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    return tt::tt_metal::operation::hash_operation<RedistributeToMemoryConfigDeviceOperation>(
+    return tt::tt_metal::operation::hash_operation<CopyToMemoryConfigDeviceOperation>(
         operation_attributes.output_mem_config,
         operation_attributes.output_dtype,
         input_tensor.dtype(),
@@ -107,13 +104,13 @@ ttsl::hash::hash_t RedistributeToMemoryConfigDeviceOperation::compute_program_ha
         input_tensor.padded_shape());
 }
 
-Tensor redistribute_to_memory_config(
+Tensor copy_to_memory_config(
     const Tensor& input_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::DataType& output_dtype,
     const std::optional<Tensor>& preallocated_output) {
-    return ttnn::device_operation::launch<RedistributeToMemoryConfigDeviceOperation>(
-        RedistributeToMemoryConfigOperationAttributes{output_mem_config, output_dtype},
-        RedistributeToMemoryConfigTensorArgs{input_tensor, preallocated_output});
+    return ttnn::device_operation::launch<CopyToMemoryConfigDeviceOperation>(
+        CopyToMemoryConfigOperationAttributes{output_mem_config, output_dtype},
+        CopyToMemoryConfigTensorArgs{input_tensor, preallocated_output});
 }
 }  // namespace ttnn::prim
