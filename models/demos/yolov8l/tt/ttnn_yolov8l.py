@@ -6,10 +6,10 @@ import json
 import math
 
 import ttnn
-from models.demos.yolov8s.tt.tt_yolov8s_utils import ttnn_decode_bboxes
+from models.demos.yolov8l.tt.tt_yolov8l_utils import ttnn_decode_bboxes
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
-with open("models/demos/yolov8s/tt/configs.json", "r") as file:
+with open("models/demos/yolov8l/tt/configs.json", "r") as file:
     configs = json.load(file)
 
 conv_config = configs["conv_config"]
@@ -810,7 +810,7 @@ class TtDetectionModel:
         return x
 
 
-class TtYolov8sModel:
+class TtYolov8lModel:
     def __init__(self, device, parameters, res=(640, 640), batch_size=1):
         self.device = device
         self.parameters = parameters
