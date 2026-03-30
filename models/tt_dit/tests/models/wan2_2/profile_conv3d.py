@@ -137,8 +137,20 @@ def profile_layer(mesh_device, grid_size, ckc, name, layer_info, warmup=WARMUP, 
     desc, T, H, W, C_in, kernel_size, C_out, repeat = layer_info
     padded_C_in = aligned_channels(C_in)
 
+    # Compute output spatial dims (input has external padding already applied)
+    kT, kH, kW = kernel_size
+    H_out = H - (kH - 1)
+    W_out = W - (kW - 1)
     conv_config = get_conv3d_config(
-        C_in, C_out, kernel_size, ttnn.bfloat16, grid_size, h_factor=H_FACTOR, w_factor=W_FACTOR
+        C_in,
+        C_out,
+        kernel_size,
+        ttnn.bfloat16,
+        grid_size,
+        h_factor=H_FACTOR,
+        w_factor=W_FACTOR,
+        H_out=H_out,
+        W_out=W_out,
     )
 
     print(f"\n{'='*80}")

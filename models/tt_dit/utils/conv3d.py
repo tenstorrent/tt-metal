@@ -51,7 +51,7 @@ _MESH_BLOCKINGS = {
     # --- BH Galaxy 6U 4x32 (h_factor=4, w_factor=32) — v3: sliding window + fused tilize+matmul ---
     # Blockings chosen by brute-force sweep across C_in, C_out, H, W combinations.
     (4, 32, 32, 384, (3, 3, 3)): (32, 128, 1, 16, 2),  # conv_in: 1.61x vs original
-    (4, 32, 384, 384, (3, 3, 3)): (96, 128, 1, 16, 2),  # latent+up1: best for up1 (1.41x), ~same latent
+    (4, 32, 384, 384, (3, 3, 3)): (96, 128, 1, 16, 2),  # up1 resblocks: best for up1 (46x10)
     (4, 32, 192, 384, (3, 3, 3)): (96, 128, 1, 16, 2),  # up1 res0: 23% faster (2647 us vs 3453 us baseline)
     (4, 32, 192, 192, (3, 3, 3)): (96, 96, 1, 32, 2),  # up2: 37% faster (4735 us vs 7629 us baseline)
     (4, 32, 96, 96, (3, 3, 3)): (96, 96, 1, 16, 4),  # up3: 36% faster (5232 us vs 8135 us baseline)
@@ -59,6 +59,15 @@ _MESH_BLOCKINGS = {
     (4, 32, 384, 192, (1, 3, 3)): (192, 96, 1, 32, 4),  # up0+up1 spatial: original is best weighted
     (4, 32, 192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),  # up2 spatial: original is best
     (4, 32, 384, 768, (3, 1, 1)): (192, 384, 1, 16, 2),  # up0+up1 time_conv: 14x vs original default
+}
+
+# Spatial-specific overrides: (h_factor, w_factor, C_in, C_out, kernel, H_out, W_out) -> blocking
+# Used when two layers share the same channel/kernel key but have different spatial dims
+# and benefit from different blockings.
+_MESH_SPATIAL_BLOCKINGS = {
+    # lat_res (384->384 k333): H_out=23, W_out=5 — small spatial, compute-bound
+    # (96,96,1,32,1) = 654 us vs shared (96,128,1,16,2) = 817 us = 20% faster
+    (4, 32, 384, 384, (3, 3, 3), 23, 5): (96, 96, 1, 32, 1),
 }
 
 # Fallback table when no mesh-specific entry exists (bh_4x8 defaults).
@@ -81,12 +90,18 @@ _DEFAULT_BLOCKINGS = {
 }
 
 
-def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1):
+def get_conv3d_config(
+    in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, H_out=None, W_out=None
+):
     """
     Get optimized Conv3dConfig for a conv3d layer.
 
     Blockings are mesh-aware: different (h_factor, w_factor) use different spatial tiling
     since per-device tensor shapes depend on how H and W are fractured across devices.
+
+    When H_out and W_out are provided, a spatial-specific blocking override is tried first.
+    This allows layers with the same (C_in, C_out, kernel) but different spatial dims to
+    use independently optimized blockings.
     """
     if weights_dtype == ttnn.float32:
         return ttnn.Conv3dConfig(
@@ -100,9 +115,15 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, weights_dtype, gri
             compute_with_storage_grid_size=grid_size,
         )
 
-    mesh_key = (h_factor, w_factor, in_channels, out_channels, kernel_size)
-    shape_key = (in_channels, out_channels, kernel_size)
-    blocking = _MESH_BLOCKINGS.get(mesh_key) or _DEFAULT_BLOCKINGS.get(shape_key)
+    blocking = None
+    if H_out is not None and W_out is not None:
+        spatial_key = (h_factor, w_factor, in_channels, out_channels, kernel_size, H_out, W_out)
+        blocking = _MESH_SPATIAL_BLOCKINGS.get(spatial_key)
+
+    if blocking is None:
+        mesh_key = (h_factor, w_factor, in_channels, out_channels, kernel_size)
+        shape_key = (in_channels, out_channels, kernel_size)
+        blocking = _MESH_BLOCKINGS.get(mesh_key) or _DEFAULT_BLOCKINGS.get(shape_key)
 
     if blocking is None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
