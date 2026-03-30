@@ -15,8 +15,8 @@ Owner:
     adjordjevic-TT
 """
 
-import os
 import threading
+from pathlib import Path
 from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
 from ttexalens.context import Context
 from ttexalens.hardware.risc_debug import ParsedElfFile
@@ -44,10 +44,10 @@ class ElfsCache:
             context: ttexalens Context object for parsing ELF files
         """
         self.context = context
-        self._cache: dict[str, ParsedElfFile] = {}
+        self._cache: dict[Path, ParsedElfFile] = {}
         self._lock = threading.Lock()
 
-    def __getitem__(self, elf_path: str) -> ParsedElfFile:
+    def __getitem__(self, elf_path: Path) -> ParsedElfFile:
         """
         Get a ParsedElfFile from cache or parse and cache it if not present.
 
@@ -60,7 +60,7 @@ class ElfsCache:
         Returns:
             ParsedElfFile object for the given path
         """
-        if not os.path.exists(elf_path):
+        if not elf_path.exists():
             raise TTTriageError(f"ELF file {elf_path} does not exist.")
         with self._lock:
             if elf_path not in self._cache:
@@ -72,7 +72,7 @@ class ElfsCache:
                 self._cache[elf_path] = parsed_elf
             return self._cache[elf_path]
 
-    def has_elf(self, elf_path: str) -> bool:
+    def has_elf(self, elf_path: Path) -> bool:
         """
         Check if an ELF file is already cached.
 
@@ -94,7 +94,7 @@ class ElfsCache:
         with self._lock:
             self._cache.clear()
 
-    def get_cached_paths(self) -> list[str]:
+    def get_cached_paths(self) -> list[Path]:
         """
         Get list of all cached ELF file paths.
 

@@ -163,7 +163,7 @@ def main() -> None:
         return
 
     try:
-        with open(json_path, "r", encoding="utf-8") as f:
+        with json_path.open("r", encoding="utf-8") as f:
             data = json.load(f)
     except Exception as e:
         ERROR(f"Error loading JSON: {e}")

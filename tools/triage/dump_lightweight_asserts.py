@@ -17,6 +17,7 @@ Owner:
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from triage import ScriptConfig, log_check_risc, run_script, triage_field
 from callstack_provider import (
     KernelCallstackWithMessage,
@@ -57,14 +58,14 @@ class LightweightAssertInfo:
     arguments_and_locals: str | None = triage_field("Arguments and Locals")
 
 
-def extract_assert_code(file: str | None, line: int | None, column: int | None) -> str:
+def extract_assert_code(file: Path | None, line: int | None, column: int | None) -> str:
     if file is None or line is None:
         return "?"
 
-    if not os.path.exists(file):
+    if not file.exists():
         return "?file not found?"
     try:
-        with open(file, "r") as f:
+        with file.open("r") as f:
             lines = f.readlines()
             if not (0 <= line - 1 < len(lines)):
                 return "?wrong line number? Check the first code line in the stack trace."

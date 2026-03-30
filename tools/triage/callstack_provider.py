@@ -306,7 +306,7 @@ class CallstackProvider:
                     )
                 else:
                     assert self.gdb_server is not None
-                    elf_paths: list[str] = [dispatcher_core_data.firmware_path]
+                    elf_paths: list[Path] = [dispatcher_core_data.firmware_path]
                     offsets: list[int | None] = [None]
                     if dispatcher_core_data.kernel_path is not None:
                         elf_paths.append(dispatcher_core_data.kernel_path)

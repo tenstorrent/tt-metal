@@ -16,20 +16,17 @@ All tests are mock-based and require no Tenstorrent hardware.
 Written to validate path handling during the pathlib migration.
 """
 
-import os
 import sys
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# sys.path setup — mirrors the pattern in test_lw_assert_handling.py
-# ---------------------------------------------------------------------------
-metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-triage_home = os.path.join(metal_home, "tools", "triage")
-if triage_home not in sys.path:
-    sys.path.insert(0, triage_home)
+metal_home = Path(__file__).resolve().parents[3]
+triage_home = metal_home / "tools" / "triage"
+if str(triage_home) not in sys.path:
+    sys.path.insert(0, str(triage_home))
 
 # ---------------------------------------------------------------------------
 # Pre-mock heavy third-party and ttexalens dependencies so that triage modules
@@ -66,15 +63,28 @@ _MOCK_MODULES = {
     "ryml": MagicMock(),
 }
 
-# Install mock modules — only if they are not already importable.
-for mod_name, mock_obj in _MOCK_MODULES.items():
-    if mod_name not in sys.modules:
-        sys.modules[mod_name] = mock_obj
+# Install mock modules immediately (so module-level imports below resolve), using
+# patch.dict so the injections are reverted after the session via the autouse fixture.
+_sys_modules_patch = patch.dict(sys.modules, {k: v for k, v in _MOCK_MODULES.items() if k not in sys.modules})
+_sys_modules_patch.start()
 
 # Now safe to import triage modules.
 from triage import run_script, TTTriageError  # noqa: E402
 from parse_inspector_logs import get_log_directory, read_yaml, get_kernels, get_data  # noqa: E402
 from system_info import get_os_version  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _scoped_sys_modules_mocks():
+    """Revert sys.modules mock injections after the test session completes.
+
+    _sys_modules_patch.start() is called at module import time so that the
+    module-level imports above can resolve. This fixture owns the stop() call,
+    ensuring the mocks don't leak into other test modules collected in the same
+    pytest session.
+    """
+    yield
+    _sys_modules_patch.stop()
 
 
 # ===================================================================
@@ -86,21 +96,24 @@ class TestGetLogDirectory:
     """Tests for parse_inspector_logs.get_log_directory."""
 
     def test_get_log_directory_explicit_path(self):
-        """When a path string is passed, it is returned unchanged."""
-        assert get_log_directory("/some/explicit/path") == "/some/explicit/path"
+        """When a path string is passed, it is returned as a Path."""
+        result = get_log_directory("/some/explicit/path")
+        assert isinstance(result, Path)
+        assert result == Path("/some/explicit/path")
 
     def test_get_log_directory_env_var(self, monkeypatch):
-        """TT_METAL_LOGS_PATH set -> returns $VAR/generated/inspector."""
+        """TT_METAL_LOGS_PATH set -> returns $VAR/generated/inspector as Path."""
         monkeypatch.setenv("TT_METAL_LOGS_PATH", "/custom/logs")
         result = get_log_directory(None)
-        assert result == os.path.join("/custom/logs", "generated", "inspector")
+        assert isinstance(result, Path)
+        assert result == Path("/custom/logs") / "generated" / "inspector"
 
     def test_get_log_directory_fallback(self, monkeypatch):
-        """No env var -> returns path under tempfile.gettempdir()."""
+        """No env var -> returns path under tempfile.gettempdir() as Path."""
         monkeypatch.delenv("TT_METAL_LOGS_PATH", raising=False)
         result = get_log_directory(None)
-        expected = os.path.join(tempfile.gettempdir(), "tt-metal", "inspector")
-        assert result == expected
+        assert isinstance(result, Path)
+        assert result == Path(tempfile.gettempdir()) / "tt-metal" / "inspector"
 
 
 class TestReadYaml:

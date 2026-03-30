@@ -54,7 +54,7 @@ from pathlib import Path
 import re
 
 
-_triage_requirements_path = str(Path(__file__).resolve().parent / "requirements.txt")
+_triage_requirements_path = Path(__file__).resolve().parent / "requirements.txt"
 
 try:
     from ttexalens.tt_exalens_init import init_ttexalens, init_ttexalens_remote
@@ -95,7 +95,7 @@ class ScriptPriority(Enum):
 class ScriptConfig:
     data_provider: bool = False
     disabled: bool = False
-    depends: list[str] = field(default_factory=list)
+    depends: list[Path] = field(default_factory=list)
     priority: ScriptPriority = ScriptPriority.MEDIUM
 
 
@@ -202,7 +202,7 @@ def get_verbose_level() -> int:
 @dataclass
 class TriageScript:
     name: str
-    path: str
+    path: Path
     config: ScriptConfig
     module: ModuleType
     run_method: Callable[..., Any]
@@ -239,15 +239,15 @@ class TriageScript:
                 raise
 
     @staticmethod
-    def load(script_path: str) -> "TriageScript":
-        script_path = os.path.abspath(script_path)
-        base_path = os.path.dirname(script_path)
+    def load(script_path: Path) -> "TriageScript":
+        script_path = script_path.resolve()
+        base_path = str(script_path.parent)  # sys.path requires str entries
         appended = False
         if not base_path in sys.path:
             sys.path.append(base_path)
             appended = True
         try:
-            script_name = os.path.splitext(os.path.basename(script_path))[0]
+            script_name = script_path.stem
             script_module = importlib.import_module(script_name)
 
             # Check if script has a configuration
@@ -281,7 +281,7 @@ class TriageScript:
                 )
 
             triage_script = TriageScript(
-                name=os.path.basename(script_path),
+                name=script_path.name,
                 path=script_path,
                 config=deepcopy(script_config),
                 module=script_module,
@@ -297,7 +297,9 @@ class TriageScript:
                     dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py"
                     for dep in triage_script.config.depends
                 ]
-                triage_script.config.depends = [os.path.join(base_path, dep) for dep in triage_script.config.depends]
+                triage_script.config.depends = [
+                    (script_path.parent / dep).resolve() for dep in triage_script.config.depends
+                ]
 
             return triage_script
         finally:
@@ -305,9 +307,10 @@ class TriageScript:
                 sys.path.remove(base_path)
 
     @staticmethod
-    def load_all(script_path: str) -> dict[str, "TriageScript"]:
-        scripts: dict[str, TriageScript] = {}
-        loading: list[str] = []
+    def load_all(script_path: Path) -> dict[Path, "TriageScript"]:
+        script_path = script_path.resolve()
+        scripts: dict[Path, TriageScript] = {}
+        loading: list[Path] = []
         script = TriageScript.load(script_path)
         scripts[script_path] = script
 
@@ -328,7 +331,7 @@ class TriageScript:
         return scripts
 
 
-def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScript]:
+def resolve_execution_order(scripts: dict[Path, TriageScript]) -> list[TriageScript]:
     # Build script dependents graph and script missing dependencies map
     script_dependents = defaultdict(list)  # dep_path -> list of scripts depending on it
     script_missing_dependencies = defaultdict(int)  # script_path -> number of unmet dependencies
@@ -363,9 +366,10 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
 
     # If some scripts remain with non-zero in-degree, we have a cycle
     if len(result) != len(scripts):
-        remaining_scripts = set(scripts.keys()) - {s.config.name for s in result}
+        executed_paths = {s.path for s in result}
+        remaining_scripts = set(scripts.keys()) - executed_paths
         raise ValueError(
-            f"Bad dependency detected in scripts: {', '.join(remaining_scripts)}\n"
+            f"Bad dependency detected in scripts: {', '.join(str(p) for p in remaining_scripts)}\n"
             f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
             f"  Please check if all dependencies are met and scripts are enabled."
         )
@@ -426,8 +430,8 @@ def process_arguments(args: ScriptArguments) -> None:
 
 
 def parse_arguments(
-    scripts: dict[str, TriageScript] = {},
-    script_path: str | None = None,
+    scripts: dict[Path, TriageScript] = {},
+    script_path: Path | None = None,
     argv: list[str] | None = None,
     only_triage_script_args=False,
 ) -> ScriptArguments:
@@ -445,12 +449,14 @@ def parse_arguments(
     )
     import sys
 
-    docs: dict[str, str] = {}
+    if script_path is not None:
+        script_path = script_path.resolve()
+
+    docs: dict[Path, str] = {}
     assert __doc__ is not None, "Help message must be provided in the script docstring."
-    my_name = os.path.splitext(os.path.basename(__file__))[0]
-    docs[my_name] = __doc__
+    docs[Path(__file__).resolve()] = __doc__
     for script in scripts.values():
-        docs[script.name] = script.documentation
+        docs[script.path] = script.documentation
 
     combined_options = []
     combined_pattern: Required = Required(*[Required(*[])])
@@ -464,7 +470,7 @@ def parse_arguments(
             pattern = parse_pattern(formal_usage(usage), script_options)
             combined_pattern.children[0].children.extend(pattern.children[0].children)
         except BaseException as e:
-            utils.ERROR(f"Error parsing arguments for script {script_name}: {e}")
+            utils.ERROR(f"Error parsing arguments for script {script_name.name}: {e}")
             continue
 
     # Deduplicate options if some scripts define the same option
@@ -497,7 +503,7 @@ def parse_arguments(
         else:
             help_message += "\n\nYou can also use arguments of dependent scripts:\n"
         for script in scripts.values():
-            if script.path != script_path:
+            if script_path is None or script.path != script_path:
                 script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
                     help_message += f"\n{script.documentation}\n"
@@ -506,7 +512,7 @@ def parse_arguments(
     else:
         help_message = printable_usage(doc)
         for script in scripts.values():
-            if script.path != script_path:
+            if script_path is None or script.path != script_path:
                 script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
                     usage = printable_usage(script.documentation)
@@ -685,7 +691,7 @@ def _enforce_dependencies(args: ScriptArguments) -> None:
         skip_check = False
 
     try:
-        with open(_triage_requirements_path, "r", encoding="utf-8") as f:
+        with _triage_requirements_path.open("r", encoding="utf-8") as f:
             req_lines = f.read().splitlines()
     except FileNotFoundError:
         utils.WARN(
@@ -800,7 +806,7 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
 
 
 def run_script(
-    script_path: str | None = None,
+    script_path: Path | None = None,
     args: ScriptArguments | None = None,
     context: Context | None = None,
     argv: list[str] | None = None,
@@ -814,16 +820,16 @@ def run_script(
         stack = inspect.stack()
         if stack is None or len(stack) < 2:
             raise ValueError("No script path provided and no caller found in callstack.")
-        script_path = stack[1].filename
+        script_path = Path(stack[1].filename).resolve()
         force_exit = True
     else:
-        if not script_path.endswith(".py"):
-            script_path = script_path + ".py"
-        application_path = os.path.dirname(__file__)
-        if not os.path.isabs(script_path):
-            script_path = os.path.join(application_path, script_path)
-        script_path = os.path.abspath(script_path)
-        if not os.path.exists(script_path):
+        if script_path.suffix != ".py":
+            script_path = script_path.with_suffix(".py")
+        application_path = Path(__file__).parent
+        if not script_path.is_absolute():
+            script_path = application_path / script_path
+        script_path = script_path.resolve()
+        if not script_path.exists():
             raise FileNotFoundError(f"Script {script_path} does not exist.")
 
     # Load script and its dependencies
@@ -850,7 +856,8 @@ def run_script(
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
-    script = scripts[script_path] if script_path in scripts else None
+    script_key = script_path
+    script = scripts[script_key] if script_key in scripts else None
     if return_result:
         return result
     serialize_result(script, result)
@@ -883,20 +890,19 @@ def main():
     parse_arguments(only_triage_script_args=True)
 
     # Enumerate all scripts in application directory
-    application_path = os.path.abspath(os.path.dirname(__file__))
-    script_files = [f for f in os.listdir(application_path) if f.endswith(".py") and f != os.path.basename(__file__)]
+    application_path = Path(__file__).resolve().parent
+    script_files = [f.name for f in application_path.iterdir() if f.suffix == ".py" and f.name != Path(__file__).name]
 
     # To avoid multiple imports of this script, we add it to sys.modules
-    my_name = os.path.splitext(os.path.basename(__file__))[0]
+    my_name = Path(__file__).stem
     if my_name not in sys.modules:
         sys.modules[my_name] = sys.modules["__main__"]
 
     # Load tt-triage scripts
     # TODO: do we need to check for subdirectories?
-    scripts: dict[str, TriageScript] = {}
-    base_path = application_path
+    scripts: dict[Path, TriageScript] = {}
     for script in script_files:
-        script_path = os.path.join(base_path, script)
+        script_path = (application_path / script).resolve()
         try:
             triage_script = TriageScript.load(script_path)
             if triage_script.config.disabled:
@@ -935,7 +941,7 @@ def main():
             progress.update(scripts_task, total=len(args["--run"]))
             for script_name in args["--run"]:
                 progress.update(scripts_task, description=f"Running {script_name}")
-                run_script(script_name, args, context)
+                run_script(Path(script_name), args, context)
                 progress.advance(scripts_task)
         else:
             # Execute all scripts
@@ -986,9 +992,9 @@ def main():
     triage_summary_path = args["--triage-summary-path"]
     if triage_summary_path:
         try:
-            os.makedirs(os.path.dirname(triage_summary_path), exist_ok=True)
-            with open(triage_summary_path, "w") as f:
-                f.write(_build_triage_summary(script_queue))
+            summary_path = Path(triage_summary_path)
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            summary_path.write_text(_build_triage_summary(script_queue), encoding="utf-8")
             utils.INFO(f"Triage summary written to {triage_summary_path}")
         except Exception as e:
             utils.WARN(f"Failed to write triage summary: {e}")
