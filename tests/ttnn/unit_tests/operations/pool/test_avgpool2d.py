@@ -202,6 +202,7 @@ def test_avg_pool2d_dram_post_commit(
         [1, 2048, 7, 7],  # ResNet-50 final layer
         [1, 144, 7, 7],  # EfficientNet (non-tile-aligned channels)
         [2, 64, 8, 8],  # Multi-batch
+        [4, 144, 7, 7],  # Multi-batch with non-tile-aligned channels
         [1, 512, 1, 1],  # Already 1x1 spatial
     ),
 )

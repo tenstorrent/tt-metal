@@ -1003,27 +1003,34 @@ static std::vector<Tensor> pool2d(
         (kernel_size[0] >= input_h && kernel_size[1] >= input_w) &&
         (padding_check[0] == 0 && padding_check[1] == 0 && padding_check[2] == 0 && padding_check[3] == 0);
 
-    if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D && batch_size == 1) {
+    if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
         auto mem_config = memory_config.value_or(input_tensor_4d.memory_config());
-
-        // Reshape [1, H, W, C] -> [1, 1, H*W, C] then reduce along dim -2
         auto in_shape = input_tensor_4d.padded_shape();
-        auto in_logical = input_tensor_4d.logical_shape();
-        ttnn::Shape reshaped({in_shape[0], 1, in_shape[1] * in_shape[2], in_shape[3]});
-        Tensor reshaped_input = ttnn::experimental::view(input_tensor_4d, reshaped);
+        uint32_t hw = input_h * input_w;
 
-        uint32_t height_without_padding = in_logical[1] * in_logical[2];
-        float scalar = divisor_override.has_value() ? 1.0f / float(divisor_override.value())
-                                                    : 1.0f / float(height_without_padding);
+        // Input is (1, 1, N*H*W, C). First reshape to (N, H, W, C) to establish
+        // proper batch structure, then flatten spatial dims to (N, 1, H*W, C)
+        // following the same approach as global_avg_pool2d.
+        ttnn::Shape nhwc_logical({batch_size, input_h, input_w, channels});
+        ttnn::Shape nhwc_padded({batch_size, input_h, input_w, in_shape[3]});
+        Tensor nhwc_input = ttnn::reshape(input_tensor_4d, nhwc_logical, nhwc_padded);
+
+        // Flatten spatial dims: (N, H, W, C) -> (N, 1, H*W, C)
+        auto ns = nhwc_input.padded_shape();
+        ttnn::Shape flat_shape({ns[0], 1, ns[1] * ns[2], ns[3]});
+        Tensor flat_input = ttnn::experimental::view(nhwc_input, flat_shape);
+
+        float scalar = divisor_override.has_value() ? 1.0f / float(divisor_override.value()) : 1.0f / float(hw);
 
         Tensor output = ttnn::operations::reduction::pool_sum(
-            reshaped_input, int(reshaped.rank() - 2), mem_config, compute_kernel_config, scalar);
+            flat_input, int(flat_shape.rank() - 2), mem_config, compute_kernel_config, scalar);
 
-        // Fix output shape to [1, 1, 1, C] with correct logical channel count
+        // Fix output shape: pool_sum returns (N, 1, 1, padded_C).
+        // Reshape to (1, 1, N, C) for pool2d output format.
         auto output_padded = output.padded_shape();
-        ttnn::Shape correct_logical({output_padded[0], 1, 1, channels});
-        ttnn::Shape correct_padded({output_padded[0], 1, 1, output_padded[3]});
-        output = ttnn::experimental::view(output, correct_logical, correct_padded);
+        ttnn::Shape correct_logical({1, 1, batch_size, channels});
+        ttnn::Shape correct_padded({1, 1, output_padded[0], output_padded[3]});
+        output = ttnn::reshape(output, correct_logical, correct_padded);
 
         return {output};
     }

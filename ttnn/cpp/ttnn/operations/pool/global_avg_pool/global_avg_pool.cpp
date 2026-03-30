@@ -26,6 +26,10 @@ Tensor pool_2d(
 
 Tensor global_avg_pool2d(
     const Tensor& input, const MemoryConfig& memory_config, const std::optional<DataType>& output_dtype) {
+    log_warning(
+        tt::LogOp,
+        "global_avg_pool2d is deprecated. Use avg_pool2d with kernel_size=(H, W) and padding=0 instead, "
+        "which now uses an efficient reduction path for global pooling.");
     TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor needs to be on device");
 
     // Handle different tensor ranks: 2D [H,W], 3D [H,W,C], or 4D [N,H,W,C]
