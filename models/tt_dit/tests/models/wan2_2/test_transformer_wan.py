@@ -12,15 +12,14 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.wan2_2.transformer_wan import WanTransformer3DModel, WanTransformerBlock
+from ....models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
-from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch, local_device_to_torch
+from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch
 from ....utils.test import line_params, ring_params
-from ....utils.tracing import Tracer
 
 # ---------------------------------------------------------------------------
 # Wan2.2-T2V-14B model configuration
@@ -77,9 +76,6 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
     )
 
 
-DEVICE_PARAMS = {"trace_region_size": 48000000}
-
-
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -91,9 +87,7 @@ DEVICE_PARAMS = {"trace_region_size": 48000000}
         pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
         # WH (ring) on 4x8
         pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-        pytest.param(
-            (4, 8), (4, 8), 1, 0, 2, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"
-        ),
+        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
         pytest.param((4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
         pytest.param((4, 32), (4, 32), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x32sp1tp0"),
     ],
@@ -127,33 +121,21 @@ def test_wan_transformer_block(
 
     parent_mesh_device = mesh_device
     mesh_device = parent_mesh_device.create_submesh(ttnn.MeshShape(*mesh_shape))
+    logger.info(f"mesh_device: {mesh_device}")
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
     ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
-
     p_t, p_h, p_w = PATCH_SIZE
     spatial_seq_len = (T // p_t) * (H // p_h) * (W // p_w)
-
     # Load Wan2.2-T2V-14B model from HuggingFace
     parent_torch_model = TorchWanTransformer3DModel.from_pretrained(
         MODEL_NAME, subfolder="transformer", torch_dtype=torch.float32, trust_remote_code=True, local_files_only=False
     )
     torch_model = parent_torch_model.blocks[0]
     torch_model.eval()
-
     # Create TT model
-    tt_model = WanTransformerBlock(
-        dim=DIM,
-        ffn_dim=FFN_DIM,
-        num_heads=NUM_HEADS,
-        cross_attention_norm=CROSS_ATTN_NORM,
-        eps=EPS,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-        is_fsdp=is_fsdp,
-    )
+    tt_model = _make_wan_transformer(torch_model, mesh_device, ccl_manager, parallel_config, is_fsdp)
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Create input tensors
@@ -161,7 +143,6 @@ def test_wan_transformer_block(
     spatial_input = torch.randn((B, spatial_seq_len, DIM), dtype=torch.float32)
     prompt_input = torch.randn((B, prompt_seq_len, DIM), dtype=torch.float32)
     temb_input = torch.randn((B, 6, DIM), dtype=torch.float32)
-
     # Create ROPE embeddings
     rope_cos = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
     rope_sin = torch.randn(B, spatial_seq_len, 1, HEAD_DIM // 2)
@@ -169,7 +150,6 @@ def test_wan_transformer_block(
 
     rope_cos_stack = torch_rope_cos.permute(0, 2, 1, 3)
     rope_sin_stack = torch_rope_sin.permute(0, 2, 1, 3)
-
     spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), num_devices=sp_factor)
     rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, num_devices=sp_factor)
     rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, num_devices=sp_factor)
@@ -181,15 +161,12 @@ def test_wan_transformer_block(
     tt_rope_cos = from_torch(rope_cos_padded, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
     tt_rope_sin = from_torch(rope_sin_padded, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
     tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
-
     # Run TT model
     logger.info(
         f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
     )
 
-    tt_model_traced = Tracer(tt_model.forward, device=mesh_device, clone_prep_inputs=False)
-
-    tt_spatial_out = tt_model_traced(
+    tt_spatial_out = tt_model(
         spatial_1BND=tt_spatial,
         prompt_1BLP=tt_prompt,
         temb_1BTD=tt_temb,
@@ -198,23 +175,22 @@ def test_wan_transformer_block(
         rope_sin=tt_rope_sin,
         trans_mat=tt_trans_mat,
     )
-
+    logger.info(f"tt_spatial_out: {tt_spatial_out.shape}")
     start = time.perf_counter()
-    for i in range(40):
-        tt_spatial = bf16_tensor_2dshard(
-            spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3}, on_host=True
-        )
-        tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device, on_host=True)
-        tt_temb = from_torch(
-            temb_input.unsqueeze(0), device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., tp_axis], on_host=True
-        )
-        tt_spatial_out = tt_model_traced(
+    for i in range(1):
+        tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
+        tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+        tt_temb = from_torch(temb_input.unsqueeze(0), device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., tp_axis])
+        tt_spatial_out = tt_model(
             spatial_1BND=tt_spatial,
             prompt_1BLP=tt_prompt,
             temb_1BTD=tt_temb,
+            N=spatial_seq_len,
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+            trans_mat=tt_trans_mat,
         )
-        # ttnn.ReadDeviceProfiler(mesh_device)
-    # ttnn.synchronize_device(mesh_device)
+
     elapsed = time.perf_counter() - start
     print(f"######################### Took {elapsed:.3f}s")
 
@@ -229,17 +205,16 @@ def test_wan_transformer_block(
     )
     tt_spatial_out = tt_spatial_out[:, :, :spatial_seq_len, :]
 
-    # # Run torch model
-    # logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
-    # with torch.no_grad():
-    #     torch_spatial_out = torch_model(
-    #         hidden_states=spatial_input,
-    #         encoder_hidden_states=prompt_input,
-    #         temb=temb_input,
-    #         rotary_emb=[torch_rope_cos, torch_rope_sin],
-    #     )
-
-    # assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
+    # Run torch model
+    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
+    with torch.no_grad():
+        torch_spatial_out = torch_model(
+            hidden_states=spatial_input,
+            encoder_hidden_states=prompt_input,
+            temb=temb_input,
+            rotary_emb=[torch_rope_cos, torch_rope_sin],
+        )
+    assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
 @pytest.mark.parametrize(
@@ -354,6 +329,7 @@ def test_wan_transformer_model(
         pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
         # BH (ring) on 4x8
         pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
+        pytest.param((4, 32), (4, 32), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x32sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -368,8 +344,8 @@ def test_wan_transformer_inner_step(
 ) -> None:
     """Test inner_step against the torch reference, mimicking the pipeline denoising loop."""
     B = 1
-    T, H, W = 8, 40, 50
-    prompt_seq_len = 118
+    T, H, W = 21, 90, 160
+    prompt_seq_len = 512
 
     MIN_PCC = 0.992_000
     MAX_RMSE = 0.15
@@ -405,23 +381,30 @@ def test_wan_transformer_inner_step(
 
     # Prepare cached inputs on device (like the pipeline does once before the denoising loop)
     spatial_host, N = tt_model.preprocess_spatial_input_host(spatial_input)
+    spatial_1BNI = bf16_tensor(
+        spatial_host,
+        device=mesh_device,
+        mesh_axis=parallel_config.sequence_parallel.mesh_axis,
+        shard_dim=-2,
+    )
     rope_cos_1HND, rope_sin_1HND, trans_mat = tt_model.prepare_rope_features(spatial_input)
-    prompt_1BLP = tt_model.prepare_text_conditioning(prompt_input)
+    prompt_embeds = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+    prompt_1BLP = tt_model.prepare_text_conditioning(prompt_embeds)
+    timestep = float32_tensor(timestep_input.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=mesh_device)
 
     # Run TT inner_step (returns on-device tensor)
     logger.info(f"Running TT inner_step with spatial_host shape {spatial_host.shape}, N={N}")
     tt_output_1BNI_tt = tt_model.inner_step(
-        spatial_1BNI_torch=spatial_host,
+        spatial_1BNI=spatial_1BNI,
         prompt_1BLP=prompt_1BLP,
         rope_cos_1HND=rope_cos_1HND,
         rope_sin_1HND=rope_sin_1HND,
         trans_mat=trans_mat,
         N=N,
-        timestep_torch=timestep_input,
+        timestep=timestep,
     )
     tt_output_1BNI = local_device_to_torch(tt_output_1BNI_tt)
     tt_output = tt_model.postprocess_spatial_output_host(tt_output_1BNI, T, H, W, N)
-    del tt_model
 
     # Run torch reference
     logger.info(f"Running torch reference with spatial shape {spatial_input.shape}")

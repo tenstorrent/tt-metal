@@ -17,7 +17,15 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config, prepare_conv3d_weights
+from ...utils.conv3d import (
+    _ntuple,
+    aligned_channels,
+    conv_pad_height,
+    conv_pad_in_channels,
+    count_convs,
+    get_conv3d_config,
+    prepare_conv3d_weights,
+)
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import typed_tensor
 
@@ -1319,6 +1327,12 @@ class WanDecoder(Module):
     def clear_cache(self):
         self._conv_idx = [0]
         self._feat_cache = [None] * self.cached_conv_count
+
+    def prepare_input(self, latents):
+        tt_latents_BTHWC = latents.permute(0, 2, 3, 4, 1)
+        tt_latents_BTHWC = conv_pad_in_channels(tt_latents_BTHWC)
+        tt_latents_BTHWC, logical_h = conv_pad_height(tt_latents_BTHWC, self.parallel_config.height_parallel.factor)
+        return tt_latents_BTHWC, logical_h
 
     def forward(self, z_BTHWC: ttnn.Tensor, logical_h: int, use_cache: bool = True) -> tuple[ttnn.Tensor, int]:
         B, T, H, W, C = z_BTHWC.shape

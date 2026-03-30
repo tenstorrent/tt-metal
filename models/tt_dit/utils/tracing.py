@@ -16,8 +16,20 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-def _distributed_barrier() -> None:
-    """Call a distributed barrier if running in a multi-host context, otherwise a no-op."""
+def _distributed_barrier(device: ttnn.MeshDevice | None = None) -> None:
+    """Drain the device command queue then synchronize all hosts at a CPU barrier.
+
+    If ``device`` is provided, ``ttnn.synchronize_device`` is called first so that
+    any in-flight async CCL operations (e.g. VAE ``all_gather_async`` on inter-host
+    ethernet links) complete before the MPI barrier aligns the hosts.  Without the
+    device drain a faster host can begin trace capture or execution while a slower
+    host still has outstanding ethernet transfers, corrupting shared CCL channel state.
+
+    On single-host setups the MPI context is not initialized and the call is a no-op
+    after the device drain.
+    """
+    if device is not None:
+        ttnn.synchronize_device(device)
     if ttnn.distributed_context_is_initialized():
         ttnn.distributed_context_barrier()
 
@@ -146,14 +158,14 @@ class Tracer:
 
                 # Barrier 1: all hosts must start the prep run together so that CCL ping-pong
                 # indices stay in sync across hosts before the prep run advances them.
-                _distributed_barrier()
+                _distributed_barrier(self._device)
                 self._function(*prep_args, **prep_kwargs)
                 del prep_args, prep_kwargs
                 # Barrier 2: all hosts must complete the prep run before any host calls
                 # begin_trace_capture. Without this, a fast host can enter capture mode while
                 # a slow host is still executing the prep-run CCL ops, causing mismatched
                 # execution/record phases on the two sides of an all_gather.
-                _distributed_barrier()
+                _distributed_barrier(self._device)
 
             # capture trace
             logger.debug("capturing trace...")
@@ -171,12 +183,16 @@ class Tracer:
 
             # Barrier 3: all hosts must finish trace capture before any host starts executing.
             # This ensures all remote-side CCL ops are captured before they are exercised.
-            _distributed_barrier()
+            _distributed_barrier(self._device)
 
             if tracer_execute_on_capture:
                 # Trace capture records commands but does not execute them. Execute the trace to
                 # actually compute outputs.
                 ttnn.execute_trace(self._device, trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
+                # Barrier 4: prevent a faster host from racing into the next pipeline stage
+                # (e.g. VAE or next denoising step) while a slower host is still executing
+                # this trace and reading from the shared persistent CCL output buffers.
+                _distributed_barrier(self._device)
 
             # Allow resources referenced by the function to be freed, which might be used to offload
             # weights.
@@ -186,6 +202,18 @@ class Tracer:
             self._trace_id = trace_id
             self._outputs = outputs
         else:
+            # Barrier 0: drain any in-flight device operations from the preceding pipeline
+            # stage (e.g. VAE async all_gather_async on inter-galaxy ethernet links) before
+            # issuing execute_trace.  The capture-path Barrier 4 only covers the trace
+            # execution itself; it does not cover operations that the pipeline runs after the
+            # Tracer returns (such as the VAE decode).  Without this drain those operations
+            # can still be in-flight on the shared inter-galaxy fabric when execute_trace
+            # replays the transformer's baked-in CCL channel programming, causing a conflict
+            # that corrupts the gathered activations — this is why the error appears on the
+            # *second* trace execution (first time through this else branch) rather than the
+            # first (which is inside the capture path and already fully wrapped by barriers).
+            _distributed_barrier(self._device)
+
             if len(args) > len(self._args):
                 msg = f"expected at most {len(self._args)} positional args, got {len(args)}"
                 raise TypeError(msg)
@@ -206,7 +234,19 @@ class Tracer:
                 if new is not None:
                     _tree_map(self._update_input, self._kwargs[name], new, path_label=f'kwargs["{name}"]')
 
+            # Barrier 1b: when input tensors are at different addresses from their baked-in
+            # equivalents, _update_input calls copy_host_to_device_tensor which dispatches
+            # cross-host transfers to remote devices.  Without this barrier a remote host can
+            # begin executing the trace before its shard of the copied input has landed in its
+            # DRAM, causing it to read stale data.  This only triggers when prompt_1BLP_2 (or
+            # any other live tensor) occupies the address the allocator would otherwise give to
+            # spatial_1BNI, forcing a copy instead of an in-place reuse.
+            _distributed_barrier(self._device)
+
             ttnn.execute_trace(self._device, self._trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
+            # Barrier 4: same as in the capture path — all hosts must finish this execution
+            # before any host proceeds, preventing races on shared persistent CCL buffers.
+            _distributed_barrier(self._device)
 
         return self._outputs
 
@@ -225,7 +265,7 @@ class Tracer:
         if trace_id is not None:
             # Barrier: ensure all hosts have finished executing the trace before any host
             # releases it. Releasing while a peer is mid-execution corrupts CCL state.
-            _distributed_barrier()
+            _distributed_barrier(self._device)
             self._trace_id = None
             self._args = ()
             self._kwargs = {}

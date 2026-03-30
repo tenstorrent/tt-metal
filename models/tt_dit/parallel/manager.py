@@ -111,7 +111,7 @@ class CCLManager:
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
             # Synchronize devices to ensure all are ready to allocate and proceed
-            ttnn.synchronize_device(self.mesh_device)
+            self.distributed_barrier()
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
@@ -126,7 +126,7 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
-            ttnn.synchronize_device(self.mesh_device)
+            self.distributed_barrier()
 
         # Get current buffer and alternate index
         current_idx = self._ping_pong_buffer_indices[cache_key]
@@ -153,7 +153,7 @@ class CCLManager:
         # Create buffers if not cached
         if cache_key not in self._ping_pong_buffer_cache:
             # Synchronize devices to ensure all are ready to allocate and proceed
-            ttnn.synchronize_device(self.mesh_device)
+            self.distributed_barrier()
             # Create two buffers for ping pong
             buffers = []
             output_buffer_shape = list(shape)
@@ -170,7 +170,7 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
-            ttnn.synchronize_device(self.mesh_device)
+            self.distributed_barrier()
 
         # Get current buffer and alternate index
         current_idx = self._ping_pong_buffer_indices[cache_key]
@@ -257,7 +257,7 @@ class CCLManager:
         cache_key = ("np", tuple(output_shape), dtype)
 
         if cache_key not in self._ping_pong_buffer_cache:
-            ttnn.synchronize_device(self.mesh_device)
+            self.distributed_barrier()
             buffers = []
             for _ in range(2):
                 output_buffer = ttnn.from_torch(
@@ -271,7 +271,7 @@ class CCLManager:
 
             self._ping_pong_buffer_cache[cache_key] = buffers
             self._ping_pong_buffer_indices[cache_key] = 0
-            ttnn.synchronize_device(self.mesh_device)
+            self.distributed_barrier()
 
         current_idx = self._ping_pong_buffer_indices[cache_key]
         self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
@@ -353,6 +353,12 @@ class CCLManager:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.ag_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
+
+    def distributed_barrier(self) -> None:
+        """Call a distributed barrier if running in a multi-host context, otherwise a no-op."""
+        ttnn.synchronize_device(self.mesh_device)
+        if ttnn.distributed_context_is_initialized():
+            ttnn.distributed_context_barrier()
 
     def all_gather_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False
