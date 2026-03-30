@@ -13,11 +13,12 @@ import urllib.request
 from typing import Any
 
 
-ISSUE_URL_RE = re.compile(r"https://github\.com/tenstorrent/tt-metal/issues/(\d+)")
+ISSUE_URL_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s]+)/issues/(\d+)")
+SUPPORTED_ISSUE_REPOS = {"tenstorrent/tt-metal", "ebanerjeeTT/issue_dump"}
 
 
-def fetch_issue(issue_number: int, github_token: str | None) -> dict[str, Any]:
-    url = f"https://api.github.com/repos/tenstorrent/tt-metal/issues/{issue_number}"
+def fetch_issue(repo_slug: str, issue_number: int, github_token: str | None) -> dict[str, Any]:
+    url = f"https://api.github.com/repos/{repo_slug}/issues/{issue_number}"
     headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
@@ -45,37 +46,48 @@ def main() -> int:
         payload = json.load(f)
 
     messages = payload.get("messages", [])
-    issue_numbers: set[int] = set()
+    issue_refs: set[tuple[str, int]] = set()
     for msg in messages:
-        for issue_num in ISSUE_URL_RE.findall(str(msg.get("text", ""))):
-            issue_numbers.add(int(issue_num))
+        for owner, repo, issue_num in ISSUE_URL_RE.findall(str(msg.get("text", ""))):
+            repo_slug = f"{owner}/{repo}"
+            if repo_slug in SUPPORTED_ISSUE_REPOS:
+                issue_refs.add((repo_slug, int(issue_num)))
 
-    issue_state_map: dict[int, dict[str, Any]] = {}
-    failures: dict[int, str] = {}
-    for n in sorted(issue_numbers):
+    issue_state_map: dict[tuple[str, int], dict[str, Any]] = {}
+    failures: dict[tuple[str, int], str] = {}
+    for repo_slug, n in sorted(issue_refs, key=lambda x: (x[0], x[1])):
         try:
-            issue = fetch_issue(n, github_token)
-            issue_state_map[n] = {
+            issue = fetch_issue(repo_slug, n, github_token)
+            issue_state_map[(repo_slug, n)] = {
+                "repo": repo_slug,
                 "state": issue.get("state"),
                 "closed": issue.get("state") == "closed",
                 "url": issue.get("html_url"),
                 "title": issue.get("title"),
             }
         except urllib.error.HTTPError as exc:
-            failures[n] = f"http_error_{exc.code}"
+            failures[(repo_slug, n)] = f"http_error_{exc.code}"
         except Exception as exc:  # noqa: BLE001
-            failures[n] = str(exc)
+            failures[(repo_slug, n)] = str(exc)
 
     for msg in messages:
-        refs = sorted({int(x) for x in ISSUE_URL_RE.findall(str(msg.get("text", "")))})
+        refs = sorted(
+            {
+                (f"{owner}/{repo}", int(num))
+                for owner, repo, num in ISSUE_URL_RE.findall(str(msg.get("text", "")))
+                if f"{owner}/{repo}" in SUPPORTED_ISSUE_REPOS
+            },
+            key=lambda x: (x[0], x[1]),
+        )
         refs_detail = []
-        for n in refs:
-            state = issue_state_map.get(n)
+        for repo_slug, n in refs:
+            state = issue_state_map.get((repo_slug, n))
             if state is None:
                 refs_detail.append(
                     {
+                        "repo": repo_slug,
                         "number": n,
-                        "url": f"https://github.com/tenstorrent/tt-metal/issues/{n}",
+                        "url": f"https://github.com/{repo_slug}/issues/{n}",
                         "state": "unknown",
                         "closed": False,
                     }
@@ -83,6 +95,7 @@ def main() -> int:
             else:
                 refs_detail.append(
                     {
+                        "repo": repo_slug,
                         "number": n,
                         "url": state["url"],
                         "state": state["state"],
@@ -90,17 +103,18 @@ def main() -> int:
                     }
                 )
 
-        msg["referenced_issue_numbers"] = refs
+        msg["referenced_issue_numbers"] = [n for _, n in refs]
+        msg["referenced_issue_repos"] = sorted({repo_slug for repo_slug, _ in refs})
         msg["referenced_issues"] = refs_detail
         msg["issue_closed"] = any(item.get("closed", False) for item in refs_detail)
         msg["all_referenced_issues_closed"] = bool(refs_detail) and all(
             item.get("closed", False) for item in refs_detail
         )
-        msg["issue_status_lookup_failed"] = any(n in failures for n in refs)
+        msg["issue_status_lookup_failed"] = any((repo_slug, n) in failures for repo_slug, n in refs)
 
     payload["issue_enrichment"] = {
-        "github_lookup_count": len(issue_numbers),
-        "github_lookup_failures": {str(k): v for k, v in failures.items()},
+        "github_lookup_count": len(issue_refs),
+        "github_lookup_failures": {f"{repo}#{num}": v for (repo, num), v in failures.items()},
         "notes": "issue_closed=true means at least one referenced top-level GitHub issue is closed",
     }
 
@@ -111,7 +125,7 @@ def main() -> int:
         json.dumps(
             {
                 "messages": len(messages),
-                "issues_found": len(issue_numbers),
+                "issues_found": len(issue_refs),
                 "lookups_failed": len(failures),
             }
         )

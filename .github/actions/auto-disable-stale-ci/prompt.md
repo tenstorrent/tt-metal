@@ -9,6 +9,7 @@ Task:
 Decision rules:
 - Ignore any candidate where `issue_closed` is true (these should already be excluded).
 - If `primary_issue_number` is missing, skip unless top-level text clearly contains enough failure context.
+- During bootstrap testing, prefer `primary_issue_repo == "ebanerjeeTT/issue_dump"` when present.
 - Prefer entries with clear CI failure context and issue references.
 - Keep action scope minimal and specific.
 
@@ -24,6 +25,8 @@ Output contract:
       "source_slack_ts": "string",
       "source_slack_permalink": "string",
       "issue_number": 12345,
+      "issue_repo": "ebanerjeeTT/issue_dump",
+      "issue_url": "https://github.com/ebanerjeeTT/issue_dump/issues/12345",
       "job_urls": ["optional job urls"],
       "disable_scope_hint": "one line",
       "branch_name_hint": "ci-disable-test-optional-slug",

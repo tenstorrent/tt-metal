@@ -31,6 +31,16 @@ def issue_numbers(msg: dict[str, Any]) -> list[int]:
     return []
 
 
+def primary_issue_detail(msg: dict[str, Any]) -> dict[str, Any] | None:
+    refs = msg.get("referenced_issues", [])
+    if not isinstance(refs, list) or not refs:
+        return None
+    first = refs[0]
+    if not isinstance(first, dict):
+        return None
+    return first
+
+
 def main() -> int:
     args = parse_args()
     now = time.time()
@@ -53,6 +63,9 @@ def main() -> int:
         age_hours = (now - ts_float) / 3600.0
         msg_issue_closed = bool(msg.get("issue_closed", False))
         refs = issue_numbers(msg)
+        primary = primary_issue_detail(msg)
+        primary_repo = str(primary.get("repo", "")).strip() if primary else ""
+        primary_url = str(primary.get("url", "")).strip() if primary else ""
 
         if msg_issue_closed:
             skipped.append({"ts": ts, "reason": "issue_closed_true"})
@@ -70,6 +83,8 @@ def main() -> int:
                 "issue_status_lookup_failed": bool(msg.get("issue_status_lookup_failed", False)),
                 "issue_numbers": refs,
                 "primary_issue_number": refs[0] if refs else None,
+                "primary_issue_repo": primary_repo or None,
+                "primary_issue_url": primary_url or None,
                 "top_level_text": str(msg.get("text", "")),
                 "thread_reply_count": len(msg.get("thread_replies", [])),
             }

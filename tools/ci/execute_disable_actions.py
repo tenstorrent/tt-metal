@@ -16,6 +16,7 @@ from typing import Any
 
 
 REPO = "tenstorrent/tt-metal"
+ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 GUARDED_GH = [sys.executable, "tools/ci/guarded_gh.py"]
 ALLOWED_STATUS = {
     "new",
@@ -206,6 +207,17 @@ def set_status(item: dict[str, Any], status: str, *, event: str, details: str) -
     append_history(item, event, details)
 
 
+def state_has_active_pr(item: dict[str, Any]) -> str | None:
+    status = str(item.get("status", ""))
+    if status not in {"pr_open", "kickoff_running", "kickoff_failed_new_failure"}:
+        return None
+    disable_pr = item.get("disable_pr")
+    if not isinstance(disable_pr, dict):
+        return None
+    pr_url = str(disable_pr.get("url", "")).strip()
+    return pr_url or None
+
+
 def write_summary(path: Path, data: dict[str, Any]) -> None:
     lines: list[str] = []
     lines.append("# Auto Disable Actions")
@@ -284,6 +296,8 @@ def main() -> int:
     for action in validated_actions:
         source_ts = str(action["source_slack_ts"])
         issue_number = int(action["issue_number"])
+        issue_repo = str(action.get("issue_repo", ISSUE_REPO_TEST)).strip() or ISSUE_REPO_TEST
+        issue_url = str(action.get("issue_url", "")).strip() or f"https://github.com/{issue_repo}/issues/{issue_number}"
         item = ensure_state_item(state, action)
 
         if item["status"] in {"completed", "paused"}:
@@ -314,12 +328,24 @@ def main() -> int:
             )
             continue
 
-        issue_url = f"https://github.com/{REPO}/issues/{issue_number}"
+        active_pr_url = state_has_active_pr(item)
+        if active_pr_url:
+            result["skipped"].append(
+                {
+                    "source_slack_ts": source_ts,
+                    "issue_number": issue_number,
+                    "reason": f"active_state_pr:{active_pr_url}",
+                }
+            )
+            append_history(item, "skip_active_state_pr", f"Skipped action because active PR exists: {active_pr_url}")
+            continue
+
         pr_title = str(action.get("pr_title", "")).strip() or f"ci: disable failing test for #{issue_number}"
         pr_body = str(action.get("pr_body", "")).strip()
         if not pr_body:
             pr_body = (
                 f"Refs #{issue_number}\n\n"
+                f"Source Issue: {issue_url}\n"
                 f"Auto-disable-source-ts: {source_ts}\n"
                 f"Source Slack: {action.get('source_slack_permalink', '')}\n"
             )

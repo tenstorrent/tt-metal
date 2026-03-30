@@ -15,7 +15,7 @@ inputs:
   model:
     description: "Cursor model"
     required: false
-    default: "auto"
+    default: "claude-4-sonnet"
   dry-run:
     description: "If true, plan only and do not push/PR"
     required: false
