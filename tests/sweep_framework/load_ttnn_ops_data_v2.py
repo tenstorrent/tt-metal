@@ -2082,6 +2082,52 @@ def set_model_name(source_file=None, hf_model=None, model_id=None, new_name=None
         print(f"  source_file={row[1]!r}  hf_model={row[2]!r}")
 
 
+def _find_manifest_trace_references(trace_run_id, manifest_path=None):
+    """Return references to a trace in the sweep manifest targets and registry."""
+    try:
+        data, path = _load_manifest(manifest_path)
+    except Exception as e:
+        return None, f"could not load manifest: {e}"
+
+    targets = []
+    for scope_name, entries in (data.get("targets") or {}).items():
+        for index, entry in enumerate(entries or []):
+            pinned_trace = entry.get("trace")
+            if pinned_trace is None:
+                continue
+            if isinstance(pinned_trace, list):
+                pinned_ids = [int(t) for t in pinned_trace]
+            else:
+                pinned_ids = [int(pinned_trace)]
+            if trace_run_id in pinned_ids:
+                targets.append(
+                    {
+                        "scope": scope_name,
+                        "index": index,
+                        "models": entry.get("model"),
+                    }
+                )
+
+    registry_entries = []
+    for index, entry in enumerate(data.get("registry") or []):
+        entry_trace_id = entry.get("trace_id")
+        try:
+            entry_trace_id = int(entry_trace_id) if entry_trace_id is not None else None
+        except (TypeError, ValueError):
+            entry_trace_id = None
+        if entry_trace_id == trace_run_id:
+            registry_entries.append(
+                {
+                    "index": index,
+                    "status": entry.get("status"),
+                    "trace_uid": entry.get("trace_uid"),
+                    "models": entry.get("models"),
+                }
+            )
+
+    return {"path": path, "targets": targets, "registry_entries": registry_entries}, None
+
+
 def delete_trace_run(trace_run_id, yes=False, schema=DEFAULT_SCHEMA):
     """Delete a trace_run and any configs that belong exclusively to it.
 
@@ -2106,6 +2152,8 @@ def delete_trace_run(trace_run_id, yes=False, schema=DEFAULT_SCHEMA):
 
     config_count, notes = row
 
+    manifest_refs, manifest_error = _find_manifest_trace_references(trace_run_id)
+
     cur.execute(
         f"""
         SELECT COUNT(*) FROM {schema}.trace_run_config trc
@@ -2124,6 +2172,20 @@ def delete_trace_run(trace_run_id, yes=False, schema=DEFAULT_SCHEMA):
     print(f"Trace run {trace_run_id}: {config_count} configs, notes={notes!r}")
     print(f"  {exclusive_count} configs will be DELETED (exclusive to this trace)")
     print(f"  {shared_count} configs will be UNLINKED only (shared with other traces)")
+    if manifest_refs:
+        target_refs = manifest_refs.get("targets", [])
+        registry_refs = manifest_refs.get("registry_entries", [])
+        if target_refs or registry_refs:
+            print(f"  Warning: trace {trace_run_id} is still referenced in {manifest_refs['path']}")
+            for ref in target_refs:
+                print(f"    Target ref: scope={ref['scope']} entry_index={ref['index']} models={ref['models']!r}")
+            for ref in registry_refs:
+                print(
+                    f"    Registry ref: entry_index={ref['index']} status={ref['status']!r} "
+                    f"trace_uid={ref['trace_uid']!r}"
+                )
+    elif manifest_error:
+        print(f"  Warning: {manifest_error}")
 
     if not yes:
         confirm = input("\nProceed? [y/N] ").strip().lower()
