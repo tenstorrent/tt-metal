@@ -16,7 +16,7 @@ Supports:
 - Mixed text/vision token sequences
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import torch
 
@@ -45,6 +45,7 @@ class TextModel(LightweightModule):
         head_dim: int = 128,
         vocab_size: int = 152064,
         max_seq_len: int = 8192,
+        max_batch_size: int = 1,
         rope_theta: float = 1000000.0,
         rms_norm_eps: float = 1e-5,
         weight_cache_path=None,
@@ -114,7 +115,7 @@ class TextModel(LightweightModule):
             head_dim=head_dim,
             max_seq_len=max_seq_len,
             rope_theta=rope_theta,
-            batch_size=1,  # Single batch for now
+            batch_size=max_batch_size,
             datatype=ttnn.bfloat16,
         )
         self.transformation_mats = self.rotary_setup.get_transformation_mats()
@@ -216,6 +217,7 @@ class TextModel(LightweightModule):
         output_hidden_states: bool = False,
         rot_mats: Optional[List[ttnn.Tensor]] = None,
         page_table: Optional[ttnn.Tensor] = None,
+        user_id: int = 0,
     ) -> Tuple[ttnn.Tensor, Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]]]:
         """
         Forward pass through text model (without embedding).
@@ -228,6 +230,7 @@ class TextModel(LightweightModule):
             output_hidden_states: Whether to return all hidden states
             rot_mats: Optional pre-computed rotation matrices [cos, sin] for tracing
             page_table: Optional page table for paged attention (vLLM)
+            user_id: Batch index for multi-user batching (which user's KV cache slot to fill)
 
         Returns:
             Tuple of (logits, new_kv_caches)
@@ -249,7 +252,9 @@ class TextModel(LightweightModule):
                 all_hidden_states.append(x)
 
             kv_cache = kv_caches[layer_idx] if kv_caches else None
-            x, new_kv_cache = block(x, rot_mats, self.transformation_mats, attn_mask, start_pos, kv_cache, page_table)
+            x, new_kv_cache = block(
+                x, rot_mats, self.transformation_mats, attn_mask, start_pos, kv_cache, page_table, user_id
+            )
             new_kv_caches.append(new_kv_cache)
 
         # Final normalization
@@ -274,6 +279,7 @@ class TextModel(LightweightModule):
         start_pos: int = 0,
         attn_mask: Optional[ttnn.Tensor] = None,
         kv_caches: Optional[List[Tuple[ttnn.Tensor, ttnn.Tensor]]] = None,
+        user_id: int = 0,
     ) -> Tuple[ttnn.Tensor, List[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         Forward pass with embedding lookup.
@@ -283,12 +289,13 @@ class TextModel(LightweightModule):
             start_pos: Starting position for KV cache
             attn_mask: Optional attention mask
             kv_caches: Optional list of (k_cache, v_cache) per layer
+            user_id: Batch index for multi-user batching
 
         Returns:
             Tuple of (logits, new_kv_caches)
         """
         hidden_states = self.embed_tokens(input_ids)
-        return self.forward(hidden_states, start_pos, attn_mask, kv_caches)
+        return self.forward(hidden_states, start_pos, attn_mask, kv_caches, user_id=user_id)
 
     def forward_decode(
         self,
@@ -424,26 +431,37 @@ def init_paged_kv_cache(
     block_size: int = 64,
     head_dim: int = 128,
     dtype=ttnn.bfloat8_b,
+    batch_size: int = 1,
+    max_seq_len: int = None,
 ) -> List[Tuple[ttnn.Tensor, ttnn.Tensor]]:
     """
     Initialize paged KV cache for all layers.
 
-    Paged attention allocates KV cache as blocks that can be dynamically
-    assigned to different sequences via page tables.
+    Paged attention uses page_table to map virtual positions to physical blocks.
+    Cache shape is [batch_size, num_kv_heads, max_seq_len, head_dim] to support
+    batched paged_update_cache operations.
 
     Args:
         mesh_device: TTNN mesh device or single device
         num_layers: Number of decoder layers
-        num_blocks: Total number of blocks in the cache
+        num_blocks: Total number of blocks in the cache (used to compute max_seq_len if not provided)
         num_kv_heads: Number of KV heads (total across all devices)
         block_size: Number of tokens per block
         head_dim: Dimension per head
         dtype: Data type for cache
+        batch_size: Batch size (first dimension of cache)
+        max_seq_len: Maximum sequence length (if None, computed as num_blocks * block_size // batch_size)
 
     Returns:
         List of (k_cache, v_cache) tuples per layer
     """
     from loguru import logger
+
+    # Compute max_seq_len from num_blocks if not provided
+    if max_seq_len is None:
+        # Distribute blocks across batch elements
+        blocks_per_batch = num_blocks // batch_size
+        max_seq_len = blocks_per_batch * block_size
 
     is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
 
@@ -454,22 +472,30 @@ def init_paged_kv_cache(
         mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
         logger.info(
             f"Initializing paged KV cache: {num_layers} layers, "
-            f"{num_blocks} blocks, block_size={block_size}, "
+            f"batch_size={batch_size}, max_seq_len={max_seq_len}, "
             f"{num_kv_heads_per_device} kv_heads per device"
         )
     else:
         num_kv_heads_per_device = num_kv_heads
         mesh_mapper = None
         logger.info(
-            f"Initializing paged KV cache: {num_layers} layers, " f"{num_blocks} blocks, block_size={block_size}"
+            f"Initializing paged KV cache: {num_layers} layers, " f"batch_size={batch_size}, max_seq_len={max_seq_len}"
         )
 
     kv_caches = []
+
+    # For paged attention, cache shape is [num_blocks, num_kv_heads, block_size, head_dim]
+    # where num_blocks = total blocks available for all sequences
+    # paged_update_cache requires: page_table[1] (max_blocks_per_seq) <= cache[0] (num_blocks)
+    max_blocks_per_seq = (max_seq_len + block_size - 1) // block_size  # blocks needed per sequence
+    total_blocks = batch_size * max_blocks_per_seq  # total blocks for all batches
+
+    logger.info(f"Paged KV cache: max_blocks_per_seq={max_blocks_per_seq}, total_blocks={total_blocks}")
+
     for layer_idx in range(num_layers):
         # Paged KV cache shape: [num_blocks, num_kv_heads, block_size, head_dim]
-        # This allows dynamic allocation of blocks to sequences via page tables
         k_cache = ttnn.as_tensor(
-            torch.zeros((num_blocks, num_kv_heads, block_size, head_dim)),
+            torch.zeros((total_blocks, num_kv_heads, block_size, head_dim)),
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -478,7 +504,7 @@ def init_paged_kv_cache(
         )
 
         v_cache = ttnn.as_tensor(
-            torch.zeros((num_blocks, num_kv_heads, block_size, head_dim)),
+            torch.zeros((total_blocks, num_kv_heads, block_size, head_dim)),
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -495,7 +521,7 @@ def init_paged_kv_cache(
 def init_decode_position(
     mesh_device,
     batch_size: int = 1,
-    initial_pos: int = 0,
+    initial_pos: Union[int, List[int]] = 0,
 ) -> ttnn.Tensor:
     """
     Initialize decode position tensor.
@@ -503,7 +529,8 @@ def init_decode_position(
     Args:
         mesh_device: TTNN mesh device
         batch_size: Batch size
-        initial_pos: Initial position value
+        initial_pos: Initial position value (int for same position for all batch items,
+                     or List[int] for per-batch positions)
 
     Returns:
         Position tensor of shape [batch_size] on device
@@ -511,7 +538,14 @@ def init_decode_position(
     is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
 
-    pos_tensor = torch.full((batch_size,), initial_pos, dtype=torch.int32)
+    if isinstance(initial_pos, int):
+        pos_tensor = torch.full((batch_size,), initial_pos, dtype=torch.int32)
+    else:
+        # List[int] - per-batch initial positions
+        assert (
+            len(initial_pos) == batch_size
+        ), f"initial_pos length {len(initial_pos)} must match batch_size {batch_size}"
+        pos_tensor = torch.tensor(initial_pos, dtype=torch.int32)
     return ttnn.from_torch(
         pos_tensor,
         dtype=ttnn.int32,

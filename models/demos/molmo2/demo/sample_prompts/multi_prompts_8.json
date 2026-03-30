@@ -1,0 +1,34 @@
+[
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Describe this image in detail."
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What breed of dog is this?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What is the dog doing in this image?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Write a short haiku about this dog."
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What color is the dog's fur?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Is the dog indoors or outdoors?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> What object is the dog standing on?"
+    },
+    {
+        "image": "../dog.jpg",
+        "prompt": "<|image|> Does this dog look happy or sad?"
+    }
+]
