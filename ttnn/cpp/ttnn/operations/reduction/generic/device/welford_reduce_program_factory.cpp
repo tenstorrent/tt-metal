@@ -200,6 +200,19 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
             tt_metal::CircularBufferConfig(4 * partial_single_tile_size, {{partial_cb_index, partial_cb_data_format}})
                 .set_page_size(partial_cb_index, partial_single_tile_size);
         tt_metal::CreateCircularBuffer(program, all_cores, partial_cb_config);
+
+        // cb_combined (c_22): HW-reduce only -- holds the combined scalar result
+        // (one Float32 tile per output) written by the writer kernel after
+        // W-combining all per-column partials.  The compute kernel reads this
+        // tile and re-packs it to cb_out in the correct output data format
+        // (the packer hardware is required for BFLOAT8_B conversion).
+        CBIndex combined_cb_index = CBIndex::c_22;
+        tt::DataFormat combined_cb_data_format = tt::DataFormat::Float32;
+        uint32_t combined_single_tile_size = tt::tile_size(combined_cb_data_format);
+        tt_metal::CircularBufferConfig combined_cb_config =
+            tt_metal::CircularBufferConfig(combined_single_tile_size, {{combined_cb_index, combined_cb_data_format}})
+                .set_page_size(combined_cb_index, combined_single_tile_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, combined_cb_config);
     }
 
     bfloat16 bfloat_scalar_value = bfloat16::truncate(operation_attributes.scalar);
@@ -272,13 +285,14 @@ WelfordReduceProgramFactory::cached_program_t WelfordReduceProgramFactory::creat
     std::string compute_kernel;
 
     if (reduce_hw) {
-        // HW-reduce compile args: {Ht, H, tile_height, Wt, do_scale}
+        // HW-reduce compile args: {Ht, H, tile_height, Wt, do_scale, reduce_batch_size}
         compute_compile_args = {
             Ht,
             H,
             tile_height,
             Wt,
             static_cast<uint32_t>(do_scale),
+            reduce_batch_size,
         };
         compute_kernel = "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/welford_reduce_hw.cpp";
     } else {

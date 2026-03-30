@@ -402,6 +402,65 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape):
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
 
 
+# Test that generic reduction ops produce correct results, preserve dtype, and output
+# TILE layout across all supported dtype/layout combinations documented in nanobind.
+@pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
+    """
+    Test generic reduction ops across all documented dtype/layout combinations.
+    Validates numerical correctness against PyTorch, verifies output dtype matches
+    input dtype, and verifies output layout is TILE as documented in nanobind.
+    """
+    shape = (4, 2, 64, 64)
+    dim = -1
+
+    if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("bfloat8_b requires TILE_LAYOUT at tensor creation (py_to_tt_tensor.cpp)")
+
+    # torch has no bfloat8_b; use float32 as highest-precision reference.
+    torch_dtype_map = {
+        ttnn.float32: torch.float32,
+        ttnn.bfloat16: torch.bfloat16,
+        ttnn.bfloat8_b: torch.float32,
+    }
+    torch_dtype = torch_dtype_map[dtype]
+
+    torch.manual_seed(0)
+    torch_tensor = torch.randn(shape, dtype=torch_dtype)
+    ttnn_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=device)
+
+    # torch.max/min with a single int dim return a namedtuple; use amax/amin instead.
+    torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
+    torch_op = getattr(torch, torch_op_name)
+    torch_result = torch_op(torch_tensor, dim=dim)
+
+    ttnn_op = getattr(ttnn, op)
+    ttnn_result = ttnn_op(ttnn_tensor, dim=dim)
+
+    # Validate output dtype matches input dtype
+    assert ttnn_result.dtype == dtype, f"Expected output dtype {dtype}, got {ttnn_result.dtype}"
+
+    # Validate output layout is TILE as documented
+    assert ttnn_result.layout == ttnn.TILE_LAYOUT, f"Expected TILE_LAYOUT, got {ttnn_result.layout}"
+
+    ttnn_result_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
+
+    if dtype == ttnn.bfloat8_b:
+        # BFLOAT8_B has lower precision.
+        atol = 0.3
+        rtol = 0.1
+        pcc = 0.998
+    else:
+        atol = 0.1
+        rtol = 0.1
+        pcc = 0.999
+
+    passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result_torch, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result_torch}"
+
+
 @pytest.mark.parametrize("tensor_shape", [(), (170,), (3, 6, 40, 63, 20), (60, 0, 32)])
 @pytest.mark.parametrize("dim", [None, 0, -1])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])

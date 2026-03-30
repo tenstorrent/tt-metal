@@ -39,7 +39,7 @@ void kernel_main() {
     constexpr auto cb_in = tt::CBIndex::c_0;
     // Scalar tile produced by the reader via generate_reduce_scaler.
     // Used to scale every input tile before Welford processing.
-    constexpr auto cb_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_scalar = tt::CBIndex::c_2;
     // Circular buffer where the final variance output tile is written
     // for the writer kernel to consume.
     constexpr auto cb_out = tt::CBIndex::c_16;
@@ -61,7 +61,7 @@ void kernel_main() {
     constexpr auto cb_transpose_src = do_scale ? cb_scaled : cb_in;
 
     experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
+    experimental::CircularBuffer cb_scalar_obj(cb_scalar);
     experimental::CircularBuffer cb_out_obj(cb_out);
     experimental::CircularBuffer cb_var_obj(cb_var);
     experimental::CircularBuffer cb_scaled_obj(cb_scaled);
@@ -86,7 +86,7 @@ void kernel_main() {
 
     if constexpr (do_scale) {
         // Scalar tile stays resident across all rows
-        cb_scaler_obj.wait_front(onetile);
+        cb_scalar_obj.wait_front(onetile);
     }
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
@@ -116,8 +116,8 @@ void kernel_main() {
                 // stale Float32 format, producing garbage on the 2nd+ NCHt
                 // iterations.
                 reconfig_data_format_srca(cb_in);
-                mul_tiles_bcast_scalar_init_short(cb_in, cb_scaler);
-                mul_tiles_bcast_scalar(cb_in, cb_scaler, 0, 0, input_dst);
+                mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
+                mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
                 tile_regs_commit();
                 cb_in_obj.pop_front(1);
                 cb_scaled_obj.reserve_back(onetile);

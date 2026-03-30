@@ -3,11 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Welford HW-reduction writer kernel.
-// Reads Wt partial (mean, var) tile pairs from cb_partial (written by the
-// compute kernel using welford_finalize_to_row), combines them across W
-// using the parallel Welford merge formula, applies Bessel's correction
-// and sqrtf() if computing std, constructs the output tile directly in
-// cb_out, and NOC-writes it to DRAM.
+//
+// Phase 1 (per output): Reads Wt partial (mean, var) tile pairs from
+// cb_partial (written by the compute kernel using
+// welford_finalize_to_row), combines them across W using the parallel
+// Welford merge formula, applies Bessel's correction and sqrtf() if
+// computing std, and writes the combined scalar into a Float32 tile
+// in cb_combined for the compute kernel to re-pack in the output format.
+//
+// Phase 2 (per output): Waits for the compute kernel to pack the
+// output tile into cb_out (in the correct output data format), then
+// NOC-writes it to DRAM.
 
 #include <cstdint>
 #include <cmath>
@@ -33,6 +39,10 @@ void kernel_main() {
     constexpr uint32_t reduce_batch_size = get_compile_time_arg_val(6);
 
     constexpr auto cb_partial = tt::CBIndex::c_21;
+    // cb_combined: Float32 tile written by this kernel, read back by compute
+    // for repacking into the output data format.
+    constexpr auto cb_combined = tt::CBIndex::c_22;
+    // cb_out: output tile packed by compute in the correct data format.
     constexpr auto cb_out = tt::CBIndex::c_16;
 
     constexpr auto dst_args = TensorAccessorArgs<7>();
@@ -45,10 +55,12 @@ void kernel_main() {
     constexpr uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
     const uint32_t partial_tile_size_bytes = get_tile_size(cb_partial);
+    const uint32_t combined_tile_size_bytes = get_tile_size(cb_combined);
     const uint32_t out_tile_size_bytes = get_tile_size(cb_out);
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_partial_obj(cb_partial);
+    experimental::CircularBuffer cb_combined_obj(cb_combined);
     experimental::CircularBuffer cb_out_obj(cb_out);
 
     const auto tensor_out = TensorAccessor(dst_args, dst_addr, out_tile_size_bytes);
@@ -59,6 +71,7 @@ void kernel_main() {
     uint32_t num_outputs = NC_per_core / reduce_batch_size;
 
     for (uint32_t out = 0; out < num_outputs; ++out) {
+        // --- Phase 1: W-combine all per-column partials into one scalar ---
         WelfordStats<float> running = {0.0f, 0.0f, 0};
 
         for (uint32_t b = 0; b < reduce_batch_size; ++b) {
@@ -97,18 +110,19 @@ void kernel_main() {
             final_var = sqrtf(final_var);
         }
 
-        // Construct the output tile in cb_out: a zero-filled tile with the
-        // scalar result at position [0,0].
-        cb_out_obj.reserve_back(1);
-        auto* out_ptr = reinterpret_cast<uint16_t*>(get_write_ptr(cb_out));
-        uint32_t num_uint16 = out_tile_size_bytes / sizeof(uint16_t);
-        for (uint32_t i = 0; i < num_uint16; ++i) {
-            out_ptr[i] = 0;
+        // Write the combined scalar into a Float32 tile in cb_combined.
+        // The compute kernel will unpack this and re-pack into cb_out
+        // in the correct output data format (using the packer hardware).
+        cb_combined_obj.reserve_back(1);
+        auto* combined_ptr = reinterpret_cast<float*>(get_write_ptr(cb_combined));
+        uint32_t num_floats = combined_tile_size_bytes / sizeof(float);
+        for (uint32_t i = 0; i < num_floats; ++i) {
+            combined_ptr[i] = 0.0f;
         }
-        out_ptr[0] = detail::float_to_bfloat16(final_var);
-        cb_out_obj.push_back(1);
+        combined_ptr[0] = final_var;
+        cb_combined_obj.push_back(1);
 
-        // NOC-write the output tile to DRAM.
+        // --- Phase 2: NOC-write the output tile (packed by compute) to DRAM ---
         cb_out_obj.wait_front(1);
         uint32_t out_tile_id = output_tile_start_id + out;
         noc.async_write(cb_out_obj, tensor_out, out_tile_size_bytes, {}, {.page_id = out_tile_id});
