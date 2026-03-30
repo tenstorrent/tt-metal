@@ -1231,7 +1231,7 @@ class Attention1D(LightweightModule):
             (configuration.n_heads * configuration.head_dim) // num_devices, configuration.dim
         )
 
-        use_fused_all_gather_matmul = model_config.get("USE_FUSED_ALL_GATHER_MATMUL", False)
+        use_fused_all_gather_matmul = model_config.use_fused_all_gather_matmul
 
         wo = LazyWeight(
             source=pt_wo,

@@ -283,7 +283,7 @@ class VisionAttention(LightweightModule):
             self.k_norm = lambda x, mode: x
 
         # For ring topology we can use all gather matmul for wo
-        # self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
+        # self.use_fused_all_gather_matmul = self.model_config.use_fused_all_gather_matmul
 
         # FIXME: workaround until nlp_concat_heads correctly supports sub-tile head dims
         # We are going to pad the input dim of the output weights with zeros in the places
