@@ -106,6 +106,7 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
+            PACK((pack_reconfig_data_format(cb_tmp1)));
             pack_tile_with_dt(tile_index * 2, cb_tmp1);
             tile_regs_release();
             cb_tmp1_obj.push_back(onetile);
@@ -122,6 +123,7 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
+            PACK((pack_reconfig_data_format(cb_tmp1, cb_tmp2)));
             pack_tile_with_dt(tile_index * 2, cb_tmp2);
             tile_regs_release();
             cb_tmp2_obj.push_back(onetile);
@@ -139,6 +141,7 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
+            PACK((pack_reconfig_data_format(cb_tmp2, cb_tmp3)));
             pack_tile_with_dt(tile_index * 2, cb_tmp3);
             tile_regs_release();
             cb_tmp3_obj.push_back(onetile);
@@ -160,9 +163,11 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
+            PACK((pack_reconfig_data_format(cb_tmp3, cb_updated_running_mean)));
             pack_tile_with_dt(tile_index * 2, cb_updated_running_mean);
             // For the output tensor, return the same values as either of the stats.
             if constexpr (!old_running_var_has_value) {
+                PACK((pack_reconfig_data_format(cb_updated_running_mean, cb_out0)));
                 pack_tile_with_dt(tile_index * 2, cb_out0);
             }
             tile_regs_release();
@@ -182,7 +187,7 @@ void kernel_main() {
             cb_tmp1_obj.reserve_back(onetile);
             tile_regs_acquire();
             sub_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(cb_momentum, cb_one);
+            copy_tile_to_dst_init_short_with_dt(cb_writer_updated_mean, cb_one);
             copy_tile(cb_one, tile_index, tile_index * 2);
             copy_tile_to_dst_init_short_with_dt(cb_one, cb_momentum);
             copy_tile(cb_momentum, tile_index, tile_index * 2 + 1);
@@ -190,6 +195,7 @@ void kernel_main() {
             tile_regs_commit();
 
             tile_regs_wait();
+            PACK((pack_reconfig_data_format(cb_out0, cb_tmp1)));
             pack_tile_with_dt(tile_index * 2, cb_tmp1);
             tile_regs_release();
             cb_tmp1_obj.push_back(onetile);
@@ -248,6 +254,7 @@ void kernel_main() {
 
             tile_regs_wait();
             pack_tile_with_dt(tile_index * 2, cb_updated_running_var);
+            PACK((pack_reconfig_data_format(cb_tmp1, cb_out0)));
             pack_tile_with_dt(tile_index * 2, cb_out0);
             tile_regs_release();
             cb_updated_running_var_obj.push_back(onetile);
