@@ -111,7 +111,6 @@ def decode_ttnn(vae, latents, mesh_device):
     [mesh_shape_request_param()],
     indirect=True,
 )
-@pytest.mark.timeout(0)
 def test_decode_one_video_pcc(mesh_device):
     # bf16 conv3d on CPU is very slow; fp32 uses fast MKL paths. Timeout disabled (pytest-timeout: 0 = no limit).
     vae = AutoencoderKLWan.from_pretrained(CHECKPOINT_PATH, torch_dtype=torch.float32).to("cpu")
