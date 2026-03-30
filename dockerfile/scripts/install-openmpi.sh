@@ -4,7 +4,7 @@
 # Output is installed under ${OMPI_PREFIX} (default /opt/openmpi-<tag>-ulfm).
 set -euo pipefail
 
-OMPI_TAG="${OMPI_TAG:-v5.0.7}"
+OMPI_TAG="${OMPI_TAG:-v5.0.10}"
 INSTALL_DIR="${INSTALL_DIR:-/opt}"
 OMPI_PREFIX="${INSTALL_DIR}/openmpi-${OMPI_TAG}-ulfm"
 
