@@ -158,7 +158,11 @@ struct DeviceStorage {
     // Begin internal functions:
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
     //
-    // These functions allows the use of the get_mesh_buffer as a view.
+    // Creates a DeviceStorage representing a view of existing device memory.
+    // `surface_buffer` could provide a different buffer configuration (e.g., sharding parameters) from the
+    // configuration of the owning_storage. Ownership of the underlying device memory is shared amongs the new
+    // DeviceStorage and the owning_storage. Deallocation will affect both the new DeviceStorage and the owning_storage.
+    //
     // These are considered internal functions and are not part of the public API.
     // They will be replaced with a new initiative as described in: #38093
     DeviceStorage(const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer);
