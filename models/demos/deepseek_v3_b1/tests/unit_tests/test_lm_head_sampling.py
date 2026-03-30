@@ -23,6 +23,9 @@ import pytest
 import torch
 from loguru import logger
 from tracy import signpost
+from transformers import AutoConfig
+from transformers.cache_utils import DynamicCache
+from transformers.dynamic_module_utils import get_class_from_dynamic_module
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
@@ -39,12 +42,15 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     EmbeddingStage,
     PassthroughPayload,
     PassthroughStage,
+    SpecLMHeadStage,
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import StateDictWeightProvider
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.prepare_weights import (
+    DeepSeekV3EmbeddingLayerWeights,
+    DeepSeekV3LMHeadWeights,
     DeepSeekV3MTPWeights,
     prepare_embedding_weights,
     prepare_lm_head_weights,
@@ -178,6 +184,83 @@ def _flat_request_and_step(flat_idx: int, row_shape: tuple[int, ...], payload: d
     return request_idx, tuple(reversed(step_suffix))
 
 
+def _slice_reference_payload(payload: dict, *, max_requests: int, max_steps: int) -> dict:
+    row_shape = _reference_row_shape(payload)
+    if len(row_shape) != 2:
+        pytest.skip(
+            f"Reference payload slicing only supports 2D [steps, users] or [users, steps] payloads, got {row_shape}"
+        )
+
+    request_axis = _payload_request_axis(row_shape, payload)
+    step_axis = 1 - request_axis
+    request_count = row_shape[request_axis]
+    step_count = row_shape[step_axis]
+    if request_count <= 0 or step_count <= 0:
+        pytest.skip(f"Reference payload has no data to slice: row_shape={row_shape}")
+
+    req_slice = slice(0, min(max_requests, request_count))
+    step_slice = slice(0, min(max_steps, step_count))
+
+    def _slice_rows(tensor: torch.Tensor) -> torch.Tensor:
+        squeezed = _squeeze_trailing_unit_dims(tensor)
+        if squeezed.ndim < 2 or tuple(squeezed.shape[:2]) != row_shape:
+            return tensor
+
+        selectors = [slice(None)] * tensor.ndim
+        selectors[request_axis] = req_slice
+        selectors[step_axis] = step_slice
+        return tensor[tuple(selectors)]
+
+    sliced = {}
+    for key, value in payload.items():
+        if key == "metadata":
+            continue
+        sliced[key] = _slice_rows(_payload_tensor(payload, key))
+
+    start_tokens = _payload_tensor(payload, "start_tokens")
+    if start_tokens.ndim == 0:
+        sliced["start_tokens"] = start_tokens
+    else:
+        sliced["start_tokens"] = start_tokens[: req_slice.stop]
+
+    metadata = dict(payload.get("metadata", {}))
+    metadata["capture_users"] = req_slice.stop
+    metadata["capture_steps"] = step_slice.stop
+    sliced["metadata"] = metadata
+    return sliced
+
+
+def _normalize_reference_payload_request_step_tensors(
+    payload: dict,
+    *,
+    feature_keys: tuple[str, ...] = (),
+    scalar_keys: tuple[str, ...] = (),
+) -> tuple[dict[str, torch.Tensor], int, int]:
+    row_shape = _reference_row_shape(payload)
+    if len(row_shape) != 2:
+        pytest.skip(f"Expected a 2D reference payload window, got {row_shape}")
+
+    request_axis = _payload_request_axis(row_shape, payload)
+    step_axis = 1 - request_axis
+    request_count = row_shape[request_axis]
+    step_count = row_shape[step_axis]
+
+    normalized: dict[str, torch.Tensor] = {}
+    for key in feature_keys:
+        tensor = _payload_tensor(payload, key)
+        if request_axis == 1:
+            tensor = tensor.permute(1, 0, *range(2, tensor.ndim)).contiguous()
+        normalized[key] = tensor
+
+    for key in scalar_keys:
+        tensor = _squeeze_trailing_unit_dims(_payload_tensor(payload, key))
+        if request_axis == 1:
+            tensor = tensor.permute(1, 0, *range(2, tensor.ndim)).contiguous()
+        normalized[key] = tensor
+
+    return normalized, request_count, step_count
+
+
 def _infer_mtp_layer_idx(hf_state_dict) -> int:
     pattern = re.compile(r"^model\.layers\.(\d+)\.eh_proj\.weight$")
     mtp_layer_indices = []
@@ -237,6 +320,66 @@ def _mtp_shared_head_golden_weights(hf_state_dict) -> tuple[torch.Tensor, torch.
     vocab = hf_state_dict[f"model.layers.{mtp_layer_idx}.shared_head.head.weight"].T
     indices = torch.arange(vocab.shape[-1], dtype=torch.int32).reshape(1, -1)
     return gamma, vocab, indices
+
+
+def _rms_norm_golden(input_tensor: torch.Tensor, gamma: torch.Tensor, *, epsilon: float = 1e-6) -> torch.Tensor:
+    variance = input_tensor.pow(2).mean(-1, keepdim=True)
+    normalized = input_tensor * torch.rsqrt(variance + epsilon)
+    return normalized * gamma
+
+
+def _mtp_decoder_input_from_hidden_and_token(
+    hidden_tensor: torch.Tensor,
+    token_id: int,
+    embedding_tensor: torch.Tensor,
+    h_gamma_tensor: torch.Tensor,
+    e_gamma_tensor: torch.Tensor,
+    eh_projection_tensor: torch.Tensor,
+    *,
+    epsilon: float = 1e-6,
+) -> torch.Tensor:
+    token_embedding = embedding_tensor[token_id, :].unsqueeze(0).to(dtype=hidden_tensor.dtype)
+    h_rmsnorm_out = _rms_norm_golden(hidden_tensor, h_gamma_tensor.to(dtype=hidden_tensor.dtype), epsilon=epsilon)
+    e_rmsnorm_out = _rms_norm_golden(token_embedding, e_gamma_tensor.to(dtype=hidden_tensor.dtype), epsilon=epsilon)
+    concat_he = torch.cat([e_rmsnorm_out, h_rmsnorm_out], dim=-1)
+    return concat_he @ eh_projection_tensor.to(dtype=hidden_tensor.dtype)
+
+
+def _mtp_decoder_layer_prefixes() -> tuple[str, ...]:
+    return (
+        "self_attn.",
+        "mlp.",
+        "input_layernorm.",
+        "post_attention_layernorm.",
+    )
+
+
+def _load_mtp_decoder_layer_golden(hf_model_path: Path, hf_state_dict):
+    mtp_layer_idx = _infer_mtp_layer_idx(hf_state_dict)
+    config = AutoConfig.from_pretrained(str(hf_model_path), trust_remote_code=True)
+    decoder_layer_cls = get_class_from_dynamic_module(
+        "modeling_deepseek.DeepseekV3DecoderLayer",
+        str(hf_model_path),
+    )
+    layer = decoder_layer_cls(config=config, layer_idx=mtp_layer_idx).eval()
+
+    layer_prefix = f"model.layers.{mtp_layer_idx}."
+    layer_state_dict = {}
+    for key in hf_state_dict.keys():
+        if not key.startswith(layer_prefix):
+            continue
+        local_key = key[len(layer_prefix) :]
+        if local_key.startswith(_mtp_decoder_layer_prefixes()):
+            layer_state_dict[local_key] = hf_state_dict[key].detach().cpu()
+
+    missing_keys, unexpected_keys = layer.load_state_dict(layer_state_dict, strict=True)
+    assert not missing_keys, f"Missing MTP decoder layer weights: {missing_keys}"
+    assert not unexpected_keys, f"Unexpected MTP decoder layer weights: {unexpected_keys}"
+    return mtp_layer_idx, layer
+
+
+def _causal_attention_mask(seq_len: int, *, dtype: torch.dtype, device: torch.device) -> torch.Tensor:
+    return torch.zeros((1, 1, 1, seq_len), dtype=dtype, device=device)
 
 
 def _golden_logits_flat(
@@ -1007,6 +1150,485 @@ def _compute_expected_spec_decode_tokens_synthetic(iterations: int):
 
         results.append((base_token, spec_token))
     return results
+
+
+def _prepare_reference_mtp_weights(device: ttnn.MeshDevice, hf_state_dict) -> DeepSeekV3MTPWeights:
+    _assert_hf_checkpoint_is_dequantized(hf_state_dict)
+    mtp_layer_idx = _infer_mtp_layer_idx(hf_state_dict)
+
+    K = _EMBED_HIDDEN
+    embedding_dim = _EMBED_HIDDEN
+    mtp_output_dim = _EMBED_HIDDEN
+    tile_width = 32
+    num_dram_banks = 8
+    mtp_n_per_core = mtp_output_dim // num_dram_banks
+    mtp_padded_dim = num_dram_banks * mtp_n_per_core
+
+    a_tile = ttnn.Tile([1, 32])
+    b_tile = ttnn.Tile([32, 32])
+
+    mcast_core = ttnn.CoreCoord(10, 9)
+    mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_core, mcast_core)])
+    input_a_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(mcast_core_grid, (1, K), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch_embedding = hf_state_dict["model.embed_tokens.weight"].to(torch.bfloat16).contiguous()
+    torch_h_gamma = hf_state_dict[f"model.layers.{mtp_layer_idx}.hnorm.weight"].reshape(1, -1).to(torch.bfloat16)
+    torch_e_gamma = hf_state_dict[f"model.layers.{mtp_layer_idx}.enorm.weight"].reshape(1, -1).to(torch.bfloat16)
+    torch_eh_proj = hf_state_dict[f"model.layers.{mtp_layer_idx}.eh_proj.weight"].T.to(torch.bfloat16).contiguous()
+    torch_eh_proj_padded = torch.zeros((K + embedding_dim, mtp_padded_dim), dtype=torch.bfloat16)
+    torch_eh_proj_padded[:, :mtp_output_dim] = torch_eh_proj
+
+    ttnn_embedding = ttnn.from_torch(
+        torch_embedding,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+    ttnn_h_gamma = ttnn.from_torch(
+        torch_h_gamma,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_a_mem_config,
+        tile=a_tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+    ttnn_e_gamma = ttnn.from_torch(
+        torch_e_gamma,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_a_mem_config,
+        tile=a_tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+    eh_shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1),
+            )
+        }
+    )
+    eh_proj_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(eh_shard_grid, (K + embedding_dim, mtp_n_per_core), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    torch_eh_proj_shuffled = shuffle_tensor_tiles(torch_eh_proj_padded, tile_width, num_dram_banks)
+    ttnn_eh_proj = ttnn.from_torch(
+        torch_eh_proj_shuffled,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=eh_proj_mem_config,
+        tile=b_tile,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+    return DeepSeekV3MTPWeights(
+        embedding=ttnn_embedding,
+        h_gamma=ttnn_h_gamma,
+        e_gamma=ttnn_e_gamma,
+        eh_projection=ttnn_eh_proj,
+    )
+
+
+class _ReferencePayloadMTPWeightProvider:
+    """Test-only provider that reuses the 4-stage pipeline with captured hidden states as stage-0 embedding rows."""
+
+    def __init__(self, payload: dict, hf_state_dict) -> None:
+        _assert_hf_checkpoint_is_dequantized(hf_state_dict)
+        self._payload = payload
+        self._hf_state_dict = hf_state_dict
+        self._mtp_layer_idx = _infer_mtp_layer_idx(hf_state_dict)
+        self._flattened_hidden_states = _flatten_feature_rows(_payload_tensor(payload, "base_hidden_states")).to(
+            torch.bfloat16
+        )
+
+    def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
+        embedding_tt = ttnn.from_torch(
+            self._flattened_hidden_states.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+        return DeepSeekV3EmbeddingLayerWeights(embedding=embedding_tt)
+
+    def load_base_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
+        return prepare_lm_head_weights(
+            {
+                "lm_head.weight": self._hf_state_dict["lm_head.weight"],
+                "model.norm.weight": self._hf_state_dict["model.norm.weight"],
+            },
+            device,
+            move_to_device=True,
+        )
+
+    def load_mtp_shared_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
+        return prepare_lm_head_weights(
+            {
+                "lm_head.weight": self._hf_state_dict[f"model.layers.{self._mtp_layer_idx}.shared_head.head.weight"],
+                "model.norm.weight": self._hf_state_dict[f"model.layers.{self._mtp_layer_idx}.shared_head.norm.weight"],
+            },
+            device,
+            move_to_device=True,
+        )
+
+    def load_mtp_weights(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
+        return _prepare_reference_mtp_weights(device, self._hf_state_dict)
+
+
+def _create_reference_spec_decode_pipeline_configuration(
+    weight_provider: _ReferencePayloadMTPWeightProvider,
+    *,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+) -> PipelineConfiguration:
+    """Reference-payload 4-stage pipeline.
+
+    Stage 0 uses a captured-hidden-state embedding table so the host can feed row indices
+    while the first compute stage still sees the captured base_hidden_states.
+    """
+
+    def stage_0(device: ttnn.MeshDevice):
+        return EmbeddingStage(
+            weight_provider.load_embedding(device),
+            d2h_page_size=TOKEN_META_PAGE_SIZE_BYTES,
+        )
+
+    def stage_1(device: ttnn.MeshDevice):
+        return BaseLMHeadStage(
+            weights=weight_provider.load_base_lm_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            mtp_weights=weight_provider.load_mtp_weights(device),
+            send_mtp_output_downstream=True,
+        )
+
+    def stage_2(device: ttnn.MeshDevice):
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    def stage_3(device: ttnn.MeshDevice):
+        return SpecLMHeadStage(
+            weights=weight_provider.load_mtp_shared_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+        )
+
+    return PipelineConfiguration({0: stage_0, 1: stage_1, 2: stage_2, 3: stage_3})
+
+
+def _parse_token_meta_page(raw: torch.Tensor) -> dict[str, int]:
+    raw = raw.to(torch.uint32).flatten()
+    return {
+        "num_tokens": int(raw[0].item()),
+        "tok0_id": int(raw[1].item()),
+        "tok0_type": int(raw[2].item()),
+        "tok0_pos": int(raw[3].item()),
+        "tok1_id": int(raw[4].item()),
+        "tok1_type": int(raw[5].item()),
+        "tok1_pos": int(raw[6].item()),
+    }
+
+
+def _compute_reference_payload_mtp_metrics_teacher_forced(
+    payload: dict,
+    hf_state_dict,
+    hf_model_path: Path,
+    *,
+    max_requests: int,
+    max_steps: int,
+) -> dict[str, float | int]:
+    """Compute bounded end-to-end MTP metrics with teacher-forced MTP token inputs."""
+    payload = _slice_reference_payload(payload, max_requests=max_requests, max_steps=max_steps)
+    normalized, request_count, step_count = _normalize_reference_payload_request_step_tensors(
+        payload,
+        feature_keys=("base_hidden_states",),
+        scalar_keys=(
+            "base_output_tokens",
+            "mtp_input_tokens",
+            "mtp_speculation_tokens",
+            "base_output_positions",
+            "mtp_input_positions",
+            "mtp_speculation_positions",
+        ),
+    )
+    base_hidden_states = normalized["base_hidden_states"].to(torch.bfloat16)
+    base_output_tokens = normalized["base_output_tokens"].to(torch.uint32)
+    mtp_input_tokens = normalized["mtp_input_tokens"].to(torch.uint32)
+    mtp_speculation_tokens = normalized["mtp_speculation_tokens"].to(torch.uint32)
+    base_output_positions = normalized["base_output_positions"].to(torch.int64)
+    mtp_input_positions = normalized["mtp_input_positions"].to(torch.int64)
+    mtp_speculation_positions = normalized["mtp_speculation_positions"].to(torch.int64)
+
+    start_tokens = _payload_tensor(payload, "start_tokens").to(torch.int64)
+    assert base_hidden_states.shape[:2] == (request_count, step_count)
+    assert start_tokens.shape[0] == request_count
+
+    gamma, vocab, indices = _lm_head_golden_weights(hf_state_dict)
+    embedding, h_gamma, e_gamma, eh_projection = _mtp_golden_weights(hf_state_dict)
+    shared_head_gamma, shared_head_vocab, shared_head_indices = _mtp_shared_head_golden_weights(hf_state_dict)
+    mtp_layer_idx, decoder_layer = _load_mtp_decoder_layer_golden(hf_model_path, hf_state_dict)
+
+    reference_token_by_request_pos = {}
+    for request_idx in range(request_count):
+        for step_idx in range(step_count):
+            reference_token_by_request_pos[
+                (request_idx, int(base_output_positions[request_idx, step_idx].item()))
+            ] = int(base_output_tokens[request_idx, step_idx].item())
+
+    total_rows = request_count * step_count
+    base_matches = 0
+    spec_matches = 0
+    accepted_rows = 0
+    verifiable_rows = 0
+    base_topk_counts = {"top1": 0, "top2": 0, "top3": 0, "mismatch": 0}
+    spec_topk_counts = {"top1": 0, "top2": 0, "top3": 0, "mismatch": 0}
+
+    for request_idx in range(request_count):
+        cache = DynamicCache()
+        last_mtp_input_token = int(start_tokens[request_idx].item())
+
+        for step_idx in range(step_count):
+            hidden_row = base_hidden_states[request_idx, step_idx : step_idx + 1].to(dtype=gamma.dtype)
+            expected_base_token = int(base_output_tokens[request_idx, step_idx].item())
+            base_scores_flat = _golden_logits_flat(hidden_row, gamma, vocab)
+            base_topk_counts[_classify_expected_token_topk(base_scores_flat, expected_base_token)] += 1
+            predicted_base_token, _ = LMHeadSampling.golden(
+                hidden_row,
+                gamma,
+                vocab,
+                indices=indices,
+                k=1,
+                p=1.0,
+            )
+
+            got_base_token = int(predicted_base_token.reshape(-1)[0].item())
+            if got_base_token == expected_base_token:
+                base_matches += 1
+
+            forced_mtp_input_token = int(mtp_input_tokens[request_idx, step_idx].item())
+            mtp_decoder_input = _mtp_decoder_input_from_hidden_and_token(
+                hidden_row,
+                forced_mtp_input_token,
+                embedding,
+                h_gamma,
+                e_gamma,
+                eh_projection,
+            )
+
+            mtp_input_pos = int(mtp_input_positions[request_idx, step_idx].item())
+            local_decode_pos = step_idx
+            position_ids = torch.tensor([[local_decode_pos]], dtype=torch.long)
+            attention_mask = _causal_attention_mask(
+                local_decode_pos + 1,
+                dtype=mtp_decoder_input.dtype,
+                device=mtp_decoder_input.device,
+            )
+            decoder_out = decoder_layer(
+                hidden_states=mtp_decoder_input.unsqueeze(1),
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=cache,
+                use_cache=True,
+            )[0].squeeze(1)
+
+            predicted_spec_token, _ = LMHeadSampling.golden(
+                decoder_out.to(dtype=shared_head_gamma.dtype),
+                shared_head_gamma,
+                shared_head_vocab,
+                indices=shared_head_indices,
+                k=1,
+                p=1.0,
+            )
+            got_spec_token = int(predicted_spec_token.reshape(-1)[0].item())
+            expected_spec_token = int(mtp_speculation_tokens[request_idx, step_idx].item())
+            spec_scores_flat = _golden_logits_flat(
+                decoder_out.to(dtype=shared_head_gamma.dtype), shared_head_gamma, shared_head_vocab
+            )
+            spec_topk_counts[_classify_expected_token_topk(spec_scores_flat, expected_spec_token)] += 1
+            if got_spec_token == expected_spec_token:
+                spec_matches += 1
+
+            reference_key = (request_idx, int(mtp_speculation_positions[request_idx, step_idx].item()))
+            if reference_key in reference_token_by_request_pos:
+                verifiable_rows += 1
+                accepted_rows += int(got_spec_token == reference_token_by_request_pos[reference_key])
+
+            last_mtp_input_token = forced_mtp_input_token
+
+        if step_count > 0:
+            logger.info(
+                "Golden MTP replay request {} complete: mtp_layer={} last_mtp_input_token={}",
+                request_idx,
+                mtp_layer_idx,
+                last_mtp_input_token,
+            )
+
+    assert verifiable_rows > 0, "Reference payload did not contain any verifiable MTP rows"
+    return {
+        "total_rows": total_rows,
+        "base_matches": base_matches,
+        "spec_matches": spec_matches,
+        "accepted_rows": accepted_rows,
+        "verifiable_rows": verifiable_rows,
+        "base_match_rate": base_matches / total_rows,
+        "spec_match_rate": spec_matches / total_rows,
+        "accept_rate": accepted_rows / verifiable_rows,
+        "base_topk_counts": base_topk_counts,
+        "spec_topk_counts": spec_topk_counts,
+    }
+
+
+def _log_reference_payload_mtp_metrics(metrics: dict[str, float | int], *, label: str) -> None:
+    logger.info(
+        f"Reference-payload {label} base token match rate: "
+        f"{metrics['base_match_rate']:.6f} ({metrics['base_matches']}/{metrics['total_rows']})"
+    )
+    logger.info(
+        f"Reference-payload {label} speculation token match rate: "
+        f"{metrics['spec_match_rate']:.6f} ({metrics['spec_matches']}/{metrics['total_rows']})"
+    )
+    if "base_topk_counts" in metrics:
+        logger.info(
+            f"Reference-payload {label} base token top-k coverage: "
+            f"{_format_topk_percentages(metrics['base_topk_counts'], int(metrics['total_rows']))}"
+        )
+    if "spec_topk_counts" in metrics:
+        logger.info(
+            f"Reference-payload {label} speculation token top-k coverage: "
+            f"{_format_topk_percentages(metrics['spec_topk_counts'], int(metrics['total_rows']))}"
+        )
+    logger.info(
+        f"Reference-payload {label} accept rate: "
+        f"{metrics['accept_rate']:.6f} ({metrics['accepted_rows']}/{metrics['verifiable_rows']})"
+    )
+
+
+# Reference-payload end-to-end helpers and tests.
+def _assert_reference_payload_accept_rate(metrics: dict[str, float | int], *, label: str) -> None:
+    assert metrics["accept_rate"] > 0.75, (
+        f"{label} end-to-end MTP accept rate too low: {metrics['accept_rate']:.6f} "
+        f"(accepted={metrics['accepted_rows']}, total={metrics['verifiable_rows']})"
+    )
+
+
+def _compute_reference_payload_mtp_metrics_ttnn(
+    mesh_device,
+    *,
+    use_fp32: bool,
+    payload: dict,
+    hf_state_dict,
+    max_requests: int,
+    max_steps: int,
+) -> dict[str, float | int]:
+    payload = _slice_reference_payload(payload, max_requests=max_requests, max_steps=max_steps)
+    row_shape = _reference_row_shape(payload)
+    base_hidden_states = _flatten_feature_rows(_payload_tensor(payload, "base_hidden_states"))
+    base_output_tokens = _flatten_scalar_rows(_payload_tensor(payload, "base_output_tokens")).to(torch.uint32)
+    mtp_speculation_tokens = _flatten_scalar_rows(_payload_tensor(payload, "mtp_speculation_tokens")).to(torch.uint32)
+    base_output_positions = _flatten_scalar_rows(_payload_tensor(payload, "base_output_positions")).to(torch.int64)
+    mtp_speculation_positions = _flatten_scalar_rows(_payload_tensor(payload, "mtp_speculation_positions")).to(
+        torch.int64
+    )
+
+    assert base_hidden_states.shape[0] == base_output_tokens.numel()
+    assert mtp_speculation_tokens.numel() == base_output_tokens.numel()
+
+    reference_token_by_request_pos = {}
+    for row_idx in range(base_output_tokens.numel()):
+        request_idx, _ = _flat_request_and_step(row_idx, row_shape, payload)
+        base_pos = int(base_output_positions[row_idx].item())
+        reference_token_by_request_pos[(request_idx, base_pos)] = int(base_output_tokens[row_idx].item())
+
+    provider = _ReferencePayloadMTPWeightProvider(payload, hf_state_dict)
+    config = _create_reference_spec_decode_pipeline_configuration(
+        provider,
+        fp32_dest_acc_en=use_fp32,
+        persistent_mode=True,
+    )
+    pipeline = config.build_pipeline(mesh_device)
+
+    try:
+        pipeline.setup_and_run()
+
+        if pipeline.my_mesh_id != 0:
+            pipeline.barrier()
+            pipeline.terminate()
+            pipeline.barrier()
+            return {
+                "total_rows": 0,
+                "base_matches": 0,
+                "spec_matches": 0,
+                "accepted_rows": 0,
+                "verifiable_rows": 0,
+                "base_match_rate": 0.0,
+                "spec_match_rate": 0.0,
+                "accept_rate": 0.0,
+            }
+
+        token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
+        total_rows = base_hidden_states.shape[0]
+        base_matches = 0
+        spec_matches = 0
+        accepted_rows = 0
+        verifiable_rows = 0
+
+        for row_idx in range(total_rows):
+            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+            torch_token[0, 0] = row_idx
+            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            output_tensor = ttnn.from_torch(
+                torch.zeros(1, token_meta_words, dtype=torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            pipeline.write_token(token_tensor)
+            pipeline.read_output(output_tensor)
+            token_meta = _parse_token_meta_page(ttnn.to_torch(output_tensor))
+
+            got_base_token = token_meta["tok0_id"]
+            got_spec_token = token_meta["tok1_id"]
+            expected_base_token = int(base_output_tokens[row_idx].item())
+            expected_spec_token = int(mtp_speculation_tokens[row_idx].item())
+
+            if got_base_token == expected_base_token:
+                base_matches += 1
+            if got_spec_token == expected_spec_token:
+                spec_matches += 1
+
+            request_idx, _ = _flat_request_and_step(row_idx, row_shape, payload)
+            reference_key = (request_idx, int(mtp_speculation_positions[row_idx].item()))
+            if reference_key in reference_token_by_request_pos:
+                verifiable_rows += 1
+                accepted_rows += int(got_spec_token == reference_token_by_request_pos[reference_key])
+
+        assert verifiable_rows > 0, "Reference payload did not contain any verifiable MTP rows"
+        pipeline.barrier()
+        pipeline.terminate()
+        pipeline.barrier()
+        return {
+            "total_rows": total_rows,
+            "base_matches": base_matches,
+            "spec_matches": spec_matches,
+            "accepted_rows": accepted_rows,
+            "verifiable_rows": verifiable_rows,
+            "base_match_rate": base_matches / total_rows,
+            "spec_match_rate": spec_matches / total_rows,
+            "accept_rate": accepted_rows / verifiable_rows,
+        }
+    finally:
+        pass
 
 
 def _is_lm_head_sampling_perf_enabled():
@@ -3995,6 +4617,99 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
         print(f"[TEST P{pid}] final barrier done", flush=True)
     finally:
         pass
+
+
+@pytest.mark.parametrize(
+    ("max_requests", "max_steps"),
+    [
+        pytest.param(8, 128, id="8req_128steps"),
+    ],
+)
+def test_reference_payload_mtp_accept_rate_golden(
+    lm_head_sampling_reference_payload,
+    hf_model_path,
+    hf_state_dict,
+    max_requests,
+    max_steps,
+):
+    """CPU-only end-to-end reference-payload MTP verification baseline."""
+    metrics = _compute_reference_payload_mtp_metrics_teacher_forced(
+        lm_head_sampling_reference_payload,
+        hf_state_dict,
+        hf_model_path,
+        max_requests=max_requests,
+        max_steps=max_steps,
+    )
+    _log_reference_payload_mtp_metrics(metrics, label="golden")
+    _assert_reference_payload_accept_rate(metrics, label="Golden")
+
+
+@pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize(
+    ("max_requests", "max_steps"),
+    [
+        pytest.param(4, 16, id="4req_16steps"),
+        pytest.param(8, 128, id="8req_128steps"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+            "trace_region_size": 1600000,
+            "worker_l1_size": 1499000,
+        }
+    ],
+    indirect=True,
+)
+def test_reference_payload_mtp_accept_rate_ttnn(
+    mesh_device,
+    use_fp32,
+    lm_head_sampling_reference_payload,
+    hf_state_dict,
+    max_requests,
+    max_steps,
+):
+    """Device-backed end-to-end reference-payload MTP verification test.
+
+    Current pipeline:
+      P1(reference hidden-state source) -> P2(base LMHead+MTP) -> P3(passthrough) -> P4(MTP shared-head verify)
+
+    This is expected to fail before a real decoder-block stage replaces the passthrough.
+    """
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 4:
+        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
+
+    metrics = _compute_reference_payload_mtp_metrics_ttnn(
+        mesh_device,
+        use_fp32=use_fp32,
+        payload=lm_head_sampling_reference_payload,
+        hf_state_dict=hf_state_dict,
+        max_requests=max_requests,
+        max_steps=max_steps,
+    )
+    if (max_requests, max_steps) == (4, 16):
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            _log_reference_payload_mtp_metrics(metrics, label="TTNN")
+        pytest.xfail(
+            "TTNN reference-payload MTP test is expected to fail on the small 4req_16steps window; "
+            "use the 8req_128steps variant for the larger validation run."
+        )
+    if int(ttnn.distributed_context_get_rank()) == 0:
+        _log_reference_payload_mtp_metrics(metrics, label="TTNN")
+        _assert_reference_payload_accept_rate(metrics, label="TTNN")
 
 
 @pytest.mark.parametrize("use_fp32", [True])
