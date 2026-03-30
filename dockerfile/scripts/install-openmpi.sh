@@ -32,8 +32,23 @@ cd "${WORKDIR}"
 # GCC 14 (shipped in manylinux_2_34) treats _Bool -> volatile void* assignment as a hard error
 # when the enclosing function is force-inlined. Fix is upstream on main (aa024ac73d62, 2026-03-05)
 # but not yet backported to v5.0.x as of v5.0.10.
-sed -i 's/^__opal_attribute_always_inline__ static inline int$/static inline int/' \
-    ompi/mca/part/persist/part_persist.h
+PART_PERSIST_H="ompi/mca/part/persist/part_persist.h"
+python3 -c "
+import sys
+path = sys.argv[1]
+with open(path) as f:
+    content = f.read()
+patched = content.replace(
+    '__opal_attribute_always_inline__ static inline int\nmca_part_persist_start(',
+    'static inline int\nmca_part_persist_start('
+)
+if patched == content:
+    print('[ERROR] part_persist.h patch did not apply — pattern not found', file=sys.stderr)
+    sys.exit(1)
+with open(path, 'w') as f:
+    f.write(patched)
+print('Patched mca_part_persist_start: removed __opal_attribute_always_inline__')
+" "${PART_PERSIST_H}"
 
 # Run autogen.pl to generate configure script (required when building from git)
 echo "Running autogen.pl..."
@@ -45,7 +60,9 @@ echo "Running autogen.pl..."
 # These settings were validated for the current manylinux-based environment.
 # If issues arise with different MPI runtimes or cluster configurations, review with the scaleout team.
 # See: https://github.com/open-mpi/ompi/blob/main/docs/features/ulfm.rst
-./configure \
+# CFLAGS: -Wno-incompatible-pointer-types suppresses the GCC 14 _Bool->void* hard error
+# in part_persist.h that is also addressed by the source patch above.
+CFLAGS="-Wno-incompatible-pointer-types" ./configure \
     --prefix="${OMPI_PREFIX}" \
     --with-ft=ulfm \
     --enable-wrapper-rpath \
