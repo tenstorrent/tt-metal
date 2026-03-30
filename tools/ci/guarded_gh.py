@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Execute a restricted subset of gh commands.
+"""Execute a restricted subset of gh/git commands.
 
-This wrapper is designed for agent use where direct gh access is blocked.
+This wrapper is designed for agent use where direct command access is blocked.
 It accepts a single command string, validates it against an allowlist, and
 executes only safe commands.
 """
@@ -20,6 +20,11 @@ ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 PRIMARY_REPO = "tenstorrent/tt-metal"
 ALLOWED_WORKFLOW_IDS = {"triage-ci", "triage-ci.yaml", "triage-ci.yml"}
 READ_REPOS = {PRIMARY_REPO, ISSUE_REPO_TEST}
+ALLOWED_PUSH_REMOTE = "origin"
+ALLOWED_PUSH_REFSPECS = {
+    "ebanerjee/CI-maintenance",
+    "HEAD:ebanerjee/CI-maintenance",
+}
 
 DENY_CHARS = {";", "&&", "||", "|", "`", "$("}
 
@@ -80,8 +85,39 @@ def ensure_repo(tokens: Sequence[str], allowed_repos: set[str], *, required: boo
 def validate(tokens: list[str]) -> Decision:
     if not tokens:
         return Decision(False, "Denied: empty command.")
+    if tokens[0] == "git":
+        if len(tokens) < 2:
+            return Decision(False, "Denied: missing git subcommand.")
+        if tokens[1] != "push":
+            return Decision(False, "Denied: only git push is allowed.")
+
+        idx = 2
+        while idx < len(tokens) and tokens[idx].startswith("-"):
+            if tokens[idx] not in {"-u", "--set-upstream"}:
+                return Decision(False, f"Denied: unsupported git push option {tokens[idx]!r}.")
+            idx += 1
+
+        if idx >= len(tokens):
+            return Decision(False, "Denied: git push requires remote.")
+        remote = tokens[idx]
+        idx += 1
+        if remote != ALLOWED_PUSH_REMOTE:
+            return Decision(False, f"Denied: git push remote must be {ALLOWED_PUSH_REMOTE!r}.")
+
+        if idx >= len(tokens):
+            return Decision(False, "Denied: git push requires explicit refspec.")
+        refspec = tokens[idx]
+        idx += 1
+        if refspec not in ALLOWED_PUSH_REFSPECS:
+            return Decision(False, f"Denied: refspec {refspec!r} is not allowed.")
+
+        if idx != len(tokens):
+            return Decision(False, "Denied: extra git push arguments are not allowed.")
+
+        return Decision(True, "Allowed: git push to ebanerjee/CI-maintenance only")
+
     if tokens[0] != "gh":
-        return Decision(False, "Denied: only commands starting with `gh` are allowed.")
+        return Decision(False, "Denied: only commands starting with `gh` or allowlisted `git push` are allowed.")
     if len(tokens) < 2:
         return Decision(False, "Denied: missing gh subcommand.")
 

@@ -70,10 +70,30 @@ def ensure_no_duplicate_open_pr(source_ts: str) -> str | None:
 
 def parse_agent_json_after_marker(text: str, marker: str) -> dict[str, Any]:
     idx = text.rfind(marker)
+    marker_end = idx + len(marker) if idx >= 0 else -1
     if idx < 0:
+        marker_re = re.compile(rf"`?\s*{re.escape(marker)}\s*`?")
+        matches = list(marker_re.finditer(text))
+        if matches:
+            marker_end = matches[-1].end()
+    if marker_end < 0:
         raise ValueError(f"marker not found: {marker}")
-    payload = text[idx + len(marker) :].strip()
-    return json.loads(payload)
+
+    payload = text[marker_end:].strip()
+    if payload.startswith("```"):
+        # Accept fenced JSON payloads while still requiring JSON parseability.
+        payload = re.sub(r"^```(?:json)?\s*", "", payload)
+        payload = re.sub(r"\s*```$", "", payload)
+        payload = payload.strip()
+
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        # Fall back to parsing from the first JSON object start after the marker.
+        brace_idx = payload.find("{")
+        if brace_idx < 0:
+            raise
+        return json.loads(payload[brace_idx:])
 
 
 def run_disable_editor(issue_number: int, issue_url: str, model: str) -> dict[str, Any]:
