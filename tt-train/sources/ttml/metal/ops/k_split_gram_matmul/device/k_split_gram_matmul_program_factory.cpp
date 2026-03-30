@@ -713,11 +713,61 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         }
     }
 
-    return {std::move(program), shared_variables_t{}};
+    // Build core lists for override_runtime_arguments
+    std::vector<tt::tt_metal::CoreCoord> row_sender_cores_list;
+    for (uint32_t y = 1; y < grid_dim; y++) row_sender_cores_list.push_back({0, y});
+
+    std::vector<tt::tt_metal::CoreCoord> col_sender_cores_list;
+    for (uint32_t x = 0; x < grid_dim; x++) col_sender_cores_list.push_back({x, 0});
+
+    std::vector<tt::tt_metal::CoreCoord> helper_cores_list;
+    for (uint32_t y = 0; y < grid_dim; y++) helper_cores_list.push_back({grid_dim, y});
+
+    return {
+        std::move(program),
+        shared_variables_t{
+            .row_sender_reduce_kid = row_sender_reduce_kid,
+            .row_sender_kid = row_sender_kid,
+            .col_sender_kid = col_sender_kid,
+            .helper_dram_reader_kid = helper_dram_reader_kid,
+            .row_upper_recv_kid = row_upper_recv_kid,
+            .row_sender_cores = std::move(row_sender_cores_list),
+            .col_sender_cores = std::move(col_sender_cores_list),
+            .row_upper_cores = std::move(row_upper_recv),
+            .helper_cores = std::move(helper_cores_list)}};
 }
 
 void KSplitGramMatmulProgramFactory::override_runtime_arguments(
-    cached_program_t&, const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&) {
+    cached_program_t& cached_program,
+    const operation_attributes_t&,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& output) {
+    auto& program = cached_program.program;
+    auto& sv = cached_program.shared_variables;
+
+    const uint32_t in_addr = tensor_args.input_tensor.buffer()->address();
+    const uint32_t out_addr = output.buffer()->address();
+
+    // Update in_addr (runtime arg index 0) for all sender kernels
+    auto& rr_args = GetRuntimeArgs(program, sv.row_sender_reduce_kid);
+    rr_args[0][0][0] = in_addr;  // core (0,0)
+
+    auto& rs_args = GetRuntimeArgs(program, sv.row_sender_kid);
+    for (const auto& c : sv.row_sender_cores) rs_args[c.x][c.y][0] = in_addr;
+
+    auto& cs_args = GetRuntimeArgs(program, sv.col_sender_kid);
+    for (const auto& c : sv.col_sender_cores) cs_args[c.x][c.y][0] = in_addr;
+
+    // Update out_addr (runtime arg index 2) for upper recv writer kernels
+    auto& ur_args = GetRuntimeArgs(program, sv.row_upper_recv_kid);
+    for (const auto& c : sv.row_upper_cores) ur_args[c.x][c.y][2] = out_addr;
+
+    // Update in_addr (index 0) and out_addr (index 3) for helper DRAM readers
+    auto& hd_args = GetRuntimeArgs(program, sv.helper_dram_reader_kid);
+    for (const auto& c : sv.helper_cores) {
+        hd_args[c.x][c.y][0] = in_addr;
+        hd_args[c.x][c.y][3] = out_addr;
+    }
 }
 
 }  // namespace ttml::metal::ops::k_split_gram_matmul::device
