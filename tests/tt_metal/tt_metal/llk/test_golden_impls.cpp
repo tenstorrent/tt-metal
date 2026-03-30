@@ -74,19 +74,23 @@ std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_ve
 std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec, const GoldenConfig& config) {
     vector<uint32_t> dst_vec;
 
-    // TODO: RT update this one to use variable tile sizes
     int num_rows = config.num_tiles_r_dim * config.face_r_dim * (config.num_faces > 2 ? 2 : 1);
-    // Due to each element being 32 bits, for bfloat16 thats 2 elements
-    int num_cols = (config.num_tiles_c_dim * config.face_c_dim * (config.num_faces >= 2 ? 2 : 1)) / 2;
+    // Number of uint32 words per row: face_c_dim elements × (faces across) × datum_bytes / 4 bytes per uint32
+    // BF16 (datum_bytes=2): (nc*16*2)*2/4 = nc*16   FP8 (datum_bytes=1): (nc*16*2)*1/4 = nc*8
+    int num_cols = (config.num_tiles_c_dim * config.face_c_dim * (config.num_faces >= 2 ? 2 : 1)) *
+                   static_cast<int>(config.datum_bytes) / 4;
+    // Half-face width in uint32 words: face_c_dim/2 elements × datum_bytes / 4 bytes per uint32
+    // BF16: 16*2/4 = 8   FP8: 16*1/4 = 4
+    const int half_face_w = config.face_c_dim * static_cast<int>(config.datum_bytes) / 4;
     for (int x = 0; x < num_rows; x += 32) {
-        for (int y = 0; y < num_cols; y += 16) {
+        for (int y = 0; y < num_cols; y += 2 * half_face_w) {
             int start = (x * num_cols) + y;
 
             // Top faces
             for (int j = 0; j < 2; j++) {
-                int start_ = start + (8 * j);
+                int start_ = start + (half_face_w * j);
                 for (int k = 0; k < 16; k++) {
-                    for (int i = 0; i < 8; i++) {
+                    for (int i = 0; i < half_face_w; i++) {
                         int idx = start_ + (num_cols * k) + i;
                         dst_vec.push_back(src_vec.at(idx));
                     }
@@ -97,9 +101,9 @@ std::vector<uint32_t> gold_standard_tilize(const std::vector<uint32_t>& src_vec,
                 // Bottom faces
                 start += 16 * num_cols;
                 for (int j = 0; j < 2; j++) {
-                    int start_ = start + (8 * j);
+                    int start_ = start + (half_face_w * j);
                     for (int k = 0; k < 16; k++) {
-                        for (int i = 0; i < 8; i++) {
+                        for (int i = 0; i < half_face_w; i++) {
                             int idx = start_ + (num_cols * k) + i;
                             dst_vec.push_back(src_vec.at(idx));
                         }

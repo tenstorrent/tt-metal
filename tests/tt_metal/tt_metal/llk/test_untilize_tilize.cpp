@@ -374,6 +374,30 @@ TEST_F(MeshDeviceFixture, TensixComputeUnpackTilize) {
     }
 }
 
+TEST_F(BlackholeSingleCardFixture, TensixComputeUnpackTilizeFp8e4m3) {
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+    for (auto num_tile : num_tiles) {
+        for (bool dst_full_sync_en : {true, false}) {
+            uint32_t num_tiles_total = num_tile[0] * num_tile[1];
+            auto src_data = create_random_vector_of_float8_e4m3(
+                tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles_total, /*rand_max_float=*/20, /*seed=*/42);
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .dst_full_sync_en = dst_full_sync_en,
+                .fp32_dest_acc_en = false,
+                .input_single_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3),
+                .output_single_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3),
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .tilize_type = unit_tests::compute::tilize::TilizeType::UNPACK_A,
+                .input_fmt = tt::DataFormat::Fp8_e4m3,
+                .output_fmt = tt::DataFormat::Fp8_e4m3,
+                .src0_data = src_data,
+                .golden_function = ::unit_tests::compute::gold_standard_tilize};
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
+    }
+}
+
 TEST_F(MeshDeviceFixture, TensixComputeFastTilize) {
     vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
     for (auto num_tile : num_tiles) {
