@@ -1004,13 +1004,17 @@ class WhisperGenerator:
                 # For KV cache mode without prefill, start with just the first token
                 input_ids = input_ids[:, :1]
 
-        # Generation loop start: if prefill ran, the first transcription token was already sampled
-        # during prefill and sits at position transcription_start_pos in the KV cache. The decode
-        # loop must start at transcription_start_pos + 1 to generate the next token; starting at
-        # transcription_start_pos would overwrite the KV cache slot written by prefill and corrupt
-        # all subsequent generation.
+        # Generation loop start: set to transcription_start_pos so the first iteration always runs
+        # un-traced (the trace condition below guards on i > generation_start). This guarantees:
+        #   1. decode_pos == current_decode_pos == transcription_start_pos on the first step (no
+        #      position-embedding desync).
+        #   2. On generation 2+, the forced un-traced step advances current_decode_pos from
+        #      transcription_start_pos (set by prefill reset) to transcription_start_pos + 1,
+        #      which is exactly the position the decode trace was captured at. Without this,
+        #      the trace would start one position behind its capture point and corrupt the KV
+        #      cache on every generation after the first.
         if self.kv_cache_per_batch_size[trace_key] and prompt is not None:
-            generation_start = transcription_start_pos + 1
+            generation_start = transcription_start_pos
         else:
             generation_start = 0
 
@@ -1044,6 +1048,7 @@ class WhisperGenerator:
                 self.kv_cache_per_batch_size[trace_key]
                 and self.trace_id_decode[trace_key]
                 and self.cross_attn_cache_valid
+                and i > generation_start
             ):
                 sampled_tokens_torch = self._execute_decode_trace(trace_key)
 
@@ -1126,6 +1131,20 @@ class WhisperGenerator:
                     # when transitioning from untraced to traced decode
                     if self.decode_pos_embed[trace_key] is not None:
                         ttnn.plus_one(self.decode_pos_embed[trace_key])
+                    # On generation 2+, the forced un-traced first step (i == generation_start)
+                    # produces next_tokens that the trace must read on its first execution.
+                    # The trace reads from token_id_device, which was pre-staged with the first
+                    # transcription token before the loop. Update it now so the trace sees the
+                    # correct token. On generation 1 this branch is skipped (trace doesn't exist
+                    # yet); the trace capture block below handles token staging instead.
+                    if self.trace_id_decode[trace_key] and i == generation_start:
+                        next_token_host = ttnn.from_torch(
+                            input_ids.reshape(-1, input_ids.shape[-1]),
+                            dtype=ttnn.uint32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            mesh_mapper=self.input_mesh_mapper,
+                        )
+                        ttnn.copy_host_to_device_tensor(next_token_host, self.token_id_device[trace_key])
 
                 # Capture enlarged decode trace after sampling and position update
                 if (
