@@ -16,18 +16,9 @@ on:
         required: false
         type: string
         default: "in-service"
-      blackhole:
-        required: false
-        type: boolean
-        default: false
-      scheduled:
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   quick-wh-glx-quick:
-    if: ${{ inputs.blackhole == false && inputs.scheduled == false }}
     name: quick-wh-glx-quick (mlperf=${{ matrix.mlperf }})
     strategy:
       fail-fast: false
