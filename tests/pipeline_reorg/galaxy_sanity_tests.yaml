@@ -11,7 +11,7 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: Galaxy sanity CCL smoke
+- name: Fabric CCL tests
   use_mlperf_mount: false
   cmd: |
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
@@ -47,7 +47,7 @@
   team: scaleout
   arch: wormhole_b0
 
-- name: Galaxy sanity DeepSeek MLPerf slice
+- name: Deepseek V3 tests
   use_mlperf_mount: true
   cmd: |
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized
