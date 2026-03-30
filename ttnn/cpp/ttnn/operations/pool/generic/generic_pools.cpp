@@ -1003,12 +1003,16 @@ static std::vector<Tensor> pool2d(
         (kernel_size[0] >= input_h && kernel_size[1] >= input_w) &&
         (padding_check[0] == 0 && padding_check[1] == 0 && padding_check[2] == 0 && padding_check[3] == 0);
 
-    // Reduction path requires ROW_MAJOR input; TILE_LAYOUT inputs (e.g. BFLOAT8_B)
-    // use the sliding window path which handles tile-padded data correctly.
-    if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D && input_tensor_4d.layout() == Layout::ROW_MAJOR) {
+    if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
         auto mem_config = memory_config.value_or(input_tensor_4d.memory_config());
-        auto in_shape = input_tensor_4d.padded_shape();
         uint32_t hw = input_h * input_w;
+
+        // Reshape requires ROW_MAJOR. Convert TILE inputs (e.g. BFLOAT8_B)
+        // which also handles any necessary dtype conversion (BFLOAT8_B → BFLOAT16).
+        if (input_tensor_4d.layout() != Layout::ROW_MAJOR) {
+            input_tensor_4d = ttnn::to_layout(input_tensor_4d, Layout::ROW_MAJOR);
+        }
+        auto in_shape = input_tensor_4d.padded_shape();
 
         // Input is (1, 1, N*H*W, C). Reshape to (N, H, W, C) to establish
         // proper batch structure, then flatten spatial dims to (N, 1, H*W, C).
