@@ -9,6 +9,7 @@
 #include <optional>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 #include "hostdev/device_print_common.h"
 #include "hostdev/device_print_structures.h"
