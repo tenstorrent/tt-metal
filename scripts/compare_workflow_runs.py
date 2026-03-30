@@ -25,7 +25,7 @@ Workflows checked (by category):
     - single-card: demo-tests, perf-models, perf-device-models
     - t3000: demo, e2e, fast, integration, perf, perplexity, profiler, unit tests
     - galaxy: deepseek, deepseek-prefill, demo, e2e, health, integration, model-perf,
-              multi-user, profiler, quick, stress, unit, tg-op-perf tests
+              multi-user, profiler, quick, stress, unit tests
     - blackhole: demo, e2e, post-commit tests
 
 Usage examples:
@@ -470,7 +470,6 @@ def main():
         "galaxy-quick.yaml",
         "galaxy-stress-tests.yaml",
         "galaxy-unit-tests.yaml",
-        "tg-op-perf-tests.yaml",
         # Blackhole
         "blackhole-demo-tests.yaml",
         "blackhole-e2e-tests.yaml",
@@ -483,7 +482,7 @@ def main():
             "core": ["sanity-tests"],
             "single-card": ["single-card", "perf-models", "perf-device-models"],
             "t3000": ["t3000-"],
-            "galaxy": ["galaxy-", "tg-"],
+            "galaxy": ["galaxy-"],
             "blackhole": ["blackhole-"],
         }
         prefixes = category_filters.get(args.category, [])
