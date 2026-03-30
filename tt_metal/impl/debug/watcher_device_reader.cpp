@@ -7,7 +7,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cctype>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -785,6 +789,81 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     DumpWaypoints(true);
     DumpRingBuffer(true);
     LogRunningKernels();
+
+    // Run dump_watcher_asserts.py to show the resolved file, line, and function name.
+    // Requires only pyelftools — no triage framework, no ttexalens needed.
+    {
+        std::string script_path;
+        const char* metal_home = std::getenv("TT_METAL_HOME");
+        if (metal_home) {
+            script_path = std::string(metal_home) + "/tt_metal/tools/watcher_dump/dump_watcher_asserts.py";
+        }
+
+        // Pick a Python interpreter that has pyelftools.  The script will auto-install
+        // it via pip if not found, but prefer an interpreter that already has it.
+        std::string python_bin = "python3";
+        for (const char* candidate : {"/opt/venv/bin/python3", "python3"}) {
+            std::string probe = fmt::format("{} -c 'import elftools' 2>/dev/null && echo ok", candidate);
+            if (std::system(probe.c_str()) == 0) {
+                python_bin = candidate;
+                break;
+            }
+        }
+
+        // Look up the kernel ELF paths registered for this kernel ID from
+        // generated/watcher/kernel_elf_paths.txt (format: "id: path1:path2").
+        std::string kernel_elf_args;
+        if (!script_path.empty() && std::filesystem::exists(script_path)) {
+            uint16_t k_id = launch_msg_.kernel_config().watcher_kernel_ids()[assert_status.which()];
+            std::string elf_file_path =
+                reader_.env.get_rtoptions().get_logs_dir() + "generated/watcher/kernel_elf_paths.txt";
+            std::ifstream elf_file(elf_file_path);
+            std::string line_buf;
+            while (std::getline(elf_file, line_buf)) {
+                int file_id = -1;
+                if (std::sscanf(line_buf.c_str(), "%d:", &file_id) == 1 && file_id == k_id) {
+                    // Format: "id: path1:path2:..."
+                    std::string paths_str = line_buf.substr(line_buf.find(':') + 2);
+                    std::stringstream ss(paths_str);
+                    std::string p;
+                    bool first = true;
+                    while (std::getline(ss, p, ':')) {
+                        if (!p.empty()) {
+                            if (first) {
+                                kernel_elf_args += " --kernel-elf " + p;
+                                first = false;
+                            } else {
+                                kernel_elf_args += " --firmware-elf " + p;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (!script_path.empty() && std::filesystem::exists(script_path) && !kernel_elf_args.empty()) {
+            std::string cmd = fmt::format(
+                "{} {} --file-id 0x{:04x} --line-num {}{}",
+                python_bin,
+                script_path,
+                assert_status.file_id(),
+                assert_status.line_num(),
+                kernel_elf_args);
+            log_info(tt::LogMetal, "Assert resolver: {}", cmd);
+            std::system(cmd.c_str());
+        } else if (!script_path.empty() && std::filesystem::exists(script_path)) {
+            log_info(
+                tt::LogMetal,
+                "For callstack details run: {} {} --file-id 0x{:04x} --line-num {}"
+                " --kernel-elf <path/to/kernel.elf>",
+                python_bin,
+                script_path,
+                assert_status.file_id(),
+                assert_status.line_num());
+        }
+    }
+
     MetalContext::instance().watcher_server()->set_exception_message(error_msg);
     TT_THROW("Watcher detected tripped assert and stopped device.");
 }
