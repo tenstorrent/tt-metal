@@ -52,6 +52,7 @@ void kernel_main() {
             dfb.pop_front(1);
         }
     }
+    dfb.finish();
     DPRINT << "CBW" << ENDL();
     noc.async_write_barrier();
     DPRINT << "CBWD" << ENDL();

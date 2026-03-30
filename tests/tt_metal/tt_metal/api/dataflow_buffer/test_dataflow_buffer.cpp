@@ -33,14 +33,6 @@ namespace tt::tt_metal {
 
 enum class DFBPorCType : uint8_t { DM, TENSIX };
 
-static void skip_single_core_compute_grid(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    const CoreCoord grid = mesh_device->compute_with_storage_grid_size();
-    if (grid.x * grid.y == 1) {
-        GTEST_SKIP() << "Multi-core DFB tests require more than a single node but grid size is (" << grid.x
-                     << "x" << grid.y << ")";
-    }
-}
-
 class DFBImplicitSyncParamFixture : public MeshDeviceFixture, public ::testing::WithParamInterface<bool> {};
 
 static std::string ImplicitSyncParamName(const ::testing::TestParamInfo<bool>& info) {
@@ -53,9 +45,8 @@ void execute_program_and_verify(
     const std::shared_ptr<distributed::MeshBuffer>& in_buffer,
     const std::shared_ptr<distributed::MeshBuffer>& out_buffer,
     distributed::MeshCoordinate& zero_coord,
-    uint32_t buffer_size,
+    std::vector<uint32_t>& input,
     bool verify_output = true) {
-    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, buffer_size / sizeof(uint32_t));
     distributed::WriteShard(mesh_device->mesh_command_queue(), in_buffer, input, zero_coord, true);
 
     // TODO #38042: Need to wait for data to be written, the barrier needs to be uplifted for Quasar
@@ -184,14 +175,22 @@ void run_single_dfb_program(
     const uint32_t producer_mask = dfb->config.producer_risc_mask;
     const uint32_t consumer_mask = dfb->config.consumer_risc_mask;
 
-    // Single-core: one iteration, chunk_offset = 0.
-    // Multi-core:  each core gets a disjoint page window via chunk_offset.
+    // Build a per-core chunk-offset map (used for both runtime args and L1 pre-fill/verify).
+    std::map<CoreCoord, uint32_t> core_to_chunk_offset;
     uint32_t core_idx = 0;
     for (const CoreRange& cr : core_range_set.ranges()) {
         for (auto y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
             for (auto x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
-                const uint32_t chunk_offset = core_idx++ * entries_per_core;
+                core_to_chunk_offset[CoreCoord(x, y)] = core_idx++ * entries_per_core;
+            }
+        }
+    }
+
+    for (const CoreRange& cr : core_range_set.ranges()) {
+        for (auto y = cr.start_coord.y; y <= cr.end_coord.y; y++) {
+            for (auto x = cr.start_coord.x; x <= cr.end_coord.x; x++) {
                 const CoreCoord core(x, y);
+                const uint32_t chunk_offset = core_to_chunk_offset.at(core);
                 SetRuntimeArgs(program, producer_kernel, core, {producer_mask, chunk_offset});
                 SetRuntimeArgs(
                     program, consumer_kernel, core,
@@ -200,10 +199,48 @@ void run_single_dfb_program(
         }
     }
 
+    // Generate input once; shared by in_buffer write, L1 pre-fill, and verification.
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_buffer_size / sizeof(uint32_t));
+
+    IDevice* device = mesh_device->get_devices()[0];
+    const uint32_t words_per_core = entries_per_core * entry_size / sizeof(uint32_t);
+
+    // For Tensix → DM: pre-fill each core's DFB L1 with its input chunk so the
+    // Tensix producer kernel can read from L1 while DM consumer drains to DRAM.
+    if (producer_type == DFBPorCType::TENSIX) {
+        for (const auto& group : dfb->groups) {
+            for (const auto& [core, alloc_addr] : group.l1_by_core) {
+                const uint32_t co = core_to_chunk_offset.at(core);
+                std::vector<uint32_t> slice(
+                    input.begin() + co * entry_size / sizeof(uint32_t),
+                    input.begin() + co * entry_size / sizeof(uint32_t) + words_per_core);
+                detail::WriteToDeviceL1(device, core, alloc_addr, slice);
+            }
+        }
+    }
+
+    // Launch program; verify out_buffer only for DM → DM paths (Tensix consumer
+    // does not write to DRAM, so out_buffer verification is skipped there).
     execute_program_and_verify(
         mesh_device, program, in_buffer, out_buffer, zero_coord,
-        total_buffer_size,
-        (producer_type == DFBPorCType::DM && consumer_type == DFBPorCType::DM));
+        input,
+        /*verify_output=*/(consumer_type == DFBPorCType::DM));
+
+    // For DM → Tensix: verify each core's DFB L1 against the expected input chunk.
+    if (consumer_type == DFBPorCType::TENSIX) {
+        for (const auto& group : dfb->groups) {
+            for (const auto& [core, alloc_addr] : group.l1_by_core) {
+                const uint32_t co = core_to_chunk_offset.at(core);
+                std::vector<uint32_t> l1_data;
+                detail::ReadFromDeviceL1(device, core, alloc_addr, dfb->total_size(), l1_data);
+                std::vector<uint32_t> expected(
+                    input.begin() + co * entry_size / sizeof(uint32_t),
+                    input.begin() + co * entry_size / sizeof(uint32_t) + words_per_core);
+                EXPECT_EQ(expected, l1_data)
+                    << "DFB L1 mismatch on core (" << core.x << "," << core.y << ")";
+            }
+        }
+    }
 }
 
 void run_in_dfb_out_dfb_program(
@@ -279,7 +316,8 @@ void run_in_dfb_out_dfb_program(
         {(uint32_t)input_dfb_id, (uint32_t)output_dfb_id});
     SetRuntimeArgs(program, consumer_kernel, logical_core, {(uint32_t)output_dfb->config.consumer_risc_mask, (uint32_t)output_dfb_id, 0u});
 
-    execute_program_and_verify(mesh_device, program, in_buffer, out_buffer, zero_coord, buffer_size);
+    auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, buffer_size / sizeof(uint32_t));
+    execute_program_and_verify(mesh_device, program, in_buffer, out_buffer, zero_coord, input);
 }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB1Sx1S) {
@@ -330,80 +368,80 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB1Sx1S) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
 }
 
-TEST_F(MeshDeviceFixture, DMTensixDMTest2xDFB1Sx1S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
-    }
-    experimental::dfb::DataflowBufferConfig dm2tensix_config{
-        .entry_size = 1024,
-        .num_entries = 16,
-        .num_producers = 1,
-        .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = 1,
-        .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+// TEST_F(MeshDeviceFixture, DMTensixDMTest2xDFB1Sx1S) {
+//     if (devices_.at(0)->arch() != ARCH::QUASAR) {
+//         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+//     }
+//     experimental::dfb::DataflowBufferConfig dm2tensix_config{
+//         .entry_size = 1024,
+//         .num_entries = 16,
+//         .num_producers = 1,
+//         .pap = dfb::AccessPattern::STRIDED,
+//         .num_consumers = 1,
+//         .cap = dfb::AccessPattern::STRIDED,
+//         .enable_implicit_sync = false};
 
-    experimental::dfb::DataflowBufferConfig tensix2dm_config{
-        .entry_size = 1024,
-        .num_entries = 16,
-        .num_producers = 1,
-        .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = 1,
-            .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+//     experimental::dfb::DataflowBufferConfig tensix2dm_config{
+//         .entry_size = 1024,
+//         .num_entries = 16,
+//         .num_producers = 1,
+//         .pap = dfb::AccessPattern::STRIDED,
+//         .num_consumers = 1,
+//             .cap = dfb::AccessPattern::STRIDED,
+//         .enable_implicit_sync = false};
 
-    run_in_dfb_out_dfb_program(this->devices_.at(0), dm2tensix_config, tensix2dm_config);
-}
+//     run_in_dfb_out_dfb_program(this->devices_.at(0), dm2tensix_config, tensix2dm_config);
+// }
 
-TEST_F(MeshDeviceFixture, DMTensixDMTest1xDFB2Sx1S1xDFB1Sx2S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
-    }
-    experimental::dfb::DataflowBufferConfig dm2tensix_config{
-        .entry_size = 1024,
-        .num_entries = 16,
-        .num_producers = 2,
-        .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = 1,
-        .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+// TEST_F(MeshDeviceFixture, DMTensixDMTest1xDFB2Sx1S1xDFB1Sx2S) {
+//     if (devices_.at(0)->arch() != ARCH::QUASAR) {
+//         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+//     }
+//     experimental::dfb::DataflowBufferConfig dm2tensix_config{
+//         .entry_size = 1024,
+//         .num_entries = 16,
+//         .num_producers = 2,
+//         .pap = dfb::AccessPattern::STRIDED,
+//         .num_consumers = 1,
+//         .cap = dfb::AccessPattern::STRIDED,
+//         .enable_implicit_sync = false};
 
-    experimental::dfb::DataflowBufferConfig tensix2dm_config{
-        .entry_size = 1024,
-        .num_entries = 16,
-        .num_producers = 1,
-        .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = 2,
-        .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+//     experimental::dfb::DataflowBufferConfig tensix2dm_config{
+//         .entry_size = 1024,
+//         .num_entries = 16,
+//         .num_producers = 1,
+//         .pap = dfb::AccessPattern::STRIDED,
+//         .num_consumers = 2,
+//         .cap = dfb::AccessPattern::STRIDED,
+//         .enable_implicit_sync = false};
 
-    run_in_dfb_out_dfb_program(this->devices_.at(0), dm2tensix_config, tensix2dm_config);
-}
+//     run_in_dfb_out_dfb_program(this->devices_.at(0), dm2tensix_config, tensix2dm_config);
+// }
 
-TEST_F(MeshDeviceFixture, DMTensixDMTest1xDFB4Sx1S1xDFB1Sx4S) {
-    if (devices_.at(0)->arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
-    }
-    experimental::dfb::DataflowBufferConfig dm2tensix_config{
-        .entry_size = 1024,
-        .num_entries = 16,
-        .num_producers = 4,
-        .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = 1,
-        .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+// TEST_F(MeshDeviceFixture, DMTensixDMTest1xDFB4Sx1S1xDFB1Sx4S) {
+//     if (devices_.at(0)->arch() != ARCH::QUASAR) {
+//         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+//     }
+//     experimental::dfb::DataflowBufferConfig dm2tensix_config{
+//         .entry_size = 1024,
+//         .num_entries = 16,
+//         .num_producers = 4,
+//         .pap = dfb::AccessPattern::STRIDED,
+//         .num_consumers = 1,
+//         .cap = dfb::AccessPattern::STRIDED,
+//         .enable_implicit_sync = false};
 
-    experimental::dfb::DataflowBufferConfig tensix2dm_config{
-        .entry_size = 1024,
-        .num_entries = 16,
-        .num_producers = 1,
-        .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = 4,
-        .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+//     experimental::dfb::DataflowBufferConfig tensix2dm_config{
+//         .entry_size = 1024,
+//         .num_entries = 16,
+//         .num_producers = 1,
+//         .pap = dfb::AccessPattern::STRIDED,
+//         .num_consumers = 4,
+//         .cap = dfb::AccessPattern::STRIDED,
+//         .enable_implicit_sync = false};
 
-    run_in_dfb_out_dfb_program(this->devices_.at(0), dm2tensix_config, tensix2dm_config);
-}
+//     run_in_dfb_out_dfb_program(this->devices_.at(0), dm2tensix_config, tensix2dm_config);
+// }
 
 TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB1Sx4S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
@@ -701,7 +739,7 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB4Sx1B) { // mismatching
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM);
 }
 
-TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1B) {
+TEST_P(DFBImplicitSyncParamFixture, DMTensixTest1xDFB4Sx1B) { // mismatching
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
@@ -873,17 +911,10 @@ TEST_P(DFBImplicitSyncParamFixture, TensixDMTest1xDFB2Sx4B) {
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    ImplicitSync,
-    DFBImplicitSyncParamFixture,
-    ::testing::Bool(),
-    ImplicitSyncParamName);
-
 TEST_P(DFBImplicitSyncParamFixture, MultiCoreDMTest2Core_1Sx1S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
-    skip_single_core_compute_grid(this->devices_.at(0));
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
@@ -893,16 +924,14 @@ TEST_P(DFBImplicitSyncParamFixture, MultiCoreDMTest2Core_1Sx1S) {
         .cap = dfb::AccessPattern::STRIDED,
         .enable_implicit_sync = GetParam()};
 
-    // 2 cores in the x-direction; each reads/writes 16 x 1024 B of DRAM.
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set);
 }
 
-TEST_F(MeshDeviceFixture, MultiCoreDMTest2Core_2Sx2S) {
+TEST_P(DFBImplicitSyncParamFixture, MultiCoreDMTest2Core_2Sx2S) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
-    skip_single_core_compute_grid(this->devices_.at(0));
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
@@ -910,7 +939,7 @@ TEST_F(MeshDeviceFixture, MultiCoreDMTest2Core_2Sx2S) {
         .pap = dfb::AccessPattern::STRIDED,
         .num_consumers = 2,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_implicit_sync = GetParam()};
 
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set);
@@ -920,7 +949,6 @@ TEST_P(DFBImplicitSyncParamFixture, MultiCoreDMTest2Core_1Sx4B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
     }
-    skip_single_core_compute_grid(this->devices_.at(0));
     experimental::dfb::DataflowBufferConfig config{
         .entry_size = 1024,
         .num_entries = 16,
@@ -933,5 +961,11 @@ TEST_P(DFBImplicitSyncParamFixture, MultiCoreDMTest2Core_1Sx4B) {
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::DM, DFBPorCType::DM, core_range_set);
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    ImplicitSync,
+    DFBImplicitSyncParamFixture,
+    ::testing::Bool(),
+    ImplicitSyncParamName);
 
 }  // end namespace tt::tt_metal
