@@ -95,5 +95,5 @@ void kernel_main() {
     Mcast::Op<McastCTArgs, Core::is_sender_core, Core::is_receiver_core, Core::is_receiver_core, true> mcast;
     mcast.init(mcast_args);
     mcast(mcast_args);
-    mcast.teardown();
+    mcast.teardown(mcast_args);
 }

@@ -168,8 +168,9 @@ struct kernel_config_msg_t {
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
     volatile uint8_t pad3[1 + ((1 - MaxProcessorsPerCoreType % 2) * 2) + 12];  // CODEGEN:skip
 
-    // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel; values fit in 8 bits)
-    // The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of 16 bytes for the pair).
+    // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel;
+    // values fit in 8 bits) The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of
+    // 16 bytes for the pair).
     volatile uint8_t num_sw_threads[MaxProcessorsForThreadingVariables];
     volatile uint8_t kernel_thread_id[MaxProcessorsForThreadingVariables];
 
@@ -261,6 +262,7 @@ struct debug_assert_msg_t {
     volatile uint16_t line_num;
     volatile uint8_t tripped;
     volatile uint8_t which;
+    volatile uint64_t hw_fault_info;
 };
 
 enum debug_assert_type_t {
@@ -271,7 +273,11 @@ enum debug_assert_type_t {
     DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped = 6,
     DebugAssertNCriscNOCPostedWritesSentTripped = 7,
     DebugAssertRtaOutOfBounds = 8,
-    DebugAssertCrtaOutOfBounds = 9
+    DebugAssertCrtaOutOfBounds = 9,
+    DebugAssertHwFault = 10,
+    // Applicable only on Quasar: multiple DMs share one NOC, so CAS is used to prevent race conditions
+    // This transient value indicates a DM is writing error metadata, host should ignore
+    DebugAssertWriteInProgress = 0xFF,
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
@@ -409,7 +415,8 @@ struct mailboxes_t {
     volatile struct go_msg_t go_messages[go_message_num_entries];
     uint64_t link_status_check_timestamp;  // Next timestamp to check link status (active erisc)
     volatile uint32_t go_message_index;    // Index into go_messages to use. Always 0 on unicast cores.
-    volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +1 for the compute kernel.
+    volatile uint8_t shared_globals_ready[MaxNumKernels];  // WAIT/GO per processor (Quasar DM kernel startup). +1 for
+                                                           // the compute kernel.
     struct watcher_msg_t watcher;
     struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
