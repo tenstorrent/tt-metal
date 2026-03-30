@@ -23,6 +23,7 @@
 #include "experimental/noc.h"
 #include "experimental/circular_buffer.h"
 #include "experimental/tensor.h"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_combine.h"
 
 void kernel_main() {
@@ -49,13 +50,12 @@ void kernel_main() {
 
     // welford_finalize_to_row stores 32 per-column values in tile row 0.
     // In tile format, row 0 spans Face 0 (columns 0-15) and Face 1 (columns 16-31).
-    // Each face has 16 rows × 16 columns = 256 float elements.
-    constexpr uint32_t FACE_C = 16;
-    constexpr uint32_t FACE_ELEMENTS = FACE_C * FACE_C;
+    // Each face has FACE_W rows × FACE_W columns elements.
+    constexpr uint32_t FACE_W = tt::constants::FACE_WIDTH;
+    constexpr uint32_t FACE_ELEMENTS = FACE_W * FACE_W;
     constexpr uint32_t last_tile_cols = (W % tile_width == 0) ? tile_width : W % tile_width;
 
     const uint32_t partial_tile_size_bytes = get_tile_size(cb_partial);
-    const uint32_t combined_tile_size_bytes = get_tile_size(cb_combined);
     const uint32_t out_tile_size_bytes = get_tile_size(cb_out);
 
     experimental::Noc noc;
@@ -89,7 +89,7 @@ void kernel_main() {
                 for (uint32_t c = 0; c < num_cols; ++c) {
                     // In tile row format, columns 0-15 are in Face 0 and
                     // columns 16-31 are in Face 1 (offset by FACE_ELEMENTS).
-                    uint32_t idx = (c < FACE_C) ? c : (FACE_ELEMENTS + c - FACE_C);
+                    uint32_t idx = (c < FACE_W) ? c : (FACE_ELEMENTS + c - FACE_W);
                     WelfordStats<float> partial;
                     partial.mean = means_ptr[idx];
                     partial.variance = vars_ptr[idx];
@@ -113,10 +113,17 @@ void kernel_main() {
         // Write the combined scalar into a Float32 tile in cb_combined.
         // The compute kernel will unpack this and re-pack into cb_out
         // in the correct output data format (using the packer hardware).
+        //
+        // Only Face 0 row 0 (FACE_W floats) needs zeroing.  The scalar
+        // lives at position [0,0]; the remaining FACE_W-1 elements in
+        // the same row share a BFP exponent group, so they must be zero
+        // to avoid corrupting the scalar's mantissa precision in
+        // BFLOAT8_B output.  Other face rows have independent exponents
+        // and are never read (the output is a single scalar), so stale
+        // L1 contents there are harmless.
         cb_combined_obj.reserve_back(1);
         auto* combined_ptr = reinterpret_cast<float*>(get_write_ptr(cb_combined));
-        uint32_t num_floats = combined_tile_size_bytes / sizeof(float);
-        for (uint32_t i = 0; i < num_floats; ++i) {
+        for (uint32_t i = 0; i < FACE_W; ++i) {
             combined_ptr[i] = 0.0f;
         }
         combined_ptr[0] = final_var;

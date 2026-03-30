@@ -78,6 +78,11 @@ void kernel_main() {
 
     for (uint32_t out = 0; out < num_outputs; ++out) {
         // --- Phase 1: H-reduce all columns for reduce_batch_size NC slices ---
+        // Restore unpacker to cb_in's format after Phase 2 set it to
+        // cb_combined (Float32).  Within Phase 1 the format stays
+        // compatible (cb_scaled uses the same format as cb_in), so a
+        // single reconfig at the start of each output suffices.
+        reconfig_data_format_srca(cb_in);
         for (uint32_t b = 0; b < reduce_batch_size; ++b) {
             for (uint32_t wt = 0; wt < Wt; ++wt) {
                 // H-reduce one column of Ht tiles.
@@ -89,12 +94,6 @@ void kernel_main() {
                         // Scale step in its own DST cycle (same pattern as welford_reduce_h.cpp).
                         cb_in_obj.wait_front(onetile);
                         tile_regs_acquire();
-                        // Explicit srca reconfig is required because Phase 2
-                        // calls reconfig_data_format_srca(cb_combined) which
-                        // sets the unpacker to Float32.
-                        // mul_tiles_bcast_scalar_init_short does not fully
-                        // reconfigure the data format.
-                        reconfig_data_format_srca(cb_in);
                         mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                         mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
                         tile_regs_commit();
@@ -115,10 +114,6 @@ void kernel_main() {
                     } else {
                         cb_in_obj.wait_front(onetile);
                         tile_regs_acquire();
-                        // Explicit srca reconfig is required because Phase 2
-                        // calls reconfig_data_format_srca(cb_combined) which
-                        // sets the unpacker to Float32.
-                        reconfig_data_format_srca(cb_in);
                         copy_tile_to_dst_init_short(cb_in);
                         copy_tile(cb_in, 0, input_dst);
                         cb_in_obj.pop_front(1);
