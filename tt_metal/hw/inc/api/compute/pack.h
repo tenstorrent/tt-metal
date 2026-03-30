@@ -101,7 +101,9 @@ ALWI void pack_tile(uint32_t ifrom_dst, uint32_t icb, std::uint32_t output_tile_
 ALWI void pack_tile_block(uint32_t ifrom_dst, uint32_t icb, uint32_t ntiles) {
 #ifndef ARCH_QUASAR
     PACK((llk_matmul_pack<DST_ACCUM_MODE, false, false>(ifrom_dst, icb, ntiles)));
-#endif  // TODO: AM; add Quasar implementation
+#else
+    PACK((llk_pack_block(ifrom_dst, icb, ntiles)));
+#endif
 }
 
 // clang-format off
@@ -257,17 +259,18 @@ ALWI void pack_rows_uninit() {
 /**
  * Configures packer ReLU activation at runtime.
  *
- * The packed config encodes the ReLU mode in bits [1:0] and a bfloat16
- * threshold in bits [31:16].
- *
  * Return value: None
  *
- * | Param Type | Name   | Description                                          | Type     | Valid Range | Required |
- * |------------|--------|------------------------------------------------------|----------|-------------|----------|
- * | Function   | config | Packed ReLU config (mode in [1:0], threshold [31:16])| uint32_t | Any         | True     |
+ * | Param Type | Name   | Description                                                         | Type                  | Valid Range | Required |
+ * |------------|--------|---------------------------------------------------------------------|-----------------------|-------------|----------|
+ * | Function   | config | ReLU configuration (ReluConfig on Quasar, packed uint32_t on WH/BH) | ReluConfig / uint32_t | Any         | True     |
  */
-ALWI void pack_relu_config(const uint32_t config) {
-    PACK((llk_pack_relu_config(config)));
-}
+ #ifdef ARCH_QUASAR
+ ALWI void pack_relu_config(const ReluConfig& config) { PACK((llk_pack_relu_config(config))); }
+ #else
+ ALWI void pack_relu_config(const uint32_t config) {
+     PACK((llk_pack_relu_config(config)));
+ }
+ #endif
 
 }  // namespace ckernel

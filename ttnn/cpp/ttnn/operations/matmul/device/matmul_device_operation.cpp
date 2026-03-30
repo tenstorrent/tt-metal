@@ -247,7 +247,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
         // 2. Shape requirements: must be rank-4 tensors (to ensure dim 1 is the batch dimension)
         // 3. Batch dimension requirement: input A must have batch size 1 on dim 1
         // 4. Memory layout requirement: inputs must not be sharded
-        auto can_use_in0_reuse = [&]() {
+        auto in0_reuse = [&]() {
             if (!std::holds_alternative<operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(
                     chosen_program_config)) {
                 return false;
@@ -271,7 +271,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
 
         for (auto i = 0; i < a_shape.rank() - 2; i++) {
             TT_FATAL(
-                a_shape[i] == b_shape[i] || (i == 1 && can_use_in0_reuse()),
+                a_shape[i] == b_shape[i] || (i == 1 && in0_reuse()),
                 "bmm (non-bcast matmul) expects input tensors of shapes "
                 "BCMK*BCKN=BCMN or batch dimension {} mismatch: a={} vs b={} (dimension mismatch only allowed on dim 1 "
                 "for rank-4 tensors when a[1]=1 and using MatmulMultiCoreReuseMultiCast1DProgramConfig with "
@@ -1499,7 +1499,10 @@ MatmulParams create_matmul_attributes(
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? MathFidelity::HiFi2 : MathFidelity::LoFi;
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
-    math_fidelity = are_inputs_32F ? MathFidelity::HiFi4 : math_fidelity;
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // When inputs are FLOAT32 (which drives fp32_dest_acc_en=True by default), use HiFi3 on Wormhole B0.
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
+    math_fidelity = are_inputs_32F ? (is_wormhole ? MathFidelity::HiFi3 : MathFidelity::HiFi4) : math_fidelity;
 
     bool broadcast_batch = parameters.bcast_batch.value_or(get_broadcast_batch(
         input_tensor_a, input_tensor_b, parameters.transpose_a, parameters.transpose_b, parameters.program_config));
@@ -1545,6 +1548,7 @@ MatmulParams create_matmul_attributes(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/is_float_32,
         /*default_l1_acc=*/!is_float_32);
+    ttnn::verify_numerical_configuration(arch, parameters.compute_kernel_config);
     auto in0_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_a, parameters.transpose_a);
     auto in1_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_b, parameters.transpose_b);
 
