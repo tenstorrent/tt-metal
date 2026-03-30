@@ -431,7 +431,11 @@ def run_demo_whisper_for_conditional_generation_dataset(
 
     # load data
     if os.getenv("CI") == "true":
-        ds = load_dataset("/mnt/MLPerf/huggingface/hub/datasets--hf-internal-testing--librispeech_asr_dummy", "clean", split="validation")
+        ds = load_dataset(
+            "/mnt/MLPerf/huggingface/hub/datasets--hf-internal-testing--librispeech_asr_dummy",
+            "clean",
+            split="validation",
+        )
     else:
         ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
     
