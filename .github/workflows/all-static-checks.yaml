@@ -81,10 +81,11 @@ jobs:
     if: false  # ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
           clean: false
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Link Checker
         uses: lycheeverse/lychee-action@v2
         with:

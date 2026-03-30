@@ -29,9 +29,10 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_perf_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Install dependencies
         run: |
           pip3 install PyYAML
@@ -85,9 +86,10 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Enable performance mode
         run: |
           sudo cpupower frequency-set -g performance

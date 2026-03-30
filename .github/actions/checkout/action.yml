@@ -1,0 +1,54 @@
+name: Checkout
+description: Wrapper around actions/checkout that injects credentials for the private tt_ops_code_gen submodule.
+
+inputs:
+  ref:
+    description: The branch, tag or SHA to checkout
+    required: false
+    default: ''
+  fetch-depth:
+    description: Number of commits to fetch. 0 indicates all history for all branches and tags.
+    required: false
+    default: '1'
+  fetch-tags:
+    description: Whether to fetch tags, even if fetch-depth > 0
+    required: false
+    default: 'false'
+  submodules:
+    description: Whether to checkout submodules. Values are 'true', 'false', or 'recursive'
+    required: false
+    default: 'false'
+  token:
+    description: PAT for checking out the main repository. Defaults to GITHUB_TOKEN.
+    required: false
+    default: ${{ github.token }}
+  path:
+    description: Relative path under $GITHUB_WORKSPACE to place the repository
+    required: false
+    default: ''
+  private-submodule-token:
+    description: PAT (TT-OPS-CODE-GEN-CLONE secret) used to authenticate cloning of the private tt_ops_code_gen submodule.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Configure credentials for private submodule
+      if: inputs.submodules != 'false' && inputs.private-submodule-token != ''
+      shell: bash
+      env:
+        PRIVATE_TOKEN: ${{ inputs.private-submodule-token }}
+      run: |
+        git config --global url."https://oauth2:${PRIVATE_TOKEN}@github.com/tenstorrent/tt_ops_code_gen".insteadOf \
+          "https://github.com/tenstorrent/tt_ops_code_gen"
+
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.ref }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+        fetch-tags: ${{ inputs.fetch-tags }}
+        submodules: ${{ inputs.submodules }}
+        token: ${{ inputs.token }}
+        path: ${{ inputs.path }}

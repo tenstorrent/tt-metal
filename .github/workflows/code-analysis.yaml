@@ -266,10 +266,11 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: ./.github/actions/checkout
         with:
           fetch-depth: 1
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       - name: Configure git safe.directory
         run: git config --global --add safe.directory /work
