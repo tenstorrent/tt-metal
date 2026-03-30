@@ -18,6 +18,7 @@ Owner:
 from collections import defaultdict
 import json
 import os
+from pathlib import Path
 import subprocess
 
 from triage import ScriptConfig, log_warning, run_script, log_check_location
@@ -44,7 +45,7 @@ def _get_git_commit_hash() -> str:
             capture_output=True,
             text=True,
             timeout=5,
-            cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+            cwd=Path(__file__).resolve().parent.parent.parent,
         )
         if out.returncode == 0 and out.stdout:
             return out.stdout.strip()
@@ -142,7 +143,7 @@ def run(args, context: Context):
     if all_debug_bus_data:
         all_debug_bus_data["git_commit"] = _get_git_commit_hash()
         output_path = args["--path"] if args["--path"] else "debug_bus_signal_groups.json"
-        with open(output_path, "w") as f:
+        with Path(output_path).open("w") as f:
             json.dump(all_debug_bus_data, f, indent=2)
         log_warning(f"Some riscs are broken. Generated JSON file with debug bus signals at {output_path}")
 

@@ -3,13 +3,14 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 import capnp
-import os
+from pathlib import Path
 
 # Import Cap'n Proto schema
 capnp.remove_import_hook()
-script_dir = os.path.dirname(os.path.abspath(__file__))
+script_dir = Path(__file__).resolve().parent
 capnp_scheme = capnp.load(
-    os.path.join(script_dir, "inspector.capnp"), imports=[os.path.dirname(p) for p in capnp.__path__]
+    str(script_dir / "inspector.capnp"),  # capnp.load() requires str, not Path
+    imports=[str(Path(p).parent) for p in capnp.__path__],  # capnp imports list requires str
 )
 
 # Dynamically import all types from capnp_scheme so that users can reference them in other scripts.

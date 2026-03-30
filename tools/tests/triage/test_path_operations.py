@@ -19,6 +19,7 @@ Written to validate path handling during the pathlib migration.
 import os
 import sys
 import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -86,21 +87,24 @@ class TestGetLogDirectory:
     """Tests for parse_inspector_logs.get_log_directory."""
 
     def test_get_log_directory_explicit_path(self):
-        """When a path string is passed, it is returned unchanged."""
-        assert get_log_directory("/some/explicit/path") == "/some/explicit/path"
+        """When a path string is passed, it is returned as a Path."""
+        result = get_log_directory("/some/explicit/path")
+        assert isinstance(result, Path)
+        assert result == Path("/some/explicit/path")
 
     def test_get_log_directory_env_var(self, monkeypatch):
-        """TT_METAL_LOGS_PATH set -> returns $VAR/generated/inspector."""
+        """TT_METAL_LOGS_PATH set -> returns $VAR/generated/inspector as Path."""
         monkeypatch.setenv("TT_METAL_LOGS_PATH", "/custom/logs")
         result = get_log_directory(None)
-        assert result == os.path.join("/custom/logs", "generated", "inspector")
+        assert isinstance(result, Path)
+        assert result == Path("/custom/logs") / "generated" / "inspector"
 
     def test_get_log_directory_fallback(self, monkeypatch):
-        """No env var -> returns path under tempfile.gettempdir()."""
+        """No env var -> returns path under tempfile.gettempdir() as Path."""
         monkeypatch.delenv("TT_METAL_LOGS_PATH", raising=False)
         result = get_log_directory(None)
-        expected = os.path.join(tempfile.gettempdir(), "tt-metal", "inspector")
-        assert result == expected
+        assert isinstance(result, Path)
+        assert result == Path(tempfile.gettempdir()) / "tt-metal" / "inspector"
 
 
 class TestReadYaml:

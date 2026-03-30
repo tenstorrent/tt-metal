@@ -15,8 +15,8 @@ Owner:
     adjordjevic-TT
 """
 
-import os
 import threading
+from pathlib import Path
 from triage import triage_singleton, ScriptConfig, run_script, TTTriageError
 from ttexalens.context import Context
 from ttexalens.hardware.risc_debug import ParsedElfFile
@@ -60,7 +60,7 @@ class ElfsCache:
         Returns:
             ParsedElfFile object for the given path
         """
-        if not os.path.exists(elf_path):
+        if not Path(elf_path).exists():
             raise TTTriageError(f"ELF file {elf_path} does not exist.")
         with self._lock:
             if elf_path not in self._cache:

@@ -21,6 +21,7 @@ from collections import namedtuple
 from dataclasses import dataclass
 from functools import cached_property
 import os
+from pathlib import Path
 import sys
 from typing import Literal, TypeAlias
 import yaml
@@ -121,9 +122,9 @@ class ProgramData:
 
 
 # Note: This method is parsing entry by entry and should be used only for debugging large log files.
-def fast_parse_yaml_log_file(log_file: str):
+def fast_parse_yaml_log_file(log_file: str | Path):
     log_entry = ""
-    with open(log_file, "r") as f:
+    with Path(log_file).open("r") as f:
         while (line := f.readline()) != "":
             if len(line) > 0 and line[0] != " " and line[0] != "\t" and line[0] != "\n":
                 if len(log_entry) > 0:
@@ -139,22 +140,23 @@ def fast_parse_yaml_log_file(log_file: str):
         yield yaml.safe_load(log_entry)
 
 
-def read_yaml(yaml_path: str):
-    if not os.path.exists(yaml_path):
-        utils.WARN(f"  {yaml_path} file does not exist.")
+def read_yaml(yaml_path: str | Path):
+    p = Path(yaml_path)
+    if not p.exists():
+        utils.WARN(f"  {p} file does not exist.")
         return []
     try:
         # Try to use ryml for faster parsing if available
         import ryml
         from ttexalens.util import ryml_to_lazy
 
-        with open(yaml_path, "r") as f:
+        with p.open("r") as f:
             content = f.read()
             tree = ryml.parse_in_arena(content)
             data = ryml_to_lazy(tree, tree.root_id())
     except:
         # Fallback to standard yaml library
-        with open(yaml_path, "r") as f:
+        with p.open("r") as f:
             data = yaml.safe_load(f)
     if data is None:
         return []
@@ -173,8 +175,8 @@ class StartupData:
         print(f"  {self.convert_timestamp(timestamp_ns).strftime('%Y-%m-%d %H:%M:%S.%f')}: {message}")
 
 
-def get_kernels(log_directory: str) -> dict[int, KernelData]:
-    yaml_path = os.path.join(log_directory, "kernels.yaml")
+def get_kernels(log_directory: str | Path) -> dict[int, KernelData]:
+    yaml_path = Path(log_directory) / "kernels.yaml"
     data = read_yaml(yaml_path)
 
     kernels: dict[int, KernelData] = {}
@@ -191,9 +193,9 @@ def get_kernels(log_directory: str) -> dict[int, KernelData]:
     return kernels
 
 
-def get_startup_data(log_directory: str) -> StartupData:
-    startup_yaml_path = os.path.join(log_directory, "startup.yaml")
-    with open(startup_yaml_path, "r") as f:
+def get_startup_data(log_directory: str | Path) -> StartupData:
+    startup_yaml_path = Path(log_directory) / "startup.yaml"
+    with startup_yaml_path.open("r") as f:
         startup_data = yaml.safe_load(f)
         for entry, startup_time in startup_data.items():
             assert entry == "startup_time", "Expected 'startup_time' entry in startup.yaml"
@@ -210,8 +212,8 @@ def get_startup_data(log_directory: str) -> StartupData:
     raise ValueError("No startup time found in startup.yaml")
 
 
-def get_programs(log_directory: str, verbose: bool = False) -> dict[int, ProgramData]:
-    yaml_path = os.path.join(log_directory, "programs_log.yaml")
+def get_programs(log_directory: str | Path, verbose: bool = False) -> dict[int, ProgramData]:
+    yaml_path = Path(log_directory) / "programs_log.yaml"
     data = read_yaml(yaml_path)
     if verbose:
         print("Programs log:")
@@ -282,8 +284,8 @@ def get_programs(log_directory: str, verbose: bool = False) -> dict[int, Program
     return programs
 
 
-def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, MeshDeviceData]:
-    yaml_path = os.path.join(log_directory, "mesh_devices_log.yaml")
+def get_mesh_devices(log_directory: str | Path, verbose: bool = False) -> dict[int, MeshDeviceData]:
+    yaml_path = Path(log_directory) / "mesh_devices_log.yaml"
     data = read_yaml(yaml_path)
     if verbose:
         print("Mesh devices log:")
@@ -325,8 +327,8 @@ def get_mesh_devices(log_directory: str, verbose: bool = False) -> dict[int, Mes
     return mesh_devices
 
 
-def get_mesh_workloads(log_directory: str, verbose: bool = False) -> dict[int, MeshWorkloadData]:
-    yaml_path = os.path.join(log_directory, "mesh_workloads_log.yaml")
+def get_mesh_workloads(log_directory: str | Path, verbose: bool = False) -> dict[int, MeshWorkloadData]:
+    yaml_path = Path(log_directory) / "mesh_workloads_log.yaml"
     data = read_yaml(yaml_path)
     if verbose:
         print("Mesh workloads log:")
@@ -413,20 +415,20 @@ def get_devices_in_use(programs: list[ProgramData]) -> set[int]:
     return used_devices
 
 
-def get_log_directory(log_directory: str | None = None) -> str:
+def get_log_directory(log_directory: str | None = None) -> Path:
     if log_directory:
-        return log_directory
+        return Path(log_directory)
     elif "TT_METAL_LOGS_PATH" in os.environ:
-        return os.path.join(os.environ.get("TT_METAL_LOGS_PATH"), "generated", "inspector")
+        return Path(os.environ["TT_METAL_LOGS_PATH"]) / "generated" / "inspector"
     else:
         import tempfile
 
-        return os.path.join(tempfile.gettempdir(), "tt-metal", "inspector")
+        return Path(tempfile.gettempdir()) / "tt-metal" / "inspector"
 
 
 class InspectorLogsData:
-    def __init__(self, log_directory: str):
-        self.log_directory = log_directory
+    def __init__(self, log_directory: str | Path):
+        self.log_directory = Path(log_directory)
 
     @cached_property
     def mesh_devices(self):
@@ -445,7 +447,7 @@ class InspectorLogsData:
 
     def _get_runtime_entries(self) -> list[MeshWorkloadRuntimeEntry]:
         """Parse runtime entries from logs"""
-        yaml_path = os.path.join(self.log_directory, "mesh_workloads_log.yaml")
+        yaml_path = self.log_directory / "mesh_workloads_log.yaml"
         data = read_yaml(yaml_path)
         runtime_entries = []
         # Build a map from (workload_id, runtime_id) -> entry so runtime_entry logs can enrich them
@@ -510,17 +512,17 @@ class InspectorLogsData:
 
 
 def get_data(log_directory: str | None = None) -> InspectorLogsData:
-    log_directory = get_log_directory(log_directory)
-    if os.path.exists(log_directory):
-        return InspectorLogsData(log_directory)
+    log_dir = get_log_directory(log_directory)
+    if log_dir.exists():
+        return InspectorLogsData(log_dir)
     else:
-        raise ValueError(f"Log directory {log_directory} does not exist. Please provide a valid path.")
+        raise ValueError(f"Log directory {log_dir} does not exist. Please provide a valid path.")
 
 
 def main():
     args = docopt(__doc__, argv=sys.argv[1:])
     log_directory = get_log_directory(args["<log-directory>"])
-    if not os.path.exists(log_directory):
+    if not log_directory.exists():
         print(f"Directory {log_directory} does not exist")
         return
 

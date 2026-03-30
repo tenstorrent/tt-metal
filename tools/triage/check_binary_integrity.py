@@ -17,7 +17,7 @@ Owner:
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from run_checks import run as get_run_checks
-import os
+from pathlib import Path
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.tt_exalens_lib import read_from_device
@@ -34,13 +34,14 @@ def check_binary_integrity(
     dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
 
     # Check firmware ELF binary state on the device
+    firmware_path = Path(dispatcher_core_data.firmware_path)
     log_check_risc(
         risc_name,
         location,
-        os.path.exists(dispatcher_core_data.firmware_path),
+        firmware_path.exists(),
         f"Firmware ELF file {dispatcher_core_data.firmware_path} does not exist.",
     )
-    if os.path.exists(dispatcher_core_data.firmware_path):
+    if firmware_path.exists():
         elf_file = elfs_cache[dispatcher_core_data.firmware_path].elf
         sections_to_verify = [".text"]
         for section_name in sections_to_verify:
@@ -65,14 +66,15 @@ def check_binary_integrity(
 
     # Check kernel ELF binary state on the device
     if dispatcher_core_data.kernel_xip_path is not None:
+        kernel_xip_path = Path(dispatcher_core_data.kernel_xip_path)
         log_check_risc(
             risc_name,
             location,
-            os.path.exists(dispatcher_core_data.kernel_xip_path),
+            kernel_xip_path.exists(),
             f"Kernel ELF file {dispatcher_core_data.kernel_xip_path} does not exist.",
         )
 
-        if os.path.exists(dispatcher_core_data.kernel_xip_path):
+        if kernel_xip_path.exists():
             elf_file = elfs_cache[dispatcher_core_data.kernel_xip_path].elf
             sections_to_verify = [".text"]
             for section_name in sections_to_verify:

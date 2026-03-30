@@ -16,7 +16,7 @@ Owner:
 """
 
 from dataclasses import dataclass
-import os
+from pathlib import Path
 import threading
 from typing import Callable
 
@@ -124,19 +124,19 @@ class DispatcherData:
 
             build_env = self._build_env_cache[device_unique_id]
             # Use build_env for initial firmware paths
-            brisc_elf_path = os.path.join(build_env.firmwarePath, "brisc", "brisc.elf")
-            idle_erisc_elf_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
+            firmware_base = Path(build_env.firmwarePath)
+            # ElfsCache.__getitem__ expects str keys
+            brisc_elf_path = str(firmware_base / "brisc" / "brisc.elf")
+            idle_erisc_elf_path = str(firmware_base / "idle_erisc" / "idle_erisc.elf")
             active_erisc_elf_name = "erisc" if run_checks.devices[0].is_wormhole() else "active_erisc"
-            active_erisc_elf_path = os.path.join(
-                build_env.firmwarePath, active_erisc_elf_name, active_erisc_elf_name + ".elf"
-            )
+            active_erisc_elf_path = str(firmware_base / active_erisc_elf_name / f"{active_erisc_elf_name}.elf")
 
             # On blackhole we have 2 modes (1-ERISC and 2-ERISC)
             # By checking if the subordinate active erisc elf exists, we can determine in which mode we are
             if run_checks.devices[0].is_blackhole():
-                self._is_2_erisc_mode = os.path.exists(
-                    os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
-                )
+                self._is_2_erisc_mode = (
+                    firmware_base / "subordinate_active_erisc" / "subordinate_active_erisc.elf"
+                ).exists()
 
         except Exception as e:
             raise TTTriageError(
@@ -495,52 +495,60 @@ class DispatcherData:
 
         # Construct the firmware path from the build_env instead of relative paths
         # This ensures we get the correct firmware path for this device and build config
+        firmware_base = Path(build_env.firmwarePath)
+        proc_name_l = proc_name.lower()
         if location in location.device.active_eth_block_locations:
-            if proc_name.lower() == "erisc":
-                firmware_path = os.path.join(build_env.firmwarePath, "erisc", "erisc.elf")
-            elif proc_name.lower() == "erisc0":
-                firmware_path = os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
-            elif proc_name.lower() == "erisc1":
-                firmware_path = (
-                    os.path.join(build_env.firmwarePath, "subordinate_active_erisc", "subordinate_active_erisc.elf")
+            if proc_name_l == "erisc":
+                firmware_resolved = firmware_base / "erisc" / "erisc.elf"
+            elif proc_name_l == "erisc0":
+                firmware_resolved = firmware_base / "active_erisc" / "active_erisc.elf"
+            elif proc_name_l == "erisc1":
+                firmware_resolved = (
+                    firmware_base / "subordinate_active_erisc" / "subordinate_active_erisc.elf"
                     if self._is_2_erisc_mode
-                    else os.path.join(build_env.firmwarePath, "active_erisc", "active_erisc.elf")
+                    else firmware_base / "active_erisc" / "active_erisc.elf"
                 )
 
         else:
-            if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                firmware_path = os.path.join(build_env.firmwarePath, "idle_erisc", "idle_erisc.elf")
-            elif proc_name.lower() == "erisc1":
-                firmware_path = os.path.join(
-                    build_env.firmwarePath, "subordinate_idle_erisc", "subordinate_idle_erisc.elf"
-                )
+            if proc_name_l == "erisc" or proc_name_l == "erisc0":
+                firmware_resolved = firmware_base / "idle_erisc" / "idle_erisc.elf"
+            elif proc_name_l == "erisc1":
+                firmware_resolved = firmware_base / "subordinate_idle_erisc" / "subordinate_idle_erisc.elf"
             else:
-                firmware_path = os.path.join(build_env.firmwarePath, proc_name.lower(), f"{proc_name.lower()}.elf")
-        firmware_path = os.path.realpath(firmware_path)
+                firmware_resolved = firmware_base / proc_name_l / f"{proc_name_l}.elf"
+        firmware_path = str(firmware_resolved.resolve())  # DispatcherCoreData.firmware_path is str
 
         if kernel:
+            kernel_path = Path(kernel.path)
+            kernel_path_resolved = None
             if location in location.device.active_eth_block_locations:
-                if proc_name.lower() == "erisc":
-                    kernel_path = kernel.path + "/erisc/erisc.elf"
-                elif proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path + "/active_erisc/active_erisc.elf" if self._is_2_erisc_mode else None
-                elif proc_name.lower() == "erisc1":
-                    kernel_path = (
-                        kernel.path + "/subordinate_active_erisc/subordinate_active_erisc.elf"
+                if proc_name_l == "erisc":
+                    kernel_path_resolved = kernel_path / "erisc" / "erisc.elf"
+                elif proc_name_l == "erisc0":
+                    kernel_path_resolved = (
+                        (kernel_path / "active_erisc" / "active_erisc.elf") if self._is_2_erisc_mode else None
+                    )
+                elif proc_name_l == "erisc1":
+                    kernel_path_resolved = (
+                        kernel_path / "subordinate_active_erisc" / "subordinate_active_erisc.elf"
                         if self._is_2_erisc_mode
-                        else kernel.path + "/active_erisc/active_erisc.elf"
+                        else kernel_path / "active_erisc" / "active_erisc.elf"
                     )
             else:
-                if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
-                elif proc_name.lower() == "erisc1":
-                    kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+                if proc_name_l == "erisc" or proc_name_l == "erisc0":
+                    kernel_path_resolved = kernel_path / "idle_erisc" / "idle_erisc.elf"
+                elif proc_name_l == "erisc1":
+                    kernel_path_resolved = kernel_path / "subordinate_idle_erisc" / "subordinate_idle_erisc.elf"
                 else:
-                    kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
-            kernel_path = os.path.realpath(kernel_path)
+                    kernel_path_resolved = kernel_path / proc_name_l / f"{proc_name_l}.elf"
+            kernel_path = (
+                str(kernel_path_resolved.resolve()) if kernel_path_resolved is not None else None
+            )  # DispatcherCoreData.kernel_path is str; also used in str concat on next line
             # For NCRISC we don't have XIP ELF file
             kernel_xip_path = (
-                kernel_path + ".xip.elf" if not (proc_name == "NCRISC" and location.device.is_wormhole()) else None
+                kernel_path + ".xip.elf"
+                if kernel_path and not (proc_name == "NCRISC" and location.device.is_wormhole())
+                else None
             )
             if proc_name == "NCRISC" and location.device.is_wormhole():
                 kernel_offset = 0xFFC00000

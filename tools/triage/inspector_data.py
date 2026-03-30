@@ -26,7 +26,7 @@ from triage import triage_singleton, ScriptConfig, run_script
 from parse_inspector_logs import get_data as get_logs_data, get_log_directory
 import asyncio
 import capnp
-import os
+from pathlib import Path
 import threading
 import inspector_capnp
 
@@ -127,21 +127,21 @@ class InspectorUnserializedMethod(InspectorException):
 
 
 class InspectorRpcSerialized(InspectorData):
-    def __init__(self, directory: str):
-        self.__directory = directory
+    def __init__(self, directory: str | Path):
+        self.__directory = Path(directory)
         self.__methods = inspector_capnp.capnp_scheme.Inspector.schema.methods
-        if not os.path.exists(directory) or not os.path.exists(os.path.join(directory, "getPrograms.capnp.bin")):
+        if not self.__directory.exists() or not (self.__directory / "getPrograms.capnp.bin").exists():
             raise ValueError(f"Serialized RPC data not found in directory {directory}")
 
     def __getattr__(self, method_name: str):
         if method_name in self.__methods:
-            serialized_path = os.path.join(self.__directory, f"{method_name}.capnp.bin")
-            if not os.path.exists(serialized_path):
+            serialized_path = self.__directory / f"{method_name}.capnp.bin"
+            if not serialized_path.exists():
                 raise InspectorUnserializedMethod(
                     f"Serialized file for method {method_name} not found at {serialized_path}"
                 )
             method_name_cap = method_name[0].upper() + method_name[1:]
-            with open(serialized_path, "rb") as f:
+            with serialized_path.open("rb") as f:
                 results_schema = self.__methods[method_name].result_type
                 results_name = f"{method_name_cap}Results"
                 results_struct = capnp.lib.capnp._StructModule(results_schema, results_name)
@@ -174,7 +174,7 @@ def run(args, context) -> InspectorData:
 
     # Check for Inspector log directory
     log_directory = get_log_directory(log_directory)
-    if not os.path.exists(log_directory):
+    if not log_directory.exists():
         raise ValueError(
             f"\n\tLog directory {log_directory} does not exist."
             f"\n\tMetal runtime is not running. Do not kill host process, but open triage in parallel."
