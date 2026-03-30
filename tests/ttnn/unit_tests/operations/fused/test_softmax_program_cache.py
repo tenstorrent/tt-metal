@@ -36,6 +36,10 @@ import torch.nn.functional as F
 import ttnn
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
+# Numeric thresholds from tests/ttnn/unit_tests/operations/fused/all_numeric_results_fused.csv
+# (test_softmax_program_cache_numeric_results). ~10% margin on max_abs / max_rel / frobenius; PCC ~= min - 1.5e-4.
+# check_ulp=True only when ulp_threshold < 12 (ulp_threshold = ceil(CSV max_ulp * 1.1)).
+
 
 @pytest.fixture
 def isolate_program_cache(device):
@@ -88,8 +92,10 @@ def test_softmax_cache_reuse_same_config_5d(device, isolate_program_cache):
         tt_out1,
         pcc_threshold=0.999,
         rtol=0.025,
-        atol=0.025,
-        frobenius_threshold=0.025,
+        atol=0.001,
+        frobenius_threshold=0.008,
+        ulp_threshold=6,
+        check_ulp=True,
     )
 
     torch.manual_seed(42)
@@ -99,8 +105,10 @@ def test_softmax_cache_reuse_same_config_5d(device, isolate_program_cache):
         tt_out2,
         pcc_threshold=0.999,
         rtol=0.025,
-        atol=0.025,
-        frobenius_threshold=0.025,
+        atol=0.001,
+        frobenius_threshold=0.008,
+        ulp_threshold=6,
+        check_ulp=True,
     )
 
     assert device.num_program_cache_entries() == 1
@@ -116,10 +124,10 @@ def test_softmax_cache_reuse_same_config_4d(device, isolate_program_cache):
     assert_numeric_metrics(
         torch_ref1,
         tt_out1,
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.997,
+        rtol=0.060,
+        atol=0.002,
+        frobenius_threshold=0.021,
     )
 
     torch.manual_seed(42)
@@ -127,10 +135,10 @@ def test_softmax_cache_reuse_same_config_4d(device, isolate_program_cache):
     assert_numeric_metrics(
         torch_ref2,
         tt_out2,
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.997,
+        rtol=0.060,
+        atol=0.002,
+        frobenius_threshold=0.021,
     )
 
     assert device.num_program_cache_entries() == 1
@@ -152,9 +160,11 @@ def test_softmax_cache_miss_different_dims_5d(device, isolate_program_cache):
         torch_ref1,
         tt_out1,
         pcc_threshold=0.999,
-        rtol=0.025,
-        atol=0.025,
-        frobenius_threshold=0.025,
+        rtol=0.023,
+        atol=0.001,
+        frobenius_threshold=0.007,
+        ulp_threshold=6,
+        check_ulp=True,
     )
 
     torch_ref2, tt_out2 = run_softmax_5d(device, shape, dim=-2, dtype=ttnn.bfloat16)
@@ -162,9 +172,11 @@ def test_softmax_cache_miss_different_dims_5d(device, isolate_program_cache):
         torch_ref2,
         tt_out2,
         pcc_threshold=0.999,
-        rtol=0.025,
-        atol=0.025,
-        frobenius_threshold=0.025,
+        rtol=0.023,
+        atol=0.001,
+        frobenius_threshold=0.007,
+        ulp_threshold=6,
+        check_ulp=True,
     )
 
     assert device.num_program_cache_entries() == 2
@@ -180,10 +192,12 @@ def test_softmax_cache_miss_different_factories(device, isolate_program_cache):
     assert_numeric_metrics(
         torch_ref1,
         tt_out1,
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.995,
+        rtol=0.023,
+        atol=0.001,
+        frobenius_threshold=0.008,
+        ulp_threshold=6,
+        check_ulp=True,
     )
 
     # 4D last dim: attention optimized factory
@@ -191,10 +205,12 @@ def test_softmax_cache_miss_different_factories(device, isolate_program_cache):
     assert_numeric_metrics(
         torch_ref2,
         tt_out2,
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.995,
+        rtol=0.053,
+        atol=0.002,
+        frobenius_threshold=0.020,
+        ulp_threshold=11,
+        check_ulp=True,
     )
 
     assert device.num_program_cache_entries() == 2
@@ -208,20 +224,22 @@ def test_softmax_cache_miss_different_input_dtypes(device, isolate_program_cache
     assert_numeric_metrics(
         torch_ref1,
         tt_out1,
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.992,
+        rtol=0.055,
+        atol=0.002,
+        frobenius_threshold=0.021,
+        ulp_threshold=11,
+        check_ulp=True,
     )
 
     torch_ref2, tt_out2 = run_softmax_4d(device, shape, dim=-1, dtype=ttnn.float32)
     assert_numeric_metrics(
         torch_ref2,
         tt_out2,
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.992,
+        rtol=0.044,
+        atol=0.001,
+        frobenius_threshold=0.019,
     )
 
     assert device.num_program_cache_entries() == 2
@@ -237,10 +255,10 @@ def test_softmax_cache_miss_different_memory_configs(device, isolate_program_cac
     assert_numeric_metrics(
         torch_ref1,
         tt_out1,
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.992,
+        rtol=0.058,
+        atol=0.002,
+        frobenius_threshold=0.021,
     )
 
     torch_ref2, tt_out2 = run_softmax_4d(
@@ -249,10 +267,10 @@ def test_softmax_cache_miss_different_memory_configs(device, isolate_program_cac
     assert_numeric_metrics(
         torch_ref2,
         tt_out2,
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.992,
+        rtol=0.058,
+        atol=0.002,
+        frobenius_threshold=0.021,
     )
 
     assert device.num_program_cache_entries() == 2
@@ -265,20 +283,20 @@ def test_softmax_cache_miss_different_shapes(device, isolate_program_cache):
     assert_numeric_metrics(
         torch_ref1,
         tt_out1,
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.991,
+        rtol=0.059,
+        atol=0.002,
+        frobenius_threshold=0.021,
     )
 
     torch_ref2, tt_out2 = run_softmax_4d(device, [1, 1, 64, 64], dim=-1, dtype=ttnn.bfloat16)
     assert_numeric_metrics(
         torch_ref2,
         tt_out2,
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.991,
+        rtol=0.059,
+        atol=0.002,
+        frobenius_threshold=0.021,
     )
 
     assert device.num_program_cache_entries() == 2
@@ -312,10 +330,12 @@ def test_scale_mask_softmax_cache_miss_different_mask_dtypes(device, isolate_pro
     assert_numeric_metrics(
         F.softmax(torch_a, dim=-1),
         ttnn.to_torch(tt_out1),
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.993,
+        rtol=0.056,
+        atol=0.002,
+        frobenius_threshold=0.021,
+        ulp_threshold=11,
+        check_ulp=True,
     )
 
     # Second call: mask in float32 (different dtype)
@@ -326,10 +346,12 @@ def test_scale_mask_softmax_cache_miss_different_mask_dtypes(device, isolate_pro
     assert_numeric_metrics(
         F.softmax(torch_a, dim=-1),
         ttnn.to_torch(tt_out2),
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.993,
+        rtol=0.056,
+        atol=0.002,
+        frobenius_threshold=0.021,
+        ulp_threshold=11,
+        check_ulp=True,
     )
 
     assert device.num_program_cache_entries() == 2
@@ -361,10 +383,10 @@ def test_scale_mask_softmax_cache_miss_different_mask_memory_configs(device, iso
     assert_numeric_metrics(
         F.softmax(torch_a, dim=-1),
         ttnn.to_torch(tt_out1),
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.993,
+        rtol=0.056,
+        atol=0.002,
+        frobenius_threshold=0.020,
     )
 
     # Second call: mask in L1 (different memory config)
@@ -376,10 +398,10 @@ def test_scale_mask_softmax_cache_miss_different_mask_memory_configs(device, iso
     assert_numeric_metrics(
         F.softmax(torch_a, dim=-1),
         ttnn.to_torch(tt_out2),
-        pcc_threshold=0.99,
-        rtol=0.08,
-        atol=0.08,
-        frobenius_threshold=0.08,
+        pcc_threshold=0.994,
+        rtol=0.056,
+        atol=0.002,
+        frobenius_threshold=0.020,
     )
 
     assert device.num_program_cache_entries() == 2

@@ -10,6 +10,10 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
+# Numeric thresholds derived from tests/ttnn/unit_tests/operations/fused/all_numeric_results_fused.csv
+# (test_rms_norm_numeric_results rows). Values use ~10% headroom on max_abs / max_rel /
+# frobenius and 3 decimal places; check_ulp is enabled only when ulp_threshold < 12.
+
 pytestmark = pytest.mark.use_module_device
 
 
@@ -33,10 +37,12 @@ def test_rms_norm(device, batch_size, h, w):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.99,
-        rtol=0.006,
-        atol=0.045,
+        pcc_threshold=0.999,
+        rtol=0.035,
+        atol=0.043,
         frobenius_threshold=0.008,
+        ulp_threshold=9,
+        check_ulp=True,
     )
 
 
@@ -83,9 +89,9 @@ def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx
         torch_output_tensor,
         output_tensor,
         pcc_threshold=0.999,
-        rtol=0.05,
-        atol=0.12,
-        frobenius_threshold=0.048,
+        rtol=0.091,
+        atol=0.129,
+        frobenius_threshold=0.052,
     )
 
 
@@ -108,7 +114,21 @@ def test_rms_norm_with_weight_and_residual(device, batch_size, h, w, dtype):
     output_tensor = ttnn.rms_norm(input_tensor, residual_input_tensor=residual_input_tensor, weight=weight)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_numeric_metrics(
-        torch_output_tensor, output_tensor, pcc_threshold=0.999, rtol=0.01, atol=0.065, frobenius_threshold=0.012
-    )
+    if dtype == torch.bfloat16:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.055,
+            atol=0.069,
+            frobenius_threshold=0.012,
+        )
+    else:
+        assert_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            pcc_threshold=0.999,
+            rtol=0.052,
+            atol=0.064,
+            frobenius_threshold=0.012,
+        )
