@@ -522,7 +522,7 @@ class ttMLA:
             is_balanced=self.is_balanced,
         )
         ttnn.synchronize_device(self.mesh_device)
-        ttnn.distributed_context_barrier()
+        # ttnn.distributed_context_barrier()
         end = time.time()
         logger.debug(f"SDPA time: {end - start}s")
 
