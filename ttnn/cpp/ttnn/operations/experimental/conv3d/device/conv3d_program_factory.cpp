@@ -126,7 +126,12 @@ Conv3dProgramFactory::cached_program_t Conv3dProgramFactory::create(
     // vol2col_tiled only needs K_t tiles (one tile-row) instead of M_t*K_t.
     // vol2col_rm only needs TILE_HEIGHT pages (one tile-row) since the fused loop
     // consumes one tile-row before the next is needed.
-    uint32_t vol2col_rm_pages = std::min(num_patches, (uint32_t)tt::constants::TILE_HEIGHT);
+    // Fused tilize+matmul needs at least TILE_HEIGHT pages per tile-row.
+    // Double-buffer (2x) when num_patches isn't tile-aligned to avoid CB deadlock
+    // between reader pushes and compute tilize pops on the partial last row.
+    uint32_t vol2col_rm_pages = (num_patches % tt::constants::TILE_HEIGHT == 0)
+                                    ? std::min(num_patches, (uint32_t)tt::constants::TILE_HEIGHT)
+                                    : std::min(num_patches, 2 * tt::constants::TILE_HEIGHT);
     uint32_t cb_vol2col_rm_id = next_cb_index++;
     tt::tt_metal::create_cb(
         cb_vol2col_rm_id, program, core_grid, padded_patch_size_bytes, vol2col_rm_pages, data_format);
