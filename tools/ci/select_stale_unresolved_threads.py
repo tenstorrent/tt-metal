@@ -9,6 +9,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+NON_ACTIONABLE_SUBTYPES = {
+    "channel_join",
+    "channel_leave",
+    "channel_topic",
+    "channel_purpose",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Filter Slack export to unresolved stale candidates.")
@@ -54,6 +61,10 @@ def main() -> int:
         ts = str(msg.get("ts", "")).strip()
         if not ts:
             continue
+        subtype = str(msg.get("subtype", "")).strip()
+        if subtype in NON_ACTIONABLE_SUBTYPES:
+            skipped.append({"ts": ts, "reason": f"non_actionable_subtype:{subtype}"})
+            continue
         try:
             ts_float = float(ts)
         except ValueError:
@@ -90,7 +101,13 @@ def main() -> int:
             }
         )
 
-    candidates.sort(key=lambda c: c["age_hours"], reverse=True)
+    # Prioritize actionable candidates with explicit issue linkage first, then oldest.
+    candidates.sort(
+        key=lambda c: (
+            0 if c.get("primary_issue_number") is not None else 1,
+            -float(c["age_hours"]),
+        )
+    )
     limited = candidates[: args.max_candidates]
     out_payload = {
         "generated_at_unix": now,
