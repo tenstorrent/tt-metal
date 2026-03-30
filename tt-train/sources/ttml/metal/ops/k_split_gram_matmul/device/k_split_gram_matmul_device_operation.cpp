@@ -31,7 +31,7 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
             input.logical_shape()[0],
             input.logical_shape()[1]);
     }
-    uint32_t K_tiles = input.logical_shape()[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t K_tiles = input.logical_shape()[-1] / tt::constants::TILE_WIDTH;
     TT_FATAL(K_tiles % 2 == 0, "K dimension ({} tiles) must be even for K-split", K_tiles);
 }
 
@@ -40,7 +40,7 @@ KSplitGramMatmulDeviceOperation::spec_return_value_t KSplitGramMatmulDeviceOpera
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
     }
-    uint32_t M = tensor_args.input_tensor.logical_shape()[-2];
+    const uint32_t M = tensor_args.input_tensor.logical_shape()[-2];
     auto shape = ttnn::Shape({1, 1, M, M});
     return ttnn::TensorSpec(
         shape,
