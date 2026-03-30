@@ -43,8 +43,8 @@ on:
           - wan22
 
   schedule:
-    # Run daily at 5 AM UTC
-    - cron: "0 5 * * *"
+    # Run daily at 4 AM UTC
+    - cron: "0 4 * * *"
 
 permissions:
   contents: write
