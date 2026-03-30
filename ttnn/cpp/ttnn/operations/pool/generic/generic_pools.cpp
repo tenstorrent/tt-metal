@@ -1003,10 +1003,10 @@ static std::vector<Tensor> pool2d(
         (kernel_size[0] >= input_h && kernel_size[1] >= input_w) &&
         (padding_check[0] == 0 && padding_check[1] == 0 && padding_check[2] == 0 && padding_check[3] == 0);
 
-    if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
+    if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D && batch_size == 1) {
         auto mem_config = memory_config.value_or(input_tensor_4d.memory_config());
 
-        // Reshape [N, H, W, C] -> [N, 1, H*W, C] then reduce along dim -2
+        // Reshape [1, H, W, C] -> [1, 1, H*W, C] then reduce along dim -2
         auto in_shape = input_tensor_4d.padded_shape();
         auto in_logical = input_tensor_4d.logical_shape();
         ttnn::Shape reshaped({in_shape[0], 1, in_shape[1] * in_shape[2], in_shape[3]});
@@ -1019,7 +1019,7 @@ static std::vector<Tensor> pool2d(
         Tensor output = ttnn::operations::reduction::pool_sum(
             reshaped_input, int(reshaped.rank() - 2), mem_config, compute_kernel_config, scalar);
 
-        // Fix output shape to [N, 1, 1, C] with correct logical channel count
+        // Fix output shape to [1, 1, 1, C] with correct logical channel count
         auto output_padded = output.padded_shape();
         ttnn::Shape correct_logical({output_padded[0], 1, 1, channels});
         ttnn::Shape correct_padded({output_padded[0], 1, 1, output_padded[3]});
