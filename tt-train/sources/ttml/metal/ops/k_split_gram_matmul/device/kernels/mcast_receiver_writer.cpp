@@ -4,7 +4,6 @@
 //
 // Multicast receiver + output writer — runs on RISCV_0 (row direction) or RISCV_1 (col edge).
 // Receives multicast K-blocks, then per (m_sub, n_sub) handles output:
-//   Default:      writes compute output to DRAM.
 //   REDUCE_SEND:  NOC-writes compute partial to partner's reduce CB.
 //   REDUCE_RECV:  waits for partner's partial, then writes combined output to DRAM.
 
@@ -29,21 +28,14 @@ void kernel_main() {
     constexpr uint32_t num_m_blocks = get_compile_time_arg_val(11);
     constexpr uint32_t M_block = get_compile_time_arg_val(12);
     constexpr uint32_t num_n_blocks = get_compile_time_arg_val(13);
-#else
+#else  // REDUCE_RECV
     constexpr uint32_t padded_out_tiles = get_compile_time_arg_val(9);
-#ifdef REDUCE_RECV
     constexpr uint32_t reduce_cb = get_compile_time_arg_val(10);
     uint32_t reduce_sem_addr = get_semaphore(get_compile_time_arg_val(11));
     constexpr uint32_t num_m_blocks = get_compile_time_arg_val(12);
     constexpr uint32_t M_block = get_compile_time_arg_val(13);
     constexpr uint32_t num_n_blocks = get_compile_time_arg_val(14);
     constexpr auto out_tensor_args = TensorAccessorArgs<15>();
-#else
-    constexpr uint32_t num_m_blocks = get_compile_time_arg_val(10);
-    constexpr uint32_t M_block = get_compile_time_arg_val(11);
-    constexpr uint32_t num_n_blocks = get_compile_time_arg_val(12);
-    constexpr auto out_tensor_args = TensorAccessorArgs<13>();
-#endif
 #endif
 
     uint32_t argidx = 0;
@@ -53,7 +45,7 @@ void kernel_main() {
 #ifdef REDUCE_SEND
     const uint32_t partner_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t partner_noc_y = get_arg_val<uint32_t>(argidx++);
-#else
+#else  // REDUCE_RECV
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -71,7 +63,7 @@ void kernel_main() {
     const uint64_t sender_sem_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_semaphore_addr);
 
     constexpr uint32_t num_blocks = num_tiles / block_size;
-    constexpr uint32_t N_block = M_block;  // N_block = M_block always
+    constexpr uint32_t N_block = M_block;
 
     for (uint32_t m_sub = 0; m_sub < num_m_blocks; m_sub++) {
         uint32_t M_start = m_sub * M_block;
@@ -105,8 +97,7 @@ void kernel_main() {
                 noc_semaphore_inc(partner_sem_noc, 1);
                 cb_pop_front(cb_out, block_tiles);
             }
-#else
-#ifdef REDUCE_RECV
+#else  // REDUCE_RECV
             {
                 volatile tt_l1_ptr uint32_t* reduce_sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sem_addr);
@@ -115,11 +106,9 @@ void kernel_main() {
                 noc_semaphore_set(reduce_sem_ptr, 0);
                 cb_push_back(reduce_cb, block_tiles);
             }
-#endif
             {
                 const auto out_writer = TensorAccessor(out_tensor_args, out_addr, out_tile_size);
 
-                // Row-major write: compute pushes rows of current_N tiles
                 for (uint32_t m = 0; m < current_M_block; m++) {
                     cb_wait_front(cb_out, current_N);
                     uint32_t l1_read_addr = get_read_ptr(cb_out);
