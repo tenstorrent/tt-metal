@@ -61,9 +61,9 @@ def run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subproce
     return proc
 
 
-def run_guarded_gh(tokens: list[str], *, capture: bool = True) -> subprocess.CompletedProcess[str]:
+def run_guarded_gh(tokens: list[str], *, capture: bool = True, check: bool = True) -> subprocess.CompletedProcess[str]:
     command_str = " ".join(shlex.quote(tok) for tok in tokens)
-    return run([*GUARDED_GH, "--command", command_str], capture=capture)
+    return run([*GUARDED_GH, "--command", command_str], capture=capture, check=check)
 
 
 def prepare_guarded_gh_runtime_copy() -> None:
@@ -98,6 +98,23 @@ def ensure_no_duplicate_open_pr(source_ts: str) -> str | None:
         if marker in (pr.get("body") or ""):
             return pr.get("url")
     return None
+
+
+def is_pr_open(pr_url: str) -> bool:
+    pr_number = parse_pr_number(pr_url)
+    if pr_number <= 0:
+        return False
+    viewed = run_guarded_gh(
+        ["gh", "pr", "view", "--repo", REPO, str(pr_number), "--json", "state"],
+        check=False,
+    )
+    if viewed.returncode != 0:
+        return False
+    try:
+        payload = json.loads(viewed.stdout or "{}")
+    except json.JSONDecodeError:
+        return False
+    return str(payload.get("state", "")).upper() == "OPEN"
 
 
 def parse_agent_json_after_marker(text: str, marker: str) -> dict[str, Any]:
@@ -530,6 +547,16 @@ def main() -> int:
             continue
 
         active_pr_url = state_has_active_pr(item)
+        if active_pr_url and not args.dry_run and not is_pr_open(active_pr_url):
+            item["disable_pr"] = {"number": 0, "url": "", "branch": "", "head_sha": ""}
+            set_status(
+                item,
+                "new",
+                event="active_pr_not_open_anymore",
+                details=f"Previously tracked PR is no longer open: {active_pr_url}",
+            )
+            result["state_updates"] += 1
+            active_pr_url = None
         if active_pr_url:
             result["skipped"].append(
                 {
