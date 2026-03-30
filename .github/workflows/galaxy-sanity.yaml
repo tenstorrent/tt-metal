@@ -33,20 +33,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-      extra-tag:
-        required: false
-        type: string
-        default: "in-service"
   schedule:
     # Every 2 hours (UTC)
     - cron: "0 */2 * * *"
 
-run-name: >
-  ${{
-    ((github.event.inputs.arch == 'blackhole') && '(BH Galaxy) Sanity') ||
-    ((github.event.inputs.arch == 'wormhole_b0') && '(WH Galaxy) Sanity') ||
-    '(Unspecified Galaxy) Sanity'
-  }}
+run-name: "(Galaxy) Sanity"
 
 permissions:
   packages: write
@@ -72,4 +63,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      extra-tag: ${{ inputs.extra-tag || 'in-service' }}
+      enabled-skus: wh_galaxy,wh_galaxy_perf

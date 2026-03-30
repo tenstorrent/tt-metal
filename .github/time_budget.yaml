@@ -94,12 +94,16 @@ scaleout:
   health:
     wh_galaxy: 15
     bh_galaxy: 10
+  sanity:
+    wh_galaxy: 20
   e2e:
     wh_llmbox: 185
     wh_galaxy: 100
     bh_galaxy: 60
 
 models:
+  sanity:
+    wh_galaxy_perf: 10
   e2e:
     wh_llmbox: 198
     wh_llmbox_perf: 90
