@@ -2,5 +2,5 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Trivial change to trigger merge gate triage tests2
+// Trivial change to trigger merge gate triage tests3
 void kernel_main() {}
