@@ -121,20 +121,6 @@ class ttMLA:
             ),
         )
 
-        # KV cache for prefill — each SP device holds its local chunk of the cache
-        # Replicated across the mesh since each device stores only its local seq portion
-        sp_factor = mesh_device.shape[sp_axis]
-        seq_len_local = seq_len // sp_factor
-
-        self.kvpe_cache = ttnn.from_torch(
-            torch.zeros(1, 1, seq_len_local, self.kv_lora_rank + self.qk_rope_head_dim),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-
         # Pre-allocate dummy joint tensors for ring_joint_scaled_dot_product_attention (seq_len=0)
         num_heads_local = self.num_heads // self.tp_factor
         joint_shard_dims = [None, None]
@@ -314,7 +300,7 @@ class ttMLA:
             return {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": self.MM_DEFAULT_DTYPES[weight_name]}
         return {
             "memory_config": cfg["out_mem_config"],
-            "program_config": cfg["program_config"],
+            "program_config": None,
             "dtype": cfg["out_dtype"],
         }
 
@@ -332,7 +318,7 @@ class ttMLA:
 
     # Expects ativation in form of:
     # [1, batch_size == 1, seq_len // sp_factor, hidden_size // tp_factor]
-    def forward(self, hidden_states: ttnn.Tensor, rope_tensors: dict) -> ttnn.Tensor:
+    def forward(self, hidden_states: ttnn.Tensor, rope_tensors: dict, kvpe_cache: ttnn.Tensor) -> ttnn.Tensor:
         mesh_size = self.mesh_device.shape
         sp_factor = mesh_size[0]
         tp_factor = mesh_size[1]
@@ -475,7 +461,7 @@ class ttMLA:
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
 
         # Update KV cache with compressed latent representation
-        ttnn.kv_cache.fill_cache_for_user_(self.kvpe_cache, tt_kvpe, 0)
+        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, 0)
 
         # expand v with wkv_b2
         # TODO: workaround for #37416, remove when resolved

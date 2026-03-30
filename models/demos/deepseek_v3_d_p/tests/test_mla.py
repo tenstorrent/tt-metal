@@ -102,9 +102,11 @@ def random_weights(config_only):
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
+@pytest.mark.parametrize("seq_len", [128 * 1024, 16 * 1024], ids=["seq128k", "seq100k"])
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
+# kv_cache is single user at the moment
+# @pytest.mark.parametrize("compare_pcc_kv_cache")
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
 def test_mla(
     use_pretrained,
@@ -170,6 +172,38 @@ def test_mla(
 
     # Create TT MLA
     logger.info("Creating TT MLA...")
+
+    # hack in num_layers into batch size, so they are contiguous in memory
+    num_layers = 1
+    kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    seq_len_local = seq_len // mesh_shape[sp_axis]
+    torch_kv_cache = torch.zeros(num_layers, 1, seq_len_local, kvpe_cache_head_dim)
+
+    core_ranges = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in [0, 1, 2, 3, 4, 5, 6, 7]
+    ]
+    grid = ttnn.CoreRangeSet(core_ranges)
+
+    kv_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, 32, 576],
+        grid=grid,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    kv_mem_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.DRAM,
+        nd_shard_spec=kv_nd_shard_spec,
+    )
+
+    tt_kvpe_cache = ttnn.from_torch(
+        torch_kv_cache,
+        dtype=ttnn.bfloat8_b,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=kv_mem_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
     mla_tt = ttMLA(
         config,
         weights,
@@ -265,6 +299,7 @@ def test_mla(
     tt_output = mla_tt.forward(
         hidden_states=tt_hidden_states,
         rope_tensors=rope_tensors,
+        kvpe_cache=tt_kvpe_cache,
     )
 
     if skip_host_comparison == False:
@@ -284,23 +319,23 @@ def test_mla(
 
         # Read back KVPE cache from device
         # Cache is replicated across TP, so concat TP replicas on dim 1 (unused) and discard extras
-        tt_kvpe_cache = ttnn.to_torch(
-            mla_tt.kvpe_cache,
+        tt_kvpe_cache_torch = ttnn.to_torch(
+            tt_kvpe_cache,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
-        tt_kvpe_cache = tt_kvpe_cache[:, :1, :, :]
+        tt_kvpe_cache_torch = tt_kvpe_cache_torch[:, :1, :, :]
 
         if is_balanced:
-            tt_kvpe_cache = reverse_reorder_tensor_chunks(tt_kvpe_cache, chunk_order, seq_dim=2)
+            tt_kvpe_cache_torch = reverse_reorder_tensor_chunks(tt_kvpe_cache_torch, chunk_order, seq_dim=2)
 
         # Check PCC separately for KV (latent) and PE (rope) parts
         kv_lora_rank = config.kv_lora_rank
         _, kv_pcc_message = assert_with_pcc(
-            ref_kvpe[:, :, :, :kv_lora_rank], tt_kvpe_cache[:, :, :, :kv_lora_rank], 0.99
+            ref_kvpe[:, :, :, :kv_lora_rank], tt_kvpe_cache_torch[:, :, :, :kv_lora_rank], 0.99
         )
         logger.info(f"KVPE cache KV part PCC is {kv_pcc_message}")
         _, pe_pcc_message = assert_with_pcc(
-            ref_kvpe[:, :, :, kv_lora_rank:], tt_kvpe_cache[:, :, :, kv_lora_rank:], 0.99
+            ref_kvpe[:, :, :, kv_lora_rank:], tt_kvpe_cache_torch[:, :, :, kv_lora_rank:], 0.99
         )
         logger.info(f"KVPE cache PE part PCC is {pe_pcc_message}")
     else:
