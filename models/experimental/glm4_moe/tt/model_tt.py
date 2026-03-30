@@ -2704,8 +2704,8 @@ class Glm4MoeTT:
         pad_multiple = max(128, int(seq_pad_multiple))
         is_mesh = _is_mesh_device(self.device)
 
-        # Prefill chunk size (16K tokens, matching DSv3 pattern for activation memory).
-        PREFILL_CHUNK_SIZE = int(os.environ.get("GLM4_MOE_PREFILL_CHUNK_SIZE", "16384") or "16384")
+        # Prefill chunk size (default 128K; override with GLM4_MOE_PREFILL_CHUNK_SIZE; lower to reduce peak activation memory).
+        PREFILL_CHUNK_SIZE = int(os.environ.get("GLM4_MOE_PREFILL_CHUNK_SIZE", "131072") or "131072")
 
         out_logits: list[torch.Tensor] = []
 

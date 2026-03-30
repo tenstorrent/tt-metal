@@ -315,6 +315,7 @@ def moe_topk_tt(
     hparams: Glm4MoeHParams,
     compute_kernel_config: Any | None = None,
     router_program_config: Any | None = None,
+    minimal_matmul_config: Any | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return (topk_weights, topk_indices) for routed experts.
 
@@ -332,15 +333,21 @@ def moe_topk_tt(
     use_l1 = int(x.shape[2]) <= 64  # decode mode only (MoE sees full batch, not DP-split)
     mc = ttnn.L1_MEMORY_CONFIG if use_l1 else None
 
-    linear_kwargs: dict[str, Any] = {}
-    if compute_kernel_config is not None:
-        linear_kwargs["compute_kernel_config"] = compute_kernel_config
-    if mc is not None:
-        linear_kwargs["memory_config"] = mc
-    if router_program_config is not None:
-        linear_kwargs["program_config"] = router_program_config
+    if minimal_matmul_config is not None:
+        mm_kw: dict[str, Any] = {"config": minimal_matmul_config}
+        if compute_kernel_config is not None:
+            mm_kw["compute_kernel_config"] = compute_kernel_config
+        logits = ttnn.experimental.minimal_matmul(x, moe_w.w_gate, **mm_kw)
+    else:
+        linear_kwargs: dict[str, Any] = {}
+        if compute_kernel_config is not None:
+            linear_kwargs["compute_kernel_config"] = compute_kernel_config
+        if mc is not None:
+            linear_kwargs["memory_config"] = mc
+        if router_program_config is not None:
+            linear_kwargs["program_config"] = router_program_config
 
-    logits = ttnn.linear(x, moe_w.w_gate, **linear_kwargs)  # [1,1,T,96]
+        logits = ttnn.linear(x, moe_w.w_gate, **linear_kwargs)  # [1,1,T,96]
     scores = ttnn.sigmoid(logits, memory_config=mc) if mc else ttnn.sigmoid(logits)
     ttnn.deallocate(logits, force=False)
 
@@ -939,8 +946,33 @@ def shared_expert_forward_tt(
     compute_kernel_config: Any | None = None,
     gate_up_program_config: Any | None = None,
     down_program_config: Any | None = None,
+    minimal_matmul_config: Any | None = None,
 ) -> ttnn.Tensor:
     """Standard TP-sharded gate-up-SiLU-down MLP for the shared expert."""
+    if minimal_matmul_config is not None:
+        mm_kw: dict[str, Any] = {"config": minimal_matmul_config}
+        if compute_kernel_config is not None:
+            mm_kw["compute_kernel_config"] = compute_kernel_config
+        if w_gate_up is not None:
+            gate_up = ttnn.experimental.minimal_matmul(x, w_gate_up, **mm_kw)
+            inter_tp = gate_up.shape[-1] // 2
+            gate = ttnn.slice(gate_up, [0, 0, 0, 0], [gate_up.shape[0], gate_up.shape[1], gate_up.shape[2], inter_tp])
+            up = ttnn.slice(
+                gate_up,
+                [0, 0, 0, inter_tp],
+                [gate_up.shape[0], gate_up.shape[1], gate_up.shape[2], gate_up.shape[-1]],
+            )
+            ttnn.deallocate(gate_up, force=False)
+        else:
+            gate = ttnn.experimental.minimal_matmul(x, w_gate, **mm_kw)
+            up = ttnn.experimental.minimal_matmul(x, w_up, **mm_kw)
+        x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        ttnn.deallocate(gate, force=False)
+        ttnn.deallocate(up, force=False)
+        out = ttnn.experimental.minimal_matmul(x_ff, w_down, **mm_kw)
+        ttnn.deallocate(x_ff, force=False)
+        return out
+
     kwargs: dict[str, Any] = {"memory_config": memory_config}
     if compute_kernel_config is not None:
         kwargs["compute_kernel_config"] = compute_kernel_config

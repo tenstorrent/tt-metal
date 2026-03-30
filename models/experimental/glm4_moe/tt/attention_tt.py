@@ -485,6 +485,26 @@ class Glm4MoeAttention(LightweightModule):
         self._prefill_prog_cfg_cache[cache_key] = cfg
         return cfg
 
+    def _get_minimal_matmul_config(self):
+        """Return a MinimalMatmulConfig for large-sequence prefill matmuls.
+
+        Unlike MatmulMultiCoreReuseMultiCastProgramConfig, MinimalMatmulConfig
+        has no num_blocks_y <= num_cores_y constraint, so it works for arbitrary
+        M dimensions (including fuse_batch with many batches).  This mirrors the
+        Llama Galaxy approach from tt_transformers/tt/attention.py.
+
+        Block sizes are kept at 4 to fit within Wormhole L1 SRAM (1499136 B)
+        given GLM's large hidden_size (K=5120) for QKV.
+        """
+        if not hasattr(self, "_minimal_mm_cfg"):
+            self._minimal_mm_cfg = ttnn.MinimalMatmulConfig(
+                M_block_size=4,
+                K_block_size=4,
+                N_block_size=4,
+                compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            )
+        return self._minimal_mm_cfg
+
     def _get_shard_cfgs(self, batch: int, prefetch: bool = False) -> dict:
         """Return per-batch shard configs (lazily created and cached).
 
@@ -1083,33 +1103,43 @@ class Glm4MoeAttention(LightweightModule):
             x = ttnn.reshape(x, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
         _wqkv = self.wqkv_interleaved if self.wqkv_interleaved is not None else self.wqkv
-        # Explicit program_config prevents TG mesh auto-config hang
-        _mm_seq = min(seq_len, self.MAX_QKV_MM_SEQ_LEN)
-        _qkv_pc = (
-            self._get_prefill_program_config(_mm_seq, int(_wqkv.shape[2]), int(_wqkv.shape[3]), label="qkv")
-            if self.TG
-            else None
-        )
-        _qkv_kwargs = {}
-        if _qkv_pc is not None:
-            _qkv_kwargs["program_config"] = _qkv_pc
 
-        # Debug: print weight info to verify correct tensor is used
+        _use_minimal_mm = self.TG and seq_len > 128
+
         print(
             f"      [ATTN PREFILL] QKV matmul: x.shape={list(x.shape)}, w.shape={list(_wqkv.shape)}, "
             f"w.memory_config={_wqkv.memory_config()}, using_interleaved={self.wqkv_interleaved is not None}, "
-            f"pc={'explicit' if _qkv_pc else 'auto'}, dtype={self.ccl_dtype if self.TG else 'bf16'}",
+            f"minimal_matmul={_use_minimal_mm}, dtype={self.ccl_dtype if self.TG else 'bf16'}",
             flush=True,
             file=sys.stderr,
         )
-        xqkv = ttnn.linear(
-            x,
-            _wqkv,
-            dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-            **_qkv_kwargs,
-        )
+
+        if _use_minimal_mm:
+            xqkv = ttnn.experimental.minimal_matmul(
+                x,
+                _wqkv,
+                compute_kernel_config=self.compute_kernel_config,
+                config=self._get_minimal_matmul_config(),
+            )
+        else:
+            _mm_seq = min(seq_len, self.MAX_QKV_MM_SEQ_LEN)
+            _qkv_pc = (
+                self._get_prefill_program_config(_mm_seq, int(_wqkv.shape[2]), int(_wqkv.shape[3]), label="qkv")
+                if self.TG
+                else None
+            )
+            _qkv_kwargs = {}
+            if _qkv_pc is not None:
+                _qkv_kwargs["program_config"] = _qkv_pc
+            xqkv = ttnn.linear(
+                x,
+                _wqkv,
+                dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+                **_qkv_kwargs,
+            )
+
         print(f"      [ATTN PREFILL] QKV matmul issued (async), syncing...", flush=True, file=sys.stderr)
 
         _sync("after QKV linear")
@@ -1266,25 +1296,39 @@ class Glm4MoeAttention(LightweightModule):
 
         # 9. Output projection (BF16 output for precision through 92 layers)
         _wo = self.wo_interleaved if self.wo_interleaved is not None else self.wo
-        _o_mm_seq = min(seq_len, _oproj_thresh)
-        _o_pc = (
-            self._get_prefill_program_config(_o_mm_seq, int(_wo.shape[2]), int(_wo.shape[3]), label="o_proj")
-            if self.TG
-            else None
-        )
-        _o_kwargs = {}
-        if _o_pc is not None:
-            _o_kwargs["program_config"] = _o_pc
+        _use_minimal_o = self.TG and seq_len > 128
 
-        print(f"      [ATTN PREFILL] before O-proj linear...", flush=True, file=sys.stderr)
-        output = ttnn.linear(
-            attn_output,
-            _wo,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config,
-            **_o_kwargs,
+        print(
+            f"      [ATTN PREFILL] before O-proj linear (minimal_matmul={_use_minimal_o})...",
+            flush=True,
+            file=sys.stderr,
         )
+
+        if _use_minimal_o:
+            output = ttnn.experimental.minimal_matmul(
+                attn_output,
+                _wo,
+                compute_kernel_config=self.compute_kernel_config,
+                config=self._get_minimal_matmul_config(),
+            )
+        else:
+            _o_mm_seq = min(seq_len, _oproj_thresh)
+            _o_pc = (
+                self._get_prefill_program_config(_o_mm_seq, int(_wo.shape[2]), int(_wo.shape[3]), label="o_proj")
+                if self.TG
+                else None
+            )
+            _o_kwargs = {}
+            if _o_pc is not None:
+                _o_kwargs["program_config"] = _o_pc
+            output = ttnn.linear(
+                attn_output,
+                _wo,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.compute_kernel_config,
+                **_o_kwargs,
+            )
         _sync("after O-proj linear")
 
         if seq_len > _oproj_thresh:

@@ -62,6 +62,21 @@ def _tp_cluster_axis(device: Any) -> int | None:
 
 _prefill_prog_cfg_cache: dict[str, object] = {}  # module-level cache for prefill program configs
 
+# TG long-sequence prefill: 2D mcast matmul CBs exceed WH L1 (~1.5MB); use minimal_matmul instead.
+_tg_prefill_minimal_mm_cfg: Any | None = None
+
+
+def _get_tg_prefill_minimal_matmul_config() -> ttnn.MinimalMatmulConfig:
+    global _tg_prefill_minimal_mm_cfg
+    if _tg_prefill_minimal_mm_cfg is None:
+        _tg_prefill_minimal_mm_cfg = ttnn.MinimalMatmulConfig(
+            M_block_size=4,
+            K_block_size=4,
+            N_block_size=4,
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+        )
+    return _tg_prefill_minimal_mm_cfg
+
 
 def _make_prefill_matmul_program_config(seq_len: int, K: int, N: int, label: str = ""):
     """Build explicit MatmulMultiCoreReuseMultiCastProgramConfig for prefill on TG mesh.
@@ -588,18 +603,22 @@ class Glm4MoeDecoderLayer:
         seq_len = x.shape[2]
         _is_tg = tp_axis is not None and tp_axis == 0  # TG mesh: TP on axis 0
         if self.is_dense_layer:
-            # On TG, provide explicit program configs to avoid auto-config hang
+            # On TG, explicit 2D mcast configs avoid auto-config hang for short seq; long seq overflows L1
+            # (same ~1.59MB CB budget as attention) — use minimal_matmul like attention_tt.
+            _sl = int(seq_len)
+            _tg_mm = _is_tg and _sl > 128
+            _mm_cfg = _get_tg_prefill_minimal_matmul_config() if _tg_mm else None
             _gu_pc = None
             _dn_pc = None
-            if _is_tg:
+            if _is_tg and not _tg_mm:
                 _gu_pc = _make_prefill_matmul_program_config(
-                    seq_len,
+                    _sl,
                     int(w.w_mlp_gate.shape[2]),
                     int(w.w_mlp_gate.shape[3]),
                     label=f"mlp_gate_up_L{_lid}",
                 )
                 _dn_pc = _make_prefill_matmul_program_config(
-                    seq_len,
+                    _sl,
                     int(w.w_mlp_down.shape[2]),
                     int(w.w_mlp_down.shape[3]),
                     label=f"mlp_down_L{_lid}",
@@ -612,6 +631,7 @@ class Glm4MoeDecoderLayer:
                 compute_kernel_config=mlp_compute_kernel_config,
                 gate_up_program_config=_gu_pc,
                 down_program_config=_dn_pc,
+                minimal_matmul_config=_mm_cfg,
             )
             ttnn.deallocate(h, force=False)
             if tp_enabled:
@@ -675,12 +695,26 @@ class Glm4MoeDecoderLayer:
         compute_kernel_config: Any | None = None,
         gate_up_program_config: Any | None = None,
         down_program_config: Any | None = None,
+        minimal_matmul_config: Any | None = None,
     ) -> ttnn.Tensor:
         """Dense MLP: gate_proj * SiLU(up_proj) -> down_proj.
 
         gate/up are column-parallel (sharded output dim by TP=8).
         down is row-parallel (sharded input dim by TP=8, needs all_reduce).
         """
+        if minimal_matmul_config is not None:
+            mm_kw: dict[str, Any] = {"config": minimal_matmul_config}
+            if compute_kernel_config is not None:
+                mm_kw["compute_kernel_config"] = compute_kernel_config
+            gate = ttnn.experimental.minimal_matmul(x, w_gate, **mm_kw)
+            up = ttnn.experimental.minimal_matmul(x, w_up, **mm_kw)
+            x_ff = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+            ttnn.deallocate(gate, force=False)
+            ttnn.deallocate(up, force=False)
+            out = ttnn.experimental.minimal_matmul(x_ff, w_down, **mm_kw)
+            ttnn.deallocate(x_ff, force=False)
+            return out
+
         kwargs: dict[str, Any] = {"memory_config": ttnn.DRAM_MEMORY_CONFIG}
         if compute_kernel_config is not None:
             kwargs["compute_kernel_config"] = compute_kernel_config
@@ -727,54 +761,75 @@ class Glm4MoeDecoderLayer:
 
         tokens = int(x.shape[2])
 
-        # Pad tokens for sparse expert alignment.
+        # Outer padding aligns tokens for all-to-all dispatch (A2A path).
+        # For REAP decode path: inner moe_sparse_experts_forward_tt pads to block=32
+        # itself, so the outer sparse_multiple alignment is unnecessary. Skip it for
+        # decode to avoid (a) extra FillPad ops and (b) blocking the router fast path.
         pad_tokens = 0
-        if moe_runtime is not None:
+        if moe_runtime is not None and is_tg_prefill:
             sparse_multiple = _moe_sparse_tokens_multiple(device=device, moe_runtime=moe_runtime)
             pad_tokens = (-tokens) % sparse_multiple
             if pad_tokens:
                 x = ttnn.pad(x, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
 
-        # On TG mesh prefill, build explicit program configs for matmuls
+        # On TG mesh prefill, build explicit program configs for matmuls (short seq only; long seq → L1 overflow)
         _shared_gu_pc = None
         _shared_dn_pc = None
         _router_pc = None
+        _mm_cfg = None
         _lid = getattr(w, "layer_idx", "?")
         if is_tg_prefill:
-            _t = tokens + pad_tokens
-            if w.w_mlp_gate_up is not None:
-                _shared_gu_pc = _make_prefill_matmul_program_config(
-                    _t,
-                    int(w.w_mlp_gate_up.shape[2]),
-                    int(w.w_mlp_gate_up.shape[3]),
-                    label=f"shared_gate_up_L{_lid}",
-                )
-            elif w.w_mlp_gate is not None:
-                _shared_gu_pc = _make_prefill_matmul_program_config(
-                    _t,
-                    int(w.w_mlp_gate.shape[2]),
-                    int(w.w_mlp_gate.shape[3]),
-                    label=f"shared_gate_L{_lid}",
-                )
-            if w.w_mlp_down is not None:
-                _shared_dn_pc = _make_prefill_matmul_program_config(
-                    _t,
-                    int(w.w_mlp_down.shape[2]),
-                    int(w.w_mlp_down.shape[3]),
-                    label=f"shared_down_L{_lid}",
-                )
-            if moe_w is not None and moe_w.w_gate is not None:
-                _router_pc = _make_prefill_matmul_program_config(
-                    _t,
-                    int(moe_w.w_gate.shape[2]),
-                    int(moe_w.w_gate.shape[3]),
-                    label=f"router_L{_lid}",
-                )
+            _t = int(x.shape[2])  # x already padded above for prefill
+            _tg_mm = _t > 128
+            if _tg_mm:
+                _mm_cfg = _get_tg_prefill_minimal_matmul_config()
+            else:
+                if w.w_mlp_gate_up is not None:
+                    _shared_gu_pc = _make_prefill_matmul_program_config(
+                        _t,
+                        int(w.w_mlp_gate_up.shape[2]),
+                        int(w.w_mlp_gate_up.shape[3]),
+                        label=f"shared_gate_up_L{_lid}",
+                    )
+                elif w.w_mlp_gate is not None:
+                    _shared_gu_pc = _make_prefill_matmul_program_config(
+                        _t,
+                        int(w.w_mlp_gate.shape[2]),
+                        int(w.w_mlp_gate.shape[3]),
+                        label=f"shared_gate_L{_lid}",
+                    )
+                if w.w_mlp_down is not None:
+                    _shared_dn_pc = _make_prefill_matmul_program_config(
+                        _t,
+                        int(w.w_mlp_down.shape[2]),
+                        int(w.w_mlp_down.shape[3]),
+                        label=f"shared_down_L{_lid}",
+                    )
+                if moe_w is not None and moe_w.w_gate is not None:
+                    _router_pc = _make_prefill_matmul_program_config(
+                        _t,
+                        int(moe_w.w_gate.shape[2]),
+                        int(moe_w.w_gate.shape[3]),
+                        label=f"router_L{_lid}",
+                    )
 
         moe_decode_mc = (
             getattr(moe_runtime, "decode_memory_config", ttnn.DRAM_MEMORY_CONFIG)
             if moe_runtime
             else ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        # ---- Router: run BEFORE decode-path padding ----
+        # For decode (tokens==1): scores.shape[2]==1 → uses e_score_correction_bias_tile
+        # (pre-tiled bias) instead of RepeatDeviceOperation, saving 89x repeat ops/step.
+        # For prefill: x was already padded above so _router_pc shape matches.
+        topk_weights, topk_indices = moe_topk_tt(
+            x=x,
+            moe_w=moe_w,
+            hparams=hparams,
+            compute_kernel_config=compute_kernel_config,
+            router_program_config=_router_pc,
+            minimal_matmul_config=_mm_cfg,
         )
 
         # ---- Shared expert (dense MLP, runs on all tokens) ----
@@ -788,18 +843,11 @@ class Glm4MoeDecoderLayer:
             compute_kernel_config=compute_kernel_config,
             gate_up_program_config=_shared_gu_pc,
             down_program_config=_shared_dn_pc,
+            minimal_matmul_config=_mm_cfg,
         )
         # NOTE: No TP reduce here — fused with EP reduce below
 
         # ---- Routed experts (skip EP reduce — will fuse with shared TP reduce) ----
-        topk_weights, topk_indices = moe_topk_tt(
-            x=x,
-            moe_w=moe_w,
-            hparams=hparams,
-            compute_kernel_config=compute_kernel_config,
-            router_program_config=_router_pc,
-        )
-
         routed_out_partial = moe_sparse_experts_forward_tt(
             device=device,
             hidden_states=x,
