@@ -713,13 +713,13 @@ class ModelOptimisations1024x1024BH:
         self.sdpa_configs = {}
         self.sdpa_configs["1024_K"] = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(11, 10),
-            q_chunk_size=128,
-            k_chunk_size=1024,
+            q_chunk_size=224,
+            k_chunk_size=512,
             exp_approx_mode=False,
         )
         self.sdpa_configs["512_K"] = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(11, 10),
-            q_chunk_size=128,
+            q_chunk_size=192,
             k_chunk_size=512,
             exp_approx_mode=False,
         )

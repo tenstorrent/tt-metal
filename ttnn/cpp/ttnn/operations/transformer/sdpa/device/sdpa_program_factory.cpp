@@ -400,6 +400,12 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         Sk,
         Sq_chunk_t);
 
+    // In the streaming path, prefer (1, 8) QK subblock for wider K-tile throughput per iteration.
+    if (use_streaming_compute && Sk_chunk_t % 8 == 0) {
+        qk_out_subblock_h = 1;
+        qk_out_subblock_w = std::min(Sk_chunk_t, dst_size);
+    }
+
     const bool lightweight_mask = use_streaming_compute && use_padded_mask;
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
