@@ -325,7 +325,14 @@ class TextModel(LightweightModule):
         """
         if rot_mats is None:
             assert rot_mat_idxs is not None, "Either rot_mats or rot_mat_idxs must be provided"
-            rot_mats = self.rotary_setup.get_rot_mats_decode_traced(rot_mat_idxs)
+            # Determine batch size from hidden_states shape [1, 1, batch, hidden_dim]
+            batch_size = hidden_states.shape[2]
+            if batch_size > 1:
+                # Use batched rot_mats that gather per-position cos/sin values
+                rot_mats = self.rotary_setup.get_rot_mats_decode_batched(rot_mat_idxs)
+            else:
+                # Use traced path with full cache (for batch=1 traced decode)
+                rot_mats = self.rotary_setup.get_rot_mats_decode_traced(rot_mat_idxs)
 
         # Get decode transformation matrix
         transformation_mat = self.transformation_mats["decode"]
