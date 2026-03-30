@@ -10,7 +10,7 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 - name: whisper performance
-  cmd: pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  cmd: pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation" --timeout=600
   skus:
     bh_p150_perf:
       timeout: 10
@@ -19,7 +19,7 @@
   model-name: whisper
 
 - name: whisper nightly
-  cmd: pytest tests/nightly/single_card/whisper
+  cmd: pytest tests/nightly/single_card/whisper --timeout=600
   skus:
     bh_p150:
       timeout: 10
@@ -318,10 +318,10 @@
 
 - name: stable_diffusion_xl demos
   cmd: >-
-    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
-    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
-    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
-    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
+    pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_base_and_refiner.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_img2img.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel" &&
+    pytest models/demos/stable_diffusion_xl_base/demo/demo_inpainting.py -k "device_vae and device_encoders and with_trace and no_cfg_parallel"
   skus:
     bh_p150b_civ2:
       timeout: 120

@@ -11,7 +11,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/variant.h>  // needed for DeviceComputerKernelConfig
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
@@ -162,9 +162,8 @@ void py_module(nb::module_& mod) {
                 ttnn.Tensor: the reallocated tensor.
         )doc");
 
-    bind_registered_operation(
+    ttnn::bind_function<"to_memory_config">(
         mod,
-        ttnn::to_memory_config,
         R"doc(
         Converts a tensor to the desired memory configuration. Used for converting tensors to sharded tensors, interleaved tensors, or converting between DRAM and L1 memory.
 
@@ -177,15 +176,14 @@ void py_module(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the converted tensor.
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("tensor"),
-            nb::arg("memory_config"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        &ttnn::to_memory_config,
+        nb::arg("tensor"),
+        nb::arg("memory_config"),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 
-    bind_registered_operation(
+    ttnn::bind_function<"to_dtype">(
         mod,
-        ttnn::to_dtype,
         R"doc(
         Converts a host tensor to the desired dtype.
 
@@ -213,7 +211,9 @@ void py_module(nb::module_& mod) {
             Limitations:
                 -  tensor must be on the host.
         )doc",
-        ttnn::nanobind_arguments_t{nb::arg("tensor"), nb::arg("dtype")});
+        &ttnn::to_dtype,
+        nb::arg("tensor"),
+        nb::arg("dtype"));
 
     mod.def(
            "allocate_tensor_on_device",
@@ -348,9 +348,8 @@ void py_module(nb::module_& mod) {
                 -  Host and Device tensors must be the same shape, have the same datatype, and have the same data layout (ROW_MAJOR or TILE).
         )doc");
 
-    bind_registered_operation(
+    ttnn::bind_function<"to_layout">(
         mod,
-        ttnn::to_layout,
         R"doc(
         Organizes the `ttnn.Tensor` tensor into either `ttnn.ROW_MAJOR_LAYOUT` or `ttnn.TILE_LAYOUT`.
 
@@ -370,22 +369,13 @@ void py_module(nb::module_& mod) {
         Returns:
             ttnn.Tensor: the tensor with the requested layout.
         )doc",
-        ttnn::nanobind_overload_t{
-            [](const std::decay_t<decltype(ttnn::to_layout)> self,
-               const ttnn::Tensor& tensor,
-               const ttnn::Layout layout,
-               const std::optional<ttnn::DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<CoreRangeSet>& sub_core_grids,
-               const float pad_value) -> ttnn::Tensor {
-                return self(tensor, layout, dtype, memory_config, sub_core_grids, pad_value);
-            },
-            nb::arg("tensor"),
-            nb::arg("layout"),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("pad_value") = 0.0f});
+        &ttnn::to_layout,
+        nb::arg("tensor"),
+        nb::arg("layout"),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("pad_value") = 0.0f);
 
     mod.def(
         "num_cores_to_corerangeset",
