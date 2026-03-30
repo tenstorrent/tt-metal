@@ -41,7 +41,6 @@ void kernel_main() {
     uint32_t argidx = 0;
     const uint32_t src_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t tile_offset = get_arg_val<uint32_t>(argidx++);  // row offset (y * Mpc)
-    get_arg_val<uint32_t>(argidx++);                               // Mpc (unused, available as compile-time arg)
     const uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);      // padded K for loop structure
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
