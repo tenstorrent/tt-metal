@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 import torch
 
@@ -11,8 +11,16 @@ import ttnn
 
 @dataclass
 class DeepseekMetadata:
+    FIELD_SIZE_BYTES = 4  # Each field is uint32_t
+
     position_id: int = 0
     slot_id: int = 0
+
+    @classmethod
+    def aligned_size_bytes(cls) -> int:
+        alignment = 64
+        unpadded_size = len(fields(cls)) * cls.FIELD_SIZE_BYTES
+        return (unpadded_size + alignment - 1) // alignment * alignment
 
     def to_list(self) -> list[int]:
         # More advanced serialization could be added here for mixed types to align with data struct on device

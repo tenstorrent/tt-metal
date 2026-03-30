@@ -86,6 +86,7 @@ def create_decoder_block_tensors(
     num_routed_experts: int = 0,
     preloaded_weights=None,
     rigged_group_count: int | None = None,
+    forward_metadata: bool = False,
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -350,18 +351,25 @@ def create_decoder_block_tensors(
     # Attention input/intermediate/output mesh tensors
     # ══════════════════════════════════════════════════════════════════════════
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
+
+    if forward_metadata:
+        padded_shape = (1, K + 1024)
+        padded_input = torch.nn.functional.pad(torch_input, (0, 1024), value=0)
+    else:
+        padded_shape = shape
+        padded_input = torch_input
+
     shard_spec = ttnn.ShardSpec(
-        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}), shape, ttnn.ShardOrientation.ROW_MAJOR
+        ttnn.CoreRangeSet({ttnn.CoreRange(mcast_core, mcast_core)}), padded_shape, ttnn.ShardOrientation.ROW_MAJOR
     )
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-
     device_tensors = []
     for row in range(mesh_rows):
         for col in range(mesh_cols):
             if row == sender_row and col == sender_col:
-                device_tensors.append(torch_input)
+                device_tensors.append(padded_input)
             else:
-                device_tensors.append(torch.zeros_like(torch_input))
+                device_tensors.append(torch.zeros_like(padded_input))
 
     input_tensor_mesh = ttnn.from_torch(
         torch.cat(device_tensors, dim=0),
@@ -831,6 +839,7 @@ def create_decoder_block_tensors(
         "num_gate_proj_cores": num_gate_proj_cores,
         "per_core_down_proj_N": per_core_down_proj_N,
         "mcast_grid": mcast_grid,
+        "forward_metadata": forward_metadata,
         **golden,
     }
     # MoE-only keys
@@ -1136,6 +1145,7 @@ def test_decoder(
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
+        forward_metadata=d["forward_metadata"],
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
@@ -1559,6 +1569,7 @@ def test_decoder_mlp(
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         persistent_mode=False,
+        forward_metadata=d["forward_metadata"],
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)

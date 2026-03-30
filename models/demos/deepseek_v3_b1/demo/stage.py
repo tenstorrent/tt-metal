@@ -18,6 +18,7 @@ import torch
 import ttnn
 from models.demos.deepseek_v3_b1.demo.weight_provider import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3EmbeddingLayerWeights, DeepSeekV3LMHeadWeights
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_broadcast_test_inputs
@@ -27,8 +28,13 @@ TOKEN_PAGE_SIZE_BYTES = 64
 TOKEN_FIFO_SIZE = 1024
 ACTIVATION_DIM = 7168
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
-ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 1
+FIFO_NUM_PAGES = 1
+ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * FIFO_NUM_PAGES
 PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)
+
+# Activation + DeepseekMetadata payload: activation data + metadata appended.
+ACTIVATION_W_METADATA_PAGE_SIZE_BYTES = ACTIVATION_PAGE_SIZE_BYTES + DeepseekMetadata.aligned_size_bytes()
+ACTIVATION_W_METADATA_FIFO_SIZE = ACTIVATION_W_METADATA_PAGE_SIZE_BYTES * FIFO_NUM_PAGES
 
 
 @dataclass

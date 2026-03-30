@@ -122,6 +122,10 @@ def test_moe_15_stages(mesh_device, vocab_size, embedding_dim, token_id, device_
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     num_gate_proj_cores = len(gate_proj_worker_cores)
+    assert (
+        embedding_size_bytes % num_gate_proj_cores == 0,
+        "embedding_size_bytes must be divisible by num_gate_proj_cores",
+    )
     reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
@@ -500,6 +504,10 @@ def test_persistent_moe_15_stages(
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     num_gate_proj_cores = len(gate_proj_worker_cores)
+    assert (
+        embedding_size_bytes % num_gate_proj_cores == 0,
+        "embedding_size_bytes must be divisible by num_gate_proj_cores",
+    )
     reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
@@ -883,6 +891,10 @@ def test_persistent_moe_multi_token(
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = get_pinned_optimal_dram_bank_to_logical_worker_assignment(mesh_device, gate_proj_noc)
     num_gate_proj_cores = len(gate_proj_worker_cores)
+    assert (
+        embedding_size_bytes % num_gate_proj_cores == 0,
+        "embedding_size_bytes must be divisible by num_gate_proj_cores",
+    )
     reduce_payload_per_shard = embedding_size_bytes // num_gate_proj_cores
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)

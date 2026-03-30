@@ -246,6 +246,7 @@ class AttentionBlock:
         upstream_socket=None,
         fabric_config=None,
         broadcast_topology_override=None,
+        forward_metadata=False,
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -343,7 +344,12 @@ class AttentionBlock:
         tile_size = interpreted_tile.get_tile_size(data_format)
 
         # Calculate num_tiles from tensor shape
-        num_tiles = (input_shape[0] * input_shape[1]) // (tile_height * tile_width)
+        original_num_tiles = (input_shape[0] * input_shape[1]) // (tile_height * tile_width)
+        if forward_metadata:
+            assert original_num_tiles == 8, f"original_num_tiles: {original_num_tiles}"
+        else:
+            assert original_num_tiles == 7, f"original_num_tiles: {original_num_tiles}"
+        num_tiles = 7
 
         # Get number of elements for RMS calculation
         numel = input_tensor_sample.logical_volume()
@@ -1050,16 +1056,23 @@ class AttentionBlock:
             ("mcast_is_part_of_receiver_grid", mcast_is_part_of_receiver_grid),
         ]
 
-        # Mcast metadata receiver compile-time args (named args for BRISC)
-        mcast_metadata_receiver_named_compile_time_args = [
-            ("mcast_metadata_receiver_semaphore_addr", mcast_metadata_receiver_semaphore_addr),
-        ]
-
         # Mcast receiver compile-time args (named args for NCRISC)
         mcast_receiver_named_compile_time_args = [
             ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_dst_num_pages", mcast_dst_num_pages),
+        ]
+
+        # Mcast metadata sender compile-time args (named args for CRISC)
+        mcast_metadata_sender_named_compile_time_args = [
+            ("rmsnorm_input_cb", input_cb),
+            ("rmsnorm_num_tiles", num_tiles),
+            ("mcast_metadata_receiver_semaphore_addr", mcast_metadata_receiver_semaphore_addr),
+        ]
+
+        # Mcast metadata receiver compile-time args (named args for NCRISC)
+        mcast_metadata_receiver_named_compile_time_args = [
+            ("mcast_metadata_receiver_semaphore_addr", mcast_metadata_receiver_semaphore_addr),
         ]
 
         # Calculate matmul1 K-split parameters
@@ -1961,30 +1974,32 @@ class AttentionBlock:
 
         # Create circular buffer descriptors
         # CB: Input (created from sharded tensor)
-        if skip_ccl:
-            in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                input_cb, ref_input_tensor, core_ranges=full_device_grid
+        # When forward_metadata is enabled, the socket writes activation + metadata
+        # contiguously. We pad the backing buffer to fit metadata after the activation
+        # data, but the CB format (what RMSNorm reads) remains activation-only.
+        activation_size = num_tiles * cb_page_size
+
+        in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            input_cb, ref_input_tensor, core_ranges=full_device_grid
+        )
+        in_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=input_cb,
+                data_format=data_format,
+                page_size=cb_page_size,
+                tile=tile_descriptor,
             )
-        else:
-            in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                input_cb,
-                ref_sdpa_kv_cache_buffer,
-                address_offset=sdpa_kv_cache_running_offset_mcast_core,
-                total_size=num_tiles * cb_page_size,
-                core_ranges=full_device_grid,
-            )
-            in_cb_descriptor.format_descriptors = [
-                ttnn.CBFormatDescriptor(
-                    buffer_index=input_cb,
-                    data_format=data_format,
-                    page_size=cb_page_size,
-                    tile=tile_descriptor,
-                )
-            ]
-            sdpa_kv_cache_running_offset_mcast_core += in_cb_descriptor.total_size
+        ]
+        in_cb_descriptor.total_size = activation_size
 
         # Keep broadcast writer backing address explicit for this fused path.
-        bcast_config.set_writer_tensor_address_override(ttnn.get_cb_address(in_cb_descriptor))
+        input_cb_l1_addr = ttnn.get_cb_address(in_cb_descriptor)
+        bcast_config.set_writer_tensor_address_override(input_cb_l1_addr)
+
+        # When forwarding metadata, the socket writes activation + metadata contiguously.
+        # The metadata sits right after the activation data in the input CB's backing buffer.
+        forwarded_metadata_l1_addr = input_cb_l1_addr + activation_size if forward_metadata else None
+        print(forward_metadata)
 
         # CB: Gamma (backed by fused overlapped tensor)
         gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(gamma_cb, gamma_tensor, ref_gamma_fused_tensor)
@@ -2002,6 +2017,7 @@ class AttentionBlock:
         # This op builds device-invariant descriptor templates from reference tensors;
         # use sender device metadata as the canonical broadcast descriptor reference.
         bcast_pkt_cb_descriptor = bcast_config.get_cb_descriptor(sender_mesh_coord)
+        bcast_pkt_cb_descriptor.total_size = activation_size
 
         # CB: RMSNorm output buffer
         rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -2879,6 +2895,10 @@ class AttentionBlock:
         sdpa_out_interm_running_offset_post_sdpa += sdpa_l_out_cb_descriptor.total_size
         post_sdpa_cb_list.append(sdpa_l_out_cb_descriptor)
 
+        assert (
+            input_running_offset <= activation_size
+        ), f"input_running_offset: {input_running_offset}, activation_size: {activation_size}"
+
         # ========================================================================
         # Semaphore descriptors
         # ========================================================================
@@ -3105,7 +3125,8 @@ class AttentionBlock:
         )
 
         brisc_named_compile_time_args_base = (
-            mcast_sender_named_compile_time_args
+            mcast_metadata_sender_named_compile_time_args
+            + mcast_sender_named_compile_time_args
             + matmul_brisc_named_compile_time_args
             + gather_reduce_receiver_named_compile_time_args
             + matmul2_brisc_named_compile_time_args
@@ -3417,7 +3438,11 @@ class AttentionBlock:
                 qrope_sin_tensor_address = qrope_sin_tensor_device.buffer_address()
                 krope_cos_tensor_address = krope_cos_tensor_device.buffer_address()
                 krope_sin_tensor_address = krope_sin_tensor_device.buffer_address()
-                metadata_tensor_addr = metadata_tensor_device.buffer_address()
+                metadata_addr = (
+                    forwarded_metadata_l1_addr
+                    if forwarded_metadata_l1_addr is not None
+                    else metadata_tensor_device.buffer_address()
+                )
 
                 # Compute address overrides for each matmul's weights within the fused buffer
                 fused_weights_base_addr = ref_fused_weights_tensor.buffer_address()
@@ -3445,7 +3470,7 @@ class AttentionBlock:
                     kv_cache_input_cb,  # idx 4
                     kv_cache_output_cb,  # idx 5
                     kv_cache_intermed_cb,  # idx 6
-                    metadata_tensor_addr,  # idx 7
+                    metadata_addr,  # idx 7
                     matmul_weights_addr,  # idx 8
                     matmul2_weights_addr,  # idx 9
                     dkv_matmul_weights_addr,  # idx 10
@@ -3483,7 +3508,7 @@ class AttentionBlock:
                 )
                 ncrisc_common_runtime_args = ncrisc_bcast_common_args + [
                     kv_cache_tensor_device.buffer_address(),
-                    metadata_tensor_addr,
+                    metadata_addr,
                     gather2_receiver_data_addr,
                     gather3_receiver_data_addr,
                 ]
@@ -3495,7 +3520,7 @@ class AttentionBlock:
                 )
                 brisc_common_runtime_args = [
                     kv_cache_tensor_device.buffer_address(),
-                    metadata_tensor_addr,
+                    metadata_addr,
                 ] + list(bcast_config.get_brisc_common_rt_args(mesh_coord))
 
                 trisc_named_compile_time_args = (
@@ -3764,7 +3789,7 @@ class AttentionBlock:
                     }
                 )
         attention_block_cbs = [in_cb_descriptor, *cbs_list, attention_block_output_cb_descriptor]
-        return full_device_grid, attention_block_cbs, per_device_contexts
+        return full_device_grid, metadata_addr, attention_block_cbs, per_device_contexts
 
     @staticmethod
     def op(
@@ -3815,7 +3840,12 @@ class AttentionBlock:
     ):
         cb_id_manager = CircularBufferIdManager()
         cb_id_context = cb_id_manager.create_context()
-        full_device_grid, attention_block_cbs, attention_block_per_device_contexts = AttentionBlock.get_program_context(
+        (
+            full_device_grid,
+            _,
+            attention_block_cbs,
+            attention_block_per_device_contexts,
+        ) = AttentionBlock.get_program_context(
             input_tensor_mesh,
             gamma_tensor,
             matmul_weights_tensor,

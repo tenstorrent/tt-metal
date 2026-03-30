@@ -115,7 +115,7 @@ void kernel_main() {
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
 
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast_metadata_receiver_args{
+    deepseek_b1_ops::Mcast::ReceiverArgs mcast_metadata_args{
         get_named_compile_time_arg_val("mcast_metadata_receiver_semaphore_addr"),
         0,
         0,
@@ -539,7 +539,7 @@ void kernel_main() {
     // RMSNorm2 writer args (BRISC is no-op)
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm2_args{};
 
-    deepseek_b1_ops::Mcast::SenderArgs mcast_metadata_sender_args{
+    deepseek_b1_ops::Mcast::SenderArgs mcast_metadata_args{
         get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
@@ -547,8 +547,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
         get_named_compile_time_arg_val("mcast_metadata_receiver_semaphore_addr"),
         sizeof(deepseek_b1_ops::DeepseekMetadata),
-        0,
-        0,
+        get_named_compile_time_arg_val("rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
         get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx),
         get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx),
     };
@@ -873,6 +873,8 @@ void kernel_main() {
     // Mcast compute args (no-op for TRISC)
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
 
+    deepseek_b1_ops::Mcast::ComputeArgs mcast_metadata_args{};
+
     // Matmul CTArgs type alias (out_w is compile-time for TRISC)
     const auto matmul_half_info = unified_kernels::get_split_half_core_info<true>(
         get_named_compile_time_arg_val("matmul_grid_start_x"),
@@ -1165,6 +1167,9 @@ void kernel_main() {
         mcast.init(mcast_args);
     }
 
+    deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_full_mcast_grid_core, false, false>
+        mcast_metadata;
+
     volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
         reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(cur_metadata_addr);
     using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
@@ -1191,21 +1196,10 @@ void kernel_main() {
             cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
         }
 #endif
-
-        // The first mcast is also used to synchronize downstream ccls, so must always run.
-        // Can revisit this later
-        // ====================================================================
-        // Input core: RMSNorm + Mcast send
-        // ====================================================================
+        // This first mcast is also used to synchronize downstream ccls, so must always run.
         {
-            DeviceZoneScopedN("RMSNORM");
-            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
-            rmsnorm(rmsnorm_args);
-        }
-
-        {
-            DeviceZoneScopedN("MCAST");
-            mcast(mcast_args);
+            DeviceZoneScopedN("METADATA_BROADCAST");
+            mcast_metadata(mcast_metadata_args);
         }
 
         if constexpr (!Core::is_input_core) {
@@ -1214,6 +1208,22 @@ void kernel_main() {
             unified_kernels::sync_riscs_enter(ccl_sync_sem);
             unified_kernels::sync_riscs_exit(ccl_sync_sem);
         }
+
+        // TODO: These can be moved into the skip_attention block below now that we have the metadata mcast.
+        // ====================================================================
+        // Input core: RMSNorm + Mcast send
+        // ====================================================================
+        {
+            DeviceZoneScopedN("RMSNORM");
+            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, false> rmsnorm;
+            rmsnorm(rmsnorm_args);
+        }
+
+        {
+            DeviceZoneScopedN("MCAST");
+            mcast(mcast_args);
+        }
+
         // SP position handling.
         // Read the global position from L1 and decide whether this device has
         // work / owns the current KV-cache slot. The normalized (device-local)

@@ -540,7 +540,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
                 get_named_compile_time_arg_val("reduce_agg_output_size_bytes"),
                 get_named_compile_time_arg_val("reduce_persistent_fabric_rt_arg_base"),
-                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable")>;
+                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable"),
+                get_named_compile_time_arg_val("reduce_forward_metadata_size_bytes")>;
 
             deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization
@@ -663,15 +664,16 @@ void kernel_main() {
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),   // output_base_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),   // shard_idx
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 8),   // socket_config_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 9),   // agg_sem_l1_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 10),  // agg_core_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 11),  // agg_core_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 12),  // persistent_enable
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 13),  // persistent_dst_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 14),  // persistent_dst_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 15),  // persistent_dst_mesh_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),  // persistent_dst_chip_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 17),  // persistent_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 9),   // metadata_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 10),  // agg_sem_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 11),  // agg_core_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 12),  // agg_core_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 13),  // persistent_enable
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 14),  // persistent_dst_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 15),  // persistent_dst_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),  // persistent_dst_mesh_id
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 17),  // persistent_dst_chip_id
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 18),  // persistent_dst_sem_addr
         };
     }
 #endif

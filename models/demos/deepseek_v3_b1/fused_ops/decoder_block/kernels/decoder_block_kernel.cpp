@@ -154,7 +154,7 @@ void kernel_main() {
     using RMSNorm2CTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
     using McastCTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
 
-    deepseek_b1_ops::Mcast::ReceiverArgs mcast_metadata_receiver_args{
+    deepseek_b1_ops::Mcast::ReceiverArgs mcast_metadata_args{
         get_named_compile_time_arg_val("mcast_metadata_receiver_semaphore_addr"),
         0,
         0,
@@ -578,7 +578,7 @@ void kernel_main() {
     // RMSNorm2 writer args (BRISC is no-op)
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm2_args{};
 
-    deepseek_b1_ops::Mcast::SenderArgs mcast_metadata_sender_args{
+    deepseek_b1_ops::Mcast::SenderArgs mcast_metadata_args{
         get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
@@ -586,8 +586,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
         get_named_compile_time_arg_val("mcast_metadata_receiver_semaphore_addr"),
         sizeof(deepseek_b1_ops::DeepseekMetadata),
-        0,
-        0,
+        get_named_compile_time_arg_val("rmsnorm_input_cb"),
+        get_named_compile_time_arg_val("rmsnorm_num_tiles"),
         get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx),
         get_common_arg_val<uint32_t>(metadata_addr_common_rta_idx),
     };
@@ -911,6 +911,8 @@ void kernel_main() {
 
     // Mcast compute args (no-op for TRISC)
     deepseek_b1_ops::Mcast::ComputeArgs mcast_args{};
+
+    deepseek_b1_ops::Mcast::ComputeArgs mcast_metadata_args{};
 
     // Matmul CTArgs type alias (out_w is compile-time for TRISC)
     const auto matmul_half_info = unified_kernels::get_split_half_core_info<true>(
@@ -1572,7 +1574,8 @@ void kernel_main() {
                 get_named_compile_time_arg_val("reduce_total_num_workers"),
                 get_named_compile_time_arg_val("reduce_agg_output_size_bytes"),
                 get_named_compile_time_arg_val("reduce_persistent_fabric_rt_arg_base"),
-                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable")>;
+                get_named_compile_time_arg_val("reduce_persistent_fabric_signal_enable"),
+                get_named_compile_time_arg_val("reduce_forward_metadata_size_bytes")>;
 
             deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs reduce_rt_args{};
             // Populated below after struct initialization
@@ -1695,15 +1698,16 @@ void kernel_main() {
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),   // output_base_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),   // shard_idx
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 8),   // socket_config_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 9),   // agg_sem_l1_addr
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 10),  // agg_core_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 11),  // agg_core_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 12),  // persistent_enable
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 13),  // persistent_dst_noc_x
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 14),  // persistent_dst_noc_y
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 15),  // persistent_dst_mesh_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),  // persistent_dst_chip_id
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 17),  // persistent_dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 9),   // metadata_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 10),  // agg_sem_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 11),  // agg_core_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 12),  // agg_core_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 13),  // persistent_enable
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 14),  // persistent_dst_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 15),  // persistent_dst_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 16),  // persistent_dst_mesh_id
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 17),  // persistent_dst_chip_id
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 18),  // persistent_dst_sem_addr
         };
     }
 #endif
@@ -1998,6 +2002,9 @@ void kernel_main() {
         true>
         moe_mcast;
 
+    deepseek_b1_ops::Mcast::Op<McastCTArgs, Core::is_input_core, Core::is_full_mcast_grid_core, false, false>
+        mcast_metadata;
+
     volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
         reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(cur_metadata_addr);
     using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
@@ -2025,20 +2032,10 @@ void kernel_main() {
         }
 #endif
 
-        // The first mcast is also used to synchronize downstream ccls, so must always run.
-        // Can revisit this later
-        // ====================================================================
-        // Input core: RMSNorm + Mcast send
-        // ====================================================================
+        // This first mcast is also used to synchronize downstream ccls, so must always run.
         {
-            DeviceZoneScopedN("RMSNORM");
-            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
-            rmsnorm(rmsnorm_args);
-        }
-
-        {
-            DeviceZoneScopedN("MCAST");
-            mcast(mcast_args);
+            DeviceZoneScopedN("METADATA_BROADCAST");
+            mcast_metadata(mcast_metadata_args);
         }
 
         if constexpr (!Core::is_input_core) {
@@ -2046,6 +2043,20 @@ void kernel_main() {
                 get_named_compile_time_arg_val("ccl_sync_semaphore_addr"));
             unified_kernels::sync_riscs_enter(ccl_sync_sem);
             unified_kernels::sync_riscs_exit(ccl_sync_sem);
+        }
+
+        // ====================================================================
+        // Input core: RMSNorm + Mcast send
+        // ====================================================================
+        {
+            DeviceZoneScopedN("RMSNORM");
+            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, false> rmsnorm;
+            rmsnorm(rmsnorm_args);
+        }
+
+        {
+            DeviceZoneScopedN("MCAST");
+            mcast(mcast_args);
         }
         // SP position handling.
         // Read the global position from L1 and decide whether this device has

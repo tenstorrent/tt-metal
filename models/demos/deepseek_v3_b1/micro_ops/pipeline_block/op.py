@@ -36,6 +36,7 @@ There are four distinct stage configurations:
 """
 
 import ttnn
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
@@ -58,6 +59,7 @@ class PipelineBlock:
         exit_upstream_page_size=None,
         embedding_tensor=None,
         initialize_loopback=True,
+        forward_metadata=False,
     ):
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
@@ -129,6 +131,7 @@ class PipelineBlock:
                 entry_node_downstream,
                 exit_node_upstream,
                 exit_upstream_page_size,
+                DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0,
             )
 
     def _init_first_stage(
@@ -275,6 +278,7 @@ class PipelineBlock:
         entry_node_downstream,
         exit_node_upstream,
         exit_upstream_page_size=None,
+        forward_metadata_size_bytes=0,
     ):
         self.entry_socket_interface = SocketInterface(
             upstream_d2d_socket_page_size,
@@ -303,6 +307,7 @@ class PipelineBlock:
                 receiver_mesh=MeshWrapper(mesh_id=next_mesh_id),
                 upstream_core_coords=exit_node_upstream,
                 upstream_page_size=exit_upstream_page_size,
+                forward_metadata_size_bytes=forward_metadata_size_bytes,
             )
         else:
             self.exit_socket_interface = SocketInterface(
