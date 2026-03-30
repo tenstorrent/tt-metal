@@ -1003,7 +1003,9 @@ static std::vector<Tensor> pool2d(
         (kernel_size[0] >= input_h && kernel_size[1] >= input_w) &&
         (padding_check[0] == 0 && padding_check[1] == 0 && padding_check[2] == 0 && padding_check[3] == 0);
 
-    if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
+    // Reduction path requires ROW_MAJOR input; TILE_LAYOUT inputs (e.g. BFLOAT8_B)
+    // use the sliding window path which handles tile-padded data correctly.
+    if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D && input_tensor_4d.layout() == Layout::ROW_MAJOR) {
         auto mem_config = memory_config.value_or(input_tensor_4d.memory_config());
         auto in_shape = input_tensor_4d.padded_shape();
         uint32_t hw = input_h * input_w;
