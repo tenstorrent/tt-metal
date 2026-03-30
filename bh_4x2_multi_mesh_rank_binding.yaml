@@ -4,14 +4,25 @@ rank_bindings:
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 0,1,2,3,4,5,6,7
+    # TT_METAL_WATCHER: "20"
+    # TT_METAL_WATCHER_NOINLINE: "1"
+    # TT_METAL_WATCHER_DISABLE_ETH_LINK_STATUS: "1"
+    # TT_METAL_LOGS_PATH: "rank0"
+    # TT_METAL_DPRINT_CORES: all
+    # TT_METAL_DPRINT_CHIPS: all
+    # TT_METAL_DPRINT_FILE: dprint_logs/rank0.txt
 - rank: 1
   mesh_id: 1
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 24,25,26,27,28,29,30,31
-    TT_METAL_DPRINT_CORES: all
-    TT_METAL_DPRINT_CHIPS: all
-    TT_METAL_DPRINT_FILE: dprint_logs/rank1.txt
+    # TT_METAL_WATCHER: "20"
+    # TT_METAL_WATCHER_NOINLINE: "1"
+    # TT_METAL_WATCHER_DISABLE_ETH_LINK_STATUS: "1"
+    # TT_METAL_LOGS_PATH: "rank1"
+    # TT_METAL_DPRINT_CORES: all
+    # TT_METAL_DPRINT_CHIPS: all
+    # TT_METAL_DPRINT_FILE: dprint_logs/rank1.txt
 - rank: 2
   mesh_id: 2
   mesh_host_rank: 0
@@ -22,7 +33,7 @@ rank_bindings:
   mesh_host_rank: 0
   env_overrides:
     TT_VISIBLE_DEVICES: 8,9,10,11,12,13,14,15
-    TT_METAL_DPRINT_CORES: all
-    TT_METAL_DPRINT_CHIPS: all
-    TT_METAL_DPRINT_FILE: dprint_logs/rank3.txt
+    # TT_METAL_DPRINT_CORES: all
+    # TT_METAL_DPRINT_CHIPS: all
+    # TT_METAL_DPRINT_FILE: dprint_logs/rank3.txt
 mesh_graph_desc_path: tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_4x2_mesh_graph_descriptor.textproto

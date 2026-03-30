@@ -325,18 +325,15 @@ struct Mcast {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
                 // Compute multicast NOC address and store for later use
-                DPRINT << ">mcast i" << ENDL();
                 uint64_t mcast_flag_noc_addr = get_noc_multicast_addr<noc_index>(
                     args.dest_noc_start_x,
                     args.dest_noc_start_y,
                     args.dest_noc_end_x,
                     args.dest_noc_end_y,
                     (uint64_t)(args.data_receiver_semaphore_addr));
-                DPRINT << ">mcast j" << ENDL();
                 volatile tt_l1_ptr uint32_t* data_sender_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)args.data_sender_semaphore_addr;
                 if constexpr (init_noc) {
-                    DPRINT << ">mcast k" << ENDL();
                     noc_semaphore_set(data_sender_semaphore_addr_ptr, INVALID);
                     // Initialize persistent mcast sender
                     init_persistent_mcast_sender<
@@ -345,12 +342,9 @@ struct Mcast {
                         CTArgsT::is_part_of_receiver_grid,
                         linked,
                         posted>(mcast_flag_noc_addr, args.data_sender_semaphore_addr);
-                    DPRINT << ">mcast l" << ENDL();
                     noc_async_posted_writes_flushed();
                 }
-                DPRINT << ">mcast m" << ENDL();
                 noc_semaphore_set(data_sender_semaphore_addr_ptr, VALID);
-                DPRINT << ">mcast n" << ENDL();
             }
 #endif
         }
@@ -383,10 +377,11 @@ struct Mcast {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
-                DPRINT << ">mcast 1 src=" << args.input_data_addr << " dst=" << args.mcast_receiver_data_addr
-                       << " sz=" << args.data_size_bytes << ENDL();
                 cb_wait_front(args.src_cb, args.src_num_pages);
-
+                {
+                    invalidate_l1_cache();
+                    auto _s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(args.input_data_addr);
+                }
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -397,7 +392,6 @@ struct Mcast {
                     true,
                     write_cmd_buf>(args.input_data_addr, args.mcast_receiver_data_addr, args.data_size_bytes);
 
-                DPRINT << ">mcast 3" << ENDL();
                 mcast_send_with_state<
                     CTArgsT::mcast_num_cores,
                     CTArgsT::loopback,
@@ -409,7 +403,6 @@ struct Mcast {
                     write_reg_cmd_buf>(args.data_sender_semaphore_addr, args.data_receiver_semaphore_addr, 4);
 
                 noc_async_posted_writes_flushed();
-                DPRINT << ">mcast 4" << ENDL();
                 if constexpr (pop_src) {
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
@@ -421,17 +414,13 @@ struct Mcast {
             if constexpr (IsReceiverCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(args.data_receiver_semaphore_addr);
-                DPRINT << ">mcast 6" << ENDL();
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
-                DPRINT << ">mcast 5 wp=" << get_write_ptr(args.dst_cb) << ENDL();
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
                 cb_push_back(args.dst_cb, args.dst_num_pages);
-
             } else if constexpr (IsMcastGridCore) {
                 volatile tt_l1_ptr uint32_t* data_receiver_semaphore_addr_ptr =
                     (volatile tt_l1_ptr uint32_t*)(args.data_receiver_semaphore_addr);
-                DPRINT << ">mcast 8" << ENDL();
                 noc_semaphore_wait(data_receiver_semaphore_addr_ptr, VALID);
                 noc_semaphore_set(data_receiver_semaphore_addr_ptr, INVALID);
             }

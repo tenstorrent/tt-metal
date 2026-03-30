@@ -31,6 +31,7 @@ import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import (
     PipelineConfiguration,
+    create_single_galaxy_combined_spec_decode_pipeline_configuration,
     create_single_galaxy_pipeline_configuration,
     create_single_galaxy_pipeline_spec_stage_only_configuration,
     create_single_galaxy_spec_decode_pipeline_configuration,
@@ -872,7 +873,7 @@ class _SyntheticWeightProvider:
             h_gamma=ttnn_h_gamma,
             e_gamma=ttnn_e_gamma,
             eh_projection=ttnn_eh_proj,
-            decoder=None,
+            decoder=None
         )
 
 
@@ -1273,10 +1274,7 @@ def _prepare_reference_mtp_weights(device: ttnn.MeshDevice, hf_state_dict) -> De
     )
 
     return DeepSeekV3MTPWeights(
-        embedding=ttnn_embedding,
-        h_gamma=ttnn_h_gamma,
-        e_gamma=ttnn_e_gamma,
-        eh_projection=ttnn_eh_proj,
+        embedding=ttnn_embedding, h_gamma=ttnn_h_gamma, e_gamma=ttnn_e_gamma, eh_projection=ttnn_eh_proj, decoder=None
     )
 
 
@@ -4769,8 +4767,6 @@ def test_reference_payload_mtp_accept_rate_ttnn(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 1600000,
-            "worker_l1_size": 1499000,
         }
     ],
     indirect=True,
@@ -5006,3 +5002,98 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
     logger.info(f"Barrier for stage {pipeline.my_mesh_id + 1}")
     pipeline.barrier()
     logger.info(f"Barrier completed for stage {pipeline.my_mesh_id + 1}")
+
+
+@pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 2)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+            "trace_region_size": 1600000,
+            "worker_l1_size": 1499000,
+        }
+    ],
+    indirect=True,
+)
+def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
+    """
+    4-stage 4x2 single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
+    P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0.
+    """
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    num_procs = int(ttnn.distributed_context_get_size())
+    if num_procs != 4:
+        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
+
+    iterations = 100
+
+    # print(f"[TEST] computing golden", flush=True)
+    # golden = _compute_expected_spec_decode_tokens_synthetic(iterations)
+    # print(f"[TEST] golden computed, creating config", flush=True)
+
+    config = create_single_galaxy_combined_spec_decode_pipeline_configuration(
+        _SyntheticWeightProvider(),
+        fp32_dest_acc_en=use_fp32,
+    )
+    print(f"[TEST] config created, building pipeline", flush=True)
+    pipeline = config.build_pipeline(mesh_device)
+    pid = pipeline.my_mesh_id
+    print(f"[TEST P{pid}] pipeline built, calling setup_and_run", flush=True)
+    try:
+        pipeline.setup_and_run()
+        print(f"[TEST P{pid}] setup_and_run complete", flush=True)
+
+        token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
+
+        if pipeline.my_mesh_id == 0:
+            for iteration in range(iterations):
+                print(f"[TEST P{pid}] iter {iteration} write_token", flush=True)
+                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+                torch_token[0, 0] = iteration
+                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                output_tensor = ttnn.from_torch(
+                    torch.zeros(1, token_meta_words, dtype=torch.uint32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                pipeline.write_token(token_tensor)
+                print(f"[TEST P{pid}] iter {iteration} read_output", flush=True)
+                pipeline.read_output(output_tensor)
+                print(f"[TEST P{pid}] iter {iteration} to_torch", flush=True)
+                raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
+
+                num_tokens = raw[0].item()
+                tok0_id = raw[1].item()
+                tok0_type = raw[2].item()
+                tok0_pos = raw[3].item()
+                tok1_id = raw[4].item()
+                tok1_type = raw[5].item()
+                tok1_pos = raw[6].item()
+
+                # expected_base, expected_spec = golden[iteration]
+                type_name = {0: "BASE", 1: "SPEC"}
+                print(
+                    f"[TEST P{pid}] iter {iteration} "
+                    f"ntok={num_tokens} t0={tok0_id}/{type_name.get(tok0_type,'?')} "
+                    f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
+                    flush=True,
+                )
+        print(f"[TEST P{pid}] all iterations done, barrier", flush=True)
+        pipeline.barrier()
+        print(f"[TEST P{pid}] barrier done, terminate", flush=True)
+        pipeline.terminate()
+        print(f"[TEST P{pid}] terminate done, final barrier", flush=True)
+        pipeline.barrier()
+        print(f"[TEST P{pid}] final barrier done", flush=True)
+    finally:
+        pass

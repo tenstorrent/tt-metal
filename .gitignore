@@ -67,7 +67,7 @@ __cmake_systeminformation/
 
 *profile_log*.csv
 **/profiler/output/*
-generated
+# generated
 
 env/
 tags

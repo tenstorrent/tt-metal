@@ -344,6 +344,15 @@ class BroadcastConfig:
 
     def _writer_named_ct_args(self, coord):
         d = self._per_device[coord]
+        print("bcast_data_cb_id", self.cb_ids["bcast_data"])
+        print("bcast_num_pages_to_read", self.num_pages_to_read)
+        print("bcast_tensor0_page_size", self.tensor0_page_size)
+        print("bcast_num_neighbors", d["num_neighbors"])
+        print("bcast_num_links", self.num_links)
+        print("bcast_is_root", 1 if d["is_root"] else 0)
+        print("bcast_chunk_size_bytes", self.chunk_size_bytes)
+        print("bcast_last_chunk_size_bytes", self.last_chunk_size_bytes)
+        print("bcast_num_chunks", self.num_chunks)
         return [
             ("bcast_data_cb_id", self.cb_ids["bcast_data"]),
             ("bcast_num_pages_to_read", self.num_pages_to_read),
@@ -409,6 +418,7 @@ class BroadcastConfig:
             payload.append(d["dst_chip_ids"][i])
             dst_node = d["dst_nodes"][i]
             for link_idx in range(self.num_links):
+                print(f"[ccl_broadcast] src_node={src_node}, dst_node={dst_node}, link_idx={link_idx}", flush=True)
                 setup_args = ttnn.setup_fabric_connection(src_node, dst_node, link_idx, program, core)
                 if self._setup_fabric_rt_arg_count is None:
                     self._setup_fabric_rt_arg_count = len(setup_args)

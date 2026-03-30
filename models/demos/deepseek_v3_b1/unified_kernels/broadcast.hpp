@@ -117,18 +117,14 @@ struct Broadcast {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
                         set_receiver_socket_page_size(recv, args.socket_page_size);
-                        DPRINT << ">br sz=" << args.socket_page_size << ENDL();
                         socket_wait_for_pages(recv, args.socket_num_pages);
-                        DPRINT << ">br1 np=" << CTArgs::num_pages_to_read << ENDL();
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                        DPRINT << "<br" << ENDL();
                         invalidate_l1_cache();
                         noc_async_read(
                             get_noc_addr(recv.read_ptr),
                             get_write_ptr(CTArgs::cb0_id),  //
                             args.socket_page_size,
                             1 - noc_index);
-                        DPRINT << "<br1" << ENDL();
                         noc_async_read_barrier(1 - noc_index);
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         socket_pop_pages(recv, args.socket_num_pages);
@@ -151,11 +147,9 @@ struct Broadcast {
             // ================================================================
             if constexpr (IsWorkerCore) {
                 PacketHeaderPool::reset();
-                DPRINT << ">fc3d 0" << ENDL();
                 std::array<tt::tt_fabric::WorkerToFabricEdmSender, CTArgs::num_connections> connections;
                 std::array<volatile PACKET_HEADER_TYPE*, CTArgs::num_connections> headers;
                 size_t arg_idx = args.per_core_rta_arg_idx_offset;
-                DPRINT << ">fc3d 1" << ENDL();
                 for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
                     const uint32_t dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
                     const uint32_t dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
@@ -170,7 +164,6 @@ struct Broadcast {
                         connections[connection_idx].open_finish();
                     }
                 }
-                DPRINT << ">fc3d 2" << ENDL();
                 const uint64_t dst_noc_base = get_noc_addr(args.my_noc_x, args.my_noc_y, args.tensor_address0, 0);
                 std::array<uint64_t, CTArgs::num_links> sem_nocs;
                 std::array<volatile tt_l1_ptr uint32_t*, CTArgs::num_links> sem_ptrs;
@@ -179,12 +172,12 @@ struct Broadcast {
                         safe_get_noc_addr(args.my_noc_x, args.my_noc_y, args.sem_bank_addrs[link_idx], 0);
                     sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
                 }
-                DPRINT << ">fc3d 3" << ENDL();
                 auto send_chunk = [&](uint32_t connection_idx,
                                       uint32_t link_idx,
                                       uint32_t src_base_addr,
                                       uint32_t chunk_idx,
                                       uint32_t size) {
+                    DPRINT << "send_chunk " << " src_base_addr=" << src_base_addr << " chunk_idx=" << chunk_idx << " size=" << size << ENDL();
                     uint32_t chunk_offset = chunk_idx * CTArgs::chunk_size_bytes;
                     headers[connection_idx]->to_noc_fused_unicast_write_atomic_inc(
                         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
@@ -195,24 +188,26 @@ struct Broadcast {
                         src_base_addr + chunk_offset, size);
                     connections[connection_idx].send_payload_flush_non_blocking_from_address(
                         reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
+                    DPRINT << "send_chunk done" << ENDL();
                 };
-                DPRINT << ">fc3d 4" << ENDL();
                 std::array<uint32_t, CTArgs::num_links> link_counters = {};
                 auto forward_chunks = [&](uint32_t src_base_addr, auto&& wait_for_link_chunk) {
                     uint32_t current_link = 0;
 
                     for (uint32_t chunk_idx = 0; chunk_idx < CTArgs::num_chunks; chunk_idx++) {
                         link_counters[current_link]++;
+                        DPRINT << "forward_chunks: link_idx=" << current_link << " chunk_idx=" << chunk_idx << " link_counters[current_link]=" << link_counters[current_link] << ENDL();
                         wait_for_link_chunk(current_link, link_counters[current_link]);
-
+                        DPRINT << "wfl chunk complete" << ENDL();
                         const uint32_t chunk_size = (chunk_idx < CTArgs::num_chunks - 1)
                                                         ? CTArgs::chunk_size_bytes
                                                         : CTArgs::last_chunk_size_bytes;
-
+                        DPRINT << "fwd cw done" << ENDL();
                         for (uint32_t neighbor_idx = 0; neighbor_idx < CTArgs::num_neighbors; neighbor_idx++) {
                             const uint32_t connection_idx = neighbor_idx * CTArgs::num_links + current_link;
                             send_chunk(connection_idx, current_link, src_base_addr, chunk_idx, chunk_size);
                         }
+                        DPRINT << "fwd chunk done" << ENDL();
 
                         if (++current_link == CTArgs::num_links) {
                             current_link = 0;
@@ -233,9 +228,7 @@ struct Broadcast {
                 // In the leaf case, num_links remains configured (> 0), wait/reset semantics are still
                 // preserved for non-root nodes, and no fabric send occurs due to zero neighbors.
                 if constexpr (CTArgs::is_root) {
-                    DPRINT << ">fc3d 5" << ENDL();
                     cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
-                    DPRINT << ">fc3d 6" << ENDL();
                     const uint32_t src = get_read_ptr(CTArgs::cb0_id);
                     constexpr uint32_t tensor_size_bytes = CTArgs::tensor0_page_size * CTArgs::num_pages_to_read;
                     noc_async_write(src, dst_noc_base, tensor_size_bytes);
@@ -249,7 +242,9 @@ struct Broadcast {
                         noc_semaphore_wait_min(sem_ptrs[link_idx], link_threshold);
                     };
                     forward_chunks(src, sem_wait);
+                    DPRINT << "forward_chunks done" << ENDL();
                     for (uint32_t link_idx = 0; link_idx < CTArgs::num_links; link_idx++) {
+                        DPRINT << "link_idx=" << link_idx << " link_counters[link_idx]=" << link_counters[link_idx] << ENDL();
                         if (link_counters[link_idx] > 0) {
                             unified_kernels::semaphore_dec(sem_ptrs[link_idx], link_counters[link_idx]);
                         }
@@ -260,9 +255,7 @@ struct Broadcast {
                 for (uint32_t i = 0; i < CTArgs::num_connections; i++) {
                     connections[i].close();
                 }
-                DPRINT << ">fc3d 10" << ENDL();
                 noc_async_full_barrier();
-                DPRINT << ">fc3d 11" << ENDL();
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

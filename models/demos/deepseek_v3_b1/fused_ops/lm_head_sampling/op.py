@@ -237,6 +237,7 @@ class LMHeadSampling:
         eh_subblock_k=None,
         eh_gather_output_buf_tensor=None,
     ):
+        print(f"broadcast sender_coord={sender_coord}", flush=True)
         """
         Execute LM head sampling CCL broadcast + mcast + matmul operation using generic_op.
 
@@ -433,7 +434,7 @@ class LMHeadSampling:
         # RMSNorm in this path must match broadcast_rms tile/page interpretation.
         full_32x32_tile = ttnn.Tile((32, 32))
         half_16x32_tile = ttnn.Tile((16, 32))
-        is_16x32_tile = (activation_cols_for_rms // full_32x32_tile.tile_shape[1]) % full_32x32_tile.tile_shape[0] != 0
+        is_16x32_tile = False
         rms_interpreted_tile = half_16x32_tile if is_16x32_tile else full_32x32_tile
         rms_tile_height, rms_tile_width = rms_interpreted_tile.tile_shape
         rms_tile_size = rms_interpreted_tile.get_tile_size(data_format)
@@ -578,6 +579,10 @@ class LMHeadSampling:
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
+                print(
+                    f"[lm_head_sampling] mesh coordinate={coord}, device_id={mesh_device.get_device_id(coord)}",
+                    flush=True,
+                )
                 device_idx = row * mesh_cols + col
                 # is_exit_device: whether this device is the exit device
                 # enable_mtp_on_device: whether this device is the exit device and we run MTP on it
@@ -1208,9 +1213,10 @@ class LMHeadSampling:
                 rms_tile_descriptor = ttnn.TileDescriptor(rms_interpreted_tile)
                 rmsnorm_input_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
                 rmsnorm_input_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
+                print("old rmsnorm_input_cb_descriptor.total_size", rmsnorm_input_cb_descriptor.total_size)
                 if is_mtp_verify_stage:
-                    rmsnorm_input_cb_descriptor.total_size = rms_num_tiles * rms_tile_size
-
+                    rmsnorm_input_cb_descriptor.total_size = (rms_num_tiles + 1) * rms_tile_size
+                print("new rmsnorm_input_cb_descriptor.total_size", rmsnorm_input_cb_descriptor.total_size)
                 print(f"[OP:{device_idx}:I1] CB0 rmsnorm_input done", flush=True)
 
                 # CB 7: RMSNorm gamma — tensor-backed on sender core.

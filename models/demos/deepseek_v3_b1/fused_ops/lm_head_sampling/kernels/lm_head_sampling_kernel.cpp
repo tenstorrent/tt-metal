@@ -115,7 +115,6 @@ struct Core {
 };
 
 void kernel_main() {
-    DPRINT << "kernel_main enter" << ENDL();
 #if defined(COMPILE_FOR_NCRISC)
     // ========================================================================
     // NCRISC — CCL broadcast writer, mcast receiver, argmax reader,
@@ -335,7 +334,6 @@ void kernel_main() {
     //   └──────────────────────┴─────────┴────────────────────────────────────┘
     // ========================================================================
     uint32_t brisc_rt_arg_idx = 0;
-    DPRINT << "brisc_rt_arg_idx" << ENDL();
     // --- BRISC: CCL broadcast reader + optional socket-reader path + mcast sender ---
 #if !defined(SKIP_CCL) || defined(ENABLE_SOCKET_READER)
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
@@ -357,7 +355,6 @@ void kernel_main() {
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
     using MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs matmul_args{};
-    DPRINT << "rmsnorm_args" << ENDL();
 
     // ── Argmax writer (matmul cores, argmax_final_core) ─────────────
     using ArgmaxCTArgs = deepseek_b1_ops::Sampling::WriterCTArgs<
@@ -367,7 +364,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("argmax_socket_cb"),
         get_named_compile_time_arg_val("argmax_socket_page_size_bytes"),
         get_named_compile_time_arg_val("argmax_defer_socket_output")>;
-    DPRINT << "argmax_args" << ENDL();
 
     deepseek_b1_ops::Sampling::WriterArgs sampling_args{
         .final_noc_x = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
@@ -382,8 +378,6 @@ void kernel_main() {
         .persistent_dst_sem_addr = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
     };
     const uint32_t persistent_next_iter_global_sem_addr = sampling_args.persistent_dst_sem_addr;
-
-    DPRINT << "psr=" << persistent_next_iter_global_sem_addr << ENDL();
 
     constexpr uint32_t base_token_output_l1_addr = get_named_compile_time_arg_val("base_token_output_l1_addr");
 
@@ -410,7 +404,6 @@ void kernel_main() {
         Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
         get_write_ptr(mcast_dst_cb),
     };
-    DPRINT << "mcast_args" << ENDL();
     // ── MTP: EH mcast sender (input_core, enable_mtp) ──────────────
     using McastEhCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_eh_num_cores"),

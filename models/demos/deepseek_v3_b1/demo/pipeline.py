@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     PassthroughPayload,
     PassthroughStage,
     SpecLMHeadStage,
+    SpecLMHeadWithEmbeddingStage,
     StageContext,
     StageKind,
 )
@@ -137,6 +138,48 @@ def create_single_galaxy_spec_decode_pipeline_configuration(
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
         )
+
+    return PipelineConfiguration(
+        {
+            0: stage_0,
+            1: stage_1,
+            2: stage_2,
+            3: stage_3,
+        }
+    )
+
+
+def create_single_galaxy_combined_spec_decode_pipeline_configuration(
+    weight_provider: WeightProvider,
+    *,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+) -> PipelineConfiguration:
+    """4-stage single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
+    P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0."""
+
+    def stage_0(device: ttnn.MeshDevice) -> StageKind:
+        return SpecLMHeadWithEmbeddingStage(
+            weights=weight_provider.load_lm_head(device),
+            embedding_weights=weight_provider.load_embedding(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+        )
+
+    def stage_1(device: ttnn.MeshDevice) -> StageKind:
+        return BaseLMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            mtp_weights=weight_provider.load_mtp_weights(device),
+            send_mtp_output_downstream=True,
+        )
+
+    def stage_2(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    def stage_3(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
     return PipelineConfiguration(
         {
