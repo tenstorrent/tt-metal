@@ -2585,6 +2585,82 @@ class TTNNBailingMoEAttention(TTNNModule):
 
         return attn_output, None, past_key_values
 
+    def _get_cur_pos_device_tensor(self, cache_position, past_key_values, layer_idx, batch_size):
+        """Get cur_pos as a device tensor, trace-compatible.
+
+        During trace capture (inside begin_trace_capture/end_trace_capture),
+        no new device buffers can be allocated (no ttnn.from_torch/to_device).
+        This method uses the already-on-device cache_position tensor directly,
+        avoiding any host→device transfers.
+
+        The cache_position kwarg is pre-allocated as a device buffer by
+        TracedRun._capture_trace before trace begins.
+        """
+        # Extract ttnn.Tensor from wrapper if needed
+        cp = cache_position
+        if isinstance(cp, TorchTTNNTensor) and cp.ttnn_tensor is not None:
+            cp = cp.ttnn_tensor
+
+        # If cache_position is already a device tensor, use directly (trace-safe path).
+        # During decode, the decoder layer passes position_ids (shape [1,1] or [B,1])
+        # which arrives as a device tensor after TracedRun's transform chain.
+        # We flatten and typecast to int32 for paged_update_cache / paged_sdpa_decode.
+        if isinstance(cp, ttnn.Tensor) and hasattr(cp, "storage_type") and cp.storage_type() != ttnn.StorageType.HOST:
+            # Flatten to 1-D: [1,1] -> [1] or [B,1] -> [B]
+            if len(cp.shape) > 1:
+                total_elems = 1
+                for d in cp.shape:
+                    total_elems *= d
+                cp = ttnn.reshape(cp, (total_elems,))
+            # Slice to batch_size if needed
+            if cp.shape[0] > batch_size:
+                cp = ttnn.slice(cp, [0], [batch_size])
+            # Typecast to int32 if needed (paged KV ops require int32)
+            if cp.dtype != ttnn.int32:
+                orig_size = cp.shape[0]
+                if orig_size % 32 != 0:
+                    pad_amount = 32 - (orig_size % 32)
+                    if not hasattr(self, "_pos_typecast_pad_buf") or self._pos_typecast_pad_buf is None:
+                        pad_torch = torch.zeros(pad_amount, dtype=torch.int64)
+                        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
+                        self._pos_typecast_pad_buf = ttnn.from_torch(
+                            pad_torch,
+                            device=self.device,
+                            dtype=cp.dtype,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            mesh_mapper=mesh_mapper,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        )
+                    cp = ttnn.concat([cp, self._pos_typecast_pad_buf], dim=-1)
+                cp = ttnn.typecast(cp, ttnn.int32)
+                if orig_size % 32 != 0:
+                    cp = ttnn.slice(cp, [0], [orig_size])
+            return cp
+
+        # Non-traced / host-tensor path: convert to torch and send to device
+        if cache_position is None:
+            cur_pos = past_key_values.get_seq_length(layer_idx)
+            cache_position_tensor = torch.tensor([cur_pos], dtype=torch.int32)
+        else:
+            if isinstance(cp, TorchTTNNTensor):
+                cp = cp.to_torch
+            if isinstance(cp, ttnn.Tensor):
+                mesh_composer = None
+                if hasattr(cp, "device") and cp.device() is not None and cp.device().get_num_devices() > 1:
+                    mesh_composer = ttnn.ConcatMeshToTensor(cp.device(), dim=0)
+                cp = ttnn.to_torch(cp, mesh_composer=mesh_composer)
+            cache_position_tensor = cp.flatten()[:batch_size].to(torch.int32)
+
+        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
+        return ttnn.from_torch(
+            cache_position_tensor,
+            device=self.device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def _forward_decode_paged(
         self,
         hidden_states: ttnn.Tensor,
@@ -2632,36 +2708,18 @@ class TTNNBailingMoEAttention(TTNNModule):
 
         layer_idx = self._fallback_torch_layer.layer_idx
 
-        if cache_position is None:
-            cur_pos = past_key_values.get_seq_length(layer_idx)
-            cache_position_tensor = torch.tensor([cur_pos], dtype=torch.int32)
-        else:
-            cp = cache_position
-            if isinstance(cp, TorchTTNNTensor):
-                cp = cp.to_torch
-            if isinstance(cp, ttnn.Tensor):
-                mesh_composer = None
-                if hasattr(cp, "device") and cp.device() is not None and cp.device().get_num_devices() > 1:
-                    mesh_composer = ttnn.ConcatMeshToTensor(cp.device(), dim=0)
-                cp = ttnn.to_torch(cp, mesh_composer=mesh_composer)
-            cache_position_tensor = cp.flatten()[:batch_size].to(torch.int32)
-
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
-        cur_pos_tt = ttnn.from_torch(
-            cache_position_tensor,
-            device=self.device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mesh_mapper,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # Build cur_pos_tt (device tensor for paged KV cache position).
+        # Trace-compatible path: if cache_position is already a device tensor
+        # (pre-allocated by TracedRun), use it directly to avoid host→device
+        # transfers that are not capturable during trace recording.
+        cur_pos_tt = self._get_cur_pos_device_tensor(cache_position, past_key_values, layer_idx, batch_size)
 
         if isinstance(query_states, ttnn.Tensor) and query_states.dtype != ttnn.bfloat16:
             query_states = ttnn.typecast(query_states, ttnn.bfloat16)
         if isinstance(key_states, ttnn.Tensor) and key_states.dtype != ttnn.bfloat16:
             key_states = ttnn.typecast(key_states, ttnn.bfloat16)
 
-        cos_ttnn, sin_ttnn = self._rotary_setup.get_cos_sin_for_decode(cache_position_tensor)
+        cos_ttnn, sin_ttnn = self._rotary_setup.get_cos_sin_for_decode(cur_pos_tt)
 
         # HEIGHT_SHARDED memory configs for RoPE decode
         batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.device.compute_with_storage_grid_size(), True)

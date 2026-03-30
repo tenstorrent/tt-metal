@@ -9,10 +9,10 @@ import torch
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule, deallocate_weights_after, run_on_devices, DeviceArch
-from models.experimental.tt_symbiote.core.run_config import trace_enabled, trace_disabled
+from models.experimental.tt_symbiote.core.run_config import trace_disabled
 
 
-@trace_enabled
+@trace_disabled
 class TTNNLinear(TTNNModule):
     """TTNN-accelerated linear layer."""
 
@@ -208,12 +208,24 @@ class TTNNLinearIColShardedWAllReduced(TTNNLinearIColShardedWRowSharded):
 
         # Matmul: partial sum on each device
         tt_output = ttnn.linear(input_tensor, self.tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_output = ttnn.all_reduce(
+        # Decompose all_reduce into reduce_scatter + all_gather for trace compatibility.
+        # ttnn.all_reduce internally allocates an intermediate buffer dynamically, which
+        # is incompatible with TTNN trace capture (requires stable buffer addresses).
+        tt_output = ttnn.reduce_scatter(
             tt_output,
+            dim=3,
             num_links=1,
-            topology=ttnn.Topology.Ring,
             cluster_axis=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Ring,
+        )
+        tt_output = ttnn.all_gather(
+            tt_output,
+            dim=3,
+            num_links=1,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Ring,
         )
         if self.tt_bias is not None:
             tt_output += self.tt_bias
@@ -345,7 +357,7 @@ class PytorchLinearActivation(nn.Module):
         return hidden_states
 
 
-@trace_enabled
+@trace_disabled
 class TTNNLinearActivation(TTNNModule):
     """Linear layer with activation using TTNN."""
 

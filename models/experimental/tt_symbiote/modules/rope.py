@@ -421,34 +421,82 @@ class BailingRotarySetup:
         self,
         position_ids: Union[torch.Tensor, ttnn.Tensor],
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Get cos/sin for decode via embedding lookup. Returns [1, batch, 1, head_dim]."""
-        if isinstance(position_ids, ttnn.Tensor):
-            if self.is_mesh_device:
-                pos_torch = ttnn.to_torch(
-                    position_ids,
-                    mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
-                )
-                pos_torch = pos_torch[: position_ids.shape[0]]
-            else:
-                pos_torch = ttnn.to_torch(position_ids)
+        """Get cos/sin for decode via embedding lookup. Returns [1, batch, 1, head_dim].
+
+        Trace-compatible: if position_ids is already a device tensor (e.g. from
+        TracedRun pre-allocated buffers), uses it directly via device ops to avoid
+        host→device transfers that break trace capture.
+        """
+        # Check if position_ids is already on device (trace-compatible path)
+        if (
+            isinstance(position_ids, ttnn.Tensor)
+            and hasattr(position_ids, "storage_type")
+            and position_ids.storage_type() != ttnn.StorageType.HOST
+        ):
+            pos_ttnn = position_ids
+            # Convert int32→uint32 for embedding lookup.
+            # ttnn.typecast requires padded_shape[-1] % 32 == 0.
+            # During trace capture, we can't use ttnn.pad (writes host fill value).
+            # Instead, concat with a pre-allocated zeros buffer to reach size 32.
+            if pos_ttnn.dtype != ttnn.uint32:
+                orig_size = pos_ttnn.shape[-1] if len(pos_ttnn.shape) > 0 else 1
+                if orig_size % 32 != 0:
+                    pad_amount = 32 - (orig_size % 32)
+                    # Lazily create/cache zeros buffer for padding
+                    if not hasattr(self, "_typecast_pad_buffer") or self._typecast_pad_buffer is None:
+                        import torch as _torch
+
+                        pad_torch = _torch.zeros(pad_amount, dtype=_torch.int32)
+                        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh_device else None
+                        self._typecast_pad_buffer = ttnn.from_torch(
+                            pad_torch,
+                            device=self.device,
+                            dtype=ttnn.int32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            mesh_mapper=mesh_mapper,
+                        )
+                    # Concat to reach size 32 (pure device op, trace-safe)
+                    pos_ttnn = ttnn.concat([pos_ttnn, self._typecast_pad_buffer], dim=-1)
+                pos_ttnn = ttnn.typecast(pos_ttnn, ttnn.uint32)
+                # Slice back to original size
+                if orig_size % 32 != 0:
+                    if len(pos_ttnn.shape) <= 1:
+                        pos_ttnn = ttnn.slice(pos_ttnn, [0], [orig_size])
+                    else:
+                        pos_ttnn = ttnn.slice(pos_ttnn, [0, 0], [pos_ttnn.shape[0], orig_size])
+            # Reshape to [1, batch] if needed for embedding
+            if len(pos_ttnn.shape) == 1:
+                pos_ttnn = ttnn.reshape(pos_ttnn, (1, pos_ttnn.shape[0]))
         else:
-            pos_torch = position_ids
+            # Host-tensor path: convert to torch and send to device
+            if isinstance(position_ids, ttnn.Tensor):
+                if self.is_mesh_device:
+                    pos_torch = ttnn.to_torch(
+                        position_ids,
+                        mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0),
+                    )
+                    pos_torch = pos_torch[: position_ids.shape[0]]
+                else:
+                    pos_torch = ttnn.to_torch(position_ids)
+            else:
+                pos_torch = position_ids
 
-        if len(pos_torch.shape) == 2:
-            pos_torch = pos_torch.squeeze(0)
+            if len(pos_torch.shape) == 2:
+                pos_torch = pos_torch.squeeze(0)
 
-        batch_size = pos_torch.shape[0]
-        pos_indices = pos_torch.reshape(1, batch_size).to(torch.int32)
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh_device else None
+            batch_size = pos_torch.shape[0]
+            pos_indices = pos_torch.reshape(1, batch_size).to(torch.int32)
+            mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh_device else None
 
-        pos_ttnn = ttnn.from_torch(
-            pos_indices,
-            device=self.device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
+            pos_ttnn = ttnn.from_torch(
+                pos_indices,
+                device=self.device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper,
+            )
 
         cos = ttnn.embedding(
             pos_ttnn,

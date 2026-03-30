@@ -885,6 +885,7 @@ class TraceEntry:
 
     trace_id: int
     trace_inputs: List[Any]
+    trace_kwargs: Dict[str, Any]  # Pre-allocated kwarg tensor buffers
     trace_output: Any
     device: Any
 
@@ -994,6 +995,20 @@ class TracedRun(LightweightRun):
                 trace_idx += 1
 
     @staticmethod
+    def _copy_kwargs_to_trace_buffer(new_kwargs, trace_kwargs) -> None:
+        """Copy new kwargs to trace kwarg buffers."""
+        for key, trace_buf in trace_kwargs.items():
+            if trace_buf is None:
+                continue
+            new_val = new_kwargs.get(key)
+            if new_val is None:
+                continue
+            if isinstance(new_val, ttnn.Tensor):
+                ttnn.copy(new_val, trace_buf)
+            elif hasattr(new_val, "ttnn_tensor") and new_val.ttnn_tensor is not None:
+                ttnn.copy(new_val.ttnn_tensor, trace_buf)
+
+    @staticmethod
     def _capture_trace(module, func_args, func_kwargs, cache_key) -> TraceEntry:
         """Capture trace for module."""
         from loguru import logger
@@ -1028,17 +1043,42 @@ class TracedRun(LightweightRun):
                 trace_inputs.append(None)
                 trace_func_args.append(arg)
 
+        # Pre-allocate persistent keyword argument buffers
+        trace_func_kwargs = {}
+        trace_kwargs_map = {}  # key -> trace buffer
+        for key, val in func_kwargs.items():
+            if isinstance(val, ttnn.Tensor):
+                host_tensor = val.cpu() if val.storage_type() != ttnn.StorageType.HOST else val
+                trace_kwarg = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                trace_kwargs_map[key] = trace_kwarg
+                trace_func_kwargs[key] = trace_kwarg
+            elif hasattr(val, "ttnn_tensor") and val.ttnn_tensor is not None:
+                t = val.ttnn_tensor
+                host_tensor = t.cpu() if t.storage_type() != ttnn.StorageType.HOST else t
+                trace_kwarg = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                trace_kwargs_map[key] = trace_kwarg
+                from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+                trace_func_kwargs[key] = TorchTTNNTensor(trace_kwarg)
+            else:
+                trace_func_kwargs[key] = val
+
         # Warm-up
         trace_output = module.forward(*func_args, **func_kwargs)
+        # Synchronize device to ensure all warm-up ops (including CCL) complete
+        # before starting trace capture. Without this, in-flight CCL ops can
+        # cause "Writes/Reads are not supported during trace capture" errors.
+        ttnn.synchronize_device(device)
         # Capture
         trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
-        _ = module.forward(*trace_func_args, **func_kwargs)
+        _ = module.forward(*trace_func_args, **trace_func_kwargs)
         ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
         ttnn.synchronize_device(device)
 
         entry = TraceEntry(
             trace_id=trace_id,
             trace_inputs=trace_inputs,
+            trace_kwargs=trace_kwargs_map,
             trace_output=trace_output,
             device=device,
         )
@@ -1108,6 +1148,7 @@ class TracedRun(LightweightRun):
             print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
             entry = TracedRun._trace_cache[cache_key]
             TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
+            TracedRun._copy_kwargs_to_trace_buffer(func_kwargs, entry.trace_kwargs)
             ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
             result = entry.trace_output
         else:

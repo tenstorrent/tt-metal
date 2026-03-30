@@ -12,11 +12,13 @@ eliminating host round-trips that force device synchronization.
 import ttnn
 
 from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.run_config import trace_enabled
 from models.experimental.tt_symbiote.modules.attention import TTNNBailingMoEAttention
 from models.experimental.tt_symbiote.modules.moe import TTNNBailingMoE
 from models.experimental.tt_symbiote.modules.normalization import TTNNDistributedRMSNorm
 
 
+@trace_enabled
 class TTNNBailingMoEDecoderLayer(TTNNModule):
     """Replaces BailingMoeV2DecoderLayer to keep residual adds on-device.
 
@@ -87,19 +89,25 @@ class TTNNBailingMoEDecoderLayer(TTNNModule):
         # Input layernorm
         hs = self.input_layernorm(hs)
 
-        # Attention
+        # Attention — pass position_ids as cache_position so the paged-attention
+        # decode path can derive cur_pos as a device tensor (trace-safe).
+        # The HF model does NOT forward cache_position to the decoder layer,
+        # so kwargs.get("cache_position") is always None.
         attn_out, self_attn_weights, present_key_value = self.attention(
             hidden_states=hs,
             position_embeddings=position_embeddings,
             attention_mask=attention_mask,
             past_key_value=past_key_value,
-            cache_position=kwargs.get("cache_position"),
+            cache_position=position_ids,
         )
 
         # Residual add ON DEVICE (replaces aten::add on CPU)
         hs = ttnn.add(residual, attn_out)
         ttnn.deallocate(attn_out)
-        ttnn.deallocate(residual)
+        # NOTE: Do NOT deallocate residual here — it is the pre-allocated trace
+        # input buffer.  ttnn.deallocate inside a traced forward would be
+        # replayed by execute_trace, freeing the buffer that
+        # _copy_inputs_to_trace_buffer needs on the next replay iteration.
 
         # Save new residual
         residual = hs

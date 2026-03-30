@@ -56,7 +56,7 @@ def create_paged_kv_cache(model_config, device, batch_size=1):
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 50000000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [{"trace_region_size": 200000000, "num_command_queues": 1, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -124,7 +124,9 @@ def test_ling_mini_2_0(mesh_device):
     # Warmup run
     outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_cache)
 
-    # Reset cache for main run
+    # Reset cache for main run — must also release all traces since they
+    # reference the old cache's device buffers which will be deallocated.
+    TracedRun.release_all()
     paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
 
     DispatchManager.clear_timings()
