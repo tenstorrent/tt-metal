@@ -20,7 +20,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedShardSpec, OverlappedTensor, overlap_tensors
+from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensor, OverlappedTensorSpec, overlap_tensors
 
 
 def shuffle_weights_for_interleaved_qnope_qrope(
@@ -92,7 +92,7 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
     the per-device layout; TP is inferred from the device topology at
     runtime (single-device -> TP=1, 4x2 mesh -> TP=2).
 
-    The three sub-tensor shard specs use :class:`OverlappedShardSpec`
+    The three sub-tensor shard specs use :class:`OverlappedTensorSpec`
     to compute per-shard tile counts and byte sizes.  ``q_a_shard_spec``
     uses the packed shape ``(H/2, 2W)`` after the ``shuffle_q_a``
     transform.
@@ -110,23 +110,23 @@ class QAB_KVA_PROJ_SingleDeviceOverlapSpec:
     kv_a_proj_shape: tuple[int, int] = (7168, 576)
 
     # Sub-tensor shard specs — q_a uses the packed shape (H/2, 2W)
-    q_a_shard_spec: OverlappedShardSpec = field(
-        default_factory=lambda: OverlappedShardSpec(
+    q_a_shard_spec: OverlappedTensorSpec = field(
+        default_factory=lambda: OverlappedTensorSpec(
             core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
             raw_tensor_shape=(3584, 3072),
             dtype=ttnn.DataType.BFLOAT8_B,
         )
     )
-    q_b_shard_spec: OverlappedShardSpec = field(
-        default_factory=lambda: OverlappedShardSpec(
+    q_b_shard_spec: OverlappedTensorSpec = field(
+        default_factory=lambda: OverlappedTensorSpec(
             core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7))}),
             raw_tensor_shape=(1536, 12288),
             dtype=ttnn.DataType.BFLOAT8_B,
             tp_dim=(None, 0),
         )
     )
-    kv_a_shard_spec: OverlappedShardSpec = field(
-        default_factory=lambda: OverlappedShardSpec(
+    kv_a_shard_spec: OverlappedTensorSpec = field(
+        default_factory=lambda: OverlappedTensorSpec(
             core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 8), ttnn.CoreCoord(8, 9))}),
             raw_tensor_shape=(7168, 576),
             dtype=ttnn.DataType.BFLOAT8_B,
@@ -220,8 +220,8 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
     Shape tuples follow (height, width) convention.
     """
 
-    o_proj: OverlappedShardSpec = field(
-        default_factory=lambda: OverlappedShardSpec(
+    o_proj: OverlappedTensorSpec = field(
+        default_factory=lambda: OverlappedTensorSpec(
             core_range_set=ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 7)),  # 96 cores
@@ -233,15 +233,15 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
             tp_dim=(None, 0),
         )
     )
-    gate_mm: OverlappedShardSpec = field(
-        default_factory=lambda: OverlappedShardSpec(
+    gate_mm: OverlappedTensorSpec = field(
+        default_factory=lambda: OverlappedTensorSpec(
             core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(12, 0), ttnn.CoreCoord(12, 7))}),
             raw_tensor_shape=(7168, 256),
             dtype=ttnn.DataType.BFLOAT16,
         )
     )
-    attn_norm: OverlappedShardSpec = field(
-        default_factory=lambda: OverlappedShardSpec(
+    attn_norm: OverlappedTensorSpec = field(
+        default_factory=lambda: OverlappedTensorSpec(
             core_range_set=_GAMMA_CORE,
             raw_tensor_shape=(1, 7168),
             dtype=ttnn.DataType.BFLOAT16,
@@ -249,8 +249,8 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
             tile_w=32,
         )
     )
-    q_norm: OverlappedShardSpec = field(
-        default_factory=lambda: OverlappedShardSpec(
+    q_norm: OverlappedTensorSpec = field(
+        default_factory=lambda: OverlappedTensorSpec(
             core_range_set=_GAMMA_CORE,
             raw_tensor_shape=(1, 1536),
             dtype=ttnn.DataType.BFLOAT16,
@@ -258,8 +258,8 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
             tile_w=32,
         )
     )
-    kv_norm: OverlappedShardSpec = field(
-        default_factory=lambda: OverlappedShardSpec(
+    kv_norm: OverlappedTensorSpec = field(
+        default_factory=lambda: OverlappedTensorSpec(
             core_range_set=_KV_NORM_CORE,
             raw_tensor_shape=(1, 512),
             dtype=ttnn.DataType.BFLOAT16,
@@ -267,8 +267,8 @@ class O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec:
             tile_w=32,
         )
     )
-    ffn_norm: OverlappedShardSpec = field(
-        default_factory=lambda: OverlappedShardSpec(
+    ffn_norm: OverlappedTensorSpec = field(
+        default_factory=lambda: OverlappedTensorSpec(
             core_range_set=_GAMMA_CORE,
             raw_tensor_shape=(1, 7168),
             dtype=ttnn.DataType.BFLOAT16,
@@ -612,7 +612,7 @@ class BlitzDecodeWeights:
                     (
                         "q_a_proj",
                         q_a_packed,
-                        OverlappedShardSpec(
+                        OverlappedTensorSpec(
                             core_range_set=q_ab_cores,
                             raw_tensor_shape=tuple(q_a_packed.shape),
                             dtype=dtype,
@@ -621,7 +621,7 @@ class BlitzDecodeWeights:
                     (
                         "q_b_proj",
                         q_b_preprocessed,
-                        OverlappedShardSpec(
+                        OverlappedTensorSpec(
                             core_range_set=q_ab_cores,
                             raw_tensor_shape=tuple(q_b_preprocessed.shape),
                             dtype=dtype,
@@ -633,7 +633,7 @@ class BlitzDecodeWeights:
                     (
                         "kv_a_proj",
                         kv_reordered,
-                        OverlappedShardSpec(
+                        OverlappedTensorSpec(
                             core_range_set=kv_cores,
                             raw_tensor_shape=tuple(kv_reordered.shape),
                             dtype=dtype,
@@ -767,7 +767,7 @@ class BlitzDecodeWeights:
                     (
                         "kv_b1_proj",
                         kv_b1_proj_weights,
-                        OverlappedShardSpec(
+                        OverlappedTensorSpec(
                             core_range_set=cfg.kv_b1_core_range_set,
                             raw_tensor_shape=tuple(kv_b1_proj_weights.shape),
                             dtype=dtype,
@@ -780,7 +780,7 @@ class BlitzDecodeWeights:
                     (
                         "kv_b2_proj",
                         kv_b2_preprocessed,
-                        OverlappedShardSpec(
+                        OverlappedTensorSpec(
                             core_range_set=cfg.kv_b2_core_range_set,
                             raw_tensor_shape=tuple(kv_b2_preprocessed.shape),
                             dtype=dtype,
@@ -902,7 +902,7 @@ class BlitzDecodeWeights:
                     (
                         "gate_proj",
                         gate_preprocessed,
-                        OverlappedShardSpec(
+                        OverlappedTensorSpec(
                             core_range_set=cfg.gate_core_range_set,
                             raw_tensor_shape=tuple(gate_preprocessed.shape),
                             dtype=dtype,
@@ -916,7 +916,7 @@ class BlitzDecodeWeights:
                     (
                         "up_proj",
                         up_preprocessed,
-                        OverlappedShardSpec(
+                        OverlappedTensorSpec(
                             core_range_set=cfg.up_core_range_set,
                             raw_tensor_shape=tuple(up_preprocessed.shape),
                             dtype=dtype,

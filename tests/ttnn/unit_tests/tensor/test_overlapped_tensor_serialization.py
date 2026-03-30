@@ -17,7 +17,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedShardSpec, OverlappedTensor, overlap_tensors
+from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensorSpec, OverlappedTensor, overlap_tensors
 
 
 def _core_range_set_eq(a: ttnn.CoreRangeSet, b: ttnn.CoreRangeSet) -> bool:
@@ -59,8 +59,8 @@ def test_overlapped_tensor_roundtrip_single_lane(tmp_path, device, dtype):
     t1 = torch.randn(512, 512, dtype=torch.bfloat16)
     t2 = torch.randn(256, 512, dtype=torch.bfloat16)
 
-    spec1 = OverlappedShardSpec(core_range_set=crs, raw_tensor_shape=(512, 512), dtype=dtype)
-    spec2 = OverlappedShardSpec(core_range_set=crs, raw_tensor_shape=(256, 512), dtype=dtype)
+    spec1 = OverlappedTensorSpec(core_range_set=crs, raw_tensor_shape=(512, 512), dtype=dtype)
+    spec2 = OverlappedTensorSpec(core_range_set=crs, raw_tensor_shape=(256, 512), dtype=dtype)
 
     views = overlap_tensors([[("t1", t1, spec1), ("t2", t2, spec2)]], device=device)
     assert len(views) == 2
@@ -92,8 +92,8 @@ def test_overlapped_tensor_roundtrip_multi_lane(tmp_path, device, dtype):
     t_primary = torch.randn(512, 512, dtype=torch.bfloat16)
     t_bf16 = torch.randn(128, 128, dtype=torch.bfloat16)
 
-    spec_primary = OverlappedShardSpec(core_range_set=crs_a, raw_tensor_shape=(512, 512), dtype=dtype)
-    spec_bf16 = OverlappedShardSpec(core_range_set=crs_b, raw_tensor_shape=(128, 128), dtype=dtype)
+    spec_primary = OverlappedTensorSpec(core_range_set=crs_a, raw_tensor_shape=(512, 512), dtype=dtype)
+    spec_bf16 = OverlappedTensorSpec(core_range_set=crs_b, raw_tensor_shape=(128, 128), dtype=dtype)
 
     views = overlap_tensors(
         [[("primary", t_primary, spec_primary)], [("bf16", t_bf16, spec_bf16)]],
@@ -123,7 +123,7 @@ def test_overlapped_tensor_roundtrip_to_device(tmp_path, device, dtype):
 
     crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
     t1 = torch.randn(256, 512, dtype=torch.bfloat16)
-    spec1 = OverlappedShardSpec(core_range_set=crs, raw_tensor_shape=(256, 512), dtype=dtype)
+    spec1 = OverlappedTensorSpec(core_range_set=crs, raw_tensor_shape=(256, 512), dtype=dtype)
 
     views = overlap_tensors([[("t1", t1, spec1)]], device=device)
 
@@ -148,7 +148,7 @@ def test_overlapped_tensor_roundtrip_height_sharded(tmp_path, device, dtype):
 
     crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})
     t1 = torch.randn(512, 256, dtype=torch.bfloat16)
-    spec1 = OverlappedShardSpec(
+    spec1 = OverlappedTensorSpec(
         core_range_set=crs,
         raw_tensor_shape=(512, 256),
         dtype=dtype,
@@ -180,8 +180,8 @@ def test_overlapped_tensor_roundtrip_mixed_tiles(tmp_path, device, dtype):
     t_main = torch.randn(256, 512, dtype=torch.bfloat16)
     t_gamma = torch.randn(1, 32, dtype=torch.bfloat16)
 
-    spec_main = OverlappedShardSpec(core_range_set=crs_main, raw_tensor_shape=(256, 512), dtype=dtype)
-    spec_gamma = OverlappedShardSpec(
+    spec_main = OverlappedTensorSpec(core_range_set=crs_main, raw_tensor_shape=(256, 512), dtype=dtype)
+    spec_gamma = OverlappedTensorSpec(
         core_range_set=crs_gamma,
         raw_tensor_shape=(1, 32),
         dtype=dtype,
@@ -240,8 +240,8 @@ def test_overlapped_tensor_roundtrip_tp_4x2(tmp_path, bh_2d_mesh_device, dtype):
     t1 = torch.randn(512, 512, dtype=torch.bfloat16)
     t2 = torch.randn(256, 1024, dtype=torch.bfloat16)
 
-    spec1 = OverlappedShardSpec(core_range_set=crs, raw_tensor_shape=(512, 512), dtype=dtype)
-    spec2 = OverlappedShardSpec(
+    spec1 = OverlappedTensorSpec(core_range_set=crs, raw_tensor_shape=(512, 512), dtype=dtype)
+    spec2 = OverlappedTensorSpec(
         core_range_set=crs,
         raw_tensor_shape=(256, 1024),
         dtype=dtype,

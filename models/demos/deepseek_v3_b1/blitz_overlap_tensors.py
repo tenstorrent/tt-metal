@@ -19,10 +19,10 @@ _DTYPE_ELEMENT_BYTES = {
 
 
 @dataclass
-class OverlappedShardSpec:
+class OverlappedTensorSpec:
     """Describes one sub-tensor within a fused raw-byte buffer.
 
-    Multiple ``OverlappedShardSpec`` instances share a single L1
+    Multiple ``OverlappedTensorSpec`` instances share a single L1
     buffer whose per-core shard is zero-padded to a common maximum
     byte size.  Each spec carries the core range, logical tensor shape,
     dtype, and tile dimensions needed to pack its portion of the shard.
@@ -114,11 +114,11 @@ class OverlappedShardSpec:
         return self.tiles_per_shard(mesh_shape) * self._tile_bytes()
 
 
-def max_shard_bytes(shard_specs: list[list[OverlappedShardSpec]], mesh_shape: tuple[int, int]) -> int:
+def max_shard_bytes(shard_specs: list[list[OverlappedTensorSpec]], mesh_shape: tuple[int, int]) -> int:
     return max(sum(spec.shard_bytes(mesh_shape) for spec in lane) for lane in shard_specs)
 
 
-def tilize_and_pack(data_2d: torch.Tensor, spec: OverlappedShardSpec) -> bytes:
+def tilize_and_pack(data_2d: torch.Tensor, spec: OverlappedTensorSpec) -> bytes:
     match spec.dtype:
         case ttnn.bfloat8_b:
             return tilize_and_pack_bfp8(data_2d, spec.tile_h, spec.tile_w)
@@ -156,7 +156,7 @@ class OverlappedTensor:
 
 
 def overlap_tensors(
-    tensors: list[list[tuple[str, torch.Tensor, OverlappedShardSpec]]],
+    tensors: list[list[tuple[str, torch.Tensor, OverlappedTensorSpec]]],
     device: ttnn.Device,
     move_to_device: bool = True,
 ) -> dict[str, OverlappedTensor]:
@@ -165,7 +165,7 @@ def overlap_tensors(
     The fused tensor is always stored as WIDTH_SHARDED on the device
     (one flat shard per core).  Individual sub-tensors within the fused
     buffer can be either WIDTH_SHARDED or HEIGHT_SHARDED — the
-    ``sharding`` field on each ``OverlappedShardSpec`` controls how the
+    ``sharding`` field on each ``OverlappedTensorSpec`` controls how the
     per-device tensor is sliced across cores before tilization.
 
     Args:
