@@ -4,6 +4,9 @@
 
 #include "dispatch.hpp"
 #include <cstdint>
+#include "allocator/allocator.hpp"
+#include "context/context_types.hpp"
+#include "device/device_manager.hpp"
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
 #include "dispatch/system_memory_manager.hpp"
@@ -32,8 +35,10 @@ void validate_core_read_write_bounds(
     IDevice* device, const CoreCoord& virtual_core, DeviceAddr address, uint32_t size_bytes) {
     const HalMemType mem_type = device->get_mem_type_of_core(virtual_core);
     if (mem_type == HalMemType::L1) {
-        const DeviceAddr l1_base_address = device->get_dev_addr(virtual_core, HalL1MemAddrType::BASE);
-        const DeviceAddr l1_size = device->get_dev_size(virtual_core, HalL1MemAddrType::BASE);
+        const auto& hal = tt::tt_metal::MetalContext::instance(extract_context_id(device)).hal();
+        HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
+        const DeviceAddr l1_base_address = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::BASE);
+        const DeviceAddr l1_size = hal.get_dev_size(programmable_core_type, HalL1MemAddrType::BASE);
 
         TT_FATAL(address >= l1_base_address, "Region in L1 is out of bounds");
         TT_FATAL(address + size_bytes <= l1_base_address + l1_size, "Region in L1 is out of bounds");
@@ -176,6 +181,26 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
 }
 
+void read_completion_queue(
+    void* dst,
+    uint32_t size_bytes,
+    ChipId device_id,
+    uint16_t channel,
+    uint32_t addr,
+    const SystemMemoryManager& sysmem_manager) {
+    if (sysmem_manager.is_dram_backed()) {
+        const uint32_t dram_channel = tt::tt_metal::MetalContext::instance()
+                                          .device_manager()
+                                          ->get_active_device(device_id)
+                                          ->allocator_impl()
+                                          ->get_dram_channel_from_bank_id(sysmem_manager.get_dram_region_bank_id());
+        tt::tt_metal::MetalContext::instance().get_cluster().read_dram_vec(
+            dst, size_bytes, device_id, dram_channel, addr);
+    } else {
+        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(dst, size_bytes, addr, device_id, channel);
+    }
+}
+
 void read_core_data_from_completion_queue(
     const ReadCoreDataDescriptor& read_descriptor,
     ChipId mmio_device_id,
@@ -212,12 +237,13 @@ void read_core_data_from_completion_queue(
         const uint32_t num_bytes_to_copy = std::min(
             num_bytes_to_read - num_bytes_read, num_bytes_available_in_completion_queue - completion_queue_read_offset);
 
-        tt::tt_metal::MetalContext::instance().get_cluster().read_sysmem(
+        read_completion_queue(
             (char*)(uint64_t(read_descriptor.dst) + num_bytes_read),
             num_bytes_to_copy,
-            completion_q_read_ptr + completion_queue_read_offset,
             mmio_device_id,
-            channel);
+            channel,
+            completion_q_read_ptr + completion_queue_read_offset,
+            sysmem_manager);
 
         num_bytes_read += num_bytes_to_copy;
         const uint32_t num_pages_read =

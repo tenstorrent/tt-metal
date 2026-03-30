@@ -7,9 +7,9 @@
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
-#include "mcast.hpp"
 #elif defined(COMPILE_FOR_NCRISC)
 #include "api/dataflow/dataflow_api.h"
+#include "mcast.hpp"
 #elif defined(COMPILE_FOR_TRISC)
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/pack_untilize.h"
@@ -20,11 +20,15 @@
 namespace deepseek_b1_ops {
 
 // ============================================================================
-// RMSNorm micro-op
+// KVCacheUpdate micro-op
 //
 // Computes: Update existing KV Cache with 1x576 new cache
 // assumes one core with 1x512 NOPE cache and 2 cores each with 1x32 ROPE cache
 //
+// BRISC: streams existing KV cache pages from DRAM into kv_cache_input_cb
+// NCRISC: waits on compute (untilize), patches new data, waits on compute
+//         (tilize), writes updated pages back to DRAM, signals cache ready
+// TRISC: untilize input_cb -> intermed_cb, tilize intermed_cb -> output_cb
 // ============================================================================
 struct KVCacheUpdate {
     // ========================================================================
@@ -32,7 +36,7 @@ struct KVCacheUpdate {
     // (used as template parameters or in constexpr expressions)
     // ========================================================================
 
-    // Reader CTArgs:none needed
+    // Reader CTArgs: none needed
     struct ReaderCTArgs {};
 
     // Writer CTArgs: none needed
@@ -45,11 +49,9 @@ struct KVCacheUpdate {
     // Runtime args structs - different layout per RISC
     // CB indices etc. filled in kernel via get_named_compile_time_arg_val
     // ========================================================================
-    struct ReaderArgs {};
     struct WriterArgs {
         uint32_t kv_cache_buffer_base_addr;
-        uint32_t pos_addr;
-        uint32_t kv_cache_input_cb;
+        uint32_t local_cur_pos;
         uint32_t kv_cache_intermed_cb;
         uint32_t kv_cache_output_cb;
         uint32_t kv_rmsnorm_output_cb;
@@ -62,66 +64,98 @@ struct KVCacheUpdate {
         uint32_t full_grid_mcast_num_dests;
         uint32_t kv_cache_cur_pos_ready_semaphore_addr;
     };
+    struct ReaderArgs {
+        uint32_t kv_cache_buffer_base_addr;
+        uint32_t local_cur_pos;
+        uint32_t kv_cache_input_cb;
+        uint32_t grid_start_y;
+    };
     struct ComputeArgs {
         uint32_t kv_cache_input_cb;
         uint32_t kv_cache_output_cb;
         uint32_t kv_cache_intermed_cb;
     };
 
-    using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
+    using RTArgs = unified_kernels::SelectByRISCV<WriterArgs, ReaderArgs, ComputeArgs>;
 
     // ========================================================================
-    // Op - the actual operation, IsActiveCore
+    // Op - full KV cache update (owning device)
     // ========================================================================
     template <bool IsNopeCore, bool IsRopeCore>
     class Op {
     public:
         void operator()([[maybe_unused]] const RTArgs& args) { impl(args); }
 
-    private:
-        void impl([[maybe_unused]] const RTArgs& args) {
-#if defined(COMPILE_FOR_BRISC)
+        void set_local_cur_pos([[maybe_unused]] RTArgs& args, [[maybe_unused]] uint32_t local_cur_pos) {
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
+            args.local_cur_pos = local_cur_pos;
+#endif
+        }
+
+        void signal_cache_ready([[maybe_unused]] const RTArgs& args) {
+#if defined(COMPILE_FOR_NCRISC)
             if constexpr (IsRopeCore || IsNopeCore) {
                 static_assert(noc_mode == DM_DYNAMIC_NOC, "KV Cache Update only supports DM_DYNAMIC_NOC");
-                uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
-                uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
-                uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
-                uint32_t new_cache_cb = IsRopeCore ? args.krope_output_cb : args.kv_rmsnorm_output_cb;
+                constexpr uint8_t MCAST_NOC = 0;
+                uint64_t sem_noc_addr = get_noc_multicast_addr<MCAST_NOC>(
+                    args.full_grid_mcast_start_x,
+                    args.full_grid_mcast_start_y,
+                    args.full_grid_mcast_end_x,
+                    args.full_grid_mcast_end_y,
+                    args.kv_cache_cur_pos_ready_semaphore_addr);
+                noc_semaphore_inc_multicast(sem_noc_addr, 1, args.full_grid_mcast_num_dests, MCAST_NOC);
+                volatile tt_l1_ptr uint32_t* sem_addr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
+                __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
+                noc_async_atomic_barrier(MCAST_NOC);
+            }
+#endif
+        }
+
+    private:
+        void impl([[maybe_unused]] const RTArgs& args) {
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
+            if constexpr (IsRopeCore || IsNopeCore) {
                 constexpr uint32_t PAGE_SIZE = 1088;
                 constexpr uint32_t PAGES_PER_BLOCK = 18;
                 constexpr uint32_t CACHES_PER_BLOCK = 32;
-                constexpr uint32_t nope_num_pages = 16;  // Offset in 1x576 for rope component
+                constexpr uint32_t nope_num_pages = 16;
                 constexpr uint32_t kv_cache_num_tiles = IsRopeCore ? 1 : 16;
 
-                volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.pos_addr);
-                uint32_t cur_pos = pos_ptr[0];
+                uint32_t cur_pos = args.local_cur_pos;
 
                 constexpr auto k_args = TensorAccessorArgs<0>();
                 auto kv_tensor_accessor = TensorAccessor(k_args, args.kv_cache_buffer_base_addr, PAGE_SIZE);
 
-                // This op needs to update 18 pages starting from kv_cache_page_id_start
-                // If cur_pos % CACHES_PER_BLOCK != 0, there is an offset into the rows
                 uint32_t kv_cache_page_id_start = cur_pos / CACHES_PER_BLOCK * PAGES_PER_BLOCK;
-                uint32_t offset_in_page = cur_pos % CACHES_PER_BLOCK;
-                uint32_t num_bytes_per_core = IsRopeCore ? 64 : 1024;
-
-                if (IsRopeCore) {
+                if constexpr (IsRopeCore) {
                     uint32_t grid_offset_pages = 1 * (get_absolute_logical_y() - args.grid_start_y);
                     kv_cache_page_id_start += grid_offset_pages;
                     kv_cache_page_id_start += nope_num_pages;
                 }
 
+#if defined(COMPILE_FOR_BRISC)
+                // BRISC: stream existing KV cache pages from DRAM into kv_cache_input_cb
+                uint32_t kv_cache_input_cb = args.kv_cache_input_cb;
+
                 cb_reserve_back(kv_cache_input_cb, kv_cache_num_tiles);
                 uint32_t cb_addr = get_write_ptr(kv_cache_input_cb);
                 for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
                     noc_async_read_page(kv_cache_page_id_start + i, kv_tensor_accessor, cb_addr);
-                    cb_addr += kv_tensor_accessor.page_size;
+                    cb_addr += kv_tensor_accessor.get_aligned_page_size();
                 }
                 noc_async_read_barrier();
 
                 cb_push_back(kv_cache_input_cb, kv_cache_num_tiles);
+#elif defined(COMPILE_FOR_NCRISC)
+                // NCRISC: wait on compute, patch new data, wait on compute, write back to DRAM
+                uint32_t kv_cache_intermed_cb = args.kv_cache_intermed_cb;
+                uint32_t kv_cache_output_cb = args.kv_cache_output_cb;
+                uint32_t new_cache_cb = IsRopeCore ? args.krope_output_cb : args.kv_rmsnorm_output_cb;
+                uint32_t offset_in_page = cur_pos % CACHES_PER_BLOCK;
+                uint32_t num_bytes_per_core = IsRopeCore ? 64 : 1024;
 
-                // wait for unpacker to untilize
+                // 1. Wait for TRISC to finish untilize into kv_cache_intermed_cb
                 cb_wait_front(kv_cache_intermed_cb, kv_cache_num_tiles);
 
                 // 2. Wait for new cache data and update into kv_cache_intermed_cb
@@ -129,7 +163,6 @@ struct KVCacheUpdate {
 
                 uint32_t write_addr = get_read_ptr(kv_cache_intermed_cb) + offset_in_page * num_bytes_per_core;
                 uint32_t new_cache_addr = get_read_ptr(new_cache_cb);
-                // Local copy data from new cache to intermed, 1x512 for nope, 1x64 for rope (1x32 per core)
                 {
                     uint32_t words_per_face = (num_bytes_per_core >> 2);
                     volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(new_cache_addr);
@@ -144,24 +177,14 @@ struct KVCacheUpdate {
                 // 3. Wait for TRISC to finish tilize into kv_cache_output_cb and write out to DRAM
                 cb_wait_front(kv_cache_output_cb, kv_cache_num_tiles);
 
-                cb_addr = get_read_ptr(kv_cache_output_cb);
+                uint32_t cb_addr = get_read_ptr(kv_cache_output_cb);
                 for (uint32_t i = 0; i < kv_cache_num_tiles; i++) {
                     noc_async_write_page(kv_cache_page_id_start + i, kv_tensor_accessor, cb_addr);
-                    cb_addr += kv_tensor_accessor.page_size;
+                    cb_addr += kv_tensor_accessor.get_aligned_page_size();
                 }
-                constexpr uint8_t MCAST_NOC = 0;
-                uint64_t kv_cache_cur_pos_ready_sem_noc_addr = get_noc_multicast_addr<MCAST_NOC>(
-                    args.full_grid_mcast_start_x,
-                    args.full_grid_mcast_start_y,
-                    args.full_grid_mcast_end_x,
-                    args.full_grid_mcast_end_y,
-                    args.kv_cache_cur_pos_ready_semaphore_addr);
                 noc_async_write_barrier();
-                // KV CACHE update is done, signal to all core to start compute
-                noc_semaphore_inc_multicast(
-                    kv_cache_cur_pos_ready_sem_noc_addr, 1, args.full_grid_mcast_num_dests, MCAST_NOC);
                 cb_pop_front(kv_cache_output_cb, kv_cache_num_tiles);
-                noc_async_atomic_barrier(MCAST_NOC);
+#endif
             }
 #elif defined(COMPILE_FOR_TRISC)
             if constexpr (IsNopeCore || IsRopeCore) {
@@ -186,10 +209,10 @@ struct KVCacheUpdate {
                 }
                 pack_untilize_uninit(kv_cache_intermed_cb);
 
-                // Push back to unblock brisc to update kv cache with new data
+                // Push back to unblock ncrisc to update kv cache with new data
                 cb_push_back(kv_cache_intermed_cb, kv_cache_num_tiles);
 
-                // Waits for brisc to push one more "tile"
+                // Waits for ncrisc to push one more "tile"
                 cb_wait_front(kv_cache_intermed_cb, kv_cache_num_tiles + 1);
                 cb_reserve_back(kv_cache_output_cb, kv_cache_num_tiles);
 

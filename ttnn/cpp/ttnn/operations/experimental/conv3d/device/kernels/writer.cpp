@@ -29,6 +29,7 @@ void kernel_main() {
     constexpr uint32_t C_out_block_bytes = get_compile_time_arg_val(19);  // padded to tile width
     constexpr bool use_bias = get_compile_time_arg_val(20) == 1;
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(21));
+    constexpr uint32_t cb_zero_tiled = get_compile_time_arg_val(22);
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
@@ -45,21 +46,27 @@ void kernel_main() {
     const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_reducer = get_arg_val<uint32_t>(argidx++);
-    const uint32_t reducer_core_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t reducer_core_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(argidx++);
 
-    const uint64_t reducer_semaphore_noc_addr = get_noc_addr(reducer_core_x, reducer_core_y, semaphore_addr);
     volatile tt_l1_ptr uint32_t* local_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(semaphore_addr);
 
-    // Get worker core coordinates
-    tt_l1_ptr uint32_t* worker_core_xs = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
-    argidx += num_workers;
-    tt_l1_ptr uint32_t* worker_core_ys = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
+    // Reducer coordinates and worker core coordinates are only present when num_workers > 0
+    uint64_t reducer_semaphore_noc_addr = 0;
+    tt_l1_ptr uint32_t* worker_core_xs = nullptr;
+    tt_l1_ptr uint32_t* worker_core_ys = nullptr;
+    if (num_workers > 0) {
+        const uint32_t reducer_core_x = get_arg_val<uint32_t>(argidx++);
+        const uint32_t reducer_core_y = get_arg_val<uint32_t>(argidx++);
+        reducer_semaphore_noc_addr = get_noc_addr(reducer_core_x, reducer_core_y, semaphore_addr);
+        worker_core_xs = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
+        argidx += num_workers;
+        worker_core_ys = (tt_l1_ptr uint32_t*)(get_arg_addr(argidx));
+    }
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
-    constexpr auto out_args = TensorAccessorArgs<22>();
+    constexpr uint32_t partials_tile_bytes = get_tile_size(cb_matmul_interm_tiled);
+    constexpr auto out_args = TensorAccessorArgs<23>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     const auto out_writer = TensorAccessor(out_args, out_addr, out_row_size_bytes);
@@ -70,6 +77,29 @@ void kernel_main() {
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t C_out_t = C_out_num_blocks * matmul_N_t;
     constexpr uint32_t T_out_H_out_W_out = T_out * H_out * W_out;
+
+    // Zero-fill the zero CB for FPU accumulate reduction (DST += tile + 0).
+    // The zero tile stays resident for the lifetime of the kernel.
+    // Clamp index to avoid constexpr OOB when cb_zero_tiled==32 (fp32 reduction disabled).
+    // The if constexpr discards this branch, but WH's compiler still evaluates get_tile_size.
+    constexpr uint32_t cb_zero_safe = cb_zero_tiled < 32 ? cb_zero_tiled : 0;
+    if constexpr (cb_zero_tiled < 32) {
+        cb_reserve_back(cb_zero_tiled, 1);
+        constexpr uint32_t zero_tile_bytes = get_tile_size(cb_zero_safe);
+        uint32_t zero_addr = get_write_ptr(cb_zero_tiled);
+        uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
+        uint32_t remaining = zero_tile_bytes;
+        while (remaining >= MEM_ZEROS_SIZE) {
+            noc_async_read(zeros_noc, zero_addr, MEM_ZEROS_SIZE);
+            zero_addr += MEM_ZEROS_SIZE;
+            remaining -= MEM_ZEROS_SIZE;
+        }
+        if (remaining > 0) {
+            noc_async_read(zeros_noc, zero_addr, remaining);
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_zero_tiled, 1);
+    }
 
     // Process each batch element
     for (uint32_t batch_idx = 0; batch_idx < N; batch_idx++) {
@@ -131,7 +161,7 @@ void kernel_main() {
                                 // Wait for reducer to ack that it has read our data
                                 noc_semaphore_wait(local_semaphore_addr_ptr, 1);
 
-                                // Hanshake with compute so it can continue
+                                // Handshake with compute so it can continue
                                 cb_pop_front(cb_reduction_tiled, output_tiles);
                                 cb_reserve_back(cb_worker_ack_back, 1);
                                 cb_push_back(cb_worker_ack_back, 1);
@@ -152,9 +182,10 @@ void kernel_main() {
                                     uint64_t worker_output_read_addr = get_noc_addr(
                                         worker_core_xs[worker_idx], worker_core_ys[worker_idx], worker_output_read_ptr);
                                     for (uint32_t tile = 0; tile < output_tiles; tile++) {
-                                        noc_async_read(worker_output_read_addr, reduction_write_ptr, tile_bytes);
-                                        worker_output_read_addr += tile_bytes;
-                                        reduction_write_ptr += tile_bytes;
+                                        noc_async_read(
+                                            worker_output_read_addr, reduction_write_ptr, partials_tile_bytes);
+                                        worker_output_read_addr += partials_tile_bytes;
+                                        reduction_write_ptr += partials_tile_bytes;
                                     }
                                     noc_async_read_barrier();
                                     cb_push_back(cb_reduction_tiled, output_tiles);
@@ -188,4 +219,5 @@ void kernel_main() {
             }
         }
     }
+    noc_async_atomic_barrier();
 }

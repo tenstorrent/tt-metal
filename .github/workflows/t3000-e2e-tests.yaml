@@ -27,6 +27,14 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      model:
+        description: 'Filter tests by model name'
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - deepseek_prefill
   schedule:
     - cron: "0 6 * * *" # runs every day at 6am UTC, 1am EST
 
@@ -50,3 +58,4 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: "wh_llmbox"
+      model: ${{ inputs.model || 'all' }}

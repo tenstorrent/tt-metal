@@ -6,8 +6,8 @@
 DeepSeek V3 B1 model (host interface).
 
 Orchestrates prefill (token-by-token prompt processing) and autoregressive decode
-over the socket interface. Uses HostInterface in loopback mode as a mock decoder
-until the real decoder pipeline is composed from Pre-SDPA, Flash MLA, Post-SDPA, MoE.
+via injectable write/read callables. Caller provides write_fn(token_tensor) and
+read_fn(output_tensor); e.g. Pipeline.write_token / Pipeline.read_output.
 
 Algorithm (prefill-by-decode then generation):
   - Prefill: for i = 0..S-1, call with input_ids = x[i] (B, 1); device uses/updates
@@ -22,21 +22,24 @@ Input tensor shape (H2D):
     runs on device; the host sends token IDs (int32). Payload size is B * TOKEN_ID_BYTES.
 
 Interface vs real decoder:
-  - One H2D write and one D2H read per step. The real decoder will also need per-step
+  - One write and one read per step. The real decoder will also need per-step
     position (cur_pos_tensor / kv_cache_write_index); the engine tracks position for
     when the protocol is extended.
 """
+
+from __future__ import annotations
+
+from typing import Callable
 
 import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 
 # Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
 TOKEN_ID_BYTES: int = 4
 
-# Socket page_size must be PCIe-aligned (see h2d_socket.cpp). Use 64 to work across devices.
+# Socket page_size must be PCIe-aligned (see h2d_socket.cpp). Must match demo stage TOKEN_PAGE_SIZE_BYTES (64).
 PCIE_PAGE_ALIGNMENT_BYTES: int = 64
 
 
@@ -71,95 +74,36 @@ def to_padded_input(
 
 class DeepSeekV3:
     """
-    Host-side model interface for prefill and decode over H2D/D2H sockets.
+    Host-side model interface for prefill and decode via injectable write/read.
     Tracks position for compatibility with the real decoder (position_ids, kv_cache_write_index).
-
-    Prefill uses DEVICE_PULL H2D; decode uses HOST_PUSH H2D. Two HostInterface programs
-    run one at a time on the same core; the first decode_step() transitions from prefill
-    to decode host I/O.
+    Caller manages I/O lifecycle (e.g. Pipeline.setup_and_run() or HostInterface.run/terminate).
     """
 
     def __init__(
         self,
-        h2d_socket_prefill: ttnn.H2DSocket,
-        h2d_socket_decode: ttnn.H2DSocket,
-        d2h_socket: ttnn.D2HSocket,
+        write_fn: Callable[[ttnn.Tensor], None],
+        read_fn: Callable[[ttnn.Tensor], None],
         batch_size: int = 1,
-        loopback_mode: bool = False,
     ) -> None:
         """
         Args:
-            h2d_socket_prefill: H2D socket for prefill; must use DEVICE_PULL mode.
-            h2d_socket_decode: H2D socket for decode; must use HOST_PUSH mode.
-            d2h_socket: D2H socket for device-to-host (shared by prefill and decode).
+            write_fn: Called with a token tensor (PCIe-aligned, page_size_bytes(batch_size)).
+            read_fn: Called with an output tensor; implementation fills it (e.g. Pipeline.read_output).
             batch_size: Batch size B. Current implementation supports only B=1;
                 payload size is B * TOKEN_ID_BYTES (int32).
-            loopback_mode: If True, host I/O uses circular buffers for H2D/D2H loopback
-                If False, host I/O forwards to downstream/upstream cores via D2D sockets.
-
-        Sockets must be created with FIFO size equal to page_size_bytes(batch_size).
         """
         if batch_size != 1:
             raise ValueError(f"DeepSeekV3 currently supports only batch_size=1, got {batch_size}")
-        if h2d_socket_prefill.get_h2d_mode() != ttnn.H2DMode.DEVICE_PULL:
-            raise ValueError(
-                "h2d_socket_prefill must use H2DMode.DEVICE_PULL, got " f"{h2d_socket_prefill.get_h2d_mode()}"
-            )
-        if h2d_socket_decode.get_h2d_mode() != ttnn.H2DMode.HOST_PUSH:
-            raise ValueError("h2d_socket_decode must use H2DMode.HOST_PUSH, got " f"{h2d_socket_decode.get_h2d_mode()}")
-
-        self.h2d_socket_prefill = h2d_socket_prefill
-        self.h2d_socket_decode = h2d_socket_decode
-        self.d2h_socket = d2h_socket
+        self._write_fn = write_fn
+        self._read_fn = read_fn
         self.batch_size = batch_size
         payload_bytes: int = batch_size * TOKEN_ID_BYTES
         logger.debug(f"Payload bytes: {payload_bytes} bytes")
         self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
         self._page_size_datums: int = self._tensor_size_bytes // TOKEN_ID_BYTES
-
-        logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
-        logger.debug(
-            f"Creating host I/O for prefill and decode with aligned page size {self._tensor_size_bytes} bytes (payload size is {payload_bytes} bytes)"
-        )
-
-        self._host_io_prefill: HostInterface = HostInterface(
-            h2d_socket_prefill,
-            d2h_socket,
-            self._tensor_size_bytes,
-            self._tensor_size_bytes,
-            core_to_core_socket_buffer_size=self._tensor_size_bytes,
-            loopback_mode=loopback_mode,
-        )
-        self._host_io_decode: HostInterface = HostInterface(
-            h2d_socket_decode,
-            d2h_socket,
-            self._tensor_size_bytes,
-            self._tensor_size_bytes,
-            core_to_core_socket_buffer_size=self._tensor_size_bytes,
-            loopback_mode=loopback_mode,
-        )
-        self._prefill_active: bool = False
-        self._decode_active: bool = False
         self._position: int = 0
         self._output_buffer: ttnn.Tensor = create_output_buffer(self._page_size_datums)
-
-    def start(self) -> None:
-        """Launch the prefill mock decoder program (DEVICE_PULL H2D) on device."""
-        self._host_io_prefill.run()
-        self._prefill_active = True
-        self._decode_active = False
-
-    def _switch_to_decode(self) -> None:
-        """One-time transition: terminate prefill host I/O, launch decode host I/O (HOST_PUSH)."""
-        if self._decode_active:
-            return
-        if self._prefill_active:
-            logger.debug(f"Terminating prefill host I/O")
-            self._host_io_prefill.terminate(sync_devices=True)
-            self._prefill_active = False
-        logger.debug(f"Switching to decode host I/O")
-        self._host_io_decode.run()
-        self._decode_active = True
+        logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
     def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> ttnn.Tensor:
         """
@@ -182,8 +126,8 @@ class DeepSeekV3:
 
         last_output: ttnn.Tensor | None = None
         for token in prompt_tokens:
-            self.h2d_socket_prefill.write_tensor(token)
-            self.d2h_socket.read_tensor(self._output_buffer)
+            self._write_fn(token)
+            self._read_fn(self._output_buffer)
             last_output = self._output_buffer
             self._position += 1
         assert last_output is not None, "Last output tensor is None"
@@ -191,26 +135,23 @@ class DeepSeekV3:
 
     def decode_step(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """
-        Single decode step: send input via H2D, receive output via D2H.
-        On first call, transitions from prefill host I/O to decode host I/O (HOST_PUSH).
+        Single decode step: send input via write_fn, receive output via read_fn.
         Returns the output tensor. Increments position.
 
         Args:
             input_tensor: Token IDs (B, 1), torch or ttnn.
 
         Returns:
-            Output tensor; valid data is first batch_size elements. In loopback mode
-            that matches the input.
+            Output tensor; valid data is first batch_size elements.
         """
         assert len(input_tensor.shape) == 2, f"Input tensor shape must be (B, 1), got {input_tensor.shape}"
         assert (
             input_tensor.shape[0] == self.batch_size
         ), f"Input tensor batch size must be {self.batch_size}, got {input_tensor.shape[0]}"
 
-        self._switch_to_decode()
         padded_input = to_padded_input(input_tensor, self.batch_size, self._page_size_datums)
-        self.h2d_socket_decode.write_tensor(padded_input)
-        self.d2h_socket.read_tensor(self._output_buffer)
+        self._write_fn(padded_input)
+        self._read_fn(self._output_buffer)
         self._position += 1
         return self._output_buffer
 
@@ -218,12 +159,3 @@ class DeepSeekV3:
     def position(self) -> int:
         """Current sequence position (number of tokens processed so far)."""
         return self._position
-
-    def stop(self) -> None:
-        """Clean shutdown of whichever mock decoder (prefill or decode) is active."""
-        if self._prefill_active:
-            self._host_io_prefill.terminate(sync_devices=True)
-            self._prefill_active = False
-        if self._decode_active:
-            self._host_io_decode.terminate(sync_devices=True)
-            self._decode_active = False

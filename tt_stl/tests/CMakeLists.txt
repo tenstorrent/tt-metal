@@ -7,12 +7,14 @@ target_sources(
     unit_tests_stl_smoke
     PRIVATE
         test_cleanup.cpp
+        test_fmt.cpp
         test_indestructible.cpp
         test_optional_reference.cpp
         test_reflection.cpp
         test_span.cpp
         test_strong_type.cpp
         test_small_vector.cpp
+        test_type_visitor.cpp
 )
 target_link_libraries(
     unit_tests_stl_smoke

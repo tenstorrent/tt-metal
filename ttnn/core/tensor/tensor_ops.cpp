@@ -60,7 +60,7 @@ Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshD
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     // TODO (#25340): Implement correct logic and add test for this
-    return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, TensorTopology{});
+    return Tensor(HostTensor(std::move(distributed_host_buffer), tensor_spec, TensorTopology{}));
 }
 
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
@@ -323,7 +323,7 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
                 tt::tt_metal::BufferDistributionSpec new_buffer_dist_spec = tt::tt_metal::BufferDistributionSpec(
                     tensor_shape_pages, shard_shape_pages, new_shard_spec.grid, new_shard_spec.orientation);
 
-                auto device_local_config = device_storage.mesh_buffer->device_local_config();
+                auto device_local_config = device_storage.get_mesh_buffer().device_local_config();
                 auto& sharding_args = device_local_config.sharding_args;
                 tt::tt_metal::BufferShardingArgs new_sharding_args(
                     new_buffer_dist_spec, new_shard_spec_buffer, sharding_args.buffer_layout());
@@ -335,17 +335,18 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
                     .bottom_up = device_local_config.bottom_up};
 
                 auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-                    device_storage.mesh_buffer->global_config(),
+                    device_storage.get_mesh_buffer().global_config(),
                     new_device_config,
-                    device_storage.mesh_buffer->device(),
-                    device_storage.mesh_buffer->address());
+                    device_storage.get_device(),
+                    device_storage.get_mesh_buffer().address());
                 tt::tt_metal::DeviceStorage view_storage(
                     view_mesh_buffer, device_storage.coords, device_storage.get_root_mesh_buffer());
 
                 return Tensor(view_storage, new_spec, tensor.tensor_topology());
             }
 
-            return Tensor(tensor.host_storage(), new_spec, tensor.tensor_topology());
+            const auto& buffer = tensor.host_storage().buffer();
+            return Tensor(HostTensor(buffer, new_spec, tensor.tensor_topology()));
         });
     output = tt::tt_metal::set_tensor_id(output);
     tt::tt_metal::GraphTracker::instance().track_function_end(output);

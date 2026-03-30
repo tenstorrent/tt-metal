@@ -94,6 +94,18 @@ std::size_t compute_flat_indices(tt::stl::Span<const uint32_t> indices, tt::stl:
 
 }  // namespace tt::tt_metal
 
+std::string ttsl::fmt_detail::to_string(const tt::tt_metal::Shape& shape) {
+    std::string result = "Shape([";
+    for (size_t i = 0; i < shape.rank(); ++i) {
+        if (i > 0) {
+            result += ", ";
+        }
+        result += std::to_string(shape[i]);
+    }
+    result += "])";
+    return result;
+}
+
 nlohmann::json ttsl::json::to_json_t<tt::tt_metal::Shape>::operator()(const tt::tt_metal::Shape& shape) const {
     return ttsl::json::to_json(shape.view());
 }

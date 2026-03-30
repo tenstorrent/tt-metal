@@ -8,11 +8,14 @@
 #include <enchantum/entries.hpp>
 #include <tt_stl/assert.hpp>
 #include <cstdint>
+#include "context/context_types.hpp"
+#include "context/metal_env_accessor.hpp"
 #include "device/device_manager.hpp"
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <experimental/host_api.hpp>
+#include <experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
 #include <sub_device_types.hpp>
@@ -30,7 +33,6 @@
 
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
-#include "data_types.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
@@ -403,6 +405,51 @@ std::map<ChipId, IDevice*> CreateDevices(
     return ret_devices;
 }
 
+}  // namespace detail
+
+namespace experimental {
+
+std::map<ChipId, IDevice*> CreateDevices(
+    ContextId context_id,
+    const std::vector<ChipId>& device_ids,
+    uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    const DispatchCoreConfig& dispatch_core_config,
+    const std::vector<uint32_t>& /*l1_bank_remap*/,
+    size_t worker_l1_size,
+    bool init_profiler,
+    bool initialize_fabric_and_dispatch_fw) {
+    ZoneScoped;
+    auto& ctx = MetalContext::instance(context_id);
+    bool is_galaxy = ctx.get_cluster().is_galaxy_cluster();
+    ctx.initialize_device_manager(
+        device_ids,
+        num_hw_cqs,
+        l1_small_size,
+        trace_region_size,
+        dispatch_core_config,
+        {},
+        worker_l1_size,
+        init_profiler,
+        initialize_fabric_and_dispatch_fw);
+
+    const auto devices = ctx.device_manager()->get_all_active_devices();
+    std::map<ChipId, IDevice*> ret_devices;
+    for (IDevice* dev : devices) {
+        if (is_galaxy and dev->is_mmio_capable()) {
+            continue;
+        }
+        ret_devices.insert({dev->id(), dev});
+    }
+
+    return ret_devices;
+}
+
+}  // namespace experimental
+
+namespace detail {
+
 void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     std::vector<IDevice*> devices_to_close;
     devices_to_close.reserve(devices.size());
@@ -412,7 +459,10 @@ void CloseDevices(const std::map<ChipId, IDevice*>& devices) {
     MetalContext::instance().device_manager()->close_devices(devices_to_close);
 }
 
-void ReleaseOwnership() { MetalContext::destroy_instance(); }
+void ReleaseOwnership() {
+    experimental::DispatchContext::get().reset();
+    MetalContext::destroy_all_instances();
+}
 
 void print_page(
     uint32_t dev_page_id,
@@ -768,6 +818,9 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
              programmable_core_type_index < logical_cores_used_in_program.size();
              programmable_core_type_index++) {
             CoreType core_type = hal.get_core_type(programmable_core_type_index);
+            HalProgrammableCoreType programmable_core_type =
+                hal.get_programmable_core_type(programmable_core_type_index);
+
             for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                 auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
                 auto runtime_id = program.get_runtime_id();
@@ -785,7 +838,8 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     physical_core,
                     kg->launch_msg.view(),
                     kg->go_msg.view(),
-                    device->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
+                    hal.get_dev_addr(
+                        programmable_core_type, HalL1MemAddrType::LAUNCH));
             }
         }
         if (wait_until_cores_done) {
@@ -820,11 +874,16 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
     auto device_id = device->id();
 
-    program.impl().allocate_circular_buffers(device);
-    program.impl().validate_circular_buffer_core_ranges(device);
-    program.impl().validate_circular_buffer_region(device);
-    program.impl().allocate_dataflow_buffers(device);
-    program.impl().validate_dataflow_buffer_region(device);
+    // Individual device allocators don't track mesh buffer allocations, so use the
+    // MeshDevice for validation when available to correctly detect CB/L1 buffer overlaps.
+    auto mesh_device = device->get_mesh_device();
+    const IDevice* validation_device = mesh_device ? mesh_device.get() : device;
+
+    program.impl().allocate_circular_buffers(validation_device);
+    program.impl().validate_circular_buffer_core_ranges(validation_device);
+    program.impl().validate_circular_buffer_region(validation_device);
+    program.impl().allocate_dataflow_buffers(validation_device);
+    program.impl().validate_dataflow_buffer_region(validation_device);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
@@ -1042,10 +1101,13 @@ IDevice* CreateDevice(
 IDevice* CreateDeviceMinimal(
     ChipId device_id, const uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     ZoneScoped;
-    MetalContext::instance().initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
-    auto* dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
-    auto& control_plane = MetalContext::instance().get_control_plane();
-    MetalContext::instance().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
+    auto& ctx = MetalContext::instance();  // runtime state
+    auto& env = ctx.get_env();             // default low level state
+    ctx.initialize(dispatch_core_config, num_hw_cqs, {}, DEFAULT_L1_SMALL_SIZE, true);
+    auto* dev =
+        new Device(&env, &ctx, device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
+    auto& control_plane = MetalEnvAccessor(env).impl().get_control_plane();
+    MetalEnvAccessor(env).impl().get_cluster().set_internal_routing_info_for_ethernet_cores(control_plane, true);
     return dev;
 }
 
@@ -1491,7 +1553,7 @@ void SetRuntimeArgs(
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32VecPerCore, program, kernel, core_spec, runtime_args);
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
-        "Mistmatch between number of cores {} and number of runtime args {} getting updated",
+        "Mismatch between number of cores {} and number of runtime args {} getting updated",
         core_spec.size(),
         runtime_args.size());
     auto k = program.impl().get_kernel(kernel);
@@ -1571,6 +1633,11 @@ uint8_t PopCurrentCommandQueueIdForThread() {
 }
 
 uint8_t GetCurrentCommandQueueIdForThread() {
+    // TODO: Make GetCurrentCommandQueueIdForThread work for non-default contexts
+    // https://github.com/tenstorrent/tt-metal/issues/39819
+    if (!MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
+        return 0;
+    }
     const auto& cq_stack = MetalContext::instance().get_command_queue_id_stack_for_thread();
     if (cq_stack.empty()) {
         return 0;
@@ -1606,44 +1673,80 @@ void UpdateDynamicCircularBufferAddress(
 
 namespace quasar {
 
+std::set<DataMovementProcessor> GetDataMovementProcessorsInUseOnKernelGroup(
+    Program& program, const KernelGroup* kernel_group) {
+    if (kernel_group == nullptr) {
+        return {};
+    }
+    std::set<DataMovementProcessor> processors_in_use;
+    for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
+        const std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
+        if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
+            const std::shared_ptr<QuasarDataMovementKernel> dm_kernel =
+                std::dynamic_pointer_cast<QuasarDataMovementKernel>(kernel);
+            TT_ASSERT(dm_kernel != nullptr);
+            const std::vector<DataMovementProcessor> dm_processors = dm_kernel->get_dm_processors();
+            processors_in_use.insert(dm_processors.begin(), dm_processors.end());
+        }
+    }
+    return processors_in_use;
+}
+
+bool DoesKernelGroupHaveComputeKernel(Program& program, const KernelGroup* kernel_group) {
+    if (kernel_group == nullptr) {
+        return false;
+    }
+    for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
+        const std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
+        if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+            return true;
+        }
+    }
+    return false;
+}
+
 template <typename ProcessorClassType>
 std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
     Program& program, const CoreRangeSet& core_ranges, uint32_t num_processors_per_cluster) {
-    TT_FATAL(core_ranges.num_cores() == 1, "Currently, kernels can only be created on a single cluster in Quasar.");
-
     std::set<ProcessorClassType> processors(
         enchantum::values<ProcessorClassType>.begin(), enchantum::values<ProcessorClassType>.end());
-    const auto& hal = MetalContext::instance().hal();
-    for (const auto& core_range : core_ranges.ranges()) {
+    std::vector<std::set<DataMovementProcessor>> dm_processors_in_use_per_kernel_group;
+
+    std::unordered_set<const KernelGroup*> kernel_groups;
+    for (const CoreRange& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 const KernelGroup* kernel_group = program.impl().kernels_on_core(
-                    CoreCoord(x, y), hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
-                if (kernel_group != nullptr) {
-                    for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
-                        const auto kernel = program.impl().get_kernel(kernel_id);
-                        if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
-                            if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
-                                const QuasarDataMovementConfig config =
-                                    std::get<QuasarDataMovementConfig>(kernel->config());
-                                const uint32_t num_processors_in_use = config.num_threads_per_cluster;
-                                const uint32_t start_processor_type = kernel->get_kernel_processor_type(0);
-                                for (uint32_t i = start_processor_type;
-                                     i < start_processor_type + num_processors_in_use;
-                                     i++) {
-                                    TT_ASSERT(processors.contains(static_cast<ProcessorClassType>(i)));
-                                    processors.erase(static_cast<ProcessorClassType>(i));
-                                }
-                            }
-                        } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
-                            if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
-                                TT_THROW("In Quasar, each cluster can only have a single compute kernel.");
-                            }
-                        }
-                    }
-                }
+                    CoreCoord(x, y),
+                    MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+                kernel_groups.insert(kernel_group);
             }
         }
+    }
+
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
+    for (const KernelGroup* kernel_group : kernel_groups) {
+        if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
+            const std::set<DataMovementProcessor> dm_processors_in_use_on_kernel_group =
+                GetDataMovementProcessorsInUseOnKernelGroup(program, kernel_group);
+            dm_processors_in_use_per_kernel_group.push_back(dm_processors_in_use_on_kernel_group);
+            for (const DataMovementProcessor dm_processor : dm_processors_in_use_on_kernel_group) {
+                processors.erase(dm_processor);
+            }
+        } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
+            TT_FATAL(
+                !DoesKernelGroupHaveComputeKernel(program, kernel_group),
+                "In Quasar, each cluster can only have a single compute kernel.");
+        }
+    }
+
+    for (uint32_t i = 1; i < dm_processors_in_use_per_kernel_group.size(); i++) {
+        TT_FATAL(
+            dm_processors_in_use_per_kernel_group[i] == dm_processors_in_use_per_kernel_group[i - 1],
+            "All clusters in {} must have the same data movement processors already in use to reserve {} new data "
+            "movement processors per cluster.",
+            core_ranges,
+            num_processors_per_cluster);
     }
 
     while (processors.size() > num_processors_per_cluster) {

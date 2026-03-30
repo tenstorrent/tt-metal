@@ -20,7 +20,6 @@
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "core_coord.hpp"
-#include "data_types.hpp"
 #include "device.hpp"
 #include "dispatch_core_common.hpp"
 #include "kernel_config/fd_kernel.hpp"
@@ -408,10 +407,18 @@ DispatchTopology::DispatchTopology(
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
     bool is_galaxy_cluster = descriptor_.cluster().is_galaxy_cluster();
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] =
-        std::make_unique<DispatchMemMap>(CoreType::WORKER, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster);
-    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] =
-        std::make_unique<DispatchMemMap>(CoreType::ETH, descriptor_.num_cqs(), descriptor_.hal(), is_galaxy_cluster);
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::WORKER)] = std::make_unique<DispatchMemMap>(
+        CoreType::WORKER,
+        descriptor_.num_cqs(),
+        descriptor_.hal(),
+        is_galaxy_cluster,
+        descriptor_.rtoptions().get_dram_backed_cq());
+    dispatch_mem_map_[enchantum::to_underlying(CoreType::ETH)] = std::make_unique<DispatchMemMap>(
+        CoreType::ETH,
+        descriptor_.num_cqs(),
+        descriptor_.hal(),
+        is_galaxy_cluster,
+        descriptor_.rtoptions().get_dram_backed_cq());
 }
 
 DispatchTopology::~DispatchTopology() { reset(); }
@@ -467,7 +474,7 @@ std::vector<DispatchKernelNode> DispatchTopology::generate_nodes(
         }
     } else {
         // Need to handle N300/T3000 separately from TG/TGG since they have different templates/tunnel depths
-        // If using fabric, upstream would have already initalized to the proper config for dispatch
+        // If using fabric, upstream would have already initialized to the proper config for dispatch
         if (descriptor_.cluster().is_galaxy_cluster()) {
             // For Galaxy, we always init all remote devices associated with an mmio device.
             std::vector<DispatchKernelNode> nodes_for_one_mmio =
@@ -778,8 +785,16 @@ void DispatchTopology::configure_dispatch_cores(Device* device) {
                     CommandQueueDeviceAddrType::COMPLETION_Q1_LAST_EVENT);
                 // Initialize completion queue write pointer and read pointer copy
                 uint32_t issue_queue_size = device->sysmem_manager().get_issue_queue_size(cq_id);
-                uint32_t completion_queue_start_addr =
-                    cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+                uint32_t completion_queue_start_addr;
+                if (device->sysmem_manager().is_dram_backed()) {
+                    completion_queue_start_addr =
+                        cq_start + issue_queue_size +
+                        get_absolute_cq_offset(
+                            channel, cq_id, cq_size, device->sysmem_manager().get_dram_region_base_addr());
+                } else {
+                    completion_queue_start_addr =
+                        cq_start + issue_queue_size + get_absolute_cq_offset(channel, cq_id, cq_size);
+                }
                 uint32_t completion_queue_start_addr_16B = completion_queue_start_addr >> 4;
                 std::vector<uint32_t> completion_queue_wr_ptr = {completion_queue_start_addr_16B};
                 detail::WriteToDeviceL1(

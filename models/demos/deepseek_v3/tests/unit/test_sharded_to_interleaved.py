@@ -13,31 +13,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "shape, shard_type, cores, out_mem_config",
     [
-        ([1, 1, 32, 896], "W", (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        ([1, 32, 16, 64], "H", (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        ([1, 32, 1, 64], "H", (1, 1), ttnn.DRAM_MEMORY_CONFIG),
-        ([1, 4, 128, 512], "H", (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        ([1, 1, 32, 7168], "W", (2, 2), ttnn.DRAM_MEMORY_CONFIG),
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 32, 16, 64],   "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 32, 1, 64],    "H",    (1, 1), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 4, 128, 512],  "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 1, 32, 7168],  "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 32, 16, 64],   "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 32, 1, 64],    "H",    (1, 1), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 4, 128, 512],  "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 1, 32, 7168],  "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 32, 16, 64],   "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 32, 1, 64],    "H",    (1, 1), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 4, 128, 512],  "H",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 1, 32, 896],   "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        # ([1, 1, 32, 7168],  "W",    (2, 2), ttnn.DRAM_MEMORY_CONFIG),  # duplicate
-        ([1, 1, 32, 7168], "W", (2, 2), ttnn.L1_MEMORY_CONFIG),
+        # kv_nope -> L1 interleaved (mla1d.py _fwd_decode_norm_and_rope): width sharded 2x8 [32,32]
+        ([1, 1, 32, 512], "W", (2, 8), ttnn.L1_MEMORY_CONFIG),
+        # q_rope -> L1 interleaved (mla1d.py _fwd_decode_q_rope_nope): height sharded 4x8 [32,64]
+        ([1, 32, 16, 64], "H", (4, 8), ttnn.L1_MEMORY_CONFIG),
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -57,7 +36,7 @@ def test_sharded_to_interleaved(mesh_device, shape, shard_type, cores, out_mem_c
             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores[0] - 1, cores[1] - 1)),
         }
     )
-    padded_shape = shape
+    padded_shape = list(shape)
     if layout == ttnn.TILE_LAYOUT:
         padded_shape[-1] = ttnn.core.roundup(padded_shape[-1], ttnn.TILE_SIZE)
         padded_shape[-2] = ttnn.core.roundup(padded_shape[-2], ttnn.TILE_SIZE)
@@ -81,9 +60,10 @@ def test_sharded_to_interleaved(mesh_device, shape, shard_type, cores, out_mem_c
     )
 
     def run_op():
-        return ttnn.sharded_to_interleaved(tt_input, out_mem_config)
+        return ttnn.to_memory_config(tt_input, out_mem_config)
 
     def check_op(tt_output):
+        tt_output = tt_output[tuple(slice(s) for s in shape)]
         assert_with_pcc(torch_output, tt_output, 0.9999)
 
     run_test(mesh_device, run_op, check_op, enable_trace)

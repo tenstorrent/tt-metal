@@ -1,6 +1,8 @@
 name: "Fabric Test on a BH Quad"
 
 on:
+  schedule:
+    - cron: "0 9 * * 1-5" # Runs weekdays at 10:00 AM GMT+1 (9:00 UTC)
   workflow_dispatch:
 
 run-name: Fabric Test on a BH Quad
@@ -55,7 +57,7 @@ jobs:
           spec: |
             allocationType: MGD
             matchLabels:
-              exabox.tenstorrent.com/purpose: ci-quads
+              exabox.tenstorrent.com/purpose: ci-metal
             topologyKeys:
               - exabox.tenstorrent.com/quad-id
             mgd: |-
@@ -67,9 +69,63 @@ jobs:
         with:
           allocationName: ci-${{ github.run_id }}-metal
 
+  reset:
+    name: Reset cards
+    needs: [build-artifact, create-allocation]
+    timeout-minutes: 15
+    runs-on:
+      group: exabox
+      labels: exabox-multihost
+    env:
+      OMPI_MCA_btl_tcp_if_exclude: docker0,lo
+      PRTE_MCA_plm_ssh_args: "-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR"
+      PRTE_MCA_plm_ssh_pass_libpath: /opt/openmpi-v5.0.7-ulfm/lib
+      PRTE_MCA_prte_launch_agent: /opt/openmpi-v5.0.7-ulfm/bin/prted
+      PRTE_MCA_prte_default_hostfile: /ci/ttrun/hostfile
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create environment
+        uses: ./.github/actions/ttop-create-environment
+        timeout-minutes: 5
+        with:
+          environmentName:  ci-${{ github.run_id }}-reset
+          allocationName:  ci-${{ github.run_id }}-metal
+          workerImage: ${{ needs.build-artifact.outputs.dev-docker-image }}
+
+      # We use setup-tt-run just to setup MPI, MGD can be dummy
+      - name: Setup tt-run
+        uses: ./.github/actions/ttop-configure-tt-run
+        timeout-minutes: 5
+        with:
+          directory: /ci/ttrun
+          mgdFile: /tmp/dummy/doesnotexist.textproto
+          copyToWorkers: false
+          ranksData: ${{ needs.create-allocation.outputs.ranksData }}
+
+      - name: Print hostnames
+        working-directory: /tmp
+        run: |
+          mpirun --tag-output --pernode \
+            hostname
+
+      - name: Reset cards
+        working-directory: /tmp
+        timeout-minutes: 10
+        run: |
+          mpirun --tag-output --pernode \
+            bash -c 'sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 120'
+
+      - name: Delete environment
+        if: always()
+        uses: ./.github/actions/ttop-delete-environment
+        with:
+          environmentName:  ci-${{ github.run_id }}-reset
+
   run:
     name: Run test
-    needs: [build-artifact, create-allocation]
+    needs: [build-artifact, create-allocation, reset]
     runs-on:
       group: exabox
       labels: exabox-multihost-with-nfs
@@ -135,11 +191,28 @@ jobs:
       - name: Run Fabric Test
         run: |
           tt-run --skip-executable-check --rank-binding /ci/ttrun/rank_bindings.yaml --mpi-args "--tag-output --host $(paste -sd, /ci/ttrun/hostfile)" \
-            /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml
+            /home/user/tt-metal/build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config /home/user/tt-metal/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_superpod_short_running.yaml
+
+      - name: Run Pipeline Test
+        timeout-minutes: 30
+        run: |
+          PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+          PIPELINE_DIR=/ci/pipeline-${{ github.run_id }}
+          mkdir -p $PIPELINE_DIR
+          python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py \
+            --mpi-user user \
+            --hostfile /ci/ttrun/hostfile \
+            --worker-tt-metal-home /home/user/tt-metal \
+            --output-dir $PIPELINE_DIR \
+            models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod_ci.yaml
+          tt-run --skip-executable-check \
+            --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod_ci --bind-to hwt:overload-allowed --host $PIPELINE_HOSTS --tag-output" \
+            --rank-binding blitz_decode_pipeline_rank_binding_single_pod_ci.yaml \
+            /home/user/tt-metal/build/test/tt_metal/multihost/socket_pipeline/multiprocess/unit_tests_pipeline
 
   cleanup:
     name: Cleanup
-    needs: [run, create-allocation]
+    needs: [run, reset, create-allocation]
     if: always()
     runs-on:
       group: exabox
@@ -152,6 +225,12 @@ jobs:
         uses: ./.github/actions/ttop-delete-environment
         with:
           environmentName:  ci-${{ github.run_id }}-metal
+
+      # Redundantly try to drop reset env - reset job might have failed
+      - name: Delete reset environment
+        uses: ./.github/actions/ttop-delete-environment
+        with:
+          environmentName:  ci-${{ github.run_id }}-reset
 
       - name: Delete allocation
         uses: ./.github/actions/ttop-delete-allocation

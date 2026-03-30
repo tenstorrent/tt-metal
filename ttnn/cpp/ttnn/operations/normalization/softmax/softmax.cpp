@@ -9,7 +9,8 @@
 
 #include <tt_stl/assert.hpp>
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 constexpr float DEFAULT_SCALE_VALUE = 1.0f;
 
@@ -45,7 +46,7 @@ Tensor softmax(
     auto output_tensor = prim::softmax(
         input_tensor, static_cast<int8_t>(dim_calculated), mem_config, compute_kernel_config, numeric_stable);
 
-    return reshape(output_tensor, input_shape);
+    return tt::tt_metal::reshape(output_tensor, input_shape);
 }
 
 Tensor scale_mask_softmax(
@@ -82,7 +83,7 @@ Tensor scale_mask_softmax(
         compute_kernel_config,
         numeric_stable);
 
-    return reshape(output_tensor, input_shape);
+    return tt::tt_metal::reshape(output_tensor, input_shape);
 }
 
 Tensor softmax_in_place(
@@ -110,7 +111,7 @@ Tensor softmax_in_place(
     auto output_tensor = prim::softmax_in_place(
         input_tensor_4D, static_cast<int8_t>(dim_calculated), program_config, compute_kernel_config, numeric_stable);
 
-    return reshape(output_tensor, input_shape);
+    return tt::tt_metal::reshape(output_tensor, input_shape);
 }
 
 Tensor scale_mask_softmax_in_place(
@@ -136,7 +137,7 @@ Tensor scale_mask_softmax_in_place(
     auto output_tensor = prim::scale_mask_softmax_in_place(
         input_tensor_4D, scale, mask, program_config, is_causal_mask, compute_kernel_config, numeric_stable);
 
-    return reshape(output_tensor, input_shape);
+    return tt::tt_metal::reshape(output_tensor, input_shape);
 }
 
 Tensor scale_causal_mask_hw_dims_softmax_in_place(
@@ -161,7 +162,7 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     auto output_tensor = prim::scale_causal_mask_hw_dims_softmax_in_place(
         input_tensor_4D, scale, mask, program_config, compute_kernel_config, numeric_stable);
 
-    return reshape(output_tensor, input_shape);
+    return tt::tt_metal::reshape(output_tensor, input_shape);
 }
 
 }  // namespace ttnn

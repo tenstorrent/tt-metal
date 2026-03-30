@@ -18,6 +18,9 @@
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "experimental/circular_buffer.h"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -53,45 +56,46 @@ void kernel_main() {
     constexpr uint32_t GROUP_SIZE_IS_POWER_OF_2 = get_compile_time_arg_val(21);
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(22);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(24);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
+    constexpr uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
 
     // dst regs
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t scaler0 = 0;
 
     // input cbs
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
-    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
-    constexpr uint32_t cb_eps = tt::CBIndex::c_3;
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
-    constexpr uint32_t cb_input_mask = tt::CBIndex::c_7;
+    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in_id = tt::CBIndex::c_1;
+    constexpr uint32_t cb_scaler_id = tt::CBIndex::c_2;
+    constexpr uint32_t cb_scaler_global_id = tt::CBIndex::c_4;
+    constexpr uint32_t cb_eps_id = tt::CBIndex::c_3;
+    constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
+    constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
+    constexpr uint32_t cb_input_mask_id = tt::CBIndex::c_7;
 
     // interm cbs
-    constexpr uint32_t cb_repack = tt::CBIndex::c_11;
-    constexpr uint32_t cb_repack_out = tt::CBIndex::c_12;
-    constexpr uint32_t cb_x = tt::CBIndex::c_13;
-    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;
-    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
-    constexpr uint32_t cb_ex_global = num_cores_per_mcast_group == 1 ? cb_ex_partial : tt::CBIndex::c_15;
-    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_17;
-    constexpr uint32_t cb_ones = tt::CBIndex::c_26;
+    constexpr uint32_t cb_repack_id = tt::CBIndex::c_11;
+    constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_12;
+    constexpr uint32_t cb_x_id = tt::CBIndex::c_13;
+    constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;
+    constexpr uint32_t cb_ex_id = tt::CBIndex::c_9;
+    constexpr uint32_t cb_ex_external_id = tt::CBIndex::c_10;
+    constexpr uint32_t cb_ex_global_id = num_cores_per_mcast_group == 1 ? cb_ex_partial_id : tt::CBIndex::c_15;
+    constexpr uint32_t cb_ex2pe_id = tt::CBIndex::c_17;
+    constexpr uint32_t cb_ones_id = tt::CBIndex::c_26;
 
     // output cb
-    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
     // not used in cases of negative mask
-    constexpr uint32_t cb_out = tt::CBIndex::c_30;
+    constexpr uint32_t cb_out_id = tt::CBIndex::c_30;
 #else
-    constexpr uint32_t cb_out = (do_gamma or do_beta)
-                                    ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? cb_in : cb_out0)
-                                    : cb_out0;
+    constexpr uint32_t cb_out_id =
+        (do_gamma or do_beta) ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? cb_in_id : cb_out0_id)
+                              : cb_out0_id;
 #endif
 
     // tile offset
@@ -113,36 +117,36 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
 #ifndef FUSE_NEGATIVE_MASK
-    constexpr int cb_outgamma = cb_in;
-    constexpr int cb_inbeta = do_gamma ? cb_outgamma : cb_out;
-    constexpr int cb_outbeta = do_gamma ? cb_out : cb_in;
-    constexpr int cb_untilize_in = (do_gamma and not do_beta) ? cb_outgamma : do_beta ? cb_outbeta : cb_out;
-    constexpr int cb_untilize_out =
+    constexpr int cb_outgamma_id = cb_in_id;
+    constexpr int cb_inbeta_id = do_gamma ? cb_outgamma_id : cb_out_id;
+    constexpr int cb_outbeta_id = do_gamma ? cb_out_id : cb_in_id;
+    constexpr int cb_untilize_in_id = (do_gamma and not do_beta) ? cb_outgamma_id : do_beta ? cb_outbeta_id : cb_out_id;
+    constexpr int cb_untilize_out_id =
 #ifdef READER_REPACK
-        cb_repack_out;
+        cb_repack_out_id;
 #else
-        cb_out0;
+        cb_out0_id;
 #endif
 #else
-    constexpr int cb_outgamma = cb_in;
-    constexpr int cb_inbeta = cb_in;
-    constexpr int cb_outbeta = cb_in;
-    constexpr int cb_untilize_in = cb_in;
-    constexpr int cb_untilize_out =
+    constexpr int cb_outgamma_id = cb_in_id;
+    constexpr int cb_inbeta_id = cb_in_id;
+    constexpr int cb_outbeta_id = cb_in_id;
+    constexpr int cb_untilize_in_id = cb_in_id;
+    constexpr int cb_untilize_out_id =
 #ifdef READER_REPACK
-        cb_repack_out;
+        cb_repack_out_id;
 #else
-        cb_out0;
+        cb_out0_id;
 #endif
 #endif
 #else
-    constexpr int cb_outgamma = do_beta ? cb_in : cb_out0;
-    constexpr int cb_inbeta = do_gamma ? cb_outgamma : cb_out;
-    constexpr int cb_outbeta = cb_out0;
+    constexpr int cb_outgamma_id = do_beta ? cb_in_id : cb_out0_id;
+    constexpr int cb_inbeta_id = do_gamma ? cb_outgamma_id : cb_out_id;
+    constexpr int cb_outbeta_id = cb_out0_id;
 #endif
 
     // Used in cases of negative mask provided
-    constexpr uint32_t cb_in_negative_mask = tt::CBIndex::c_14;
+    constexpr uint32_t cb_in_negative_mask_id = tt::CBIndex::c_14;
 
 #ifdef FUSE_NEGATIVE_MASK
     constexpr bool use_negative_mask = true;
@@ -150,29 +154,52 @@ void kernel_main() {
     constexpr bool use_negative_mask = false;
 #endif
 
+    experimental::CircularBuffer cb_beta(cb_beta_id);
+    experimental::CircularBuffer cb_eps(cb_eps_id);
+    experimental::CircularBuffer cb_ex(cb_ex_id);
+    experimental::CircularBuffer cb_ex2pe(cb_ex2pe_id);
+    experimental::CircularBuffer cb_ex_external(cb_ex_external_id);
+    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
+    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    experimental::CircularBuffer cb_gamma(cb_gamma_id);
+    experimental::CircularBuffer cb_in(cb_in_id);
+    experimental::CircularBuffer cb_in_negative_mask(cb_in_negative_mask_id);
+    experimental::CircularBuffer cb_inbeta(cb_inbeta_id);
+    experimental::CircularBuffer cb_input_mask(cb_input_mask_id);
+    experimental::CircularBuffer cb_ones(cb_ones_id);
+    experimental::CircularBuffer cb_out(cb_out_id);
+    experimental::CircularBuffer cb_outbeta(cb_outbeta_id);
+    experimental::CircularBuffer cb_outgamma(cb_outgamma_id);
+    experimental::CircularBuffer cb_scaler(cb_scaler_id);
+    experimental::CircularBuffer cb_scaler_global(cb_scaler_global_id);
+    experimental::CircularBuffer cb_x(cb_x_id);
+
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
-    binary_op_init_common(cb_in0, cb_in0, cb_in);
-// tilize in0 -> in
+    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_id);
+// Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
-    constexpr uint32_t cb_in_rm = cb_repack;
+    constexpr uint32_t cb_in_rm_id = cb_repack_id;
+    compute_kernel_lib::tilize<
+        per_core_N,
+        cb_in_rm_id,
+        cb_in_id,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
-    constexpr uint32_t cb_in_rm = cb_in0;
+    constexpr uint32_t cb_in_rm_id = cb_in0_id;
+    compute_kernel_lib::tilize<
+        per_core_N,
+        cb_in_rm_id,
+        cb_in_id,
+        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::tilize_config::WaitMode::NoWait,
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
-    tilize_init(cb_in_rm, per_core_N, cb_in);
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-#ifdef READER_REPACK
-        cb_wait_front(cb_in_rm, per_core_N);
-#endif
-        cb_reserve_back(cb_in, per_core_N);
-        tilize_block(cb_in_rm, per_core_N, cb_in);
-        cb_push_back(cb_in, per_core_N);
-        cb_pop_front(cb_in_rm, per_core_N);
-    }
-    tilize_uninit(cb_in_rm, cb_in);
-    cb_wait_front(cb_in, per_core_MN);
+    cb_in.wait_front(per_core_MN);
 #else
-    binary_op_init_common(cb_in0, cb_input_mask, cb_x);
+    binary_op_init_common(cb_in0_id, cb_input_mask_id, cb_x_id);
 #endif
 
     index_b_offset = 0;
@@ -182,10 +209,10 @@ void kernel_main() {
         for (uint32_t g = 0; g < group; ++g) {
             // mask input
             index_h_offset = index_b_offset + index_g_offset;
-            reconfig_data_format_srcb(cb_in0, cb_input_mask);
-            mul_tiles_init(cb_in0, cb_input_mask);
-            cb_reserve_back(cb_x, block_hw);
-            cb_wait_front(cb_input_mask, block_w);
+            reconfig_data_format_srcb(cb_in0_id, cb_input_mask_id);
+            mul_tiles_init(cb_in0_id, cb_input_mask_id);
+            cb_x.reserve_back(block_hw);
+            cb_input_mask.wait_front(block_w);
             for (uint32_t i = 0; i < block_h; ++i) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; ++j) {
@@ -194,31 +221,31 @@ void kernel_main() {
                         uint32_t index = w + index_subblock_w_offset + index_h_offset;
                         uint32_t index_mask = w + index_subblock_w_offset;
 #ifdef TILIZE_IN
-                        mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
+                        mul_tiles(cb_in_id, cb_input_mask_id, index, index_mask, w);
 #else
-                        mul_tiles(cb_in0, cb_input_mask, index, index_mask, w);
+                        mul_tiles(cb_in0_id, cb_input_mask_id, index, index_mask, w);
 #endif
                     }
                     tile_regs_commit();
                     tile_regs_wait();
                     for (uint32_t i = 0; i < subblock_w; ++i) {
-                        pack_tile(i, cb_x);
+                        pack_tile(i, cb_x_id);
                     }
                     tile_regs_release();
                     index_subblock_w_offset += subblock_w;
                 }
                 index_h_offset += per_core_N;
             }
-            cb_push_back(cb_x, block_hw);
-            reconfig_data_format_srcb(cb_input_mask, cb_ones);
+            cb_x.push_back(block_hw);
+            reconfig_data_format_srcb(cb_input_mask_id, cb_ones_id);
 
             // Partial-E[x]
             index_h_offset = 0;
-            mul_tiles_init(cb_x, cb_ones);
-            cb_reserve_back(cb_ex2pe, 1);
+            mul_tiles_init(cb_x_id, cb_ones_id);
+            cb_ex2pe.reserve_back(1);
             tile_regs_acquire();
-            cb_wait_front(cb_x, block_hw);
-            cb_wait_front(cb_ones, 1);
+            cb_x.wait_front(block_hw);
+            cb_ones.wait_front(1);
 
             index_h_offset = 0;
             // Accomulate into dest directly by using mul_tiles (tile * 1 is accomulated into dest at the moment)
@@ -226,76 +253,78 @@ void kernel_main() {
             for (uint32_t h = 0; h < block_h; ++h) {
                 for (uint32_t w = 0; w < block_w; ++w) {
                     uint32_t index = index_h_offset + w;
-                    mul_tiles(cb_x, cb_ones, index, 0, dst0);
+                    mul_tiles(cb_x_id, cb_ones_id, index, 0, dst0);
                 }
                 index_h_offset += block_w;
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe);
+            pack_tile(dst0, cb_ex2pe_id);
             tile_regs_release();
-            cb_push_back(cb_ex2pe, 1);
+            cb_ex2pe.push_back(1);
             tile_regs_acquire();
-            reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, cb_ex_partial);
-            cb_reserve_back(cb_ex_partial, 1);
-            cb_wait_front(cb_scaler, 1);
-            cb_wait_front(cb_ex2pe, 1);
+            reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id);
+            cb_ex_partial.reserve_back(1);
+            cb_scaler.wait_front(1);
+            cb_ex2pe.wait_front(1);
             // reduce only one final tile
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, 0, scaler0, dst0);
-            cb_pop_front(cb_ex2pe, 1);
+            reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe_id, cb_scaler_id, 0, scaler0, dst0);
+            cb_ex2pe.pop_front(1);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_ex_partial);
+            pack_tile(dst0, cb_ex_partial_id);
             tile_regs_release();
-            cb_push_back(cb_ex_partial, 1);
+            cb_ex_partial.push_back(1);
             reduce_uninit<FP32_DEST_ACC>();
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex_global);
-                cb_reserve_back(cb_ex_global, 1);
-                cb_reserve_back(cb_ex, 1);
+                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
+                    cb_ex_external_id, cb_scaler_global_id, cb_ex_global_id);
+                cb_ex_global.reserve_back(1);
+                cb_ex.reserve_back(1);
                 tile_regs_acquire();
-                cb_wait_front(cb_scaler_global, 1);
-                cb_wait_front(cb_ex_external, 1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external, 1);
+                cb_scaler_global.wait_front(1);
+                cb_ex_external.wait_front(1);
+                reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
+                    cb_ex_external_id, cb_scaler_global_id, 0, scaler0, dst0);
+                cb_ex_external.pop_front(1);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(dst0, cb_ex_global);
+                pack_tile(dst0, cb_ex_global_id);
                 tile_regs_release();
                 reduce_uninit<FP32_DEST_ACC>();
-                cb_push_back(cb_ex_global, 1);
-                cb_push_back(cb_ex, 1);
+                cb_ex_global.push_back(1);
+                cb_ex.push_back(1);
             }
             // x - E[x]
-            sub_tiles_bcast_scalar_init_short(cb_x, cb_ex_global);
+            sub_tiles_bcast_scalar_init_short(cb_x_id, cb_ex_global_id);
 
-            cb_wait_front(cb_ex_global, 1);
+            cb_ex_global.wait_front(1);
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
                     tile_regs_acquire();
                     for (uint32_t w = 0; w < subblock_w; w++) {
                         uint32_t index = w + index_subblock_w_offset;
-                        sub_tiles_bcast_scalar(cb_x, cb_ex_global, index, 0, w);
+                        sub_tiles_bcast_scalar(cb_x_id, cb_ex_global_id, index, 0, w);
                     }
                     tile_regs_commit();
-                    cb_pop_front(cb_x, subblock_w);
-                    cb_reserve_back(cb_x, subblock_w);
+                    cb_x.pop_front(subblock_w);
+                    cb_x.reserve_back(subblock_w);
                     tile_regs_wait();
                     for (uint32_t k = 0; k < subblock_w; k++) {
-                        pack_tile(k, cb_x);
+                        pack_tile(k, cb_x_id);
                     }
-                    cb_push_back(cb_x, subblock_w);
+                    cb_x.push_back(subblock_w);
                     tile_regs_release();
-                    cb_wait_front(cb_x, block_hw);
+                    cb_x.wait_front(block_hw);
                 }
             }
-            cb_pop_front(cb_ex_global, 1);
+            cb_ex_global.pop_front(1);
 
-            reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
-            mul_tiles_init(cb_x, cb_input_mask);
-            cb_wait_front(cb_x, block_hw);
+            reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
+            mul_tiles_init(cb_x_id, cb_input_mask_id);
+            cb_x.wait_front(block_hw);
 
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
@@ -304,38 +333,38 @@ void kernel_main() {
                     for (uint32_t w = 0; w < subblock_w; ++w) {
                         uint32_t index = w + index_subblock_w_offset;
                         uint32_t index_mask = index;
-                        mul_tiles(cb_x, cb_input_mask, index, index_mask, w);
+                        mul_tiles(cb_x_id, cb_input_mask_id, index, index_mask, w);
                     }
                     tile_regs_commit();
 
-                    cb_pop_front(cb_x, subblock_w);
-                    cb_reserve_back(cb_x, subblock_w);
+                    cb_x.pop_front(subblock_w);
+                    cb_x.reserve_back(subblock_w);
 
                     tile_regs_wait();
                     for (uint32_t i = 0; i < subblock_w; ++i) {
-                        pack_tile(i, cb_x);
+                        pack_tile(i, cb_x_id);
                     }
-                    cb_push_back(cb_x, subblock_w);
+                    cb_x.push_back(subblock_w);
                     tile_regs_release();
                 }
             }
-            cb_pop_front(cb_input_mask, block_w);
-            reconfig_data_format_srcb(cb_input_mask, cb_x);
+            cb_input_mask.pop_front(block_w);
+            reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
 
             // (x - E[x])^2
             index_h_offset = 0;
-            mul_tiles_init(cb_x, cb_x);
-            cb_wait_front(cb_x, block_hw);
+            mul_tiles_init(cb_x_id, cb_x_id);
+            cb_x.wait_front(block_hw);
 
             tile_regs_acquire();
-            cb_reserve_back(cb_ex2pe, 1);
+            cb_ex2pe.reserve_back(1);
 
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
                     for (uint32_t w = 0; w < subblock_w; w++) {
                         uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                        mul_tiles(cb_x, cb_x, index, index, dst0);
+                        mul_tiles(cb_x_id, cb_x_id, index, index, dst0);
                     }
 
                     index_subblock_w_offset += subblock_w;
@@ -344,91 +373,93 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe);
+            pack_tile(dst0, cb_ex2pe_id);
             tile_regs_release();
-            cb_push_back(cb_ex2pe, 1);
+            cb_ex2pe.push_back(1);
 
-            cb_reserve_back(cb_ex_partial, 1);
-            cb_wait_front(cb_scaler, 1);
-            cb_wait_front(cb_ex2pe, 1);
+            cb_ex_partial.reserve_back(1);
+            cb_scaler.wait_front(1);
+            cb_ex2pe.wait_front(1);
 
-            reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, cb_ex_partial);
+            reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe_id, cb_scaler_id, cb_ex_partial_id);
 
             tile_regs_acquire();
-            reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe, cb_scaler, 0, scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex2pe_id, cb_scaler_id, 0, scaler0, dst0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_ex_partial);
+            pack_tile(dst0, cb_ex_partial_id);
             tile_regs_release();
-            cb_push_back(cb_ex_partial, 1);
+            cb_ex_partial.push_back(1);
 
             reduce_uninit<FP32_DEST_ACC>();
 
-            cb_pop_front(cb_ex2pe, 1);
-            cb_wait_front(cb_ex_partial, 1);
+            cb_ex2pe.pop_front(1);
+            cb_ex_partial.wait_front(1);
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, cb_ex_global);
-                cb_reserve_back(cb_ex_global, 1);
-                cb_reserve_back(cb_ex, 1);
+                reduce_init<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
+                    cb_ex_external_id, cb_scaler_global_id, cb_ex_global_id);
+                cb_ex_global.reserve_back(1);
+                cb_ex.reserve_back(1);
                 tile_regs_acquire();
-                cb_wait_front(cb_scaler_global, 1);
-                cb_wait_front(cb_ex_external, 1);
-                reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external, 1);
+                cb_scaler_global.wait_front(1);
+                cb_ex_external.wait_front(1);
+                reduce_tile<REDUCE_OP, REDUCE_DIM, FP32_DEST_ACC>(
+                    cb_ex_external_id, cb_scaler_global_id, 0, scaler0, dst0);
+                cb_ex_external.pop_front(1);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(dst0, cb_ex_global);
+                pack_tile(dst0, cb_ex_global_id);
                 tile_regs_release();
                 reduce_uninit<FP32_DEST_ACC>();
-                cb_push_back(cb_ex_global, 1);
-                cb_push_back(cb_ex, 1);
+                cb_ex_global.push_back(1);
+                cb_ex.push_back(1);
             }
 
             // global reduce results
 
-            cb_wait_front(cb_eps, 1);
-            cb_wait_front(cb_ex_global, 1);
-            cb_reserve_back(cb_ex2pe, 1);
+            cb_eps.wait_front(1);
+            cb_ex_global.wait_front(1);
+            cb_ex2pe.reserve_back(1);
 
             // (Var + eps)
             tile_regs_acquire();
-            add_tiles_init(cb_ex_global, cb_eps);
-            add_tiles(cb_ex_global, cb_eps, 0, 0, dst0);
+            add_tiles_init(cb_ex_global_id, cb_eps_id);
+            add_tiles(cb_ex_global_id, cb_eps_id, 0, 0, dst0);
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
             rsqrt_tile<true>(dst0);
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe);
+            pack_tile(dst0, cb_ex2pe_id);
             tile_regs_release();
-            cb_push_back(cb_ex2pe, 1);
-            cb_pop_front(cb_ex_global, 1);
+            cb_ex2pe.push_back(1);
+            cb_ex_global.pop_front(1);
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;
-            mul_tiles_bcast_scalar_init_short(cb_x, cb_ex2pe);
+            mul_tiles_bcast_scalar_init_short(cb_x_id, cb_ex2pe_id);
 
-            cb_wait_front(cb_ex2pe, 1);
+            cb_ex2pe.wait_front(1);
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
                     tile_regs_acquire();
                     for (uint32_t w = 0; w < subblock_w; w++) {
                         uint32_t index = w + index_subblock_w_offset;
-                        mul_tiles_bcast_scalar(cb_x, cb_ex2pe, index, 0, w);
+                        mul_tiles_bcast_scalar(cb_x_id, cb_ex2pe_id, index, 0, w);
                     }
                     tile_regs_commit();
-                    cb_pop_front(cb_x, subblock_w);
-                    cb_reserve_back(cb_x, subblock_w);
+                    cb_x.pop_front(subblock_w);
+                    cb_x.reserve_back(subblock_w);
                     tile_regs_wait();
                     for (uint32_t i = 0; i < subblock_w; i++) {
-                        pack_tile(i, cb_x);
+                        pack_tile(i, cb_x_id);
                     }
-                    cb_push_back(cb_x, subblock_w);
+                    cb_x.push_back(subblock_w);
                     tile_regs_release();
                 }
             }
-            cb_pop_front(cb_ex2pe, 1);
-            cb_wait_front(cb_x, block_hw);
+            cb_ex2pe.pop_front(1);
+            cb_x.wait_front(block_hw);
             //  add or copy with previous output results
             uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
@@ -440,9 +471,9 @@ void kernel_main() {
                     uint32_t index_h1_offset = 0;
 
                     if (copy_or_add == true) {
-                        copy_tile_init(cb_x);
+                        copy_tile_init(cb_x_id);
                     } else {
-                        add_tiles_init(cb_out, cb_x);
+                        add_tiles_init(cb_out_id, cb_x_id);
                     }
 
                     for (uint32_t i = 0; i < block_h; ++i) {
@@ -451,13 +482,13 @@ void kernel_main() {
                         uint32_t index = w + index_h_offset;
 
                         if (copy_or_add == true) {
-                            copy_tile(cb_x, index_x, dst0);
+                            copy_tile(cb_x_id, index_x, dst0);
                         } else {
-                            add_tiles(cb_out, cb_x, index, index_x, dst0);
+                            add_tiles(cb_out_id, cb_x_id, index, index_x, dst0);
                         }
                         tile_regs_commit();
                         tile_regs_wait();
-                        pack_tile<true>(dst0, cb_out, index);
+                        pack_tile<true>(dst0, cb_out_id, index);
                         tile_regs_release();
 
                         index_h_offset += per_core_N;
@@ -484,9 +515,9 @@ void kernel_main() {
                 }
             } else {
                 // zero out values in cb_tilized_in input by multiplying with negative mask for the current group
-                cb_wait_front(cb_in_negative_mask, block_w);
-                reconfig_data_format_srcb(cb_x, cb_in_negative_mask);
-                mul_tiles_init(cb_in, cb_in_negative_mask);
+                cb_in_negative_mask.wait_front(block_w);
+                reconfig_data_format_srcb(cb_x_id, cb_in_negative_mask_id);
+                mul_tiles_init(cb_in_id, cb_in_negative_mask_id);
 
                 for (uint32_t w = 0; w < block_w_curr; w++) {
                     index_h_offset = index_b_offset + index_g_offset;
@@ -497,21 +528,21 @@ void kernel_main() {
                         uint32_t index_in = w + index_h_offset;
                         uint32_t index_mask = w;
 
-                        mul_tiles(cb_in, cb_in_negative_mask, index_in, index_mask, dst0);
+                        mul_tiles(cb_in_id, cb_in_negative_mask_id, index_in, index_mask, dst0);
                         tile_regs_commit();
 
                         tile_regs_wait();
-                        pack_tile<true>(dst0, cb_in, index_in);
+                        pack_tile<true>(dst0, cb_in_id, index_in);
                         tile_regs_release();
 
                         index_h_offset += per_core_N;
                     }
                 }
 
-                reconfig_data_format_srcb(cb_in_negative_mask, cb_x);
-                add_tiles_init(cb_in, cb_x);
-                // data in cb_x has valid data only for current group
-                // cb_in has cleared data for that group
+                reconfig_data_format_srcb(cb_in_negative_mask_id, cb_x_id);
+                add_tiles_init(cb_in_id, cb_x_id);
+                // data in cb_x_id has valid data only for current group
+                // cb_in_id has cleared data for that group
                 // just add them together
                 for (uint32_t w = 0; w < block_w_curr; ++w) {
                     index_h_offset = index_b_offset + index_g_offset;
@@ -522,23 +553,23 @@ void kernel_main() {
                         uint32_t index_x = w + index_h1_offset;
                         uint32_t index = w + index_h_offset;
 
-                        add_tiles(cb_in, cb_x, index, index_x, dst0);
+                        add_tiles(cb_in_id, cb_x_id, index, index_x, dst0);
                         tile_regs_commit();
                         tile_regs_wait();
-                        pack_tile<true>(dst0, cb_in, index);
+                        pack_tile<true>(dst0, cb_in_id, index);
                         tile_regs_release();
 
                         index_h_offset += per_core_N;
                         index_h1_offset += block_w;
                     }
                 }
-                cb_pop_front(cb_in_negative_mask, block_w);
+                cb_in_negative_mask.pop_front(block_w);
             }
 
-            cb_pop_front(cb_x, block_hw);
+            cb_x.pop_front(block_hw);
 
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
-                if (row_offset == TILE_WIDTH) {
+                if (row_offset == tile_width) {
                     index_g_offset += block_w;
                     row_offset = num_cols_per_group;
 
@@ -547,11 +578,11 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                 }
             } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
-                if (row_offset == TILE_WIDTH) {
+                if (row_offset == tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = num_cols_per_group;
 
-                } else if (row_offset > TILE_WIDTH) {
+                } else if (row_offset > tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = row_offset + group_row_offset;
 
@@ -559,7 +590,7 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                 }
             } else {
-                if (row_offset > TILE_WIDTH) {
+                if (row_offset > tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = row_offset - tile_w_minux_group_size;
                 } else {
@@ -572,51 +603,51 @@ void kernel_main() {
     }
 
     if constexpr (use_negative_mask == false) {
-        cb_push_back(cb_out, per_core_MN);
-        cb_pop_front(cb_in, per_core_MN);
+        cb_out.push_back(per_core_MN);
+        cb_in.pop_front(per_core_MN);
 
     } else {
-        // nothing, for the negative mask implementation, cb_in is the only cb in use, and it already has the data
+        // nothing, for the negative mask implementation, cb_in_id is the only cb in use, and it already has the data
         // required for the rest of kernel.
     }
 
     if constexpr (do_gamma) {
         index_h_offset = 0;
         if constexpr (use_negative_mask == false) {
-            mul_bcast_rows_init_short(cb_out, cb_gamma);
-            cb_reserve_back(cb_outgamma, per_core_MN);
-            cb_wait_front(cb_gamma, per_core_N);
+            mul_bcast_rows_init_short(cb_out_id, cb_gamma_id);
+            cb_outgamma.reserve_back(per_core_MN);
+            cb_gamma.wait_front(per_core_N);
             for (uint32_t i = 0; i < per_core_M; ++i) {
                 for (uint32_t j = 0; j < per_core_N; ++j) {
                     tile_regs_acquire();
                     uint32_t index = j + index_h_offset;
-                    mul_tiles_bcast_rows(cb_out, cb_gamma, index, j, dst0);
+                    mul_tiles_bcast_rows(cb_out_id, cb_gamma_id, index, j, dst0);
                     tile_regs_commit();
                     tile_regs_wait();
-                    pack_tile(dst0, cb_outgamma);
+                    pack_tile(dst0, cb_outgamma_id);
                     tile_regs_release();
                 }
                 index_h_offset += per_core_N;
             }
 
-            cb_push_back(cb_outgamma, per_core_MN);
-            cb_pop_front(cb_out, per_core_MN);
-            cb_wait_front(cb_outgamma, per_core_MN);
+            cb_outgamma.push_back(per_core_MN);
+            cb_out.pop_front(per_core_MN);
+            cb_outgamma.wait_front(per_core_MN);
         } else {
             // cb in has data required for gamma, so we do it inplace
-            mul_bcast_rows_init_short(cb_in, cb_gamma);
-            cb_wait_front(cb_gamma, per_core_N);
-            cb_wait_front(cb_in, per_core_MN);
+            mul_bcast_rows_init_short(cb_in_id, cb_gamma_id);
+            cb_gamma.wait_front(per_core_N);
+            cb_in.wait_front(per_core_MN);
             for (uint32_t i = 0; i < per_core_M; i++) {
                 for (uint32_t j = 0; j < per_core_N; j++) {
                     tile_regs_acquire();
-                    mul_tiles_bcast_rows(cb_in, cb_gamma, 0, j, dst0);
+                    mul_tiles_bcast_rows(cb_in_id, cb_gamma_id, 0, j, dst0);
                     tile_regs_commit();
-                    cb_pop_front(cb_in, 1);
-                    cb_reserve_back(cb_in, 1);
+                    cb_in.pop_front(1);
+                    cb_in.reserve_back(1);
                     tile_regs_wait();
-                    pack_tile(dst0, cb_in);
-                    cb_push_back(cb_in, 1);
+                    pack_tile(dst0, cb_in_id);
+                    cb_in.push_back(1);
                     tile_regs_release();
                 }
             }
@@ -626,39 +657,39 @@ void kernel_main() {
     if constexpr (do_beta) {
         if constexpr (use_negative_mask == false) {
             index_h_offset = 0;
-            add_bcast_rows_init_short(cb_inbeta, cb_beta);
-            cb_reserve_back(cb_outbeta, per_core_MN);
-            cb_wait_front(cb_beta, per_core_N);
+            add_bcast_rows_init_short(cb_inbeta_id, cb_beta_id);
+            cb_outbeta.reserve_back(per_core_MN);
+            cb_beta.wait_front(per_core_N);
             for (uint32_t i = 0; i < per_core_M; ++i) {
                 for (uint32_t j = 0; j < per_core_N; ++j) {
                     tile_regs_acquire();
                     uint32_t index = j + index_h_offset;
-                    add_tiles_bcast_rows(cb_inbeta, cb_beta, index, j, dst0);
+                    add_tiles_bcast_rows(cb_inbeta_id, cb_beta_id, index, j, dst0);
                     tile_regs_commit();
                     tile_regs_wait();
-                    pack_tile(dst0, cb_outbeta);
+                    pack_tile(dst0, cb_outbeta_id);
                     tile_regs_release();
                 }
                 index_h_offset += per_core_N;
             }
-            cb_push_back(cb_outbeta, per_core_MN);
-            cb_pop_front(cb_inbeta, per_core_MN);
-            cb_wait_front(cb_outbeta, per_core_MN);
+            cb_outbeta.push_back(per_core_MN);
+            cb_inbeta.pop_front(per_core_MN);
+            cb_outbeta.wait_front(per_core_MN);
         } else {
-            // cb_in has data required for beta, so we do it inplace
-            add_bcast_rows_init_short(cb_in, cb_beta);
-            cb_wait_front(cb_beta, per_core_N);
-            cb_wait_front(cb_in, per_core_MN);
+            // cb_in_id has data required for beta, so we do it inplace
+            add_bcast_rows_init_short(cb_in_id, cb_beta_id);
+            cb_beta.wait_front(per_core_N);
+            cb_in.wait_front(per_core_MN);
             for (uint32_t i = 0; i < per_core_M; i++) {
                 for (uint32_t j = 0; j < per_core_N; j++) {
                     tile_regs_acquire();
-                    add_tiles_bcast_rows(cb_in, cb_beta, 0, j, dst0);
+                    add_tiles_bcast_rows(cb_in_id, cb_beta_id, 0, j, dst0);
                     tile_regs_commit();
-                    cb_pop_front(cb_in, 1);
-                    cb_reserve_back(cb_in, 1);
+                    cb_in.pop_front(1);
+                    cb_in.reserve_back(1);
                     tile_regs_wait();
-                    pack_tile(dst0, cb_in);
-                    cb_push_back(cb_in, 1);
+                    pack_tile(dst0, cb_in_id);
+                    cb_in.push_back(1);
                     tile_regs_release();
                 }
             }
@@ -666,15 +697,13 @@ void kernel_main() {
     }
 
 #ifdef UNTILIZE_OUT
-    // untilize
-    untilize_init(cb_untilize_in);
-    cb_wait_front(cb_untilize_in, per_core_MN);
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_reserve_back(cb_untilize_out, per_core_N);
-        untilize_block(cb_untilize_in, per_core_N, cb_untilize_out);
-        cb_push_back(cb_untilize_out, per_core_N);
-        cb_pop_front(cb_untilize_in, per_core_N);
-    }
-    untilize_uninit(cb_untilize_in);
+    // untilize - DEST capacity auto-detected
+    compute_kernel_lib::untilize<
+        per_core_N,
+        cb_untilize_in_id,
+        cb_untilize_out_id,
+        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
 }

@@ -9,7 +9,12 @@ import ttnn
 
 import math
 
-from ttnn._ttnn.operations.normalization import create_group_norm_input_mask, create_group_norm_input_negative_mask
+from ttnn._ttnn.operations.normalization import (
+    create_group_norm_input_mask,
+    create_group_norm_input_negative_mask,
+    _compute_num_virtual_cols,
+    _find_expected_dram_grid,
+)
 
 
 def find_closest_largest_divisor(num: int, start_divisor: int):
@@ -238,8 +243,10 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
         num_cores_channels = device_grid_size[1]
         # num_channels_tiles = num_channels // 16
         num_channels_tiles = num_channels // 8
-        while (num_channels_tiles % num_cores_channels != 0) or (
-            ((num_channels // num_cores_channels) % group_size) != 0
+        while (
+            (num_channels_tiles % num_cores_channels != 0)
+            or ((num_channels // num_cores_channels) % group_size != 0)
+            or (num_channels // num_cores_channels < 32)
         ):
             num_cores_channels -= 1
             assert num_cores_channels > 0
@@ -276,6 +283,20 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
     ), ttnn.CoreGrid(y=grid_size[1], x=grid_size[0])
 
 
+def determine_expected_group_norm_dram_grid_size(*, device, num_channels, num_groups, input_nhw):
+    """Determine a valid core grid for DRAM interleaved (non-sharded) group norm.
+
+    Delegates to the C++ implementation which finds the largest grid (x then y)
+    within the device compute grid that satisfies the DRAM group-norm constraints.
+
+    Returns: CoreGrid
+    """
+    assert num_channels % num_groups == 0
+    assert num_channels % ttnn.TILE_SIZE == 0
+    compute_grid = device.compute_with_storage_grid_size()
+    return _find_expected_dram_grid(compute_grid.x, compute_grid.y, num_channels, num_groups, input_nhw)
+
+
 def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_cores_x):
     """Prepares a gamma/beta tensor in a padded [1,1,-1,32] format.
 
@@ -300,12 +321,14 @@ def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_cores_x):
 def dram_group_norm_virtual_columns(core_grid, num_channels, num_groups):
     """Choose number of virtual columns for DRAM params/mask generation.
 
-    Tries to find the largest number of virtual columns that will evenly divide the number of channels into tiles.
+    Delegates to the C++ implementation of compute_num_virtual_cols.
     """
-    num_virtual_cols = min(core_grid.x, num_groups)
-    while (num_channels / num_virtual_cols) % ttnn.TILE_SIZE != 0:
-        num_virtual_cols -= 1
-    return num_virtual_cols
+    result = _compute_num_virtual_cols(core_grid.x, num_groups, num_channels)
+    assert result > 0, (
+        f"dram_group_norm_virtual_columns: could not find a valid num_virtual_cols for "
+        f"grid_x={core_grid.x}, num_channels={num_channels}, num_groups={num_groups}"
+    )
+    return result
 
 
 def dram_group_norm_params_from_torch(
@@ -321,7 +344,7 @@ def dram_group_norm_params_from_torch(
     """
     Create group norm parameters from torch in row major layout. It currently supports sharding along 1 mesh dimension. Sharding along 2 dimensions to be added as needed.
     Args:
-        torch_params: List[torch.Tensor] or torch.Tensor. This is weith and or bias for the affine transformation.
+        torch_params: List[torch.Tensor] or torch.Tensor. This is weight and or bias for the affine transformation.
         channels_per_device: Number of channels per device if using multi-device else number of channels
         groups_per_device: Number of groups per device if using multi-device else number of groups
         device: Device to create the group norm parameters on. Set to None if setting up on host. Must be provided if core_grid is None
@@ -337,7 +360,7 @@ def dram_group_norm_params_from_torch(
     """
     import torch
 
-    assert core_grid or device, "Either core_grid or device must be provided to determin virtual columns"
+    assert core_grid or device, "Either core_grid or device must be provided to determine virtual columns"
     assert (
         channels_per_device % 32 == 0 == channels_per_device % groups_per_device
     ), f"channels_per_device {channels_per_device} must be divisible by 32 and groups_per_device {groups_per_device}"
@@ -443,12 +466,18 @@ def create_group_norm_reciprocals(N, C, H, W, num_groups, core_grid):
     return create_group_norm_reciprocals_impl(N, C, H, W, num_groups, core_grid)
 
 
-def get_group_norm_cores_across_channel(memory_layout, core_grid):
+def get_group_norm_cores_across_channel(memory_layout, core_grid, shard_orientation=None):
     """Compute effective cores that split the channel axis.
-    Used to reshape gamma/beta per-core views in the golden code.
+
+    For BLOCK_SHARDED, the channel axis lives in grid.y (COL_MAJOR)
+    or grid.x (ROW_MAJOR).  When *shard_orientation* is not supplied
+    the legacy COL_MAJOR behaviour is assumed.
     """
     if memory_layout == ttnn.types.TensorMemoryLayout.BLOCK_SHARDED:
-        num_cores_across_channel = core_grid.y
+        if shard_orientation == ttnn.ShardOrientation.ROW_MAJOR:
+            num_cores_across_channel = core_grid.x
+        else:
+            num_cores_across_channel = core_grid.y
     elif memory_layout == ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED:
         num_cores_across_channel = 1
     else:
@@ -472,7 +501,10 @@ def _golden_function(
     import torch
 
     num_channels = input_tensor.shape[-1]
-    num_cores_across_channel = get_group_norm_cores_across_channel(memory_config.memory_layout, core_grid)
+    shard_orientation = getattr(memory_config.shard_spec, "orientation", None) if memory_config.shard_spec else None
+    num_cores_across_channel = get_group_norm_cores_across_channel(
+        memory_config.memory_layout, core_grid, shard_orientation
+    )
     weight = weight.reshape((num_cores_across_channel, -1))
     weight = weight[:, : num_channels // num_cores_across_channel].flatten()
     if bias is not None:

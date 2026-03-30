@@ -328,7 +328,7 @@ BinaryDeviceOperation::tensor_return_value_t BinaryDeviceOperation::create_outpu
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
@@ -362,7 +362,7 @@ BinaryDeviceOperation::create_op_performance_model(
     const auto& output_tensor = tensor_return_value;
     // GS specific parameters
     // 80 B/cycle unpacker BW shared
-    // 128 datums per cycle math, but unpacker cant keep up
+    // 128 datums per cycle math, but unpacker can't keep up
     constexpr uint32_t num_cores = 9 * 12;
 
     uint32_t total_bytes = 0;

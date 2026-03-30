@@ -181,7 +181,7 @@ Llama::Llama(const LlamaConfig& config) : m_config(config) {
 
 ttml::autograd::TensorPtr Llama::operator()(
     const ttml::autograd::TensorPtr& x,
-    const ttml::autograd::TensorPtr& mask,
+    const std::optional<ttml::autograd::TensorPtr>& mask,
     std::shared_ptr<common::transformer::KvCache> kv_cache,
     const uint32_t new_tokens) {
     // Pad input tokens to nearest multiple of 32 before embedding
@@ -230,7 +230,9 @@ ttml::autograd::TensorPtr Llama::operator()(
             auto& block = blocks[block_idx];
             // Cast block to LlamaBlock to access the cache-aware operator
             auto llama_block = std::dynamic_pointer_cast<ttml::modules::LlamaBlock>(block);
-            out = (*llama_block)(out, mask, kv_cache, static_cast<uint32_t>(block_idx), new_tokens);
+
+            TT_FATAL(mask.has_value(), "Mask has to be provided in inference mode with KV cache");
+            out = (*llama_block)(out, mask.value(), kv_cache, block_idx, new_tokens);
         }
     } else {
         // Training mode or inference without cache
@@ -267,7 +269,6 @@ LlamaConfig read_config(const YAML::Node& config) {
     llama_config.theta = config["theta"].as<float>(500000.0F);
     llama_config.runner_type = common::transformer::read_runner_type(config);
     llama_config.weight_tying = common::transformer::read_weight_tying_type(config);
-
     // Read RoPE NTK-aware scaling parameters if they exist
     if (config["rope_scaling"]) {
         const auto& rope_scaling = config["rope_scaling"];
@@ -300,7 +301,6 @@ YAML::Node write_config(const LlamaConfig& llama_config) {
     config["vocab_size"] = llama_config.vocab_size;
     config["max_sequence_length"] = llama_config.max_sequence_length;
     config["theta"] = llama_config.theta;
-
     // Add RoPE scaling parameters if they are set
     if (llama_config.scaling_factor != 0.0F && llama_config.original_context_length != 0U) {
         YAML::Node rope_scaling;

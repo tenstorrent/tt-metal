@@ -81,12 +81,14 @@ class StatsReporter:
 
                 # Get test metadata if metadata loader is available
                 test_metadata = None
-                bandwidth_mode = "per_core"  # Default to per-core bandwidth
+                bandwidth_mode = "per_core"
+                bandwidth_unit = "bpc"
                 if self.metadata_loader is not None:
                     # Load bandwidth_mode from test_information.yaml
                     test_info = self.metadata_loader.load_test_information()
                     test_data = test_info.get("tests", {}).get(test_id, {})
                     bandwidth_mode = test_data.get("bandwidth_mode", "per_core")
+                    bandwidth_unit = test_data.get("bandwidth_unit", "bpc")
 
                     try:
                         test_metadata = self.metadata_loader.get_test_metadata(test_id, self.arch)
@@ -99,20 +101,27 @@ class StatsReporter:
                     "Number of Transactions",
                 ]
 
+                # Architecture is always included (known from the host side)
+                header.append("Architecture")
+
                 # Add metadata columns for NOC estimator consumption
                 # All metadata fields are automatically included (except 'name' and 'comment')
                 if test_metadata is not None:
                     # Standard metadata fields in specific order for csv_reader.cpp compatibility
                     standard_fields = ["architecture", "mechanism", "memory_type", "pattern"]
                     for field in standard_fields:
-                        if field in test_metadata:
+                        if field in test_metadata and field != "architecture":
                             column_name = self.metadata_loader.metadata_field_to_column_name(field)
                             header.append(column_name)
 
                     # Add any additional optional fields in alphabetical order
                     # Exclude bandwidth_mode as it's a config flag, not data
                     optional_fields = sorted(
-                        [k for k in test_metadata.keys() if k not in standard_fields and k != "bandwidth_mode"]
+                        [
+                            k
+                            for k in test_metadata.keys()
+                            if k not in standard_fields and k not in ("bandwidth_mode", "bandwidth_unit")
+                        ]
                     )
                     for field in optional_fields:
                         column_name = self.metadata_loader.metadata_field_to_column_name(field)
@@ -134,22 +143,34 @@ class StatsReporter:
                         break
 
                 # Add performance metrics at the end
+                use_gbps = bandwidth_unit == "gbps"
                 if bandwidth_mode == "combined":
                     header.extend(
                         [
                             "Number of Cores",
                             "Total Bytes",
-                            "Wall Clock Time (cycles)",
+                            "Latency (cycles)",
                             "Combined Bandwidth (bytes/cycle)",
                         ]
                     )
                 else:
+                    bw_label = "Bandwidth (GB/s)" if use_gbps else "Bandwidth (bytes/cycle)"
                     header.extend(
                         [
                             "Latency (cycles)",
-                            "Bandwidth (bytes/cycle)",
+                            bw_label,
                         ]
                     )
+
+                # Add clock frequency column if any run has it logged
+                has_clock_freq = any(
+                    self.aggregate_stats[r].get(rid, {}).get("clock_freq_mhz", 0) > 0
+                    for r in self.aggregate_stats
+                    for rid, rs in self.aggregate_stats[r].items()
+                    if rs["attributes"].get("Test id") == test_id
+                )
+                if has_clock_freq:
+                    header.append("Clock Frequency (MHz)")
 
                 writer.writerow(header)
 
@@ -165,6 +186,9 @@ class StatsReporter:
                             run_stats.get("num_transactions"),
                         ]
 
+                        # Architecture is always included
+                        row.append(self.arch.lower())
+
                         # Add metadata columns
                         if test_metadata is not None:
                             # Standard metadata fields in specific order
@@ -176,15 +200,14 @@ class StatsReporter:
                             # Add any additional optional fields in alphabetical order
                             # Exclude bandwidth_mode as it's a config flag, not data
                             optional_fields = sorted(
-                                [k for k in test_metadata.keys() if k not in standard_fields and k != "bandwidth_mode"]
+                                [
+                                    k
+                                    for k in test_metadata.keys()
+                                    if k not in standard_fields and k not in ("bandwidth_mode", "bandwidth_unit")
+                                ]
                             )
                             for field in optional_fields:
                                 value = test_metadata[field]
-                                # If we have profiled data and it's not set in the test_information
-                                if field == "num_subordinates" and value == "":
-                                    value = run_stats.get("num_subordinates", 0)
-                                if field == "same_axis" and value == "":
-                                    value = bool(run_stats.get("same_axis", 0))
                                 row.append(value)
                         row.extend(
                             [
@@ -212,12 +235,25 @@ class StatsReporter:
                                 ]
                             )
                         else:
+                            if use_gbps:
+                                bw_val = run_stats.get("bandwidth_gbps", 0)
+                                if not bw_val:
+                                    # Fallback: B/cycle * arch freq
+                                    from tests.tt_metal.tt_metal.data_movement.python.constants import NOC_FREQ_GHZ
+
+                                    bw_val = run_stats["bandwidth"] * NOC_FREQ_GHZ.get(self.arch, 1.0)
+                            else:
+                                bw_val = run_stats["bandwidth"]
                             row.extend(
                                 [
                                     run_stats["duration_cycles"],
-                                    run_stats["bandwidth"],
+                                    bw_val,
                                 ]
                             )
+
+                        # Add clock frequency if present for this test
+                        if has_clock_freq:
+                            row.append(run_stats.get("clock_freq_mhz", 0))
 
                         writer.writerow(row)
 

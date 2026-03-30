@@ -189,6 +189,11 @@ class StatsCollector:
                 total_bytes = num_cores * transaction_size * num_transactions
                 combined_bandwidth = total_bytes / wall_clock_time if wall_clock_time > 0 else 0
 
+                # Use real clock frequency from device if logged
+                clock_freq_mhz = attributes.get("Clock frequency MHz", 0)
+                clock_freq_ghz = clock_freq_mhz / 1000.0 if clock_freq_mhz else 0
+                bandwidth_gbps = agg_bandwidth * clock_freq_ghz if clock_freq_ghz else 0
+
                 agg_data = {
                     "duration_cycles": agg_duration,
                     "bandwidth": agg_bandwidth,
@@ -203,24 +208,29 @@ class StatsCollector:
                     "wall_clock_time": wall_clock_time,
                     "total_bytes": total_bytes,
                     "combined_bandwidth": combined_bandwidth,
+                    # Clock frequency and GB/s metrics
+                    "clock_freq_mhz": clock_freq_mhz,
+                    "clock_freq_ghz": clock_freq_ghz,
+                    "bandwidth_gbps": bandwidth_gbps,
                 }
 
                 # Dynamically add attributes based on test type
                 test_name = self.test_id_to_name.get(test_id, "")
                 for test_type, config in self.test_type_attributes.items():
                     if test_type.replace("_", " ").title() in test_name:
+                        value_mappings = config.get("value_mappings", {})
                         for key, value in config["attributes"].items():
-                            agg_data[value] = attributes.get(key)
+                            raw_val = attributes.get(key)
+                            # Apply value mapping if one exists for this attribute
+                            if key in value_mappings and raw_val in value_mappings[key]:
+                                agg_data[value] = value_mappings[key][raw_val]
+                            else:
+                                agg_data[value] = raw_val
                         # For multicast, create a grid dimension string
                         if test_type == "multicast_schemes":
                             grid_x = attributes.get("Subordinate Grid Size X", "N/A")
                             grid_y = attributes.get("Subordinate Grid Size Y", "N/A")
                             agg_data["grid_dimensions"] = f"{grid_x} x {grid_y}"
-
-                num_subordinates = attributes.get("Number of subordinates", 0)
-                same_axis = attributes.get("Same axis", 0)
-                agg_data["num_subordinates"] = num_subordinates
-                agg_data["same_axis"] = same_axis
 
                 agg[run_host_id] = agg_data
 

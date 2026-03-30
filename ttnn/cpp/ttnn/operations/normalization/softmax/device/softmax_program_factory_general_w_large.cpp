@@ -8,7 +8,6 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <utility>
@@ -26,11 +25,13 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
     auto* const device = input.device();
     const auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
+    const uint32_t tile_height = input.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input.tensor_spec().tile().get_width();
     const auto shape = input.padded_shape();
     const auto H = shape[-2];
     const auto W = shape[-1];
-    const auto Ht = H / tt::constants::TILE_HEIGHT;
-    const auto Wt = W / tt::constants::TILE_WIDTH;
+    const auto Ht = H / tile_height;
+    const auto Wt = W / tile_width;
 
     // Worksplit
     const auto num = input.physical_volume() / H / W;
@@ -51,7 +52,12 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
 
     // Circular buffers
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    // Use Float16_b for intermediates when not accumulating in fp32, matching the AttentionOptimized path.
+    // This avoids using Bfp8_b for intermediate computations where it lacks precision (issue #32934).
+    const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // Reader generates mask/scaler with uint16_t (1024 elements = 2048 bytes). Use Float16_b for these CBs when
+    // input is Bfp8_b so tile size matches; Bfp8_b tile layout is smaller and would be overflowed (issue #32934).
+    const auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
     operations::CreateCircularBuffer(
         program,
@@ -59,8 +65,8 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
         data_format,
         {
             {tt::CBIndex::c_0, 2},                         // input
-            {tt::CBIndex::c_1, 1},                         // mask
-            {tt::CBIndex::c_2, 1},                         // scaler
+            {tt::CBIndex::c_1, 1, mask_scaler_format},     // mask
+            {tt::CBIndex::c_2, 1, mask_scaler_format},     // scaler
             {tt::CBIndex::c_16, 2},                        // output
             {tt::CBIndex::c_24, 2, intermed_data_format},  // exp(x)
             {tt::CBIndex::c_25, 1, intermed_data_format},  // reduce
@@ -91,8 +97,9 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
 
     std::map<std::string, std::string> compute_defines;
     compute_defines["SOFTMAX"] = "1";
-
-    if (fp32_dest_acc_en) {
+    // Enable FP32_DEST_ACC_EN for format reconfiguration in moreh compute helpers when using mixed
+    // data formats (Bfp8_b input with Float16_b intermediates/mask/scaler) (issue #32934).
+    if (fp32_dest_acc_en || data_format == tt::DataFormat::Bfp8_b) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
@@ -125,9 +132,9 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
         }
 
         float scaler = 1.0f;
-        uint32_t mask_w = input.logical_shape()[-1] % tt::constants::TILE_WIDTH;
+        uint32_t mask_w = input.logical_shape()[-1] % tile_width;
         if (mask_w == 0) {
-            mask_w = tt::constants::TILE_WIDTH;
+            mask_w = tile_width;
         }
         const std::vector<uint32_t> reader_args = {
             input.buffer()->address(),

@@ -9,11 +9,32 @@
 #include <cassert>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
+#include <filesystem>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 
 #include "serialization/flatbuffer_file.hpp"
 #include "serialization/serialization.hpp"
+
+// Expand ${TT_METAL_RUNTIME_ROOT} in a config path string.
+// Fail fast when the placeholder is used without TT_METAL_RUNTIME_ROOT.
+inline std::string expand_config_path(const std::string &path) {
+    static const std::string kPlaceholder = "${TT_METAL_RUNTIME_ROOT}";
+    auto pos = path.find(kPlaceholder);
+    if (pos == std::string::npos) {
+        return path;
+    }
+    const char *env = std::getenv("TT_METAL_RUNTIME_ROOT");
+    if (env == nullptr) {
+        throw std::runtime_error(
+            "TT_METAL_RUNTIME_ROOT is not set, but model_config path uses ${TT_METAL_RUNTIME_ROOT}: " + path);
+    }
+    std::string result = path;
+    result.replace(pos, kPlaceholder.length(), env);
+    return std::filesystem::path(result).lexically_normal().string();
+}
 
 class LossAverageMeter {
     float m_sum = 0.0F;
