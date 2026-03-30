@@ -59,6 +59,7 @@ void bind_redistribute_to_memory_config(nb::module_& mod) {
             nb::arg("input_tensor").noconvert(),
             nb::arg("memory_config"),
             nb::arg("output_dtype") = nb::none(),
+            nb::kw_only(),
             nb::arg("preallocated_output") = nb::none()));
 }
 

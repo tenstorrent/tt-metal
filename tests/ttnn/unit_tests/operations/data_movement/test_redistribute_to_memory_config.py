@@ -1894,6 +1894,39 @@ def test_redistribute_to_memory_config_rm_interleaved_to_nd_sharded_large_row(
     assert_equal(torch_input, output_torch)
 
 
+# Test for large row major input legacy 2D sharding
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape, grid",
+    [
+        (
+            [160, 5210112],
+            [160, 434176],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))}),
+        ),
+    ],
+)
+@pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.DRAM])
+def test_redistribute_to_memory_config_rm_interleaved_to_legacy_2D_sharded_large_row(
+    device, tensor_shape, shard_shape, grid, shard_orientation, buffer_type
+):
+    torch.manual_seed(0)
+
+    shard_spec = ttnn.ShardSpec(grid, shard_shape, shard_orientation)
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type, shard_spec)
+    assert sharded_memory_config.is_sharded()
+
+    torch_input = torch.randn(tensor_shape, dtype=torch.float32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    output_tensor = ttnn.redistribute_to_memory_config(input_tensor, sharded_memory_config)
+
+    check_mem_config(output_tensor, sharded_memory_config, is_nd_sharded=False)
+
+    output_torch = ttnn.to_torch(output_tensor)
+    assert_equal(torch_input, output_torch)
+
+
 # Test for large row major ND sharded to interleaved
 @pytest.mark.parametrize(
     "tensor_shape, shard_shape, grid",
@@ -2238,3 +2271,57 @@ def test_redistribute_to_memory_config_tilized_legacy_2d_sharded_to_interleaved_
     assert output_tensor.dtype == output_dtype, f"Expected dtype {output_dtype}, got {output_tensor.dtype}"
     output_torch = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_input, output_torch, pcc=pcc)
+
+
+@pytest.mark.parametrize(
+    "tensor_shape, shard_shape, grid",
+    [
+        # Uneven first dim: 5 / 2 → last shard width 1 along dim 0; grid has spare cores
+        (
+            [5, 32, 64],
+            [2, 32, 64],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
+        ),
+        # Uneven + unaligned shard width on last dim
+        (
+            [6, 8, 64],
+            [4, 3, 20],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(2, 0))}),
+        ),
+    ],
+)
+@pytest.mark.parametrize("buffer_type", [ttnn.BufferType.L1])
+def test_redistribute_to_memory_config_rm_interleaved_to_nd_sharded_preallocated_output(
+    device, tensor_shape, shard_shape, grid, buffer_type
+):
+    """Interleaved row-major → ND sharded (row-major orientation) with uneven shards; write into preallocated output."""
+    torch.manual_seed(0)
+    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+
+    nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=shard_orientation)
+    sharded_memory_config = ttnn.MemoryConfig(buffer_type, nd_shard_spec)
+    assert sharded_memory_config.is_sharded()
+
+    torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    input_tensor = ttnn.to_device(input_tensor, device)
+
+    # NOTE: This next step may result in an implicit conversion from an nd_shard_spec to an equivalent legacy 2D shard_spec, causing the actual memory_config of the preallocated tensor to be different from the one passed in to the redistribute_to_memory_config call.
+    preallocated = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(tensor_shape),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+        sharded_memory_config,
+    )
+
+    output_tensor = ttnn.redistribute_to_memory_config(
+        input_tensor,
+        preallocated.memory_config(),
+        preallocated_output=preallocated,
+    )
+
+    check_mem_config(output_tensor, preallocated.memory_config(), is_nd_sharded=True)
+
+    output_torch = ttnn.to_torch(output_tensor)
+    assert_equal(torch_input, output_torch)

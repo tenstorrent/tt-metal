@@ -11,7 +11,7 @@ namespace ttnn {
 
 ttnn::Tensor redistribute_to_memory_config(
     const ttnn::Tensor& input_tensor,
-    const MemoryConfig& sharded_memory_config,
+    const MemoryConfig& output_memory_config,
     const std::optional<DataType>& data_type_arg,
     const std::optional<Tensor>& preallocated_output = std::nullopt);
 

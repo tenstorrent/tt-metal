@@ -13,11 +13,11 @@ namespace ttnn {
 
 ttnn::Tensor redistribute_to_memory_config(
     const ttnn::Tensor& input_tensor,
-    const MemoryConfig& sharded_memory_config,
+    const MemoryConfig& output_memory_config,
     const std::optional<DataType>& data_type_arg,
     const std::optional<Tensor>& preallocated_output) {
     return ttnn::prim::redistribute_to_memory_config(
-        input_tensor, sharded_memory_config, data_type_arg.value_or(input_tensor.dtype()), preallocated_output);
+        input_tensor, output_memory_config, data_type_arg.value_or(input_tensor.dtype()), preallocated_output);
 }
 
 }  // namespace ttnn

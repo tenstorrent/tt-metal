@@ -36,7 +36,10 @@ void RedistributeToMemoryConfigDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.output_tensor.has_value()) {
         const auto& output_tensor = tensor_args.output_tensor.value();
         TT_FATAL(output_tensor.logical_shape() == input_tensor.logical_shape(), "Mismatched output shape");
-        TT_FATAL(output_tensor.memory_config() == output_mem_config, "Mismatched output memory config");
+        TT_FATAL(
+            output_tensor.memory_config() == output_mem_config,
+            "Mismatched output memory config. Check to see if the preallocated output tensor has a different shard "
+            "spec than the one specified in the passed-in memory config.");
         TT_FATAL(output_tensor.dtype() == output_dtype, "Mismatched output dtype");
         TT_FATAL(output_tensor.storage_type() == StorageType::DEVICE, "Output tensor needs to be on device!");
         TT_FATAL(output_tensor.buffer() != nullptr, "Output tensor needs to be allocated in buffers on device!");
