@@ -96,7 +96,17 @@ def parse_agent_json_after_marker(text: str, marker: str) -> dict[str, Any]:
         return json.loads(payload[brace_idx:])
 
 
-def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> dict[str, Any]:
+def safe_slug(text: str) -> str:
+    clean = re.sub(r"[^a-zA-Z0-9._-]+", "_", text).strip("._-")
+    return clean or "item"
+
+
+def write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> tuple[dict[str, Any], dict[str, Any]]:
     issue_number = int(action["issue_number"])
     job_urls = action.get("job_urls", [])
     if not isinstance(job_urls, list):
@@ -118,9 +128,16 @@ def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> di
     if model != "auto":
         cmd[1:1] = ["--model", model]
     result = run(cmd, capture=True)
+    debug: dict[str, Any] = {
+        "used_retry": False,
+        "primary_stdout": result.stdout,
+        "primary_stderr": result.stderr,
+    }
     try:
-        return parse_agent_json_after_marker(result.stdout, "===FINAL_DISABLE_EDIT_SUMMARY===")
-    except Exception:
+        summary = parse_agent_json_after_marker(result.stdout, "===FINAL_DISABLE_EDIT_SUMMARY===")
+        return summary, debug
+    except Exception as exc:
+        debug["primary_parse_error"] = str(exc)
         # Retry with a strict summary-only prompt in case the main run omitted marker formatting.
         retry_prompt = (
             "Output only the required marker and compact JSON summary.\n"
@@ -132,7 +149,11 @@ def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> di
         if model != "auto":
             retry_cmd[1:1] = ["--model", model]
         retry = run(retry_cmd, capture=True)
-        return parse_agent_json_after_marker(retry.stdout, "===FINAL_DISABLE_EDIT_SUMMARY===")
+        debug["used_retry"] = True
+        debug["retry_stdout"] = retry.stdout
+        debug["retry_stderr"] = retry.stderr
+        summary = parse_agent_json_after_marker(retry.stdout, "===FINAL_DISABLE_EDIT_SUMMARY===")
+        return summary, debug
 
 
 def invoke_kickoff_agent(pr_url: str, model: str) -> str:
@@ -292,6 +313,7 @@ def main() -> int:
     parser.add_argument("--output-json", required=True)
     parser.add_argument("--summary-md", required=True)
     parser.add_argument("--state-json", required=True)
+    parser.add_argument("--debug-dir", default="")
     parser.add_argument("--model", default="auto")
     parser.add_argument("--max-attempts-per-item", type=int, default=3)
     parser.add_argument("--dry-run", action="store_true")
@@ -333,6 +355,10 @@ def main() -> int:
         "state_path": str(state_path),
         "state_updates": 0,
     }
+    debug_root = Path(args.debug_dir) if args.debug_dir else None
+    if debug_root is not None:
+        debug_root.mkdir(parents=True, exist_ok=True)
+        result["debug_dir"] = str(debug_root)
 
     if not args.dry_run:
         run_guarded_gh(["gh", "auth", "status"])
@@ -448,18 +474,35 @@ def main() -> int:
             )
             result["state_updates"] += 1
 
-            edit_summary = run_disable_editor(action, issue_url, args.model)
+            edit_summary, editor_debug = run_disable_editor(action, issue_url, args.model)
+            if debug_root is not None:
+                item_dir = debug_root / f"{safe_slug(source_ts)}_issue_{issue_number}"
+                write_text(item_dir / "disable_editor_primary.stdout.txt", str(editor_debug.get("primary_stdout", "")))
+                write_text(item_dir / "disable_editor_primary.stderr.txt", str(editor_debug.get("primary_stderr", "")))
+                if editor_debug.get("used_retry"):
+                    write_text(item_dir / "disable_editor_retry.stdout.txt", str(editor_debug.get("retry_stdout", "")))
+                    write_text(item_dir / "disable_editor_retry.stderr.txt", str(editor_debug.get("retry_stderr", "")))
+                write_text(item_dir / "disable_edit_summary.json", json.dumps(edit_summary, indent=2))
             changed = git_changed_files()
             if not changed:
+                summary_note = str(edit_summary.get("notes", "")).strip() if isinstance(edit_summary, dict) else ""
+                skip_reason = "no_code_changes_from_agent"
+                if summary_note:
+                    skip_reason += f":{summary_note}"
                 set_status(
                     item,
                     "needs_human",
                     event="no_changes_from_disable_editor",
-                    details=f"Attempt {item['attempts']} produced no code changes",
+                    details=f"Attempt {item['attempts']} produced no code changes. {summary_note}".strip(),
                 )
                 result["state_updates"] += 1
                 result["skipped"].append(
-                    {"source_slack_ts": source_ts, "issue_number": issue_number, "reason": "no_code_changes_from_agent"}
+                    {
+                        "source_slack_ts": source_ts,
+                        "issue_number": issue_number,
+                        "reason": skip_reason,
+                        "disable_edit_summary": edit_summary,
+                    }
                 )
                 continue
 

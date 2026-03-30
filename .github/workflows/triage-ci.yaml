@@ -179,6 +179,7 @@ jobs:
             build_ci/auto_disable/disable_actions.json
             build_ci/auto_disable/execution_result.json
             build_ci/auto_disable/summary.md
+            build_ci/auto_disable/debug
           retention-days: 7
 
       - name: Upload triage state artifact
