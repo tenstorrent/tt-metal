@@ -279,26 +279,17 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
-    // Build strided (diagonal) sender/receiver core sets for DRAM channel spreading.
-    // in0 injector for M-row r is at N-column (r % in1_parallel_axis_cores).
-    // in1 injector for N-column c is at M-row (c % in0_parallel_axis_cores).
-    std::set<CoreRange> in0_sender_set, in0_receiver_set;
-    std::set<CoreRange> in1_sender_set, in1_receiver_set;
-    for (uint32_t y = 0; y < grid_size.y; y++) {
-        for (uint32_t x = 0; x < grid_size.x; x++) {
-            CoreCoord c{x, y};
-            uint32_t in0_idx = transpose_core_grid ? x : y;
-            uint32_t in1_idx = transpose_core_grid ? y : x;
-            bool is_in0_injector = (in1_idx == (in0_idx % in1_parallel_axis_cores));
-            bool is_in1_injector = (in0_idx == (in1_idx % in0_parallel_axis_cores));
-            (is_in0_injector ? in0_sender_set : in0_receiver_set).insert(CoreRange(c, c));
-            (is_in1_injector ? in1_sender_set : in1_receiver_set).insert(CoreRange(c, c));
-        }
-    }
-    auto in0_sender_cores = CoreRangeSet(in0_sender_set);
-    auto in0_receiver_cores = CoreRangeSet(in0_receiver_set);
-    auto in1_sender_cores = CoreRangeSet(in1_sender_set);
-    auto in1_receiver_cores = CoreRangeSet(in1_receiver_set);
+    auto core_0_0 = CoreCoord{0, 0};
+    auto core_0_1 = CoreCoord{0, 1};
+    auto core_1_0 = CoreCoord{1, 0};
+    auto core_endx_0 = CoreCoord{grid_size.x - 1, 0};
+    auto core_0_endy = CoreCoord{0, grid_size.y - 1};
+    auto core_endx_endy = CoreCoord{grid_size.x - 1, grid_size.y - 1};
+
+    auto in0_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
+    auto in0_receiver_cores = CoreRange(transpose_core_grid ? core_0_1 : core_1_0, core_endx_endy);
+    auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
+    auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
 
     auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
@@ -652,17 +643,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
 
-        // Strided (diagonal) injector selection for DRAM channel spreading
-        bool is_in0_injector = (in1_idx == (in0_idx % in1_parallel_axis_cores));
-        bool is_in1_injector = (in0_idx == (in1_idx % in0_parallel_axis_cores));
-
-        // Compute injector logical core for this row/column (strided position)
-        uint32_t in0_injector_axis_pos = in0_idx % in1_parallel_axis_cores;
-        CoreCoord in0_injector_logical = transpose_core_grid ? CoreCoord{core.x, (std::size_t)in0_injector_axis_pos}
-                                                             : CoreCoord{(std::size_t)in0_injector_axis_pos, core.y};
-        uint32_t in1_injector_axis_pos = in1_idx % in0_parallel_axis_cores;
-        CoreCoord in1_injector_logical = transpose_core_grid ? CoreCoord{(std::size_t)in1_injector_axis_pos, core.y}
-                                                             : CoreCoord{core.x, (std::size_t)in1_injector_axis_pos};
+        CoreCoord in0_injector_logical = transpose_core_grid ? CoreCoord{core.x, 0} : CoreCoord{0, core.y};
+        CoreCoord in1_injector_logical = transpose_core_grid ? CoreCoord{0, core.y} : CoreCoord{core.x, 0};
 
         auto [in0_core_order, in0_core_order_index] = build_core_order_for_axis(
             core,
@@ -693,8 +675,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         auto in0_injector_physical = device->worker_core_from_logical_core(in0_injector_logical);
         auto in1_injector_physical = device->worker_core_from_logical_core(in1_injector_logical);
         // For receivers, sender_noc = injector physical; for injector itself, keep clamped prev (itself)
-        const auto& in0_effective_sender_physical = !is_in0_injector ? in0_injector_physical : in0_prev_core_physical;
-        const auto& in1_effective_sender_physical = !is_in1_injector ? in1_injector_physical : in1_prev_core_physical;
+        const auto& in0_effective_sender_physical = (in1_idx != 0) ? in0_injector_physical : in0_prev_core_physical;
+        const auto& in1_effective_sender_physical = (in0_idx != 0) ? in1_injector_physical : in1_prev_core_physical;
 
         /**
          * NOTE: Some cores are doing unnecessary work, on blocks which are processed just to make
@@ -713,8 +695,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
 
         // USE_MCAST: all non-injector cores are sinks (no forwarding); injector only has receivers if axis > 1
-        bool is_in0_sink = !is_in0_injector || (in1_parallel_axis_cores == 1);
-        bool is_in1_sink = !is_in1_injector || (in0_parallel_axis_cores == 1);
+        bool is_in0_sink = (in1_idx != 0) || (in1_parallel_axis_cores == 1);
+        bool is_in1_sink = (in0_idx != 0) || (in0_parallel_axis_cores == 1);
 
         std::vector<uint32_t> in0_args = {
             in0_addr,
@@ -731,7 +713,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
             defer_write_k_block,
         };
-        if (is_in0_injector) {
+        if (in1_idx == 0) {
             // USE_MCAST: injector appends 4 mcast rect coords; box spans full line (hardware excludes sender)
             if (in1_parallel_axis_cores > 1) {
                 CoreCoord in0_mcast_start_l =
@@ -769,7 +751,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
         }
-        if (is_in0_injector) {
+        if (in1_idx == 0) {
             // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
         } else {
@@ -791,7 +773,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
             defer_write_k_block,
         };
-        if (is_in1_injector) {
+        if (in0_idx == 0) {
             // USE_MCAST: injector appends 4 mcast rect coords; box spans full line (hardware excludes sender)
             if (in0_parallel_axis_cores > 1) {
                 CoreCoord in1_mcast_start_l =
@@ -829,7 +811,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
         }
-        if (is_in1_injector) {
+        if (in0_idx == 0) {
             // in1 sender
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
         } else {
@@ -858,9 +840,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in1_receiver_kernels_id,
         compute_kernels_id,
         transpose_core_grid,
-        fuse_op && fused_op_signaler->read_local_slice_from_input,
-        in0_parallel_axis_cores,
-        in1_parallel_axis_cores};
+        fuse_op && fused_op_signaler->read_local_slice_from_input};
 }
 
 MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(
@@ -941,10 +921,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
         CoreCoord core = override_variables.cores.at(i);
         uint32_t in0_idx = override_variables.transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
-        bool is_in0_injector = (in1_idx == (in0_idx % override_variables.in1_parallel_axis_cores));
-        bool is_in1_injector = (in0_idx == (in1_idx % override_variables.in0_parallel_axis_cores));
-
-        if (is_in0_injector) {
+        if (in1_idx == 0) {
             auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
 
             in0_sender_args[in0_in0_addr_idx] = tensor_args.input_tensor.buffer()->address();
@@ -984,7 +961,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
             }
         }
 
-        if (is_in1_injector) {
+        if (in0_idx == 0) {
             auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
             in1_sender_args[in1_in0_addr_idx] = tensor_args.weight_tensor.buffer()->address();
             in1_sender_args[in1_bias_addr_idx] =
