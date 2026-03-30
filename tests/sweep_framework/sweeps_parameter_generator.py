@@ -655,7 +655,7 @@ if __name__ == "__main__":
         logger.info("=" * 80)
         logger.info("Lead models filter enabled.")
         logger.info(
-            "Set TTNN_LEAD_MODELS_ONLY=%s for tests.sweep_framework.master_config_loader_v2 "
+            "Set TTNN_LEAD_MODELS_ONLY={} for tests.sweep_framework.master_config_loader_v2 "
             "to filter traced configs to lead-model sources from model_tracer/sweep_manifest.yaml",
             os.environ.get("TTNN_LEAD_MODELS_ONLY"),
         )
