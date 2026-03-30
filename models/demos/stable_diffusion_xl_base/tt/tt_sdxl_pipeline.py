@@ -12,7 +12,7 @@ from transformers import CLIPTextModel, CLIPTextModelWithProjection
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import profiler
+from models.common.utility_functions import is_wormhole_b0, profiler
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from models.demos.stable_diffusion_xl_base.refiner.tt.model_configs import load_refiner_model_optimisations
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
@@ -94,7 +94,8 @@ class TtSDXLPipeline(LightweightModule):
         self.allocated_device_tensors = False
         self.generated_input_tensors = False
 
-        os.environ["TT_MM_THROTTLE_PERF"] = "5"
+        if is_wormhole_b0():
+            os.environ["TT_MM_THROTTLE_PERF"] = "5"
         if pipeline_config.is_galaxy:
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
             assert (

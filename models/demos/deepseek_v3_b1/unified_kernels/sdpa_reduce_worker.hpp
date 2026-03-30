@@ -239,7 +239,7 @@ ALWI void sdpa_tail_streaming(
     // TODO: Unit test perf seemed better if we operated on all chunks
     // Retest in streaming context since unit test doesn't need to wait for input
     if constexpr (untilize) {
-        pack_untilize_dest_init<total_size, total_size, false, TILE_C_DIM, dense>(cb_l_out, 8, dense ? 2 : 4);
+        custom_pack_untilize_dest_init<total_size, total_size, false, TILE_C_DIM, dense>(cb_l_out, 8, dense ? 2 : 4);
         cb_wait_front(cb_l1, total_size);
         cb_wait_front(cb_l2, total_size);
         cb_reserve_back(cb_l_out, total_size);
@@ -272,11 +272,11 @@ ALWI void sdpa_forward_data(
     uint32_t cb_l1,
     uint32_t cb_l_out,
     uint32_t block_size) {
+    copy_tile_init(cb_prev_max_sum);
     cb_wait_front(cb_prev_max_sum, 1);
     cb_reserve_back(cb_cur_max_sum, 1);
 
     tile_regs_acquire();
-    copy_tile_init(cb_prev_max_sum);
     copy_tile(cb_prev_max_sum, 0, 0);
     tile_regs_commit();
 
@@ -293,7 +293,6 @@ ALWI void sdpa_forward_data(
         uint32_t tile_index = chunk * block_size;
         for (uint32_t i = 0; i < block_size; i++) {
             tile_regs_acquire();
-            copy_tile_init(cb_l1);
             copy_tile(cb_l1, tile_index + i, i);
             tile_regs_commit();
 
@@ -653,6 +652,21 @@ struct SdpaReduceWorker {
                 cb_push_back(CTArgs::cb_neighbor_ms, 1);
                 cb_reserve_back(CTArgs::cb_neighbor_l, CTArgs::out_tiles);
                 cb_push_back(CTArgs::cb_neighbor_l, CTArgs::out_tiles);
+            }
+
+            // Clear the semaphores if the neighbor is not valid
+            if (!r1_neighbor_valid) {
+                volatile tt_l1_ptr uint32_t* sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.r1_neighbor_sem_addr);
+                noc_semaphore_wait(sem_ptr, CTArgs::L_SEM_BASE_THRESHOLD + CTArgs::num_l_chunks - 1);
+                noc_semaphore_set(sem_ptr, 0);
+            }
+
+            if (!r2_neighbor_r1_valid) {
+                volatile tt_l1_ptr uint32_t* sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.r2_neighbor_sem_addr);
+                noc_semaphore_wait(sem_ptr, CTArgs::L_SEM_BASE_THRESHOLD + CTArgs::num_l_chunks - 1);
+                noc_semaphore_set(sem_ptr, 0);
             }
         }
 #endif  // COMPILE_FOR_NCRISC

@@ -11,11 +11,7 @@ from loguru import logger
 from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name
 from models.demos.stable_diffusion_xl_base.demo.demo_lora import run_demo_inference
-from models.demos.stable_diffusion_xl_base.tests.test_common import (
-    SDXL_FABRIC_CONFIG,
-    SDXL_L1_SMALL_SIZE,
-    SDXL_TRACE_REGION_SIZE,
-)
+from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_FABRIC_CONFIG, SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
     accuracy_assert,
     calculate_accuracy_metrics,
@@ -42,7 +38,6 @@ from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
         (
             {
                 "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
             True,
@@ -50,7 +45,6 @@ from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
         (
             {
                 "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
             },
             False,
         ),

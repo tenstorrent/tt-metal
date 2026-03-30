@@ -85,6 +85,11 @@ class SocketInterface:
             assert upstream_page_size is not None, "upstream_page_size required for multi-upstream mode"
             assert upstream_socket is None, "Cannot mix upstream_socket (singular) with multi-upstream params"
             assert upstream_core_coord is None, "Cannot mix upstream_core_coord (singular) with multi-upstream params"
+            assert page_size > 0, "page_size must be positive"
+            assert socket_fifo_size >= page_size, "socket_fifo_size must be at least page_size"
+            assert (
+                socket_fifo_size % page_size == 0
+            ), f"socket_fifo_size ({socket_fifo_size}) must be a multiple of page_size ({page_size})"
             self.upstream_page_size = upstream_page_size
 
         self.upstream_socket = None
@@ -97,9 +102,11 @@ class SocketInterface:
                     self.upstream_sockets_list = upstream_sockets
                 elif upstream_core_coords is not None:
                     self.upstream_socket_pairs = []
+                    buffer_depth = socket_fifo_size // page_size
+                    upstream_fifo_size = self.upstream_page_size * buffer_depth
                     for uc in upstream_core_coords:
                         socket_connection = ttnn.SocketConnection(uc, send_core_coord)
-                        socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
+                        socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, upstream_fifo_size)
                         socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
                         pair = ttnn.create_socket_pair(self.mesh_device, self.mesh_device, socket_config)
                         self.upstream_socket_pairs.append(pair)
