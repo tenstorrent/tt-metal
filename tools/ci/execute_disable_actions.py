@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -62,7 +63,13 @@ def run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subproce
     return proc
 
 
-def run_streaming(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run_streaming(
+    cmd: list[str],
+    *,
+    check: bool = True,
+    heartbeat_label: str = "",
+    heartbeat_interval_sec: int = 30,
+) -> subprocess.CompletedProcess[str]:
     proc = subprocess.Popen(
         cmd,
         text=True,
@@ -87,7 +94,21 @@ def run_streaming(cmd: list[str], *, check: bool = True) -> subprocess.Completed
     t_err = threading.Thread(target=_pump, args=(proc.stderr, err_parts), kwargs={"to_stderr": True})
     t_out.start()
     t_err.start()
+    stop_heartbeat = threading.Event()
+
+    def _heartbeat() -> None:
+        if not heartbeat_label:
+            return
+        started = time.monotonic()
+        while not stop_heartbeat.wait(heartbeat_interval_sec):
+            elapsed = int(time.monotonic() - started)
+            log(f"{heartbeat_label}: still running ({elapsed}s elapsed)")
+
+    t_hb = threading.Thread(target=_heartbeat)
+    t_hb.start()
     returncode = proc.wait()
+    stop_heartbeat.set()
+    t_hb.join()
     t_out.join()
     t_err.join()
 
@@ -263,7 +284,7 @@ def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> tu
     cmd = ["agent", "--trust", "-p", prompt]
     if model != "auto":
         cmd[1:1] = ["--model", model]
-    result = run_streaming(cmd)
+    result = run_streaming(cmd, heartbeat_label=f"disable_editor issue #{issue_number}")
     debug: dict[str, Any] = {
         "used_retry": False,
         "primary_stdout": result.stdout,
@@ -286,7 +307,7 @@ def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> tu
         retry_cmd = ["agent", "--trust", "-p", retry_prompt]
         if model != "auto":
             retry_cmd[1:1] = ["--model", model]
-        retry = run_streaming(retry_cmd)
+        retry = run_streaming(retry_cmd, heartbeat_label=f"disable_editor retry issue #{issue_number}")
         debug["used_retry"] = True
         debug["retry_stdout"] = retry.stdout
         debug["retry_stderr"] = retry.stderr
@@ -304,7 +325,7 @@ def invoke_kickoff_agent(pr_url: str, model: str) -> str:
     cmd = ["agent", "--trust", "-p", prompt]
     if model != "auto":
         cmd[1:1] = ["--model", model]
-    result = run_streaming(cmd)
+    result = run_streaming(cmd, heartbeat_label=f"kickoff_agent for {pr_url}")
     return result.stdout.strip()[-2000:]
 
 
