@@ -224,7 +224,11 @@ def _serialize_vectors(vectors):
         vector["timestamp"] = current_time
         vector["input_hash"] = input_hash
         vector["tag"] = SWEEPS_TAG
-        serialized_vectors[input_hash] = vector
+        vector = _normalize_serialized_vector_metadata(vector)
+        if input_hash in serialized_vectors:
+            serialized_vectors[input_hash] = _merge_duplicate_serialized_vectors(serialized_vectors[input_hash], vector)
+        else:
+            serialized_vectors[input_hash] = vector
 
     return serialized_vectors
 
@@ -245,6 +249,63 @@ def _compute_vector_hash(vector):
         # Fallback if non-serializable objects are present
         hash_input = str(vector)
     return hashlib.sha224(hash_input.encode("utf-8")).hexdigest()
+
+
+def _normalize_metadata_list(value):
+    """Normalize metadata fields to a list while preserving order."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(value)
+    return [value]
+
+
+def _dedupe_metadata_items(items):
+    """Deduplicate metadata items deterministically."""
+    deduped = []
+    seen = set()
+
+    for item in items:
+        try:
+            key = json.dumps(item, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        except (TypeError, ValueError):
+            key = repr(item)
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        deduped.append(item)
+
+    return deduped
+
+
+def _merge_duplicate_serialized_vectors(existing_vector, new_vector):
+    """Merge metadata for vectors that share the same config_hash/input_hash."""
+    merged = dict(existing_vector)
+
+    merged_sources = _dedupe_metadata_items(
+        _normalize_metadata_list(existing_vector.get("traced_source"))
+        + _normalize_metadata_list(new_vector.get("traced_source"))
+    )
+    if merged_sources:
+        merged["traced_source"] = merged_sources[0] if len(merged_sources) == 1 else merged_sources
+
+    merged_machine_info = _dedupe_metadata_items(
+        _normalize_metadata_list(existing_vector.get("traced_machine_info"))
+        + _normalize_metadata_list(new_vector.get("traced_machine_info"))
+    )
+    if merged_machine_info:
+        merged["traced_machine_info"] = merged_machine_info[0] if len(merged_machine_info) == 1 else merged_machine_info
+
+    return merged
+
+
+def _normalize_serialized_vector_metadata(vector):
+    """Normalize exported metadata fields to stable shapes."""
+    normalized = dict(vector)
+    normalized["traced_source"] = _normalize_metadata_list(vector.get("traced_source"))
+    return normalized
 
 
 def _backup_corrupted_json_file(path: pathlib.Path) -> None:
