@@ -1780,54 +1780,95 @@ void bind_unary_composite_rpow(
 }  // namespace
 
 void py_module(nb::module_& mod) {
-    bind_unary_operation_overload_complex<"abs">(
+    ttnn::bind_function<"abs">(
         mod,
-        nb::overload_cast<const Tensor&, const std::optional<MemoryConfig>&, const std::optional<Tensor>&>(&ttnn::abs),
-        nb::overload_cast<const ttnn::operations::complex::ComplexTensor&, const MemoryConfig&>(&ttnn::abs),
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|abs|(\mathrm{{input\_tensor}}_i))doc",
-        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"acos", &ttnn::acos>(
+        R"doc(
+        Applies abs to :attr:`input_tensor` element-wise.
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = \verb|abs|(\mathrm{{input\_tensor}}_i)
+
+        Args:
+            input_tensor (ttnn.Tensor or ComplexTensor): the input tensor.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`. When ``input_tensor`` is a ``ttnn.ComplexTensor``, this argument is not supported.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids for the operation. Defaults to `None`. When ``input_tensor`` is a ``ttnn.ComplexTensor``, this argument is not supported.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes: BFLOAT16, BFLOAT8_B, FLOAT32
+        )doc",
+        ttnn::overload_t(
+            nb::overload_cast<
+                const Tensor&,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&,
+                const std::optional<CoreRangeSet>&>(&ttnn::abs),
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("memory_config") = nb::none(),
+            nb::arg("output_tensor") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            nb::overload_cast<const ttnn::operations::complex::ComplexTensor&, const MemoryConfig&>(&ttnn::abs),
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("memory_config")));
+    bind_unary_operation_subcoregrids<"acos">(
         mod,
+        &ttnn::acos,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|acos|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation<"asin", &ttnn::asin>(
+    bind_unary_operation_subcoregrids<"asin">(
         mod,
+        &ttnn::asin,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|asin|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation<"atan", &ttnn::atan>(
+    bind_unary_operation_subcoregrids<"atan">(
         mod,
+        &ttnn::atan,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|atan|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_composite<"atanh", &ttnn::atanh>(
-        mod, R"doc(Performs atanh function on :attr:`input_tensor`.)doc", "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"cos", &ttnn::cos>(
+    bind_unary_operation_subcoregrids<"atanh">(
         mod,
+        &ttnn::atanh,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|atanh|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation_subcoregrids<"cos">(
+        mod,
+        &ttnn::cos,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|cos|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"acosh", &ttnn::acosh>(
+    bind_unary_operation_subcoregrids<"acosh">(
         mod,
+        &ttnn::acosh,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|acosh|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-
-    bind_unary_operation<"erfinv", &ttnn::erfinv>(
+    bind_unary_operation_subcoregrids<"erfinv">(
         mod,
+        &ttnn::erfinv,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|erfinv|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-
-    bind_unary_operation<"exp2", &ttnn::exp2>(
+    bind_unary_operation_subcoregrids<"exp2">(
         mod,
+        &ttnn::exp2,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|exp2|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-
-    bind_unary_operation<"expm1", &ttnn::expm1>(
+    bind_unary_operation_subcoregrids<"expm1">(
         mod,
+        &ttnn::expm1,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|expm1|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
@@ -1844,8 +1885,9 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|trunc|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation<"frac", &ttnn::frac>(
+    bind_unary_operation_subcoregrids<"frac">(
         mod,
+        &ttnn::frac,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|frac|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
@@ -1854,8 +1896,9 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ == 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16, UINT32)doc");
-    bind_unary_operation<"ceil", &ttnn::ceil>(
+    bind_unary_operation_subcoregrids<"ceil">(
         mod,
+        &ttnn::ceil,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|ceil|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
@@ -1865,65 +1908,70 @@ void py_module(nb::module_& mod) {
         "[Supported range -20 to inf]",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(Computes the Hard Mish activation function. Hard Mish is a piecewise-linear approximation of the Mish activation function, offering improved computational efficiency while maintaining similar performance characteristics.)doc");
-    bind_unary_operation<"gez", &ttnn::gez>(
+    bind_unary_operation_subcoregrids<"gez">(
         mod,
+        &ttnn::gez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ >= 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
-    bind_unary_operation<"gtz", &ttnn::gtz>(
+    bind_unary_operation_subcoregrids<"gtz">(
         mod,
+        &ttnn::gtz,
         R"doc(\mathrm{{output\_tensor}}_i= (\mathrm{{input\_tensor_i\ > 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
-
-    bind_unary_operation<"lgamma", &ttnn::lgamma>(
+    bind_unary_operation_subcoregrids<"i0">(
         mod,
-        R"doc(Computes natural logarithm of the gamma function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16, FLOAT32)doc");
-    bind_unary_operation<"i0", &ttnn::i0>(
-        mod,
+        &ttnn::i0,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|i0|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"i1", &ttnn::i1>(
+    bind_unary_operation_subcoregrids<"i1">(
         mod,
+        &ttnn::i1,
         R"doc(\mathrm{{output\_tensor}}_i = I_1(\mathrm{{input\_tensor}}_i))doc",
         "[Validated range: -10 to 10]",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(Computes the modified Bessel function of the first kind of order 1. This function is commonly used in physics and engineering, particularly in problems with cylindrical symmetry.)doc");
-    bind_unary_operation<"isfinite", &ttnn::isfinite>(
+        R"doc(Computes the modified Bessel function of the first kind of order 1.)doc");
+    bind_unary_operation_subcoregrids<"isfinite">(
         mod,
+        &ttnn::isfinite,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isfinite|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"isinf", &ttnn::isinf>(
+    bind_unary_operation_subcoregrids<"isinf">(
         mod,
+        &ttnn::isinf,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isinf|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"isnan", &ttnn::isnan>(
+    bind_unary_operation_subcoregrids<"isnan">(
         mod,
+        &ttnn::isnan,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isnan|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"isneginf", &ttnn::isneginf>(
+    bind_unary_operation_subcoregrids<"isneginf">(
         mod,
+        &ttnn::isneginf,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isneginf|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"isposinf", &ttnn::isposinf>(
+    bind_unary_operation_subcoregrids<"isposinf">(
         mod,
+        &ttnn::isposinf,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|isposinf|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"lez", &ttnn::lez>(
+    bind_unary_operation_subcoregrids<"lez">(
         mod,
+        &ttnn::lez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ <= 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
-    bind_unary_operation<"logical_not", &ttnn::logical_not>(
+    bind_unary_operation_subcoregrids<"logical_not">(
         mod,
+        &ttnn::logical_not,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
@@ -1933,13 +1981,15 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ < 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
-    bind_unary_operation<"neg", &ttnn::neg>(
+    bind_unary_operation_subcoregrids<"neg">(
         mod,
+        &ttnn::neg,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|neg|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"nez", &ttnn::nez>(
+    bind_unary_operation_subcoregrids<"nez">(
         mod,
+        &ttnn::nez,
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor_i\ != 0}}))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16, UINT32)doc");
@@ -1948,28 +1998,33 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(BFLOAT8_B is supported only for non-zero inputs. Inputs containing zero may produce inaccurate results due to the characteristics of the block-FP format.)doc");
-    bind_unary_operation<"relu", &ttnn::relu>(
+    bind_unary_operation_subcoregrids<"relu">(
         mod,
+        &ttnn::relu,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|relu|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"relu6", &ttnn::relu6>(
+    bind_unary_operation_subcoregrids<"relu6">(
         mod,
+        &ttnn::relu6,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|relu6|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"sign", &ttnn::sign>(
+    bind_unary_operation_subcoregrids<"sign">(
         mod,
+        &ttnn::sign,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sign|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"signbit", &ttnn::signbit>(
+    bind_unary_operation_subcoregrids<"signbit">(
         mod,
+        &ttnn::signbit,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|signbit|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32, FLOAT32)doc");
-    bind_unary_operation<"silu", &ttnn::silu>(
+    bind_unary_operation_subcoregrids<"silu">(
         mod,
+        &ttnn::silu,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|silu|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
@@ -1978,19 +2033,21 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|swish|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation<"sin", &ttnn::sin>(
+    bind_unary_operation_subcoregrids<"sin">(
         mod,
+        &ttnn::sin,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|sin|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-
-    bind_unary_operation<"square", &ttnn::square>(
+    bind_unary_operation_subcoregrids<"square">(
         mod,
+        &ttnn::square,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|square|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16 [0,255])doc");
-    bind_unary_operation<"tan", &ttnn::tan>(
+    bind_unary_operation_subcoregrids<"tan">(
         mod,
+        &ttnn::tan,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|tan|(\mathrm{{input\_tensor}}_i))doc",
         "Supported input range is (-1.45, 1.45)",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
@@ -1999,14 +2056,16 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|log_sigmoid|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"bitwise_not", &ttnn::bitwise_not>(
+    bind_unary_operation_subcoregrids<"bitwise_not">(
         mod,
+        &ttnn::bitwise_not,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_not|(\mathrm{{input\_tensor}}_i))doc",
         R"doc(Supported input range is [-2147483647, 2147483647].)doc",
         R"doc(INT32)doc",
         R"doc(torch.tensor([[1, 2], [3, 4]], dtype=torch.int32))doc");
-    bind_unary_operation<"alt_complex_rotate90", &ttnn::alt_complex_rotate90>(
+    bind_unary_operation_subcoregrids<"alt_complex_rotate90">(
         mod,
+        &ttnn::alt_complex_rotate90,
         R"doc((\mathrm{{output\_tensor}}_{2i}, \mathrm{{output\_tensor}}_{2i+1}) = (-\mathrm{{input\_tensor}}_{2i+1}, \mathrm{{input\_tensor}}_{2i}))doc",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, BFLOAT4_B)doc",
         "",
@@ -2021,28 +2080,33 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|rad2deg|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation<"asinh", &ttnn::asinh>(
+    bind_unary_operation_subcoregrids<"asinh">(
         mod,
+        &ttnn::asinh,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|asinh|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"hardsigmoid", &ttnn::hardsigmoid>(
+    bind_unary_operation_subcoregrids<"hardsigmoid">(
         mod,
+        &ttnn::hardsigmoid,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|hardsigmoid|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"hardswish", &ttnn::hardswish>(
+    bind_unary_operation_subcoregrids<"hardswish">(
         mod,
+        &ttnn::hardswish,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|hardswish|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"softsign", &ttnn::softsign>(
+    bind_unary_operation_subcoregrids<"softsign">(
         mod,
+        &ttnn::softsign,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|softsign|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_operation<"cbrt", &ttnn::cbrt>(
+    bind_unary_operation_subcoregrids<"cbrt">(
         mod,
+        &ttnn::cbrt,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|cbrt|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
@@ -2167,6 +2231,12 @@ void py_module(nb::module_& mod) {
     bind_sigmoid(mod);
 
     bind_unary_chain(mod);
+    bind_unary_operation_subcoregrids<"lgamma">(
+        mod,
+        &ttnn::lgamma,
+        R"doc(Computes natural logarithm of the gamma function on :attr:`input_tensor`.)doc",
+        "",
+        R"doc(BFLOAT16, FLOAT32)doc");
     bind_identity(mod);
 
     // unary composite imported into ttnn

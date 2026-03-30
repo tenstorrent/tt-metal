@@ -16,7 +16,7 @@ DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG = [
             memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             buffer_type=ttnn.BufferType.L1,
             shard_spec=ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
                 (32, 64),
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -30,7 +30,7 @@ DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG = [
             memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             buffer_type=ttnn.BufferType.L1,
             shard_spec=ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))}),
                 (32, 64),
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -72,7 +72,7 @@ DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG = [
             memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             buffer_type=ttnn.BufferType.L1,
             shard_spec=ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 8))}),
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))}),
                 (32, 576),
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -86,7 +86,7 @@ DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG = [
             memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             buffer_type=ttnn.BufferType.L1,
             shard_spec=ttnn.ShardSpec(
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}),
                 (32, 128),
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -100,7 +100,7 @@ DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG = [
             ttnn.BufferType.L1,
             ttnn.NdShardSpec(
                 (32, 128),
-                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6))}),
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7))}),
                 ttnn.ShardOrientation.ROW_MAJOR,
                 ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
             ),
