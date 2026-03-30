@@ -1183,17 +1183,20 @@ void FDMeshCommandQueue::record_end() {
         uint32_t worker_ringbuffer_start =
             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG);
         uint32_t worker_ringbuffer_size =
-            mesh_device_->allocator()->get_config().l1_unreserved_base - worker_ringbuffer_start;
+            mesh_device_->allocator_impl()->get_config().l1_unreserved_base - worker_ringbuffer_start;
         SimpleTraceAllocator allocator{
             worker_ringbuffer_start,
             worker_ringbuffer_size,
-            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG),
-            hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG)};
+            static_cast<uint32_t>(
+                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG)),
+            static_cast<uint32_t>(
+                hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG))};
         allocator.allocate_trace_programs(trace_nodes);
 
         auto& sysmem_manager_for_trace = mesh_device_->get_device(range.start_coord())->sysmem_manager();
+        auto& worker_launch_message_buffer_state = cq_shared_state_->worker_launch_message_buffer_state;
         for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
-            (*this->worker_launch_message_buffer_state_)[sub_device_id].reset();
+            worker_launch_message_buffer_state[sub_device_id].reset();
         }
         std::unordered_map<SubDeviceId, TraceWorkerDescriptor> trace_worker_descriptors;
         // Output a GO signal for each unused mesh node, to ensure that the launch message buffer write pointer and
@@ -1209,28 +1212,32 @@ void FDMeshCommandQueue::record_end() {
                 bool multicast = i < unused_nodes[sub_device_id].unused_nodes_both_multicast_and_unicast +
                                          unused_nodes[sub_device_id].unused_nodes_multicast;
                 bool unicast = i < unused_nodes[sub_device_id].unused_nodes_both_multicast_and_unicast || !multicast;
-                auto& trace_worker_descriptor = trace_worker_descriptors[SubDeviceId{sub_device_id}];
+                SubDeviceId sub_device{static_cast<uint8_t>(sub_device_id)};
+                auto& trace_worker_descriptor = trace_worker_descriptors[sub_device];
+                program_dispatch::ProgramDispatchMetadata go_signal_md;
+                go_signal_md.prefetcher_cache_info.is_cached = true;
                 write_go_signal(
                     this->id_,
                     this->mesh_device_,
-                    SubDeviceId{sub_device_id},
+                    sub_device,
                     sysmem_manager_for_trace,
                     trace_worker_descriptor.num_completion_worker_cores,
                     this->virtual_program_dispatch_core(),
                     multicast,
-                    unicast);
+                    unicast,
+                    go_signal_md);
 
-                auto& worker_launch_message_buffer_state = (*this->worker_launch_message_buffer_state_)[sub_device_id];
+                auto& worker_launch_msg_state = worker_launch_message_buffer_state[sub_device_id];
                 if (multicast) {
                     trace_worker_descriptor.num_completion_worker_cores +=
-                        mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{sub_device_id});
-                    worker_launch_message_buffer_state.inc_mcast_wptr(1);
+                        mesh_device_->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device);
+                    worker_launch_msg_state.inc_mcast_wptr(1);
                     trace_worker_descriptor.num_traced_programs_needing_go_signal_multicast++;
                 }
                 if (unicast) {
                     trace_worker_descriptor.num_completion_worker_cores +=
-                        mesh_device_->num_virtual_eth_cores(SubDeviceId{sub_device_id});
-                    worker_launch_message_buffer_state.inc_unicast_wptr(1);
+                        mesh_device_->num_virtual_eth_cores(sub_device);
+                    worker_launch_msg_state.inc_unicast_wptr(1);
                     trace_worker_descriptor.num_traced_programs_needing_go_signal_unicast++;
                 }
             }
@@ -1263,13 +1270,13 @@ void FDMeshCommandQueue::record_end() {
             uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
             auto& cached_program_command_sequence =
                 program.get_trace_cached_program_command_sequences().at(command_hash);
-            auto& worker_launch_message_buffer_state = (*this->worker_launch_message_buffer_state_)[*sub_device_id];
+            auto& worker_launch_msg_state = worker_launch_message_buffer_state[*sub_device_id];
             // Update the generated dispatch commands based on the state of the CQ and the ring buffer
             program_dispatch::update_traced_program_dispatch_commands(
                 node,
                 cached_program_command_sequence,
-                worker_launch_message_buffer_state.get_mcast_wptr(),
-                worker_launch_message_buffer_state.get_unicast_wptr(),
+                worker_launch_msg_state.get_mcast_wptr(),
+                worker_launch_msg_state.get_unicast_wptr(),
                 trace_worker_descriptors[sub_device_id].num_completion_worker_cores,
                 this->virtual_program_dispatch_core(),
                 MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type(),
@@ -1281,7 +1288,7 @@ void FDMeshCommandQueue::record_end() {
                  cached_program_command_sequence.launch_messages) {
                 auto device = mesh_device_->get_device(range.start_coord());
                 TT_ASSERT(range.start_coord() == range.end_coord());
-                launch_msg->kernel_config.host_assigned_id =
+                launch_msg.kernel_config().host_assigned_id() =
                     tt_metal::detail::EncodePerDeviceProgramID(node.program_runtime_id, device->id());
             }
 #endif
@@ -1299,11 +1306,11 @@ void FDMeshCommandQueue::record_end() {
 
             // Update wptrs for tensix and eth launch message in the device class
             if (mesh_node.multicast_go_signals) {
-                worker_launch_message_buffer_state.inc_mcast_wptr(1);
+                worker_launch_msg_state.inc_mcast_wptr(1);
                 trace_worker_descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
             }
             if (mesh_node.unicast_go_signals) {
-                worker_launch_message_buffer_state.inc_unicast_wptr(1);
+                worker_launch_msg_state.inc_unicast_wptr(1);
                 trace_worker_descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
             }
             trace_worker_descriptors[sub_device_id].num_completion_worker_cores += num_workers;
