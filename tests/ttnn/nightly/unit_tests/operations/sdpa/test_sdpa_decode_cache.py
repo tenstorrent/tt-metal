@@ -129,7 +129,6 @@ def test_mask_dtype_bf16_then_bfp8(device):
 
 
 # Share_cache must be part of compute_program_hash
-@pytest.mark.timeout(600)
 def test_share_cache_false_then_true_program_cache_distinct(device):
     device.enable_program_cache()
     device.clear_program_cache()
@@ -279,7 +278,6 @@ def _run_decode_non_causal_with_bkv_variant(device, *, b: int, nh: int, nkv: int
     return comp_pcc(ref, out_torch, 0.97)
 
 
-@pytest.mark.timeout(600)
 def test_share_cache_nullopt_bkv_relation_change(device):
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
@@ -303,7 +301,6 @@ def test_share_cache_nullopt_bkv_relation_change(device):
 
 
 # Operation_attributes.cur_pos must be in compute_program_hash when cur_pos_tensor is None.
-@pytest.mark.timeout(600)
 def test_cur_pos_list_values_change_program_cache_distinct(device):
     device.enable_program_cache()
     device.clear_program_cache()
@@ -387,7 +384,6 @@ def test_cur_pos_list_values_change_program_cache_distinct(device):
     device.disable_and_clear_program_cache()
 
 
-@pytest.mark.timeout(600)
 def test_mla_head_dim_v_change_program_cache_distinct(device):
     device.enable_program_cache()
     device.clear_program_cache()
@@ -483,7 +479,6 @@ def test_mla_head_dim_v_change_program_cache_distinct(device):
     device.disable_and_clear_program_cache()
 
 
-@pytest.mark.timeout(600)
 def test_q_shard_height_diff_same_logical_program_cache_distinct(device):
     device.enable_program_cache()
     device.clear_program_cache()
@@ -594,7 +589,6 @@ def test_q_shard_height_diff_same_logical_program_cache_distinct(device):
     device.disable_and_clear_program_cache()
 
 
-@pytest.mark.timeout(300)
 def test_cur_pos_tensor_rank1_then_rank2_same_dram_same_qkv_program_cache(device):
     device.enable_program_cache()
     device.clear_program_cache()
