@@ -25,6 +25,7 @@ ALLOWED_PUSH_REFSPECS = {
     "ebanerjee/CI-maintenance",
     "HEAD:ebanerjee/CI-maintenance",
 }
+ALLOWED_COMMIT_OPTS = {"-m", "--message"}
 
 DENY_CHARS = {";", "&&", "||", "|", "`", "$("}
 
@@ -85,45 +86,69 @@ def ensure_repo(tokens: Sequence[str], allowed_repos: set[str], *, required: boo
 def validate(tokens: list[str]) -> Decision:
     if not tokens:
         return Decision(False, "Denied: empty command.")
-    if tokens[0] == "git":
-        if len(tokens) < 2:
-            return Decision(False, "Denied: missing git subcommand.")
-        if tokens[1] != "push":
-            return Decision(False, "Denied: only git push is allowed.")
-
-        idx = 2
-        while idx < len(tokens) and tokens[idx].startswith("-"):
-            if tokens[idx] not in {"-u", "--set-upstream"}:
-                return Decision(False, f"Denied: unsupported git push option {tokens[idx]!r}.")
-            idx += 1
-
-        if idx >= len(tokens):
-            return Decision(False, "Denied: git push requires remote.")
-        remote = tokens[idx]
-        idx += 1
-        if remote != ALLOWED_PUSH_REMOTE:
-            return Decision(False, f"Denied: git push remote must be {ALLOWED_PUSH_REMOTE!r}.")
-
-        if idx >= len(tokens):
-            return Decision(False, "Denied: git push requires explicit refspec.")
-        refspec = tokens[idx]
-        idx += 1
-        if refspec not in ALLOWED_PUSH_REFSPECS:
-            return Decision(False, f"Denied: refspec {refspec!r} is not allowed.")
-
-        if idx != len(tokens):
-            return Decision(False, "Denied: extra git push arguments are not allowed.")
-
-        return Decision(True, "Allowed: git push to ebanerjee/CI-maintenance only")
-
-    if tokens[0] != "gh":
-        return Decision(False, "Denied: only commands starting with `gh` or allowlisted `git push` are allowed.")
-    if len(tokens) < 2:
-        return Decision(False, "Denied: missing gh subcommand.")
 
     suspicious = deny_for_suspicious_tokens(tokens)
     if suspicious:
         return suspicious
+
+    if tokens[0] == "git":
+        if len(tokens) < 2:
+            return Decision(False, "Denied: missing git subcommand.")
+        if tokens[1] == "push":
+            idx = 2
+            while idx < len(tokens) and tokens[idx].startswith("-"):
+                if tokens[idx] not in {"-u", "--set-upstream"}:
+                    return Decision(False, f"Denied: unsupported git push option {tokens[idx]!r}.")
+                idx += 1
+
+            if idx >= len(tokens):
+                return Decision(False, "Denied: git push requires remote.")
+            remote = tokens[idx]
+            idx += 1
+            if remote != ALLOWED_PUSH_REMOTE:
+                return Decision(False, f"Denied: git push remote must be {ALLOWED_PUSH_REMOTE!r}.")
+
+            if idx >= len(tokens):
+                return Decision(False, "Denied: git push requires explicit refspec.")
+            refspec = tokens[idx]
+            idx += 1
+            if refspec not in ALLOWED_PUSH_REFSPECS:
+                return Decision(False, f"Denied: refspec {refspec!r} is not allowed.")
+
+            if idx != len(tokens):
+                return Decision(False, "Denied: extra git push arguments are not allowed.")
+
+            return Decision(True, "Allowed: git push to ebanerjee/CI-maintenance only")
+
+        if tokens[1] == "commit":
+            idx = 2
+            has_message = False
+            while idx < len(tokens):
+                tok = tokens[idx]
+                if tok.startswith("-"):
+                    if tok in ALLOWED_COMMIT_OPTS:
+                        if idx + 1 >= len(tokens):
+                            return Decision(False, f"Denied: {tok} requires a value.")
+                        has_message = True
+                        idx += 2
+                        continue
+                    if any(tok.startswith(f"{opt}=") for opt in ALLOWED_COMMIT_OPTS):
+                        has_message = True
+                        idx += 1
+                        continue
+                    return Decision(False, f"Denied: unsupported git commit option {tok!r}.")
+                return Decision(False, "Denied: positional arguments are not allowed for git commit.")
+
+            if not has_message:
+                return Decision(False, "Denied: git commit requires -m/--message.")
+            return Decision(True, "Allowed: git commit with message only")
+
+        return Decision(False, "Denied: only git push/commit are allowlisted.")
+
+    if tokens[0] != "gh":
+        return Decision(False, "Denied: only commands starting with `gh` or allowlisted `git` are allowed.")
+    if len(tokens) < 2:
+        return Decision(False, "Denied: missing gh subcommand.")
 
     root = tokens[1]
     sub = tokens[2] if len(tokens) > 2 else ""
@@ -247,6 +272,25 @@ def main() -> int:
     if args.dry_run:
         print("Dry-run mode: command not executed.", file=sys.stderr)
         return 0
+
+    if len(tokens) >= 2 and tokens[0] == "git" and tokens[1] == "commit":
+        first = subprocess.run(tokens, check=False)
+        if first.returncode == 0:
+            return 0
+        print(
+            "git commit failed; retrying once after staging hook-modified tracked files.",
+            file=sys.stderr,
+        )
+        add = subprocess.run(["git", "add", "--update"], check=False)
+        if add.returncode != 0:
+            print("Retry aborted: git add --update failed.", file=sys.stderr)
+            return first.returncode
+        staged = subprocess.run(["git", "diff", "--cached", "--quiet"], check=False)
+        if staged.returncode == 0:
+            print("Retry aborted: no staged changes after hook run.", file=sys.stderr)
+            return first.returncode
+        retry = subprocess.run(tokens, check=False)
+        return retry.returncode
 
     proc = subprocess.run(tokens, check=False)
     return proc.returncode
