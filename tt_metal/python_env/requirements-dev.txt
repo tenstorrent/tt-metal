@@ -33,6 +33,9 @@ protobuf==3.20.2
 
 # For TT-Transformers Qwen3 support
 transformers >= 4.53.0
+
+# version where AutoModelForVision2Seq got removed
+transformers < 5.0.0
 huggingface-hub >= 0.30.0
 
 # testing
