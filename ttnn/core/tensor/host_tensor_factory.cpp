@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/tensor_impl.hpp"
+#include "ttnn/tensor/host_buffer/functions.hpp"
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat4.hpp>
@@ -48,21 +49,6 @@ std::vector<T> decode_tensor_data(  // NOLINT(readability-redundant-declaration)
 // ============================================================================
 
 namespace tt::tt_metal::tensor_impl::host_tensor {
-
-namespace {
-// TODO(#40348):
-// Will be host_buffer::get_host_buffer
-HostBuffer get_single_host_buffer(const HostTensor& tensor) {
-    const auto& distributed_buffer = tensor.buffer();
-    std::vector<HostBuffer> buffers;
-    distributed_buffer.apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
-    TT_FATAL(
-        buffers.size() == 1,
-        "Can't get a single buffer from HostTensor distributed over mesh shape {}",
-        distributed_buffer.shape());
-    return buffers.front();
-}
-}  // namespace
 
 template <typename T>
 HostTensor from_span(ttsl::Span<const T> buffer, const TensorSpec& spec, T pad_value) {
@@ -115,7 +101,7 @@ std::vector<T> to_vector_generic(const HostTensor& tensor) {
         tensor.dtype(),
         convert_to_data_type<T>());
 
-    HostBuffer host_buffer = get_single_host_buffer(tensor);
+    HostBuffer host_buffer = host_buffer::get_host_buffer(tensor);
 
     auto data = host_buffer.view_as<const T>();
     if (logical_matches_physical(tensor.tensor_spec())) {
@@ -125,7 +111,7 @@ std::vector<T> to_vector_generic(const HostTensor& tensor) {
 }
 
 std::vector<float> to_vector_float(const HostTensor& tensor) {
-    HostBuffer host_buffer = get_single_host_buffer(tensor);
+    HostBuffer host_buffer = host_buffer::get_host_buffer(tensor);
 
     switch (tensor.dtype()) {
         case DataType::BFLOAT16: {
