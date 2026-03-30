@@ -52,8 +52,7 @@ def test_model_full_end_to_end(device, model_artifacts, seq_len, reset_seeds):
     non_pad_token_id = (int(model_args.pad_token_id) + 1) % model_args.vocab_size
     input_ids[input_ids == model_args.pad_token_id] = non_pad_token_id
     token_type_ids = torch.zeros_like(input_ids)
-    attention_mask = input_ids.ne(model_args.pad_token_id).long()
-
+    attention_mask = None
     with torch.no_grad():
         reference_output = (
             backbone(
@@ -69,7 +68,7 @@ def test_model_full_end_to_end(device, model_artifacts, seq_len, reset_seeds):
 
     tt_output = tt_model.forward(
         input_ids=to_ttnn_ids(input_ids, device),
-        attention_mask=to_ttnn_ids(attention_mask, device),
+        attention_mask=attention_mask,
         token_type_ids=to_ttnn_ids(token_type_ids, device),
     )
     tt_output_torch = to_torch(tt_output, expected_shape=(BATCH_SIZE, 1, seq_len, model_args.dim))
