@@ -67,6 +67,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command_calculator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/simple_trace_allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/command_queue_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_mem_map.cpp
