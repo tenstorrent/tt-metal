@@ -10,19 +10,17 @@ For multi-node cluster setup, hostfiles, rankfiles, and validation, see [tools/s
 
 ## Auto allocation mode (Mesh Graph Descriptor)
 
-> **Note:** Auto allocation mode is not yet implemented. The following describes the intended design. Use legacy mode for now.
-
-In the auto allocation mode, you provide:
+In auto allocation mode (new mode), you provide:
 
 1. **`--mesh-graph-descriptor`** – Path to the Mesh Graph Descriptor (MGD) file
 2. **`--hosts`** – Comma-separated list of hostnames (e.g., `node1,node2,node3`), **or** a **`--mock-cluster-rank-binding`** mapping file (which makes `--hosts` unnecessary)
 
 tt-run automatically:
 
-1. Runs `generate_rank_bindings` on the specified hosts with the MGD file
-2. Writes `generated/ttrun/rank_bindings.yaml` and `generated/ttrun/rankfile` (relative to launch directory)
-3. Waits 5 seconds for file sync (e.g., NFS)
-4. Launches your program with those generated files
+1. Resolves a **Phase 1 cache directory** under `generated/ttrun/` from the MGD **content** and host set (or mock descriptor contents); see [Phase 1 cache directory](#phase-1-cache-directory) below.
+2. If that directory already has valid cached outputs and a matching fingerprint, **skips** `generate_rank_bindings`; otherwise runs it on the specified hosts (or mock ranks) with the MGD.
+3. Waits 5 seconds for file sync after Phase 1 (e.g., NFS) when Phase 1 runs.
+4. Launches your program with the generated (or cached) rank bindings and rankfile.
 
 ### Basic Usage
 
@@ -40,14 +38,31 @@ tt-run --mesh-graph-descriptor path/to/mgd.textproto \
   ./my_app
 ```
 
-### Generated Outputs
+### Phase 1 cache directory
 
-Auto allocation mode writes to `generated/ttrun/` (relative to launch directory):
+Outputs live in a **per-configuration subdirectory** of the launch directory:
+
+`generated/ttrun/<cache_id>/`
+
+- **`<cache_id>`** is a short hexadecimal prefix (16 characters) of a SHA-256 fingerprint over the MGD file bytes plus either the **sorted** host list (real cluster) or the mock cluster descriptor contents per rank (mock mode). The original MGD path and host **order** in `--hosts` do not change the id as long as the multiset of hosts is the same.
+- **Canonical host order:** `--hosts` is passed to Phase 1 in **lexicographic sorted** order so MPI rank order matches the cache fingerprint. If you relied on “first host in the list is rank 0,” use sorted hostnames instead.
+
+**Truncation collision:** If another configuration shares the same short id but a different full fingerprint, tt-run detects the mismatch via `.phase1_cache_key` and writes to a disambiguated path `generated/ttrun/<full_64_char_hex>/` instead of overwriting the short-id directory.
+
+### Generated outputs (inside each cache directory)
+
+Paths are relative to the launch directory:
 
 | File | Description |
 |------|-------------|
-| `generated/ttrun/rank_bindings.yaml` | Rank bindings in tt-run format |
-| `generated/ttrun/rankfile` | OpenMPI rankfile |
+| `generated/ttrun/<cache_id>/mgd<suffix>` | Copy of the mesh graph descriptor used for this run |
+| `generated/ttrun/<cache_id>/hostfile` | OpenMPI hostfile (`hostname slots=1` per line, sorted hosts; real cluster only) |
+| `generated/ttrun/<cache_id>/rank_bindings.yaml` | Rank bindings in tt-run format |
+| `generated/ttrun/<cache_id>/rankfile` | OpenMPI rankfile |
+| `generated/ttrun/<cache_id>/.phase1_cache_key` | Full 64-hex SHA-256 fingerprint; used to validate cache hits (avoid wrong reuse if short ids collide) |
+| `generated/ttrun/<cache_id>/phase2_mock_mapping.yaml` | Written by `generate_rank_bindings` in **mock** mode for Phase 2 mock descriptor routing |
+
+After a successful run, tt-run logs a **Phase 2–only** command using the paths under that cache directory so you can re-run with `--rank-binding` / legacy mode without re-executing Phase 1 when the cache still matches.
 
 ---
 
@@ -85,15 +100,17 @@ tt-run --mesh-graph-descriptor path/to/mesh.textproto \
   true
 ```
 
-**Step 2: Use with legacy mode:**
+**Step 2: Use with legacy mode** (use the cache subdirectory from Step 1; tt-run prints the exact paths in the log, e.g. `generated/ttrun/<cache_id>/…`):
 
 ```bash
-tt-run --rank-binding generated/ttrun/rank_bindings.yaml \
-  --mpi-args "--map-by rankfile:file=generated/ttrun/rankfile" \
+tt-run --rank-binding generated/ttrun/<cache_id>/rank_bindings.yaml \
+  --mpi-args "--map-by rankfile:file=generated/ttrun/<cache_id>/rankfile" \
   ./my_app
 ```
 
-**Step 3 (optional):** Edit `generated/ttrun/rank_bindings.yaml` or `generated/ttrun/rankfile` before Step 2 to adjust `env_overrides` (e.g., `TT_VISIBLE_DEVICES`), change host/slot mapping, or add/remove ranks—just keep both files consistent.
+If you used mock cluster mapping in Step 1, pass the generated `phase2_mock_mapping.yaml` path as `--mock-cluster-rank-binding` as shown in the Phase 2 hint line from tt-run.
+
+**Step 3 (optional):** Edit `rank_bindings.yaml` or `rankfile` in that cache directory before Step 2 to adjust `env_overrides` (e.g., `TT_VISIBLE_DEVICES`), change host/slot mapping, or add/remove ranks—just keep both files consistent. If you change the MGD or host set, tt-run will use a different `generated/ttrun/<cache_id>/` on the next auto-allocation run (or invalidate miss until Phase 1 re-runs).
 
 ### Rank Bindings Format
 
@@ -132,7 +149,7 @@ rank 3=hostname3 slot=0
 | **Required args** | `--mesh-graph-descriptor` and `--hosts` (unless `--mock-cluster-rank-binding`) | `--rank-binding` |
 | **Rank bindings** | Auto-generated | You supply |
 | **Rankfile** | Auto-generated | You supply via `--mpi-args` |
-| **Output location** | `generated/ttrun/` | N/A |
+| **Output location** | `generated/ttrun/<cache_id>/` (per MGD + hosts/mock fingerprint) | N/A |
 | **Use case** | Quick launch with MGD + host list | Full control, hand-crafted or generated configs |
 
 ---

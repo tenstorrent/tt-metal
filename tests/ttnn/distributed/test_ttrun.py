@@ -3,6 +3,8 @@
 
 """Unit tests for ttrun command-line utility."""
 
+import itertools
+import random
 import yaml
 import importlib
 from pathlib import Path
@@ -26,10 +28,22 @@ from ttnn.distributed.ttrun import (
     run_phase1_generate_rank_bindings,
     find_generate_rank_bindings_executable,
     rankfile_needs_oversubscribe,
+    compute_phase1_cache_id,
+    compute_phase1_cache_fingerprint_full,
+    write_phase1_openmpi_hostfile,
+    phase1_outputs_ready,
+    phase1_cache_hit_valid,
+    write_phase1_cache_key_file,
+    read_stored_phase1_cache_key,
+    PHASE2_MOCK_MAPPING_FILENAME,
+    PHASE1_CACHE_KEY_FILENAME,
+    PHASE1_CACHE_ID_HEX_LEN,
 )
 
 # Import the module directly to avoid conflicts with distributed.py
 ttrun_module = importlib.import_module("ttnn.distributed.ttrun")
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture
@@ -720,6 +734,150 @@ class TestFindGenerateRankBindingsExecutable:
             assert "generate_rank_bindings executable not found" in str(exc_info.value)
 
 
+class TestPhase1CacheId:
+    """Tests for Phase 1 cache fingerprint (content-based MGD, order-invariant hosts)."""
+
+    def test_cache_id_is_short_hex(self, temp_dir):
+        mgd = temp_dir / "m.textproto"
+        mgd.write_bytes(b"x")
+        cid = compute_phase1_cache_id(mgd, sorted(["single-host"]), None)
+        assert len(cid) == PHASE1_CACHE_ID_HEX_LEN
+        assert all(c in "0123456789abcdef" for c in cid)
+
+    def test_fingerprint_full_is_sha256_hex(self, temp_dir):
+        mgd = temp_dir / "m.textproto"
+        mgd.write_bytes(b"x")
+        fp = compute_phase1_cache_fingerprint_full(mgd, sorted(["h"]), None)
+        assert len(fp) == 64
+        assert fp[:PHASE1_CACHE_ID_HEX_LEN] == compute_phase1_cache_id(mgd, sorted(["h"]), None)
+
+    @pytest.mark.parametrize(
+        "mgd_relative",
+        [
+            Path("tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto"),
+            Path("tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"),
+            Path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto"),
+        ],
+    )
+    def test_cache_id_real_mgd_host_permutations_stable(self, temp_dir, mgd_relative):
+        mgd_src = REPO_ROOT / mgd_relative
+        if not mgd_src.is_file():
+            pytest.skip(f"Mesh graph descriptor not present: {mgd_src}")
+        mgd_a = temp_dir / "a.textproto"
+        mgd_b = temp_dir / "subdir" / "b.proto"
+        mgd_b.parent.mkdir(parents=True, exist_ok=True)
+        data = mgd_src.read_bytes()
+        mgd_a.write_bytes(data)
+        mgd_b.write_bytes(data)
+
+        hosts = ["zebra-0", "alpha-1", "moon-2"]
+        id_from_a = compute_phase1_cache_id(mgd_a, sorted(hosts), None)
+        id_from_b = compute_phase1_cache_id(mgd_b, sorted(hosts), None)
+        assert id_from_a == id_from_b
+
+        assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
+            mgd_a, sorted(reversed(hosts)), None
+        )
+        random.seed(42)
+        for _ in range(5):
+            shuffled = hosts.copy()
+            random.shuffle(shuffled)
+            assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
+                mgd_a, sorted(shuffled), None
+            )
+        for perm in itertools.permutations(hosts):
+            assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
+                mgd_a, sorted(perm), None
+            )
+
+    def test_cache_id_hosts_change_changes_id(self, temp_dir):
+        mgd = temp_dir / "m.textproto"
+        mgd.write_bytes(b"mesh-content-xyz")
+        a = compute_phase1_cache_id(mgd, sorted(["h1", "h2"]), None)
+        b = compute_phase1_cache_id(mgd, sorted(["h1", "h3"]), None)
+        assert a != b
+
+    def test_cache_id_mgd_content_change_changes_id(self, temp_dir):
+        mgd1 = temp_dir / "m1.textproto"
+        mgd2 = temp_dir / "m2.textproto"
+        mgd1.write_bytes(b"aaa")
+        mgd2.write_bytes(b"bbb")
+        hosts = sorted(["n1"])
+        assert compute_phase1_cache_id(mgd1, hosts, None) != compute_phase1_cache_id(mgd2, hosts, None)
+
+    def test_cache_id_mock_same_desc_bytes_different_paths(self, temp_dir):
+        mgd = temp_dir / "m.textproto"
+        mgd.write_bytes(b"mgd")
+        body = b"mock:\n  chip: 0\n"
+        p1 = temp_dir / "d1.yaml"
+        p2 = temp_dir / "other" / "d2.yaml"
+        p2.parent.mkdir(parents=True, exist_ok=True)
+        p1.write_bytes(body)
+        p2.write_bytes(body)
+        a = compute_phase1_cache_id(mgd, None, {0: p1, 1: p2})
+        b = compute_phase1_cache_id(mgd, None, {0: p2, 1: p1})
+        assert a == b
+
+    def test_cache_id_mock_desc_content_matters(self, temp_dir):
+        mgd = temp_dir / "m.textproto"
+        mgd.write_bytes(b"mgd")
+        p1 = temp_dir / "d1.yaml"
+        p2 = temp_dir / "d2.yaml"
+        p1.write_bytes(b"a")
+        p2.write_bytes(b"b")
+        assert compute_phase1_cache_id(mgd, None, {0: p1}) != compute_phase1_cache_id(mgd, None, {0: p2})
+
+
+class TestPhase1CacheArtifacts:
+    """Hostfile and cache completeness helpers."""
+
+    def test_write_phase1_openmpi_hostfile(self, temp_dir):
+        hf = temp_dir / "hostfile"
+        write_phase1_openmpi_hostfile(hf, ["b", "a"])
+        assert hf.read_text().strip().splitlines() == ["b slots=1", "a slots=1"]
+
+    def test_phase1_outputs_ready_real_cluster(self, temp_dir):
+        run_dir = temp_dir / "r"
+        run_dir.mkdir()
+        rb, rf = get_generate_rank_bindings_output_paths(run_dir)
+        rb.write_text("x")
+        rf.write_text("y")
+        assert phase1_outputs_ready(run_dir, mock_mode=False)
+        rb.write_text("")
+        assert not phase1_outputs_ready(run_dir, mock_mode=False)
+
+    def test_phase1_outputs_ready_mock_needs_phase2_mapping(self, temp_dir):
+        run_dir = temp_dir / "r"
+        run_dir.mkdir()
+        rb, rf = get_generate_rank_bindings_output_paths(run_dir)
+        rb.write_text("x")
+        rf.write_text("y")
+        assert not phase1_outputs_ready(run_dir, mock_mode=True)
+        (run_dir / PHASE2_MOCK_MAPPING_FILENAME).write_text("m: 1\n")
+        assert phase1_outputs_ready(run_dir, mock_mode=True)
+
+    def test_phase1_cache_hit_valid_requires_key_file(self, temp_dir):
+        run_dir = temp_dir / "r"
+        run_dir.mkdir()
+        rb, rf = get_generate_rank_bindings_output_paths(run_dir)
+        rb.write_text("x")
+        rf.write_text("y")
+        fp = "a" * 64
+        assert not phase1_cache_hit_valid(run_dir, fp, mock_mode=False)
+        write_phase1_cache_key_file(run_dir, fp)
+        assert read_stored_phase1_cache_key(run_dir) == fp
+        assert phase1_cache_hit_valid(run_dir, fp, mock_mode=False)
+
+    def test_phase1_cache_hit_valid_wrong_fingerprint(self, temp_dir):
+        run_dir = temp_dir / "r"
+        run_dir.mkdir()
+        rb, rf = get_generate_rank_bindings_output_paths(run_dir)
+        rb.write_text("x")
+        rf.write_text("y")
+        write_phase1_cache_key_file(run_dir, "b" * 64)
+        assert not phase1_cache_hit_valid(run_dir, "c" * 64, mock_mode=False)
+
+
 class TestRunPhase1GenerateRankBindings:
     """Test Phase 1 generate_rank_bindings orchestration."""
 
@@ -845,6 +1003,7 @@ class TestNewModeFlow:
         """Test successful new_mode_flow execution."""
         from unittest.mock import patch, MagicMock
 
+        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
 
@@ -882,10 +1041,184 @@ class TestNewModeFlow:
             assert call_args.kwargs["rank_binding"] == rank_bindings_path
             assert call_args.kwargs["rankfile"] == rankfile_path
 
+    def test_new_mode_flow_phase1_cache_hit(self, runner, temp_dir, monkeypatch):
+        """When cache dir has rank_bindings and rankfile, Phase 1 is skipped."""
+        from unittest.mock import patch
+
+        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.write_bytes(b"mgd-for-cache-test")
+        cache_id = compute_phase1_cache_id(mgd_path, sorted(["node1", "node2"]), None)
+        run_dir = temp_dir / "generated" / "ttrun" / cache_id
+        run_dir.mkdir(parents=True)
+        mesh_graph_file = temp_dir / "mesh_graph.yaml"
+        mesh_graph_file.touch()
+        rank_bindings_content = {
+            "rank_bindings": [{"rank": 0, "mesh_id": 0, "mesh_host_rank": 0}],
+            "global_env": {},
+            "mesh_graph_desc_path": str(mesh_graph_file),
+        }
+        with open(run_dir / "rank_bindings.yaml", "w") as f:
+            yaml.dump(rank_bindings_content, f)
+        (run_dir / "rankfile").write_text("rank 0=node1 slot=0\n")
+        write_phase1_cache_key_file(
+            run_dir, compute_phase1_cache_fingerprint_full(mgd_path, sorted(["node1", "node2"]), None)
+        )
+
+        with patch.object(ttrun_module, "run_phase1_generate_rank_bindings") as mock_p1, patch.object(
+            ttrun_module, "legacy_flow"
+        ) as mock_legacy, patch.object(ttrun_module, "resolve_path", return_value=mgd_path), patch.object(
+            ttrun_module, "find_generate_rank_bindings_executable"
+        ):
+            result = runner.invoke(
+                main,
+                [
+                    "--mesh-graph-descriptor",
+                    str(mgd_path),
+                    "--hosts",
+                    "node2,node1",
+                    "--dry-run",
+                    "echo",
+                    "test",
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert not mock_p1.called
+        assert mock_legacy.called
+        assert mock_legacy.call_args.kwargs["rank_binding"] == run_dir / "rank_bindings.yaml"
+        assert mock_legacy.call_args.kwargs["rankfile"] == run_dir / "rankfile"
+
+    def test_new_mode_flow_cache_miss_without_key_file_runs_phase1(self, runner, temp_dir, monkeypatch):
+        """Outputs present but no .phase1_cache_key is not a valid hit (must re-verify)."""
+        from unittest.mock import patch
+
+        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.write_bytes(b"m")
+        cache_id = compute_phase1_cache_id(mgd_path, sorted(["node1", "node2"]), None)
+        run_dir = temp_dir / "generated" / "ttrun" / cache_id
+        run_dir.mkdir(parents=True)
+        mesh_graph_file = temp_dir / "mesh_graph.yaml"
+        mesh_graph_file.touch()
+        rank_bindings_content = {
+            "rank_bindings": [{"rank": 0, "mesh_id": 0, "mesh_host_rank": 0}],
+            "global_env": {},
+            "mesh_graph_desc_path": str(mesh_graph_file),
+        }
+        with open(run_dir / "rank_bindings.yaml", "w") as f:
+            yaml.dump(rank_bindings_content, f)
+        (run_dir / "rankfile").write_text("rank 0=node1 slot=0\n")
+        # no PHASE1_CACHE_KEY_FILENAME
+        with patch.object(
+            ttrun_module,
+            "run_phase1_generate_rank_bindings",
+            return_value=(run_dir / "rank_bindings.yaml", run_dir / "rankfile"),
+        ) as mock_p1, patch.object(ttrun_module, "legacy_flow"), patch.object(
+            ttrun_module, "resolve_path", return_value=mgd_path
+        ), patch.object(
+            ttrun_module, "find_generate_rank_bindings_executable"
+        ):
+            runner.invoke(
+                main,
+                [
+                    "--mesh-graph-descriptor",
+                    str(mgd_path),
+                    "--hosts",
+                    "node1,node2",
+                    "--dry-run",
+                    "echo",
+                    "test",
+                ],
+            )
+        assert mock_p1.called
+
+    def test_new_mode_flow_truncation_collision_uses_full_id_dir(self, runner, temp_dir, monkeypatch):
+        """When short-id dir has another config's key, Phase 1 writes to full-fingerprint path."""
+        from unittest.mock import patch
+
+        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.write_bytes(b"collision-test-mgd")
+        fp = compute_phase1_cache_fingerprint_full(mgd_path, sorted(["a", "b"]), None)
+        short_dir = temp_dir / "generated" / "ttrun" / fp[:PHASE1_CACHE_ID_HEX_LEN]
+        full_dir = temp_dir / "generated" / "ttrun" / fp
+        short_dir.mkdir(parents=True)
+        mesh_graph_file = temp_dir / "mesh_graph.yaml"
+        mesh_graph_file.touch()
+        rank_bindings_content = {
+            "rank_bindings": [{"rank": 0, "mesh_id": 0, "mesh_host_rank": 0}],
+            "global_env": {},
+            "mesh_graph_desc_path": str(mesh_graph_file),
+        }
+        with open(short_dir / "rank_bindings.yaml", "w") as f:
+            yaml.dump(rank_bindings_content, f)
+        (short_dir / "rankfile").write_text("rank 0=a slot=0\n")
+        (short_dir / PHASE1_CACHE_KEY_FILENAME).write_text("0" * 64 + "\n")
+
+        with patch.object(
+            ttrun_module,
+            "run_phase1_generate_rank_bindings",
+            return_value=(full_dir / "rank_bindings.yaml", full_dir / "rankfile"),
+        ) as mock_p1, patch.object(ttrun_module, "legacy_flow"), patch.object(
+            ttrun_module, "resolve_path", return_value=mgd_path
+        ), patch.object(
+            ttrun_module, "find_generate_rank_bindings_executable"
+        ):
+            runner.invoke(
+                main,
+                [
+                    "--mesh-graph-descriptor",
+                    str(mgd_path),
+                    "--hosts",
+                    "a,b",
+                    "--dry-run",
+                    "echo",
+                    "test",
+                ],
+            )
+        assert mock_p1.called
+        assert mock_p1.call_args[0][2] == full_dir
+
+    def test_new_mode_flow_hosts_passed_sorted_to_phase1(self, runner, temp_dir, monkeypatch):
+        """Comma-list host order is canonicalized to sorted order for Phase 1 (MPI rank alignment)."""
+        from unittest.mock import patch
+
+        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
+        mgd_path = temp_dir / "mesh.textproto"
+        mgd_path.write_bytes(b"x")
+        cache_id = compute_phase1_cache_id(mgd_path, sorted(["alpha", "zebra"]), None)
+        run_dir = temp_dir / "generated" / "ttrun" / cache_id
+        rb = run_dir / "rank_bindings.yaml"
+        rf = run_dir / "rankfile"
+
+        with patch.object(
+            ttrun_module, "run_phase1_generate_rank_bindings", return_value=(rb, rf)
+        ) as mock_p1, patch.object(ttrun_module, "legacy_flow"), patch.object(
+            ttrun_module, "resolve_path", return_value=mgd_path
+        ), patch.object(
+            ttrun_module, "find_generate_rank_bindings_executable"
+        ):
+            runner.invoke(
+                main,
+                [
+                    "--mesh-graph-descriptor",
+                    str(mgd_path),
+                    "--hosts",
+                    "zebra,alpha",
+                    "--dry-run",
+                    "echo",
+                    "test",
+                ],
+            )
+
+        assert mock_p1.call_args[0][1] == ["alpha", "zebra"]
+
     def test_new_mode_flow_phase1_failure(self, runner, temp_dir, monkeypatch):
         """Test new_mode_flow handles Phase 1 failure."""
         from unittest.mock import patch
 
+        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
 
@@ -914,6 +1247,7 @@ class TestNewModeFlow:
         """Test new_mode_flow with mock cluster rank binding."""
         from unittest.mock import patch, MagicMock
 
+        monkeypatch.setattr(ttrun_module, "ORIGINAL_CWD", temp_dir)
         mgd_path = temp_dir / "mesh.textproto"
         mgd_path.touch()
 
