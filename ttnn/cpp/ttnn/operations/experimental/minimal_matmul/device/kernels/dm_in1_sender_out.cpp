@@ -202,6 +202,7 @@ void kernel_main() {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
                         cb_wait_front(cb_id_out, out_block_num_tiles);
+#ifndef SKIP_OUT
                         uint32_t out_read_ptr = get_read_ptr(cb_id_out);
 
                         // write_block_sync_split is more generic (support multiple output tensors)
@@ -227,6 +228,7 @@ void kernel_main() {
                                 defer_write_n_tile,
                                 defer_write_n_tile_end);
                         }
+#endif  // !SKIP_OUT
                         cb_pop_front(cb_id_out, out_block_num_tiles);
                     }
                 }
@@ -235,6 +237,8 @@ void kernel_main() {
                 cb_reserve_back(cb_id_in1, in1_block_num_tiles);
 
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
+
+#ifndef SKIP_IN1
                 if constexpr (is_injector_core) {
 #ifdef FUSE_AG
                     if (is_injector_core) {
@@ -260,11 +264,13 @@ void kernel_main() {
                     noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in1_receiver_semaphore_addr_ptr, VALID);
                 }
+#endif  // !SKIP_IN1
 
                 // Critical to performance for sender to push data to compute before mcasting
                 // This frees sender to start next read earlier
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
 
+#ifndef SKIP_IN1
 #ifdef USE_MCAST
                 if constexpr (is_injector_core && num_mcast_receivers > 0) {
                     DeviceZoneScopedN("in1-mcast");
@@ -303,6 +309,7 @@ void kernel_main() {
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
 #endif  // USE_MCAST
+#endif  // !SKIP_IN1
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
@@ -352,6 +359,12 @@ void kernel_main() {
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
+#ifdef SKIP_OUT
+                    for (uint32_t i = 0; i < M_block_tiles; i++) {
+                        cb_wait_front(cb_id_out, N_block_tiles);
+                        cb_pop_front(cb_id_out, N_block_tiles);
+                    }
+#else
                     DeviceZoneScopedN("in1-write-out");
                     if constexpr (N_chunks == 1) {
                         write_block_sync_granular<M_block_tiles, N_block_tiles>(
@@ -374,6 +387,7 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     }
+#endif  // SKIP_OUT
                 }
             }
         }

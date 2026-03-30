@@ -8,6 +8,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tuple>
 #include <utility>
@@ -66,7 +67,7 @@ std::pair<std::vector<CoreCoord>, uint32_t> build_core_order_for_axis(
         size_t& coord_to_modify = transpose_core_grid ? (axis_is_x_when_not_transposed ? worker_core.y : worker_core.x)
                                                       : (axis_is_x_when_not_transposed ? worker_core.x : worker_core.y);
 
-        coord_to_modify = increasing ? worker_idx : (axis_length - worker_idx);
+        coord_to_modify = increasing ? worker_idx : (axis_length - 1 - worker_idx);
         if (coord_to_modify == current_axis_value) {
             index_of_current = worker_idx;
         }
@@ -242,6 +243,12 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     auto in1_risc = transpose_core_grid ? small_input_risc : large_input_risc;
     uint32_t in1_parallel_axis_cores = transpose_core_grid ? grid_size.y : grid_size.x;
 
+    // Place each injector at the end of the mcast axis that aligns with the NoC routing direction.
+    // NOC_0 routes +x/+y so the injector belongs at the low end (index 0).
+    // NOC_1 routes -x/-y so the injector belongs at the high end (index max).
+    uint32_t in0_injector_idx = (in0_noc == tt::tt_metal::NOC::NOC_1) ? in1_parallel_axis_cores - 1 : 0;
+    uint32_t in1_injector_idx = (in1_noc == tt::tt_metal::NOC::NOC_1) ? in0_parallel_axis_cores - 1 : 0;
+
     /**
      * We pad the input dimensions to the nearest multiple of the parallelization factor.
      *
@@ -280,16 +287,24 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     uint32_t in2_cb_num_tiles = in2_block_num_tiles;     // not double buffered
 
     auto core_0_0 = CoreCoord{0, 0};
-    auto core_0_1 = CoreCoord{0, 1};
-    auto core_1_0 = CoreCoord{1, 0};
     auto core_endx_0 = CoreCoord{grid_size.x - 1, 0};
-    auto core_0_endy = CoreCoord{0, grid_size.y - 1};
     auto core_endx_endy = CoreCoord{grid_size.x - 1, grid_size.y - 1};
+    auto core_endx_1_endy = CoreCoord{grid_size.x - 2, grid_size.y - 1};
 
-    auto in0_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_endx_0 : core_0_endy);
-    auto in0_receiver_cores = CoreRange(transpose_core_grid ? core_0_1 : core_1_0, core_endx_endy);
-    auto in1_sender_cores = CoreRange(core_0_0, transpose_core_grid ? core_0_endy : core_endx_0);
-    auto in1_receiver_cores = CoreRange(transpose_core_grid ? core_1_0 : core_0_1, core_endx_endy);
+    // in0 sender/receiver placement depends on whether in0 uses NOC_1 (injector at high end)
+    // Non-transposed + NOC_1: in0 injectors at last column; Transposed + NOC_0: in0 injectors at first row
+    auto in0_sender_cores = transpose_core_grid
+                                ? CoreRange(core_0_0, core_endx_0)         // first row (NOC_0, low y)
+                                : CoreRange(core_endx_0, core_endx_endy);  // last column (NOC_1, high x)
+    auto in0_receiver_cores = transpose_core_grid ? CoreRange(CoreCoord{0, 1}, core_endx_endy)  // rows y=1..max
+                                                  : CoreRange(core_0_0, core_endx_1_endy);      // columns x=0..max-1
+
+    // in1 sender/receiver placement depends on whether in1 uses NOC_1 (injector at high end)
+    // Non-transposed + NOC_0: in1 injectors at first row; Transposed + NOC_1: in1 injectors at last column
+    auto in1_sender_cores = transpose_core_grid ? CoreRange(core_endx_0, core_endx_endy)  // last column (NOC_1, high x)
+                                                : CoreRange(core_0_0, core_endx_0);       // first row (NOC_0, low y)
+    auto in1_receiver_cores = transpose_core_grid ? CoreRange(core_0_0, core_endx_1_endy)        // columns x=0..max-1
+                                                  : CoreRange(CoreCoord{0, 1}, core_endx_endy);  // rows y=1..max
 
     auto in0_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
     auto in0_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, core_grid, INVALID);
@@ -375,6 +390,15 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     std::map<std::string, std::string> defines;
     std::map<std::string, std::string> in0_injector_defines;
     defines["USE_MCAST"] = "1";
+    if (std::getenv("SKIP_IN0")) {
+        defines["SKIP_IN0"] = "1";
+    }
+    if (std::getenv("SKIP_IN1")) {
+        defines["SKIP_IN1"] = "1";
+    }
+    if (std::getenv("SKIP_OUT")) {
+        defines["SKIP_OUT"] = "1";
+    }
     if (use_bias) {
         defines["FUSE_BIAS"] = "1";
     }
@@ -643,8 +667,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         uint32_t in0_idx = transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = transpose_core_grid ? core.y : core.x;
 
-        CoreCoord in0_injector_logical = transpose_core_grid ? CoreCoord{core.x, 0} : CoreCoord{0, core.y};
-        CoreCoord in1_injector_logical = transpose_core_grid ? CoreCoord{0, core.y} : CoreCoord{core.x, 0};
+        CoreCoord in0_injector_logical =
+            transpose_core_grid ? CoreCoord{core.x, (std::size_t)0} : CoreCoord{grid_size.x - 1, core.y};
+        CoreCoord in1_injector_logical =
+            transpose_core_grid ? CoreCoord{grid_size.x - 1, core.y} : CoreCoord{core.x, (std::size_t)0};
 
         auto [in0_core_order, in0_core_order_index] = build_core_order_for_axis(
             core,
@@ -675,8 +701,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         auto in0_injector_physical = device->worker_core_from_logical_core(in0_injector_logical);
         auto in1_injector_physical = device->worker_core_from_logical_core(in1_injector_logical);
         // For receivers, sender_noc = injector physical; for injector itself, keep clamped prev (itself)
-        const auto& in0_effective_sender_physical = (in1_idx != 0) ? in0_injector_physical : in0_prev_core_physical;
-        const auto& in1_effective_sender_physical = (in0_idx != 0) ? in1_injector_physical : in1_prev_core_physical;
+        const auto& in0_effective_sender_physical =
+            (in1_idx != in0_injector_idx) ? in0_injector_physical : in0_prev_core_physical;
+        const auto& in1_effective_sender_physical =
+            (in0_idx != in1_injector_idx) ? in1_injector_physical : in1_prev_core_physical;
 
         /**
          * NOTE: Some cores are doing unnecessary work, on blocks which are processed just to make
@@ -695,8 +723,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         defer_write_k_block = std::min(defer_write_k_block, K_blocks - 1);
 
         // USE_MCAST: all non-injector cores are sinks (no forwarding); injector only has receivers if axis > 1
-        bool is_in0_sink = (in1_idx != 0) || (in1_parallel_axis_cores == 1);
-        bool is_in1_sink = (in0_idx != 0) || (in0_parallel_axis_cores == 1);
+        bool is_in0_sink = (in1_idx != in0_injector_idx) || (in1_parallel_axis_cores == 1);
+        bool is_in1_sink = (in0_idx != in1_injector_idx) || (in0_parallel_axis_cores == 1);
 
         std::vector<uint32_t> in0_args = {
             in0_addr,
@@ -713,7 +741,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
             defer_write_k_block,
         };
-        if (in1_idx == 0) {
+        if (in1_idx == in0_injector_idx) {
             // USE_MCAST: injector appends 4 mcast rect coords; box spans full line (hardware excludes sender)
             if (in1_parallel_axis_cores > 1) {
                 CoreCoord in0_mcast_start_l =
@@ -751,7 +779,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in0_args, padded_K_tiles / K_block_tiles, K_block_tiles);
         }
-        if (in1_idx == 0) {
+        if (in1_idx == in0_injector_idx) {
             // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
         } else {
@@ -773,7 +801,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
             defer_write_k_block,
         };
-        if (in0_idx == 0) {
+        if (in0_idx == in1_injector_idx) {
             // USE_MCAST: injector appends 4 mcast rect coords; box spans full line (hardware excludes sender)
             if (in0_parallel_axis_cores > 1) {
                 CoreCoord in1_mcast_start_l =
@@ -811,7 +839,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         if (fuse_op) {
             fused_op_signaler->push_matmul_fused_op_rt_args(in1_args, padded_K_tiles / K_block_tiles, K_block_tiles);
         }
-        if (in0_idx == 0) {
+        if (in0_idx == in1_injector_idx) {
             // in1 sender
             SetRuntimeArgs(program, in1_sender_kernels_id, core, in1_args);
         } else {
@@ -840,7 +868,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         in1_receiver_kernels_id,
         compute_kernels_id,
         transpose_core_grid,
-        fuse_op && fused_op_signaler->read_local_slice_from_input};
+        fuse_op && fused_op_signaler->read_local_slice_from_input,
+        in0_injector_idx,
+        in1_injector_idx};
 }
 
 MinimalMatmulProgramFactory::cached_program_t MinimalMatmulProgramFactory::create(
@@ -921,7 +951,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
         CoreCoord core = override_variables.cores.at(i);
         uint32_t in0_idx = override_variables.transpose_core_grid ? core.x : core.y;
         uint32_t in1_idx = override_variables.transpose_core_grid ? core.y : core.x;
-        if (in1_idx == 0) {
+        if (in1_idx == override_variables.in0_injector_idx) {
             auto& in0_sender_args = in0_sender_runtime_args[core.x][core.y];
 
             in0_sender_args[in0_in0_addr_idx] = tensor_args.input_tensor.buffer()->address();
@@ -961,7 +991,7 @@ void MinimalMatmulProgramFactory::override_runtime_arguments(
             }
         }
 
-        if (in0_idx == 0) {
+        if (in0_idx == override_variables.in1_injector_idx) {
             auto& in1_sender_args = in1_sender_runtime_args[core.x][core.y];
             in1_sender_args[in1_in0_addr_idx] = tensor_args.weight_tensor.buffer()->address();
             in1_sender_args[in1_bias_addr_idx] =
