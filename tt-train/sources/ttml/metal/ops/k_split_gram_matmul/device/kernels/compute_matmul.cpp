@@ -5,8 +5,8 @@
 // Matmul compute kernel with M_block x N_block streaming for Mpc×Mpc gram matmul.
 // in0: M_block rows per K-block, in1: N_block rows per K-block.
 // Output streamed per (m_sub, n_sub) block:
-//   Non-accumulator: matmul → c_2, pack c_2 → c_5 (row-major), DM sends c_5
-//   REDUCE_ACCUMULATOR: matmul → c_2, add c_2(FP32) + c_5(BF16) → c_6
+//   REDUCE_SENDER/TRANSPOSE: matmul → c_2, pack c_2 → c_5 (row-major), DM sends c_5 to partner
+//   REDUCE_ACCUMULATOR: matmul → c_2, add own c_2(FP32) + partner's c_5(BF16) → c_6
 
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
@@ -68,8 +68,7 @@ void matmul_blocks(
     }
 }
 
-// Block streaming helpers:
-// Per-nsb: pack c_2 → c_5 in row-major order matching receiver's c_2 layout.
+// Pack c_2 → c_5 in row-major order for DM to send to reduction partner.
 // REDUCE_SENDER_TRANSPOSE: transpose tile content + swap indices so receiver can add directly.
 // REDUCE_SENDER: identity copy with FP32 → BF16 format conversion.
 void pack_subblock_pernsb(uint32_t in_cb, uint32_t out_cb, uint32_t current_M, uint32_t current_N) {
@@ -235,7 +234,7 @@ void kernel_main() {
 
             // Pack or reduce immediately after each (m_sub, n_sub) block
 #ifndef REDUCE_ACCUMULATOR
-            // Non-accumulator: pack c_2 → c_5 in row-major order
+            // REDUCE_SENDER path: pack c_2 → c_5 for DM to send to partner
             cb_reserve_back(out_cb, intermed_tiles);
             cb_wait_front(intermed_cb, intermed_tiles);
             pack_subblock_pernsb(intermed_cb, out_cb, current_M_block, current_N);
