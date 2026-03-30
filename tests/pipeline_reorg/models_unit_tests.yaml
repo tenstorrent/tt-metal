@@ -274,7 +274,9 @@
   team: models
 
 - name: Whisper unit tests
-  cmd: HF_HUB_OFFLINE=0 pytest --timeout 300 models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    pytest --timeout 300 models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
   model: whisper
   skus:
     wh_n150:
