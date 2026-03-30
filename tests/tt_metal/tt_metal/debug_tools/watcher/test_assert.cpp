@@ -179,9 +179,9 @@ static void RunTest(
         default: core_str = "worker";
     }
 
-    // For DebugAssertHwFault, construct the hw_fault_info value (mtval<<32|mcause) to match
-    // what assert_and_hang stores, so we can build the expected message string.
-    // For all other types the PC is unknown at test time so we pass 0.
+    // Don't hardcode line number, the ASSERT location in watcher_asserts.cpp kernel
+    // can shift as code changes. Use regex to match any line number for DebugAssertTripped
+    // (get_debug_assert_message defaults to line 0, which we replace with \d+ below)
     uint64_t hw_fault_info = 0;
     switch (hw_assert_cause) {
         case 2: hw_fault_info = 0x0; break;
@@ -194,7 +194,9 @@ static void RunTest(
     log_critical(LogTest, "hw_fault_info: 0x{:x}, hw_assert_cause: 0x{:x}", hw_fault_info, hw_assert_cause);
     const std::string msg = get_debug_assert_message(
         assert_type,
-        0,  // PC unknown at test time; host triage resolves it from DWARF
+        0,  // line_num: use 0 since we match with regex for DebugAssertTripped
+        0,  // file_id: unknown at test time
+        // hard code cause/line info for HW faults, as we know them exactly
         hw_fault_info << 32 | hw_assert_cause);
     ASSERT_FALSE(msg.empty()) << "Unhandled assert type " << static_cast<int>(assert_type);
 
@@ -211,14 +213,13 @@ static void RunTest(
         kernel);
 
     if (assert_type == dev_msgs::DebugAssertTripped) {
-        // Build regex pattern, replacing the file and line placeholders with regex wildcards.
-        // get_debug_assert_message with defaults returns "tripped an assert in unknown file on line 0."
+        // Build regex pattern from string expected, replacing "on line 0" with "on line \d+"
         std::string pattern = regex_escape(expected);
-        const std::string file_placeholder = "in unknown file on line 0";
-        size_t pos = pattern.find(file_placeholder);
+        const std::string placeholder = "on line 0";
+        size_t pos = pattern.find(placeholder);
         ASSERT_NE(pos, std::string::npos)
-            << "Expected placeholder '" << file_placeholder << "' not found in escaped pattern: " << pattern;
-        pattern.replace(pos, file_placeholder.length(), "in .+ on line \\d+");
+            << "Expected placeholder '" << placeholder << "' not found in escaped pattern: " << pattern;
+        pattern.replace(pos, placeholder.length(), "on line \\d+");
         EXPECT_TRUE(std::regex_match(exception, std::regex(pattern)))
             << "Expected pattern: " << pattern << "\nActual: " << exception;
     } else if (assert_type == dev_msgs::DebugAssertHwFault) {

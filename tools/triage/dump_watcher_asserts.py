@@ -52,6 +52,48 @@ script_config = ScriptConfig(
 _WATCHER_ASSERT_TRIPPED = 3
 
 
+# FNV-1a 16-bit folded hash — matches device-side constexpr debug_file_hash in dev_msgs.h
+def _debug_file_hash(s: str) -> int:
+    h = 2166136261
+    for c in s:
+        h = ((h ^ ord(c)) * 16777619) & 0xFFFFFFFF
+    return ((h >> 16) ^ (h & 0xFFFF)) & 0xFFFF
+
+
+def _resolve_file_from_hash_via_elf(file_id: int, parsed_elf) -> str | None:
+    """
+    Resolve a file_id hash to a source path by scanning the file paths recorded
+    in the ELF's DWARF line table — the same paths the compiler stored for __FILE__.
+    Strips the CWD prefix to recover the relative path used at compile time.
+    """
+    repo_root = os.getcwd()
+    if not repo_root.endswith("/"):
+        repo_root += "/"
+
+    seen: set[str] = set()
+    for (_start, _end), (dwarf_fname, _line, _col) in parsed_elf._dwarf.file_lines_ranges.items():
+        if dwarf_fname in seen:
+            continue
+        seen.add(dwarf_fname)
+        # Try the path as stored in DWARF (may already be relative).
+        if _debug_file_hash(dwarf_fname) == file_id:
+            return dwarf_fname
+        # Strip repo-root prefix to get the relative path the compiler saw via __FILE__.
+        if dwarf_fname.startswith(repo_root):
+            rel = dwarf_fname[len(repo_root) :]
+            if _debug_file_hash(rel) == file_id:
+                return rel
+    return None
+
+
+def _find_assert_address_in_elf(parsed_elf, filename: str, line_num: int) -> int | None:
+    """Scan the DWARF line table for the first address at (filename, line_num)."""
+    for (start, _end), (dwarf_fname, line, _col) in parsed_elf._dwarf.file_lines_ranges.items():
+        if line == line_num and (dwarf_fname == filename or dwarf_fname.endswith(filename)):
+            return start
+    return None
+
+
 # ── Per-core result dataclass ─────────────────────────────────────────────────
 
 
@@ -71,7 +113,8 @@ def _serialize_parameters(variables: list[CallstackEntryVariable]) -> str:
 @dataclass
 class WatcherAssertResult:
     kernel_name: str | None = triage_field("Kernel Name")
-    pc: str = triage_field("PC")
+    file: str = triage_field("File")
+    line: int = triage_field("Line")
     parameters: str | None = triage_field("Parameters")
     callstack: KernelCallstackWithMessage = triage_field("Callstack", _fmt_callstack)
 
@@ -101,51 +144,72 @@ def check_watcher_assert(
         return None
 
     try:
-        # pc is the return address captured by __builtin_return_address(0) inside assert_and_hang,
-        # pointing to the call site inside the ASSERT macro expansion.
-        pc = int(mailboxes.watcher.assert_status.pc)
+        file_id = int(mailboxes.watcher.assert_status.file_id)
+        line_num = int(mailboxes.watcher.assert_status.line_num)
     except Exception:
         return None
 
-    # Use top_callstack exactly as triage does: DWARF resolves pc → file, line, function, message.
-    context = location._device._context
-    callstack_with_msg: KernelCallstackWithMessage | None = None
-
-    for elf_path, offset in [
-        (dispatcher_core_data.kernel_path, dispatcher_core_data.kernel_offset),
-        (dispatcher_core_data.firmware_path, None),
-    ]:
+    # Resolve the source file by scanning DWARF paths in the ELF — the same paths
+    # the compiler stored for __FILE__, which is what debug_file_hash hashed.
+    resolved_file: str | None = None
+    for elf_path in [dispatcher_core_data.kernel_path, dispatcher_core_data.firmware_path]:
         if not elf_path:
             continue
         try:
             parsed_elf = elfs_cache[elf_path]
-            cs = top_callstack(pc, parsed_elf, offset, context)
-            if cs:
-                callstack_with_msg = KernelCallstackWithMessage(callstack=cs, message=None)
+            resolved_file = _resolve_file_from_hash_via_elf(file_id, parsed_elf)
+            if resolved_file:
                 break
         except Exception:
             continue
 
+    file_str = resolved_file if resolved_file else f"unknown file (hash=0x{file_id:04X})"
+
+    # Look up the assert address in DWARF to get a proper callstack frame.
+    callstack_with_msg: KernelCallstackWithMessage | None = None
+    if resolved_file:
+        context = location._device._context
+        for elf_path, offset in [
+            (dispatcher_core_data.kernel_path, dispatcher_core_data.kernel_offset),
+            (dispatcher_core_data.firmware_path, None),
+        ]:
+            if not elf_path:
+                continue
+            try:
+                parsed_elf = elfs_cache[elf_path]
+                addr = _find_assert_address_in_elf(parsed_elf, resolved_file, line_num)
+                if addr is None:
+                    continue
+                cs = top_callstack(addr, parsed_elf, offset, context)
+                if cs:
+                    callstack_with_msg = KernelCallstackWithMessage(callstack=cs, message=None)
+                    break
+            except Exception:
+                continue
+
     if callstack_with_msg is None:
         callstack_with_msg = KernelCallstackWithMessage(
-            callstack=[CallstackEntry(pc=pc, function_name=None, file=None, line=None)],
-            message="Rebuild with TT_METAL_RISCV_DEBUG_INFO=1 for full resolution",
+            callstack=[CallstackEntry(pc=None, function_name=None, file=resolved_file, line=line_num)],
+            message="Rebuild with TT_METAL_RISCV_DEBUG_INFO=1 + TT_METAL_WATCHER=1 for full callstack",
         )
 
-    # Read arguments/locals from the assert frame (frame #0 = return site inside ASSERT macro).
+    # Read arguments/locals from the full PC-based callstack — frame matching resolved_file.
     parameters: str | None = None
     try:
-        if callstack_with_msg.callstack:
-            frame = callstack_with_msg.callstack[0]
-            all_vars: list[CallstackEntryVariable] = list(frame.arguments) + list(frame.locals)
-            if all_vars:
-                parameters = _serialize_parameters(all_vars)
+        pc_data = callstack_provider.get_cached_callstacks(location, risc_name, use_full_callstack=True)
+        for frame in pc_data.kernel_callstack_with_message.callstack:
+            if frame.file and resolved_file and frame.file.endswith(resolved_file):
+                all_vars = list(frame.arguments) + list(frame.locals)
+                if all_vars:
+                    parameters = _serialize_parameters(all_vars)
+                break
     except Exception:
         pass
 
     return WatcherAssertResult(
         kernel_name=dispatcher_core_data.kernel_name,
-        pc=f"0x{pc:08X}",
+        file=file_str,
+        line=line_num,
         parameters=parameters,
         callstack=callstack_with_msg,
     )
