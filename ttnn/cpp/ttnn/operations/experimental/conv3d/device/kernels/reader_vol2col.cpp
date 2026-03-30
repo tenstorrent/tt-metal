@@ -165,32 +165,112 @@ void kernel_main() {
                     for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
                         const uint32_t h_block_end = std::min(h_block + H_block_size, h_out_end);
 
+                        // H rows persist across w_blocks for sliding window W reuse.
+                        uint32_t h_rows_gathered = 0;
+                        const int32_t t_shard_start =
+                            static_cast<int32_t>(t_block * stride_t) - static_cast<int32_t>(padding_t);
+                        const int32_t h_shard_start =
+                            static_cast<int32_t>(h_block * stride_h) - static_cast<int32_t>(padding_h);
+                        const uint32_t T_shard_cur = (t_block_end - 1 - t_block) * stride_t + kT;
+                        const uint32_t H_shard_cur = (h_block_end - 1 - h_block) * stride_h + kH;
+                        constexpr uint32_t kW_bytes = kW * C_in_block_bytes;
+                        static_assert(kW_bytes <= NOC_MAX_BURST_SIZE, "kW_bytes exceeds NOC_MAX_BURST_SIZE");
+
                         for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
                             const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
                             if constexpr (use_l1_prefetch) {
-                                // ============================================================
-                                // TWO-PHASE READER (L1 prefetch for kernels > 1x1x1)
-                                // Phase 1: Gather receptive field DRAM -> L1 shard buffer
-                                // Phase 2: Assemble vol2col patches L1 shard -> CB
-                                // ============================================================
-
-                                // Compute shard bounds for this spatial block
-                                const int32_t t_shard_start =
-                                    static_cast<int32_t>(t_block * stride_t) - static_cast<int32_t>(padding_t);
-                                const int32_t h_shard_start =
-                                    static_cast<int32_t>(h_block * stride_h) - static_cast<int32_t>(padding_h);
                                 const int32_t w_shard_start =
                                     static_cast<int32_t>(w_block * stride_w) - static_cast<int32_t>(padding_w);
-                                const uint32_t T_shard_cur = (t_block_end - 1 - t_block) * stride_t + kT;
-                                const uint32_t H_shard_cur = (h_block_end - 1 - h_block) * stride_h + kH;
                                 const uint32_t W_shard_cur = (w_block_end - 1 - w_block) * stride_w + kW;
 
-                                // --- H-ROW INTERLEAVED GATHER + VOL2COL ---
-                                // Gather shard rows incrementally per output h, so compute
-                                // gets first data sooner (after kH rows instead of all H_shard rows).
+                                // --- SLIDING WINDOW W + H-ROW INTERLEAVED GATHER ---
+                                // For w_block > first: shift retained kW-1 columns to shard start,
+                                // then gather only W_block new columns for existing h-rows.
+                                // H rows persist across w_blocks — no re-gather for retained rows.
+                                const bool is_first_w = (w_block == w_out_start);
 
-                                constexpr uint32_t kW_bytes = kW * C_in_block_bytes;
-                                static_assert(kW_bytes <= NOC_MAX_BURST_SIZE, "kW_bytes exceeds NOC_MAX_BURST_SIZE");
+                                // Reset h_rows when no W overlap to retain (kW==1 or first w_block)
+                                if (is_first_w || kW <= 1) {
+                                    h_rows_gathered = 0;
+                                }
+
+                                if (!is_first_w && h_rows_gathered > 0) {
+                                    // Sliding window: shift retained kW-1 columns to shard start,
+                                    // then gather only new W columns for existing h-rows.
+                                    for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
+                                        for (uint32_t h_local = 0; h_local < h_rows_gathered; h_local++) {
+                                            // Shift kW-1 retained columns from end to start of shard row.
+                                            // Source and dest are contiguous within the row, so one transfer.
+                                            const uint32_t row_base =
+                                                (t_local * H_shard_max_W_shard_max + h_local * W_shard_max) *
+                                                C_in_block_bytes;
+                                            const uint32_t src_off = (W_shard_max - kW + 1) * C_in_block_bytes;
+                                            constexpr uint32_t shift_bytes = (kW - 1) * C_in_block_bytes;
+                                            noc_async_read(
+                                                get_noc_addr(shard_l1_base + row_base + src_off),
+                                                shard_l1_base + row_base,
+                                                shift_bytes);
+                                        }
+                                    }
+                                    noc_async_read_barrier();
+
+                                    // Gather new W columns for existing h-rows
+                                    const uint32_t new_w_cols = W_shard_cur - (kW - 1);
+                                    for (uint32_t t_local = 0; t_local < T_shard_cur; t_local++) {
+                                        const int32_t t_in = t_shard_start + static_cast<int32_t>(t_local);
+                                        const bool t_outside = (t_in < 0 || t_in >= static_cast<int32_t>(T_in));
+                                        const int32_t t_clamped = clampIndex(t_in, 0, static_cast<int32_t>(T_in) - 1);
+                                        for (uint32_t h_local = 0; h_local < h_rows_gathered; h_local++) {
+                                            const int32_t h_in = h_shard_start + static_cast<int32_t>(h_local);
+                                            const bool h_outside = (h_in < 0 || h_in >= static_cast<int32_t>(H_in));
+                                            const int32_t h_clamped =
+                                                clampIndex(h_in, 0, static_cast<int32_t>(H_in) - 1);
+                                            uint32_t shard_offset =
+                                                (t_local * H_shard_max_W_shard_max + h_local * W_shard_max + (kW - 1)) *
+                                                C_in_block_bytes;
+                                            for (uint32_t wn = 0; wn < new_w_cols; wn++) {
+                                                const int32_t w_in = w_shard_start + static_cast<int32_t>(kW - 1 + wn);
+                                                const bool w_outside = (w_in < 0 || w_in >= static_cast<int32_t>(W_in));
+                                                const bool in_padding = t_outside || h_outside || w_outside;
+                                                const uint32_t shard_addr = shard_l1_base + shard_offset;
+                                                if (in_padding) {
+                                                    if constexpr (is_padding_zeros) {
+                                                        zeroPad<C_in_block_bytes>(shard_addr);
+                                                    } else {
+                                                        const int32_t w_clamped =
+                                                            clampIndex(w_in, 0, static_cast<int32_t>(W_in) - 1);
+                                                        const uint32_t page_idx =
+                                                            batch_page_base +
+                                                            static_cast<uint32_t>(t_clamped) * H_in_W_in +
+                                                            static_cast<uint32_t>(h_clamped) * W_in +
+                                                            static_cast<uint32_t>(w_clamped);
+                                                        noc_async_read(
+                                                            get_input_noc_addr(
+                                                                in_reader,
+                                                                page_idx,
+                                                                c_in_offset_bytes,
+                                                                in_row_size_bytes),
+                                                            shard_addr,
+                                                            C_in_block_bytes);
+                                                    }
+                                                } else {
+                                                    const uint32_t page_idx = batch_page_base +
+                                                                              static_cast<uint32_t>(t_in) * H_in_W_in +
+                                                                              static_cast<uint32_t>(h_in) * W_in +
+                                                                              static_cast<uint32_t>(w_in);
+                                                    noc_async_read(
+                                                        get_input_noc_addr(
+                                                            in_reader, page_idx, c_in_offset_bytes, in_row_size_bytes),
+                                                        shard_addr,
+                                                        C_in_block_bytes);
+                                                }
+                                                shard_offset += C_in_block_bytes;
+                                            }
+                                        }
+                                    }
+                                    noc_async_read_barrier();
+                                }
+
                                 constexpr uint32_t chunk_max = 32;  // TILE_HEIGHT
                                 uint32_t patches_remaining = num_patches;
                                 uint32_t patches_in_chunk = 0;
@@ -200,8 +280,6 @@ void kernel_main() {
                                 if constexpr (patch_pad_bytes > 0) {
                                     pre_zero_pages<padded_page_bytes>(cb_write_addr, chunk_size);
                                 }
-
-                                uint32_t h_rows_gathered = 0;
 
                                 for (uint32_t t = t_block; t < t_block_end; t++) {
                                     const uint32_t t_base = (t - t_block) * stride_t;
