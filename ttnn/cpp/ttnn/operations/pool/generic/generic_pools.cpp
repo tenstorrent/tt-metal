@@ -18,6 +18,8 @@
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -993,6 +995,38 @@ static std::vector<Tensor> pool2d(
         TT_FATAL(false, "Pool2D: Input tensor must be rank 2, 3, or 4, got rank {}", rank);
     }
     // For rank-4, input_tensor_4d is already the input_tensor, no copy needed
+
+    // Use reduction path for global average pooling (kernel covers entire input with no padding)
+    // This is more efficient than the sliding window path for this special case
+    std::array<uint32_t, 4> padding_check = sliding_window::get_pair_n4_padding(padding);
+    bool is_global_pool =
+        (kernel_size[0] >= input_h && kernel_size[1] >= input_w) &&
+        (padding_check[0] == 0 && padding_check[1] == 0 && padding_check[2] == 0 && padding_check[3] == 0);
+
+    if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
+        auto mem_config = memory_config.value_or(input_tensor_4d.memory_config());
+
+        // Reshape [N, H, W, C] -> [N, 1, H*W, C] then reduce along dim -2
+        auto in_shape = input_tensor_4d.padded_shape();
+        auto in_logical = input_tensor_4d.logical_shape();
+        ttnn::Shape reshaped({in_shape[0], 1, in_shape[1] * in_shape[2], in_shape[3]});
+        Tensor reshaped_input = ttnn::experimental::view(input_tensor_4d, reshaped);
+
+        uint32_t height_without_padding = in_logical[1] * in_logical[2];
+        float scalar = divisor_override.has_value() ? 1.0f / float(divisor_override.value())
+                                                    : 1.0f / float(height_without_padding);
+
+        Tensor output = ttnn::operations::reduction::pool_sum(
+            reshaped_input, int(reshaped.rank() - 2), mem_config, compute_kernel_config, scalar);
+
+        // Fix output shape to [N, 1, 1, C] with correct logical channel count
+        auto output_padded = output.padded_shape();
+        ttnn::Shape correct_logical({output_padded[0], 1, 1, channels});
+        ttnn::Shape correct_padded({output_padded[0], 1, 1, output_padded[3]});
+        output = ttnn::experimental::view(output, correct_logical, correct_padded);
+
+        return {output};
+    }
 
     auto exec_path =
         return_indices ? Pool2dExecutionPath::L1 : determine_pool2d_execution_path(input_tensor_4d, dram_slice_config);

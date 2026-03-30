@@ -194,3 +194,42 @@ def test_avg_pool2d_dram_post_commit(
         dram_slice_config=dram_slice_config,
         config_tensor_in_dram=True,
     )
+
+
+@pytest.mark.parametrize(
+    "input_shape",  # NCHW
+    (
+        [1, 2048, 7, 7],  # ResNet-50 final layer
+        [1, 144, 7, 7],  # EfficientNet (non-tile-aligned channels)
+        [2, 64, 8, 8],  # Multi-batch
+        [1, 512, 1, 1],  # Already 1x1 spatial
+    ),
+)
+@pytest.mark.parametrize(
+    "divisor_override",
+    [None, 5],
+)
+def test_avg_pool2d_global_pool_post_commit(
+    device,
+    tensor_map,
+    input_shape,
+    divisor_override,
+):
+    """Test global average pooling via avg_pool2d (kernel_size == input spatial dims, no padding).
+    This exercises the reduction-based fast path for global pooling."""
+    in_n, in_c, in_h, in_w = input_shape
+    run_avg_pool2d(
+        device=device,
+        tensor_map=tensor_map,
+        input_shape=input_shape,
+        kernel_size=(in_h, in_w),
+        stride=(1, 1),
+        padding=(0, 0),
+        ceil_mode=False,
+        divisor_override=divisor_override,
+        count_include_pad=True,
+        shard_scheme=None,
+        in_dtype=ttnn.bfloat16,
+        nightly_skips=False,
+        config_tensor_in_dram=True,
+    )
