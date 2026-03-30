@@ -7,12 +7,6 @@
 
 namespace ttnn::operations::randn {
 
-RandnDeviceOperation::program_factory_t RandnDeviceOperation::select_program_factory(
-    [[maybe_unused]] const operation_attributes_t& operation_attributes,
-    [[maybe_unused]] const tensor_args_t& tensor_args) {
-    return ProgramFactory{};
-}
-
 void RandnDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, [[maybe_unused]] const tensor_args_t& tensor_args) {
     TT_FATAL(
