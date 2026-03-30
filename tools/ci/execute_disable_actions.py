@@ -24,6 +24,13 @@ PROTECTED_AGENT_PATHS = {
     "tools/ci/guarded_gh.py",
     "tools/ci/execute_disable_actions.py",
 }
+DEFAULT_REQUIRED_PR_CHECK_WORKFLOWS = [
+    "all-static-checks.yaml",
+]
+OPTIONAL_EARLY_WORKFLOWS = {
+    "pr-gate.yaml",
+    "merge-gate.yaml",
+}
 ALLOWED_STATUS = {
     "new",
     "planned",
@@ -239,6 +246,34 @@ def invoke_kickoff_agent(pr_url: str, model: str) -> str:
     return result.stdout.strip()[-2000:]
 
 
+def parse_first_url(text: str) -> str:
+    for line in (text or "").splitlines():
+        candidate = line.strip()
+        if candidate.startswith("http://") or candidate.startswith("https://"):
+            return candidate
+    return ""
+
+
+def parse_extra_workflows(raw: str) -> list[str]:
+    workflows: list[str] = []
+    for entry in (raw or "").split(","):
+        workflow = entry.strip()
+        if not workflow:
+            continue
+        if workflow not in OPTIONAL_EARLY_WORKFLOWS:
+            raise ValueError(f"unsupported extra workflow {workflow!r}; allowed: {sorted(OPTIONAL_EARLY_WORKFLOWS)}")
+        workflows.append(workflow)
+    return workflows
+
+
+def dispatch_required_pr_check_workflows(branch: str, workflows: list[str]) -> dict[str, str]:
+    runs: dict[str, str] = {}
+    for workflow in workflows:
+        dispatched = run_guarded_gh(["gh", "workflow", "run", workflow, "--repo", REPO, "--ref", branch])
+        runs[workflow] = parse_first_url(dispatched.stdout)
+    return runs
+
+
 def git_changed_files() -> list[str]:
     out = run(["git", "status", "--porcelain"], capture=True).stdout.strip().splitlines()
     files: list[str] = []
@@ -404,8 +439,14 @@ def main() -> int:
     parser.add_argument("--debug-dir", default="")
     parser.add_argument("--model", default="auto")
     parser.add_argument("--max-attempts-per-item", type=int, default=3)
+    parser.add_argument(
+        "--extra-pr-check-workflows",
+        default="",
+        help="Comma-separated optional early workflows to run after PR create (allowed: pr-gate.yaml, merge-gate.yaml)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    extra_pr_check_workflows = parse_extra_workflows(args.extra_pr_check_workflows)
 
     if not args.dry_run:
         if not os.environ.get("GITHUB_TOKEN"):
@@ -635,9 +676,14 @@ def main() -> int:
                     pr_title,
                     "--body",
                     pr_body,
+                    "--label",
+                    "CI auto triage",
                 ]
             )
             pr_url = pr.stdout.strip().splitlines()[-1].strip()
+            required_check_runs = dispatch_required_pr_check_workflows(
+                branch, [*DEFAULT_REQUIRED_PR_CHECK_WORKFLOWS, *extra_pr_check_workflows]
+            )
             kickoff_tail = invoke_kickoff_agent(pr_url, args.model)
             item["disable_pr"] = {
                 "number": parse_pr_number(pr_url),
@@ -654,6 +700,7 @@ def main() -> int:
                     "issue_number": issue_number,
                     "branch": branch,
                     "pr_url": pr_url,
+                    "required_check_runs": required_check_runs,
                     "disable_edit_summary": edit_summary,
                     "kickoff_output_tail": kickoff_tail,
                     "attempts": item["attempts"],

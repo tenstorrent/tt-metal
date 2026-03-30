@@ -24,6 +24,10 @@ inputs:
     description: "Maximum attempts per candidate before needs_human"
     required: false
     default: "3"
+  extra-pr-check-workflows:
+    description: "Optional comma-separated early workflows to run after PR create (pr-gate.yaml,merge-gate.yaml)"
+    required: false
+    default: ""
   output-dir:
     description: "Directory for generated artifacts"
     required: false
@@ -103,5 +107,6 @@ runs:
           --state-json "build_ci/triage_state/ci_triage_state.json" \
           --debug-dir "${{ inputs.output-dir }}/debug" \
           --max-attempts-per-item "${{ inputs.max-attempts-per-item }}" \
+          --extra-pr-check-workflows "${{ inputs.extra-pr-check-workflows }}" \
           --model "${{ inputs.model }}" \
           $dry

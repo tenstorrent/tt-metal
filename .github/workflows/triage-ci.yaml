@@ -56,6 +56,10 @@ on:
         description: "Maximum attempts per candidate before needs_human"
         required: false
         default: "3"
+      extra-pr-check-workflows:
+        description: "Optional comma-separated early workflows after PR create (pr-gate.yaml,merge-gate.yaml)"
+        required: false
+        default: ""
       auto-disable-dry-run:
         description: "If checked, produce plan only and skip push/PR/kickoff execution"
         required: false
@@ -165,6 +169,7 @@ jobs:
           stale-hours: ${{ github.event.inputs['stale-hours-threshold'] || '32' }}
           max-actions: ${{ github.event.inputs['max-auto-disable-actions'] || '3' }}
           max-attempts-per-item: ${{ github.event.inputs['max-attempts-per-item'] || '3' }}
+          extra-pr-check-workflows: ${{ github.event.inputs['extra-pr-check-workflows'] || '' }}
           model: ${{ github.event.inputs['auto-disable-model'] || 'claude-4-sonnet' }}
           dry-run: ${{ github.event.inputs['auto-disable-dry-run'] || 'false' }}
           output-dir: build_ci/auto_disable

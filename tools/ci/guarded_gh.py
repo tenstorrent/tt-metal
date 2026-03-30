@@ -18,7 +18,20 @@ from typing import Sequence
 
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 PRIMARY_REPO = "tenstorrent/tt-metal"
-ALLOWED_WORKFLOW_IDS = {"triage-ci", "triage-ci.yaml", "triage-ci.yml"}
+ALLOWED_WORKFLOW_IDS = {
+    "triage-ci",
+    "triage-ci.yaml",
+    "triage-ci.yml",
+    "all-static-checks",
+    "all-static-checks.yaml",
+    "all-static-checks.yml",
+    "pr-gate",
+    "pr-gate.yaml",
+    "pr-gate.yml",
+    "merge-gate",
+    "merge-gate.yaml",
+    "merge-gate.yml",
+}
 READ_REPOS = {PRIMARY_REPO, ISSUE_REPO_TEST}
 ALLOWED_PUSH_REMOTE = "origin"
 ALLOWED_PUSH_REFSPECS = {
@@ -226,7 +239,7 @@ def validate(tokens: list[str]) -> Decision:
                     False,
                     f"Denied: workflow {workflow_id!r} not in allowlist {sorted(ALLOWED_WORKFLOW_IDS)}.",
                 )
-            return Decision(True, "Allowed: gh workflow run for triage-ci only")
+            return Decision(True, "Allowed: gh workflow run in allowlist")
 
         return Decision(False, f"Denied: unsupported gh workflow subcommand {sub!r}.")
 
