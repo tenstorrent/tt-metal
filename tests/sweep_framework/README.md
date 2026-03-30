@@ -1,83 +1,79 @@
 # Sweep Framework
 
-## Op Test Library
+The sweep framework tests TTNN operations across large parameter spaces. It generates op parameters from code or from a database, runs ops with the associated parameters on device, and records pass/fail status, PCC accuracy, and optional performance/memory metrics.
 
-Sweep test module files are placed in the `tests/sweep_framework/sweeps/` folder. The name of the `.py` file will be the name of the module. They use the following template:
+## Quick Start
 
-### Parameters
+```bash
+# 1. Install dependencies (if not already in your venv)
+uv pip install -r requirements-dev.txt
 
-**LIMITATION: The suites must be made up of a maximum of 10,000 individual permutations. If you wish to test on more than 10,000 vectors, split the inputs into more than one suite.**
+# 2. Generate test vectors for one module
+# {module.name} uses Python path notation rooted at tests/sweep_framework/sweeps/
+# e.g. data_movement.permute.permute or eltwise.unary.abs.abs
+python tests/sweep_framework/sweeps_parameter_generator.py --module-name {module.name}
 
-**LIMITATION: All parameters should be top level. Do not nest ttnn parameters in tuples or dictionaries, or any ttnn types within will not be serialized correctly. Instead, make them top level. If you require nested data because you want to avoid the cross-product of all individual parameters, split them into separate suites, and add in general parameters after.**
-
-#### Example (INCORRECT, nested ttnn types in dicts/tuples, no separate suites):
-```
-parameters = {
-    "default": {
-        "matmul_specs": [
-            # mcast 2d
-            (
-                (2, 3),
-                (1600, 224, 896),
-                False,
-                dict(core_grid=ttnn.CoreGrid(y=5, x=7), strategy=ttnn.ShardStrategy.BLOCK),
-                None,
-            ),
-            # mcast 2d transposed
-            (
-                (2, 3),
-                (1600, 224, 896),
-                False,
-                dict(core_grid=ttnn.CoreGrid(y=5, x=7), strategy=ttnn.ShardStrategy.BLOCK, orientation=ttnn.ShardOrientation.COL_MAJOR),
-                None,
-            )
-        ],
-        "compute_kernel_config": [None],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_layout": [ttnn.TILE_LAYOUT],
-    }
-}
+# 3. Run the tests
+python tests/sweep_framework/sweeps_runner.py \
+  --module-name {module.name} \
+  --vector-source vectors_export \
+  --result-dest results_export
 ```
 
-#### Example (CORRECT,  ttnn types are top level, and more sensible suite definitions are used):
-```
-# Matmul specific parameters
-parameters = {
-    "mcast_2d": {
-        "batch_sizes": [(2, 3)],
-        "input_shapes": [(1600, 224, 896)],
-        "batch_matrix_multiply": [False],
-        "input_a_sharded_core_grid": [ttnn.CoreGrid(y=5, x=7)],
-        "input_a_sharded_strategy": [ttnn.ShardStrategy.BLOCK],
-        "input_b_sharded_memory_config_specs": [None]
-    },
-    "mcast_2d_transposed": {
-        "batch_sizes": [(2, 3)],
-        "input_shapes": [(1600, 224, 896)],
-        "batch_matrix_multiply": [False],
-        "input_a_sharded_core_grid": [ttnn.CoreGrid(y=5, x=7)],
-        "input_a_sharded_strategy": [ttnn.ShardStrategy.BLOCK],
-        "input_a_sharded_orientation": [ttnn.ShardOrientation.COL_MAJOR],
-        "input_b_sharded_memory_config_specs": [None]
-    }
-}
+Generated vectors go to `tests/sweep_framework/vectors_export/`. Results go to `tests/sweep_framework/results_export/`.
 
-# Add general parameters
-general = {
-    "compute_kernel_config": [None],
-    "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-    "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-    "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-    "input_layout": [ttnn.TILE_LAYOUT]
-}
-for p in parameters.values():
-    p.update(general)
+## Model-Traced Sweeps
+
+**Most sweep tests should use parameters traced from real model executions** rather than hand-written parameter lists. Model-traced sweeps live under `sweeps/model_traced/` and are the primary way ops get validated against production workloads.
+
+> For the full workflow — tracing models, loading traces into the database, promoting them in the manifest, and reconstructing configs for use as sweep vectors — see [model_tracer/GUIDE.md](../../model_tracer/GUIDE.md).
+
+Model-traced sweeps pull configurations from a master JSON file (produced by `model_tracer/`) via `master_config_loader_v2.py`. The loader looks for `model_tracer/traced_operations/ttnn_operations_master.json` by default. If you have a reconstructed file under a different name, point at it with `--master-trace`:
+
+```bash
+python tests/sweep_framework/sweeps_parameter_generator.py \
+  --model-traced all \
+  --suite-name model_traced \
+  --master-trace model_tracer/traced_operations/ttnn_operations_master.json
 ```
 
-#### Example
+Without a master JSON at the expected path (and without `--master-trace`), the loader runs in degraded mode and produces empty vectors.
+
+### Lead Models
+
+Lead models are prioritized models whose traced configurations get dedicated CI treatment, including automatic routing to multi-chip runners. They are defined in `model_tracer/sweep_manifest.yaml` (with a fallback in `framework/constants.py`).
+
+Generate vectors for lead models only:
+
+```bash
+python tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --tag ci-main
 ```
+
+### Multi-Chip Runner Assignment
+
+For lead model runs, vectors are grouped by `mesh_device_shape` and routed to appropriate hardware in CI:
+
+
+| Mesh Shape          | Runner                       |
+| ------------------- | ---------------------------- |
+| `1x1`               | N150 (single-chip)           |
+| `1x2`, `1x4`, `2x4` | Galaxy (multi-chip)          |
+| `4x8`, `8x4`        | Galaxy topology-6u (32-chip) |
+
+
+The mapping is defined in `framework/compute_sweep_matrix.py`.
+
+## Writing a Sweep Test
+
+Each sweep test is a `.py` file under `tests/sweep_framework/sweeps/`. The file path determines the module name (e.g., `sweeps/eltwise/unary/relu/relu.py` → module name `eltwise.unary.relu.relu`).
+
+A sweep test file has up to four components:
+
+### 1. `parameters` (required)
+
+A dict of named suites. Each suite maps parameter names to lists of values. All permutations within a suite are generated automatically.
+
+```python
 parameters = {
     "suite_1": {
         "batch_sizes": [(1,)],
@@ -88,144 +84,29 @@ parameters = {
         "input_b_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT],
-        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
-    },
-    "suite_2": {
-        "batch_sizes": [(1,)],
-        "height": [1024, 1024],
-        "width": [1024, 2048],
-        "broadcast": [None, "h", "hw"],
-        "input_a_dtype": [ttnn.bfloat16],
-        "input_b_dtype": [ttnn.bfloat16],
-        "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "input_b_layout": [ttnn.ROW_MAJOR_LAYOUT],
-        "input_b_memory_config": [ttnn.L1_MEMORY_CONFIG],
-        "input_a_memory_config": [ttnn.L1_MEMORY_CONFIG],
-        "output_memory_config": [
-            ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    ttnn.CoreRangeSet(
-                        {
-                            ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(1, 4)),
-                            ttnn.CoreRange(ttnn.CoreCoord(2, 3), ttnn.CoreCoord(2, 4)),
-                        }
-                    ),
-                    [64, 64],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            )
-        ],
     },
 }
 ```
 
-Parameters must be separated into "suites" (in this example, suite_1 and suite_2 are the named suites). These suites allow for granularity when running test suites with the runner. A common use case may be to define post-commit, nightly, and weekly type suites where each suite is larger than the previous, and can be run less frequently.
+**Rules:**
 
-Each suite dictionary must contain a list of input parameters, and all permutations of these will be generated.
+- Each suite must have **at most 10,000 permutations**. Split into multiple suites if needed.
+- **All TTNN types must be top-level parameters.** Do not nest `ttnn.`* objects inside tuples or dicts — they will not serialize correctly. See [Correct vs Incorrect Nesting](#correct-vs-incorrect-nesting) below.
 
-It is possible to define generator functions for these input parameters separately, and pass the generators into the parameter field:
+Suite names control how tests are grouped. Common patterns:
 
-#### Example
+- `default` — a single general suite
+- `nightly`, `weekly` — frequency-based suites for CI scheduling
+- `xfail_*` — suites where failures are expected (triggers XFAIL/XPASS status tracking)
 
-```
-def get_block_sharded_specs(
-    batch_sizes_choices: List[Tuple[int, ...]],
-    m_size_choices: List[int],
-    k_size_choices: List[int],
-    num_cores_choices: List[int],
-) -> Tuple[Tuple[int, ...], int, int, int, int, int]:
-    for batch_sizes, m_size, k_size in itertools.product(batch_sizes_choices, m_size_choices, k_size_choices):
-        total_height = functools.reduce(operator.mul, batch_sizes) * m_size
-        for per_core_height, num_cores_height in get_per_core_size_and_num_cores(
-            total_height, num_cores_choices, max_per_core_size=1024
-        ):
-            for per_core_width, num_cores_width in get_per_core_size_and_num_cores(
-                k_size, num_cores_choices, max_per_core_size=1024
-            ):
-                yield (batch_sizes, m_size, k_size, per_core_height, per_core_width, num_cores_height, num_cores_width)
+### 2. `run()` (required)
 
-"block_sharded_specs": list(
-        get_block_sharded_specs(
-            [(1,), (2,)],
-            [x if x > 0 else 32 for x in range(0, 2048, 384)],
-            [x if x > 0 else 32 for x in range(0, 2048, 256)],
-            [1, 4, 7],
-        )
-    )
-```
+Called once per test vector. Receives all parameter values as keyword arguments plus `device`.
 
-### Vector Validation
-Each op test file can optionally have a `invalidate_vector` function which takes in a vector and determines if it is an invalid combination. The function must return a tuple of `(True, REASON STRING)` if the vector is invalid or `(False, None)` if the vector is valid.
-
-#### Example
-```
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["broadcast"] in {"w", "hw"} and test_vector["input_b_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Broadcasting along width is not supported for row major layout"
-    return False, None
-```
-
-Vectors marked invalid will not be run by the test runner, but it will be recorded that it was skipped due to its invalidity.
-
-### Device Fixture
-Each op test file can optionally have a `mesh_device_fixture` generator which will be picked up by the infra for when a developer wants to use a custom (multi-chip, mesh, or otherwise) device configuration.
-
-This function should have two stages, setup and teardown of the device. These stages will be executed before, and after the test suite is executed. They are separated by the yield statement.
-
-The `yield` statement in the generator should yield all of the devices at once, if there are multiple. This object will be passed to `run()` when the tests are executed as the `device` parameter.
-
-The `yield` statement must give a tuple of your device object, and a label for this device configuration. See the below example.
-
-#### Example
-
-```
-def mesh_device_fixture():
-    # SETUP (called before test suite is executed)
-    import tt_lib as ttl
-
-    assert ttnn.get_num_devices() >= 8, "Not T3000!"
-
-    num_devices_requested = 8
-
-    mesh_device = ttnn.open_mesh_device(
-        ttnn.MeshShape(1, num_devices_requested),
-    )
-
-    print("ADD: Opened device mesh")
-    # YIELD to test infrastructure
-    # IMPORTANT: Whatever device object(s) you want to pass to your run function need to be ONE object here, as this generator will only be referenced once before executing the tests.
-    # i.e. If you have four separate devices to use in your test, use 'yield ([device1, device2, device3, device4], "4 Device Setup")' inside of a list.
-    yield (mesh_device, "T3000 Mesh")
-
-    # TEARDOWN (called after test suite is finished executing)
-    print("ADD: Closing device mesh")
-
-    ttnn.close_mesh_device(mesh_device)
-    del mesh_device
-```
-
-### Run Function
-
-The run function will be called by the test runner with all defined parameters passed in, along with the device.
-
-This is where to define the test case itself including setup and teardown and golden comparison.
-
-If you defined a `mesh_device_fixture` generator, the object you yielded will be passed into this function as `device`. Otherwise, `device` will be the default ttnn device opened by the infra.
-
-The runner expects one of two returns from the run function:
-
-- Tuple[bool, Optional[str]] where the bool is the test pass/fail (True or False), and the string is the PCC. (e.g. (True, "0.999"))
-
-- List[Tuple[bool, Optional[str]], Integer] where the tuple is the same as above, and the Integer is the e2e perf in nanoseconds.
-
-See below example for how to measure the e2e perf and return it properly.
-
-#### Example
-```
+```python
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 def run(
@@ -237,274 +118,290 @@ def run(
     input_b_dtype,
     input_a_layout,
     input_b_layout,
-    input_b_memory_config,
     input_a_memory_config,
+    input_b_memory_config,
     output_memory_config,
     *,
     device,
-) -> Tuple[bool, Optional[str]]:
-    input_shape_a = (*batch_sizes, height, width)
-    input_shape_b = (*batch_sizes, height, width)
-    if broadcast == "hw":
-        input_shape_b = (*batch_sizes, 1, 1)
-    elif broadcast == "h":
-        input_shape_b = (*batch_sizes, 1, width)
-    elif broadcast == "w":
-        input_shape_b = (*batch_sizes, height, 1)
+) -> list:
+    # 1. Create torch reference
+    torch_input_a = torch.randn(*batch_sizes, height, width)
+    torch_output = torch.add(torch_input_a, torch_input_a)
 
-    torch_input_tensor_a = torch_random(input_shape_a, -0.1, 0.1, dtype=torch.float32)
-    torch_input_tensor_b = torch_random(input_shape_b, -0.1, 0.1, dtype=torch.float32)
-    torch_output_tensor = torch.add(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=input_b_memory_config,
-    )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=input_b_dtype,
-        layout=input_b_layout,
-        device=device,
-        memory_config=input_a_memory_config,
-    )
+    # 2. Run on device
+    input_tensor = ttnn.from_torch(torch_input_a, dtype=input_a_dtype, layout=input_a_layout,
+                                    device=device, memory_config=input_a_memory_config)
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output = ttnn.add(input_tensor, input_tensor, memory_config=output_memory_config)
     e2e_perf = stop_measuring_time(start_time)
 
-    output_tensor = ttnn.to_torch(output_tensor)
+    output = ttnn.to_torch(output)
 
-    return [check_with_pcc(torch_output_tensor, output_tensor, 0.999), e2e_perf]
+    # 3. Return [check_result, e2e_perf]
+    return [check_with_pcc(torch_output, output, 0.999), e2e_perf]
 ```
 
-## Test Vector Generation
+**Return format** — one of:
 
-The test vector generator takes in lists of parameters from each sweep test file and generates all permutations of these parameters, and stores serialized versions of them as suites in JSON files.
+- `(pass: bool, message: Optional[str])` — e.g., `(True, "0.999")`
+- `[(pass, message), e2e_perf_ns]` — includes end-to-end performance in nanoseconds
 
-**NOTE: Elasticsearch support has been removed. Test vectors are now always exported to disk in JSON format under `tests/sweep_framework/vectors_export/`.**
+### 3. `invalidate_vector()` (optional)
 
-The test vector ids are the sha224 hash of the vector itself. This ID is used to uniquely identify each vector, and detect changes in the suite. If the parameter generator is run multiple times on the same parameter set from the op test file, it will update the JSON files with the new vectors.
+Pre-filters invalid parameter combinations before execution.
 
-### Usage
-
-To run the test vector generator:
-
-`python3 tests/sweep_framework/sweeps_parameter_generator.py`
-
-Options:
-
-`--module-name <sweep_name>` OPTIONAL: Select the sweep file to generate parameters for. This should be only the name and not extension of the file. If not set, the generator will generate vectors for all sweep files in the sweeps folder.
-
-`--dump-file` OPTIONAL: [DEPRECATED] This flag is deprecated and no longer needed. Vectors are always dumped to disk by default. Elasticsearch support has been removed.
-
-`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be assigned to your test vectors. This is to keep copies of vectors separate from other developers / CI. By default, this will be your username. You are able to specify a tag when running tests using the runner.
-
-## Test Runner
-
-The test runner reads in test vectors from the test vector database and executes the tests sequentially by calling the op test's run function with the specified vectors.
-
-### Features
-
-- Hang Detection / Timeout: Default timeout for one single test is 30 seconds. This can be overridden by setting a global `TIMEOUT` variable in the test file. Test processes are killed after this timeout and tt-smi is automatically run to reset the chip after a hang, before continuing the test suite.
-- NOTE ON HANGS: When specifying one test vector to run, hang detection will be disabled. This is because the test is run in the parent process to allow debug tools like gdb/lldb to be used easily.
-- NOTE ON TT-SMI: To ensure the best stability, set the TT-SMI reset command in an environment variable `TT_SMI_RESET_COMMAND`. For example `TT_SMI_RESET_COMMAND="tt-smi -tr 0"`. If this is not set, the system will attempt to find tt-smi and use default flags, but this is not guaranteed to work on every system because of version mismatches of tt-smi.
-- Result Classification: Tests will be assigned one of the following statuses after a run:
-    1. PASS: The test met expected criteria. In this case the test message response is stored with the status, typically this is a PCC value.
-    2. FAIL: ASSERT / EXCEPTION: The test failed due to an assertion in the op itself, failed PCC assertion, or any other exception that is raised during execution. The exception is stored with the test result.
-    3. FAIL: CRASH / HANG: The test timed out and is assumed to be in a hung state.
-    4. NOT RUN: The test was run with a vector that is marked as invalid. The invalid reason given from the op test file is stored with the result.
-    5. FAIL_L1_OUT_OF_MEM: The test failed specifically due to an L1 Out of Memory error.
-    6. FAIL_WATCHER: The test failed due to a Watcher raised exception. This only occurs if `--watcher` is passed in the run command.
-- Memory Profiling: Per-core and device-level memory usage can be captured using the `--measure-memory` flag. This uses graph trace in NO_DISPATCH mode to profile memory requirements without execution overhead. Memory data is stored in test results with multiple granular metrics and can be analyzed in downstream dashboards. This is useful for:
-    - Identifying memory-intensive operations and configurations per core
-    - Tracking memory usage trends and regressions across commits
-    - Understanding actual vs theoretical worst-case memory usage
-    - Optimizing memory layouts and detecting L1 memory limit violations
-    - Analyzing memory distribution patterns (sequential vs parallel execution)
-- Granularity of Testing: Tests can be run by all sweeps, individual sweep, or individual suite to allow for faster/slower test runs, spanning larger/smaller suites of tests.
-- Git Hash information is stored with each test run, so it is easy to see on which commit the test is breaking/passing.
-- Data Aggregation: Results are accumulated in a database that can be queried to see desired details of test runs.
-
-
-### Usage
-
-**NOTE: Elasticsearch support has been removed from the parameter generator. Vectors are now always exported to disk in JSON format.**
-
-Go to [`tests/README.md`](../README.md) for the latest information on how to run the sweeps_runner.
-
-#### Memory Profiling
-
-To capture per-core and device-level memory usage during sweep runs, add the `--measure-memory` flag:
-
-```bash
-python3 tests/sweep_framework/sweeps_runner.py \
-  --module-name <module_name> \
-  --vector-source vectors_export \
-  --result-dest results_export \
-  --measure-memory \
-  --tag <your_tag>
+```python
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["broadcast"] in {"w", "hw"} and test_vector["input_b_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        return True, "Broadcasting along width is not supported for row major layout"
+    return False, None
 ```
 
-**How it works:**
-- Uses ttnn graph trace with NO_DISPATCH mode (fast, no device execution overhead)
-- Captures both per-core and device-level memory metrics for each test vector
-- Uses `extract_resource_usage_per_core()` for worst-case per-core analysis
-- Uses `extract_peak_L1_memory_usage()` for actual observed device memory
-- Memory capture failures are non-fatal (returns null but test continues)
+Invalidated vectors are skipped (status `NOT_RUN`) with the reason recorded.
 
-**Memory metrics captured:**
+**Restriction:** This function runs on CPU only — no device code or TTNN device calls.
 
-| Metric Name | Description | Use Case |
-|-------------|-------------|----------|
-| `peak_l1_memory_per_core_bytes` | Peak total (CB+L1) per core | Per-core memory budget validation |
-| `peak_cb_per_core_bytes` | Peak circular buffer per core | CB-specific analysis |
-| `peak_l1_buffers_per_core_bytes` | Peak L1 buffer per core | L1-specific analysis |
-| `num_cores` | Number of cores used | Context for other metrics |
-| `peak_l1_memory_aggregate_bytes` | Worst-case if all cores peak together | Conservative capacity planning |
-| `peak_l1_memory_device_bytes` | Actual observed peak across device | Realistic usage tracking |
+### 4. `mesh_device_fixture()` (optional)
 
-**Understanding the metrics:**
+Override the default single-chip device with a custom device configuration (e.g., multi-chip mesh).
 
-- **Per-core metrics** (`peak_l1_memory_per_core_bytes`, etc.): Show worst-case memory per individual core
-- **Aggregate** (`peak_l1_memory_aggregate_bytes`): Theoretical maximum if all cores peak simultaneously (= `peak_l1_memory_per_core_bytes × num_cores`)
-- **Device** (`peak_l1_memory_device_bytes`): Actual peak observed during execution
-- **Key insight**: If `aggregate ≈ device`, cores peak together (parallel). If `aggregate >> device`, execution is sequential.
+```python
+def mesh_device_fixture():
+    assert ttnn.get_num_devices() >= 8, "Not T3000!"
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
+    yield (mesh_device, "T3000 Mesh")
+    ttnn.close_mesh_device(mesh_device)
+    del mesh_device
+```
 
-**Example result with memory metrics:**
-```json
-{
-  "status": "pass",
-  "metrics": [
-    {
-      "metric_name": "peak_l1_memory_per_core_bytes",
-      "metric_value": 18432
-    },
-    {
-      "metric_name": "peak_cb_per_core_bytes",
-      "metric_value": 18432
-    },
-    {
-      "metric_name": "peak_l1_buffers_per_core_bytes",
-      "metric_value": 0
-    },
-    {
-      "metric_name": "num_cores",
-      "metric_value": 64
-    },
-    {
-      "metric_name": "peak_l1_memory_aggregate_bytes",
-      "metric_value": 1179648
-    },
-    {
-      "metric_name": "peak_l1_memory_device_bytes",
-      "metric_value": 18432
-    },
-    {
-      "metric_name": "e2e_perf_ms",
-      "metric_value": 2.5
+The yielded tuple is `(device_object, label_string)`. The `device_object` is passed to `run()` as the `device` argument.
+
+### 5. `TIMEOUT` (optional)
+
+Override the default 30-second per-test timeout:
+
+```python
+TIMEOUT = 60  # seconds
+```
+
+## Correct vs Incorrect Nesting
+
+TTNN types (`ttnn.CoreGrid`, `ttnn.ShardStrategy`, etc.) must be top-level parameters, not nested inside tuples or dicts.
+
+**Incorrect** — TTNN types buried in tuples:
+
+```python
+parameters = {
+    "default": {
+        "matmul_specs": [
+            ((2, 3), (1600, 224, 896), False,
+             dict(core_grid=ttnn.CoreGrid(y=5, x=7), strategy=ttnn.ShardStrategy.BLOCK), None),
+        ],
     }
-  ]
 }
 ```
 
-**Interpreting results:**
-In the example above:
-- Each core uses at most 18KB (well within 256KB L1 limit ✓)
-- Circular buffers account for all memory (18KB), L1 buffers are 0
-- 64 cores are used
-- Aggregate (1.18MB) >> Device (18KB), indicating **sequential execution** (only ~1 core active at a time)
-- Low memory pressure, good efficiency
-
-**Use cases:**
-- Identify memory-intensive operation configurations
-- Track memory usage trends across commits
-- Detect memory regressions in CI
-- Optimize memory layouts before running on hardware
-
-## CI Execution
-
-The sweep framework runs automatically in CI via the [ttnn - run sweeps](https://github.com/tenstorrent/tt-metal/actions/workflows/ttnn-run-sweeps.yaml) workflow. There are four distinct run types:
-
-### Run Types
-
-| Run Type | Schedule | Suite | Description |
-|----------|----------|-------|-------------|
-| **Nightly** | Mon, Tue, Thu, Fri @ 4:30 AM UTC | `nightly` | Regular sweep testing with standard parameters |
-| **Comprehensive** | Wed, Sat @ 4:00 AM UTC | All suites | Exhaustive testing with all suite combinations |
-| **Model Traced** | Daily @ 4:00 AM UTC | `model_traced` | Tests with configurations traced from real models |
-| **Lead Models** | Daily @ 3:00 AM UTC | `model_traced` | Tests from prioritized lead models with multi-chip support |
-
-### Lead Models
-
-Lead models are prioritized models whose traced configurations receive special treatment in CI, including automatic routing to multi-chip runners.
-
-**Configuration:** Lead models are defined in `tests/sweep_framework/framework/constants.py`:
+**Correct** — TTNN types as separate top-level keys, split into meaningful suites:
 
 ```python
-LEAD_MODELS = [
-    "deepseek_v3",
-]
+parameters = {
+    "mcast_2d": {
+        "batch_sizes": [(2, 3)],
+        "input_shapes": [(1600, 224, 896)],
+        "batch_matrix_multiply": [False],
+        "input_a_sharded_core_grid": [ttnn.CoreGrid(y=5, x=7)],
+        "input_a_sharded_strategy": [ttnn.ShardStrategy.BLOCK],
+        "input_b_sharded_memory_config_specs": [None],
+    },
+}
+
+# Append shared parameters to all suites
+general = {
+    "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "input_b_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "output_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "input_layout": [ttnn.TILE_LAYOUT],
+}
+for suite in parameters.values():
+    suite.update(general)
 ```
 
-To add a new lead model, add its directory name pattern to this list. The pattern is matched against the `source` path in traced operations.
+You can also use generator functions to produce parameter lists programmatically — just pass the resulting list into the suite dict.
 
-**Generation:** To generate vectors for lead models only:
+## Vector Generation
 
 ```bash
-python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --tag ci-main
+# Generate vectors for all modules
+python tests/sweep_framework/sweeps_parameter_generator.py
+
+# Generate vectors for one module
+python tests/sweep_framework/sweeps_parameter_generator.py --module-name matmul.short.matmul
+
+# Generate only model-traced vectors (all or lead models)
+python tests/sweep_framework/sweeps_parameter_generator.py --model-traced all
+python tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead
+
+# Custom tag (default: your username)
+python tests/sweep_framework/sweeps_parameter_generator.py --module-name matmul.short.matmul --tag my-experiment
+
+# Randomize vector order with a seed
+python tests/sweep_framework/sweeps_parameter_generator.py --module-name matmul.short.matmul --randomize 42
 ```
 
-### Multi-Chip Runner Assignment
+**Options:**
 
-For lead model runs, the framework automatically routes operations to appropriate hardware based on their `mesh_device_shape`:
 
-| Mesh Shape | Description | Runner |
-|------------|-------------|--------|
-| `[1, 1]` | Single-chip | N150 |
-| `[1, 2]`, `[1, 4]`, `[2, 4]` | Small multi-chip | Galaxy |
-| `[4, 8]`, `[8, 4]` | 32-chip | Galaxy (topology-6u) |
+| Flag                        | Description                                       |
+| --------------------------- | ------------------------------------------------- |
+| `--module-name <name>`      | Module to generate (omit for all)                 |
+| `--tag <tag>`               | Tag for separating vector sets (default: `$USER`) |
+| `--randomize <seed>`        | Shuffle vector order reproducibly                 |
+| `--skip-modules <a,b>`      | Comma-separated modules to skip                   |
+| `--model-traced [all|lead]` | Generate only model-traced ops                    |
+| `--suite-name <name>`       | Generate a specific suite only                    |
+| `--mesh-shape <RxC>`        | Filter to a specific mesh shape (e.g., `2x4`)     |
 
-**How it works:**
+
+Output goes to `tests/sweep_framework/vectors_export/`. For multi-chip ops, vectors are grouped by mesh shape into separate files (e.g., `module__mesh_2x4.json`) for CI runner routing.
+
+## Test Runner
+
+```bash
+# Run a specific module
+python tests/sweep_framework/sweeps_runner.py \
+  --module-name eltwise.unary.relu.relu \
+  --vector-source vectors_export \
+  --result-dest results_export
+
+# Run a specific suite
+python tests/sweep_framework/sweeps_runner.py \
+  --module-name eltwise.unary.relu.relu \
+  --suite-name suite_1 \
+  --vector-source vectors_export \
+  --result-dest results_export
+
+# Run a single vector by ID (hang detection disabled for debugging)
+python tests/sweep_framework/sweeps_runner.py \
+  --module-name eltwise.unary.relu.relu \
+  --vector-id abc123 \
+  --vector-source vectors_export \
+  --result-dest results_export
+
+# Dry run — see what would execute without running
+python tests/sweep_framework/sweeps_runner.py \
+  --module-name eltwise.unary.relu.relu \
+  --vector-source vectors_export \
+  --result-dest results_export \
+  --dry-run --summary
+
+# Run from an arbitrary JSON file
+python tests/sweep_framework/sweeps_runner.py \
+  --module-name eltwise.unary.relu.relu \
+  --vector-source file \
+  --file-path /path/to/vectors.json \
+  --result-dest results_export
+```
+
+**Key options:**
+
+
+| Flag                   | Description                                                             |
+| ---------------------- | ----------------------------------------------------------------------- |
+| `--module-name <name>` | Module(s) to run (comma-separated, or omit for all)                     |
+| `--suite-name <name>`  | Run only this suite                                                     |
+| `--vector-id <hash>`   | Run a single vector (disables hang detection for debugging)             |
+| `--vector-source`      | `vectors_export` (default) or `file`                                    |
+| `--file-path <path>`   | JSON path (required when `--vector-source file`)                        |
+| `--result-dest`        | `results_export` (default) or `superset`                                |
+| `--tag <tag>`          | Reserved; tag field is stored in vectors but not used for filtering yet |
+| `--skip-modules <a,b>` | Skip these modules when running all                                     |
+| `--perf`               | Measure end-to-end performance                                          |
+| `--device-perf`        | Measure device-level performance (requires profiler build)              |
+| `--measure-memory`     | Capture per-core L1 memory usage via graph trace                        |
+| `--watcher`            | Enable watcher for memory/exception monitoring                          |
+| `--skip-on-timeout`    | Abort remaining suite tests after a timeout                             |
+| `--keep-invalid`       | Include invalid vectors as NOT_RUN (default: exclude them)              |
+| `--main-proc-verbose`  | Run in main process (not subprocess) for easier debugging               |
+| `--dry-run`            | Plan without executing                                                  |
+| `--summary`            | Print execution summary                                                 |
+
+
+### Test Statuses
+
+
+| Status                         | Meaning                                                                |
+| ------------------------------ | ---------------------------------------------------------------------- |
+| `PASS`                         | Test met expected PCC or other criteria                                |
+| `FAIL_ASSERT_EXCEPTION`        | Assertion failure, bad PCC, or unhandled exception                     |
+| `FAIL_CRASH_HANG`              | Test timed out (assumed hang)                                          |
+| `FAIL_L1_OUT_OF_MEM`           | L1 memory allocation failure                                           |
+| `FAIL_WATCHER`                 | Watcher-raised exception (requires `--watcher`)                        |
+| `FAIL_UNSUPPORTED_DEVICE_PERF` | Device perf requested (`--device-perf`) but no profiler data available |
+| `NOT_RUN`                      | Skipped due to `invalidate_vector`                                     |
+| `XFAIL`                        | Expected failure (suite name starts with `xfail`)                      |
+| `XPASS`                        | Unexpected pass in an xfail suite                                      |
+
+
+### Hang Detection and Recovery
+
+- Default timeout: 30 seconds per test (override with `TIMEOUT` in test file).
+- On timeout, the test subprocess is killed and `tt-smi` resets the device before the next test.
+- Set `TT_SMI_RESET_COMMAND` env var for your system (e.g., `TT_SMI_RESET_COMMAND="tt-smi -tr 0"`).
+- When running a single vector (`--vector-id`), hang detection is disabled so you can attach debuggers.
+
+### Memory Profiling
+
+Use `--measure-memory` to capture per-core and device-level L1 memory usage without execution overhead (uses graph trace in `NO_DISPATCH` mode).
+
+```bash
+python tests/sweep_framework/sweeps_runner.py \
+  --module-name matmul.short.matmul \
+  --vector-source vectors_export \
+  --result-dest results_export \
+  --measure-memory
+```
+
+Captured metrics:
+
+
+| Metric                           | Description                                                        |
+| -------------------------------- | ------------------------------------------------------------------ |
+| `peak_l1_memory_per_core_bytes`  | Peak total (CB + L1) per core                                      |
+| `peak_cb_per_core_bytes`         | Peak circular buffer per core                                      |
+| `peak_l1_buffers_per_core_bytes` | Peak L1 buffer per core                                            |
+| `num_cores`                      | Number of cores used                                               |
+| `peak_l1_memory_aggregate_bytes` | Worst-case if all cores peak simultaneously (per-core × num_cores) |
+| `peak_l1_memory_device_bytes`    | Actual observed peak across device                                 |
+
 
 1. **Vector Generation:** The parameter generator reads `mesh_device_shape` from `traced_machine_info.tensor_placements` in the master JSON
 2. **File Routing:** By default, vectors are grouped by mesh shape and written to separate files (e.g., `op.mesh_4x8.json`). You can also generate hardware-grouped files with `--group-by hw`.
 3. **Matrix Computation:** `framework/compute_sweep_matrix.py` creates a GitHub Actions matrix that maps mesh shapes to runners
 4. **Execution:** CI spawns parallel jobs on appropriate hardware based on the matrix
 
-**Runner Configuration:** The mesh-to-runner mapping is defined in `framework/compute_sweep_matrix.py`:
+## CI Execution
 
-```python
-def get_lead_models_mesh_runner_config():
-    return [
-        {
-            "mesh_shapes": ["1x1"],
-            "runs_on": "tt-ubuntu-2204-n150-stable",
-            ...
-        },
-        {
-            "mesh_shapes": ["1x2", "1x4", "2x4", "4x8", "8x4"],
-            "runs_on": ["topology-6u", "arch-wormhole_b0", "in-service", "pipeline-functional"],
-            ...
-        },
-    ]
-```
+Sweeps run automatically via the [ttnn - run sweeps](https://github.com/tenstorrent/tt-metal/actions/workflows/ttnn-run-sweeps.yaml) workflow.
 
-For more details on the master JSON format and tensor placements, see the [Model Tracer README](../../model_tracer/README.md).
+
+| Run Type          | Schedule                         | Suite          | Description                         |
+| ----------------- | -------------------------------- | -------------- | ----------------------------------- |
+| **Nightly**       | Mon, Tue, Thu, Fri @ 4:30 AM UTC | `nightly`      | Standard parameter sweeps           |
+| **Comprehensive** | Wed, Sat @ 4:00 AM UTC           | All suites     | Exhaustive testing                  |
+| **Model Traced**  | Daily @ 4:00 AM UTC              | `model_traced` | Configs from real model traces      |
+| **Lead Models**   | Daily @ 3:00 AM UTC              | `model_traced` | Lead models with multi-chip routing |
+
+
+Before merging new or modified sweep tests, verify locally and also run the [ttnn - run sweeps](https://github.com/tenstorrent/tt-metal/actions/workflows/ttnn-run-sweeps.yaml) workflow against your branch.
 
 ## FAQ / Troubleshooting
 
-- If you see an error like the following, it means you did not re-create your environment using the `create_venv.sh` script. Either re-create your python environment, or manually install the dependencies using `uv pip install beautifultable termcolor`:
-```
-Traceback (most recent call last):
-  File "<stdin>", line 1, in <module>
-ModuleNotFoundError: No module named 'beautifultable'
-```
+**TTNN types not serializing correctly**
+TTNN nanobind classes need the `tt_nanobind_class` wrapper for serialization support. Enum types work without it. See the template in `tt_lib_bindings_tensor.cpp`.
 
-- TTNN class nanobinds need to use the `tt_nanobind_class` wrapper to enable serialization/deserialization within this framework. There is a template in `tt_lib_bindings_tensor.cpp` which should replace `nb::class_` and automatically add these bindings to your type. (TODO: Move the template from this location to a common location.) Enum types do not need these nanobinds.
+`**invalidate_vector` or `parameters` code fails with device errors**
+These run on CPU only — no device code or TTNN device calls allowed. To filter by device architecture, use a `mesh_device_fixture` instead.
 
-- Code within the `invalidate_vector` function or any code / generators used within `parameters` must NOT include any device code. These functions are intended to be run on CPU only, without access to a device. If you wish to filter tests by device architecture, see the [Device Fixture](#device-fixture) section.
-
-- Before merging new tests / modified tests to main, please verify that your changes can generate tests and execute by testing locally, and also using the [ttnn - run sweeps](https://github.com/tenstorrent/tt-metal/actions/workflows/ttnn-run-sweeps.yaml) pipeline with your branch and modified test(s) selected.
+**Tests hang or timeout unexpectedly**
+Set `TT_SMI_RESET_COMMAND` for your system. Debug individual vectors with `--vector-id` (disables timeout) and `--main-proc-verbose` (runs in-process for full stack traces).

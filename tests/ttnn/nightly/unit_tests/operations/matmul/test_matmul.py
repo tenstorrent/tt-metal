@@ -260,3 +260,106 @@ def test_matmul_2d_interleaved_sharded_dtype_bias_sweep(
         num_dram_banks=num_dram_banks,
         expected_pcc=expected_pcc,
     )
+
+
+@pytest.mark.parametrize(
+    "batch, m, k, n, program_config",
+    [
+        pytest.param(
+            256,
+            32,
+            128,
+            128,
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(8, 4),
+                in0_block_w=1,
+                out_subblock_h=2,
+                out_subblock_w=2,
+                per_core_M=8,
+                per_core_N=4,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=False,
+            ),
+            id="1d_mcast_in1_fuse_batch",
+        ),
+        pytest.param(
+            8,
+            32,
+            128,
+            128,
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(2, 1),
+                in0_block_w=1,
+                out_subblock_h=2,
+                out_subblock_w=2,
+                per_core_M=8,
+                per_core_N=2,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            ),
+            id="1d_mcast_in0_fuse_batch",
+        ),
+        pytest.param(
+            64,
+            32,
+            128,
+            128,
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(2, 8),
+                in0_block_w=1,
+                out_subblock_h=2,
+                out_subblock_w=2,
+                per_core_M=8,
+                per_core_N=2,
+                transpose_mcast=False,
+                fuse_batch=True,
+            ),
+            id="2d_mcast_fuse_batch",
+        ),
+    ],
+)
+@pytest.mark.timeout(120)
+def test_matmul_transpose_a_fuse_batch(device, batch, m, k, n, program_config):
+    """
+    Regression test for transpose_a stride calculation with fuse_batch enabled
+    in 1D mcast (both mcast_in0 and mcast_in1) and 2D mcast program configs.
+
+    When batches are fused into M and transpose_a is True, the reader kernel
+    strides must use M_per_batch (not the fused M) to correctly traverse tiles.
+    Program configs are specified explicitly to guard against future changes in
+    automatic config selection.
+    """
+    torch.manual_seed(0)
+
+    torch_a = torch.randn((batch, m, k), dtype=torch.bfloat16)
+    torch_b = torch.randn((1, k, n), dtype=torch.bfloat16)
+    torch_out = torch.matmul(torch_a, torch_b)
+
+    torch_a_phys = torch_a.transpose(-1, -2)
+    torch_b_phys = torch_b.transpose(-1, -2)
+
+    a = ttnn.from_torch(torch_a_phys, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b_phys, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    output = ttnn.matmul(
+        a,
+        b,
+        transpose_a=True,
+        transpose_b=True,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    output = ttnn.to_torch(output)
+
+    assert output.shape == torch_out.shape
+    assert_with_pcc(torch_out, output, pcc=0.999)

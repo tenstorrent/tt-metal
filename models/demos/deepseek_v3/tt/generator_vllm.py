@@ -91,8 +91,12 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         page_table = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
         empty_slots = kwargs.get("empty_slots", None)
+        sampling_params = kwargs.get("sampling_params", None)
+        sample_on_device = bool(sampling_params is not None)
 
         if all(length == 0 for length in lengths):
+            if sample_on_device:
+                return torch.zeros(tokens.shape[0], device=tokens.device, dtype=torch.int64)
             return torch.zeros(tokens.shape[0], self.hf_config.vocab_size, device=tokens.device, dtype=tokens.dtype)
 
         # Set kv_cache if provided and all entries are valid
@@ -106,29 +110,66 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             ((max_prompt_len + pad_block_size - 1) // pad_block_size) * pad_block_size if max_prompt_len > 0 else 0
         )
         num_of_users = tokens.shape[0]
-        last_logits = []
+        if sample_on_device:
+            self._validate_and_initialize_sampling(sampling_params, sample_on_device)
+
+        user_outputs = []
         for i in range(num_of_users):
             user_id = empty_slots[i] if empty_slots is not None else i
             prompt_len = int(lengths[i])
             if prompt_len == 0:
-                last_logits.append(
-                    torch.zeros(max_padded_len, self.hf_config.vocab_size, device=tokens.device, dtype=tokens.dtype)
-                )
+                if sample_on_device:
+                    # Device-sampling path returns token ids, even for empty prompts.
+                    user_output = torch.tensor(0, dtype=torch.int64, device=tokens.device)
+                else:
+                    # Host-sampling path returns logits.
+                    user_output = torch.zeros(
+                        max_padded_len, self.hf_config.vocab_size, device=tokens.device, dtype=tokens.dtype
+                    )
+                user_outputs.append(user_output)
                 continue
+
             user_tokens = tokens[i, :prompt_len].unsqueeze(0)
             user_tokens = _pad_tokens(user_tokens, pad_value, block_size=pad_block_size).squeeze(0)
-            user_out = self._prefill(user_tokens, user_id, page_table, local_user_id=i)
-            user_logits = user_out.squeeze(0).squeeze(0)  # [1, 1, S, V] -> [S, V]
-            if user_logits.shape[0] > prompt_len:
-                user_logits = user_logits[:prompt_len]
-            if user_logits.shape[0] < max_padded_len:
-                pad_len = max_padded_len - user_logits.shape[0]
-                pad_logits = user_logits[-1:].expand(pad_len, -1)
-                user_logits = torch.cat([user_logits, pad_logits], dim=0)
-            last_logits.append(user_logits)
-        last_logits = torch.stack(last_logits)  # [num_of_users, S, V]
+            prefill_logits = self._prefill(
+                user_tokens,
+                user_id,
+                page_table,
+                local_user_id=i,
+                sample_on_device=sample_on_device,
+                return_last_hidden=False,
+            )
 
-        return last_logits
+            if sample_on_device:
+                prefill_logits = self._slice_last_token_logits(prefill_logits, prompt_len, expand_to_batch=True)
+                prefill_logits_sampled_device = self._sample_tokens_device(prefill_logits, user_slots=[user_id])
+                prefill_logits_sampled_host = self._tokens_from_device(
+                    prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=1
+                )
+                # Device-sampling path emits token ids.
+                user_output = prefill_logits_sampled_host[0].to(torch.int64)
+            else:
+                assert isinstance(prefill_logits, torch.Tensor), "prefill_logits should be a torch.Tensor on host"
+                user_logits = prefill_logits.squeeze(0).squeeze(0)  # [1, 1, S, V] -> [S, V]
+                seq_len = user_logits.shape[0]
+                assert (
+                    seq_len >= prompt_len
+                ), f"Prefill returned fewer tokens ({seq_len}) than prompt length ({prompt_len})"
+                user_logits = user_logits[:prompt_len]
+                if prompt_len < max_padded_len:
+                    pad_len = max_padded_len - prompt_len
+                    pad_logits = user_logits[-1:].expand(pad_len, -1)
+                    user_logits = torch.cat([user_logits, pad_logits], dim=0)
+                user_output = user_logits
+
+            user_outputs.append(user_output)
+
+        prefill_output = torch.stack(user_outputs)
+        # prefill_output semantics:
+        # - sample_on_device=True  -> sampled token ids [B]
+        # - sample_on_device=False -> logits [B, S, V] for host sampling
+
+        return prefill_output
 
     def decode_forward(self, *args, **kwargs):
         assert self.model_run_config_decode is not None, "Model run config decode is not initialized"
@@ -136,24 +177,39 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         page_tables = kwargs.get("page_table", None)
         kv_cache = kwargs.get("kv_cache", None)
         enable_trace = kwargs.get("enable_trace", False)
+        read_from_device = kwargs.get("read_from_device", True)
+        sampling_params = kwargs.get("sampling_params", None)
+        sample_on_device = bool(sampling_params is not None)
         # Set kv_cache if provided and all entries are valid
         if kv_cache is not None and not any(entry is None for entry in kv_cache):
             self.set_kv_cache(kv_cache)
 
         tokens_step = kwargs["tokens"].squeeze(1)
+        if sample_on_device:
+            self._validate_and_initialize_sampling(sampling_params, sample_on_device, enable_trace=enable_trace)
+        decode_step_output = super().decode_forward(
+            tokens=tokens_step,
+            start_pos=kwargs["start_pos"],
+            batch_size_per_row=USERS_PER_ROW,
+            enable_trace=enable_trace,
+            page_table=page_tables,
+            sample_on_device=sample_on_device,
+        )
 
-        return_value = (
-            super()
-            .decode_forward(
-                tokens=tokens_step,
-                start_pos=kwargs["start_pos"],
-                batch_size_per_row=USERS_PER_ROW,
-                enable_trace=enable_trace,
-                page_table=page_tables,
-            )
-            .unsqueeze(1)
-        )  # [B, V] -> [B, 1, V]
-        return return_value
+        if sample_on_device:
+            decode_output = self._sample_tokens_device(decode_step_output, enable_trace=enable_trace)
+            if read_from_device:
+                decode_output = self._tokens_from_device(
+                    decode_output, self.mesh_device, batch_size_per_row=self.batch_size_per_row
+                )
+        else:
+            assert isinstance(decode_step_output, torch.Tensor), "decode_step_output should be a torch.Tensor on host"
+            decode_output = decode_step_output.unsqueeze(1)
+
+        # decode_output semantics:
+        # - sample_on_device=True  -> sampled token ids
+        # - sample_on_device=False -> logits [B, 1, V] for host sampling
+        return decode_output
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         assert (
