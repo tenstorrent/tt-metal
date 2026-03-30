@@ -94,18 +94,25 @@ class BgeM3Model(LightweightModule):
 
         if attention_mask is None:
             pad_mask = ttnn.eq(input_ids, self.pad_token_id)
+            if not self._has_any_masked_positions(pad_mask):
+                return None
             additive_mask = self._build_additive_attention_mask(pad_mask)
         else:
             rank = len(attention_mask.shape)
             if rank == 2:
                 # HF convention: 1=keep, 0=pad.
                 pad_mask = ttnn.eq(attention_mask, 0)
+                if not self._has_any_masked_positions(pad_mask):
+                    return None
                 additive_mask = self._build_additive_attention_mask(pad_mask)
             elif rank == 4:
                 if attention_mask.shape[1] != 1 or attention_mask.shape[2] != 1 or attention_mask.shape[3] != seq_len:
                     raise ValueError(
                         f"attention_mask rank-4 shape must be [B, 1, 1, S] with S={seq_len}, got {attention_mask.shape}"
                     )
+                nonzero_mask = ttnn.ne(attention_mask, 0)
+                if not self._has_any_masked_positions(nonzero_mask):
+                    return None
                 additive_mask = attention_mask
             else:
                 raise ValueError(f"attention_mask rank must be 2 or 4, got shape={attention_mask.shape}")
