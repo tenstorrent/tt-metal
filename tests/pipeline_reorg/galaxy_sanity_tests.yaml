@@ -59,6 +59,6 @@
   skus:
     wh_galaxy_perf:
       timeout: 10
-  owner_id: U08H32XUS9W # Yousef Al Rawwash
+  owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
   arch: wormhole_b0
