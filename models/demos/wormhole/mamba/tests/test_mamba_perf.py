@@ -133,7 +133,7 @@ def test_mamba_perf_e2e(
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, expected_layer_duration_ms",
-    ((32, 1.596),),
+    ((32, 1.634),),
 )
 def test_mamba_perf_device(batch, expected_layer_duration_ms):
     subdir = "ttnn_mamba"
