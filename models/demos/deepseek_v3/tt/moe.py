@@ -127,8 +127,10 @@ class MoE(SharedStateAddOn, AbstractModule):
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
         }
 
+        # TODO: #41009
         # optimized ops (exclusive to quad with ring fabric) require preallocated tensors for all_to_all_dispatch_metadata
-        if is_ring_fabric(fabric_config) and num_dispatch_device_rows == 16:
+        # if is_ring_fabric(fabric_config) and num_dispatch_device_rows == 16:
+        if False:
             # NOTE: these do not have to be double buffered, due to the synchronization between all_to_all_dispatch_metadata and selective_reduce_combine inside the MoE block
             batch = OPTIMIZED_MOE_BLOCK_USERS_PER_ROW * mesh_device.shape[0]
             preallocated_all_to_all_dispatch_metadata_tensors = (
@@ -302,10 +304,14 @@ class MoE(SharedStateAddOn, AbstractModule):
             batch = OPTIMIZED_MOE_BLOCK_USERS_PER_ROW * mesh_device.shape[0]
             seq_len = 1
 
+            # TODO: #41009
             config["quad_ring_all_to_all_dispatch_metadata"] = AllToAllDispatchMetadataConfig(
-                cluster_axis=0,
                 worker_mode=ttnn.WorkerMode.DIRECT,
                 dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+                drain_sync_tilizer_core=(6, 9),
+                cluster_axis=0,
+                num_links=4,
+                cross_device_semaphore=None,
             )
             config[
                 "quad_ring_all_to_all_dispatch_metadata_sharded_memory_config"
@@ -486,6 +492,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         # optimized ops are exclusive to quad with ring fabric
         if is_ring_fabric(cfg["fabric_config"]) and cfg["num_dispatch_devices"] == 16:
+            # TODO: #41009
             # NOTE: can move towards removing these TMs once optimized moe_gate is integrated
             topk_experts_indices_rm = ttnn.to_layout(
                 topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -546,8 +553,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         chunk_size = min(batch_size_per_device, max(1, cfg.get("moe_chunk_size", batch_size_per_device)))
         output_chunks: list[ttnn.Tensor] = []
 
+        # TODO: #41009
         # optimized ops are exclusive to quad with ring fabric
         if is_ring_fabric(cfg["fabric_config"]) and cfg["num_dispatch_devices"] == 16:
+            # TODO: #41009
             topk_experts_indices_rm = ttnn.to_layout(
                 topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
             )
@@ -558,6 +567,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             ttnn.deallocate(topk_experts_indices)
             ttnn.deallocate(topk_experts_weights)
 
+            # TODO: #41009
             # NOTE: store in DRAM while chunking, as moe_compute requires just about all of L1
             topk_experts_indices_rm = ttnn.permute(
                 topk_experts_indices_rm, (2, 0, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -766,6 +776,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         # NOTE: needs to run prior to all_to_all_dispatch_metadata
         preallocated_combine_output = ttnn.moreh_full(**cfg["quad_ring_moreh_full"])
 
+        # TODO: #41009
         (
             dispatch_output_sparse_buffer,
             dispatch_output_expert_indices,
@@ -775,8 +786,8 @@ class MoE(SharedStateAddOn, AbstractModule):
             topk_experts_indices_rm_sharded,
             topk_experts_weights_rm_sharded,
             cfg["expert_mapping_tensor"],
-            output_tensors=cfg["quad_ring_preallocated_all_to_all_dispatch_metadata_tensors"],
-            **ccl.populate_all_to_all_dispatch_metadata_args(cfg["quad_ring_all_to_all_dispatch_metadata"]),
+            output_tensors=None,
+            **cfg["quad_ring_all_to_all_dispatch_metadata"],
         )
 
         # deallocation required in order to free up L1 space for moe_compute

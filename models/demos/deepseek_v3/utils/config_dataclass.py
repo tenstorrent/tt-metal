@@ -477,6 +477,7 @@ class AllToAllDispatchMetadataConfig(OpConfigBase):
 
     worker_mode: ttnn.WorkerMode
     dispatch_algorithm: ttnn.DispatchAlgorithm
+    drain_sync_tilizer_core: tuple[int, int] | None = None
     cluster_axis: int | None = None
     num_links: int | None = 4
     cross_device_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
