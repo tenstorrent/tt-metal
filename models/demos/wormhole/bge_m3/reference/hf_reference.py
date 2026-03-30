@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 # References:
 # https://huggingface.co/docs/transformers/model_doc/roberta
 

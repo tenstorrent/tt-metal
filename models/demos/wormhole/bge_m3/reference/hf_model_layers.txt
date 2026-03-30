@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 roberta.embeddings.word_embeddings.weight torch.Size([250002, 1024])
 roberta.embeddings.position_embeddings.weight torch.Size([8194, 1024])
 roberta.embeddings.token_type_embeddings.weight torch.Size([1, 1024])
