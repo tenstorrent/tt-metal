@@ -64,6 +64,7 @@ void do_signaling(const experimental::Noc& noc, uint32_t& rt_args_idx) {
         noc_semaphore_set_multicast(pv_semaphore, signalling_semaphore_address, num_signalling_semaphores);
     } else {
         pv_sem.up(noc, pv_core_x, pv_core_y, 1);
+        noc.async_atomic_barrier();
     }
 }
 

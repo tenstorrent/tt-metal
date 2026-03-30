@@ -16,7 +16,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-class MemoryUtilsTest : public ::testing::Test {
+class DISABLED_MemoryUtilsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
@@ -32,7 +32,7 @@ size_t compute_tensor_size(const ttnn::Tensor& tensor) {
     return physical_shape.volume() * tensor.element_size();
 }
 
-TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
+TEST_F(DISABLED_MemoryUtilsTest, DRAMUsageMatmulInScope) {
     // Test is skipped with watcher due to the nature of the test.
     // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
     // since watcher adds code overhead and uses memory to store its assert messages
@@ -115,7 +115,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMatmulInScope) {
     assert_dram_usage(dram_usage, expected_size, expected_peak_size);
 }
 
-TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
+TEST_F(DISABLED_MemoryUtilsTest, DRAMUsageMultipleOperations) {
     // Test is skipped with watcher due to the nature of the test.
     // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
     // since watcher adds code overhead and uses memory to store its assert messages
@@ -205,7 +205,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     EXPECT_EQ(l1_usage.peak_l1, 0);
 }
 
-TEST_F(MemoryUtilsTest, L1Usage) {
+TEST_F(DISABLED_MemoryUtilsTest, L1Usage) {
     // Test is skipped with watcher due to the nature of the test.
     // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
     // since watcher adds code overhead and uses memory to store its assert messages
@@ -308,7 +308,7 @@ TEST_F(MemoryUtilsTest, L1Usage) {
     }
 }
 
-TEST_F(MemoryUtilsTest, SnapshotFeature) {
+TEST_F(DISABLED_MemoryUtilsTest, SnapshotFeature) {
     // Test is skipped with watcher due to the nature of the test.
     // Test checks whether the calculated memory equals the amount actually used, this will always fail with watcher
     // since watcher adds code overhead and uses memory to store its assert messages

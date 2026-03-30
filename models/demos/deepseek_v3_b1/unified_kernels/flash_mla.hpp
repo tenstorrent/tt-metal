@@ -285,7 +285,7 @@ struct FlashMLADecode {
             volatile tt_l1_ptr uint32_t* k_write_next_ptr_shared =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.ncrisc_brisc_sync_semaphore_addr + 12);
             // Reset the other semaphores outside the base offset to 0
-            *ncrisc_brisc_sync_next_ptr = 0;
+            noc_semaphore_set(ncrisc_brisc_sync_next_ptr, 0);
 
             volatile tt_l1_ptr uint32_t* receiver_ready_semaphore_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.receiver_ready_semaphore_addr);
@@ -719,6 +719,7 @@ struct FlashMLADecode {
             }
             cb_push_back(sdpa_output_cb, out_chunk_tiles);
             tile_regs_commit();
+            tile_regs_wait();
             tile_regs_release();
             sdpa_custom_mm_block_uninit();
             MATH(t6_semaphore_wait_on_max<p_stall::STALL_SFPU>(semaphore::FPU_SFPU));
@@ -727,21 +728,19 @@ struct FlashMLADecode {
             constexpr uint32_t num_blocks = vDHt / dst_size;
             constexpr uint32_t block_size = vDHt / num_blocks;
 
-            if (do_reduce) {
+            if (do_reduce && num_cores_to_wait > 0) {
+                reconfig_data_format_srca<false, true>(cb_ms_in);
                 exp_tile_init<exp_approx_mode, false, scale_fp32>();
-                if (num_cores_to_wait > 0) {
-                    reconfig_data_format_srca<false, true>(cb_ms_in);
-                    for (uint32_t i = 0; i < num_cores_to_wait - 1; i++) {
-                        sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(
-                            cb_ms_in, cb_interm_ms, cb_interm_ms, cb_out_in, cb_interm_out, cb_interm_out);
-                    }
-                    if (is_sender_after_reduce) {
-                        sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(
-                            cb_ms_in, cb_interm_ms, cb_out_ms, cb_out_in, cb_interm_out, cb_out_o);
-                    } else {
-                        sdpa_tail<exp_approx_mode, true, block_size, num_blocks, scale_fp32, VectorMode::C>(
-                            cb_ms_in, cb_interm_ms, cb_out_ms, cb_out_in, cb_interm_out, cb_out_final);
-                    }
+                for (uint32_t i = 0; i < num_cores_to_wait - 1; i++) {
+                    sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(
+                        cb_ms_in, cb_interm_ms, cb_interm_ms, cb_out_in, cb_interm_out, cb_interm_out);
+                }
+                if (is_sender_after_reduce) {
+                    sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(
+                        cb_ms_in, cb_interm_ms, cb_out_ms, cb_out_in, cb_interm_out, cb_out_o);
+                } else {
+                    sdpa_tail<exp_approx_mode, true, block_size, num_blocks, scale_fp32, VectorMode::C>(
+                        cb_ms_in, cb_interm_ms, cb_out_ms, cb_out_in, cb_interm_out, cb_out_final);
                 }
             }
 

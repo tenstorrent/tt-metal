@@ -357,8 +357,8 @@ def _build_lm_head_inputs(
 @pytest.mark.parametrize(
     "mode, seq_len, expected_pcc, expected_atol, expected_rtol, expected_perf_us",
     [
-        ("decode", 1, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=1 → 32 tokens
-        ("prefill", 128, 0.97, 1.0, 1.0, 0.0),  # batch=32, seq=128 → 4096 tokens
+        pytest.param("decode", 1, 0.97, 1.0, 1.0, 0.0, id="decode_seq1"),  # batch=32, seq=1 → 32 tokens
+        pytest.param("prefill", 128, 0.97, 1.0, 1.0, 0.0, id="prefill_seq128"),  # batch=32, seq=128 → 4096 tokens
         pytest.param(
             "prefill",
             1024,
@@ -367,6 +367,7 @@ def _build_lm_head_inputs(
             1.0,
             0.0,
             marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+            id="prefill_seq1024",
         ),  # batch=32, seq=1024 → 32768 tokens
         pytest.param(
             "prefill",
@@ -376,6 +377,7 @@ def _build_lm_head_inputs(
             1.0,
             0.0,
             marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+            id="prefill_seq8192",
         ),
         pytest.param(
             "prefill",
@@ -385,6 +387,7 @@ def _build_lm_head_inputs(
             1.0,
             0.0,
             marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+            id="prefill_seq32768",
         ),
         pytest.param(
             "prefill",
@@ -394,6 +397,7 @@ def _build_lm_head_inputs(
             1.0,
             0.0,
             marks=pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI"),
+            id="prefill_seq131072",
         ),  # batch=32, seq=128k
     ],
 )
@@ -571,7 +575,8 @@ def test_ds_lm_head_device_perf(mode, seq_len):
     step_name = f"ds_lm_head_device_perf_{mode}_seq{seq_len}"
     test_path = "models/demos/deepseek_v3/tests/fused_op_unit_tests/lm_head/test_ds_lm_head.py"
     trace_filter = "trace" if mode == "decode" else "eager"
-    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_len} and real_weights"
+    seq_filter = f"seq{seq_len}"
+    expr = f"program_cache and not no_program_cache and {trace_filter} and {mode} and {seq_filter} and real_weights"
     command = f'pytest {test_path}::test_ds_lm_head -k "{expr}"'
 
     perf_profiler.start("run")
