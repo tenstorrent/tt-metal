@@ -1,6 +1,3 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
-# SPDX-License-Identifier: Apache-2.0
-
 add_library(ttnn_op_experimental_deepseek_moe_post_combine_reduce ${LIB_TYPE})
 add_library(
     TTNN::Ops::Experimental::DeepseekMoEPostCombineReduce

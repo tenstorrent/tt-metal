@@ -47,12 +47,13 @@ ttnn::TensorSpec DeepseekMoEPostCombineReduceDeviceOperation::compute_output_spe
         }
     }
 
-    const ttnn::SimpleShape output_shape(output_shape_vec);
+    const ttnn::Shape output_shape(output_shape_vec);
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
     return TensorSpec(
         output_shape,
-        operations::TensorLayout(combine_output.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
+        tt::tt_metal::TensorLayout(
+            combine_output.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
 }
 
 ttnn::Tensor DeepseekMoEPostCombineReduceDeviceOperation::create_output_tensors(
@@ -72,7 +73,7 @@ ttnn::Tensor deepseek_moe_post_combine_reduce(
     const tt::tt_metal::MemoryConfig& output_memory_config) {
     using OperationType = ttnn::experimental::prim::DeepseekMoEPostCombineReduceDeviceOperation;
 
-    return ttnn::device_operation::run<OperationType>(
+    return ttnn::device_operation::launch<OperationType>(
         ttnn::experimental::prim::DeepseekMoEPostCombineReduceParams{expert_dim, output_memory_config},
         ttnn::experimental::prim::DeepseekMoEPostCombineReduceInputs{combine_output, weights});
 }

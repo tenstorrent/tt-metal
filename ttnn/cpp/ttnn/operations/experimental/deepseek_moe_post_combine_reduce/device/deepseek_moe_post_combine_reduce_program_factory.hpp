@@ -4,14 +4,11 @@
 
 #pragma once
 
-#include "deepseek_moe_post_combine_reduce_device_operation.hpp"
+#include "deepseek_moe_post_combine_reduce_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
-
-using DeepseekMoEPostCombineReduceParams = DeepseekMoEPostCombineReduceDeviceOperationImpl::operation_attributes_t;
-using DeepseekMoEPostCombineReduceInputs = DeepseekMoEPostCombineReduceDeviceOperationImpl::tensor_args_t;
 
 struct DeepseekMoEPostCombineReduceProgramFactory {
     struct shared_variables_t {

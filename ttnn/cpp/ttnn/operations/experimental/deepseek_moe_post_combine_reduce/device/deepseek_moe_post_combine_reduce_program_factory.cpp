@@ -24,7 +24,6 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
 
     // Get tensor shapes
     const auto& combine_shape = combine_output.padded_shape();
-    const auto& weight_shape = weights.padded_shape();
 
     const uint32_t expert_dim = operation_attributes.expert_dim;
 
@@ -34,7 +33,6 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     // For simplicity, assume expert_dim is the second-to-last dimension
     const uint32_t emb_dim = combine_shape[-1];
     const uint32_t num_experts = combine_shape[expert_dim];
-    const uint32_t seq_len = combine_shape[expert_dim - 1];
 
     // Calculate total tokens (product of all dims before expert_dim)
     uint32_t num_tokens = 1;
@@ -82,14 +80,14 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     tt::tt_metal::CircularBufferConfig cb_combine_config =
         tt::tt_metal::CircularBufferConfig(combine_cb_size, {{tt::CBIndex::c_0, input_cb_data_format}})
             .set_page_size(tt::CBIndex::c_0, tile_size);
-    auto cb_combine = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_combine_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_combine_config);
 
     // CB1: weights - single scalar weight per expert
     // Single-buffered (one weight at a time)
     tt::tt_metal::CircularBufferConfig cb_weight_config =
         tt::tt_metal::CircularBufferConfig(tile_size, {{tt::CBIndex::c_1, weight_cb_data_format}})
             .set_page_size(tt::CBIndex::c_1, tile_size);
-    auto cb_weight = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_weight_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_weight_config);
 
     // CB16: output - TILE_LAYOUT accumulated result
     // Size: 7 tiles (accumulator for one token's reduced output)
