@@ -9,7 +9,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
 
@@ -63,4 +63,13 @@ def test_reduce_on_batch(shape, shard_shape, dim, interleaved, device):
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=True, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)
+    # test for equivalance
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        pcc_threshold=0.999,
+        rtol=0.008,
+        atol=8.1,
+        frobenius_threshold=0.002,
+        check_ulp=True,
+    )

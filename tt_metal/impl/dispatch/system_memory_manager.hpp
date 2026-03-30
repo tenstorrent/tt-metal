@@ -11,7 +11,6 @@
 #include <umd/device/types/xy_pair.hpp>           // for tt_cxy_pair
 #include <atomic>
 #include <cstdint>
-#include <functional>
 #include <mutex>
 #include <vector>
 #include "impl/context/context_types.hpp"
@@ -19,6 +18,8 @@
 using ChipId = int;
 
 namespace tt::tt_metal {
+
+class Buffer;
 
 class SystemMemoryManager {
 public:
@@ -99,8 +100,16 @@ public:
     void set_current_and_last_completed_event(
         uint8_t cq_id, uint32_t current_event_id, uint32_t last_completed_event_id);
 
+    bool is_dram_backed() const;
+
+    uint32_t get_dram_region_base_addr() const;
+
+    uint32_t get_dram_region_bank_id() const;
+
 private:
     bool is_mock_device() const;
+
+    void init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint16_t channel);
 
     ContextId context_id;
     ChipId device_id = 0;
@@ -121,6 +130,8 @@ private:
     bool bypass_enable = false;
     std::vector<uint32_t> bypass_buffer;
     uint32_t bypass_buffer_write_offset = 0;
+
+    std::unique_ptr<char[]> dram_region_staging_buffer;
 };
 
 }  // namespace tt::tt_metal
