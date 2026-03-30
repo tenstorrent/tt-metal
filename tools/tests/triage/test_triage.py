@@ -80,6 +80,7 @@ def cause_hang_with_app(request):
     build_dir = os.path.join(metal_home, "build")
     app_path_str = os.path.join(build_dir, app)
     os.environ.pop("TT_METAL_LOGS_PATH", None)
+    request.cls.exalens_context = init_ttexalens()
     proc = subprocess.Popen(
         [app_path_str] + args,
         stdout=subprocess.PIPE,
@@ -105,7 +106,6 @@ def cause_hang_with_app(request):
 
     request.cls.app_configuration = app_configuration
     request.cls.expected_results = app_configuration.get("expected_results", {})
-    request.cls.exalens_context = init_ttexalens()
     if app_configuration.get("env", {}).get("TT_METAL_LOGS_PATH"):
         metal_logs_path = app_configuration["env"]["TT_METAL_LOGS_PATH"]
         os.environ["TT_METAL_LOGS_PATH"] = metal_logs_path
