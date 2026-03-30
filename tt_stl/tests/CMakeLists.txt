@@ -14,6 +14,7 @@ target_sources(
         test_span.cpp
         test_strong_type.cpp
         test_small_vector.cpp
+        test_type_visitor.cpp
 )
 target_link_libraries(
     unit_tests_stl_smoke
