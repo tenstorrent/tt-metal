@@ -77,7 +77,6 @@ on:
       - "(Galaxy) unit tests"
       - "(Galaxy) Quick"
       - "(Galaxy) Health"
-      - "(Galaxy) Fast tests"
       - "(Galaxy) DeepSeek tests"
       - "(TG) TG op perf tests"
       - "(TM-DM) Data Movement Test Suite"
