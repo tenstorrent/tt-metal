@@ -710,6 +710,8 @@ jobs:
   generate-master-json-from-db:
     name: 🗄️ Generate Master JSON from Database
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     if: |
       (github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)')) ||
       github.event.schedule == '0 3 * * *' ||
