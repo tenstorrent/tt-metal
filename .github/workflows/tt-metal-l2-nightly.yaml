@@ -274,7 +274,7 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       timeout: ${{ (github.event_name == 'schedule' && 150) || fromJSON(inputs.timeout) }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       # Test group selection - default to all enabled for scheduled runs
@@ -310,7 +310,7 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       timeout: ${{ (github.event_name == 'schedule' && 150) || fromJSON(inputs.timeout) }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   didt-tests:
@@ -328,7 +328,7 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       timeout: 20
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
@@ -344,10 +344,9 @@ jobs:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-cpp-tests) }}
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       gtest_filter: "*NIGHTLY_*"
       nightly-run: true
@@ -364,15 +363,14 @@ jobs:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-blackhole-only) }}
     uses: ./.github/workflows/metal-iommu-unit-tests.yaml
     with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Slow Dispatch Unit Tests
   sd-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_sd_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-sd-fd-tests != '[]'
@@ -385,7 +383,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Fast Dispatch Unit Tests
@@ -401,10 +399,9 @@ jobs:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-sd-fd-tests) }}
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # TTNN Tutorials
   test-ttnn-tutorials:
@@ -419,14 +416,13 @@ jobs:
       matrix:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tutorials) }}
     with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.basic-ttnn-runtime-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   run-profiler-regression:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_profiler_regression) &&
       needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
@@ -439,7 +435,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   tt-train-cpp-unit-tests:
@@ -454,15 +450,14 @@ jobs:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tt-train-tests) }}
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       timeout: 90
       gtest_filter: "*"
   tt-train-cpp-models:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_cpp_model_tests) &&
       needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
@@ -475,11 +470,11 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       timeout: 90
   tt-train-python-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_python_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-tt-train-tests != '[]'
@@ -492,7 +487,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       timeout: 10
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -509,14 +504,13 @@ jobs:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
     uses: ./.github/workflows/models-post-commit.yaml
     with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Triage tests (including hang report generation test)
   triage-tests:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: ${{ needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]' }}
     secrets: inherit
     strategy:
@@ -526,13 +520,13 @@ jobs:
     uses: ./.github/workflows/triage.yaml
     with:
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       run-hang-report-test: true
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
+    needs: [check-harbor, build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_cnn_unit_tests) &&
       needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
@@ -545,5 +539,5 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

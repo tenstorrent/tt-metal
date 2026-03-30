@@ -15,17 +15,12 @@ on:
       product:
         required: true
         type: string
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   sdk-examples:
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
-      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       volumes:
         - /work
         - /dev/hugepages-1G:/dev/hugepages-1G

@@ -65,7 +65,7 @@ on:
         value: ${{ jobs.build-2204.outputs.manylinux-tag }}
       llk-ci-tag:
         description: "Docker tag for LLK CI image (Ubuntu 22.04)"
-        value: ${{ jobs.check-images.outputs.llk-ci-tag }}
+        value: ${{ jobs.preflight.outputs.llk-ci-tag }}
   workflow_dispatch:
     inputs:
       force-rebuild:
@@ -88,6 +88,8 @@ jobs:
       tool-data: ${{ steps.tool-data.outputs.data }}
       platform-2204-data: ${{ steps.platform-2204.outputs.data }}
       platform-2404-data: ${{ steps.platform-2404.outputs.data }}
+      llk-ci-tag: ${{ steps.llk-check.outputs.llk-ci-tag }}
+      llk-needs-build: ${{ steps.llk-check.outputs.llk-needs-build }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
@@ -195,6 +197,30 @@ jobs:
             echo "llk-needs-build=true" >> "$GITHUB_OUTPUT"
           fi
 
+  build-llk:
+    name: "Build LLK CI image"
+    needs: [preflight]
+    if: needs.preflight.outputs.llk-needs-build == 'true'
+    timeout-minutes: 90
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push LLK images
+        shell: bash
+        env:
+          LLK_UBUNTU_BASE_IMAGE: mirror.gcr.io/ubuntu:22.04
+        run: .github/scripts/llk-build-docker-images.sh
+
   # Tool images
   build-tools:
     name: "Build tool images"
@@ -207,11 +233,12 @@ jobs:
   # Ubuntu 22.04: full build; this run also builds manylinux once for all platforms
   build-2204:
     name: "Ubuntu 22.04"
-    needs: [preflight, build-tools]
+    needs: [preflight, build-tools, build-llk]
     if: always() && !failure() && !cancelled()
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       build-manylinux: true
+      skip-llk-build: true
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
       platform-data: ${{ needs.preflight.outputs.platform-2204-data }}
     secrets: inherit
@@ -219,11 +246,12 @@ jobs:
   # Ubuntu 24.04: full build in parallel with build-2204; manylinux is skipped here
   build-2404:
     name: "Ubuntu 24.04"
-    needs: [preflight, build-tools]
+    needs: [preflight, build-tools, build-llk]
     if: always() && !failure() && !cancelled()
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       build-manylinux: false
+      skip-llk-build: true
       tool-tags: ${{ needs.build-tools.outputs.tool-tags }}
       platform-data: ${{ needs.preflight.outputs.platform-2404-data }}
     secrets: inherit
@@ -231,7 +259,7 @@ jobs:
   # Prewarm Harbor cache after all image-producing jobs complete
   prewarm-cache:
     name: "Prewarm cache from GHCR via HARBOR"
-    needs: [preflight, build-tools, build-2204, build-2404]
+    needs: [preflight, build-tools, build-llk, build-2204, build-2404]
     if: always() && !failure() && !cancelled() && needs.preflight.outputs.harbor-prefix != ''
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -313,3 +341,10 @@ jobs:
           harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
           images: ${{ steps.images-2404.outputs.list }}
           title: "Ubuntu 24.04 images"
+
+      - name: Prewarm LLK CI image
+        uses: ./.github/actions/prewarm-images
+        with:
+          harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
+          images: '["${{ needs.preflight.outputs.llk-ci-tag }}"]'
+          title: "LLK CI image"

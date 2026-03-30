@@ -44,10 +44,10 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   tg-op-perf-tests:
-    needs: build-artifact-profiler
+    needs: [check-harbor, build-artifact-profiler]
     secrets: inherit
     uses: ./.github/workflows/tg-op-perf-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-profiler.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}

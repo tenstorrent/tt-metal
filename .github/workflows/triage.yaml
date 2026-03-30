@@ -31,11 +31,6 @@ on:
         description: 'Enable LLK asserts'
         default: false
         type: boolean
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor prefix to use (empty for direct GHCR)"
       run-hang-report-test:
         description: 'Run hang report generation test (intentionally hangs a card)'
         default: false
@@ -45,7 +40,7 @@ jobs:
   triage-tests:
     name: Triage tests ${{ inputs.runner-label }}
     container:
-      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work

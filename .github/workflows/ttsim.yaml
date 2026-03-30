@@ -34,11 +34,6 @@ on:
         required: false
         type: boolean
         default: false
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   ttsim-integration:
@@ -59,7 +54,7 @@ jobs:
     permissions:
       contents: read
     container:
-      image: ${{ inputs.harbor-prefix }}${{ inputs.basic-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.basic-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:
@@ -316,7 +311,7 @@ jobs:
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
     container:
-      image: ${{ inputs.harbor-prefix }}${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:
@@ -404,7 +399,7 @@ jobs:
             cluster_desc: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml
             soc_desc: blackhole_140_arch.yaml
     container:
-      image: ${{ inputs.harbor-prefix }}${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:

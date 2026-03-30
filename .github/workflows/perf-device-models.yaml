@@ -85,11 +85,11 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   device-perf:
-    needs: build-artifact-profiler
+    needs: [check-harbor, build-artifact-profiler]
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-profiler.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
       architecture: ${{ inputs.architecture || '["blackhole", "wormhole_b0"]' }}

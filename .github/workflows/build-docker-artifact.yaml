@@ -8,6 +8,10 @@ name: "Build tt-metal docker artifact"
 #   - platform-data: JSON with all platform tags, exists flags, version info
 #
 # Outputs use the "-tag" suffix (e.g., ci-build-tag, dev-tag).
+#
+# Bake steps use vars.HARBOR_PREFIX for docker-image:// layer contexts on GitHub-hosted
+# runners; runtime pull strings for test jobs use check-harbor + resolve-docker-pull-refs
+# (or inline format) in calling workflows — those are intentionally separate.
 # =============================================================================
 
 permissions:
@@ -49,6 +53,13 @@ on:
         type: string
         default: ""
         description: "JSON from preflight containing all platform tags and existence flags"
+      skip-llk-build:
+        required: false
+        type: boolean
+        default: false
+        description: >-
+          When true, metadata still computes LLK tag / existence, but the build-llk-images job is skipped
+          (caller builds the LLK image separately, e.g. build-all-docker-images).
     outputs:
       ci-build-tag:
         value: ${{ jobs.metadata.outputs.ci_build_tag }}
@@ -71,7 +82,7 @@ on:
       llk-ci-tag:
         # MIGRATION STAGING: requires tt_llk submodule; simplify when LLK moves in-tree
         description: "Docker tag for the LLK CI Docker image (Ubuntu 22.04); requires tt_llk submodule checkout"
-        value: ${{ jobs.check-docker-images.outputs.llk-ci-tag }}
+        value: ${{ jobs.metadata.outputs.llk-ci-tag }}
 
 jobs:
   metadata:
@@ -93,6 +104,16 @@ jobs:
     steps:
       - name: Checkout repo for metadata computation
         if: ${{ inputs.platform-data == '' || inputs.tool-tags == '' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          fetch-depth: 1
+          submodules: recursive
+
+      # When platform-data and tool-tags are both supplied (e.g. from build-all-docker-images preflight),
+      # the checkout above is skipped — still need tt_llk for LLK tag + manifest check.
+      - name: Checkout repo for LLK metadata
+        if: ${{ inputs.platform-data != '' && inputs.tool-tags != '' }}
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref || github.sha }}
@@ -152,7 +173,6 @@ jobs:
           echo "ci_test_venv_tag=$(echo "$PLATFORM_DATA" | jq -r '.ci_test_venv_tag')" >> "$GITHUB_OUTPUT"
           echo "tool_tags=$TOOL_TAGS" >> "$GITHUB_OUTPUT"
 
-     # Dockerfiles and parent build scripts in the hash computation.
       - name: Check LLK CI image
         id: llk-images
         run: |
@@ -387,8 +407,10 @@ jobs:
 
   build-llk-images:
     name: "🐳️ Build LLK Docker images"
-    needs: check-docker-images
-    if: needs.check-docker-images.outputs.llk-ci-exists != 'true'
+    needs: [metadata]
+    if: |
+      needs.metadata.outputs.llk-ci-exists != 'true' &&
+      inputs.skip-llk-build != true
     timeout-minutes: 90
     runs-on: tt-ubuntu-2204-large-stable
     steps:
@@ -414,7 +436,7 @@ jobs:
   # Update 'latest' tags on main branch pushes
   tag-latest:
     name: "🏷️ Update latest tags"
-    needs: [metadata, ubuntu, manylinux]
+    needs: [metadata, ubuntu, manylinux, build-llk-images]
     if: |
       always() && !failure() && !cancelled() &&
       github.event_name == 'push' &&
@@ -471,8 +493,10 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Push latest LLK CI tag"
-        if: needs.check-docker-images.outputs.llk-ci-exists == 'true'
+        if: |
+          needs.metadata.outputs.llk-ci-exists == 'true' ||
+          needs.build-llk-images.result == 'success'
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
-          docker-image-tag: ${{ needs.check-docker-images.outputs.llk-ci-tag }}
+          docker-image-tag: ${{ needs.metadata.outputs.llk-ci-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}

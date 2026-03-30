@@ -33,11 +33,7 @@ on:
         description: "Filter for gtest"
 
 jobs:
-  check-harbor:
-    uses: ./.github/workflows/check-harbor.yaml
-
   data-movement-tests:
-    needs: check-harbor
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -49,7 +45,7 @@ jobs:
               ./build/test/tt_metal/unit_tests_data_movement --gtest_filter=$GTEST_FILTER
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
-      image: ${{ needs.check-harbor.outputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO

@@ -53,12 +53,16 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
@@ -119,7 +123,7 @@ jobs:
           echo "Generated matrix: $matrix_json"
   data-movement-unit-tests:
     uses: ./.github/workflows/tm-data-movement-unit-impl.yaml
-    needs: [build-artifact, generate-matrix]
+    needs: [check-harbor, build-artifact, generate-matrix]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -128,16 +132,16 @@ jobs:
     with:
         arch: ${{ matrix.test-group.arch }}
         runner-label: ${{ matrix.test-group.runner-label }}
-        docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+        docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
         build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
         wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
         gtest_filter: "*-*NIGHTLY_*:*NocEstimator*"
   data-movement-perf-tests:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-tests != false || (github.event_name == 'workflow_call' || github.event_name == 'push') }}
     uses: ./.github/workflows/tm-data-movement-perf-impl.yaml
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

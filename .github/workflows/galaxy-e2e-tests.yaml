@@ -48,17 +48,16 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
   galaxy-e2e-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     uses: ./.github/workflows/galaxy-e2e-tests-impl.yaml
     secrets: inherit
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       # For scheduled runs: hardcode the full list of SKUs you want active.

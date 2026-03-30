@@ -27,18 +27,13 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   smoke:
     timeout-minutes: 30
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
-      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"

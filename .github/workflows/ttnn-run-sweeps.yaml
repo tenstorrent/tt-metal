@@ -769,7 +769,7 @@ jobs:
     # Generates sweep vectors for: single sweeps, model traced, lead models, and non-CCL modules for nightly/comprehensive
     # CCL module generation is handled by ttnn-generate-sweeps-ccl job (only for Nightly/Comprehensive)
     name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }}
-    needs: [build-artifact, generate-master-json-from-db]
+    needs: [check-harbor, build-artifact, generate-master-json-from-db]
     if: always() && needs.build-artifact.result == 'success' && (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
     strategy:
       fail-fast: false
@@ -784,7 +784,7 @@ jobs:
             runner_label: N150
             generate_mode: non_ccl
     container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -873,7 +873,7 @@ jobs:
     # Generates CCL sweep vectors on n300-llmbox - ONLY for Nightly/Comprehensive runs
     # This job is skipped for Lead Models, Model Traced, and single sweep runs (they don't use CCL)
     name: Generate CCL Sweep Vectors (n300-llmbox)
-    needs: [build-artifact]
+    needs: [check-harbor, build-artifact]
     if: |
       always() &&
       needs.build-artifact.result == 'success' &&
@@ -883,7 +883,7 @@ jobs:
         (github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Comprehensive)')
       )
     container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -987,6 +987,7 @@ jobs:
   ttnn-run-single-sweep:
     name: Run single sweep
     needs:
+      - check-harbor
       - ttnn-generate-sweeps
       - build-artifact
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Lead Models)' }}
@@ -1000,7 +1001,7 @@ jobs:
             arch: ${{ github.event.inputs['arch'] || 'wormhole_b0' }}
             runner_label: ${{ github.event.inputs['runner-label'] || 'N150' }}
     container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -1131,6 +1132,7 @@ jobs:
   ttnn-run-sweeps-parallel:
     name: Run sweeps in parallel (${{ matrix.test_group_name }}, ${{ matrix.batch_display }})
     needs:
+      - check-harbor
       - ttnn-generate-sweeps
       - ttnn-generate-sweeps-ccl
       - build-artifact
@@ -1149,7 +1151,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).include }}
     container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -1300,11 +1302,12 @@ jobs:
   ttnn-homogenize-run-result:
     name: Homogenize run result
     needs:
+      - check-harbor
       - build-artifact
       - ttnn-run-sweeps-parallel
     if: ${{ !cancelled() && needs.ttnn-run-sweeps-parallel.result != 'skipped' && needs.ttnn-run-sweeps-parallel.result != 'cancelled' }}
     container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work

@@ -356,11 +356,10 @@ jobs:
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
     container:
       image: >-
-        ${{ inputs.harbor-prefix }}${{
-
-          inputs.ci-build-docker-image ||
-          needs.build-docker-image.outputs.ci-build-tag ||
-          'docker-image-unresolved!' }}
+        ${{
+          (inputs.ci-build-docker-image != '' && inputs.ci-build-docker-image) ||
+          format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!')
+        }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -631,10 +630,10 @@ jobs:
     with:
       python-version: ${{ needs.determine-python-version.outputs.python-version }}
       docker-image: >-
-        ${{ inputs.manylinux-docker-image ||
-            needs.build-docker-image.outputs.manylinux-tag ||
-            'docker-image-unresolved!' }}
-      harbor-prefix: ${{ inputs.harbor-prefix }}
+        ${{
+          (inputs.manylinux-docker-image != '' && inputs.manylinux-docker-image) ||
+          format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!')
+        }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}

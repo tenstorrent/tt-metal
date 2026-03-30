@@ -19,18 +19,13 @@ on:
       wheel-artifact-name:
         required: true
         type: string
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   fabric-cpu-unit-tests:
     name: ${{ inputs.arch }} fabric cpu unit tests
     runs-on: tt-ubuntu-2204-large-stable
     container:
-      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO

@@ -1,4 +1,5 @@
 name: "Build Evaluation Image"
+# Push-oriented workflow (GHCR / optional Harbor evaluation registry). Not part of CI pull-prefix centralization.
 
 permissions:
   packages: write

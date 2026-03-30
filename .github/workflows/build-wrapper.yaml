@@ -54,6 +54,11 @@ on:
         type: number
         default: 500
         description: "Git fetch depth passed through to build-artifact"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor pull-through prefix for CI images (empty to use canonical refs)"
   workflow_dispatch:
     inputs:
       platform:
@@ -101,6 +106,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ inputs.harbor-prefix }}
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -140,6 +146,7 @@ jobs:
             toolchain: "cmake/x86_64-linux-gcc-14-toolchain.cmake"
             build-type: "Release"
     with:
+      harbor-prefix: ${{ inputs.harbor-prefix }}
       platform: ${{ matrix.config.platform }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}

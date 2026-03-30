@@ -50,11 +50,6 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   t3000-fast-tests:
@@ -62,7 +57,7 @@ jobs:
     runs-on:
       - tt-ubuntu-2204-N300-llmbox-stable
     container:
-      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work

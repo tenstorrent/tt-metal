@@ -90,11 +90,6 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor prefix to use (empty for direct GHCR)"
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml internally.
@@ -164,10 +159,18 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
 
+  resolve-docker-pull-refs:
+    needs: [check-harbor, build-docker-image]
+    if: ${{ always() && !failure() && !cancelled() }}
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      ci-build-docker-image: ${{ inputs.ci-build-docker-image || needs.build-docker-image.outputs.ci-build-tag }}
+
   # Full scan: single job that analyzes everything
   clang-tidy-full:
     name: 🤖 Clang Tidy (Full)
-    needs: [ check-harbor, build-docker-image, determine-scan-type ]
+    needs: [resolve-docker-pull-refs, build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
@@ -177,20 +180,16 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
-      ci-build-docker-image: >-
-        ${{ inputs.ci-build-docker-image ||
-            needs.build-docker-image.outputs.ci-build-tag ||
-            'docker-image-unresolved!' }}
+      ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       do-full-scan: 'true'
       merge-base: ''
       prereq-targets: ''
       scan-targets: ''
-      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
     name: 🤖 Clang Tidy (Metalium)
-    needs: [ check-harbor, build-docker-image, determine-scan-type ]
+    needs: [resolve-docker-pull-refs, build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
@@ -200,19 +199,15 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
-      ci-build-docker-image: >-
-        ${{ inputs.ci-build-docker-image ||
-            needs.build-docker-image.outputs.ci-build-tag ||
-            'docker-image-unresolved!' }}
+      ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       do-full-scan: 'false'
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: ''
       scan-targets: 'tt_metal'
-      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
-    needs: [ check-harbor, build-docker-image, determine-scan-type ]
+    needs: [resolve-docker-pull-refs, build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
@@ -222,19 +217,15 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
-      ci-build-docker-image: >-
-        ${{ inputs.ci-build-docker-image ||
-            needs.build-docker-image.outputs.ci-build-tag ||
-            'docker-image-unresolved!' }}
+      ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       do-full-scan: 'false'
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: 'tt_metal'
       scan-targets: 'ttnn'
-      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
-    needs: [ check-harbor, build-docker-image, determine-scan-type ]
+    needs: [resolve-docker-pull-refs, build-docker-image, determine-scan-type ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           needs.determine-scan-type.outputs.do-scan == 'true' &&
@@ -244,30 +235,22 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
-      ci-build-docker-image: >-
-        ${{ inputs.ci-build-docker-image ||
-            needs.build-docker-image.outputs.ci-build-tag ||
-            'docker-image-unresolved!' }}
+      ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       do-full-scan: 'false'
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
-      harbor-prefix: ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}
 
   clang-static-analyzer:
     name: 🔬 Clang Static Analyzer
-    needs: [ check-harbor, build-docker-image ]
+    needs: [resolve-docker-pull-refs, build-docker-image ]
     if: >-
       ${{ always() && !failure() && !cancelled() &&
           (inputs.enable-static-analysis == true || github.event_name == 'schedule') }}
     timeout-minutes: 300
     runs-on: tt-ubuntu-2204-xlarge-stable
     container:
-      image: >-
-        ${{ inputs.harbor-prefix || needs.check-harbor.outputs.harbor-prefix }}${{
-          inputs.ci-build-docker-image ||
-          needs.build-docker-image.outputs.ci-build-tag ||
-          'docker-image-unresolved!'}}
+      image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
       volumes:
         - ${{ github.workspace }}:/work
         # HACK: make actions available inside container

@@ -1,11 +1,13 @@
-# Check if Harbor registry is available and return the appropriate prefix
+# Check if Harbor registry is available and return the appropriate prefix.
+# Orchestrators compose pull-ready image strings by passing this prefix into
+# resolve-docker-pull-refs (or equivalent format()) with canonical ghcr.io tags.
 name: "[internal] Check Harbor Availability"
 
 on:
   workflow_call:
     outputs:
       harbor-prefix:
-        description: "Harbor prefix to use (empty if Harbor is down)"
+        description: "Harbor pull-through prefix from org vars when healthy; empty to pull GHCR directly"
         value: ${{ jobs.check.outputs.harbor-prefix }}
   schedule:
     - cron: '0 * * * *'
