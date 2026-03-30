@@ -176,3 +176,22 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintAllArgumentSizes) {
     TestFormatUpdate(
         "tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp", ttsl::make_span(messages));
 }
+
+// Enum arguments are serialized as their base type on device, with the format string updated to contain
+// /e_<base_type_char>_<fully_qualified_enum_type_name> as the type specifier.
+// The '#' alternate form flag encodes "print full enum type name including value name" on the host side.
+TEST_F(DevicePrintFormatUpdatesFixture, PrintEnumValue) {
+    std::vector<std::string_view> messages = {
+        "Enum1 value: {0,/e_I_test::deep::Enum1}\n"sv,
+        "Enum1 full name value: {0,/e_I_test::deep::Enum1:#}\n"sv,
+        "Enum2 value: {0,/e_I_test_shallow::Enum2}\n"sv,
+        "Enum2 full name value: {0,/e_I_test_shallow::Enum2:#}\n"sv,
+        "EnumClass value: {0,/e_B_EnumClass}\n"sv,
+        "EnumClass full name value: {0,/e_B_EnumClass:#}\n"sv,
+        "BitEnum value: {0,/E_I_flags::BitEnum}\n"sv,
+        "BitEnum full name value: {0,/E_I_flags::BitEnum:#}\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_enum_value.cpp", ttsl::make_span(messages));
+}

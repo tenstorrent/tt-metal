@@ -364,6 +364,23 @@ CPMAddPackage(
 )
 
 ####################################################################################################################
+# libdwarf : https://github.com/davea42/libdwarf-code
+# Portable DWARF debug info parser (no libelf dependency, built-in ELF reader)
+####################################################################################################################
+CPMAddPackage(
+    NAME libdwarf
+    GITHUB_REPOSITORY davea42/libdwarf-code
+    GIT_TAG v0.12.0
+    OPTIONS
+        "BUILD_DWARFDUMP OFF"
+        "BUILD_DWARFEXAMPLE OFF"
+        "BUILD_SHARED_LIBS OFF"
+        "PIC_ALWAYS ON"
+        "BUILD_TESTING OFF"
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
+
+####################################################################################################################
 # Cap'n Proto : https://github.com/capnproto/capnproto
 ####################################################################################################################
 CPMAddPackage(

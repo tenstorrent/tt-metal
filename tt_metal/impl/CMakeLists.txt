@@ -86,6 +86,7 @@ target_link_libraries(
         Metalium::Metal::LLRT
         capnp
         capnp-rpc
+        libdwarf::dwarf-static
 )
 
 target_include_directories(

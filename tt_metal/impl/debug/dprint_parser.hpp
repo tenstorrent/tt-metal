@@ -20,6 +20,8 @@
 #include "hostdev/device_print_common.h"
 #include "hostdev/device_print_structures.h"
 
+#include <unordered_map>
+
 namespace tt::tt_metal {
 
 class DPrintParser {
@@ -93,11 +95,24 @@ public:
 private:
     DevicePrintParser(const std::string& elf_path);
 
+    // Enum debug info extracted from DWARF: maps enumerator integer values to their names.
+    struct EnumInfo {
+        std::string type_name;                                     // Fully-qualified enum type name from format string
+        std::vector<std::pair<int64_t, std::string>> enumerators;  // (value, name) pairs from DWARF
+    };
+
     struct FormatPlaceholderInfo {
         uint32_t arg_id;
         char type_id;
         std::string_view format_spec;  // The part after ':' in the format string, if it exists, including ':' itself.
         std::string fmt_format;        // The full format to be used in fmt::format, e.g. "{0:08x}"
+
+        // Enum-specific fields (populated when type_id marker is '/e' or '/E')
+        std::string_view enum_type_name;      // e.g. "test::deep::Enum1" (view into format string)
+        char enum_base_type_id = 0;           // e.g. 'I' for uint32_t
+        bool enum_is_flag = false;            // true for '/E' (flag/bitmask enum), false for '/e'
+        bool enum_use_full_name = false;      // true when '#' alternate form was specified
+        const EnumInfo* enum_info = nullptr;  // Points into DevicePrintParser::enum_info_cache_; null if no DWARF info
     };
 
     struct ParsedStringInfo {
@@ -126,6 +141,11 @@ private:
     static std::string_view format_message(
         ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer);
 
+    // Loads all enum type definitions from DWARF debug info in the ELF file.
+    void load_enum_info_from_dwarf();
+    // Look up (or lazily load) enum info by fully-qualified type name.
+    const EnumInfo* get_enum_info(std::string_view type_name);
+
     std::string elf_path;
     ll_api::ElfFile elf_file;
     std::span<std::byte> format_strings_info_bytes;
@@ -135,6 +155,14 @@ private:
     DevicePrintStringInfo* string_info_ptr = nullptr;
     size_t string_info_size = 0;
     std::vector<ParsedStringInfo> parsed_string_info;
+    // Enum DWARF info: maps fully-qualified type name -> EnumInfo
+    // Transparent hash/eq to allow lookup by string_view without allocating a std::string.
+    struct StringHash {
+        using is_transparent = void;
+        size_t operator()(std::string_view sv) const { return std::hash<std::string_view>{}(sv); }
+    };
+    std::unordered_map<std::string, EnumInfo, StringHash, std::equal_to<>> enum_info_cache_;
+    bool enum_info_loaded_ = false;
     static std::map<std::string, std::weak_ptr<DevicePrintParser>> parser_cache;
     friend struct DevicePrintParserDeleter;
 };

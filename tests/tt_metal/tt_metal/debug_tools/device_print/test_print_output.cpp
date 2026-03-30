@@ -214,3 +214,25 @@ TEST_F(DevicePrintOutputFixture, PrintAllArgumentSizes) {
 
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp", messages);
 }
+
+// When DWARF debug info is present in the ELF, enum values are printed as their symbolic names.
+// Without '#' the output is just the value name; with '#' the full qualified type::value name is printed.
+// Bit-field enums print each active flag separated by " | ".
+// Unrecognised values are printed as (EnumType)integer.
+TEST_F(DevicePrintOutputFixture, PrintEnumValue) {
+    std::vector<std::string> messages = {
+        // Plain format: only the value name
+        "Enum1 value: Value2",
+        // Alternate form (#): full qualified type name + value name
+        "Enum1 full name value: test::deep::Enum1::Value3",
+        "Enum2 value: ValueB",
+        "Enum2 full name value: test_shallow::Enum2::ValueC",
+        "EnumClass value: ValueY",
+        "EnumClass full name value: EnumClass::ValueZ",
+        // Bit-field enum: active flags joined by " | "
+        "BitEnum value: Flag1 | Flag3",
+        "BitEnum full name value: flags::BitEnum::Flag2 | flags::BitEnum::Flag3",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_enum_value.cpp", messages);
+}
