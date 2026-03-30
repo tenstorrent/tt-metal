@@ -14,3 +14,7 @@
 	path = tt_metal/third_party/tt_llk
 	url = https://github.com/tenstorrent/tt-llk.git
 	branch = main
+[submodule "tt_metal/third_party/tt_ops_code_gen"]
+	path = tt_metal/third_party/tt_ops_code_gen
+	url = https://github.com/tenstorrent/tt_ops_code_gen
+	branch = main
