@@ -385,38 +385,52 @@ inline void calculate_atan() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat sfpu_asin_ratio_poly_direct(sfpi::vFloat val) {
-    // Polynomial in Horner form for asin(z)/z, evaluated over reduced intervals.
-    // asin(z) = z * (1 + c1*z^2 + c2*z^4 + ...).
+    // Polynomial in Horner form for asin(z)/z in u=z^2, evaluated over reduced intervals.
+    // asin(z) = z * P(u).
     sfpi::vFloat z2 = val * val;
-    sfpi::vFloat ratio = PolynomialEvaluator::eval(
-        z2,
-        sfpi::vConst1,
-        0.16666666666666666f,
-        0.075f,
-        0.044642857142857144f,
-        0.030381944444444444f,
-        0.022372159090909091f,
-        0.017352764423076923f,
-        0.01396484375f,
-        0.011551800896139705f,
-        0.009761609529194078f);
+    sfpi::vFloat ratio;
+    if constexpr (!is_fp32_dest_acc_en) {
+        // Low-degree polynomial for reduced-precision destination path; |z| <= 5/8 => u=z^2 <= (5/8)^2.
+        // Single-precision fit to asin(sqrt(u))/sqrt(u) (same Horner depth as atan low path). Regenerate with:
+        // > fpminimax(asin(sqrt(x))/sqrt(x), [|0,1,2,3|], [|single...|], [2^(-40); (5/8)^2], relative);
+        ratio = PolynomialEvaluator::eval(
+            z2,
+            0.999978601932525634765625f,
+            0.16771225631237030029296875f,
+            0.06381262838840484619140625f,
+            0.083148844540119171142578125f);
+    } else {
+        // Higher-degree series coefficients for fp32 destination path.
+        ratio = PolynomialEvaluator::eval(
+            z2,
+            sfpi::vConst1,
+            0.16666666666666666f,
+            0.075f,
+            0.044642857142857144f,
+            0.030381944444444444f,
+            0.022372159090909091f,
+            0.017352764423076923f,
+            0.01396484375f,
+            0.011551800896139705f,
+            0.009761609529194078f);
+    }
     return val * ratio;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat sfpu_asin_range_reduced(sfpi::vFloat val) {
     // Use symmetry + range transform for better accuracy near |x| ~= 1:
     // asin(x) = sign(x) * [pi/2 - 2*asin(sqrt((1-|x|)/2))].
     sfpi::vFloat abs_v = sfpi::abs(val);
     sfpi::vFloat asin_abs = PI_2;
 
-    v_if(abs_v <= 0.625f) { asin_abs = sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE>(abs_v); }
+    v_if(abs_v <= 0.625f) { asin_abs = sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE, is_fp32_dest_acc_en>(abs_v); }
     v_else {
         sfpi::vFloat t = (1.0f - abs_v) * 0.5f;
         sfpi::vFloat root = sfpu_sqrt_custom<APPROXIMATION_MODE>(t);
-        sfpi::vFloat asin_root = sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE>(root);
+        sfpi::vFloat asin_root = sfpu_asin_ratio_poly_direct<APPROXIMATION_MODE, is_fp32_dest_acc_en>(root);
         asin_abs -= 2.0f * asin_root;
     }
     v_endif;
@@ -431,7 +445,7 @@ inline void calculate_asin_acos_impl() {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
         v_if(sfpi::abs(v) <= sfpi::vConst1) {
-            sfpi::vFloat a = sfpu_asin_range_reduced<APPROXIMATION_MODE>(v);
+            sfpi::vFloat a = sfpu_asin_range_reduced<APPROXIMATION_MODE, is_fp32_dest_acc_en>(v);
             if constexpr (IS_ACOS) {
                 result = PI_2 - a;
             } else {
