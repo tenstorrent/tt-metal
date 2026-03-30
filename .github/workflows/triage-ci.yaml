@@ -52,6 +52,10 @@ on:
         description: "Maximum number of disable PRs to attempt in one run"
         required: false
         default: "3"
+      max-attempts-per-item:
+        description: "Maximum attempts per candidate before needs_human"
+        required: false
+        default: "3"
       auto-disable-dry-run:
         description: "If checked, produce plan only and skip push/PR/kickoff execution"
         required: false
@@ -160,6 +164,7 @@ jobs:
           input-json-path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
           stale-hours: ${{ github.event.inputs['stale-hours-threshold'] || '32' }}
           max-actions: ${{ github.event.inputs['max-auto-disable-actions'] || '3' }}
+          max-attempts-per-item: ${{ github.event.inputs['max-attempts-per-item'] || '3' }}
           model: ${{ github.event.inputs['auto-disable-model'] || 'claude-4-sonnet' }}
           dry-run: ${{ github.event.inputs['auto-disable-dry-run'] || 'false' }}
           output-dir: build_ci/auto_disable
