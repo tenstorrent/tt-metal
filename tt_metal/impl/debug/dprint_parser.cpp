@@ -1270,6 +1270,7 @@ void DevicePrintParser::load_enum_info_from_dwarf() {
                     enum_info_cache_[enum_qualified_name] = std::move(info);
                 }
             }
+            dwarf_dealloc(dbg, die_name, DW_DLA_STRING);
 
             // Recurse into children
             Dwarf_Die child = nullptr;
