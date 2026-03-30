@@ -139,6 +139,10 @@ def main() -> int:
             raise Exception(f"analyze_steps returned None. Please check the log {log_path}.")
         print(step_data)
 
+        # Get additional metadata from CI ENV
+        arch_name = get_env("ARCH_NAME", required=False)
+        ci_runner_label = get_env("CI_RUNNER_LABEL", required=False)
+
         # Build metrics payload and write JSON alongside the log
         pydantic_data = tt_train_metrics.TtTrainMetricsData(
             test_ts=current_time,
@@ -156,6 +160,13 @@ def main() -> int:
             device_memory_mb=memory_data["device_memory"],
             last_loss=step_data["last_loss"],
             average_iteration_time_ms=step_data["average_iteration_time_ms"],
+            step_time_1st=step_data["step_time_1st"],
+            step_time_2nd=step_data["step_time_2nd"],
+            step_time_p50=step_data["step_time_p50"],
+            step_time_p95=step_data["step_time_p95"],
+            step_time_p99=step_data["step_time_p99"],
+            arch_name=arch_name,
+            ci_runner_label=ci_runner_label,
         )
         print(pydantic_data)
 
