@@ -179,6 +179,7 @@ class DispatchManager:
     timings: Dict[str, Any] = {}
     _modules_in_progress: List[str] = []
     current_module_name: Optional[str] = None
+    ENABLED = True
 
     @staticmethod
     def set_current_module_name(module_name: Optional[str]) -> None:
@@ -244,7 +245,13 @@ class DispatchManager:
         return rs
 
     @staticmethod
+    def DisableTiming():
+        DispatchManager.ENABLED = False
+
+    @staticmethod
     def record_timing(backend: str, module_name: str, func_name: str, attrs: dict, duration: float) -> None:
+        if not DispatchManager.ENABLED:
+            return
         if backend not in DispatchManager.timings:
             DispatchManager.timings[backend] = {}
         if "TimingEntries" not in DispatchManager.timings:
@@ -995,18 +1002,33 @@ class TracedRun(LightweightRun):
                 trace_idx += 1
 
     @staticmethod
+    def _copy_one_to_trace_buffer(new_val, trace_buf) -> None:
+        """Copy a single value into its pre-allocated trace buffer."""
+        if isinstance(new_val, ttnn.Tensor):
+            ttnn.copy(new_val, trace_buf)
+        elif hasattr(new_val, "ttnn_tensor") and new_val.ttnn_tensor is not None:
+            ttnn.copy(new_val.ttnn_tensor, trace_buf)
+
+    @staticmethod
     def _copy_kwargs_to_trace_buffer(new_kwargs, trace_kwargs) -> None:
-        """Copy new kwargs to trace kwarg buffers."""
+        """Copy new kwargs to trace kwarg buffers.
+
+        Handles both scalar tensors and list/tuple of tensors (e.g.
+        position_embeddings = [cos, sin]).
+        """
         for key, trace_buf in trace_kwargs.items():
             if trace_buf is None:
                 continue
             new_val = new_kwargs.get(key)
             if new_val is None:
                 continue
-            if isinstance(new_val, ttnn.Tensor):
-                ttnn.copy(new_val, trace_buf)
-            elif hasattr(new_val, "ttnn_tensor") and new_val.ttnn_tensor is not None:
-                ttnn.copy(new_val.ttnn_tensor, trace_buf)
+            if isinstance(trace_buf, (list, tuple)):
+                # List/tuple of trace buffers — copy element-wise
+                for tb, nv in zip(trace_buf, new_val):
+                    if tb is not None:
+                        TracedRun._copy_one_to_trace_buffer(nv, tb)
+            else:
+                TracedRun._copy_one_to_trace_buffer(new_val, trace_buf)
 
     @staticmethod
     def _capture_trace(module, func_args, func_kwargs, cache_key) -> TraceEntry:
@@ -1045,33 +1067,64 @@ class TracedRun(LightweightRun):
 
         # Pre-allocate persistent keyword argument buffers
         trace_func_kwargs = {}
-        trace_kwargs_map = {}  # key -> trace buffer
+        trace_kwargs_map = {}  # key -> trace buffer (or list of trace buffers)
+
+        def _alloc_kwarg_tensor(t):
+            """Pre-allocate a single device buffer for a kwarg tensor."""
+            host = t.cpu() if t.storage_type() != ttnn.StorageType.HOST else t
+            return ttnn.to_device(host, device, memory_config=mem_config)
+
         for key, val in func_kwargs.items():
             if isinstance(val, ttnn.Tensor):
-                host_tensor = val.cpu() if val.storage_type() != ttnn.StorageType.HOST else val
-                trace_kwarg = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                trace_kwarg = _alloc_kwarg_tensor(val)
                 trace_kwargs_map[key] = trace_kwarg
                 trace_func_kwargs[key] = trace_kwarg
             elif hasattr(val, "ttnn_tensor") and val.ttnn_tensor is not None:
-                t = val.ttnn_tensor
-                host_tensor = t.cpu() if t.storage_type() != ttnn.StorageType.HOST else t
-                trace_kwarg = ttnn.to_device(host_tensor, device, memory_config=mem_config)
+                trace_kwarg = _alloc_kwarg_tensor(val.ttnn_tensor)
                 trace_kwargs_map[key] = trace_kwarg
                 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
                 trace_func_kwargs[key] = TorchTTNNTensor(trace_kwarg)
+            elif isinstance(val, (list, tuple)):
+                # Handle list/tuple of tensors (e.g. position_embeddings = [cos, sin])
+                bufs = []
+                func_vals = []
+                has_tensors = False
+                for elem in val:
+                    if isinstance(elem, ttnn.Tensor):
+                        tb = _alloc_kwarg_tensor(elem)
+                        bufs.append(tb)
+                        func_vals.append(tb)
+                        has_tensors = True
+                    elif hasattr(elem, "ttnn_tensor") and elem.ttnn_tensor is not None:
+                        tb = _alloc_kwarg_tensor(elem.ttnn_tensor)
+                        bufs.append(tb)
+                        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+                        func_vals.append(TorchTTNNTensor(tb))
+                        has_tensors = True
+                    else:
+                        bufs.append(None)
+                        func_vals.append(elem)
+                if has_tensors:
+                    trace_kwargs_map[key] = bufs
+                    trace_func_kwargs[key] = type(val)(func_vals)
+                else:
+                    trace_func_kwargs[key] = val
             else:
                 trace_func_kwargs[key] = val
 
-        # Warm-up
-        trace_output = module.forward(*func_args, **func_kwargs)
+        # Warm-up — run forward once to populate caches and prime ops.
+        # The warm-up output is discarded; we only keep the trace-capture output.
+        module.forward(*func_args, **func_kwargs)
         # Synchronize device to ensure all warm-up ops (including CCL) complete
         # before starting trace capture. Without this, in-flight CCL ops can
         # cause "Writes/Reads are not supported during trace capture" errors.
         ttnn.synchronize_device(device)
-        # Capture
+        # Capture — the output from THIS forward is the trace_output whose
+        # device buffer will be rewritten by every subsequent execute_trace.
         trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
-        _ = module.forward(*trace_func_args, **trace_func_kwargs)
+        trace_output = module.forward(*trace_func_args, **trace_func_kwargs)
         ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
         ttnn.synchronize_device(device)
 
