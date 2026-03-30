@@ -46,10 +46,12 @@ void kernel_main() {
     const auto output_tensor_dram =
         TensorAccessor(output_tensor_args, output_tensor_buffer_addr, output_tensor_tile_size_bytes);
 
-    uint32_t current_index_tile_id = core_id;
-
     for (uint32_t h = 0; h < Ht; h++) {
         for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
+            const uint32_t current_index_tile_id = core_id + core_loop * total_number_of_cores;
+            if (current_index_tile_id >= Wt_index) {
+                break;
+            }
             // Read input data
             for (uint32_t w = 0; w < Wt_input; w++) {
                 cb_reserve_back(input_tensor_cb_index, one_tile);
@@ -67,7 +69,6 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(output_tensor_cb_index, one_tile);
 
-            current_index_tile_id += total_number_of_cores;
         }  // core_loop_count loop
     }  // h loop
 }
