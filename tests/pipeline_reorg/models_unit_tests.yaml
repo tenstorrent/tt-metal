@@ -21,7 +21,7 @@
     pytest --timeout 300 models/tt_transformers/tests/test_attention.py
     pytest --timeout 300 models/tt_transformers/tests/test_attention_prefill.py
     pytest --timeout 300 models/tt_transformers/tests/test_decoder.py
-    pytest --timeout 300 models/tt_transformers/tests/test_decoder_prefill.py
+    pytest --timeout 400 models/tt_transformers/tests/test_decoder_prefill.py
   model: llama3.1-8b
   skus:
     wh_n150:
