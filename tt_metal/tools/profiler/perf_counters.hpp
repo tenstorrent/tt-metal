@@ -217,11 +217,10 @@ constexpr PerfCounterGroup counter_groups[] = {
     PerfCounterGroup::L1_1,
     PerfCounterGroup::INSTRN};
 constexpr size_t NUM_COUNTER_GROUPS = sizeof(counter_groups) / sizeof(counter_groups[0]);
-constexpr size_t MAX_NUM_COUNTERS_PER_GROUP = 85;  // INSTRN: 61 req + 24 grant
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> fpu_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> unpack_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 20> unpack_counters = {
     {{PerfCounterType::SRCA_WRITE, 261},
      {PerfCounterType::SRCB_WRITE, 259},
      {PerfCounterType::UNPACK0_BUSY_THREAD0, 7},
@@ -245,7 +244,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
 constexpr size_t NUM_UNPACK_COUNTERS = 20;
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> pack_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_BUSY, 18},
      // Additional req counters (WH: active, BH: packer engines 1-3 tied to 0)
@@ -266,7 +265,7 @@ constexpr size_t NUM_PACK_COUNTERS = 14;
 
 // L1 bank 0 counters (MUX_CTRL[6:4] = 0): unpacker, TDMA bundles, ring0 NOC
 // Port 1 differs between architectures: BH has unified packer, WH has unpacker#1/ECC/pack1
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> l1_0_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
     {{PerfCounterType::L1_0_UNPACKER_0, 0},
 #if defined(ARCH_BLACKHOLE)
      {PerfCounterType::L1_0_UNIFIED_PACKER, 1},
@@ -292,7 +291,7 @@ constexpr size_t NUM_L1_0_COUNTERS = 16;
 
 // L1 bank 1 counters (MUX_CTRL[6:4] = 1): packer/risc, ext unpacker, ring1 NOC
 // Port 8 differs between architectures: BH has RISC core, WH has TDMA packer 2
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> l1_1_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_1_counters = {
 #if defined(ARCH_BLACKHOLE)
     {{PerfCounterType::L1_1_RISC_CORE, 0},
 #else
@@ -317,7 +316,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_
 constexpr size_t NUM_L1_1_COUNTERS = 16;
 
 // INSTRN counters (61 counters)
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> instrn_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 85> instrn_counters = {
     {{PerfCounterType::CFG_INSTRN_AVAILABLE_0, 0},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_1, 1},
      {PerfCounterType::CFG_INSTRN_AVAILABLE_2, 2},
@@ -517,18 +516,18 @@ uint32_t get_num_counters_for_counter_group(PerfCounterGroup counter_group) {
     return num_counters;
 }
 
-FORCE_INLINE const std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP>&
-get_counters_for_counter_group(PerfCounterGroup counter_group) {
+FORCE_INLINE const std::pair<PerfCounterType, uint16_t>* get_counters_for_counter_group(
+    PerfCounterGroup counter_group) {
     switch (counter_group) {
-        case PerfCounterGroup::FPU: return fpu_counters;
-        case PerfCounterGroup::UNPACK: return unpack_counters;
-        case PerfCounterGroup::PACK: return pack_counters;
-        case PerfCounterGroup::L1_0: return l1_0_counters;
-        case PerfCounterGroup::L1_1: return l1_1_counters;
-        case PerfCounterGroup::INSTRN: return instrn_counters;
+        case PerfCounterGroup::FPU: return fpu_counters.data();
+        case PerfCounterGroup::UNPACK: return unpack_counters.data();
+        case PerfCounterGroup::PACK: return pack_counters.data();
+        case PerfCounterGroup::L1_0: return l1_0_counters.data();
+        case PerfCounterGroup::L1_1: return l1_1_counters.data();
+        case PerfCounterGroup::INSTRN: return instrn_counters.data();
         default: {
             ASSERT(false);
-            return fpu_counters;
+            return fpu_counters.data();
         }
     }
 }
@@ -549,7 +548,7 @@ void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
     *mux_reg = mux_val;
 }
 
-void start_single_group(PerfCounterGroup counter_group) {
+__attribute__((noinline)) void start_single_group(PerfCounterGroup counter_group) {
     if (counter_group == PerfCounterGroup::L1_0 || counter_group == PerfCounterGroup::L1_1) {
         set_l1_mux_ctrl(counter_group);
     }
@@ -561,14 +560,14 @@ void start_single_group(PerfCounterGroup counter_group) {
     cntl_reg[2] = PERF_CNT_START_VALUE;
 }
 
-void stop_single_group(PerfCounterGroup counter_group) {
+__attribute__((noinline)) void stop_single_group(PerfCounterGroup counter_group) {
     volatile tt_reg_ptr uint32_t* cntl_reg =
         reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
     cntl_reg[2] = 0;
     cntl_reg[2] = PERF_CNT_STOP_VALUE;
 }
 
-void read_single_group(PerfCounterGroup counter_group) {
+__attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group) {
     if (counter_group == PerfCounterGroup::L1_0 || counter_group == PerfCounterGroup::L1_1) {
         set_l1_mux_ctrl(counter_group);
     }
@@ -576,7 +575,7 @@ void read_single_group(PerfCounterGroup counter_group) {
         reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
     volatile tt_reg_ptr uint32_t* read_reg =
         reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_read_register_for_counter_group(counter_group));
-    const auto& counters = get_counters_for_counter_group(counter_group);
+    const auto* counters = get_counters_for_counter_group(counter_group);
     const uint32_t counters_size = get_num_counters_for_counter_group(counter_group);
     for (unsigned int i = 0; i < counters_size; i++) {
         uint32_t counter_sel = counters[i].second;

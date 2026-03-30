@@ -294,6 +294,49 @@ PERF_COUNTER_CSV_HEADERS = [
     "NOC Ring 0 Incoming Backpressure Median (%)",
     "NOC Ring 0 Incoming Backpressure Max (%)",
     "NOC Ring 0 Incoming Backpressure Avg (%)",
+    # Fidelity cycle breakdown
+    "HiFi2 Instrn Rate Min (%)",
+    "HiFi2 Instrn Rate Median (%)",
+    "HiFi2 Instrn Rate Max (%)",
+    "HiFi2 Instrn Rate Avg (%)",
+    "LoFi Instrn Rate Min (%)",
+    "LoFi Instrn Rate Median (%)",
+    "LoFi Instrn Rate Max (%)",
+    "LoFi Instrn Rate Avg (%)",
+    # Math pipeline stall breakdown
+    "Math Src Data Ready Rate Min (%)",
+    "Math Src Data Ready Rate Median (%)",
+    "Math Src Data Ready Rate Max (%)",
+    "Math Src Data Ready Rate Avg (%)",
+    "SrcA Write Port Blocked Rate Min (%)",
+    "SrcA Write Port Blocked Rate Median (%)",
+    "SrcA Write Port Blocked Rate Max (%)",
+    "SrcA Write Port Blocked Rate Avg (%)",
+    "Dest Read Backpressure Min (%)",
+    "Dest Read Backpressure Median (%)",
+    "Dest Read Backpressure Max (%)",
+    "Dest Read Backpressure Avg (%)",
+    "Math Dest Write Port Stall Rate Min (%)",
+    "Math Dest Write Port Stall Rate Median (%)",
+    "Math Dest Write Port Stall Rate Max (%)",
+    "Math Dest Write Port Stall Rate Avg (%)",
+    "Math Scoreboard Stall Rate Min (%)",
+    "Math Scoreboard Stall Rate Median (%)",
+    "Math Scoreboard Stall Rate Max (%)",
+    "Math Scoreboard Stall Rate Avg (%)",
+    # Instruction issue rates (per cycle, not %)
+    "Unpack Instrn Issue Rate T0 Min",
+    "Unpack Instrn Issue Rate T0 Median",
+    "Unpack Instrn Issue Rate T0 Max",
+    "Unpack Instrn Issue Rate T0 Avg",
+    "Math Instrn Issue Rate T1 Min",
+    "Math Instrn Issue Rate T1 Median",
+    "Math Instrn Issue Rate T1 Max",
+    "Math Instrn Issue Rate T1 Avg",
+    "Pack Instrn Issue Rate T2 Min",
+    "Pack Instrn Issue Rate T2 Median",
+    "Pack Instrn Issue Rate T2 Max",
+    "Pack Instrn Issue Rate T2 Avg",
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
@@ -1194,6 +1237,112 @@ def _enrich_ops_from_device_logs(
                     "L1_0_NOC_RING0_INCOMING_1_GRANT",
                 )
 
+            # === Grant counter derived metrics ===
+            # Fidelity cycle breakdown
+            hifi2_rate = {}
+            lofi_rate = {}
+            if has_counter("INSTRN_2_HF_CYCLES") and has_counter("MATH_INSTRN_STARTED"):
+                num = get_counter_series("INSTRN_2_HF_CYCLES")
+                den = get_counter_series("MATH_INSTRN_STARTED")
+                ratio = (num / den * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                hifi2_rate = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+            if has_counter("INSTRN_1_HF_CYCLE") and has_counter("MATH_INSTRN_STARTED"):
+                num = get_counter_series("INSTRN_1_HF_CYCLE")
+                den = get_counter_series("MATH_INSTRN_STARTED")
+                ratio = (num / den * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                lofi_rate = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+
+            # Math source data readiness
+            math_src_ready = {}
+            if has_counter("MATH_INSTRN_NOT_BLOCKED_SRC") and has_counter("MATH_INSTRN_AVAILABLE"):
+                num = get_counter_series("MATH_INSTRN_NOT_BLOCKED_SRC")
+                den = get_counter_series("MATH_INSTRN_AVAILABLE")
+                ratio = (num / den * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                math_src_ready = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+
+            # SrcA write port blocked rate
+            srca_blocked = {}
+            if has_counter("SRCA_WRITE_AVAILABLE") and has_counter("SRCA_WRITE_NOT_BLOCKED_OVR"):
+                avail = get_counter_series("SRCA_WRITE_AVAILABLE")
+                unblocked = get_counter_series("SRCA_WRITE_NOT_BLOCKED_OVR")
+                ratio = ((avail - unblocked) / avail * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                srca_blocked = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+
+            # Dest read backpressure
+            dest_bp = {}
+            if has_counter("PACKER_DEST_READ_AVAILABLE") and has_counter("DEST_READ_GRANTED_0"):
+                req = get_counter_series("PACKER_DEST_READ_AVAILABLE")
+                grant = get_counter_series("DEST_READ_GRANTED_0")
+                ratio = ((req - grant) / req * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                dest_bp = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+
+            # Math dest write port stall and scoreboard stall
+            math_dest_wr_stall = {}
+            math_scoreboard_stall = {}
+            if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("MATH_NOT_STALLED_DEST_WR_PORT"):
+                avail = get_counter_series("MATH_INSTRN_AVAILABLE")
+                unstalled = get_counter_series("MATH_NOT_STALLED_DEST_WR_PORT")
+                ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                math_dest_wr_stall = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+            if has_counter("MATH_INSTRN_AVAILABLE") and has_counter("AVAILABLE_MATH"):
+                avail = get_counter_series("MATH_INSTRN_AVAILABLE")
+                unstalled = get_counter_series("AVAILABLE_MATH")
+                ratio = ((avail - unstalled) / avail * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                math_scoreboard_stall = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+
+            # Instruction issue rates per thread
+            unpack_issue_rate = {}
+            math_issue_rate = {}
+            pack_issue_rate = {}
+            if has_counter("UNPACK_INSTRN_ISSUED_0"):
+                unpack_issue_rate = compute_util_metric("UNPACK_INSTRN_ISSUED_0", scale=1)
+            if has_counter("FPU_INSTRN_ISSUED_1"):
+                math_issue_rate = compute_util_metric("FPU_INSTRN_ISSUED_1", scale=1)
+            if has_counter("PACK_INSTRN_ISSUED_2"):
+                pack_issue_rate = compute_util_metric("PACK_INSTRN_ISSUED_2", scale=1)
+
             # === New metrics: L1 Bank 1 ===
             noc_r1_out_util = {}
             noc_r1_in_util = {}
@@ -1340,6 +1489,22 @@ def _enrich_ops_from_device_logs(
                 # L1 back-pressure
                 assign_metric("NOC Ring 0 Outgoing Backpressure", noc_r0_out_bp)
                 assign_metric("NOC Ring 0 Incoming Backpressure", noc_r0_in_bp)
+
+                # Fidelity cycle breakdown
+                assign_metric("HiFi2 Instrn Rate", hifi2_rate)
+                assign_metric("LoFi Instrn Rate", lofi_rate)
+
+                # Math pipeline stall breakdown
+                assign_metric("Math Src Data Ready Rate", math_src_ready)
+                assign_metric("SrcA Write Port Blocked Rate", srca_blocked)
+                assign_metric("Dest Read Backpressure", dest_bp)
+                assign_metric("Math Dest Write Port Stall Rate", math_dest_wr_stall)
+                assign_metric("Math Scoreboard Stall Rate", math_scoreboard_stall)
+
+                # Instruction issue rates
+                assign_metric("Unpack Instrn Issue Rate T0", unpack_issue_rate, suffix="")
+                assign_metric("Math Instrn Issue Rate T1", math_issue_rate, suffix="")
+                assign_metric("Pack Instrn Issue Rate T2", pack_issue_rate, suffix="")
 
         if perf_counter_df is not None and not perf_counter_df.empty:
             print_efficiency_metrics_summary(pd.DataFrame(host_ops_by_device[device]), device)
@@ -1772,9 +1937,23 @@ def get_device_data_generate_report(
                         "L1 Packer Port Util",
                         "NOC Ring 0 Outgoing Backpressure",
                         "NOC Ring 0 Incoming Backpressure",
+                        "HiFi2 Instrn Rate",
+                        "LoFi Instrn Rate",
+                        "Math Src Data Ready Rate",
+                        "SrcA Write Port Blocked Rate",
+                        "Dest Read Backpressure",
+                        "Math Dest Write Port Stall Rate",
+                        "Math Scoreboard Stall Rate",
                     ]
-                    # IPC metrics (no % suffix)
-                    _ipc_metric_names = ["Thread 0 IPC", "Thread 1 IPC", "Thread 2 IPC"]
+                    # Non-percentage metrics (raw rates)
+                    _ipc_metric_names = [
+                        "Thread 0 IPC",
+                        "Thread 1 IPC",
+                        "Thread 2 IPC",
+                        "Unpack Instrn Issue Rate T0",
+                        "Math Instrn Issue Rate T1",
+                        "Pack Instrn Issue Rate T2",
+                    ]
 
                     agg_metrics = {}
                     for base_name in _pct_metric_names + _ipc_metric_names:

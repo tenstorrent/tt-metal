@@ -392,13 +392,24 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         # L1 back-pressure
         "NOC Ring 0 Outgoing Backpressure",
         "NOC Ring 0 Incoming Backpressure",
+        # Fidelity and math pipeline stall breakdown
+        "HiFi2 Instrn Rate",
+        "LoFi Instrn Rate",
+        "Math Src Data Ready Rate",
+        "SrcA Write Port Blocked Rate",
+        "Dest Read Backpressure",
+        "Math Dest Write Port Stall Rate",
+        "Math Scoreboard Stall Rate",
     ]
 
-    # IPC metrics use no suffix (not percentages)
+    # Non-percentage metrics (raw rates, not %)
     base_metrics_no_pct = [
         "Thread 0 IPC",
         "Thread 1 IPC",
         "Thread 2 IPC",
+        "Unpack Instrn Issue Rate T0",
+        "Math Instrn Issue Rate T1",
+        "Pack Instrn Issue Rate T2",
     ]
 
     # For each base metric, display a table with Min/Median/Max/Avg rows
