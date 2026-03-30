@@ -325,9 +325,9 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     std::array<uint32_t, 4> gamma_shape = {1, 1, 1, shape[3]};
     auto rng = autograd::ctx().get_generator();
     uint32_t seed1 = rng();
-    xt::xarray<float> x_data = ttml::test_utils::make_uniform_xarray<float>(shape, seed1, -1.0F, 1.0F);
+    xt::xarray<float> x_data = ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed1);
     uint32_t seed2 = rng();
-    xt::xarray<float> gamma_data = ttml::test_utils::make_uniform_xarray<float>(gamma_shape, seed2, 0.0F, 1.0F);
+    xt::xarray<float> gamma_data = ttml::test_utils::make_uniform_xarray<float>(gamma_shape, 0.0F, 1.0F, seed2);
 
     // Test forward pass - kernel vs composite
     auto x_kernel = autograd::create_tensor(core::from_xtensor(x_data, device), /* requires_grad */ true);

@@ -108,11 +108,11 @@ void run_softmax_backward_case(
     const uint32_t logits_seed = make_case_seed(test_case, 0xA5A5A5A5U);
     const uint32_t grad_seed = make_case_seed(test_case, 0x5A5A5A5AU);
     xt::xarray<float> logits_tensor = ttml::test_utils::make_uniform_xarray<float>(
-        std::array<std::size_t, 4>{test_case.n, test_case.c, test_case.h, test_case.w}, logits_seed, -10.0F, 10.0F);
+        std::array<std::size_t, 4>{test_case.n, test_case.c, test_case.h, test_case.w}, -10.0F, 10.0F, logits_seed);
     const float grad_min = test_case.grad_min;
     const float grad_max = test_case.grad_max;
     xt::xarray<float> grad_tensor = ttml::test_utils::make_uniform_xarray<float>(
-        std::array<std::size_t, 4>{test_case.n, test_case.c, test_case.h, test_case.w}, grad_seed, grad_min, grad_max);
+        std::array<std::size_t, 4>{test_case.n, test_case.c, test_case.h, test_case.w}, grad_min, grad_max, grad_seed);
 
     const int32_t rank = 4;
     const int32_t normalized_dim = test_case.dim >= 0 ? test_case.dim : rank + test_case.dim;

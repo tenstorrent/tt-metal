@@ -77,7 +77,7 @@ TEST_F(NewtonSchulzOpTest, MuonCoeff) {
     using namespace ttml;
 
     std::array<uint32_t, 4> shape = {1, 1, 32, 128};
-    xt::xarray<float> G_data = ttml::test_utils::make_uniform_xarray<float>(shape, 42U, -1.0F, 1.0F);
+    xt::xarray<float> G_data = ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 42U);
 
     auto G_expected = newtonschulz5_xtensor(G_data, 10, 1e-7f);
 
@@ -92,7 +92,7 @@ TEST_F(NewtonSchulzOpTest, OrthogonalityCheck) {
     using namespace ttml;
 
     std::array<uint32_t, 4> shape = {1, 1, 32, 128};
-    xt::xarray<float> G_data = ttml::test_utils::make_uniform_xarray<float>(shape, 84U, -1.0F, 1.0F);
+    xt::xarray<float> G_data = ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, 84U);
 
     float a = 15.0f / 8.0f;
     float b = -5.0f / 4.0f;

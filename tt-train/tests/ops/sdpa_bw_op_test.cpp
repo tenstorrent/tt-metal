@@ -517,16 +517,16 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     const std::array<std::size_t, 4> query_shape{B, qNH, S, qD};
     const std::array<std::size_t, 4> kv_shape{B, kvNH, S, kvD};
 
-    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, seed, -1.0F, 1.0F);
+    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed);
 
-    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, seed, -1.0F, 1.0F);
+    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
 
-    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, seed, -1.0F, 1.0F);
+    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads
     xt::xarray<float> attn_mask_tensor = generate_attn_mask(query_tensor);
 
-    xt::xarray<float> grad_output_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, seed, -1.0F, 1.0F);
+    xt::xarray<float> grad_output_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed);
 
     const xt::xarray<float> scale_query_tensor = scale_tensor(query_tensor, scale_factor);
     const auto scaled_query = core::from_xtensor(scale_query_tensor, device);

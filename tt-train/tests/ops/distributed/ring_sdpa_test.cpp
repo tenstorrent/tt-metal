@@ -297,9 +297,9 @@ static void TestRingAttention(
     const auto query_seed = rng();
     const auto key_seed = rng();
     const auto value_seed = rng();
-    xt::xarray<float> query_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, query_seed, 0.0F, 2.0F);
-    xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, key_seed, 0.0F, 2.0F);
-    xt::xarray<float> value_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, value_seed, 0.0F, 2.0F);
+    xt::xarray<float> query_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, query_seed);
+    xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, key_seed);
+    xt::xarray<float> value_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, value_seed);
 
     // Create reference mask (full causal)
     std::optional<xt::xarray<float>> ref_mask_xt;
@@ -365,7 +365,7 @@ static void TestRingAttention(
     if (test_backward) {
         const auto grad_seed = rng();
         xt::xarray<float> grad_output_xt =
-            ttml::test_utils::make_uniform_xarray<float>(qkv_shape, grad_seed, 0.0F, 2.0F);
+            ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, grad_seed);
 
         auto ref_grads = reference_sdpa_backward(
             query_xt, key_xt, value_xt, ref_result.attention_weights, grad_output_xt, ref_result.scale);

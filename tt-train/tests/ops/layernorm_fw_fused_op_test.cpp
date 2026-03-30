@@ -74,15 +74,15 @@ static void CompareKernelVsXArray(
         auto& rng = autograd::ctx().get_generator();
         uint32_t seed1 = rng();
         xt::xarray<float> x_data =
-            test_utils::make_uniform_xarray<float>(std::array<std::size_t, 1>{total_elements}, seed1, -1.0F, 1.0F);
+            test_utils::make_uniform_xarray<float>(std::array<std::size_t, 1>{total_elements}, -1.0F, 1.0F, seed1);
 
         uint32_t seed2 = rng();
         xt::xarray<float> gamma_data =
-            test_utils::make_uniform_xarray<float>(std::array<std::size_t, 1>{features}, seed2, 0.5F, 1.5F);
+            test_utils::make_uniform_xarray<float>(std::array<std::size_t, 1>{features}, 0.5F, 1.5F, seed2);
 
         uint32_t seed3 = rng();
         xt::xarray<float> beta_data =
-            test_utils::make_uniform_xarray<float>(std::array<std::size_t, 1>{features}, seed3, -0.1F, 0.1F);
+            test_utils::make_uniform_xarray<float>(std::array<std::size_t, 1>{features}, -0.1F, 0.1F, seed3);
 
         // Compute reference results
         auto [y_ref, mu_ref, rstd_ref] =

@@ -133,7 +133,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     xt::xarray<float> xtensor =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 32, 32}, seed, -0.05F, 0.05F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 32, 32}, -0.05F, 0.05F, seed);
 
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
@@ -160,7 +160,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     xt::xarray<float> xtensor =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 4, 8}, seed, -1.0F, 1.0F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 4, 8}, -1.0F, 1.0F, seed);
 
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
@@ -200,11 +200,11 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     xt::xarray<float> xtensor_a =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 128, 64}, seed, -0.005F, 0.005F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 128, 64}, -0.005F, 0.005F, seed);
 
     uint32_t seed2 = rng();
     xt::xarray<float> xtensor_b =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 64, 256}, seed2, -0.005F, 0.005F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{1, 1, 64, 256}, -0.005F, 0.005F, seed2);
 
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
     auto tensor_a = ttml::core::from_xtensor(xtensor_a, device, ttnn::Layout::TILE, mapper.get());

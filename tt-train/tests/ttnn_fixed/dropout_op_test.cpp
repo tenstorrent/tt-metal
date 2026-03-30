@@ -37,7 +37,7 @@ TEST_F(DropoutTest, TestSeed) {
         fmt::println("Testing shape: {}", shape);
         auto& rng = ttml::autograd::ctx().get_generator();
         uint32_t seed = rng();
-        xt::xarray<float> xtensor_a = ttml::test_utils::make_uniform_xarray<float>(shape, seed, -0.5F, 0.5F);
+        xt::xarray<float> xtensor_a = ttml::test_utils::make_uniform_xarray<float>(shape, -0.5F, 0.5F, seed);
 
         auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
         auto num_cache_before = device->num_program_cache_entries();

@@ -169,15 +169,15 @@ static void run_step_and_compare(const AdamWCase& pc) {
     const uint32_t seed_max_second_moment = g();
 
     // Same data used for all optimizers
-    xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_grad, -1.0F, 1.0F);
-    xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_param, -1.0F, 1.0F);
+    xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_grad);
+    xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_param);
 
     // Generate random momentum states
-    xt::xarray<float> m0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_first_moment, -1.0F, 1.0F);
+    xt::xarray<float> m0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_first_moment);
     xt::xarray<float> v0 =
-        ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_second_moment, 0.0F, 1.0F);  // must be >= 0
+        ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_second_moment);  // must be >= 0
     xt::xarray<float> max_v0 =
-        ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_max_second_moment, 0.0F, 1.0F);  // for amsgrad
+        ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_max_second_moment);  // for amsgrad
 
     // Initial step count (non-zero to test bias correction with accumulated steps)
     const size_t initial_steps = 10;
@@ -397,8 +397,8 @@ TEST_F(StochasticRoundingTest, NIGHTLY_ErrorComparisonOverMultipleSteps) {
     const uint32_t steps = 512U;
     const uint32_t seed = 42U;
 
-    xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(shape, seed, -1.0F, 1.0F);
-    xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(shape, seed + 1, -0.1F, 0.1F);
+    xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed);
+    xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(shape, -0.1F, 0.1F, seed + 1);
 
     xt::xarray<float> w_cpu = w0;
     CPUAdamW cpu_opt(1e-3f, 0.9f, 0.999f, 1e-8f, 0.0f, false);

@@ -36,7 +36,7 @@ TEST_F(ReduceOpTest, TestMeanDim0) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     xt::xarray<float> xtensor_a =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 64, 64}, seed, -0.5F, 0.5F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 64, 64}, -0.5F, 0.5F, seed);
 
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
@@ -59,7 +59,7 @@ TEST_F(ReduceOpTest, TestSumDim0) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     xt::xarray<float> xtensor_a =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 64, 64}, seed, -0.1F, 0.1F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 64, 64}, -0.1F, 0.1F, seed);
 
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
@@ -82,7 +82,7 @@ TEST_F(ReduceOpTest, TestMeanDim3) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     xt::xarray<float> xtensor_a =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 64, 64}, seed, -0.5F, 0.5F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 64, 64}, -0.5F, 0.5F, seed);
 
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
@@ -104,7 +104,7 @@ TEST_F(ReduceOpTest, TestSumDim3) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     xt::xarray<float> xtensor_a =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 64, 64}, seed, -0.1F, 0.1F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 64, 64}, -0.1F, 0.1F, seed);
 
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
@@ -127,7 +127,7 @@ TEST_F(ReduceOpTest, TestMeanLargeDim3) {
     auto& rng = ttml::autograd::ctx().get_generator();
     uint32_t seed = rng();
     xt::xarray<float> xtensor_a =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 512, 1024}, seed, -0.5F, 0.5F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{2, 1, 512, 1024}, -0.5F, 0.5F, seed);
 
     auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
 

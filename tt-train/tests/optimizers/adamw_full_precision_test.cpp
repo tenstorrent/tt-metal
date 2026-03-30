@@ -174,16 +174,16 @@ static void run_steps_and_compare(const AdamWFullPrecisionCase& pc, uint32_t ste
     const uint32_t seed_max_second_moment = g();
 
     // Generate random data
-    xt::xarray<float> w0_fp32 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_param, -1.0F, 1.0F);
-    xt::xarray<float> m0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_first_moment, -1.0F, 1.0F);
+    xt::xarray<float> w0_fp32 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_param);
+    xt::xarray<float> m0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_first_moment);
     xt::xarray<float> v0 =
-        ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_second_moment, 0.0F, 1.0F);  // must be >= 0
+        ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_second_moment);  // must be >= 0
     xt::xarray<float> max_v0 =
-        ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_max_second_moment, 0.0F, 1.0F);
+        ttml::test_utils::make_uniform_xarray<float>(pc.shape, 0.0F, 1.0F, seed_max_second_moment);
 
     // Generate gradient directly as bfloat16
     xt::xarray<bfloat16> g0_bf16 =
-        ttml::test_utils::make_uniform_xarray<bfloat16>(pc.shape, seed_grad, bfloat16{-1.0F}, bfloat16{1.0F});
+        ttml::test_utils::make_uniform_xarray<bfloat16>(pc.shape, bfloat16{-1.0F}, bfloat16{1.0F}, seed_grad);
     auto g0_bf16_tt = to_tt_bf16(g0_bf16);
 
     // Initial step count (non-zero to test bias correction with accumulated steps)

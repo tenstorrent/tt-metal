@@ -18,7 +18,7 @@
 namespace ttml::test_utils {
 
 template <typename T>
-inline void fill_uniform(std::span<T> data, T min, T max, uint32_t seed) {
+inline void fill_uniform(std::span<T> data, const T min, const T max, const uint32_t seed) {
     if constexpr (std::is_integral_v<T>) {
         ttml::core::parallel_generate(data, [min, max]() { return std::uniform_int_distribution<T>(min, max); }, seed);
     } else {
@@ -31,14 +31,14 @@ inline void fill_uniform(std::span<T> data, T min, T max, uint32_t seed) {
 }
 
 template <typename T>
-inline std::vector<T> make_uniform_vector(std::size_t count, T min, T max, uint32_t seed) {
-    std::vector<T> data(count);
+inline std::vector<T> make_uniform_vector(const std::size_t vec_size, const T min, const T max, const uint32_t seed) {
+    std::vector<T> data(vec_size);
     fill_uniform<T>(std::span<T>{data.data(), data.size()}, min, max, seed);
     return data;
 }
 
 template <typename T, typename Shape>
-inline xt::xarray<T> make_uniform_xarray(const Shape& shape, uint32_t seed, T min, T max) {
+inline xt::xarray<T> make_uniform_xarray(const Shape& shape, const T min, const T max, const uint32_t seed) {
     std::vector<std::size_t> xt_shape;
     xt_shape.reserve(std::size(shape));
     for (const auto dim : shape) {

@@ -81,7 +81,7 @@ static void TestRingShift(
     auto& rng = autograd::ctx().get_generator();
     const auto seed = rng();
     const xt::xarray<float> xtensor = ttml::test_utils::make_uniform_xarray<float>(
-        std::array<std::size_t, 4>{batch, 1UL, seq, hidden}, seed, 0.0F, 2.0F);
+        std::array<std::size_t, 4>{batch, 1UL, seq, hidden}, 0.0F, 2.0F, seed);
 
     // Shard tensor across devices along the appropriate dimension
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
@@ -129,7 +129,7 @@ static void TestRingShift(
     if (test_backward_grad) {
         const auto grad_seed = rng();
         xt::xarray<float> grad_data = ttml::test_utils::make_uniform_xarray<float>(
-            std::array<std::size_t, 4>{batch, 1UL, seq, hidden}, grad_seed, 0.0F, 1.0F);
+            std::array<std::size_t, 4>{batch, 1UL, seq, hidden}, 0.0F, 1.0F, grad_seed);
 
         const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, shard_dim, cluster_axis);
         const auto tt_grad_tensor =

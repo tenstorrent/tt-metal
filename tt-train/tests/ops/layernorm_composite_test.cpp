@@ -34,7 +34,7 @@ TEST_F(LayerNormOpTest, CompositeLayerNormOp_0) {
     const uint32_t features = 333;
 
     auto input_data = ttml::test_utils::make_uniform_xarray<float>(
-        std::array<std::size_t, 4>{batch_size, seq_len, heads, features}, 42U, -1.0F, 1.0F);
+        std::array<std::size_t, 4>{batch_size, seq_len, heads, features}, -1.0F, 1.0F, 42U);
 
     auto tensor = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
 

@@ -103,9 +103,9 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
     auto& rng = ttml::autograd::ctx().get_generator();
     const uint32_t seed = rng();
     xt::xarray<float> input_tensor =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, seed, -10.0F, 10.0F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, -10.0F, 10.0F, seed);
     xt::xarray<uint32_t> target_tensor =
-        ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, seed + 1U, 0U, W - 1U);
+        ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, 0U, W - 1U, seed + 1U);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -129,9 +129,9 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
     auto& rng = ttml::autograd::ctx().get_generator();
     const uint32_t seed = rng();
     xt::xarray<float> input_tensor =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, seed, -10.0F, 10.0F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, -10.0F, 10.0F, seed);
     xt::xarray<uint32_t> target_tensor =
-        ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, seed + 1U, 0U, W - 1U);
+        ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, 0U, W - 1U, seed + 1U);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -155,9 +155,9 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
     auto& rng = ttml::autograd::ctx().get_generator();
     const uint32_t seed = rng();
     xt::xarray<float> input_tensor =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, seed, -10.0F, 10.0F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, -10.0F, 10.0F, seed);
     xt::xarray<uint32_t> target_tensor =
-        ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, seed + 1U, 0U, W - 1U);
+        ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, 0U, W - 1U, seed + 1U);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 
@@ -181,9 +181,9 @@ TEST_F(CrossEntropyForwardTest, NIGHTLY_CrossEntropyForward_Huge_Forward) {
     auto& rng = ttml::autograd::ctx().get_generator();
     const uint32_t seed = rng();
     xt::xarray<float> input_tensor =
-        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, seed, -10.0F, 10.0F);
+        ttml::test_utils::make_uniform_xarray<float>(std::array<std::size_t, 4>{N, C, H, W}, -10.0F, 10.0F, seed);
     xt::xarray<uint32_t> target_tensor =
-        ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, seed + 1U, 0U, W - 1U);
+        ttml::test_utils::make_uniform_xarray<uint32_t>(std::array<std::size_t, 2>{N, H}, 0U, W - 1U, seed + 1U);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
 

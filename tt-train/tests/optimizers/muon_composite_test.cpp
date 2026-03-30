@@ -94,8 +94,8 @@ TEST_P(MuonCorrectnessTest, DeviceMatchesCPU) {
     using namespace ttml;
     const auto& tc = GetParam();
 
-    xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(tc.shape, 42U, -1.0F, 1.0F);
-    xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(tc.shape, 43U, -1.0F, 1.0F);
+    xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(tc.shape, -1.0F, 1.0F, 42U);
+    xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(tc.shape, -1.0F, 1.0F, 43U);
 
     // CPU reference
     xt::xarray<float> w_cpu = w0;

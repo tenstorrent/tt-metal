@@ -107,8 +107,8 @@ static void run_steps_and_compare(const ParityCase& pc, uint32_t steps) {
     const uint32_t seed_grad = g();
 
     // Same data used for all optimizers
-    xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_grad, -1.0F, 1.0F);
-    xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, seed_param, -1.0F, 1.0F);
+    xt::xarray<float> g0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_grad);
+    xt::xarray<float> w0 = ttml::test_utils::make_uniform_xarray<float>(pc.shape, -1.0F, 1.0F, seed_param);
 
     xt::xarray<float> g_cpu = g0;
     xt::xarray<float> w_cpu = w0;
