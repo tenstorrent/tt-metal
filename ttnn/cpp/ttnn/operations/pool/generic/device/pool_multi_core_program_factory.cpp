@@ -875,25 +875,27 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         SetRuntimeArgs(program, compute_kernel, core, args);
     }
 
-    // Validate that the CB sizes computed by calculate_pool_cb_sizes match the actual program allocation.
-    // The factory has additional CBs (raw_in_cb, reader_indices, scalar config) that are outside the
-    // pool CB sizing, so we validate the combined total against (local CBs + global allocations).
-    auto temporary_size = calculate_total_cb_size(program);
+    // Validate local and global CB sizes separately to prevent two errors from cancelling out (#23133).
+    // Local CBs are non-globally-allocated (computed by the program); global CBs are tensor-backed.
+    auto actual_local_cb_size = calculate_total_cb_size(program);
 
     uint32_t post_allocate_size =
         input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
-    uint32_t output_cb_size = post_allocate_size == 0 ? 0 : post_allocate_size - memory_used;
+    uint32_t actual_global_cb_size = post_allocate_size == 0 ? 0 : post_allocate_size - memory_used;
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
     // in graph capture NO_DISPATCH mode.
     bool is_graph_capture_no_dispatch_mode = post_allocate_size == 0;
     TT_FATAL(
-        temporary_size + output_cb_size == cb_sizes.total() || is_graph_capture_no_dispatch_mode,
-        "Calculated CB size {} + {} = {} does not match with the expected CB size {}",
-        temporary_size,
-        output_cb_size,
-        temporary_size + output_cb_size,
-        cb_sizes.total());
+        actual_local_cb_size == cb_sizes.local_cb_total() || is_graph_capture_no_dispatch_mode,
+        "Local CB size mismatch: actual {} != expected {}",
+        actual_local_cb_size,
+        cb_sizes.local_cb_total());
+    TT_FATAL(
+        actual_global_cb_size == cb_sizes.global_cb_total() || is_graph_capture_no_dispatch_mode,
+        "Global CB size mismatch: actual {} != expected {}",
+        actual_global_cb_size,
+        cb_sizes.global_cb_total());
 
     {  // debug
         log_debug(tt::LogOp, "raw_in_cb :: PS = {}, NP = {}", raw_in_cb_pagesize, raw_in_cb_npages);
