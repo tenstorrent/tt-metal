@@ -11,18 +11,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-
-// Zero-fill a tile in L1 by reading from the zero-filled memory region.
-inline void fill_tile_zeros(uint32_t write_addr, uint32_t tile_bytes) {
-    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-    uint32_t bytes_left = tile_bytes;
-    while (bytes_left > 0) {
-        uint32_t read_size = (bytes_left > MEM_ZEROS_SIZE) ? MEM_ZEROS_SIZE : bytes_left;
-        noc_async_read(zeros_noc_addr, write_addr, read_size);
-        write_addr += read_size;
-        bytes_left -= read_size;
-    }
-}
+#include "metal/common/dataflow_utils.hpp"
 
 void kernel_main() {
     constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
