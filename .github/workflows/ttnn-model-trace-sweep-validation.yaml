@@ -46,7 +46,15 @@ jobs:
               manifest = yaml.safe_load(f)
 
           targets = manifest.get("targets", {})
-          scope_targets = list(targets.keys())
+          target_keys = set(targets.keys())
+          if target_keys == {"lead_models"}:
+              scope_target = "lead_models"
+          elif target_keys == {"model_traced"}:
+              scope_target = "model_traced"
+          elif {"lead_models", "model_traced"}.issubset(target_keys):
+              scope_target = "all"
+          else:
+              scope_target = "none"
 
           all_models = []
           all_trace_ids = []
@@ -60,7 +68,7 @@ jobs:
 
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
               out.write(f"manifest_path={manifest_path}\n")
-              out.write(f"scope_targets={', '.join(scope_targets) or 'none'}\n")
+              out.write(f"scope_targets={scope_target}\n")
               out.write(f"models={', '.join(unique_models) or 'none'}\n")
               out.write(f"trace_ids={', '.join(str(trace_id) for trace_id in unique_trace_ids) or 'auto-resolve'}\n")
           PY
@@ -73,7 +81,7 @@ jobs:
           echo "├─────────────────────────────────────────────────────────────┤"
           echo "│ Branch/Ref:           ${{ github.ref_name }}"
           echo "│ Manifest:             ${{ steps.parse-manifest.outputs.manifest_path }}"
-          echo "│ Scope Targets:        ${{ steps.parse-manifest.outputs.scope_targets }}"
+          echo "│ Scope Target:         ${{ steps.parse-manifest.outputs.scope_targets }}"
           echo "│ Models:               ${{ steps.parse-manifest.outputs.models }}"
           echo "│ Trace IDs:            ${{ steps.parse-manifest.outputs.trace_ids }}"
           echo "│ Allow Partial Changes:${{ inputs.allow-partial-hash-changes && ' true' || ' false' }}"
@@ -89,7 +97,7 @@ jobs:
 
   validate-model-traces:
     needs: display-manifest-options
-    uses: ./.github/workflows/ttnn-sweep-validation-v2-impl.yaml
+    uses: ./.github/workflows/ttnn-sweep-validation-impl.yaml
     secrets: inherit
     with:
       manifest-path: ${{ needs.display-manifest-options.outputs.manifest-path }}
