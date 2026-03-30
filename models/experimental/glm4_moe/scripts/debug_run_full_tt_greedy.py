@@ -315,6 +315,7 @@ def main() -> int:
 
         print("[debug glm4_moe] prefill ...", flush=True)
         t_pf = time.perf_counter()
+        ttnn.start_tracy_zone(__file__, "prefill_start", 317)
         logits = runner.prefill(
             tokens=prompt_ids,
             prompt_lens=prompt_lens,
@@ -322,6 +323,7 @@ def main() -> int:
             kv_cache=kv_cache,
             seq_pad_multiple=block_size,
         )
+        ttnn.stop_tracy_zone("prefill_end")
         prefill_s = time.perf_counter() - t_pf
         print(f"[debug glm4_moe] prefill_s={prefill_s:.3f}", flush=True)
 
@@ -333,6 +335,7 @@ def main() -> int:
             wpos = torch.tensor([prompt_len] * batch_size, dtype=torch.int32)
             wtok = torch.tensor([[t] for t in next_ids], dtype=torch.int32)
             sp = True if use_sampling else None
+            ttnn.start_tracy_zone(__file__, "decode_warmup", 332)
             _ = runner.decode(
                 tokens=wtok,
                 start_pos=wpos,
@@ -341,10 +344,12 @@ def main() -> int:
                 enable_trace=True,
                 sampling_params=sp,
             )
+            ttnn.stop_tracy_zone("decode_warmup")
 
         step_times: list[float] = []
         t_dec0 = time.perf_counter()
         cur = next_ids
+        ttnn.start_tracy_zone(__file__, "decode_start", 347)
         for step in range(max_new - 1):
             pos = torch.tensor([prompt_len + step] * batch_size, dtype=torch.int32)
             tok_in = torch.tensor([[t] for t in cur], dtype=torch.int32)
@@ -366,6 +371,7 @@ def main() -> int:
             step_times.append((time.perf_counter() - t_step) * 1000)
             for b in range(batch_size):
                 generated[b].append(cur[b])
+        ttnn.stop_tracy_zone("decode_end")
         decode_s = time.perf_counter() - t_dec0
 
         if tok is None:

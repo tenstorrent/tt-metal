@@ -35,11 +35,11 @@ ISL_VALUES = [2000, 4000, 8000, 16000, 32000, 64000, 128000]
 BATCH_SIZES = [1, 2, 4, 8, 16, 20, 24, 28, 30, 32]
 
 BASE_PROMPT = "Summarize the following document. "
-MAX_NEW_TOKENS = 2
+MAX_NEW_TOKENS = 128
 # Galaxy TG-style default (TP×EP mesh); override with --mesh-rows / --mesh-cols
 MESH_ROWS = 8
 MESH_COLS = 4
-PREFILL_CHUNK_SIZE = 32768
+PREFILL_CHUNK_SIZE = 131072
 SCRIPT_PATH = "models/experimental/glm4_moe/scripts/debug_run_full_tt_greedy.py"
 DEFAULT_MODEL_ID = "cerebras/GLM-4.7-REAP-218B-A32B"
 
@@ -80,8 +80,8 @@ def _glm4_moe_sweep_env(
         "GLM4_MOE_REDUCE_IMPL": "native",
         "GLM4_MOE_EP_REDUCE_DEVICE": "1",
         # MoE / prefill
-        "GLM4_MOE_EP_L1": "1",
-        "GLM4_MOE_PREFILL_CHUNK_SIZE": str(prefill_chunk),
+        # "GLM4_MOE_EP_L1": "1",
+        # "GLM4_MOE_PREFILL_CHUNK_SIZE": str(prefill_chunk),
         # Memory / expert weights (matches many lite sweeps using bf4 experts)
         "GLM4_MOE_EXPERTS_TT_DTYPE": "bf4",
     }
