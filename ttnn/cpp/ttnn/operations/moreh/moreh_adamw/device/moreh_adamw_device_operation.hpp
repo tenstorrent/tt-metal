@@ -84,8 +84,7 @@ struct MorehAdamWDeviceOperation {
 };
 }  // namespace ttnn::operations::moreh::moreh_adamw
 
-// Register the operation with the ttnn::register_operation API to make it available to the user as
-// ttnn::prim::adamw
+// Prim function exposed as ttnn::prim::moreh_adamw
 namespace ttnn::prim {
 ttnn::operations::moreh::moreh_adamw::MorehAdamWDeviceOperation::tensor_return_value_t moreh_adamw(
     const Tensor& param_in,

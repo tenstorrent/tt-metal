@@ -133,3 +133,18 @@ TopkRouterGptDeviceOperation::invoke(
 }
 
 }  // namespace ttnn::operations::experimental::topk_router_gpt
+
+namespace ttnn::experimental {
+std::tuple<Tensor, Tensor> topk_router_gpt(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    const ttnn::Tensor& bias_tensor,
+    uint32_t k,
+    uint32_t num_experts) {
+    auto [operation_attributes, tensors_args] =
+        operations::experimental::topk_router_gpt::TopkRouterGptDeviceOperation::invoke(
+            input_tensor, weight_tensor, bias_tensor, k, num_experts);
+    return ttnn::device_operation::detail::invoke<
+        operations::experimental::topk_router_gpt::TopkRouterGptDeviceOperation>(operation_attributes, tensors_args);
+}
+}  // namespace ttnn::experimental
