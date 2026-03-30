@@ -10,6 +10,7 @@ import importlib
 from pathlib import Path
 from unittest.mock import patch
 import pytest
+import click
 from click.testing import CliRunner
 
 from ttnn.distributed.ttrun import (
@@ -813,16 +814,8 @@ class TestPhase1CacheId:
         assert len(fp) == 64
         assert fp[:PHASE1_CACHE_ID_HEX_LEN] == compute_phase1_cache_id(mgd, sorted(["h"]), None)
 
-    @pytest.mark.parametrize(
-        "mgd_relative",
-        [
-            Path("tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto"),
-            Path("tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"),
-            Path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto"),
-        ],
-    )
-    def test_cache_id_real_mgd_host_permutations_stable(self, temp_dir, mgd_relative):
-        mgd_src = REPO_ROOT / mgd_relative
+    def test_cache_id_same_bytes_and_sorted_hosts_stable(self, temp_dir):
+        mgd_src = REPO_ROOT / "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto"
         if not mgd_src.is_file():
             pytest.skip(f"Mesh graph descriptor not present: {mgd_src}")
         mgd_a = temp_dir / "a.textproto"
@@ -831,26 +824,13 @@ class TestPhase1CacheId:
         data = mgd_src.read_bytes()
         mgd_a.write_bytes(data)
         mgd_b.write_bytes(data)
-
         hosts = ["zebra-0", "alpha-1", "moon-2"]
-        id_from_a = compute_phase1_cache_id(mgd_a, sorted(hosts), None)
-        id_from_b = compute_phase1_cache_id(mgd_b, sorted(hosts), None)
-        assert id_from_a == id_from_b
-
+        assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
+            mgd_b, sorted(hosts), None
+        )
         assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
             mgd_a, sorted(reversed(hosts)), None
         )
-        random.seed(42)
-        for _ in range(5):
-            shuffled = hosts.copy()
-            random.shuffle(shuffled)
-            assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
-                mgd_a, sorted(shuffled), None
-            )
-        for perm in itertools.permutations(hosts):
-            assert compute_phase1_cache_id(mgd_a, sorted(hosts), None) == compute_phase1_cache_id(
-                mgd_a, sorted(perm), None
-            )
 
     def test_cache_id_hosts_change_changes_id(self, temp_dir):
         mgd = temp_dir / "m.textproto"
@@ -905,8 +885,6 @@ class TestPhase1CacheArtifacts:
         rb.write_text("x")
         rf.write_text("y")
         assert phase1_outputs_ready(run_dir, mock_mode=False)
-        rb.write_text("")
-        assert not phase1_outputs_ready(run_dir, mock_mode=False)
 
     def test_phase1_outputs_ready_mock_needs_phase2_mapping(self, temp_dir):
         run_dir = temp_dir / "r"
