@@ -822,8 +822,8 @@ def catalog():
             }
         )
 
-    # Add known future trainers that aren't implemented yet
-    future_trainers = {"grpo"}
+    # Placeholder for future trainers not yet in the registry
+    future_trainers: set = set()
     for trainer_id in sorted(future_trainers - set(TRAINING_TYPES.keys())):
         trainers.append(
             {
