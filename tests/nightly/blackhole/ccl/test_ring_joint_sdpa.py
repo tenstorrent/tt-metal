@@ -176,6 +176,18 @@ class MLAConfig:
     nhq: int = 0
     nhv: int = 0
 
+    @property
+    def seq_lens(self) -> List[int]:
+        """Extract unique sequence lengths from workloads."""
+        return list(dict.fromkeys(w[0] for w in self.workloads))
+
+    def get_chunk_sizes(self, seq_len_per_device: int) -> Tuple[int, int]:
+        """Get (q_chunk_size, k_chunk_size) for a given sequence length."""
+        for seq_len, q_chunk, k_chunk in self.workloads:
+            if seq_len == seq_len_per_device:
+                return (q_chunk, k_chunk)
+        raise ValueError(f"No workload found for seq_len_per_device={seq_len_per_device}")
+
     @classmethod
     def from_hardware(cls, hw: "HardwareConfig") -> "MLAConfig":
         """Create MLAConfig with hardware-specific values resolved."""
@@ -313,11 +325,29 @@ def compute_ring_joint_cores_used(seqlen, q_chunk_size, compute_cores, num_heads
     return cores_used
 
 
-def compute_ring_joint_utilization(local_seqlen, total_seqlen, head_dim, num_heads_per_device, duration_ns, core_count):
+def compute_sdpa_flops(sq, sk, d_q, d_v, num_heads, is_causal=False):
+    """
+    Compute FLOPs for SDPA operation.
+
+    Matches sdpa_perf_model.cpp calculation:
+    - Q*K matmul: 2 * d_q * Sq * Sk FLOPs
+    - attn*V matmul: 2 * d_v * Sq * Sk FLOPs
+    - Causal: divide by 2 (only half the attention matrix computed)
+    """
+    flops = 2 * sq * sk * (d_q + d_v) * num_heads
+    if is_causal:
+        flops //= 2
+    return flops
+
+
+def compute_ring_joint_utilization(
+    local_seqlen, total_seqlen, d_q, d_v, num_heads_per_device, duration_ns, core_count, is_causal=False
+):
     """
     Compute math utilization for ring joint attention.
     """
-    mm_flops = 4 * local_seqlen * total_seqlen * head_dim * num_heads_per_device
+    mm_flops = compute_sdpa_flops(local_seqlen, total_seqlen, d_q, d_v, num_heads_per_device, is_causal)
+
     cycles = duration_ns * BLACKHOLE_CLOCK_GHZ
     theoretical_flops = core_count * cycles * MM_FLOPS_PER_CYCLE_PER_CORE
     utilization = (mm_flops / theoretical_flops) * 100
@@ -435,6 +465,16 @@ def run_ring_joint_sdpa(
         d_v = d_q
     if kv_dtype is None:
         kv_dtype = q_dtype
+
+    logger.debug(
+        f"run_ring_joint_sdpa params: b={b}, nhq={nhq}, nhk={nhk}, nhv={nhv}, "
+        f"sq={sq}, d_q={d_q}, d_k={d_k}, d_v={d_v}, "
+        f"q_chunk={q_chunk_size}, k_chunk={k_chunk_size}, "
+        f"q_dtype={q_dtype}, kv_dtype={kv_dtype}, "
+        f"is_causal={is_causal}, is_balanced={is_balanced}, "
+        f"pcc_threshold={pcc_threshold}, rmse_threshold={rmse_threshold}, "
+        f"do_check={do_check}, num_iterations={num_iterations}"
+    )
 
     # Ensure reproducible results
     torch.manual_seed(1234)
@@ -1023,48 +1063,67 @@ def test_ring_joint_attention_sdpa_determinism(
 
 
 # === TEST 4: PERFORMANCE TABLE GENERATOR (skipped on CI) ===
-def _get_wan_perf_table_params():
-    """Generate WAN performance table parameters based on hardware."""
+def _get_perf_table_params():
+    """Generate performance table parameters for both WAN and MLA models."""
     hw = HardwareConfig.detect()
     if hw.num_devices < 2:
         return [], []
 
-    wan = WANConfig.from_hardware(hw)
-
     params = []
     ids = []
+
+    # WAN parameters
+    wan = WANConfig.from_hardware(hw)
     for seq_len_per_device in wan.seq_lens:
-        total_seq_len = seq_len_per_device * hw.sp_size
-        total_heads = wan.nhq * hw.tp_size
-        params.append((BATCH_SIZE, total_heads, total_seq_len, wan.d_q, seq_len_per_device))
+        params.append(("wan", seq_len_per_device))
         ids.append(f"wan-{seq_len_per_device}")
+
+    # MLA parameters
+    mla = MLAConfig.from_hardware(hw)
+    for seq_len_per_device in mla.seq_lens:
+        params.append(("mla", seq_len_per_device))
+        ids.append(f"mla-{seq_len_per_device}")
 
     return params, ids
 
 
-_WAN_PERF_PARAMS, _WAN_PERF_IDS = _get_wan_perf_table_params()
+_PERF_PARAMS, _PERF_IDS = _get_perf_table_params()
 
 
 @pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
 @pytest.mark.timeout(1000)
 @pytest.mark.parametrize(
-    "b, nh, s, d, seq_len_per_device",
-    _WAN_PERF_PARAMS,
-    ids=_WAN_PERF_IDS,
+    "model_name, seq_len_per_device",
+    _PERF_PARAMS,
+    ids=_PERF_IDS,
 )
-def test_ring_joint_attention_create_perf_table(b, nh, s, d, seq_len_per_device):
+def test_ring_joint_attention_create_perf_table(model_name, seq_len_per_device):
     """
-    Sweep chunk sizes for ring joint attention SDPA (WAN only) and print a performance table.
+    Sweep chunk sizes for ring joint attention SDPA and print a performance table.
+    Supports both WAN and MLA configurations.
     Skipped on CI - run locally with tracy profiler.
     """
     from tracy.process_model_log import run_device_profiler
 
     hw = HardwareConfig.detect()
-    wan = WANConfig.from_hardware(hw)
     ring_size = hw.sp_size
 
     if ring_size < 2:
         pytest.skip(f"Ring joint attention requires at least 2 devices, got {ring_size}")
+
+    # Select config based on model name
+    if model_name == "wan":
+        config = WANConfig.from_hardware(hw)
+    else:
+        config = MLAConfig.from_hardware(hw)
+
+    # Derive values from config
+    b = BATCH_SIZE
+    s = seq_len_per_device * hw.sp_size  # Total sequence length
+    nh = config.nhq * hw.tp_size  # Total heads
+    d_q = config.d_q  # Query/Key head dimension
+    d_v = config.d_v  # Value head dimension
+    is_causal = config.is_causal
 
     # Use hardware config values (cannot query device due to TLB conflicts with subprocess tests)
     full_grid_rows = hw.grid_rows
@@ -1077,12 +1136,19 @@ def test_ring_joint_attention_create_perf_table(b, nh, s, d, seq_len_per_device)
     subdir = "ttnn_ring_joint_sdpa_performance"
     perf_results = []
 
-    for q_chunk_size, k_chunk_size in product(wan.q_chunk_sizes, wan.k_chunk_sizes):
-        float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]"]
+    # Get chunk size combinations to sweep
+    if model_name == "wan":
+        chunk_combinations = list(product(config.q_chunk_sizes, config.k_chunk_sizes))
+    else:
+        # MLA: single chunk size pair per sequence length from workloads
+        chunk_combinations = [config.get_chunk_sizes(seq_len_per_device)]
+
+    for q_chunk_size, k_chunk_size in chunk_combinations:
+        float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]", "PM FPU UTIL (%)"]
         cols = ["ATTRIBUTES"]
 
-        # New test ID format: wan-{seq_len_per_device}-q{q_chunk}-k{k_chunk}
-        test_id = f"wan-{seq_len_per_device}-q{q_chunk_size}-k{k_chunk_size}"
+        # Test ID format: {model}-{seq_len_per_device}-q{q_chunk}-k{k_chunk}
+        test_id = f"{model_name}-{seq_len_per_device}-q{q_chunk_size}-k{k_chunk_size}"
         command = (
             f"pytest tests/nightly/blackhole/ccl/"
             f"test_ring_joint_sdpa.py::"
@@ -1100,6 +1166,9 @@ def test_ring_joint_attention_create_perf_table(b, nh, s, d, seq_len_per_device)
             duration_ns = (
                 int(r["DEVICE KERNEL DURATION [ns]"].max()) if len(r["DEVICE KERNEL DURATION [ns]"]) > 0 else 0
             )
+            fpu_util_col = r.get("PM FPU UTIL (%)", [])
+            fpu_util_min = float(fpu_util_col.min()) if len(fpu_util_col) > 0 else 0.0
+            fpu_util_max = float(fpu_util_col.max()) if len(fpu_util_col) > 0 else 0.0
 
             local_seq_len = s // ring_size
 
@@ -1136,7 +1205,7 @@ def test_ring_joint_attention_create_perf_table(b, nh, s, d, seq_len_per_device)
             effective_cores = measured_core_count - measured_core_count % 10
             heads_per_device = nh / hw.tp_size
             utilization = compute_ring_joint_utilization(
-                local_seq_len, s, d, heads_per_device, duration_ns, effective_cores
+                local_seq_len, s, d_q, d_v, heads_per_device, duration_ns, effective_cores, is_causal
             )
 
             ring_efficiency = (cores_used * 100.0) / total_cores
@@ -1158,6 +1227,8 @@ def test_ring_joint_attention_create_perf_table(b, nh, s, d, seq_len_per_device)
                     "duration_ns": duration_ns,
                     "duration_ms": duration_ns / 1e6,
                     "utilization": utilization,
+                    "fpu_util_min": fpu_util_min,
+                    "fpu_util_max": fpu_util_max,
                 }
             )
             logger.info(
@@ -1184,27 +1255,30 @@ def test_ring_joint_attention_create_perf_table(b, nh, s, d, seq_len_per_device)
     valid_results = [r for r in perf_results if r["duration_ns"] is not None]
     valid_results.sort(key=lambda x: x["duration_ns"])
 
-    mm_flops = 4 * s * s * d * nh
+    mm_flops = compute_sdpa_flops(s, s, d_q, d_v, nh, is_causal)
 
     # Print summary table
     print(f"\n{'='*190}")
-    print(f"Ring Joint Attention Performance Sweep: b={b}, nh={nh}, s={s}, d={d}")
+    print(
+        f"Ring Joint Attention Performance Sweep ({model_name.upper()}): b={b}, nh={nh}, s={s}, d_q={d_q}, d_v={d_v}, causal={is_causal}"
+    )
     print(f"Architecture: {hw.arch_type}, Ring size: {ring_size} devices")
     print(f"Total MM FLOPs (all devices): {mm_flops:,} ({mm_flops/1e9:.2f} GFLOPs)")
     print(f"Per-device workload: Q={s // ring_size} tokens, K/V={s} tokens (via ring), {nh} heads")
     print(f"Core Allocation: {total_compute_cores} compute + {ccl_cores} CCL = {total_cores} total cores")
     print(f"{'='*190}")
-    header = "| Rank | q_chunk | k_chunk | Duration (ms) | Compute Used | Compute Idle | Compute Util | CCL Cores | Ring Eff | Iters/Core | Pad Waste | Slot Waste | Math Util |"
-    sep = "|------|---------|---------|---------------|--------------|--------------|--------------|-----------|----------|------------|-----------|------------|-----------|"
+    header = "| Rank | q_chunk | k_chunk | Duration (ms) | Compute Used | Compute Idle | Compute Util | CCL Cores | Ring Eff | Iters/Core | Pad Waste | Slot Waste | FPU Util (%)  | Math Util |"
+    sep = "|------|---------|---------|---------------|--------------|--------------|--------------|-----------|----------|------------|-----------|------------|---------------|-----------|"
     print(header)
     print(sep)
 
     for rank, result in enumerate(valid_results, 1):
+        fpu_range = f"{result['fpu_util_min']:.1f}-{result['fpu_util_max']:.1f}"
         print(
             f"| {rank:4d} | {result['q_chunk_size']:7d} | {result['k_chunk_size']:7d} | {result['duration_ms']:13.3f} | "
             f"{result['cores_used']:12d} | {result['cores_idle']:12d} | {result['compute_util_pct']:11.0f}% | "
             f"{result['ccl_cores']:9d} | {result['ring_efficiency']:7.0f}% | {result['iters_per_core']:10d} | "
-            f"{result['total_waste_pct']:8.1f}% | {result['slot_waste_pct']:9.1f}% | {result['utilization']:8.1f}% |"
+            f"{result['total_waste_pct']:8.1f}% | {result['slot_waste_pct']:9.1f}% | {fpu_range:>13} | {result['utilization']:8.1f}% |"
         )
 
     failed_results = [r for r in perf_results if r["duration_ns"] is None]
