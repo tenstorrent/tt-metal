@@ -871,9 +871,7 @@ TEST_F(TestScopedGraphCapture, ExactBufferTypeAndMaxSizePerBankTest) {
 
             ASSERT_TRUE(params.contains(ttnn::graph::kExactBufferType))
                 << "buffer_allocate should contain exact_buffer_type";
-            EXPECT_TRUE(params.at(ttnn::graph::kExactBufferType).is_string());
-            auto exact_type = params.at(ttnn::graph::kExactBufferType).get<std::string>();
-            EXPECT_FALSE(exact_type.empty());
+            EXPECT_TRUE(params.at(ttnn::graph::kExactBufferType).is_number_integer());
 
             ASSERT_TRUE(params.contains(ttnn::graph::kMaxSizePerBank))
                 << "buffer_allocate should contain max_size_per_bank";
@@ -953,7 +951,7 @@ TEST_F(TestScopedGraphCapture, DeallocateContainsExactBufferTypeTest) {
             EXPECT_TRUE(params.contains(ttnn::graph::kExactBufferType))
                 << "buffer_deallocate should contain exact_buffer_type";
             if (params.contains(ttnn::graph::kExactBufferType)) {
-                EXPECT_TRUE(params.at(ttnn::graph::kExactBufferType).is_string());
+                EXPECT_TRUE(params.at(ttnn::graph::kExactBufferType).is_number_integer());
             }
             EXPECT_TRUE(params.contains(ttnn::graph::kAddress)) << "buffer_deallocate should contain address";
         }
