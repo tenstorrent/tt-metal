@@ -154,8 +154,27 @@ class Molmo2Model(LightweightModule):
         n_out = pooled_patches_idx.shape[1]
         k_pool = pooled_patches_idx.shape[2]
 
-        # Patch embedding on TTNN: CPU unfold only, linear+pos_embed on device
-        embedded_ttnn = self.vision_backbone.image_vit.patch_embed_ttnn(pixel_values)
+        image_vit = self.vision_backbone.image_vit
+        _, _, height, width = pixel_values.shape
+        patches_h = height // image_vit.patch_size
+        patches_w = width // image_vit.patch_size
+        native_patch_grid = patches_h == patches_w == image_vit.base_num_patches_per_side
+
+        # Multi-frame / multi-crop on native 378 grid: one ViT forward per crop (seq 729) then
+        # concat, matching forward_with_patch_embed — avoids huge seq_len in L1 width-sharded linears.
+        precomputed_features = None
+        embedded_ttnn = None
+        if batch_size > 1 and native_patch_grid:
+            crop_feats = []
+            for crop_idx in range(batch_size):
+                emb = image_vit.patch_embed_ttnn(pixel_values[crop_idx : crop_idx + 1])
+                crop_feats.append(self.vision_backbone.encode_image(emb))
+                ttnn.deallocate(emb)
+            precomputed_features = ttnn.concat(crop_feats, dim=2)
+            for t in crop_feats:
+                ttnn.deallocate(t)
+        else:
+            embedded_ttnn = image_vit.patch_embed_ttnn(pixel_values)
 
         # Prepare gather indices and masks (CPU, fast)
         valid = pooled_patches_idx >= 0
@@ -190,16 +209,18 @@ class Molmo2Model(LightweightModule):
         )
 
         visual_embeddings = self.vision_backbone.forward_ttnn(
-            images_embedded=embedded_ttnn,
             pooled_patches_idx_ttnn=idx_ttnn,
             valid_mask_ttnn=valid_mask_ttnn,
             valid_token_ttnn=valid_token_ttnn,
             n_out=n_out,
             k_pool=k_pool,
             batch_size=batch_size,
+            images_embedded=embedded_ttnn,
+            image_features=precomputed_features,
         )
 
-        ttnn.deallocate(embedded_ttnn)
+        if embedded_ttnn is not None:
+            ttnn.deallocate(embedded_ttnn)
         ttnn.deallocate(idx_ttnn)
         ttnn.deallocate(valid_mask_ttnn)
         ttnn.deallocate(valid_token_ttnn)

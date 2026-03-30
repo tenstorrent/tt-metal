@@ -17,7 +17,7 @@ Pipeline:
     6. Filter by valid_token mask: [valid_tokens, 4096]
 """
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 
@@ -374,13 +374,14 @@ class VisionBackbone(LightweightModule):
 
     def forward_ttnn(
         self,
-        images_embedded: ttnn.Tensor,
         pooled_patches_idx_ttnn: ttnn.Tensor,
         valid_mask_ttnn: ttnn.Tensor,
         valid_token_ttnn: ttnn.Tensor,
         n_out: int,
         k_pool: int,
         batch_size: int = 1,
+        images_embedded: Optional[ttnn.Tensor] = None,
+        image_features: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """
         Full forward pass using TTNN ops (traceable).
@@ -388,21 +389,28 @@ class VisionBackbone(LightweightModule):
         This version keeps everything in TTNN to enable tracing.
 
         Args:
-            images_embedded: Embedded image patches [1, 1, B*T*N, hidden_dim]
             pooled_patches_idx_ttnn: Flattened indices [1, B*N_out*K_pool] (clipped to >= 0)
             valid_mask_ttnn: Valid mask [1, 1, B*N_out*K_pool, 1] for masking gathered features
             valid_token_ttnn: Valid token mask [B*N_out] for final filtering
             n_out: Number of output positions
             k_pool: Pooling kernel size
             batch_size: Batch size (default 1)
+            images_embedded: Embedded image patches [1, 1, B*T*N, hidden_dim]. Required unless
+                ``image_features`` is passed (e.g. per-crop ViT assembled upstream).
+            image_features: Multi-scale ViT output [1, 1, B*T*N, pool_dim]. When set, ViT is skipped.
 
         Returns:
             Visual embeddings [1, 1, B*N_out, output_dim]
         """
         is_mesh_device = self.mesh_device.__class__.__name__ == "MeshDevice"
 
-        # 1. Encode image through ViT
-        image_features = self.encode_image(images_embedded)
+        # 1. Encode image through ViT (unless features were built per-crop upstream)
+        if image_features is not None:
+            pass
+        elif images_embedded is not None:
+            image_features = self.encode_image(images_embedded)
+        else:
+            raise ValueError("forward_ttnn requires images_embedded or image_features")
         # image_features: [1, 1, B*T*N, pool_dim]
 
         # Squeeze to 2D for embedding lookup: [B*T*N, pool_dim]
