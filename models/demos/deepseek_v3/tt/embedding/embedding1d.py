@@ -205,7 +205,54 @@ class Embedding1D(AbstractModule):
         return cls._forward(x, cfg)
 
     @classmethod
-    def _forward(cls, x, cfg):
+    def _forward(cls, x, cfg, chunk_size=65536):
+        assert len(x.shape) == 3, "Ids tensor must be 3D: [1, 1, batch]"
+
+        _, _, original_seq_len = x.shape
+
+        # If sequence length is smaller than chunk_size, process normally
+        if original_seq_len <= chunk_size:
+            return cls._forward_chunk(x, cfg)
+
+        # Process in chunks
+        embeddings_chunks = []
+        for start_idx in range(0, original_seq_len, chunk_size):
+            end_idx = min(start_idx + chunk_size, original_seq_len)
+            chunk_len = end_idx - start_idx
+
+            # Extract chunk [1, 1, chunk_len]
+            x_chunk = x[:, :, start_idx:end_idx]
+
+            # Process chunk
+            embeddings_chunk = cls._forward_chunk(x_chunk, cfg)
+
+            # Remove padding if needed
+            if embeddings_chunk.shape[-2] > chunk_len:
+                embeddings_chunk = embeddings_chunk[:, :, :chunk_len, :]
+
+            embeddings_chunks.append(embeddings_chunk)
+            ttnn.deallocate(x_chunk)
+
+        # Concatenate all chunks along sequence dimension
+        result = ttnn.concat(embeddings_chunks, dim=2)
+
+        # Deallocate intermediate chunks
+        for chunk in embeddings_chunks:
+            ttnn.deallocate(chunk)
+
+        return result
+
+    @classmethod
+    def _forward_chunk(cls, x, cfg):
+        """Process a single chunk through the embedding pipeline.
+
+        Args:
+            x: Input token IDs tensor [1, 1, seq_len]
+            cfg: Config containing embedding, typecast, and all_gather settings
+
+        Returns:
+            Embeddings tensor [1, 1, seq_len, hidden_size]
+        """
         assert len(x.shape) == 3, "Ids tensor must be 3D: [1, 1, batch]"
 
         # TODO: remove this padding once all gather async supports subtile gathering
