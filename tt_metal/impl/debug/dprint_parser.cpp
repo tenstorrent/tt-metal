@@ -994,7 +994,7 @@ std::string_view DevicePrintParser::format_message(
 
                 // Build the enum string representation, then format it with the user's format spec.
                 fmt::memory_buffer enum_str;
-                auto* ei = placeholder.enum_info;
+                const auto* ei = placeholder.enum_info;
 
                 // Append "TypeName::" prefix when full name is requested
                 auto append_type_prefix = [&]() {
@@ -1016,7 +1016,7 @@ std::string_view DevicePrintParser::format_message(
                     // Print bitfield: Flag1 | Flag3 or BitEnum::Flag1 | BitEnum::Flag3
                     bool first = true;
                     int64_t remaining = int_val;
-                    for (auto& [eval, ename] : ei->enumerators) {
+                    for (const auto& [eval, ename] : ei->enumerators) {
                         if (eval != 0 && (remaining & eval) == eval) {
                             if (!first) {
                                 enum_str.append(" | "sv);
@@ -1036,7 +1036,7 @@ std::string_view DevicePrintParser::format_message(
                 } else {
                     // Non-bitfield: find exact match
                     const std::string* found_name = nullptr;
-                    for (auto& [eval, ename] : ei->enumerators) {
+                    for (const auto& [eval, ename] : ei->enumerators) {
                         if (eval == int_val) {
                             found_name = &ename;
                             break;  // Use first match
@@ -1251,6 +1251,8 @@ void DevicePrintParser::load_enum_info_from_dwarf() {
                                 if (got_value) {
                                     info.enumerators.emplace_back(enum_val, std::string(enumerator_name));
                                 }
+
+                                dwarf_dealloc(dbg, enumerator_name, DW_DLA_STRING);
                             }
                         }
 
