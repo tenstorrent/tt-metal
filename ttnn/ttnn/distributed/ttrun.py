@@ -272,6 +272,30 @@ def mpi_args_contain_rankfile_options(mpi_args: Optional[List[str]]) -> bool:
     return False
 
 
+def mpi_args_contain_rankfile_options(mpi_args: Optional[List[str]]) -> bool:
+    """True if ``mpi_args`` already specifies rankfile placement (token-aware, not substring-joined).
+
+    Avoids false positives from unrelated arguments that happen to contain substrings such as
+    ``rankfile`` in paths.
+    """
+    if not mpi_args:
+        return False
+    args = list(mpi_args)
+    for i, arg in enumerate(args):
+        if arg == "--rankfile":
+            return True
+        # Match legacy behavior: any ``--map-by`` defers to user placement (rankfile injection skipped).
+        if arg == "--map-by":
+            return True
+        if "rankfile:file=" in arg:
+            return True
+        if arg == "rmaps_rankfile_path":
+            return True
+        if i + 2 < len(args) and arg == "--mca" and args[i + 1] == "rmaps_rankfile_path":
+            return True
+    return False
+
+
 def inject_rankfile_mpi_args(
     rankfile: Path,
     base_mpi_args: List[str],
@@ -1690,6 +1714,8 @@ def build_mpi_command(
 
     parent_env_prefix = _parent_env_prefix_from_environ()
 
+    parent_env_prefix = _parent_env_prefix_from_environ()
+
     # Build per-rank application contexts
     for i, binding in sorted(enumerate(config.rank_bindings), key=lambda x: x[1].rank):
         if i > 0:
@@ -2201,15 +2227,7 @@ def legacy_flow(
     # This happens after multihost args so rankfile comes right before user args
     # Check if user already specified rankfile in mpi_args to avoid conflicts
     if rankfile:
-        # Check for existing rankfile-related args in user's mpi_args
-        rankfile_keywords = ["--rankfile", "--map-by", "rankfile:file=", "rmaps_rankfile_path"]
-        has_existing_rankfile = False
-        if mpi_args:
-            mpi_args_str = " ".join(mpi_args)
-            for keyword in rankfile_keywords:
-                if keyword in mpi_args_str:
-                    has_existing_rankfile = True
-                    break
+        has_existing_rankfile = mpi_args_contain_rankfile_options(mpi_args)
 
         if has_existing_rankfile:
             logger.warning(
@@ -2841,81 +2859,85 @@ def new_mode_flow(
         resolved_mock_path = resolve_path(
             mock_cluster_rank_binding, description="Mock cluster rank binding configuration", must_be_file=True
         )
-        with open(resolved_mock_path, "r") as f:
-            mock_data = yaml.safe_load(f)
-
-        mock_rank_to_desc = {}
-
-        # Check if this is a mapping file (has rank_to_cluster_mock_cluster_desc key) or a cluster descriptor file
-        # Check the key in the YAML data, not the filename
-        if mock_data and isinstance(mock_data, dict) and "rank_to_cluster_mock_cluster_desc" in mock_data:
-            # Mapping format: rank -> cluster descriptor path
-            for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
-                resolved_path = resolve_path(
-                    path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
-                )
-                mock_rank_to_desc[int(rank)] = resolved_path
-        else:
-            # Cluster descriptor format: treat as single entry with rank 0
-            mock_rank_to_desc[0] = resolved_mock_path
-
+        mock_rank_to_desc = load_mock_rank_to_descriptors(resolved_mock_path)
         if verbose:
             logger.info(f"{TT_RUN_PREFIX} Mock cluster: {len(mock_rank_to_desc)} ranks")
 
-    # Output directory: generated/ttrun (create if it doesn't exist)
-    output_dir = ORIGINAL_CWD / "generated" / "ttrun"
-    output_dir.mkdir(parents=True, exist_ok=True)
+    hosts_for_phase1: Optional[List[str]] = sorted(hosts) if hosts else None
+    fingerprint_full = compute_phase1_cache_fingerprint_full(resolved_mgd, hosts_for_phase1, mock_rank_to_desc)
+    short_id = fingerprint_full[:PHASE1_CACHE_ID_HEX_LEN]
+    ttrun_base = ORIGINAL_CWD / "generated" / "ttrun"
+    ttrun_base.mkdir(parents=True, exist_ok=True)
+    short_dir = ttrun_base / short_id
+    full_dir = ttrun_base / fingerprint_full
+    mock_mode = mock_rank_to_desc is not None
 
-    if verbose:
-        logger.info(f"{TT_RUN_PREFIX} Phase 1 output directory: {output_dir}")
+    if verbose and hosts_for_phase1:
+        logger.info(f"{TT_RUN_PREFIX} Phase 1 canonical host order (sorted): {','.join(hosts_for_phase1)}")
 
     # Apply default multihost MPI args to Phase 1 (same as Phase 2) unless --bare
     phase1_mpi_args: Optional[List[str]] = None
     if tcp_interface and not bare:
         validate_network_interface(tcp_interface, verbose=verbose)
     if not bare:
-        multihost_args = [
-            "--mca",
-            "btl",
-            "self,tcp",
-            "--mca",
-            "btl_tcp_if_exclude",
-            "docker0,lo",
-        ]
-        if tcp_interface:
-            multihost_args = [
-                "--mca",
-                "btl",
-                "self,tcp",
-                "--mca",
-                "btl_tcp_if_include",
-                tcp_interface,
-            ]
+        multihost_args = default_multihost_mpi_args(tcp_interface)
         phase1_mpi_args = multihost_args + (mpi_args or [])
         if verbose:
             logger.info(f"{TT_RUN_PREFIX} Phase 1 using multihost MPI args: {' '.join(multihost_args)}")
     else:
         phase1_mpi_args = mpi_args
 
-    # Phase 1: Run generate_rank_bindings
-    try:
-        rank_bindings_path, rankfile_path = run_phase1_generate_rank_bindings(
-            resolved_mgd,
-            hosts,
-            output_dir,
-            subprocess_run=subprocess.run,
-            sleep_secs=5,
-            mock_rank_to_desc=mock_rank_to_desc,
-            mpi_args=phase1_mpi_args,
-        )
-    except (FileNotFoundError, RuntimeError) as e:
-        raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
+    run_dir: Path
+    if phase1_cache_hit_valid(short_dir, fingerprint_full, mock_mode):
+        run_dir = short_dir
+        logger.info(f"{TT_RUN_PREFIX} Phase 1 cache hit, skipping generate_rank_bindings ({run_dir})")
+        rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(run_dir)
+    elif phase1_cache_hit_valid(full_dir, fingerprint_full, mock_mode):
+        run_dir = full_dir
+        logger.info(f"{TT_RUN_PREFIX} Phase 1 cache hit, skipping generate_rank_bindings ({run_dir})")
+        rank_bindings_path, rankfile_path = get_generate_rank_bindings_output_paths(run_dir)
+    else:
+        stored_short = read_stored_phase1_cache_key(short_dir)
+        if (
+            short_dir.is_dir()
+            and phase1_outputs_ready(short_dir, mock_mode)
+            and stored_short is not None
+            and stored_short != fingerprint_full
+        ):
+            logger.warning(
+                f"{TT_RUN_PREFIX} Phase 1 cache directory name collision ({short_dir}): "
+                f"another configuration shares the short id. Writing to disambiguated path {full_dir}"
+            )
+            run_dir = full_dir
+        else:
+            run_dir = short_dir
+
+        if verbose:
+            logger.info(f"{TT_RUN_PREFIX} Phase 1 output directory: {run_dir}")
+
+        run_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(resolved_mgd, run_dir / f"mgd{resolved_mgd.suffix}")
+        if hosts_for_phase1:
+            write_phase1_openmpi_hostfile(run_dir / "hostfile", hosts_for_phase1)
+        try:
+            rank_bindings_path, rankfile_path = run_phase1_generate_rank_bindings(
+                resolved_mgd,
+                hosts_for_phase1,
+                run_dir,
+                subprocess_run=subprocess.run,
+                sleep_secs=5,
+                mock_rank_to_desc=mock_rank_to_desc,
+                mpi_args=phase1_mpi_args,
+            )
+        except (FileNotFoundError, RuntimeError) as e:
+            raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
+        write_phase1_cache_key_file(run_dir, fingerprint_full)
 
     # Phase 2: Use phase2_mock_mapping.yaml from generate_rank_bindings (cluster descriptors used during allocation).
     # The C++ tool writes this file; ttrun only reads it.
     phase2_mock_binding_path: Optional[Path] = None
     if mock_rank_to_desc:
-        generated_phase2_mock_path = output_dir / "phase2_mock_mapping.yaml"
+        generated_phase2_mock_path = run_dir / PHASE2_MOCK_MAPPING_FILENAME
         if generated_phase2_mock_path.exists():
             phase2_mock_binding_path = generated_phase2_mock_path
             if verbose:
@@ -2962,6 +2984,8 @@ def new_mode_flow(
     mpi_args_str = " ".join(shlex.quote(a) for a in rankfile_args)
     phase2_parts.extend(["--mpi-args", shlex.quote(mpi_args_str)])
     phase2_parts.extend(["--"] + [str(a) for a in ctx.args])
+    # Suggested command is Phase-2-equivalent (rankfile + oversubscribe + syntax); multihost defaults
+    # are applied separately when this full command is executed from tt-run.
     logger.info(f"{TT_RUN_PREFIX} To re-run only Phase 2 (skip generate_rank_bindings): {' '.join(phase2_parts)}")
 
     legacy_flow(
@@ -3081,7 +3105,7 @@ def main(
         # Legacy mode
         tt-run --rank-binding rank_binding.yaml ./my_app
 
-        # New mode (not yet implemented)
+        # New mode (--mesh-graph-descriptor)
         tt-run --mesh-graph-descriptor mesh_graph.yaml --hosts node1,node2 ./my_app
         # Or with mock cluster (makes --hosts optional):
         tt-run --mesh-graph-descriptor mesh_graph.yaml --mock-cluster-rank-binding mock.yaml ./my_app
