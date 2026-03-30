@@ -378,6 +378,33 @@ def test_concat_1d(device, layout, dim, input_shapes):
     assert_equal(torch_output_tensor, output)
 
 
+@pytest.mark.parametrize("num_inputs", [47, 48, 100])
+def test_concat_many_inputs(device, num_inputs):
+    """
+    Regression test for concat hang with many tiled inputs.
+    Fixed by commit 85d11279d27 (re-calculated batch size).
+    Previously hung at 48+ inputs with ETH dispatch on N300.
+    """
+    torch_input = torch.zeros((1,), dtype=torch.bfloat16)
+    torch_expected = torch.concat([torch_input] * num_inputs, dim=0)
+
+    input_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tiled_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(input_tensor)
+
+    output_tensor = ttnn.concat([tiled_tensor] * num_inputs, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(tiled_tensor)
+
+    output_host = ttnn.to_torch(output_tensor)
+    assert_equal(torch_expected, output_host)
+
+
 @pytest.mark.parametrize(
     "input_shapes,dim",
     [
