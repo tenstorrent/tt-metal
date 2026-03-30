@@ -874,6 +874,35 @@ class LMHeadSampling:
                         f"[OP:{device_idx}:C] eh_gather_receiver_data_addr={eh_gather_receiver_data_addr}", flush=True
                     )
 
+                # MTP token path + verify metadata staging: named compile-time args (not common runtime).
+                base_token_output_l1_addr = 0
+                if is_mtp_verify_stage and is_exit_device:
+                    _base_token_buf = ttnn.get_device_tensors(base_token_tensor)[device_idx]
+                    base_token_output_l1_addr = int(_base_token_buf.buffer_address())
+
+                sender_core_phys_for_mtp = device.worker_core_from_logical_core(mcast_sender_core)
+                mtp_embedding_dram_base = (
+                    int(embedding_tensors_per_device[device_idx].buffer_address())
+                    if is_mtp_base_stage and enable_mtp_on_device
+                    else 0
+                )
+                mtp_token_l1_addr = (
+                    int(intermediate_tensor_device.buffer_address())
+                    if is_mtp_base_stage and enable_mtp_on_device
+                    else 0
+                )
+                mtp_input_core_noc_x = (
+                    int(sender_core_phys_for_mtp.x) if is_mtp_base_stage and enable_mtp_on_device else 0
+                )
+                mtp_input_core_noc_y = (
+                    int(sender_core_phys_for_mtp.y) if is_mtp_base_stage and enable_mtp_on_device else 0
+                )
+                mtp_argmax_output_l1_addr = (
+                    int(output_index_tensor_device.buffer_address())
+                    if is_mtp_base_stage and enable_mtp_on_device
+                    else 0
+                )
+
                 # ================================================================
                 # NCRISC compile-time args
                 # ================================================================
@@ -993,6 +1022,12 @@ class LMHeadSampling:
                     ("gather_receiver_data_addr", eh_gather_receiver_data_addr),
                     ("has_bypass_socket_output", 0),
                     ("has_bypass_socket_input", 0),
+                    ("mtp_embedding_dram_base", mtp_embedding_dram_base),
+                    ("mtp_token_l1_addr", mtp_token_l1_addr),
+                    ("mtp_input_core_noc_x", mtp_input_core_noc_x),
+                    ("mtp_input_core_noc_y", mtp_input_core_noc_y),
+                    ("mtp_argmax_output_addr", mtp_argmax_output_l1_addr),
+                    ("base_token_output_l1_addr", base_token_output_l1_addr),
                 ]
                 ncrisc_named_compile_time_args.extend(bcast_config.get_ncrisc_named_ct_args(coord))
 
@@ -1070,6 +1105,7 @@ class LMHeadSampling:
                     ("gather_dst_cb", eh_gather_dst_cb if enable_mtp_on_device else 0),
                     ("gather_dst_num_pages", eh_gather_dst_num_pages),
                     ("gather_send_total_bytes", eh_gather_send_total_bytes),
+                    ("base_token_output_l1_addr", base_token_output_l1_addr),
                 ]
                 brisc_named_compile_time_args.extend(bcast_config.get_brisc_named_ct_args(coord))
 
@@ -1145,23 +1181,6 @@ class LMHeadSampling:
                     global_sem_addr,
                     global_stage2_sem_addr,
                 ]
-                if is_mtp_base_stage and enable_mtp_on_device:
-                    sender_core_phys = device.worker_core_from_logical_core(mcast_sender_core)
-                    embedding_tensor_device = embedding_tensors_per_device[device_idx]
-                    mtp_token_addr = int(intermediate_tensor_device.buffer_address())
-                    mtp_argmax_output_addr = int(output_index_tensor_device.buffer_address())
-                    ncrisc_bcast_common_args += [
-                        int(embedding_tensor_device.buffer_address()),  # embedding DRAM base addr
-                        mtp_token_addr,  # mtp_token_addr = intermediate_tensor buffer address (reused for storing argmax final token during MTP unicast)
-                        int(sender_core_phys.x),  # input_core_noc_x
-                        int(sender_core_phys.y),  # input_core_noc_y
-                        mtp_argmax_output_addr,  # output_index_tensor buffer address (reused for storing argmax final token)
-                    ]
-                if is_mtp_verify_stage and is_exit_device:
-                    base_token_buffer = ttnn.get_device_tensors(base_token_tensor)[device_idx]
-                    ncrisc_bcast_common_args += [
-                        int(base_token_buffer.buffer_address()),
-                    ]
 
                 brisc_bcast_common_args = bcast_config.get_brisc_common_rt_args(coord) + [
                     int(final_core_phys.x),
@@ -1175,10 +1194,6 @@ class LMHeadSampling:
                     int(persistent_target_node.chip_id),
                     persistent_next_iter_global_sem_addr,
                 ]
-                if is_mtp_verify_stage and is_exit_device:
-                    brisc_bcast_common_args += [
-                        int(base_token_buffer.buffer_address()),  # [13] verify_output_staging_addr
-                    ]
 
                 # ================================================================
                 # Circular buffer descriptors
@@ -1492,16 +1507,6 @@ class LMHeadSampling:
                             ),
                         ]
                     )
-                # ================================================================
-                # Additional BRISC runtime args for mcast dst CB addresses
-                # ================================================================
-                # Append mcast receiver data addresses as BRISC runtime args
-                # [14]/[15] when verify (verify_output_staging at [13]), [13]/[14] otherwise
-                mcast_receiver_data_addr = 0
-                mcast_eh_receiver_data_addr = 0
-                brisc_bcast_common_args.append(mcast_receiver_data_addr)
-                brisc_bcast_common_args.append(mcast_eh_receiver_data_addr if enable_mtp_on_device else 0)
-
                 # ================================================================
                 # Unified kernel descriptor
                 # ================================================================

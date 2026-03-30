@@ -127,9 +127,7 @@ void kernel_main() {
     //   ├──────────────────────┼───────┼─────────────────────────────────────┤
     //   │ CCL Broadcast writer │  13   │ !skip_ccl                           │
     //   │ Argmax reader        │   7   │ always                              │
-    //   │ MTP (after argmax)   │   5   │ enable_mtp: noc_x, noc_y,         │
-    //   │                      │       │ mtp_token_l1_addr, embedding_dram   │
-    //   │ Verification         │   4   │ enable_mtp_verification             │
+    //   │ MTP / verify addrs   │   —   │ named compile-time args             │
     //   │ Fabric routing       │  var  │ !skip_ccl (per-core appended)       │
     //   └──────────────────────┴───────┴─────────────────────────────────────┘
     // ========================================================================
@@ -236,23 +234,12 @@ void kernel_main() {
         .gather_addr = 0,
     };
 
-    uint32_t mtp_embedding_base = 0;
-    uint32_t mtp_token_addr = 0;
-    uint32_t mtp_input_core_noc_x = 0;
-    uint32_t mtp_input_core_noc_y = 0;
-    uint32_t mtp_argmax_output_addr = 0;
-    if constexpr (Core::is_base_stage && Core::enable_mtp) {
-        mtp_embedding_base = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
-        mtp_token_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
-        mtp_input_core_noc_x = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
-        mtp_input_core_noc_y = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
-        mtp_argmax_output_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
-    }
-
-    uint32_t verify_output_staging_addr = 0;
-    if constexpr (Core::is_spec_stage) {
-        verify_output_staging_addr = get_common_arg_val<uint32_t>(ncrisc_rt_arg_idx++);
-    }
+    constexpr uint32_t mtp_embedding_base = get_named_compile_time_arg_val("mtp_embedding_dram_base");
+    constexpr uint32_t mtp_token_addr = get_named_compile_time_arg_val("mtp_token_l1_addr");
+    constexpr uint32_t mtp_input_core_noc_x = get_named_compile_time_arg_val("mtp_input_core_noc_x");
+    constexpr uint32_t mtp_input_core_noc_y = get_named_compile_time_arg_val("mtp_input_core_noc_y");
+    constexpr uint32_t mtp_argmax_output_addr = get_named_compile_time_arg_val("mtp_argmax_output_addr");
+    constexpr uint32_t base_token_output_l1_addr = get_named_compile_time_arg_val("base_token_output_l1_addr");
 
     // ── Sharded buffer setup (registers tensor-backed CBs before main loop) ──
     //   input_core:  CB 0 (rmsnorm_input), CB 7 (rmsnorm_gamma)
@@ -343,10 +330,8 @@ void kernel_main() {
     //   │ Argmax writer        │  [0..3] │ final_noc_x/y, scratch, socket    │
     //   │ Socket input reader  │  [4..6] │ config_addr, page_size, num_pages │
     //   │ Persistent routing   │ [7..12] │ enable, dst noc/mesh/chip, sem    │
-    //   │ Verify staging (spec)│   [13]  │ verify_output_staging_addr        │
-    //   │ Mcast dst override   │ [13/14] │ non-verify/verify                 │
-    //   │ Mcast EH dst override│ [14/15] │ non-verify/verify                 │
-    //   │ Fabric routing       │  [N+]   │ per-core appended                 │
+    //   │ Verify / mcast dst   │   —     │ named compile-time args           │
+    //   │ Fabric routing       │  [13+]  │ per-core appended                 │
     //   └──────────────────────┴─────────┴────────────────────────────────────┘
     // ========================================================================
     uint32_t brisc_rt_arg_idx = 0;
@@ -400,13 +385,7 @@ void kernel_main() {
 
     DPRINT << "psr=" << persistent_next_iter_global_sem_addr << ENDL();
 
-    // ── Verify stage runtime arg (BRISC, for reading base token metadata)
-    uint32_t brisc_verify_output_staging_addr = 0;
-    if constexpr (Core::is_spec_stage) {
-        brisc_verify_output_staging_addr = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++);
-    }
-
-    DPRINT << "brisc_verify_output_staging_addr=" << brisc_verify_output_staging_addr << ENDL();
+    constexpr uint32_t base_token_output_l1_addr = get_named_compile_time_arg_val("base_token_output_l1_addr");
 
     // ── Mcast sender (input_core) ───────────────────────────────────
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
@@ -417,9 +396,6 @@ void kernel_main() {
     constexpr uint32_t mcast_src_cb = get_named_compile_time_arg_val("mcast_src_cb");
     constexpr uint32_t mcast_dst_cb = get_named_compile_time_arg_val("mcast_dst_cb");
     // mcast dst CB addr (needed since this CB not allocated on sender)
-    uint32_t mcast_dst_addr_override = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++);
-
-    DPRINT << "mcast_dst_addr_override=" << mcast_dst_addr_override << ENDL();
 
     deepseek_b1_ops::Mcast::SenderArgs mcast_args{
         get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
@@ -432,7 +408,7 @@ void kernel_main() {
         mcast_src_cb,
         get_named_compile_time_arg_val("mcast_src_num_pages"),
         Core::is_input_core ? get_read_ptr(mcast_src_cb) : 0,
-        mcast_dst_addr_override != 0 ? mcast_dst_addr_override : get_write_ptr(mcast_dst_cb),
+        get_write_ptr(mcast_dst_cb),
     };
     DPRINT << "mcast_args" << ENDL();
     // ── MTP: EH mcast sender (input_core, enable_mtp) ──────────────
@@ -442,12 +418,7 @@ void kernel_main() {
         false>;
     constexpr uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("mcast_eh_src_cb");
     constexpr uint32_t mcast_eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
-    uint32_t mcast_eh_dst_addr_override = 0;
-    if constexpr (Core::is_base_stage && Core::enable_mtp) {
-        mcast_eh_dst_addr_override = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++);
-    }
 
-    DPRINT << "mcast_eh_dst_addr_override=" << mcast_eh_dst_addr_override << ENDL();
     DPRINT << "mcast_eh_args" << ENDL();
     deepseek_b1_ops::Mcast::SenderArgs mcast_eh_args{
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_x"),
@@ -460,9 +431,8 @@ void kernel_main() {
         mcast_eh_src_cb,
         get_named_compile_time_arg_val("mcast_eh_src_num_pages"),
         Core::is_input_core ? get_read_ptr(mcast_eh_src_cb) : 0,
-        mcast_eh_dst_addr_override != 0 ? mcast_eh_dst_addr_override : get_write_ptr(mcast_eh_dst_cb),
+        get_write_ptr(mcast_eh_dst_cb),
     };
-    DPRINT << "eh_logits_gather_args" << ENDL();
     // Output gather receiver args
     deepseek_b1_ops::Gather::ReceiverArgs eh_logits_gather_args{
         get_named_compile_time_arg_val("gather_noc0_num_senders"),
@@ -678,7 +648,7 @@ void kernel_main() {
             uint32_t metadata_src = rmsnorm_buffer_addr + activation_size_bytes;
 
             // Write the metadata to the base token buffer on the argmax final core
-            uint64_t metadata_dst = get_noc_addr(argmax_noc_x, argmax_noc_y, verify_output_staging_addr);
+            uint64_t metadata_dst = get_noc_addr(argmax_noc_x, argmax_noc_y, base_token_output_l1_addr);
             noc_async_write(metadata_src, metadata_dst, metadata_size);
             noc_async_write_barrier();
 
@@ -900,10 +870,8 @@ void kernel_main() {
             uint32_t speculative_token =
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
 
-            DPRINT << "speculative_token=" << speculative_token << ENDL();
-
             // Read the base token from metadata L1 (transferred by NCRISC during the broadcast phase)
-            auto metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(brisc_verify_output_staging_addr);
+            auto metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_token_output_l1_addr);
             uint32_t base_token = metadata[1];
             cb_pop_front(argmax_socket_cb, 1);
 
