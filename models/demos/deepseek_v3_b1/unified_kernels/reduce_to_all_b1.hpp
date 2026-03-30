@@ -16,9 +16,11 @@
  *   Round 2 (2-apart rows):   (row, col) <-> (row^2, col)
  *   Round 3 (cross-column):   (row, col) <-> (row, col^1)
  *
- * TRISC keeps the running accumulation in dest registers across all
- * three rounds (pack_tile copies dest to CB without clearing it) and
- * packs intermediate results to scratch_cb for BRISC to forward.
+ * TRISC uses add_tiles (CB-to-CB add) each round with a reload_cb to
+ * carry the accumulated partial sum across rounds.  tile_regs_commit/
+ * wait/release provide explicit MATH↔PACK sync; the release zeros the
+ * current dest half, so reload_cb stores the intermediate result for
+ * the next round's add_tiles to re-read.
  *
  * R1/R2 are forwarded by BRISC on each fabric core via its same-column
  * EDM connection.  R3 is forwarded by NCRISC on FC1 (link_idx=1) via a
@@ -123,12 +125,19 @@ struct ReduceToAllB1 {
         static constexpr uint32_t defer_r3_send = deferR3Send;
     };
 
-    template <uint32_t numTiles, uint32_t localCb, uint32_t receivedCb, uint32_t scratchCb, uint32_t isFabricCore>
+    template <
+        uint32_t numTiles,
+        uint32_t localCb,
+        uint32_t receivedCb,
+        uint32_t scratchCb,
+        uint32_t reloadCb,
+        uint32_t isFabricCore>
     struct ComputeCTArgs {
         static constexpr uint32_t num_tiles = numTiles;
         static constexpr uint32_t local_cb = localCb;
         static constexpr uint32_t received_cb = receivedCb;
         static constexpr uint32_t scratch_cb = scratchCb;
+        static constexpr uint32_t reload_cb = reloadCb;
         static constexpr uint32_t is_fabric_core = isFabricCore;
     };
 
@@ -277,6 +286,11 @@ struct ReduceToAllB1 {
             }
 
             DPRINT << "NCRISC: start, num_tiles=" << (uint32_t)CTArgs::num_tiles << ENDL();
+            {
+                volatile tt_l1_ptr uint32_t* r2_sem =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round2);
+                DPRINT << "NCRISC: INIT r2_sem=" << *r2_sem << ENDL();
+            }
 
             if constexpr (!SkipLocalCbPush) {
                 DPRINT << "NCRISC: local_cb reserve_back" << ENDL();
@@ -295,18 +309,35 @@ struct ReduceToAllB1 {
                 noc_semaphore_wait_min(sem_ptr, 1);
                 unified_kernels::semaphore_dec(sem_ptr);
             }
+            {
+                uint32_t recv_addr = get_write_ptr(CTArgs::received_cb);
+                volatile uint16_t* d = reinterpret_cast<volatile uint16_t*>(recv_addr + 32);
+                DPRINT << "NCRISC: R1 recv_val[0]=0x" << HEX() << (uint32_t)d[0] << ENDL();
+            }
             cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
             DPRINT << "NCRISC: R1 received_cb pushed" << ENDL();
 
             // Round 2
             DPRINT << "NCRISC: R2 reserve received_cb" << ENDL();
             cb_reserve_back(CTArgs::received_cb, CTArgs::num_tiles);
+            {
+                uint32_t recv_addr = get_write_ptr(CTArgs::received_cb);
+                volatile uint16_t* d_pre = reinterpret_cast<volatile uint16_t*>(recv_addr + 32);
+                DPRINT << "NCRISC: R2 PRE-SEM addr=" << recv_addr << " val[0]=0x" << HEX() << (uint32_t)d_pre[0]
+                       << ENDL();
+            }
             DPRINT << "NCRISC: R2 waiting on sem @" << (uint32_t)args.recv_sem_round2 << ENDL();
             {
                 volatile tt_l1_ptr uint32_t* sem_ptr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round2);
                 noc_semaphore_wait_min(sem_ptr, 1);
                 unified_kernels::semaphore_dec(sem_ptr);
+            }
+            {
+                uint32_t recv_addr = get_write_ptr(CTArgs::received_cb);
+                DPRINT << "NCRISC: R2 recv_addr=" << recv_addr << ENDL();
+                volatile uint16_t* d = reinterpret_cast<volatile uint16_t*>(recv_addr + 32);
+                DPRINT << "NCRISC: R2 recv_val[0]=0x" << HEX() << (uint32_t)d[0] << ENDL();
             }
             cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
             DPRINT << "NCRISC: R2 received_cb pushed" << ENDL();
@@ -320,6 +351,11 @@ struct ReduceToAllB1 {
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.recv_sem_round3);
                 noc_semaphore_wait_min(sem_ptr, 1);
                 unified_kernels::semaphore_dec(sem_ptr);
+            }
+            {
+                uint32_t recv_addr = get_write_ptr(CTArgs::received_cb);
+                volatile uint16_t* d = reinterpret_cast<volatile uint16_t*>(recv_addr + 32);
+                DPRINT << "NCRISC: R3 recv_val[0]=0x" << HEX() << (uint32_t)d[0] << ENDL();
             }
             cb_push_back(CTArgs::received_cb, CTArgs::num_tiles);
             DPRINT << "NCRISC: R3 received_cb pushed" << ENDL();
@@ -349,42 +385,75 @@ struct ReduceToAllB1 {
                 const uint32_t packet_buffer_addr = get_write_ptr(CTArgs::packet_cb);
                 DPRINT << "BRISC FABRIC: packet_buffer_addr=" << packet_buffer_addr << ENDL();
 
-                DPRINT << "BRISC FABRIC: build_from_args, arg_idx=" << (uint32_t)arg_idx << ENDL();
-                auto fabric_sender =
+                DPRINT << "BRISC FABRIC: build sender_r1, arg_idx=" << (uint32_t)arg_idx << ENDL();
+                auto sender_r1 =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
-                DPRINT << "BRISC FABRIC: opening" << ENDL();
-                fabric_sender.open();
-                DPRINT << "BRISC FABRIC: opened" << ENDL();
+                DPRINT << "BRISC FABRIC: build sender_r2, arg_idx=" << (uint32_t)arg_idx << ENDL();
+                auto sender_r2 =
+                    tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
                 constexpr uint32_t round_stride = CTArgs::num_workers * CTArgs::slot_size_bytes;
-                for (uint32_t round = 0; round < 2; round++) {
-                    uint32_t slot_base = packet_buffer_addr + round * round_stride;
+
+                // R1: use sender_r1 (connection to R1 partner)
+                DPRINT << "BRISC FABRIC: R1 opening sender_r1" << ENDL();
+                sender_r1.open();
+                {
+                    uint32_t slot_base = packet_buffer_addr;
                     for (uint32_t worker = 0; worker < CTArgs::num_workers; worker++) {
-                        DPRINT << "BRISC FABRIC: R" << (round + 1) << " waiting worker " << worker << " sem @"
-                               << worker_sem_addr[worker] << ENDL();
+                        DPRINT << "BRISC FABRIC: R1 waiting worker " << worker << " sem @" << worker_sem_addr[worker]
+                               << ENDL();
                         volatile tt_l1_ptr uint32_t* worker_sem_ptr =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
                         noc_semaphore_wait_min(worker_sem_ptr, 1);
                         unified_kernels::semaphore_dec(worker_sem_ptr);
-                        DPRINT << "BRISC FABRIC: R" << (round + 1) << " worker " << worker << " sem acquired" << ENDL();
+                        DPRINT << "BRISC FABRIC: R1 worker " << worker << " sem acquired" << ENDL();
 
                         uint32_t worker_header_addr = slot_base;
                         uint32_t worker_payload_addr = slot_base + packet_header_size_bytes;
 
-                        fabric_sender.wait_for_empty_write_slot();
-                        fabric_sender.send_payload_without_header_non_blocking_from_address(
+                        sender_r1.wait_for_empty_write_slot();
+                        sender_r1.send_payload_without_header_non_blocking_from_address(
                             worker_payload_addr, CTArgs::payload_size_bytes);
-                        fabric_sender.send_payload_flush_blocking_from_address(
+                        sender_r1.send_payload_flush_blocking_from_address(
                             worker_header_addr, packet_header_size_bytes);
-                        DPRINT << "BRISC FABRIC: R" << (round + 1) << " worker " << worker << " forwarded" << ENDL();
+                        DPRINT << "BRISC FABRIC: R1 worker " << worker << " forwarded" << ENDL();
 
                         slot_base += CTArgs::slot_size_bytes;
                     }
-                    DPRINT << "BRISC FABRIC: R" << (round + 1) << " all workers forwarded" << ENDL();
                 }
+                DPRINT << "BRISC FABRIC: R1 closing sender_r1" << ENDL();
+                sender_r1.close();
+                noc_async_write_barrier();
 
-                DPRINT << "BRISC FABRIC: closing" << ENDL();
-                fabric_sender.close();
+                // R2: use sender_r2 (connection to R2 partner)
+                DPRINT << "BRISC FABRIC: R2 opening sender_r2" << ENDL();
+                sender_r2.open();
+                {
+                    uint32_t slot_base = packet_buffer_addr + round_stride;
+                    for (uint32_t worker = 0; worker < CTArgs::num_workers; worker++) {
+                        DPRINT << "BRISC FABRIC: R2 waiting worker " << worker << " sem @" << worker_sem_addr[worker]
+                               << ENDL();
+                        volatile tt_l1_ptr uint32_t* worker_sem_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sem_addr[worker]);
+                        noc_semaphore_wait_min(worker_sem_ptr, 1);
+                        unified_kernels::semaphore_dec(worker_sem_ptr);
+                        DPRINT << "BRISC FABRIC: R2 worker " << worker << " sem acquired" << ENDL();
+
+                        uint32_t worker_header_addr = slot_base;
+                        uint32_t worker_payload_addr = slot_base + packet_header_size_bytes;
+
+                        sender_r2.wait_for_empty_write_slot();
+                        sender_r2.send_payload_without_header_non_blocking_from_address(
+                            worker_payload_addr, CTArgs::payload_size_bytes);
+                        sender_r2.send_payload_flush_blocking_from_address(
+                            worker_header_addr, packet_header_size_bytes);
+                        DPRINT << "BRISC FABRIC: R2 worker " << worker << " forwarded" << ENDL();
+
+                        slot_base += CTArgs::slot_size_bytes;
+                    }
+                }
+                DPRINT << "BRISC FABRIC: R2 closing sender_r2" << ENDL();
+                sender_r2.close();
                 noc_async_write_barrier();
                 DPRINT << "BRISC FABRIC: done" << ENDL();
                 return;
@@ -407,6 +476,8 @@ struct ReduceToAllB1 {
             DPRINT << "BRISC WORKER: r1_dst_chip=" << (uint32_t)CTArgs::r1_dst_chip_id
                    << " r2_dst_chip=" << (uint32_t)CTArgs::r2_dst_chip_id
                    << " r3_dst_chip=" << (uint32_t)CTArgs::r3_dst_chip_id << ENDL();
+            DPRINT << "BRISC WORKER: reload_cb_wptr=" << get_write_ptr(4) << " recv_cb_wptr=" << get_write_ptr(1)
+                   << ENDL();
 
             PacketHeaderPool::reset();
             auto* packet_header = PacketHeaderPool::allocate_header(1);
@@ -442,6 +513,10 @@ struct ReduceToAllB1 {
                 }
                 uint32_t data_addr = get_read_ptr(CTArgs::local_cb);
                 DPRINT << "BRISC WORKER: R1 data_addr=" << data_addr << ENDL();
+                {
+                    volatile uint16_t* d = reinterpret_cast<volatile uint16_t*>(data_addr + 32);
+                    DPRINT << "BRISC WORKER: R1 local_val[0]=0x" << HEX() << (uint32_t)d[0] << ENDL();
+                }
                 send_via_fabric(
                     packet_header,
                     static_cast<uint16_t>(CTArgs::r1_dst_chip_id),
@@ -464,6 +539,10 @@ struct ReduceToAllB1 {
                 DPRINT << "BRISC WORKER: R2 scratch_cb ready" << ENDL();
                 uint32_t data_addr = get_read_ptr(CTArgs::scratch_cb);
                 DPRINT << "BRISC WORKER: R2 data_addr=" << data_addr << ENDL();
+                {
+                    volatile uint16_t* d = reinterpret_cast<volatile uint16_t*>(data_addr + 32);
+                    DPRINT << "BRISC WORKER: R2 scratch_val[0]=0x" << HEX() << (uint32_t)d[0] << ENDL();
+                }
                 send_via_fabric(
                     packet_header,
                     static_cast<uint16_t>(CTArgs::r2_dst_chip_id),
@@ -494,6 +573,10 @@ struct ReduceToAllB1 {
                 DPRINT << "BRISC WORKER: R3 scratch_cb ready" << ENDL();
                 uint32_t data_addr = get_read_ptr(CTArgs::scratch_cb);
                 DPRINT << "BRISC WORKER: R3 data_addr=" << data_addr << ENDL();
+                {
+                    volatile uint16_t* d = reinterpret_cast<volatile uint16_t*>(data_addr + 32);
+                    DPRINT << "BRISC WORKER: R3 scratch_val[0]=0x" << HEX() << (uint32_t)d[0] << ENDL();
+                }
                 send_via_fabric(
                     packet_header,
                     static_cast<uint16_t>(CTArgs::r3_dst_chip_id),
@@ -516,6 +599,10 @@ struct ReduceToAllB1 {
                 cb_wait_front(CTArgs::scratch_cb, CTArgs::num_tiles);
                 DPRINT << "BRISC WORKER: OUTPUT scratch_cb ready" << ENDL();
                 uint32_t src_addr = get_read_ptr(CTArgs::scratch_cb);
+                {
+                    volatile uint16_t* d = reinterpret_cast<volatile uint16_t*>(src_addr + 32);
+                    DPRINT << "BRISC WORKER: OUTPUT scratch_val[0]=0x" << HEX() << (uint32_t)d[0] << ENDL();
+                }
                 uint64_t output_noc_addr = get_noc_addr(my_noc_x, my_noc_y, args.output_base_addr);
                 noc_async_write(src_addr, output_noc_addr, CTArgs::payload_size_bytes);
                 noc_async_write_barrier();
@@ -529,7 +616,12 @@ struct ReduceToAllB1 {
 
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
-            // TRISC — Compute: accumulate 3 rounds in dest registers
+            // TRISC — Compute: add_tiles + reload_cb for cross-round accumulation
+            //
+            // tile_regs_commit/release zero the current dest half (SyncHalf),
+            // so we use add_tiles(cbA, cbB) to read both operands from CBs
+            // each round.  reload_cb stores the intermediate accumulated value
+            // for the next round.
             // ================================================================
             if constexpr (CTArgs::is_fabric_core) {
                 return;
@@ -537,88 +629,102 @@ struct ReduceToAllB1 {
 
             DPRINT << "TRISC: start, num_tiles=" << (uint32_t)CTArgs::num_tiles << ENDL();
 
-            reconfig_data_format<false, true>(CTArgs::local_cb, CTArgs::received_cb);
+            // --- Round 1: local_cb + received_cb ---
+            DPRINT << "TRISC: R1 add_tiles_init" << ENDL();
+            add_tiles_init(CTArgs::local_cb, CTArgs::received_cb);
             pack_reconfig_data_format<true>(CTArgs::scratch_cb);
 
-            copy_tile_to_dst_init_short(CTArgs::local_cb);
             DPRINT << "TRISC: R1 tile_regs_acquire" << ENDL();
             tile_regs_acquire();
-            DPRINT << "TRISC: R1 waiting local_cb" << ENDL();
+            DPRINT << "TRISC: R1 waiting local_cb + received_cb" << ENDL();
             cb_wait_front(CTArgs::local_cb, CTArgs::num_tiles);
+            cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
+            DPRINT << "TRISC: R1 add_tiles" << ENDL();
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                copy_tile(CTArgs::local_cb, i, i);
+                add_tiles(CTArgs::local_cb, CTArgs::received_cb, i, i, i);
             }
             cb_pop_front(CTArgs::local_cb, CTArgs::num_tiles);
-            DPRINT << "TRISC: R1 local copied to dest" << ENDL();
-
-            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb);
-
-            DPRINT << "TRISC: R1 waiting received_cb" << ENDL();
-            cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
-            for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb, i, i);
-            }
             cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
-            DPRINT << "TRISC: R1 ELWADD done, committing" << ENDL();
+            DPRINT << "TRISC: R1 commit" << ENDL();
             tile_regs_commit();
 
-            DPRINT << "TRISC: R1 tile_regs_wait (pack)" << ENDL();
+            DPRINT << "TRISC: R1 wait+pack scratch" << ENDL();
             tile_regs_wait();
-            DPRINT << "TRISC: R1 reserve scratch_cb" << ENDL();
             cb_reserve_back(CTArgs::scratch_cb, CTArgs::num_tiles);
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                 pack_tile(i, CTArgs::scratch_cb, i);
             }
-            tile_regs_release();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
-            DPRINT << "TRISC: R1 packed to scratch_cb" << ENDL();
+            DPRINT << "TRISC: R1 pack reload" << ENDL();
+            cb_reserve_back(CTArgs::reload_cb, CTArgs::num_tiles);
+            for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
+                pack_tile(i, CTArgs::reload_cb, i);
+            }
+            cb_push_back(CTArgs::reload_cb, CTArgs::num_tiles);
+            DPRINT << "TRISC: R1 release" << ENDL();
+            tile_regs_release();
+            DPRINT << "TRISC: R1 done" << ENDL();
 
-            // Round 2
+            // --- Round 2: reload_cb (R1 result) + received_cb ---
+            DPRINT << "TRISC: R2 add_tiles_init" << ENDL();
+            add_tiles_init(CTArgs::reload_cb, CTArgs::received_cb);
+
             DPRINT << "TRISC: R2 tile_regs_acquire" << ENDL();
             tile_regs_acquire();
-            DPRINT << "TRISC: R2 waiting received_cb" << ENDL();
+            DPRINT << "TRISC: R2 waiting reload_cb + received_cb" << ENDL();
+            cb_wait_front(CTArgs::reload_cb, CTArgs::num_tiles);
             cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
+            DPRINT << "TRISC: R2 add_tiles" << ENDL();
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb, i, i);
+                add_tiles(CTArgs::reload_cb, CTArgs::received_cb, i, i, i);
             }
+            cb_pop_front(CTArgs::reload_cb, CTArgs::num_tiles);
             cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
-            DPRINT << "TRISC: R2 ELWADD done, committing" << ENDL();
+            DPRINT << "TRISC: R2 commit" << ENDL();
             tile_regs_commit();
 
-            DPRINT << "TRISC: R2 tile_regs_wait (pack)" << ENDL();
+            DPRINT << "TRISC: R2 wait+pack scratch" << ENDL();
             tile_regs_wait();
-            DPRINT << "TRISC: R2 reserve scratch_cb" << ENDL();
             cb_reserve_back(CTArgs::scratch_cb, CTArgs::num_tiles);
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                 pack_tile(i, CTArgs::scratch_cb, i);
             }
-            tile_regs_release();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
-            DPRINT << "TRISC: R2 packed to scratch_cb" << ENDL();
+            DPRINT << "TRISC: R2 pack reload" << ENDL();
+            cb_reserve_back(CTArgs::reload_cb, CTArgs::num_tiles);
+            for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
+                pack_tile(i, CTArgs::reload_cb, i);
+            }
+            cb_push_back(CTArgs::reload_cb, CTArgs::num_tiles);
+            DPRINT << "TRISC: R2 release" << ENDL();
+            tile_regs_release();
+            DPRINT << "TRISC: R2 done" << ENDL();
 
-            // Round 3
+            // --- Round 3: reload_cb (R2 result) + received_cb ---
             DPRINT << "TRISC: R3 tile_regs_acquire" << ENDL();
             tile_regs_acquire();
-            DPRINT << "TRISC: R3 waiting received_cb" << ENDL();
+            DPRINT << "TRISC: R3 waiting reload_cb + received_cb" << ENDL();
+            cb_wait_front(CTArgs::reload_cb, CTArgs::num_tiles);
             cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
+            DPRINT << "TRISC: R3 add_tiles" << ENDL();
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
-                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::received_cb, i, i);
+                add_tiles(CTArgs::reload_cb, CTArgs::received_cb, i, i, i);
             }
+            cb_pop_front(CTArgs::reload_cb, CTArgs::num_tiles);
             cb_pop_front(CTArgs::received_cb, CTArgs::num_tiles);
-            DPRINT << "TRISC: R3 ELWADD done, committing" << ENDL();
+            DPRINT << "TRISC: R3 commit" << ENDL();
             tile_regs_commit();
 
-            DPRINT << "TRISC: R3 tile_regs_wait (pack)" << ENDL();
+            DPRINT << "TRISC: R3 wait+pack scratch" << ENDL();
             tile_regs_wait();
-            DPRINT << "TRISC: R3 reserve scratch_cb" << ENDL();
             cb_reserve_back(CTArgs::scratch_cb, CTArgs::num_tiles);
             for (uint32_t i = 0; i < CTArgs::num_tiles; i++) {
                 pack_tile(i, CTArgs::scratch_cb, i);
             }
-            tile_regs_release();
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
-            DPRINT << "TRISC: R3 packed to scratch_cb" << ENDL();
-            DPRINT << "TRISC: done" << ENDL();
+            DPRINT << "TRISC: R3 release" << ENDL();
+            tile_regs_release();
+            DPRINT << "TRISC: R3 done" << ENDL();
 #endif
         }
     };  // class Op

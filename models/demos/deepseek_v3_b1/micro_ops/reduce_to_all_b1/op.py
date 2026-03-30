@@ -123,6 +123,7 @@ class ReduceToAllB1:
         received_cb = 1
         output_cb = 2
         packet_cb = 3
+        reload_cb = 4
         scratch_cb = 5
 
         # Worker-fabric semaphores for BRISC forwarding (R1/R2, reused across rounds)
@@ -270,6 +271,7 @@ class ReduceToAllB1:
                     ("local_cb", local_cb),
                     ("received_cb", received_cb),
                     ("scratch_cb", scratch_cb),
+                    ("reload_cb", reload_cb),
                     ("num_loop_iters", num_iterations),
                 ]
 
@@ -389,7 +391,20 @@ class ReduceToAllB1:
                     ],
                 )
 
-                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb5_desc]
+                cb4_desc = ttnn.CBDescriptor(
+                    total_size=num_compute_tiles * compute_tile_size_bytes,
+                    core_ranges=all_cores_set,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=reload_cb,
+                            data_format=dtype,
+                            page_size=compute_tile_size_bytes,
+                            tile=compute_tile_desc,
+                        )
+                    ],
+                )
+
+                cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb4_desc, cb5_desc]
 
                 # === Unified kernel descriptor ===
                 unified_ct_core_descriptors = [
@@ -448,33 +463,57 @@ class ReduceToAllB1:
                 )
 
                 fc0 = fabric_cores[0]
-                # FC0 BRISC: connection to R1 partner (same-column, link_idx=0)
-                print(f"[ReduceToAllB1] dev({row},{col}) FC0({fc0.x},{fc0.y}) BRISC link_idx=0")
-                conn_args_fc0 = ttnn.setup_fabric_connection(
+                # FC0 BRISC: connection 1 — R1 partner (same-column, link_idx=0)
+                print(
+                    f"[ReduceToAllB1] dev({row},{col}) FC0({fc0.x},{fc0.y}) BRISC R1 link_idx=0 -> chip {partners[1]['fabric_node_id'].chip_id}"
+                )
+                conn_args_fc0_r1 = ttnn.setup_fabric_connection(
                     fabric_node_id,
                     partners[1]["fabric_node_id"],
                     0,
                     program,
                     fc0,
                 )
-                program.kernels[fc0_group.brisc_kernel_index].runtime_args[fc0.x][fc0.y].extend(conn_args_fc0)
-                print(
-                    f"[ReduceToAllB1] dev({row},{col}) FC0({fc0.x},{fc0.y}) BRISC conn_args count={len(conn_args_fc0)}"
-                )
+                program.kernels[fc0_group.brisc_kernel_index].runtime_args[fc0.x][fc0.y].extend(conn_args_fc0_r1)
 
-                # FC1 BRISC: connection to R1 partner (same-column, link_idx=1)
-                print(f"[ReduceToAllB1] dev({row},{col}) FC1({fc1.x},{fc1.y}) BRISC link_idx=1")
-                conn_args_fc1 = ttnn.setup_fabric_connection(
+                # FC0 BRISC: connection 2 — R2 partner (same-column, link_idx=0)
+                print(
+                    f"[ReduceToAllB1] dev({row},{col}) FC0({fc0.x},{fc0.y}) BRISC R2 link_idx=0 -> chip {partners[2]['fabric_node_id'].chip_id}"
+                )
+                conn_args_fc0_r2 = ttnn.setup_fabric_connection(
+                    fabric_node_id,
+                    partners[2]["fabric_node_id"],
+                    0,
+                    program,
+                    fc0,
+                )
+                program.kernels[fc0_group.brisc_kernel_index].runtime_args[fc0.x][fc0.y].extend(conn_args_fc0_r2)
+
+                # FC1 BRISC: connection 1 — R1 partner (same-column, link_idx=1)
+                print(
+                    f"[ReduceToAllB1] dev({row},{col}) FC1({fc1.x},{fc1.y}) BRISC R1 link_idx=1 -> chip {partners[1]['fabric_node_id'].chip_id}"
+                )
+                conn_args_fc1_r1 = ttnn.setup_fabric_connection(
                     fabric_node_id,
                     partners[1]["fabric_node_id"],
                     1,
                     program,
                     fc1,
                 )
-                program.kernels[fc1_group.brisc_kernel_index].runtime_args[fc1.x][fc1.y].extend(conn_args_fc1)
+                program.kernels[fc1_group.brisc_kernel_index].runtime_args[fc1.x][fc1.y].extend(conn_args_fc1_r1)
+
+                # FC1 BRISC: connection 2 — R2 partner (same-column, link_idx=1)
                 print(
-                    f"[ReduceToAllB1] dev({row},{col}) FC1({fc1.x},{fc1.y}) BRISC conn_args count={len(conn_args_fc1)}"
+                    f"[ReduceToAllB1] dev({row},{col}) FC1({fc1.x},{fc1.y}) BRISC R2 link_idx=1 -> chip {partners[2]['fabric_node_id'].chip_id}"
                 )
+                conn_args_fc1_r2 = ttnn.setup_fabric_connection(
+                    fabric_node_id,
+                    partners[2]["fabric_node_id"],
+                    1,
+                    program,
+                    fc1,
+                )
+                program.kernels[fc1_group.brisc_kernel_index].runtime_args[fc1.x][fc1.y].extend(conn_args_fc1_r2)
 
                 # FC1 NCRISC: connection to R3 partner (cross-column, link_idx=1)
                 r3_conn_args = ttnn.setup_fabric_connection(

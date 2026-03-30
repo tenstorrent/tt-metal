@@ -85,6 +85,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("local_cb"),
         get_named_compile_time_arg_val("received_cb"),
         get_named_compile_time_arg_val("scratch_cb"),
+        get_named_compile_time_arg_val("reload_cb"),
         get_named_compile_time_arg_val("is_fabric_core")>;
 
     ReduceToAll::ComputeArgs rt_args{};
