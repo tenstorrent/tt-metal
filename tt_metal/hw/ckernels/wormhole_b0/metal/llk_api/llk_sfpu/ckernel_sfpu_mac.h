@@ -12,6 +12,8 @@ namespace ckernel::sfpu {
 
 // mac: out = a * b + c, computed in FP32 accumulator via SFPMAD.
 //
+// The replay sequence is recorded once in mac_init (with fixed dest offsets 0, 64, 128
+// matching tile indices 0, 1, 2) and replayed ITERATIONS times here.
 // ADDR_MOD_2 on SFPSTORE auto-advances the dest base register by 2 rows per
 // replay, so the next replay's SFPLOADs read the next row group automatically.
 // This avoids the explicit sfpi::dst_reg++ used in a plain for-loop, which
@@ -26,46 +28,12 @@ inline void calculate_mac(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "Unsupported data format for calculate_mac(). Supported data formats are: Float32, Float16_b.");
 
-    constexpr InstrModLoadStore mod0 =
-        (data_format == DataFormat::Float32) ? InstrModLoadStore::FP32 : InstrModLoadStore::DEFAULT;
-    // Each tile occupies 64 rows in the dest register file.
-    const uint offset_in0 = dst_index_in0 * 64;
-    const uint offset_in1 = dst_index_in1 * 64;
-    const uint offset_in2 = dst_index_in2 * 64;
-    const uint offset_out  = dst_index_out  * 64;
-
-    if constexpr (is_fp32_dest_acc_en) {
-        // FP32 dest: no stochastic rounding → 6-instruction replay sequence.
-        lltt::record(0, 6);
-        TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_3, offset_in0);
-        TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_3, offset_in1);
-        TT_SFPLOAD(p_sfpu::LREG2, mod0, ADDR_MOD_3, offset_in2);
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-        TTI_SFPNOP;
-        // ADDR_MOD_2 (dest.incr=2, configured in mac_init) advances the base by
-        // 2 rows after each SFPSTORE so that the next replay reads the next row group.
-        TT_SFPSTORE(p_sfpu::LREG3, mod0, ADDR_MOD_2, offset_out);
-
+    // The replay buffer was recorded in mac_init with fixed offsets (0, 64, 128, 0).
+    // All call sites use tile indices (0, 1, 2, 0), so the recorded sequence matches.
+    constexpr int num_instrs = is_fp32_dest_acc_en ? 6 : 7;
 #pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            lltt::replay(0, 6);
-        }
-    } else {
-        // BF16 dest: stochastic rounding FP32→FP16B → 7-instruction replay sequence.
-        lltt::record(0, 7);
-        TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_3, offset_in0);
-        TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_3, offset_in1);
-        TT_SFPLOAD(p_sfpu::LREG2, mod0, ADDR_MOD_3, offset_in2);
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-        TTI_SFPNOP;
-        TTI_SFP_STOCH_RND(
-            sfpi::SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        TT_SFPSTORE(p_sfpu::LREG3, mod0, ADDR_MOD_2, offset_out);
-
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            lltt::replay(0, 7);
-        }
+    for (int d = 0; d < ITERATIONS; d++) {
+        lltt::replay(0, num_instrs);
     }
 }
 

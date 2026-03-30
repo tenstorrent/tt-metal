@@ -31,6 +31,9 @@ ALWI void mac_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void mac_tile_init() { MATH((llk_math_eltwise_ternary_sfpu_mac_init<APPROX>())); }
+template <DataFormat data_format>
+ALWI void mac_tile_init() {
+    MATH((llk_math_eltwise_ternary_sfpu_mac_init<APPROX, DST_ACCUM_MODE, data_format>()));
+}
 
 }  // namespace ckernel

@@ -21,7 +21,7 @@ inline void llk_math_eltwise_ternary_sfpu_mac(
         vector_mode);
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, DataFormat data_format>
 inline void llk_math_eltwise_ternary_sfpu_mac_init() {
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::mac>();
     // eltwise_ternary_sfpu_configure_addrmod only sets ADDR_MOD_6 (dest.incr=2)
@@ -33,6 +33,30 @@ inline void llk_math_eltwise_ternary_sfpu_mac_init() {
         .srcb = {.incr = 0},
         .dest = {.incr = 2},
     }.set(ADDR_MOD_6);
+
+    // Record the replay sequence once at init time with fixed dest offsets.
+    // All callers use tile indices (0, 1, 2, 0) → offsets (0, 64, 128, 0).
+    constexpr InstrModLoadStore mod0 =
+        (data_format == DataFormat::Float32) ? InstrModLoadStore::FP32 : InstrModLoadStore::DEFAULT;
+    if constexpr (is_fp32_dest_acc_en) {
+        lltt::record(0, 6);
+        TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, 64);
+        TT_SFPLOAD(p_sfpu::LREG2, mod0, ADDR_MOD_7, 128);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+        TTI_SFPNOP;
+        TT_SFPSTORE(p_sfpu::LREG3, mod0, ADDR_MOD_6, 0);
+    } else {
+        lltt::record(0, 7);
+        TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_7, 0);
+        TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, 64);
+        TT_SFPLOAD(p_sfpu::LREG2, mod0, ADDR_MOD_7, 128);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+        TTI_SFPNOP;
+        TTI_SFP_STOCH_RND(
+            sfpi::SFPSTOCHRND_RND_EVEN, 0, 0, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+        TT_SFPSTORE(p_sfpu::LREG3, mod0, ADDR_MOD_6, 0);
+    }
 }
 
 }  // namespace ckernel

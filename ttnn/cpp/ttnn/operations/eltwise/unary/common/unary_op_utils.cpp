@@ -518,7 +518,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             const char* data_format = (input_dtype == DataType::FLOAT32) ? "Float32" : "Float16_b";
             std::string mac_call =
                 fmt::format("mac_tile<DataFormat::{0}>({1}, {2}, {3}, {1});", data_format, idst, 1, 2);
-            return std::make_pair("mac_tile_init();", mac_call);
+            return std::make_pair(fmt::format("mac_tile_init<DataFormat::{0}>();", data_format), mac_call);
         }
         case UnaryOpType::CLAMP_TSS: {
             float param1 = params[1];

@@ -526,7 +526,8 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
                                                                            : "addcdiv_tile<DataFormat::Float16_b>";
             break;
         case TernaryOpType::MAC:
-            defines["TERNARY_SFPU_OP_INIT"] = "mac_tile_init";
+            defines["TERNARY_SFPU_OP_INIT"] = (dtype == DataType::FLOAT32) ? "mac_tile_init<DataFormat::Float32>"
+                                                                           : "mac_tile_init<DataFormat::Float16_b>";
             defines["TERNARY_SFPU_OP_FUNC"] =
                 (dtype == DataType::FLOAT32) ? "mac_tile<DataFormat::Float32>" : "mac_tile<DataFormat::Float16_b>";
             break;
