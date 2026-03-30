@@ -21,7 +21,8 @@ What steps are needed to add TT-NN operation in C++?
 1. There are 2 options for writing a new operation. Option ``a`` is to write a device operation and option ``b`` is to write an operation that calls other operations
    a. Implement device operation in C++. Device operation is a struct that satisfies `DeviceOperationConcept` and specifies how to create output tensors and a program to run on the device.
    b. Implement an operation in C++ that calls other operations. This type of operation simply defines an ``invoke()`` method that calls other operations.
-2. Expose the operation as a free function under ttnn or ttnn::experimental (e.g. ttnn::tilize or ttnn::experimental::dropout) namespace that invokes the device operation via ``ttnn::device_operation::launch``.
+2. Expose the operation as a free function under ``ttnn`` or ``ttnn::experimental`` (e.g. ``ttnn::tilize`` or ``ttnn::experimental::dropout``) namespace
+   that invoke corresponding ``ttnn::prim`` operation(e.g. ``ttnn::prim::dropout``).
 
 What steps are needed to add TT-NN operation in Python?
 -------------------------------------------------------
