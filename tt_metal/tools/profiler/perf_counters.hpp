@@ -112,6 +112,26 @@ enum PerfCounterType : uint8_t {
     // Blackhole-specific L1 ports (differ from Wormhole at ports 1 and 8)
     L1_0_UNIFIED_PACKER,  // BH Port 1, mux 0: Unified Packer (WH has Unpacker#1/ECC/Pack1)
     L1_1_RISC_CORE,       // BH Port 8, mux 1: RISC Core L1 access (WH has TDMA Packer 2)
+    // L1 grant counters (reqif_ready — cycles L1 interface was ready to accept)
+    // Back-pressure = req - grant. Same port order as req counters above.
+    // L1 Bank 0 grants
+    L1_0_UNPACKER_0_GRANT,
+    L1_0_PORT1_GRANT,  // WH: Unpacker#1/ECC/Pack1, BH: Unified Packer
+    L1_0_TDMA_BUNDLE_0_GRANT,
+    L1_0_TDMA_BUNDLE_1_GRANT,
+    L1_0_NOC_RING0_OUTGOING_0_GRANT,
+    L1_0_NOC_RING0_OUTGOING_1_GRANT,
+    L1_0_NOC_RING0_INCOMING_0_GRANT,
+    L1_0_NOC_RING0_INCOMING_1_GRANT,
+    // L1 Bank 1 grants
+    L1_1_PORT8_GRANT,  // WH: TDMA Packer 2, BH: RISC Core
+    L1_1_EXT_UNPACKER_1_GRANT,
+    L1_1_EXT_UNPACKER_2_GRANT,
+    L1_1_EXT_UNPACKER_3_GRANT,
+    L1_1_NOC_RING1_OUTGOING_0_GRANT,
+    L1_1_NOC_RING1_OUTGOING_1_GRANT,
+    L1_1_NOC_RING1_INCOMING_0_GRANT,
+    L1_1_NOC_RING1_INCOMING_1_GRANT,
     // === Grant counters (accessed via out_fmt bit 16 = 1) ===
     // INSTRN_THREAD grant counters: actual instruction issue counts (8 types x 3 threads = 24)
     CFG_INSTRN_ISSUED_0,
@@ -258,8 +278,17 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_
      {PerfCounterType::L1_0_NOC_RING0_OUTGOING_0, 4},
      {PerfCounterType::L1_0_NOC_RING0_OUTGOING_1, 5},
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_0, 6},
-     {PerfCounterType::L1_0_NOC_RING0_INCOMING_1, 7}}};
-constexpr size_t NUM_L1_0_COUNTERS = 8;
+     {PerfCounterType::L1_0_NOC_RING0_INCOMING_1, 7},
+     // Grant counters (counter_sel + 256 = out_fmt bit 16 set)
+     {PerfCounterType::L1_0_UNPACKER_0_GRANT, 256},
+     {PerfCounterType::L1_0_PORT1_GRANT, 257},
+     {PerfCounterType::L1_0_TDMA_BUNDLE_0_GRANT, 258},
+     {PerfCounterType::L1_0_TDMA_BUNDLE_1_GRANT, 259},
+     {PerfCounterType::L1_0_NOC_RING0_OUTGOING_0_GRANT, 260},
+     {PerfCounterType::L1_0_NOC_RING0_OUTGOING_1_GRANT, 261},
+     {PerfCounterType::L1_0_NOC_RING0_INCOMING_0_GRANT, 262},
+     {PerfCounterType::L1_0_NOC_RING0_INCOMING_1_GRANT, 263}}};
+constexpr size_t NUM_L1_0_COUNTERS = 16;
 
 // L1 bank 1 counters (MUX_CTRL[6:4] = 1): packer/risc, ext unpacker, ring1 NOC
 // Port 8 differs between architectures: BH has RISC core, WH has TDMA packer 2
@@ -275,8 +304,17 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_
      {PerfCounterType::L1_1_NOC_RING1_OUTGOING_0, 4},
      {PerfCounterType::L1_1_NOC_RING1_OUTGOING_1, 5},
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_0, 6},
-     {PerfCounterType::L1_1_NOC_RING1_INCOMING_1, 7}}};
-constexpr size_t NUM_L1_1_COUNTERS = 8;
+     {PerfCounterType::L1_1_NOC_RING1_INCOMING_1, 7},
+     // Grant counters
+     {PerfCounterType::L1_1_PORT8_GRANT, 256},
+     {PerfCounterType::L1_1_EXT_UNPACKER_1_GRANT, 257},
+     {PerfCounterType::L1_1_EXT_UNPACKER_2_GRANT, 258},
+     {PerfCounterType::L1_1_EXT_UNPACKER_3_GRANT, 259},
+     {PerfCounterType::L1_1_NOC_RING1_OUTGOING_0_GRANT, 260},
+     {PerfCounterType::L1_1_NOC_RING1_OUTGOING_1_GRANT, 261},
+     {PerfCounterType::L1_1_NOC_RING1_INCOMING_0_GRANT, 262},
+     {PerfCounterType::L1_1_NOC_RING1_INCOMING_1_GRANT, 263}}};
+constexpr size_t NUM_L1_1_COUNTERS = 16;
 
 // INSTRN counters (61 counters)
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> instrn_counters = {

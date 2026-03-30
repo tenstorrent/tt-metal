@@ -285,6 +285,15 @@ PERF_COUNTER_CSV_HEADERS = [
     "L1 Packer Port Util Median (%)",
     "L1 Packer Port Util Max (%)",
     "L1 Packer Port Util Avg (%)",
+    # L1 back-pressure metrics: (req - grant) / req * 100
+    "NOC Ring 0 Outgoing Backpressure Min (%)",
+    "NOC Ring 0 Outgoing Backpressure Median (%)",
+    "NOC Ring 0 Outgoing Backpressure Max (%)",
+    "NOC Ring 0 Outgoing Backpressure Avg (%)",
+    "NOC Ring 0 Incoming Backpressure Min (%)",
+    "NOC Ring 0 Incoming Backpressure Median (%)",
+    "NOC Ring 0 Incoming Backpressure Max (%)",
+    "NOC Ring 0 Incoming Backpressure Avg (%)",
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
@@ -962,6 +971,21 @@ def _enrich_ops_from_device_logs(
                     "avg": grouped.mean().to_dict(),
                 }
 
+            def compute_backpressure(req_ch0, req_ch1, grant_ch0, grant_ch1):
+                """Compute avg back-pressure across two channels: (req-grant)/req * 100."""
+                r0 = get_counter_series(req_ch0)
+                r1 = get_counter_series(req_ch1)
+                g0 = get_counter_series(grant_ch0)
+                g1 = get_counter_series(grant_ch1)
+                bp = (((r0 - g0) + (r1 - g1)) / (r0 + r1) * 100).replace([float("inf"), -float("inf")], nan)
+                grouped = bp.groupby(level=["run_host_id", "trace_id_count"])
+                return {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+
             # Get all counter series needed for metrics
             sfpu_counter = get_counter_series("SFPU_COUNTER")
             sfpu_ref_cnt = get_counter_ref_cnt("SFPU_COUNTER")
@@ -1152,6 +1176,24 @@ def _enrich_ops_from_device_logs(
             elif has_counter("L1_0_UNPACKER_1_ECC_PACK1"):
                 l1_packer_port_util = compute_util_metric("L1_0_UNPACKER_1_ECC_PACK1")
 
+            # L1 back-pressure metrics (from grant counters)
+            noc_r0_out_bp = {}
+            noc_r0_in_bp = {}
+            if has_counter("L1_0_NOC_RING0_OUTGOING_0") and has_counter("L1_0_NOC_RING0_OUTGOING_0_GRANT"):
+                noc_r0_out_bp = compute_backpressure(
+                    "L1_0_NOC_RING0_OUTGOING_0",
+                    "L1_0_NOC_RING0_OUTGOING_1",
+                    "L1_0_NOC_RING0_OUTGOING_0_GRANT",
+                    "L1_0_NOC_RING0_OUTGOING_1_GRANT",
+                )
+            if has_counter("L1_0_NOC_RING0_INCOMING_0") and has_counter("L1_0_NOC_RING0_INCOMING_0_GRANT"):
+                noc_r0_in_bp = compute_backpressure(
+                    "L1_0_NOC_RING0_INCOMING_0",
+                    "L1_0_NOC_RING0_INCOMING_1",
+                    "L1_0_NOC_RING0_INCOMING_0_GRANT",
+                    "L1_0_NOC_RING0_INCOMING_1_GRANT",
+                )
+
             # === New metrics: L1 Bank 1 ===
             noc_r1_out_util = {}
             noc_r1_in_util = {}
@@ -1294,6 +1336,10 @@ def _enrich_ops_from_device_logs(
 
                 # L1 Port 1 (arch-specific: BH unified packer, WH unpacker#1/ECC/pack1)
                 assign_metric("L1 Packer Port Util", l1_packer_port_util)
+
+                # L1 back-pressure
+                assign_metric("NOC Ring 0 Outgoing Backpressure", noc_r0_out_bp)
+                assign_metric("NOC Ring 0 Incoming Backpressure", noc_r0_in_bp)
 
         if perf_counter_df is not None and not perf_counter_df.empty:
             print_efficiency_metrics_summary(pd.DataFrame(host_ops_by_device[device]), device)
@@ -1652,6 +1698,37 @@ def get_device_data_generate_report(
                         axis=1,
                     )
 
+                    # L1 back-pressure: (req - grant) / req * 100
+                    def safe_backpressure(req0_key, req1_key, grant0_key, grant1_key):
+                        def fn(x):
+                            r0 = x.get(req0_key, 0)
+                            r1 = x.get(req1_key, 0)
+                            g0 = x.get(grant0_key, 0)
+                            g1 = x.get(grant1_key, 0)
+                            total_req = r0 + r1
+                            return ((total_req - g0 - g1) / total_req * 100) if total_req > 0 else nan
+
+                        return fn
+
+                    eff_pivot["NOC Ring 0 Outgoing Backpressure"] = eff_pivot.apply(
+                        safe_backpressure(
+                            "value_L1_0_NOC_RING0_OUTGOING_0",
+                            "value_L1_0_NOC_RING0_OUTGOING_1",
+                            "value_L1_0_NOC_RING0_OUTGOING_0_GRANT",
+                            "value_L1_0_NOC_RING0_OUTGOING_1_GRANT",
+                        ),
+                        axis=1,
+                    )
+                    eff_pivot["NOC Ring 0 Incoming Backpressure"] = eff_pivot.apply(
+                        safe_backpressure(
+                            "value_L1_0_NOC_RING0_INCOMING_0",
+                            "value_L1_0_NOC_RING0_INCOMING_1",
+                            "value_L1_0_NOC_RING0_INCOMING_0_GRANT",
+                            "value_L1_0_NOC_RING0_INCOMING_1_GRANT",
+                        ),
+                        axis=1,
+                    )
+
                     # Aggregate metrics per operation (min, median, max, avg)
                     grouped_eff = eff_pivot.groupby(["run_host_id", "trace_id_count"])
 
@@ -1693,6 +1770,8 @@ def get_device_data_generate_report(
                         "NOC Ring 1 Outgoing Util",
                         "NOC Ring 1 Incoming Util",
                         "L1 Packer Port Util",
+                        "NOC Ring 0 Outgoing Backpressure",
+                        "NOC Ring 0 Incoming Backpressure",
                     ]
                     # IPC metrics (no % suffix)
                     _ipc_metric_names = ["Thread 0 IPC", "Thread 1 IPC", "Thread 2 IPC"]

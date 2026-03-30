@@ -170,6 +170,25 @@ COUNTER_TYPE_NAMES = {
     140: "DEST_READ_GRANTED_2",
     141: "DEST_READ_GRANTED_3",
     142: "MATH_NOT_STALLED_DEST_WR_PORT",
+    # L1 grant counters (reqif_ready — cycles L1 was ready to accept)
+    # L1 Bank 0 grants
+    143: "L1_0_UNPACKER_0_GRANT",
+    144: "L1_0_PORT1_GRANT",
+    145: "L1_0_TDMA_BUNDLE_0_GRANT",
+    146: "L1_0_TDMA_BUNDLE_1_GRANT",
+    147: "L1_0_NOC_RING0_OUTGOING_0_GRANT",
+    148: "L1_0_NOC_RING0_OUTGOING_1_GRANT",
+    149: "L1_0_NOC_RING0_INCOMING_0_GRANT",
+    150: "L1_0_NOC_RING0_INCOMING_1_GRANT",
+    # L1 Bank 1 grants
+    151: "L1_1_PORT8_GRANT",
+    152: "L1_1_EXT_UNPACKER_1_GRANT",
+    153: "L1_1_EXT_UNPACKER_2_GRANT",
+    154: "L1_1_EXT_UNPACKER_3_GRANT",
+    155: "L1_1_NOC_RING1_OUTGOING_0_GRANT",
+    156: "L1_1_NOC_RING1_OUTGOING_1_GRANT",
+    157: "L1_1_NOC_RING1_INCOMING_0_GRANT",
+    158: "L1_1_NOC_RING1_INCOMING_1_GRANT",
 }
 
 
@@ -370,6 +389,9 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "NOC Ring 1 Incoming Util",
         # L1 Port 1 (arch-specific: BH unified packer, WH unpacker#1/ECC/pack1)
         "L1 Packer Port Util",
+        # L1 back-pressure
+        "NOC Ring 0 Outgoing Backpressure",
+        "NOC Ring 0 Incoming Backpressure",
     ]
 
     # IPC metrics use no suffix (not percentages)
