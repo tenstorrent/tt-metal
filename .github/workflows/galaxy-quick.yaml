@@ -37,8 +37,9 @@ on:
         required: false
         type: string
         default: "in-service"
-  push:
-    branches: ["main"]
+  schedule:
+    # Every 2 hours (UTC)
+    - cron: "0 */2 * * *"
 
 run-name: >
   ${{
