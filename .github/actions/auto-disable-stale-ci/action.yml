@@ -91,7 +91,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        python3 tools/ci/load_previous_triage_state.py \
+        echo "[triage] Restoring previous triage state artifact..."
+        python3 -u tools/ci/load_previous_triage_state.py \
           --repo tenstorrent/tt-metal \
           --workflow triage-ci.yaml \
           --artifact-name triage-state \
@@ -100,7 +101,8 @@ runs:
         if [ "${{ inputs.dry-run }}" = "true" ]; then
           dry="--dry-run"
         fi
-        python3 tools/ci/execute_disable_actions.py \
+        echo "[triage] Executing disable actions (this can take several minutes when creating PRs)..."
+        python3 -u tools/ci/execute_disable_actions.py \
           --actions-json "${{ inputs.output-dir }}/disable_actions.json" \
           --output-json "${{ inputs.output-dir }}/execution_result.json" \
           --summary-md "${{ inputs.output-dir }}/summary.md" \
@@ -110,3 +112,4 @@ runs:
           --extra-pr-check-workflows "${{ inputs.extra-pr-check-workflows }}" \
           --model "${{ inputs.model }}" \
           $dry
+        echo "[triage] Disable action execution finished."

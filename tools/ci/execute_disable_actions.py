@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -59,6 +60,46 @@ def run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subproce
             f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
         )
     return proc
+
+
+def run_streaming(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.Popen(
+        cmd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        bufsize=1,
+    )
+    out_parts: list[str] = []
+    err_parts: list[str] = []
+
+    def _pump(stream: Any, sink: list[str], *, to_stderr: bool) -> None:
+        if stream is None:
+            return
+        for line in stream:
+            sink.append(line)
+            if to_stderr:
+                print(line, file=sys.stderr, end="", flush=True)
+            else:
+                print(line, end="", flush=True)
+
+    t_out = threading.Thread(target=_pump, args=(proc.stdout, out_parts), kwargs={"to_stderr": False})
+    t_err = threading.Thread(target=_pump, args=(proc.stderr, err_parts), kwargs={"to_stderr": True})
+    t_out.start()
+    t_err.start()
+    returncode = proc.wait()
+    t_out.join()
+    t_err.join()
+
+    stdout = "".join(out_parts)
+    stderr = "".join(err_parts)
+    if check and returncode != 0:
+        raise RuntimeError(
+            "Command failed with non-zero exit status "
+            f"{returncode}: {' '.join(shlex.quote(c) for c in cmd)}\n"
+            f"stdout:\n{stdout.strip()}\n\nstderr:\n{stderr.strip()}"
+        )
+    return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr=stderr)
 
 
 def run_guarded_gh(tokens: list[str], *, capture: bool = True, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -200,6 +241,7 @@ def write_text(path: Path, content: str) -> None:
 
 def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> tuple[dict[str, Any], dict[str, Any]]:
     issue_number = int(action["issue_number"])
+    log(f"disable_editor: start issue #{issue_number} with model={model}")
     job_urls = action.get("job_urls", [])
     if not isinstance(job_urls, list):
         job_urls = []
@@ -221,7 +263,7 @@ def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> tu
     cmd = ["agent", "--trust", "-p", prompt]
     if model != "auto":
         cmd[1:1] = ["--model", model]
-    result = run(cmd, capture=True)
+    result = run_streaming(cmd)
     debug: dict[str, Any] = {
         "used_retry": False,
         "primary_stdout": result.stdout,
@@ -229,8 +271,10 @@ def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> tu
     }
     try:
         summary = parse_agent_json_after_marker(result.stdout, "===FINAL_DISABLE_EDIT_SUMMARY===")
+        log(f"disable_editor: parsed summary on primary response for issue #{issue_number}")
         return summary, debug
     except Exception as exc:
+        log(f"disable_editor: primary parse failed for issue #{issue_number}; retrying summary-only response")
         debug["primary_parse_error"] = str(exc)
         # Retry with a strict summary-only prompt in case the main run omitted marker formatting.
         retry_prompt = (
@@ -242,11 +286,12 @@ def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> tu
         retry_cmd = ["agent", "--trust", "-p", retry_prompt]
         if model != "auto":
             retry_cmd[1:1] = ["--model", model]
-        retry = run(retry_cmd, capture=True)
+        retry = run_streaming(retry_cmd)
         debug["used_retry"] = True
         debug["retry_stdout"] = retry.stdout
         debug["retry_stderr"] = retry.stderr
         summary = parse_agent_json_after_marker(retry.stdout, "===FINAL_DISABLE_EDIT_SUMMARY===")
+        log(f"disable_editor: parsed summary on retry for issue #{issue_number}")
         return summary, debug
 
 
@@ -259,7 +304,7 @@ def invoke_kickoff_agent(pr_url: str, model: str) -> str:
     cmd = ["agent", "--trust", "-p", prompt]
     if model != "auto":
         cmd[1:1] = ["--model", model]
-    result = run(cmd, capture=True)
+    result = run_streaming(cmd)
     return result.stdout.strip()[-2000:]
 
 
@@ -286,8 +331,13 @@ def parse_extra_workflows(raw: str) -> list[str]:
 def dispatch_required_pr_check_workflows(branch: str, workflows: list[str]) -> dict[str, str]:
     runs: dict[str, str] = {}
     for workflow in workflows:
+        log(f"dispatch: triggering workflow {workflow} for branch {branch}")
         dispatched = run_guarded_gh(["gh", "workflow", "run", workflow, "--repo", REPO, "--ref", branch])
         runs[workflow] = parse_first_url(dispatched.stdout)
+        if runs[workflow]:
+            log(f"dispatch: workflow {workflow} run URL {runs[workflow]}")
+        else:
+            log(f"dispatch: workflow {workflow} dispatched (run URL not returned)")
     return runs
 
 
@@ -302,6 +352,10 @@ def git_changed_files() -> list[str]:
 
 def now_utc() -> str:
     return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def log(message: str) -> None:
+    print(f"[{now_utc()}] {message}", flush=True)
 
 
 def state_key_for_ts(source_ts: str) -> str:
@@ -464,6 +518,10 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     extra_pr_check_workflows = parse_extra_workflows(args.extra_pr_check_workflows)
+    log(
+        "execute_disable_actions: start "
+        f"dry_run={args.dry_run} model={args.model} max_attempts_per_item={args.max_attempts_per_item}"
+    )
 
     if not args.dry_run:
         if not os.environ.get("GITHUB_TOKEN"):
@@ -490,8 +548,10 @@ def main() -> int:
             continue
         dedup[source_ts] = action
     validated_actions = list(dedup.values())
+    log(f"execute_disable_actions: validated {len(validated_actions)} actions after input filtering")
     state_path = Path(args.state_json)
     state = load_state(state_path)
+    log(f"execute_disable_actions: loaded state from {state_path}")
 
     result: dict[str, Any] = {
         "planned_actions": len(validated_actions),
@@ -507,13 +567,16 @@ def main() -> int:
         result["debug_dir"] = str(debug_root)
 
     if not args.dry_run:
+        log("execute_disable_actions: preparing guarded gh runtime copy and auth checks")
         prepare_guarded_gh_runtime_copy()
         run_guarded_gh(["gh", "auth", "status"])
         run(["git", "fetch", "origin", "main"], capture=True)
+        log("execute_disable_actions: git fetch origin/main complete")
 
     for action in validated_actions:
         source_ts = str(action["source_slack_ts"])
         issue_number = int(action["issue_number"])
+        log(f"action: evaluating issue #{issue_number} source_ts={source_ts}")
         issue_repo = str(action.get("issue_repo", ISSUE_REPO_TEST)).strip() or ISSUE_REPO_TEST
         issue_url = str(action.get("issue_url", "")).strip() or f"https://github.com/{issue_repo}/issues/{issue_number}"
         item = ensure_state_item(state, action)
@@ -548,6 +611,7 @@ def main() -> int:
 
         active_pr_url = state_has_active_pr(item)
         if active_pr_url and not args.dry_run and not is_pr_open(active_pr_url):
+            log(f"action: tracked active PR is no longer open for issue #{issue_number}: {active_pr_url}")
             item["disable_pr"] = {"number": 0, "url": "", "branch": "", "head_sha": ""}
             set_status(
                 item,
@@ -558,6 +622,7 @@ def main() -> int:
             result["state_updates"] += 1
             active_pr_url = None
         if active_pr_url:
+            log(f"action: skipping issue #{issue_number} because active PR exists: {active_pr_url}")
             result["skipped"].append(
                 {
                     "source_slack_ts": source_ts,
@@ -582,6 +647,7 @@ def main() -> int:
 
         existing = None if args.dry_run else ensure_no_duplicate_open_pr(source_ts)
         if existing:
+            log(f"action: found matching open PR marker for issue #{issue_number}: {existing}")
             item["disable_pr"]["url"] = existing
             item["disable_pr"]["number"] = parse_pr_number(existing)
             set_status(item, "pr_open", event="existing_pr_detected", details=f"Found open PR {existing}")
@@ -593,6 +659,7 @@ def main() -> int:
 
         branch = branch_name(action)
         if args.dry_run:
+            log(f"action: dry-run planned for issue #{issue_number} on branch {branch}")
             set_status(
                 item,
                 "planned",
@@ -612,6 +679,7 @@ def main() -> int:
             continue
 
         try:
+            log(f"action: checking out branch {branch} for issue #{issue_number}")
             run(["git", "checkout", "-B", branch, "origin/main"], capture=True)
             before = set(git_changed_files())
             if before:
@@ -642,6 +710,7 @@ def main() -> int:
                 write_text(item_dir / "disable_edit_summary.json", json.dumps(edit_summary, indent=2))
             changed = git_changed_files()
             if not changed:
+                log(f"action: no code changes produced by disable editor for issue #{issue_number}")
                 summary_note = str(edit_summary.get("notes", "")).strip() if isinstance(edit_summary, dict) else ""
                 skip_reason = "no_code_changes_from_agent"
                 if summary_note:
@@ -664,6 +733,7 @@ def main() -> int:
                 continue
             protected = sorted({p for p in changed if p in PROTECTED_AGENT_PATHS})
             if protected:
+                log(f"action: protected paths modified for issue #{issue_number}; escalating to needs_human")
                 set_status(
                     item,
                     "needs_human",
@@ -684,9 +754,12 @@ def main() -> int:
             run(["git", "add", "."], capture=True)
             commit_msg = f"ci: disable failing test for #{issue_number}"
             ensure_git_identity()
+            log(f"action: committing disable changes for issue #{issue_number}")
             run(["git", "commit", "-m", commit_msg], capture=True)
+            log(f"action: pushing branch {branch} for issue #{issue_number}")
             run(["git", "push", "-u", "origin", branch], capture=True)
 
+            log(f"action: creating draft PR for issue #{issue_number}")
             pr = run_guarded_gh(
                 [
                     "gh",
@@ -708,9 +781,11 @@ def main() -> int:
                 ]
             )
             pr_url = pr.stdout.strip().splitlines()[-1].strip()
+            log(f"action: created PR {pr_url} for issue #{issue_number}")
             required_check_runs = dispatch_required_pr_check_workflows(
                 branch, [*DEFAULT_REQUIRED_PR_CHECK_WORKFLOWS, *extra_pr_check_workflows]
             )
+            log(f"action: invoking kickoff workflow agent for PR {pr_url}")
             kickoff_tail = invoke_kickoff_agent(pr_url, args.model)
             item["disable_pr"] = {
                 "number": parse_pr_number(pr_url),
@@ -734,6 +809,7 @@ def main() -> int:
                 }
             )
         except Exception as exc:
+            log(f"action: failed issue #{issue_number}: {exc}")
             set_status(item, "needs_human", event="action_failed", details=str(exc))
             result["state_updates"] += 1
             result["skipped"].append(
@@ -752,6 +828,7 @@ def main() -> int:
     out_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
     save_state(state_path, state)
     write_summary(Path(args.summary_md), result)
+    log(f"execute_disable_actions: wrote outputs to {out_path} and {args.summary_md}")
     return 0
 
 

@@ -1,4 +1,4 @@
-name: "(triage) Export Evan Slack threads"
+name: "(triage) CI Triage Autonomy"
 
 on:
   workflow_dispatch:
@@ -73,7 +73,8 @@ permissions:
   pull-requests: write
 
 jobs:
-  export-slack-author-threads:
+  triage-ci-autonomy:
+    name: "Run CI triage autonomy pipeline"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
