@@ -268,7 +268,7 @@ void kernel_main() {
     // Matmul reader args (NCRISC is no-op)
     deepseek_b1_ops::Matmul::ReaderArgs dkv_matmul_args{};
 
-    // Gather sender args (from compile-time args, passed to op as runtime args)
+    // Gather args: both sender and receiver on NCRISC (ReceiverOnNCRISC mode)
     deepseek_b1_ops::Gather::DMArgs dkv_gather_args{
         .sender =
             {
@@ -286,7 +286,15 @@ void kernel_main() {
                 get_write_ptr(get_named_compile_time_arg_val(
                     "kv_rmsnorm_input_cb")),  // receiver_data_addr from CB write ptr (single-buffered)
             },
-        .receiver = {},
+        .receiver =
+            {
+                get_named_compile_time_arg_val("dkv_gather_noc0_num_senders"),
+                get_named_compile_time_arg_val("dkv_gather_noc1_num_senders"),
+                get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_addr"),
+                get_named_compile_time_arg_val("dkv_gather_dst_cb"),
+                get_named_compile_time_arg_val("dkv_gather_dst_num_pages"),
+            },
     };
 
     using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::ReaderCTArgs;
@@ -652,18 +660,10 @@ void kernel_main() {
     using DKV_MatmulCTArgs = deepseek_b1_ops::Matmul::WriterCTArgs;
     deepseek_b1_ops::Matmul::WriterArgs dkv_matmul_args{};
 
-    // Gather receiver args (from compile-time args, passed to op as runtime args)
+    // Gather: BRISC is no-op (ReceiverOnNCRISC mode)
     deepseek_b1_ops::Gather::DMArgs dkv_gather_args{
         .sender = {},
-        .receiver =
-            {
-                get_named_compile_time_arg_val("dkv_gather_noc0_num_senders"),
-                get_named_compile_time_arg_val("dkv_gather_noc1_num_senders"),
-                get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_addr"),
-                get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_addr"),
-                get_named_compile_time_arg_val("dkv_gather_dst_cb"),
-                get_named_compile_time_arg_val("dkv_gather_dst_num_pages"),
-            },
+        .receiver = {},
     };
 
     using KV_RMSNormCTArgs = deepseek_b1_ops::RMSNorm::WriterCTArgs;
@@ -2187,7 +2187,8 @@ void kernel_main() {
                 // ================================================================
                 {
                     DeviceZoneScopedN("DKV_GATHER");
-                    deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true> dkv_gather;
+                    deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true, false, true>
+                        dkv_gather;
                     dkv_gather(dkv_gather_args);
                 }
 
