@@ -132,6 +132,21 @@ def test_deepseek_v3_moe_gate_linear_trace_mode(
         memory_config=weight_memory_config,
     )
 
+    grid = mesh_device.compute_with_storage_grid_size()
+    linear_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(7, 10),
+        in0_block_w=32,
+        out_subblock_h=1,
+        out_subblock_w=2,
+        out_block_h=1,
+        out_block_w=2,
+        per_core_M=1,
+        per_core_N=2,
+        transpose_mcast=False,
+        fused_activation=None,
+    )
+    linear_program_config = None
+
     # Compile run
     logger.info(f"Compiling linear operation: {op_name}")
     logger.info(f"  Input shape: {input_shape}")
@@ -143,6 +158,7 @@ def test_deepseek_v3_moe_gate_linear_trace_mode(
         tt_weight_tensor,
         memory_config=output_memory_config,
         dtype=ttnn.bfloat16,
+        program_config=linear_program_config,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -155,6 +171,7 @@ def test_deepseek_v3_moe_gate_linear_trace_mode(
             tt_weight_tensor,
             memory_config=output_memory_config,
             dtype=ttnn.bfloat16,
+            program_config=linear_program_config,
         )
     ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
     ttnn.synchronize_device(mesh_device)
@@ -168,6 +185,7 @@ def test_deepseek_v3_moe_gate_linear_trace_mode(
             tt_weight_tensor,
             memory_config=output_memory_config,
             dtype=ttnn.bfloat16,
+            program_config=linear_program_config,
         )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)

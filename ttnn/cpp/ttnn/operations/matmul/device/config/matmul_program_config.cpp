@@ -1174,61 +1174,9 @@ MatmulProgramConfig create_simple_matmul_program_config(
             (core_range.y == 0 and mem_config.is_sharded() and
              (mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED or block_sharded_on_1d_column_grid));
         bool use_mcast_2d_config =
-            all_interleaved or (core_range.y == 0 and mem_config.is_sharded() and
-                                mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
-                                not block_sharded_on_1d_column_grid and not block_sharded_on_1d_row_grid);
-        if ((core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or use_mcast_2d_config) {
-            bool transpose_mcast =
-                input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
-                input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
-            uint32_t out_block_h = per_core_M;
-            uint32_t out_block_w = per_core_N;
-            out_subblock_h = 4;
-            out_subblock_w = 2;
-            if (out_subblock_w != per_core_N) {
-                out_subblock_h = 1;
-            }
-            if (all_interleaved) {
-                in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1)
-                                               : (Kt % num_cores_x == 0 ? Kt / num_cores_y : 1);
-                per_core_M = !transpose_mcast ? tt::div_up(Mt, num_cores_y) : tt::div_up(Mt, num_cores_x);
-                per_core_N = !transpose_mcast ? tt::div_up(Nt, num_cores_x) : tt::div_up(Nt, num_cores_y);
-
-                auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
-                    input_tensor_a,
-                    input_tensor_b,
-                    transpose_a,
-                    transpose_b,
-                    bias_single_tile_size,
-                    per_core_M,
-                    per_core_N,
-                    in0_block_w,
-                    utilities::estimate_interm_tile_size(compute_kernel_config, output_dtype),
-                    /*adjust_in0_block_w=*/true);
-                out_block_h = mutlti_dim_per_core_factor[0];
-                out_block_w = mutlti_dim_per_core_factor[1];
-                in0_block_w = mutlti_dim_per_core_factor[2];
-
-                bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
-                auto subblock_hw =
-                    bmm_op_utils::get_matmul_subblock_params(out_block_h, out_block_w, false, false, fp32_dest_acc_en);
-                out_subblock_h = std::get<0>(subblock_hw);
-                out_subblock_w = std::get<1>(subblock_hw);
-            }
-            return MatmulMultiCoreReuseMultiCastProgramConfig{
-                .compute_with_storage_grid_size = {num_cores_x, num_cores_y},
-                .in0_block_w = in0_block_w,
-                .out_subblock_h = out_subblock_h,
-                .out_subblock_w = out_subblock_w,
-                .out_block_h = out_block_h,
-                .out_block_w = out_block_w,
-                .per_core_M = per_core_M,
-                .per_core_N = per_core_N,
-                .transpose_mcast = transpose_mcast,
-                .fused_activation = std::nullopt,
-                .fuse_batch = false,
-            };
-        }
+            all_dram_interleaved or (core_range.y == 0 and mem_config.is_sharded() and
+                                     mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
+                                     not block_sharded_on_1d_column_grid and not block_sharded_on_1d_row_grid);
         if (core_range.y == 1 or use_mcast_1d_in0_config) {
             // Pass user's shard_spec when BLOCK_SHARDED on 1D row grid
             std::optional<tt::tt_metal::ShardSpec> user_shard_spec =
@@ -1280,6 +1228,58 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 output_dtype,
                 all_dram_interleaved,
                 user_shard_spec);
+        }
+        if ((core_range.y > 0 and num_blocks_x <= num_cores_x and num_blocks_y <= num_cores_y) or use_mcast_2d_config) {
+            bool transpose_mcast =
+                input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED &&
+                input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR;
+            uint32_t out_block_h = per_core_M;
+            uint32_t out_block_w = per_core_N;
+            out_subblock_h = 4;
+            out_subblock_w = 2;
+            if (out_subblock_w != per_core_N) {
+                out_subblock_h = 1;
+            }
+            if (all_dram_interleaved) {
+                in0_block_w = !transpose_mcast ? (Kt % num_cores_x == 0 ? Kt / num_cores_x : 1)
+                                               : (Kt % num_cores_x == 0 ? Kt / num_cores_y : 1);
+                per_core_M = !transpose_mcast ? tt::div_up(Mt, num_cores_y) : tt::div_up(Mt, num_cores_x);
+                per_core_N = !transpose_mcast ? tt::div_up(Nt, num_cores_x) : tt::div_up(Nt, num_cores_y);
+
+                auto mutlti_dim_per_core_factor = get_multi_dim_per_core_factor(
+                    input_tensor_a,
+                    input_tensor_b,
+                    transpose_a,
+                    transpose_b,
+                    bias_single_tile_size,
+                    per_core_M,
+                    per_core_N,
+                    in0_block_w,
+                    utilities::estimate_interm_tile_size(compute_kernel_config, output_dtype),
+                    /*adjust_in0_block_w=*/true);
+                out_block_h = mutlti_dim_per_core_factor[0];
+                out_block_w = mutlti_dim_per_core_factor[1];
+                in0_block_w = mutlti_dim_per_core_factor[2];
+
+                bool fp32_dest_acc_en = get_fp32_dest_acc_en(compute_kernel_config);
+                auto subblock_hw =
+                    bmm_op_utils::get_matmul_subblock_params(out_block_h, out_block_w, false, false, fp32_dest_acc_en);
+                out_subblock_h = std::get<0>(subblock_hw);
+                out_subblock_w = std::get<1>(subblock_hw);
+            }
+            return MatmulMultiCoreReuseMultiCastProgramConfig{
+                .compute_with_storage_grid_size = {num_cores_x, num_cores_y},
+                .in0_block_w = in0_block_w,
+                .out_subblock_h = out_subblock_h,
+                .out_subblock_w = out_subblock_w,
+                .out_block_h = out_block_h,
+                .out_block_w = out_block_w,
+                .per_core_M = per_core_M,
+                .per_core_N = per_core_N,
+                .transpose_mcast = transpose_mcast,
+                .fused_activation = std::nullopt,
+                .fuse_batch = false,
+            };
         }
     }
     return MatmulMultiCoreProgramConfig{};
