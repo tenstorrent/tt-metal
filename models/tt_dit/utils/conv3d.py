@@ -55,7 +55,7 @@ _MESH_BLOCKINGS = {
     (4, 32, 192, 384, (3, 3, 3)): (96, 128, 1, 16, 2),  # up1 res0: 23% faster (2647 us vs 3453 us baseline)
     (4, 32, 192, 192, (3, 3, 3)): (96, 96, 1, 32, 2),  # up2: 37% faster (4735 us vs 7629 us baseline)
     (4, 32, 96, 96, (3, 3, 3)): (96, 96, 1, 16, 4),  # up3: 36% faster (5232 us vs 8135 us baseline)
-    (4, 32, 96, 3, (3, 3, 3)): (96, 32, 1, 16, 8),  # conv_out: original is best
+    (4, 32, 96, 3, (3, 3, 3)): (96, 32, 1, 32, 2),  # conv_out: 13% faster (4716 us vs 5428 us)
     (4, 32, 384, 192, (1, 3, 3)): (192, 96, 1, 32, 4),  # up0+up1 spatial: original is best weighted
     (4, 32, 192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),  # up2 spatial: original is best
     (4, 32, 384, 768, (3, 1, 1)): (192, 384, 1, 16, 2),  # up0+up1 time_conv: 14x vs original default
