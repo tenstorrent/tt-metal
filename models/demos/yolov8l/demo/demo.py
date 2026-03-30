@@ -19,11 +19,11 @@ from models.demos.utils.common_demo_utils import (
     preprocess,
     save_yolo_predictions_by_model,
 )
-from models.demos.yolov8s.common import YOLOV8S_L1_SMALL_SIZE, load_torch_model
-from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
+from models.demos.yolov8l.common import YOLOV8L_L1_SMALL_SIZE, load_torch_model
+from models.demos.yolov8l.runner.performant_runner import YOLOv8lPerformantRunner
 
 
-def run_yolov8s(
+def run_yolov8l(
     device,
     batch_size_per_device,
     input_loc,
@@ -43,7 +43,7 @@ def run_yolov8s(
         model = load_torch_model(model_location_generator)
 
     if model_type == "tt_model":
-        performant_runner = YOLOv8sPerformantRunner(
+        performant_runner = YOLOv8lPerformantRunner(
             device,
             device_batch_size=batch_size,
             mesh_mapper=inputs_mesh_mapper,
@@ -51,7 +51,7 @@ def run_yolov8s(
             model_location_generator=model_location_generator,
         )
 
-    save_dir = "models/demos/yolov8s/demo/runs"
+    save_dir = "models/demos/yolov8l/demo/runs"
 
     input_loc = os.path.abspath(input_loc)
     dataset = LoadImages(path=input_loc, batch=batch_size)
@@ -88,7 +88,7 @@ def run_yolov8s(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV8S_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    [{"l1_small_size": YOLOV8L_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -96,7 +96,7 @@ def run_yolov8s(
     [
         (
             1,
-            "models/demos/yolov8s/demo/images",
+            "models/demos/yolov8l/demo/images",
         ),
     ],
 )
@@ -115,7 +115,7 @@ def run_yolov8s(
 def test_demo(
     device, batch_size_per_device, input_loc, model_type, use_weights_from_ultralytics, res, model_location_generator
 ):
-    run_yolov8s(
+    run_yolov8l(
         device,
         batch_size_per_device,
         input_loc,
@@ -128,7 +128,7 @@ def test_demo(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": YOLOV8S_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    [{"l1_small_size": YOLOV8L_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -136,7 +136,7 @@ def test_demo(
     [
         (
             1,
-            "models/demos/yolov8s/demo/images",
+            "models/demos/yolov8l/demo/images",
         ),
     ],
 )
@@ -161,7 +161,7 @@ def test_demo_dp(
     res,
     model_location_generator,
 ):
-    run_yolov8s(
+    run_yolov8l(
         mesh_device,
         batch_size_per_device,
         input_loc,

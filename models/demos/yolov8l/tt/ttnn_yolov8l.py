@@ -584,7 +584,7 @@ class TtDetectionModel:
             device,
             parameters,
             "model.2",
-            n=1,
+            n=3,
             shortcut=True,
             input_params=c2f_configs["model.2"]["input_params"],
         )
@@ -599,16 +599,16 @@ class TtDetectionModel:
             device,
             parameters,
             "model.4",
-            n=2,
+            n=6,
             shortcut=True,
             input_params=c2f_configs["model.4"]["input_params"],
         )
-        self.conv_5 = TtConv(device, parameters, "model.5", input_params=[3, 2, 1, 256, 128], block_shard=True)
+        self.conv_5 = TtConv(device, parameters, "model.5", input_params=[3, 2, 1, 512, 256], block_shard=True)
         self.c2f_6 = TtC2f(
             device,
             parameters,
             "model.6",
-            n=2,
+            n=6,
             shortcut=True,
             block_shard=True,
             change_shard=True,
@@ -626,7 +626,7 @@ class TtDetectionModel:
             device,
             parameters,
             "model.8",
-            n=1,
+            n=3,
             shortcut=True,
             change_shard=True,
             block_shard=True,
@@ -639,7 +639,7 @@ class TtDetectionModel:
             device,
             parameters,
             "model.12",
-            n=1,
+            n=3,
             shortcut=False,
             bfloat8=True,
             block_shard=True,
@@ -649,7 +649,7 @@ class TtDetectionModel:
             device,
             parameters,
             "model.15",
-            n=1,
+            n=3,
             shortcut=False,
             input_params=c2f_configs["model.15"]["input_params"],
         )
@@ -660,7 +660,7 @@ class TtDetectionModel:
             device,
             parameters,
             "model.18",
-            n=1,
+            n=3,
             shortcut=False,
             input_params=c2f_configs["model.18"]["input_params"],
         )
@@ -671,7 +671,7 @@ class TtDetectionModel:
             device,
             parameters,
             "model.21",
-            n=1,
+            n=3,
             shortcut=False,
             input_params=c2f_configs["model.21"]["input_params"],
             block_shard=True,
