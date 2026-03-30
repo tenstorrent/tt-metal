@@ -99,14 +99,23 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
             .set_page_size(tt::CBIndex::c_1, tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_weight_config);
 
-    // CB16: output - TILE_LAYOUT accumulated result
-    // Size: 7 tiles (accumulator for one token's reduced output)
+    // CB16: output - TILE_LAYOUT final result
+    // Size: 7 tiles (one token's reduced output)
     // Double-buffered for pipelining between compute and writer
     uint32_t output_cb_size = emb_dim_tiles * tile_size;
     tt::tt_metal::CircularBufferConfig cb_output_config =
         tt::tt_metal::CircularBufferConfig(2 * output_cb_size, {{tt::CBIndex::c_16, output_cb_data_format}})
             .set_page_size(tt::CBIndex::c_16, tile_size);
     auto cb_output_handle = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_output_config);
+
+    // CB24: intermediate accumulation buffer for packer L1 accumulation
+    // Size: 7 tiles (accumulator for one token's result across all experts)
+    // Used for accumulation with push/pop between experts
+    uint32_t accumulator_cb_size = emb_dim_tiles * tile_size;
+    tt::tt_metal::CircularBufferConfig cb_accumulator_config =
+        tt::tt_metal::CircularBufferConfig(2 * accumulator_cb_size, {{tt::CBIndex::c_24, output_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_24, tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_accumulator_config);
 
     // Buffer info
     auto* combine_buffer = combine_output.buffer();
