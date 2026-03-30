@@ -198,7 +198,6 @@ constexpr float GELU_EXP_CORR_C4 = 1.0058581740e-05f;
 
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
-template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.1875
 
@@ -295,7 +294,7 @@ inline void calculate_gelu() {
 #pragma GCC unroll 0
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
-            sfpi::vFloat result = calculate_gelu_piecewise<APPROXIMATION_MODE>(in);
+            sfpi::vFloat result = calculate_gelu_piecewise(in);
             if constexpr (!is_fp32_dest_acc_en) {
                 result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
             }
