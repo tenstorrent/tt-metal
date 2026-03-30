@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       workflow_name:
-        description: "Workflow file name to inspect (e.g., galaxy-quick)"
+        description: "Workflow name without extension (e.g., galaxy-quick, t3000-unit-tests, single-card-demo-tests)"
         required: true
         type: string
       job_name:
