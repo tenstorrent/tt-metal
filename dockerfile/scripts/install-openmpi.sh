@@ -28,6 +28,13 @@ fi
 
 cd "${WORKDIR}"
 
+# Patch: drop __opal_attribute_always_inline__ from mca_part_persist_start.
+# GCC 14 (shipped in manylinux_2_34) treats _Bool -> volatile void* assignment as a hard error
+# when the enclosing function is force-inlined. Fix is upstream on main (aa024ac73d62, 2026-03-05)
+# but not yet backported to v5.0.x as of v5.0.10.
+sed -i 's/^__opal_attribute_always_inline__ static inline int$/static inline int/' \
+    ompi/mca/part/persist/part_persist.h
+
 # Run autogen.pl to generate configure script (required when building from git)
 echo "Running autogen.pl..."
 ./autogen.pl
