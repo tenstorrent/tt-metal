@@ -111,7 +111,59 @@ enum PerfCounterType : uint8_t {
     L1_1_NOC_RING1_INCOMING_1,  // Port 15: NOC Ring 1 Incoming channel 1
     // Blackhole-specific L1 ports (differ from Wormhole at ports 1 and 8)
     L1_0_UNIFIED_PACKER,  // BH Port 1, mux 0: Unified Packer (WH has Unpacker#1/ECC/Pack1)
-    L1_1_RISC_CORE        // BH Port 8, mux 1: RISC Core L1 access (WH has TDMA Packer 2)
+    L1_1_RISC_CORE,       // BH Port 8, mux 1: RISC Core L1 access (WH has TDMA Packer 2)
+    // === Grant counters (accessed via out_fmt bit 16 = 1) ===
+    // INSTRN_THREAD grant counters: actual instruction issue counts (8 types x 3 threads = 24)
+    CFG_INSTRN_ISSUED_0,
+    CFG_INSTRN_ISSUED_1,
+    CFG_INSTRN_ISSUED_2,
+    SYNC_INSTRN_ISSUED_0,
+    SYNC_INSTRN_ISSUED_1,
+    SYNC_INSTRN_ISSUED_2,
+    THCON_INSTRN_ISSUED_0,
+    THCON_INSTRN_ISSUED_1,
+    THCON_INSTRN_ISSUED_2,
+    XSEARCH_INSTRN_ISSUED_0,
+    XSEARCH_INSTRN_ISSUED_1,
+    XSEARCH_INSTRN_ISSUED_2,
+    MOVE_INSTRN_ISSUED_0,
+    MOVE_INSTRN_ISSUED_1,
+    MOVE_INSTRN_ISSUED_2,
+    FPU_INSTRN_ISSUED_0,
+    FPU_INSTRN_ISSUED_1,
+    FPU_INSTRN_ISSUED_2,
+    UNPACK_INSTRN_ISSUED_0,
+    UNPACK_INSTRN_ISSUED_1,
+    UNPACK_INSTRN_ISSUED_2,
+    PACK_INSTRN_ISSUED_0,
+    PACK_INSTRN_ISSUED_1,
+    PACK_INSTRN_ISSUED_2,
+    // TDMA_UNPACK grant counters (11): detailed write/HF info
+    INSTRN_2_HF_CYCLES,           // Math instrns that took 2 HF cycles (grant 257)
+    INSTRN_1_HF_CYCLE,            // Math instrns that took 1 HF cycle (grant 258)
+    SRCB_WRITE_ACTUAL,            // srcB writes not blocked by overwrite (grant 259)
+    SRCA_WRITE_NOT_BLOCKED_OVR,   // srcA writes not blocked by overwrite (grant 260)
+    SRCA_WRITE_ACTUAL,            // srcA writes not blocked by port (grant 261)
+    SRCB_WRITE_NOT_BLOCKED_PORT,  // srcB writes not blocked by port (grant 262)
+    SRCA_WRITE_THREAD0,           // srcA writes from thread 0 (grant 263)
+    SRCB_WRITE_THREAD0,           // srcB writes from thread 0 (grant 264)
+    SRCA_WRITE_THREAD1,           // srcA writes from thread 1 (grant 265)
+    SRCB_WRITE_THREAD1,           // srcB writes from thread 1 (grant 266)
+    MATH_INSTRN_NOT_BLOCKED_SRC,  // Math not blocked by src_data_ready (grant 256, same req as 0)
+    // TDMA_PACK additional req counters (WH only, BH has these tied to 0)
+    PACKER_DEST_READ_1,  // Dest accumulator register 1 read request (req 12)
+    PACKER_DEST_READ_2,  // Dest accumulator register 2 read request (req 13)
+    PACKER_DEST_READ_3,  // Dest accumulator register 3 read request (req 14)
+    PACKER_BUSY_0,       // Packer engine 0 busy (req 15)
+    PACKER_BUSY_1,       // Packer engine 1 busy (req 16)
+    PACKER_BUSY_2,       // Packer engine 2 busy (req 17)
+    // TDMA_PACK grant counters: dest read grants and scoreboard stalls
+    DEST_READ_GRANTED_0,           // Dest register 0 read granted (grant 267)
+    DEST_READ_GRANTED_1,           // Dest register 1 read granted (grant 268)
+    DEST_READ_GRANTED_2,           // Dest register 2 read granted (grant 269)
+    DEST_READ_GRANTED_3,           // Dest register 3 read granted (grant 270)
+    MATH_NOT_STALLED_DEST_WR_PORT  // Math not stalled by dest write port (grant 271)
+    // Note: AVAILABLE_MATH (existing, counter_sel 272) = math not stalled by scoreboard (grant 272)
 };
 
 union PerfCounter {
@@ -145,7 +197,7 @@ constexpr PerfCounterGroup counter_groups[] = {
     PerfCounterGroup::L1_1,
     PerfCounterGroup::INSTRN};
 constexpr size_t NUM_COUNTER_GROUPS = sizeof(counter_groups) / sizeof(counter_groups[0]);
-constexpr size_t MAX_NUM_COUNTERS_PER_GROUP = 61;
+constexpr size_t MAX_NUM_COUNTERS_PER_GROUP = 85;  // INSTRN: 61 req + 24 grant
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
@@ -160,13 +212,37 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
-     {PerfCounterType::UNPACK1_BUSY_THREAD1, 10}}};
-constexpr size_t NUM_UNPACK_COUNTERS = 11;
+     {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
+     // Additional grant counters (counter_sel with bit 16 set = out_fmt grant mode)
+     // Note: SRCA_WRITE(261) and SRCB_WRITE(259) above are already grant counters
+     {PerfCounterType::MATH_INSTRN_NOT_BLOCKED_SRC, 256},
+     {PerfCounterType::INSTRN_2_HF_CYCLES, 257},
+     {PerfCounterType::INSTRN_1_HF_CYCLE, 258},
+     {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 260},
+     {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 262},
+     {PerfCounterType::SRCA_WRITE_THREAD0, 263},
+     {PerfCounterType::SRCB_WRITE_THREAD0, 264},
+     {PerfCounterType::SRCA_WRITE_THREAD1, 265},
+     {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
+constexpr size_t NUM_UNPACK_COUNTERS = 20;
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_BUSY, 18},
-     {PerfCounterType::AVAILABLE_MATH, 272}}};
-constexpr size_t NUM_PACK_COUNTERS = 3;
+     // Additional req counters (WH: active, BH: packer engines 1-3 tied to 0)
+     {PerfCounterType::PACKER_DEST_READ_1, 12},
+     {PerfCounterType::PACKER_DEST_READ_2, 13},
+     {PerfCounterType::PACKER_DEST_READ_3, 14},
+     {PerfCounterType::PACKER_BUSY_0, 15},
+     {PerfCounterType::PACKER_BUSY_1, 16},
+     {PerfCounterType::PACKER_BUSY_2, 17},
+     // Grant counters (counter_sel with bit 16 set)
+     {PerfCounterType::DEST_READ_GRANTED_0, 267},
+     {PerfCounterType::DEST_READ_GRANTED_1, 268},
+     {PerfCounterType::DEST_READ_GRANTED_2, 269},
+     {PerfCounterType::DEST_READ_GRANTED_3, 270},
+     {PerfCounterType::MATH_NOT_STALLED_DEST_WR_PORT, 271},
+     {PerfCounterType::AVAILABLE_MATH, 272}}};  // AVAILABLE_MATH = math not stalled by scoreboard
+constexpr size_t NUM_PACK_COUNTERS = 14;
 
 // L1 bank 0 counters (MUX_CTRL[6:4] = 0): unpacker, TDMA bundles, ring0 NOC
 // Port 1 differs between architectures: BH has unified packer, WH has unpacker#1/ECC/pack1
@@ -264,8 +340,33 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_
      {PerfCounterType::WAITING_FOR_MMIO_IDLE_2, 57},
      {PerfCounterType::WAITING_FOR_SFPU_IDLE_0, 58},
      {PerfCounterType::WAITING_FOR_SFPU_IDLE_1, 59},
-     {PerfCounterType::WAITING_FOR_SFPU_IDLE_2, 60}}};
-constexpr size_t NUM_INSTRN_COUNTERS = 61;
+     {PerfCounterType::WAITING_FOR_SFPU_IDLE_2, 60},
+     // Grant counters: actual instruction issue counts (counter_sel + 256)
+     {PerfCounterType::CFG_INSTRN_ISSUED_0, 256},
+     {PerfCounterType::CFG_INSTRN_ISSUED_1, 257},
+     {PerfCounterType::CFG_INSTRN_ISSUED_2, 258},
+     {PerfCounterType::SYNC_INSTRN_ISSUED_0, 259},
+     {PerfCounterType::SYNC_INSTRN_ISSUED_1, 260},
+     {PerfCounterType::SYNC_INSTRN_ISSUED_2, 261},
+     {PerfCounterType::THCON_INSTRN_ISSUED_0, 262},
+     {PerfCounterType::THCON_INSTRN_ISSUED_1, 263},
+     {PerfCounterType::THCON_INSTRN_ISSUED_2, 264},
+     {PerfCounterType::XSEARCH_INSTRN_ISSUED_0, 265},
+     {PerfCounterType::XSEARCH_INSTRN_ISSUED_1, 266},
+     {PerfCounterType::XSEARCH_INSTRN_ISSUED_2, 267},
+     {PerfCounterType::MOVE_INSTRN_ISSUED_0, 268},
+     {PerfCounterType::MOVE_INSTRN_ISSUED_1, 269},
+     {PerfCounterType::MOVE_INSTRN_ISSUED_2, 270},
+     {PerfCounterType::FPU_INSTRN_ISSUED_0, 271},
+     {PerfCounterType::FPU_INSTRN_ISSUED_1, 272},
+     {PerfCounterType::FPU_INSTRN_ISSUED_2, 273},
+     {PerfCounterType::UNPACK_INSTRN_ISSUED_0, 274},
+     {PerfCounterType::UNPACK_INSTRN_ISSUED_1, 275},
+     {PerfCounterType::UNPACK_INSTRN_ISSUED_2, 276},
+     {PerfCounterType::PACK_INSTRN_ISSUED_0, 277},
+     {PerfCounterType::PACK_INSTRN_ISSUED_1, 278},
+     {PerfCounterType::PACK_INSTRN_ISSUED_2, 279}}};
+constexpr size_t NUM_INSTRN_COUNTERS = 85;
 
 // bit masks for the different counter groups
 #define PROFILE_PERF_COUNTERS_FPU (1 << 0)
