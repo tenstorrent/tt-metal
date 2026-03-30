@@ -91,18 +91,18 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     };
 
     uint32_t best_kb = 0, best_mb = 0, best_num_m_blocks = UINT32_MAX;
-    for (uint32_t kb = std::min(K_half, 8u); kb >= 1; kb--) {
+    for (uint32_t kb = 1; kb <= std::min(K_half, 8u); kb++) {
         if (K_half % kb != 0)
             continue;
         uint32_t mb = find_max_mb(kb);
         if (mb == 0)
             continue;
         uint32_t n = (Mpc + mb - 1) / mb;
-        if (n < best_num_m_blocks || (n == best_num_m_blocks && kb > best_kb)) {
-            best_num_m_blocks = n;
-            best_kb = kb;
-            best_mb = mb;
-        }
+        if (n > best_num_m_blocks)
+            break;
+        best_num_m_blocks = n;
+        best_kb = kb;
+        best_mb = mb;
     }
     TT_FATAL(best_mb > 0, "Cannot fit mcast gram matmul in L1");
 
