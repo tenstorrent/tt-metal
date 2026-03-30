@@ -75,7 +75,7 @@ on:
       - "(Galaxy) profiler tests"
       - "(Galaxy) Stress"
       - "(Galaxy) unit tests"
-      - "(Galaxy) Quick"
+      - "(Galaxy) Sanity"
       - "(Galaxy) Health"
       - "(Galaxy) DeepSeek tests"
       - "(TM-DM) Data Movement Test Suite"

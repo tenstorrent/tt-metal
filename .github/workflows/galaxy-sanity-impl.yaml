@@ -1,4 +1,4 @@
-name: "[internal] Galaxy Quick tests"
+name: "[internal] Galaxy Sanity tests"
 
 on:
   workflow_call:
@@ -18,8 +18,8 @@ on:
         default: "in-service"
 
 jobs:
-  quick-wh-glx-quick:
-    name: quick-wh-glx-quick (mlperf=${{ matrix.mlperf }})
+  sanity-wh-glx-sanity:
+    name: sanity-wh-glx-sanity (mlperf=${{ matrix.mlperf }})
     strategy:
       fail-fast: false
       matrix:
@@ -59,7 +59,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Run quick tests (non-mlperf)
+      - name: Run sanity tests (non-mlperf)
         if: ${{ !matrix.mlperf }}
         timeout-minutes: 20
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
@@ -90,7 +90,7 @@ jobs:
           pytest "tests/scale_out/test_ccl_fabric_manager.py::test_reduce_scatter_async_fabric_manager[wormhole_b0-mesh_device0-8-2-2-fabric_manager_enabled_linear-mem_config_input0-mem_config_rs0-batch_8-perf-3links]" --timeout=300;
           pytest "tests/scale_out/test_ccl_fabric_manager.py::test_all_to_all_dispatch_fabric_manager_8x4[wormhole_b0-l1_in_dram_out-DataType.BFLOAT16-None-4-s2-7168-8-256-32-8x4_grid-False-fabric_manager_enabled_1d_line]" --timeout=300;
           ./build/tools/scaleout/run_fabric_manager --mesh-shape 8x4 --fabric-config FABRIC_1D --terminate-fabric
-      - name: Run quick tests (mlperf)
+      - name: Run sanity tests (mlperf)
         if: ${{ matrix.mlperf }}
         timeout-minutes: 10
         env:

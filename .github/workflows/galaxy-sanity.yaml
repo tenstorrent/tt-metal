@@ -1,4 +1,4 @@
-name: "(Galaxy) Quick"
+name: "(Galaxy) Sanity"
 
 on:
   workflow_dispatch:
@@ -43,9 +43,9 @@ on:
 
 run-name: >
   ${{
-    ((github.event.inputs.arch == 'blackhole') && '(BH Galaxy) Quick') ||
-    ((github.event.inputs.arch == 'wormhole_b0') && '(WH Galaxy) Quick') ||
-    '(Unspecified Galaxy) Quick'
+    ((github.event.inputs.arch == 'blackhole') && '(BH Galaxy) Sanity') ||
+    ((github.event.inputs.arch == 'wormhole_b0') && '(WH Galaxy) Sanity') ||
+    '(Unspecified Galaxy) Sanity'
   }}
 
 permissions:
@@ -64,10 +64,10 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
-  galaxy-quick-test:
+  galaxy-sanity-test:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/galaxy-quick-impl.yaml
+    uses: ./.github/workflows/galaxy-sanity-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
