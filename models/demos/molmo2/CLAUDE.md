@@ -12,20 +12,21 @@
 ## Current Status (2026-03-30)
 
 **vLLM Server:** STABLE for text, images, and video (traces disabled for vision)
-- Updated with user_id support for multi-user batching (2026-03-29)
-- Handles concurrent requests (processed sequentially, max_concurrency=1)
-- True batched decode NOT supported in vLLM mode (see notes below)
+- Added batched decode support following tt_transformers pattern (2026-03-30)
+- Uses vLLM's start_pos for per-request positions via `prepare_decode_inputs()`
+- Batched RoPE via `get_rot_mats_decode_batched()` with ttnn.embedding lookup
+- max_concurrency can be increased from 1 (requires testing)
 
 **Demo Batched Inference:** WORKING - true parallel batch processing
 - 4 prompts: 141.03 tok/s total (35.26 tok/s/user)
 - 32 prompts: 767.52 tok/s total (23.99 tok/s/user)
 - Each user gets coherent output for their specific prompt
 
-**Why vLLM batch>1 doesn't work:**
-- vLLM's paged attention expects different KV cache layout than demo's direct cache
-- Demo manages batch dimension internally with sequential prefill + batched decode
-- vLLM schedules requests independently and expects model to handle arbitrary batch sizes
-- Requires significant changes to match tt_transformers Llama 8B batching pattern
+**vLLM Batched Decode Implementation:**
+- `generator_vllm.py`: Added `prepare_decode_inputs()` to create batch-sized current_pos and rot_mat_idxs from vLLM's start_pos
+- `text_rotary_setup.py`: Added `get_rot_mats_decode_batched()` using ttnn.embedding to gather per-position cos/sin
+- `text_model.py`: Auto-detects batch>1 and uses batched rot_mats
+- `text_attention.py`: Manual RoPE application for batched case (element-wise ops)
 
 **Verified:**
 - Text: 50/50 tests passed
