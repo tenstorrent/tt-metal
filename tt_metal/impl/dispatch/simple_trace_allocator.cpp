@@ -5,6 +5,7 @@
 #include "simple_trace_allocator.hpp"
 
 #include "impl/context/metal_context.hpp"
+#include "hal/generated/dev_msgs.hpp"
 
 namespace tt::tt_metal {
 
@@ -23,7 +24,7 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
     std::set<uint32_t> marked_for_deletion;
 
     // Once we've filled up the entire launch message buffer, we'll sync on that rather than on any older regions.
-    constexpr uint32_t max_stall_history_size = launch_msg_buffer_num_entries;
+    constexpr uint32_t max_stall_history_size = dev_msgs::launch_msg_buffer_num_entries;
 
     // Iterate over possible placements, including the very beginning of the ringbuffer and starting immediately after
     // every region. One of these placements must be the best, since any other placement would be overlap the same or a
@@ -76,7 +77,7 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
                 // Avoid evicting something that was last used recently, as that can cause a stall that is very bad for
                 // performance. This is critical for avoiding gaps between ops, so it's given a very high cost (the
                 // highest cost for a program is normally around 10,000).
-                constexpr uint32_t desired_write_ahead = std::min(launch_msg_buffer_num_entries, 7u);
+                constexpr uint32_t desired_write_ahead = std::min(dev_msgs::launch_msg_buffer_num_entries, 7u);
                 constexpr uint32_t stall_badness = 100000000;
                 static_assert(
                     max_stall_history_size > desired_write_ahead,
@@ -129,7 +130,6 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
 }
 
 void SimpleTraceAllocator::allocate_trace_programs(std::vector<TraceNode*>& trace_nodes) {
-    const auto& hal = MetalContext::instance().hal();
     worker_region_allocator_.set_trace_nodes(&trace_nodes);
     active_eth_region_allocator_.set_trace_nodes(&trace_nodes);
     std::map<uint64_t, uint32_t> program_ids_use_map;
@@ -167,7 +167,6 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
         if (node.sub_device_id != sub_device_id) {
             continue;
         }
-        auto sub_device_id = node.sub_device_id;
 
         std::optional<uint32_t> nonbinary_sync_idx;
         std::optional<uint32_t> binary_sync_idx;
@@ -229,7 +228,7 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
         extra_data_[i].finished_sync_count = expected_workers_completed + node.num_workers;
 
         // Subtract 1 because we don't want to overwrite watcher data for the last program to complete executing.
-        constexpr uint32_t max_queued_programs = launch_msg_buffer_num_entries - 1;
+        constexpr uint32_t max_queued_programs = dev_msgs::launch_msg_buffer_num_entries - 1;
 
         // Do adjustments to the sync index to ensure we don't overflow the worker launch message buffer. We could
         // ignore programs that only use active ethernet, but that's a very rare case and not worth the complexity.
