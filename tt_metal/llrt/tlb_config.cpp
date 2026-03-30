@@ -48,6 +48,12 @@ tt_xy_pair ddr_to_noc0(unsigned i) {
 
 }  // namespace blackhole
 
+namespace quasar {
+
+int32_t get_static_tlb_size() { return (1 << 20); }
+
+}  // namespace quasar
+
 void configure_static_tlbs(
     tt::ARCH arch, tt::ChipId mmio_device_id, const metal_SocDescriptor& sdesc, tt::umd::Cluster& device_driver) {
     using get_static_tlb_size_ptr = std::int32_t (*)();
@@ -61,6 +67,7 @@ void configure_static_tlbs(
         case tt::ARCH::BLACKHOLE:
             get_static_tlb_size = blackhole::get_static_tlb_size;
             break;
+        case tt::ARCH::QUASAR: get_static_tlb_size = quasar::get_static_tlb_size; break;
         default: TT_THROW("Configuring static TLBs is not supported for {}", tt::get_string(arch));
     }
 

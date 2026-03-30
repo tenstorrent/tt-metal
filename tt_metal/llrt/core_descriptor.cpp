@@ -55,6 +55,7 @@ inline std::string get_core_descriptor_file(
     if (env.get_rtoptions().get_simulator_enabled()) {
         auto soc_desc = tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(
             env.get_rtoptions().get_simulator_path());
+        log_info(tt::LogMetal, "get_core_descriptor_file: soc_desc = {}", soc_desc);
         tt_xy_pair grid_size = tt::umd::SocDescriptor::get_grid_size_from_soc_descriptor_path(soc_desc);
         if (grid_size.y <= 2 || grid_size.x <= 2) {  // small simulation grids (any dimension <= 2)
             switch (arch) {
@@ -66,7 +67,9 @@ inline std::string get_core_descriptor_file(
                 case tt::ARCH::QUASAR:
                     // Small Quasar sims: x_size=1 -> 1x3, x_size=2 -> 2x3
                     if (grid_size.x >= 2) {
-                        return core_desc_dir + "quasar_simulation_2x3_arch.yaml";
+                        return core_desc_dir + ((env.get_rtoptions().get_fast_dispatch())
+                                                    ? "quasar_simulation_2x3_arch_fast_dispatch.yaml"
+                                                    : "quasar_simulation_2x3_arch.yaml");
                     }
                     return core_desc_dir + "quasar_simulation_1x3_arch.yaml";
             };
