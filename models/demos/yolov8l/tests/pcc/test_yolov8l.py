@@ -7,15 +7,13 @@ import torch
 from loguru import logger
 
 import ttnn
-
-# from models.common.utility_functions import disable_persistent_kernel_cache
-from models.demos.yolov8s.common import YOLOV8S_L1_SMALL_SIZE, load_torch_model
-from models.demos.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
-from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
+from models.demos.yolov8l.common import YOLOV8L_L1_SMALL_SIZE, load_torch_model
+from models.demos.yolov8l.tt.tt_yolov8l_utils import custom_preprocessor
+from models.demos.yolov8l.tt.ttnn_yolov8l import TtYolov8lModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8S_L1_SMALL_SIZE}], indirect=True, ids=["0"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8L_L1_SMALL_SIZE}], indirect=True, ids=["0"])
 @pytest.mark.parametrize(
     "input_tensor",
     [torch.rand((1, 3, 640, 640))],
@@ -25,16 +23,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "use_pretrained_weights",
     [True],
 )
-def test_yolov8s_640(device, input_tensor, use_pretrained_weights, model_location_generator):
-    # disable_persistent_kernel_cache()
-
+def test_yolov8l_640(device, input_tensor, use_pretrained_weights, model_location_generator):
     inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
     if use_pretrained_weights:
         torch_model = load_torch_model(model_location_generator)
         state_dict = torch_model.state_dict()
 
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
-    ttnn_model = TtYolov8sModel(device=device, parameters=parameters, res=(inp_h, inp_w))
+    ttnn_model = TtYolov8lModel(device=device, parameters=parameters, res=(inp_h, inp_w))
 
     n, c, h, w = input_tensor.shape
     if c == 3:
