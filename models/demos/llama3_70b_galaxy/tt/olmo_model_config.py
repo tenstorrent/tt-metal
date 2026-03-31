@@ -356,8 +356,8 @@ class TtOlmoModelArgs(TtModelArgs):
             and self.num_devices > 1
         )
 
-        # Galaxy num links
-        self.model_config["GALAXY_NUM_LINKS"] = 1
+        # Galaxy num links - use 2 links for ~4% CCL speedup (4 links breaks coherency)
+        self.model_config["GALAXY_NUM_LINKS"] = 2
 
         # ==== MLP Decode Configs ====
         mlp_core_grid = ttnn.CoreGrid(y=1, x=8)

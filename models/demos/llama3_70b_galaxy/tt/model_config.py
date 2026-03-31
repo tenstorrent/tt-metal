@@ -2744,6 +2744,10 @@ def num_to_coregrid(x):
         return ttnn.CoreGrid(y=2, x=6)
     if x == 20:
         return ttnn.CoreGrid(y=4, x=5)
+    if x == 27:
+        return ttnn.CoreGrid(y=3, x=9)  # OLMo FF1/FF3: 27 cores for tile-aligned 3456/27=128
+    if x == 36:
+        return ttnn.CoreGrid(y=6, x=6)  # OLMo FF1/FF3: 36 cores for tile-aligned 3456/36=96
 
 
 def set_tg_attention_config(model_config, dim):
