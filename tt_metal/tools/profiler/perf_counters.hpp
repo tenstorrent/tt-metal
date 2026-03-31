@@ -13,8 +13,10 @@ enum PerfCounterType : uint8_t {
     FPU_COUNTER,
     SFPU_COUNTER,
     MATH_COUNTER,
-    // TDMA_UNPACK Group (11 counters)
-    DATA_HAZARD_STALLS_MOVD2A,
+    // TDMA_UNPACK Group (11 req + 11 grant = 22 counters)
+    MATH_SRC_DATA_READY,        // Req 0: math instrn valid & src_data_ready
+    DATA_HAZARD_STALLS_MOVD2A,  // Req 1: math instrn not stalled by D2A
+    FIDELITY_PHASE_STALLS,      // Req 2: fidelity (HiFi) phase stalls
     MATH_INSTRN_STARTED,
     MATH_INSTRN_AVAILABLE,
     SRCB_WRITE_AVAILABLE,
@@ -220,16 +222,16 @@ constexpr size_t NUM_COUNTER_GROUPS = sizeof(counter_groups) / sizeof(counter_gr
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 20> unpack_counters = {
-    {{PerfCounterType::SRCA_WRITE, 261},
-     {PerfCounterType::SRCB_WRITE, 259},
-     {PerfCounterType::UNPACK0_BUSY_THREAD0, 7},
-     {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
-     {PerfCounterType::SRCA_WRITE_AVAILABLE, 6},
-     {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
+    {{PerfCounterType::MATH_SRC_DATA_READY, 0},
+     {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
+     {PerfCounterType::FIDELITY_PHASE_STALLS, 2},
      {PerfCounterType::MATH_INSTRN_STARTED, 3},
      {PerfCounterType::MATH_INSTRN_AVAILABLE, 4},
-     {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
+     {PerfCounterType::SRCB_WRITE_AVAILABLE, 5},
+     {PerfCounterType::SRCA_WRITE_AVAILABLE, 6},
+     {PerfCounterType::UNPACK0_BUSY_THREAD0, 7},
+     {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
      // Additional grant counters (counter_sel with bit 16 set = out_fmt grant mode)
@@ -243,7 +245,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 20> unpack_counters =
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
-constexpr size_t NUM_UNPACK_COUNTERS = 20;
+constexpr size_t NUM_UNPACK_COUNTERS = 22;
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_BUSY, 18},
