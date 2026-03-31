@@ -116,6 +116,7 @@ def infer_unpack_out(
     output_format: DataFormat,
     is_fp32_dest_acc_en: DestAccumulation,
     unpacking_to_dest: bool = False,
+    unpacking_to_srcs: bool = False,
 ) -> DataFormat:
     """
     Returns the output format for the unpacker (data format config for registers)
@@ -145,7 +146,11 @@ def infer_unpack_out(
     if input_format == DataFormat.Bfp4_b:
         return DataFormat.Bfp8_b
 
-    if input_format == DataFormat.Float32 and not unpacking_to_dest:
+    if (
+        input_format == DataFormat.Float32
+        and not unpacking_to_dest
+        and not unpacking_to_srcs
+    ):
         # When input format in L1 is Float32 + unpacking to src registers (instead of directly to dest register)
         # Source registers can store 19-bit values, so we truncate Float32 to Tf32 if we know dest will be 32-bit format
         # which preserves the 8-bit exponent and as much mantissa precision as fits. If our dst register is 16-bit we directly truncate to 16-bit format
@@ -154,6 +159,9 @@ def infer_unpack_out(
         elif output_format.is_exponent_B():  # includes Float32
             return DataFormat.Float16_b  # If output Float32 or Float16_b
         return DataFormat.Float16  # Tilize to Float16
+
+    if unpacking_to_srcs and is_fp32_dest_acc_en == DestAccumulation.Yes:
+        return DataFormat.Float32
 
     # For all other cases, we can keep the format the same in L1 and src register or dest register
     return input_format
@@ -166,6 +174,7 @@ def infer_pack_in(
     is_fp32_dest_acc_en: DestAccumulation,
     unpacking_to_dest: bool = False,
     chip_arch: Optional[ChipArchitecture] = None,
+    unpacking_to_srcs: bool = False,
 ) -> DataFormat:
     """
     Infers the packer input format based on input/output formats and architecture.
@@ -306,6 +315,7 @@ def infer_data_formats(
     unpacking_to_dest: bool = False,
     chip_arch: Optional[ChipArchitecture] = None,
     input_format_B: DataFormat = None,
+    unpacking_to_srcs: bool = False,
 ) -> FormatConfig:
     """
     Infers all data formats needed for unpacking, math, and packing stages in a pipeline.
@@ -338,6 +348,15 @@ def infer_data_formats(
         )
     )
 
+    # Infer unpack_out_S using separate logic for SrcS
+    unpack_out_S = infer_unpack_out(
+        input_format,
+        output_format,
+        is_fp32_dest_acc_en,
+        unpacking_to_dest,
+        unpacking_to_srcs,
+    )
+
     # The data format used for mathematical computations, desired format in dest register (typically matches unpack_out if both regs have same format)
     math = infer_math_format(unpack_out_A, unpack_out_B)
 
@@ -362,6 +381,17 @@ def infer_data_formats(
     if output_format == DataFormat.Fp8_e4m3:
         pack_in = DataFormat.Float16_b if math.is_exponent_B() else DataFormat.Float16
 
+    # Input to the SrcS packer (PACK1)
+    pack_in_S = infer_pack_in(
+        input_format,
+        output_format,
+        unpack_out_S,
+        is_fp32_dest_acc_en,
+        unpacking_to_dest,
+        chip_arch,
+        unpacking_to_srcs,
+    )
+
     # We fall back to using input_format for src_B if input_format_B is not provided, ensuring same_src_format is True in this case.
     if input_format_B is None:
         input_format_B = input_format
@@ -383,6 +413,10 @@ def infer_data_formats(
         same_src_format=same_src_format,
         unpack_B_src=input_format_B,
         unpack_B_dst=unpack_out_B,
+        unpack_S_src=input_format,
+        unpack_S_dst=unpack_out_S,
+        pack_S_src=pack_in_S,
+        pack_S_dst=output_format,
     )
 
 
@@ -423,6 +457,7 @@ def data_formats(
     chip_arch: Optional[ChipArchitecture] = None,
     disable_format_inference: bool = False,
     input_format_B: DataFormat = None,
+    unpacking_to_srcs: bool = False,
 ) -> List[FormatConfig]:
     """
     Entry point for computing a list of FormatConfig objects.
@@ -488,6 +523,10 @@ def data_formats(
                 same_src_format=same_src_format,
                 unpack_B_src=unpack_B_src_val,
                 unpack_B_dst=unpack_B_dst_val,
+                unpack_S_src=input_format,
+                unpack_S_dst=unpack_dst,
+                pack_S_src=pack_src_format,
+                pack_S_dst=output_format,
             )
         ]  # No final config for single iteration
 
@@ -499,6 +538,7 @@ def data_formats(
             unpacking_to_dest,
             chip_arch,
             input_format_B,
+            unpacking_to_srcs,
         )
     else:
         intermediate_config = None
@@ -510,6 +550,7 @@ def data_formats(
         unpacking_to_dest,
         chip_arch,
         input_format_B,
+        unpacking_to_srcs,
     )
 
     return build_data_formats(num_iterations, intermediate_config, final_config)

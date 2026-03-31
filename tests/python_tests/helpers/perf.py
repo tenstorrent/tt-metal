@@ -290,6 +290,7 @@ class PerfConfig(TestConfig):
         runtimes: list[RuntimeParameter] = [],
         variant_stimuli: StimuliConfig = None,
         unpack_to_dest=False,
+        unpack_to_srcs=False,
         disable_format_inference=False,
         dest_acc=DestAccumulation.No,
         l1_acc=L1Accumulation.No,
@@ -323,6 +324,7 @@ class PerfConfig(TestConfig):
             ProfilerBuild.Yes,
             1,  # L1_2_L1s
             unpack_to_dest,
+            unpack_to_srcs,
             disable_format_inference,
             dest_acc,
             l1_acc,
