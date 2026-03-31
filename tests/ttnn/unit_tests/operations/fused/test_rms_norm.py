@@ -9,6 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_for_simulator
 
 pytestmark = pytest.mark.use_module_device
 
@@ -33,6 +34,7 @@ def test_rms_norm(device, batch_size, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
+@skip_for_simulator("Skipping due to CI failure - issue #41286")
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [128])
 @pytest.mark.parametrize("w", [32, 4096])
@@ -42,9 +44,6 @@ def test_rms_norm(device, batch_size, h, w):
 @pytest.mark.parametrize("packer_l1_acc", [True, False])
 def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc):
     torch.manual_seed(0)
-
-    if fp32_dest_acc_en and device.arch() == ttnn.device.Arch.BLACKHOLE:
-        pytest.skip("Skipping test on Blackhole with fp32_dest_acc_en=True, see issue #38561")
 
     torch_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
     torch_weight = torch.rand((w,), dtype=torch.bfloat16)
