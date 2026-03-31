@@ -9,16 +9,22 @@
 namespace tt::tt_metal {
 
 static const HostTensor& get_host_tensor(const Storage& storage) {
-    if (const auto* host_storage = std::get_if<HostStorage>(&storage)) {
-        return host_storage->host_tensor();
-    }
     return std::get<HostStorage>(storage).host_tensor();
+}
+
+static const MeshTensor& get_mesh_tensor(const Storage& storage) {
+    return std::get<DeviceStorage>(storage).get_mesh_tensor();
 }
 
 TensorAttributes::TensorAttributes(HostStorage storage) :
     storage_(std::move(storage)),
     tensor_spec_(get_host_tensor(storage_).tensor_spec()),
     tensor_topology_(get_host_tensor(storage_).tensor_topology()) {}
+
+TensorAttributes::TensorAttributes(DeviceStorage storage) :
+    storage_(std::move(storage)),
+    tensor_spec_(get_mesh_tensor(storage_).tensor_spec()),
+    tensor_topology_(get_mesh_tensor(storage_).tensor_topology()) {}
 
 // Transitional: assumes a HostStorage constructed without proper TensorSpec and TensorTopology.
 // Overrides the existing spec and topology in the HostStorage.

@@ -17,6 +17,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 #include "common_tensor_test_utils.hpp"
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
 #include "ttnn/async_runtime.hpp"
@@ -58,9 +59,7 @@ void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const
     ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
     auto input_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(device, tensor_spec);
 
-    auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {tt::tt_metal::distributed::MeshCoordinate{0, 0}}};
-
-    Tensor input_tensor = Tensor(input_storage, tensor_spec, TensorTopology{});
+    Tensor input_tensor(tt::tt_metal::MeshTensor(input_buffer, tensor_spec, TensorTopology{}));
 
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
 
@@ -261,9 +260,7 @@ TEST_F(TensorFromDeallocatedStorageTest, ConstructingTensorFromDeallocatedStorag
     TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
 
     // Step 1: Create initial tensor on device
-    auto input_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(device_, tensor_spec);
-    auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {tt::tt_metal::distributed::MeshCoordinate{0, 0}}};
-    Tensor tensor_a = Tensor(input_storage, tensor_spec, TensorTopology{});
+    Tensor tensor_a = create_device_tensor(tensor_spec, device_);
 
     ASSERT_NE(tensor_a.device(), nullptr) << "Tensor A should have valid device";
     ASSERT_TRUE(tensor_a.is_allocated()) << "Tensor A should be allocated";
