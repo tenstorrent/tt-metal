@@ -10,9 +10,19 @@
 | **Demo Image** | ✅ WORKING | ⚠️ PARTIAL (1/4) | Batched images show repetition |
 | **Demo Video (8 frames)** | ✅ WORKING | - | Must limit frames |
 | **Demo Video (all frames)** | ❌ GARBAGE | - | Chunked processing broken |
-| **Server Text** | ✅ WORKING | ✅ WORKING (97%) | Server concurrent text excellent |
-| **Server Image** | ✅ WORKING | ❌ CRITICAL | Concurrent images corrupt server |
-| **Server Video** | ❌ seq_len error | - | max_model_len=4096 too small |
+| **Local Server Text** | ✅ WORKING | ✅ WORKING (97%) | Concurrent text excellent |
+| **Local Server Image** | ✅ WORKING | ❌ CRITICAL | Concurrent images corrupt server |
+| **Local Server Video** | ❌ seq_len error | - | max_model_len=4096 too small |
+| **Docker Server Text** | ✅ WORKING | ✅ WORKING (97%) | Same as local server |
+| **Docker Server Image** | ✅ WORKING | ❌ CRITICAL | Same corruption issue |
+| **Docker Server Video** | - | - | Not tested (seq_len issue) |
+
+### Docker Image Used (2026-03-31)
+```
+ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dev-ubuntu-22.04-amd64:0.11.0-f47e93fe7d-ba84dbf0
+```
+- Built from tt-metal commit: `f47e93fe7d`
+- vLLM commit: `ba84dbf0`
 
 ### What Is Working
 
