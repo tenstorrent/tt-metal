@@ -21,14 +21,7 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import (
     SyntheticWeightProvider,
     WeightProvider,
 )
-from models.demos.deepseek_v3_b1.model import (
-    TOKEN_ID_BYTES,
-    DecodeResult,
-    DeepSeekV3,
-    NumTokens,
-    page_size_bytes,
-    to_spec_input,
-)
+from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DecodeResult, DeepSeekV3, page_size_bytes, to_spec_input
 
 
 class ModelPipeline:
@@ -158,13 +151,18 @@ class ModelPipeline:
         assert max_new_tokens >= 1, f"max_new_tokens must be >= 1, got {max_new_tokens}"
 
         generated_tokens: list[int] = []
+        verified_spec_tokens: list[int] = []
+        unverified_spec_tokens: list[int] = []
 
-        def emit(token_id: int) -> bool:
-            """Emit a token to the caller. Returns True if EOS was hit."""
+        def is_eos(token_id: int) -> bool:
+            """Returns True if a token is the EOS token"""
+            return eos_token_id is not None and token_id == eos_token_id
+
+        def emit(token_id: int) -> None:
+            """Emit a token to the caller"""
             if on_token is not None:
                 on_token(token_id)
             generated_tokens.append(token_id)
-            return eos_token_id is not None and token_id == eos_token_id
 
         # --- Prefill --------------------------------------------------------
         prefill_results = self.prefill_forward(prompt_token_ids)
@@ -177,17 +175,33 @@ class ModelPipeline:
         while len(generated_tokens) < max_new_tokens:
             result = pending.popleft() if pending else self.model.read_result()
 
-            if result.num_tokens == NumTokens.STALE:
-                continue
+            if not unverified_spec_tokens:
+                unverified_spec_tokens.append(result.token_1)
+                emit(result.token_0)
+            else:
+                if result.token_0_type == TokenType.BASE:
+                    # On acceptance, we check that the base token matches the first token of the last unverified spec token
+                    if result.token_0 == unverified_spec_tokens[-1]:
+                        verified_spec_tokens.append(unverified_spec_tokens.pop())
+                        emit(result.token_0)
+                        continue
+                    # On rejection, we discard the last unverified spec token and populate the new spec token
+                    else:
+                        unverified_spec_tokens.pop()
+                        unverified_spec_tokens.append(result.token_1)
+                        emit(result.token_0)
+                if result.token_0_type == TokenType.SPEC:
+                    # If we have a verified spec token it means we have an acceptance case, remove it and emit the token
+                    if verified_spec_tokens:
+                        verified_spec_tokens.pop()
+                        unverified_spec_tokens.append(result.token_1)
+                        emit(result.token_0)
+                    else:
+                        continue
 
-            if result.num_tokens == NumTokens.ACCEPT:
-                if emit(result.token_0) or len(generated_tokens) >= max_new_tokens:
-                    break
-                continue
-
-            # num_tokens == 2: CONTINUE (after ACCEPT) or REJECT
-            if emit(result.token_0) or len(generated_tokens) >= max_new_tokens:
+            if is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens:
                 break
+
             self._write_spec_pair(
                 result.token_0,
                 result.token_0_pos,
