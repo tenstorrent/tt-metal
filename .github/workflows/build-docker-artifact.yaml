@@ -99,6 +99,7 @@ jobs:
       ci_build_venv_tag: ${{ steps.metadata.outputs.ci_build_venv_tag }}
       ci_test_venv_tag: ${{ steps.metadata.outputs.ci_test_venv_tag }}
       tool_tags: ${{ steps.metadata.outputs.tool_tags }}
+      tool_data: ${{ steps.metadata.outputs.tool_data }}
       llk-ci-exists: ${{ steps.llk-images.outputs.llk-ci-exists }}
       llk-ci-tag: ${{ steps.llk-images.outputs.llk-ci-tag }}
     steps:
@@ -156,10 +157,20 @@ jobs:
           fi
 
           if [ -n "$TOOL_TAGS_INPUT" ]; then
+            # Tool-tags supplied by caller (e.g. build-all-docker-images already ran
+            # compute-tool-data + build-docker-tools) — use as-is, skip existence check.
             TOOL_TAGS=$(echo "$TOOL_TAGS_INPUT" | jq -ce '.')
+            echo "tool_data=" >> "$GITHUB_OUTPUT"
           else
-            TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "$GITHUB_REPOSITORY_VALUE")
-            TOOL_TAGS=$(echo "$TOOL_TAGS" | jq -ce '.')
+            # Standalone call: check which tool images are missing so build-tools can
+            # build only what's needed before the bake jobs run.
+            TOOL_DATA=$(.github/scripts/compute-tool-data.sh "$GITHUB_REPOSITORY_VALUE")
+            TOOL_TAGS=$(echo "$TOOL_DATA" | jq -ce '.tool_tags')
+            {
+              echo "tool_data<<EOJSON"
+              echo "$TOOL_DATA"
+              echo "EOJSON"
+            } >> "$GITHUB_OUTPUT"
           fi
 
           echo "platform_data=$PLATFORM_DATA" >> "$GITHUB_OUTPUT"
@@ -194,6 +205,18 @@ jobs:
           fi
 
 
+  # Build missing tool images before any bake step tries to pull them.
+  # Skipped when tool-tags input was provided (caller already ran build-docker-tools)
+  # or when all tool images already exist in the registry.
+  build-tools:
+    name: "🔧 Build tool images"
+    needs: [metadata]
+    if: ${{ inputs.tool-tags == '' && fromJson(needs.metadata.outputs.tool_data).any_missing == 'true' }}
+    uses: ./.github/workflows/build-docker-tools.yaml
+    with:
+      tool-data: ${{ needs.metadata.outputs.tool_data }}
+    secrets: inherit
+
   # Build venv images if needed (required by main images)
   venvs:
     name: "🐍 Python venvs"
@@ -209,7 +232,7 @@ jobs:
   # Build Ubuntu images (ci-build, ci-test, dev, basic-dev, basic-ttnn-runtime)
   ubuntu:
     name: "🐳 Ubuntu images"
-    needs: [metadata, venvs]
+    needs: [metadata, venvs, build-tools]
     if: |
       always() && !failure() && !cancelled() &&
       fromJson(needs.metadata.outputs.platform_data).distro == 'ubuntu' &&
@@ -337,8 +360,9 @@ jobs:
   # Build ManyLinux image (runs in parallel with Ubuntu)
   manylinux:
     name: "🐳 ManyLinux image"
-    needs: [metadata]
+    needs: [metadata, build-tools]
     if: |
+      always() && !failure() && !cancelled() &&
       inputs.build-manylinux == true &&
       fromJson(needs.metadata.outputs.platform_data).manylinux_exists != 'true'
     timeout-minutes: 90
