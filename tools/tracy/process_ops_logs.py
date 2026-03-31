@@ -294,6 +294,22 @@ PERF_COUNTER_CSV_HEADERS = [
     "NOC Ring 0 Incoming Backpressure Median (%)",
     "NOC Ring 0 Incoming Backpressure Max (%)",
     "NOC Ring 0 Incoming Backpressure Avg (%)",
+    "NOC Ring 1 Outgoing Backpressure Min (%)",
+    "NOC Ring 1 Outgoing Backpressure Median (%)",
+    "NOC Ring 1 Outgoing Backpressure Max (%)",
+    "NOC Ring 1 Outgoing Backpressure Avg (%)",
+    "NOC Ring 1 Incoming Backpressure Min (%)",
+    "NOC Ring 1 Incoming Backpressure Median (%)",
+    "NOC Ring 1 Incoming Backpressure Max (%)",
+    "NOC Ring 1 Incoming Backpressure Avg (%)",
+    "L1 Unpacker Backpressure Min (%)",
+    "L1 Unpacker Backpressure Median (%)",
+    "L1 Unpacker Backpressure Max (%)",
+    "L1 Unpacker Backpressure Avg (%)",
+    "L1 Packer Port Backpressure Min (%)",
+    "L1 Packer Port Backpressure Median (%)",
+    "L1 Packer Port Backpressure Max (%)",
+    "L1 Packer Port Backpressure Avg (%)",
     # Fidelity cycle breakdown
     "HiFi2 Instrn Rate Min (%)",
     "HiFi2 Instrn Rate Median (%)",
@@ -1020,7 +1036,7 @@ def _enrich_ops_from_device_logs(
                 r1 = get_counter_series(req_ch1)
                 g0 = get_counter_series(grant_ch0)
                 g1 = get_counter_series(grant_ch1)
-                bp = (((r0 - g0) + (r1 - g1)) / (r0 + r1) * 100).replace([float("inf"), -float("inf")], nan)
+                bp = (((r0 - g0) + (r1 - g1)) / (r0 + r1) * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
                 grouped = bp.groupby(level=["run_host_id", "trace_id_count"])
                 return {
                     "min": grouped.min().to_dict(),
@@ -1351,6 +1367,60 @@ def _enrich_ops_from_device_logs(
             if has_counter("L1_1_NOC_RING1_INCOMING_0") and has_counter("L1_1_NOC_RING1_INCOMING_1"):
                 noc_r1_in_util = compute_avg_channel_util("L1_1_NOC_RING1_INCOMING_0", "L1_1_NOC_RING1_INCOMING_1")
 
+            # === Derived stall metrics (req - grant) / req * 100 ===
+            # These are equivalent to the BH hardware stall_cnt but computed in software.
+            noc_r1_out_bp = {}
+            noc_r1_in_bp = {}
+            l1_unpacker_bp = {}
+            l1_packer_port_bp = {}
+            if has_counter("L1_1_NOC_RING1_OUTGOING_0") and has_counter("L1_1_NOC_RING1_OUTGOING_0_GRANT"):
+                noc_r1_out_bp = compute_backpressure(
+                    "L1_1_NOC_RING1_OUTGOING_0",
+                    "L1_1_NOC_RING1_OUTGOING_1",
+                    "L1_1_NOC_RING1_OUTGOING_0_GRANT",
+                    "L1_1_NOC_RING1_OUTGOING_1_GRANT",
+                )
+            if has_counter("L1_1_NOC_RING1_INCOMING_0") and has_counter("L1_1_NOC_RING1_INCOMING_0_GRANT"):
+                noc_r1_in_bp = compute_backpressure(
+                    "L1_1_NOC_RING1_INCOMING_0",
+                    "L1_1_NOC_RING1_INCOMING_1",
+                    "L1_1_NOC_RING1_INCOMING_0_GRANT",
+                    "L1_1_NOC_RING1_INCOMING_1_GRANT",
+                )
+            if has_counter("L1_0_UNPACKER_0") and has_counter("L1_0_UNPACKER_0_GRANT"):
+                req = get_counter_series("L1_0_UNPACKER_0")
+                grant = get_counter_series("L1_0_UNPACKER_0_GRANT")
+                ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                l1_unpacker_bp = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+            if has_counter("L1_0_UNIFIED_PACKER") and has_counter("L1_0_PORT1_GRANT"):
+                req = get_counter_series("L1_0_UNIFIED_PACKER")
+                grant = get_counter_series("L1_0_PORT1_GRANT")
+                ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                l1_packer_port_bp = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+            elif has_counter("L1_0_UNPACKER_1_ECC_PACK1") and has_counter("L1_0_PORT1_GRANT"):
+                req = get_counter_series("L1_0_UNPACKER_1_ECC_PACK1")
+                grant = get_counter_series("L1_0_PORT1_GRANT")
+                ratio = ((req - grant) / req * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                l1_packer_port_bp = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+
         # Enrich ops with device data and perf counters
         for device_op, device_op_time in zip(host_ops_by_device[device], device_ops_time):
             # Verify match again (redundant but safe)
@@ -1486,9 +1556,13 @@ def _enrich_ops_from_device_logs(
                 # L1 Port 1 (arch-specific: BH unified packer, WH unpacker#1/ECC/pack1)
                 assign_metric("L1 Packer Port Util", l1_packer_port_util)
 
-                # L1 back-pressure
+                # L1 back-pressure (derived stall metrics: (req - grant) / req * 100)
                 assign_metric("NOC Ring 0 Outgoing Backpressure", noc_r0_out_bp)
                 assign_metric("NOC Ring 0 Incoming Backpressure", noc_r0_in_bp)
+                assign_metric("NOC Ring 1 Outgoing Backpressure", noc_r1_out_bp)
+                assign_metric("NOC Ring 1 Incoming Backpressure", noc_r1_in_bp)
+                assign_metric("L1 Unpacker Backpressure", l1_unpacker_bp)
+                assign_metric("L1 Packer Port Backpressure", l1_packer_port_bp)
 
                 # Fidelity cycle breakdown
                 assign_metric("HiFi2 Instrn Rate", hifi2_rate)
@@ -1871,7 +1945,7 @@ def get_device_data_generate_report(
                             g0 = x.get(grant0_key, 0)
                             g1 = x.get(grant1_key, 0)
                             total_req = r0 + r1
-                            return ((total_req - g0 - g1) / total_req * 100) if total_req > 0 else nan
+                            return max(0.0, (total_req - g0 - g1) / total_req * 100) if total_req > 0 else nan
 
                         return fn
 
@@ -1891,6 +1965,47 @@ def get_device_data_generate_report(
                             "value_L1_0_NOC_RING0_INCOMING_0_GRANT",
                             "value_L1_0_NOC_RING0_INCOMING_1_GRANT",
                         ),
+                        axis=1,
+                    )
+                    eff_pivot["NOC Ring 1 Outgoing Backpressure"] = eff_pivot.apply(
+                        safe_backpressure(
+                            "value_L1_1_NOC_RING1_OUTGOING_0",
+                            "value_L1_1_NOC_RING1_OUTGOING_1",
+                            "value_L1_1_NOC_RING1_OUTGOING_0_GRANT",
+                            "value_L1_1_NOC_RING1_OUTGOING_1_GRANT",
+                        ),
+                        axis=1,
+                    )
+                    eff_pivot["NOC Ring 1 Incoming Backpressure"] = eff_pivot.apply(
+                        safe_backpressure(
+                            "value_L1_1_NOC_RING1_INCOMING_0",
+                            "value_L1_1_NOC_RING1_INCOMING_1",
+                            "value_L1_1_NOC_RING1_INCOMING_0_GRANT",
+                            "value_L1_1_NOC_RING1_INCOMING_1_GRANT",
+                        ),
+                        axis=1,
+                    )
+
+                    def safe_single_bp(req_key, grant_key):
+                        def fn(x):
+                            r = x.get(req_key, 0)
+                            g = x.get(grant_key, 0)
+                            return max(0.0, (r - g) / r * 100) if r > 0 else nan
+
+                        return fn
+
+                    eff_pivot["L1 Unpacker Backpressure"] = eff_pivot.apply(
+                        safe_single_bp("value_L1_0_UNPACKER_0", "value_L1_0_UNPACKER_0_GRANT"),
+                        axis=1,
+                    )
+                    # L1 Packer Port: BH uses L1_0_UNIFIED_PACKER, WH uses L1_0_UNPACKER_1_ECC_PACK1
+                    packer_req_key = (
+                        "value_L1_0_UNIFIED_PACKER"
+                        if "value_L1_0_UNIFIED_PACKER" in eff_pivot.columns
+                        else "value_L1_0_UNPACKER_1_ECC_PACK1"
+                    )
+                    eff_pivot["L1 Packer Port Backpressure"] = eff_pivot.apply(
+                        safe_single_bp(packer_req_key, "value_L1_0_PORT1_GRANT"),
                         axis=1,
                     )
 
@@ -1937,6 +2052,10 @@ def get_device_data_generate_report(
                         "L1 Packer Port Util",
                         "NOC Ring 0 Outgoing Backpressure",
                         "NOC Ring 0 Incoming Backpressure",
+                        "NOC Ring 1 Outgoing Backpressure",
+                        "NOC Ring 1 Incoming Backpressure",
+                        "L1 Unpacker Backpressure",
+                        "L1 Packer Port Backpressure",
                         "HiFi2 Instrn Rate",
                         "LoFi Instrn Rate",
                         "Math Src Data Ready Rate",

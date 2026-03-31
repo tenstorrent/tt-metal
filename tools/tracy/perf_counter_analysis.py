@@ -408,9 +408,13 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "NOC Ring 1 Incoming Util",
         # L1 Port 1 (arch-specific: BH unified packer, WH unpacker#1/ECC/pack1)
         "L1 Packer Port Util",
-        # L1 back-pressure
+        # L1 back-pressure (derived stall: (req - grant) / req)
         "NOC Ring 0 Outgoing Backpressure",
         "NOC Ring 0 Incoming Backpressure",
+        "NOC Ring 1 Outgoing Backpressure",
+        "NOC Ring 1 Incoming Backpressure",
+        "L1 Unpacker Backpressure",
+        "L1 Packer Port Backpressure",
         # Fidelity and math pipeline stall breakdown
         "HiFi2 Instrn Rate",
         "LoFi Instrn Rate",
