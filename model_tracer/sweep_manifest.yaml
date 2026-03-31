@@ -49,8 +49,8 @@ targets:
     - model:
         # - deepseek-llm-7b-chat
         # - deepseek-r1-distill-qwen-32b
-        # - efficientnetb0
-        # - falcon7b
+        - efficientnetb0
+        - falcon7b
         # - llama-3.2-11b-vision-instruct
         # - llama-3.2-1b-instruct
         # - llama-krikri-8b-instruct
@@ -62,11 +62,11 @@ targets:
         # - qwen3-32b_2
         # - segmentation
         # - sentence_bert
-        # - stable_diffusion_xl_base
+        - stable_diffusion_xl_base
         # - vit
         # - vit_2
-        - whisper
-      trace: [1]
+        # - whisper
+      trace: [3]
 
 registry:
   - trace_id: 1
