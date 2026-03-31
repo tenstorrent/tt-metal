@@ -68,11 +68,11 @@ def test_vae_resnetblock2d(
     if is_blackhole():
         if image_resolution == (512, 512):
             pytest.skip("512x512 resolution not supported on Blackhole")
-        dram_gn_skip = (block == "up_blocks" and block_id == 1 and resnet_id == 0) or (
-            block == "down_blocks" and block_id == 2 and resnet_id == 0
-        )
-        if dram_gn_skip:
-            pytest.skip("Skipping on Blackhole due to PCC issue with DRAM group_norm")
+        # dram_gn_skip = (block == "up_blocks" and block_id == 1 and resnet_id == 0) or (
+        #     block == "down_blocks" and block_id == 2 and resnet_id == 0
+        # )
+        # if dram_gn_skip:
+        #     pytest.skip("Skipping on Blackhole due to PCC issue with DRAM group_norm")
     vae = AutoencoderKL.from_pretrained(
         sdxl_base_vae_location,
         torch_dtype=torch.float32,
@@ -105,7 +105,8 @@ def test_vae_resnetblock2d(
         debug_mode=debug_mode,
     )
 
-    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
+    torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.bfloat16)
+    torch_resnet = torch_resnet.to(torch.bfloat16)
     torch_output_tensor = torch_resnet(torch_input_tensor, None)
 
     B, C, H, W = input_shape

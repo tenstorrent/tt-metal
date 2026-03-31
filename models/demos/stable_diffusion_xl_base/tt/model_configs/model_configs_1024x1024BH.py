@@ -772,6 +772,14 @@ class ModelOptimisations1024x1024BH:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+
+        # Group Norm high-accuracy compute config for better precision with small variance inputs
+        self.compute_configs["GN_HIFI4_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
         # endregion
 
     def get_matmul_config(self, matmul_path):
@@ -1065,6 +1073,10 @@ class ModelOptimisations1024x1024BH:
             return self.layernorm_configs["640_config"]
         else:
             return self.layernorm_configs["1280_config"]
+
+    def get_groupnorm_compute_config(self, module_path=None):
+        """Get high-accuracy compute config for group norm to reduce rounding errors in Welford algorithm."""
+        return self.compute_configs["GN_HIFI4_FP32_COMPUTE_CONFIG"]
 
     def get_sdpa_config(self, module_path, is_self_attention):
         if not is_self_attention:
