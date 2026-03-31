@@ -222,6 +222,7 @@ std::vector<uint32_t> get_ring_reader_compile_args(
     const uint32_t ring_size,
     const uint32_t input_cb_index,
     const uint32_t intermediate_cb_index,
+    const uint32_t intermediate_2_cb_index,
     const uint32_t reader_output_cb_index,
     const uint32_t tile_granularity,
     const uint32_t page_size,
@@ -257,6 +258,7 @@ std::vector<uint32_t> get_ring_reader_compile_args(
         ring_size,                 // ring_size
         input_cb_index,            // cb_input_id
         intermediate_cb_index,     // cb_intermediate_id
+        intermediate_2_cb_index,   // cb_intermediate_2_id
         reader_output_cb_index,    // cb_reader_output_id
         tile_granularity,          // tile_granularity
         page_size,                 // page_size
@@ -331,6 +333,7 @@ std::vector<uint32_t> get_ring_writer_compile_args(
 std::vector<uint32_t> get_ring_compute_compile_args(
     const uint32_t input_cb_index,
     const uint32_t intermediate_cb_index,
+    const uint32_t intermediate_2_cb_index,
     const uint32_t compute_output_cb_index,
     const uint32_t tile_granularity,
     const uint32_t ring_size,
@@ -349,8 +352,9 @@ std::vector<uint32_t> get_ring_compute_compile_args(
         };
     }
     return {
-        input_cb_index,           //         input_cb_id
+        input_cb_index,           // input_cb_id
         intermediate_cb_index,    // intermediate_cb
+        intermediate_2_cb_index,  // intermediate_2_cb
         compute_output_cb_index,  // output_cb
         tile_granularity,         // tile_granularity
         ring_size,                // ring_size
@@ -757,12 +761,13 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{intermediate_cb_index, df}})
             .set_page_size(intermediate_cb_index, l1_scratch_cb_page_size_bytes));
     // output_tensor from reader -> compute
-    uint32_t interm2_cb_index = tt::CB::c_in2;
+    uint32_t intermediate_2_cb_index = tt::CB::c_in2;
     CreateCircularBuffer(
         program,
         sender_worker_core_range_set,
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{interm2_cb_index, df}})
-            .set_page_size(interm2_cb_index, l1_scratch_cb_page_size_bytes));
+        tt::tt_metal::CircularBufferConfig(
+            cb_num_pages * l1_scratch_cb_page_size_bytes, {{intermediate_2_cb_index, df}})
+            .set_page_size(intermediate_2_cb_index, l1_scratch_cb_page_size_bytes));
     // input_tensor from reader -> writer
     uint32_t reader_output_cb_index = tt::CB::c_in3;
     CreateCircularBuffer(
@@ -823,6 +828,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         ring_size,
         input_cb_index,
         intermediate_cb_index,
+        intermediate_2_cb_index,
         reader_output_cb_index,
         tile_granularity,
         page_size,
@@ -911,6 +917,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
         .compile_args = operations::experimental::ccl::detail::get_ring_compute_compile_args(
             input_cb_index,
             intermediate_cb_index,
+            intermediate_2_cb_index,
             compute_output_cb_index,
             tile_granularity,
             ring_size,

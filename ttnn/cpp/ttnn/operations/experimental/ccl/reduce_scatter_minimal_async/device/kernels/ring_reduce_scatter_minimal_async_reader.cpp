@@ -22,21 +22,21 @@ constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
 constexpr uint32_t cb_input_id = get_compile_time_arg_val(2);
 constexpr uint32_t cb_interm_id = get_compile_time_arg_val(3);
-constexpr uint32_t cb_interm2_id = 2;  // TODO hardcoded
-constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(4);
-constexpr uint32_t tile_granularity = get_compile_time_arg_val(5);
-constexpr uint32_t page_size = get_compile_time_arg_val(6);
-constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(7);
-constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(8);
-constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(9);
-constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(10);
-constexpr uint32_t input_tensor_B = get_compile_time_arg_val(11);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(12);
-constexpr uint32_t slice_C = get_compile_time_arg_val(13);
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(14);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(15);
-constexpr uint32_t fuse_op = get_compile_time_arg_val(16);
-constexpr uint32_t dim = get_compile_time_arg_val(17);
+constexpr uint32_t cb_interm2_id = get_compile_time_arg_val(4);
+constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(5);
+constexpr uint32_t tile_granularity = get_compile_time_arg_val(6);
+constexpr uint32_t page_size = get_compile_time_arg_val(7);
+constexpr uint32_t input_batch_num_pages = get_compile_time_arg_val(8);
+constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(9);
+constexpr uint32_t input_channel_num_pages = get_compile_time_arg_val(10);
+constexpr uint32_t output_channel_num_pages = get_compile_time_arg_val(11);
+constexpr uint32_t input_tensor_B = get_compile_time_arg_val(12);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(13);
+constexpr uint32_t slice_C = get_compile_time_arg_val(14);
+constexpr uint32_t slice_Ht = get_compile_time_arg_val(15);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(16);
+constexpr uint32_t fuse_op = get_compile_time_arg_val(17);
+constexpr uint32_t dim = get_compile_time_arg_val(18);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -58,7 +58,7 @@ void kernel_main() {
     const uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 18;
+    constexpr uint32_t ct_idx = 19;
     constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
     constexpr uint32_t ct_idx2 = ct_idx + input_tensor_args.num_compile_time_args();
