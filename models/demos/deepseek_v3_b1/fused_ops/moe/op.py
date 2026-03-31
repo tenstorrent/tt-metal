@@ -4228,74 +4228,12 @@ class MoeOp:
             bcast_num_targets_forward = bcast_ring_size - bcast_ring_index - 1
             bcast_num_targets_backward = bcast_ring_index
 
-        bcast_start_distance_forward = 1 if bcast_num_targets_forward > 0 else 0
-        bcast_range_hops_forward = bcast_num_targets_forward
-        bcast_start_distance_backward = 1 if bcast_num_targets_backward > 0 else 0
-        bcast_range_hops_backward = bcast_num_targets_backward
-
         bcast_data_core_physical = routed_ctx.device.worker_core_from_logical_core(routed_ctx.sender_core)
         bcast_core_noc_x = bcast_data_core_physical.x
         bcast_core_noc_y = bcast_data_core_physical.y
 
-        bcast_wait_output_semaphore = bcast_is_secondary_sender or (
-            not bcast_is_sender and not bcast_is_secondary_sender
-        )
-        bcast_reset_global_semaphore = bcast_is_secondary_sender or (
-            not bcast_is_sender and not bcast_is_secondary_sender
-        )
-        bcast_out_ready_sem_wait_value = 1
-
         bcast_intermediate_per_device = ttnn.get_device_tensors(ctx.bcast_intermediate_tensor)
         bcast_intermediate_device = bcast_intermediate_per_device[chip_id]
-
-        self.ncrisc_args.extend(
-            [
-                ("bcast_num_pages_to_read", bp["input_num_pages"]),
-                ("bcast_tensor0_page_size", bp["page_size_bytes"]),
-                ("bcast_num_targets_forward_direction", bcast_num_targets_forward),
-                ("bcast_num_targets_backward_direction", bcast_num_targets_backward),
-                ("bcast_is_sender", int(bcast_is_sender)),
-                ("bcast_core_noc_x", bcast_core_noc_x),
-                ("bcast_core_noc_y", bcast_core_noc_y),
-                ("bcast_is_secondary_sender", int(bcast_is_secondary_sender)),
-                ("bcast_has_secondary_target", int(bcast_has_secondary_target)),
-                ("bcast_start_distance_in_hops_forward", bcast_start_distance_forward),
-                ("bcast_range_hops_forward", bcast_range_hops_forward),
-                ("bcast_start_distance_in_hops_backward", bcast_start_distance_backward),
-                ("bcast_range_hops_backward", bcast_range_hops_backward),
-                ("bcast_use_socket", int(bcast_use_socket)),
-            ]
-        )
-
-        self.brisc_args.extend(
-            [
-                ("bcast_num_pages_to_read", bp["input_num_pages"]),
-                ("bcast_is_sender", int(bcast_is_sender)),
-                ("bcast_use_socket", int(bcast_use_socket)),
-            ]
-        )
-
-        self.brisc_common_rt_args = [
-            int(ctx.socket.get_config_buffer_address()) if bcast_use_socket else 0,
-            int(bcast_socket_page_size) if bcast_use_socket else 0,
-            1 if bcast_use_socket else 0,
-        ]
-
-        bcast_ncrisc_common_rt_args = [
-            int(bcast_intermediate_device.buffer_address()),
-            int(bp["out_ready_sem_addr"]),
-            int(bcast_wait_output_semaphore),
-            int(bcast_reset_global_semaphore),
-            bcast_core_noc_x,
-            bcast_core_noc_y,
-            bcast_out_ready_sem_wait_value,
-            int(bp["barrier_sem_addr"]),
-            bcast_core_noc_x,
-            bcast_core_noc_y,
-            bcast_ring_index,
-            int(bp["secondary_sync_sem_addr"]),
-            0,  # num_connections (updated below)
-        ]
 
         mesh_device = ctx.mesh_device
         mesh_rows = routed_ctx.mesh_rows
@@ -4316,8 +4254,51 @@ class MoeOp:
         if bcast_has_secondary_target:
             secondary_coord = ttnn.MeshCoordinate(row, 1 - sender_col)
             self.bcast_dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
-        bcast_num_connections = len(self.bcast_dst_nodes)
-        bcast_ncrisc_common_rt_args[-1] = int(bcast_num_connections)
+        bcast_num_neighbors = len(self.bcast_dst_nodes)
+
+        bcast_tensor_size_bytes = bp["page_size_bytes"] * bp["input_num_pages"]
+        bcast_max_payload = int(ttnn.get_tt_fabric_max_payload_size_bytes())
+        bcast_chunk_size_bytes = min(bcast_tensor_size_bytes, bcast_max_payload)
+        bcast_last_chunk_size_bytes = bcast_tensor_size_bytes % bcast_chunk_size_bytes or bcast_chunk_size_bytes
+        bcast_num_chunks = (bcast_tensor_size_bytes + bcast_chunk_size_bytes - 1) // bcast_chunk_size_bytes
+
+        bcast_num_links = 1
+
+        self.ncrisc_args.extend(
+            [
+                ("bcast_num_pages_to_read", bp["input_num_pages"]),
+                ("bcast_tensor0_page_size", bp["page_size_bytes"]),
+                ("bcast_num_neighbors", bcast_num_neighbors),
+                ("bcast_num_links", bcast_num_links),
+                ("bcast_is_sender", int(bcast_is_sender)),
+                ("bcast_chunk_size_bytes", bcast_chunk_size_bytes),
+                ("bcast_last_chunk_size_bytes", bcast_last_chunk_size_bytes),
+                ("bcast_num_chunks", bcast_num_chunks),
+                ("bcast_use_socket", int(bcast_use_socket)),
+            ]
+        )
+
+        self.brisc_args.extend(
+            [
+                ("bcast_num_pages_to_read", bp["input_num_pages"]),
+                ("bcast_is_sender", int(bcast_is_sender)),
+                ("bcast_use_socket", int(bcast_use_socket)),
+            ]
+        )
+
+        self.brisc_common_rt_args = [
+            int(ctx.socket.get_config_buffer_address()) if bcast_use_socket else 0,
+            int(bcast_socket_page_size) if bcast_use_socket else 0,
+            1 if bcast_use_socket else 0,
+        ]
+
+        bcast_ncrisc_common_rt_args = [
+            int(bcast_intermediate_device.buffer_address()),
+            bcast_core_noc_x,
+            bcast_core_noc_y,
+            int(bp["out_ready_sem_addr"]),
+            0,
+        ]
 
         bcast_ncrisc_base = len(self.ncrisc_common_rt_args)
         for i, (name, _val) in enumerate(self.ncrisc_args):
@@ -4326,7 +4307,7 @@ class MoeOp:
                 break
         self.ncrisc_common_rt_args.extend(bcast_ncrisc_common_rt_args)
 
-        if bcast_num_connections > 0:
+        if bcast_num_neighbors > 0:
             bcast_ncrisc_per_core = [(routed_ctx.sender_core, [])]
             if self.device_rt_args_desc is not None:
                 self.device_rt_args_desc = PerCoreRuntimeArgsDescriptor(
@@ -4416,10 +4397,15 @@ class MoeOp:
                     )
                 ):
                     bcast_writer_rt_args_ref = kernel.runtime_args[bcast_worker_core.x][bcast_worker_core.y]
-                    bcast_fabric_args = ttnn.setup_routing_plane_connection(
-                        self.bcast_fabric_node_id, self.bcast_dst_nodes, [0], program, idx, bcast_worker_core
-                    )
-                    bcast_writer_rt_args_ref.extend(bcast_fabric_args)
+                    payload = []
+                    for dst_node in self.bcast_dst_nodes:
+                        payload.append(int(dst_node.mesh_id))
+                        payload.append(int(dst_node.chip_id))
+                        setup_args = ttnn.setup_fabric_connection(
+                            self.bcast_fabric_node_id, dst_node, 0, program, bcast_worker_core
+                        )
+                        payload.extend(setup_args)
+                    bcast_writer_rt_args_ref.extend([len(payload)] + payload)
                     break
 
     # ==================================================================
