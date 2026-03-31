@@ -940,7 +940,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
                     uint32_t offset = 0;
                     for (const auto& dfb : dfbs_on_core) {
-                        auto serialized = dfb->serialize();
+                        auto serialized = dfb->serialize_for_core(logical_core);
                         std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
                         offset += serialized.size();
                     }
