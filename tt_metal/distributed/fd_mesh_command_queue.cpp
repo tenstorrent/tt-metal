@@ -309,19 +309,21 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         TT_FATAL(!blocking, "Blocking is not supported when recording a trace.");
         trace_nodes_.push_back(MeshTraceNode{});
         auto& trace_node = trace_nodes_.back();
-        bool use_prefetcher_cache =
-            mesh_workload.impl().max_program_kernels_sizeB_ <= this->prefetcher_cache_sizeB_;
+        bool use_prefetcher_cache = mesh_workload.impl().max_program_kernels_sizeB_ <= this->prefetcher_cache_sizeB_;
         for (auto& [device_range, program] : mesh_workload.get_programs()) {
 #if defined(TRACY_ENABLE)
             // With tracy enabled, each device has a different program runtime ID in the launch message, so we need to
             // handle each device separately rather than grouping them.
             for (auto& coord : device_range) {
                 trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
-                    coord, program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
+                    coord,
+                    program_dispatch::create_trace_node(
+                        program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
             }
 #else
             trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
-                device_range, program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
+                device_range,
+                program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
 #endif
         }
         trace_node.multicast_go_signals = mcast_go_signals;
@@ -1148,6 +1150,11 @@ void FDMeshCommandQueue::record_end() {
     std::set<SubDeviceId> sub_device_ids;
     std::optional<std::unordered_map<SubDeviceId, TraceWorkerDescriptor>> overall_trace_worker_descriptors;
     for (const auto& range : device_ranges) {
+        // NOTE: TraceNode objects may be shared across device ranges (when a program's device range
+        // spans multiple partition ranges). Each iteration of this loop mutates
+        // node.dispatch_metadata (sync_count, prefetcher_cache_info, etc.) on shared nodes. This is
+        // safe because allocate_trace_programs() reinitializes dispatch_metadata at the start of
+        // each range's processing, overwriting any stale mutations from a previous range.
         std::vector<TraceNode*> trace_nodes;
         std::vector<MeshTraceNode*> mesh_trace_nodes;
         // Records the number of MeshTraceNodes that had no relevant program.
@@ -1303,6 +1310,13 @@ void FDMeshCommandQueue::record_end() {
             }
 
             auto& worker_launch_msg_state = worker_launch_message_buffer_state[*sub_device_id];
+
+            // The allocator computed sync_count relative to 0, but dummy GO signals prepended to
+            // this device range's trace stream contribute starting_workers_completed to the
+            // dispatch completion counter. Offset sync_count before it is patched into the stall
+            // command by update_traced_program_dispatch_commands.
+            node.dispatch_metadata.sync_count += starting_workers_completed[*sub_device_id];
+
             // Update the generated dispatch commands based on the state of the CQ and the ring buffer
             program_dispatch::update_traced_program_dispatch_commands(
                 node,
@@ -1325,7 +1339,6 @@ void FDMeshCommandQueue::record_end() {
             }
 #endif
 
-            node.dispatch_metadata.sync_count += starting_workers_completed[*sub_device_id];
             // Issue dispatch commands for this program
             program_dispatch::write_program_command_sequence(
                 cached_program_command_sequence,
@@ -1358,7 +1371,9 @@ void FDMeshCommandQueue::record_end() {
         if (!overall_trace_worker_descriptors) {
             overall_trace_worker_descriptors = trace_worker_descriptors;
         } else {
-            TT_ASSERT(overall_trace_worker_descriptors == trace_worker_descriptors);
+            TT_FATAL(
+                overall_trace_worker_descriptors == trace_worker_descriptors,
+                "All device ranges must produce identical TraceWorkerDescriptors after dummy GO equalization");
         }
     }
     trace_ctx_->total_trace_size = max_trace_size * sizeof(uint32_t);

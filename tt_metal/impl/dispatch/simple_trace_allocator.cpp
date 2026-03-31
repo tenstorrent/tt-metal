@@ -171,6 +171,9 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
         std::optional<uint32_t> nonbinary_sync_idx;
         std::optional<uint32_t> binary_sync_idx;
         uint32_t programmable_core_count_ = hal.get_programmable_core_type_count();
+        // Reinitialize dispatch_metadata. TraceNodes may be shared across device ranges in a mesh
+        // trace, so the caller (record_end) relies on this reinitialization to clear stale values
+        // from a previous device range's processing.
         node.dispatch_metadata = TraceDispatchMetadata{};
         node.dispatch_metadata.binary_kernel_config_addrs.resize(programmable_core_count_);
         node.dispatch_metadata.nonbinary_kernel_config_addrs.resize(programmable_core_count_);
