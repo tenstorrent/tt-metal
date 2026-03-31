@@ -409,7 +409,7 @@ def train():
     mapper = None
     if use_ddp:
         device = ttml.autograd.AutoContext.get_instance().get_device()
-        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0)
+        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, 0)
 
     tc = model_config["transformer_config"]
     model_type = tc["model_type"]
@@ -419,7 +419,7 @@ def train():
     elif model_type == "llama":
         repo_id = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
     elif model_type == "qwen3":
-        repo_id = "Qwen/Qwen3-0.6B"
+        repo_id = "Qwen/Qwen3-1.7B"
     else:
         raise ValueError(f"Unsupported model_type: {model_type}. Supported: gpt2, llama, qwen3")
 

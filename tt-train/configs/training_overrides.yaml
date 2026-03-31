@@ -6,9 +6,9 @@ training_config:
   model_save_interval: 0
 
 device_config:
-  enable_ddp: False
+  enable_ddp: True
   enable_tp: True
-  mesh_shape: [1, 4]
+  mesh_shape: [2, 2]
 
 transformer_config:
   max_sequence_length: 256
