@@ -101,12 +101,12 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Ensure EVAN_RESTRICTED_PAT is configured
+      - name: Ensure EVAN_RESTRICTED_TOKEN is configured
         env:
-          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_PAT }}
+          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
         run: |
           if [ -z "$TARGET_PR_PUSH_TOKEN" ]; then
-            echo "Missing secret EVAN_RESTRICTED_PAT"
+            echo "Missing secret EVAN_RESTRICTED_TOKEN"
             exit 1
           fi
 
@@ -114,7 +114,7 @@ jobs:
         env:
           TARGET_PR_REPO: ${{ github.event.inputs['target-pr-repo'] || 'ebanerjeeTT/tt-metal' }}
           TARGET_PR_BASE: ${{ github.event.inputs['target-pr-base'] || 'main' }}
-          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_PAT }}
+          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
         run: |
           set -euo pipefail
           login="$(GH_TOKEN="$TARGET_PR_PUSH_TOKEN" gh api user --jq .login)"
@@ -188,7 +188,7 @@ jobs:
       - name: Enrich export with GitHub issue closure booleans
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE_REPO_GITHUB_TOKEN: ${{ secrets.ISSUE_REPO_GITHUB_TOKEN || secrets.EVAN_RESTRICTED_PAT }}
+          ISSUE_REPO_GITHUB_TOKEN: ${{ secrets.ISSUE_REPO_GITHUB_TOKEN || secrets.EVAN_RESTRICTED_TOKEN }}
         run: |
           set -euo pipefail
           python tools/ci/enrich_slack_with_issue_status.py \
@@ -222,13 +222,13 @@ jobs:
             exit 1
           fi
 
-      - name: Ensure EVAN_RESTRICTED_PAT is configured for fork/issue access (auto-disable mode)
+      - name: Ensure EVAN_RESTRICTED_TOKEN is configured for fork/issue access (auto-disable mode)
         if: ${{ !inputs['data-gathering-mode'] }}
         env:
-          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_PAT }}
+          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
         run: |
           if [ -z "$TARGET_PR_PUSH_TOKEN" ]; then
-            echo "Missing secret EVAN_RESTRICTED_PAT (required for fork push/PR + issue access)"
+            echo "Missing secret EVAN_RESTRICTED_TOKEN (required for fork push/PR + issue access)"
             exit 1
           fi
 
@@ -246,8 +246,8 @@ jobs:
         if: ${{ !inputs['data-gathering-mode'] }}
         env:
           CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.EVAN_RESTRICTED_PAT }}
-          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_PAT }}
+          GITHUB_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
         uses: ./.github/actions/auto-disable-stale-ci
         with:
           input-json-path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
