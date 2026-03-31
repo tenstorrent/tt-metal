@@ -7,6 +7,24 @@ import ttnn
 from models.common.modules.lazy_weight import LazyWeight
 
 
+def cleanup_ttnn_value(value):
+    if value is None:
+        return
+
+    if isinstance(value, ttnn.Tensor):
+        ttnn.deallocate(value)
+        return
+
+    if isinstance(value, dict):
+        for nested_value in value.values():
+            cleanup_ttnn_value(nested_value)
+        return
+
+    if isinstance(value, (list, tuple, set)):
+        for nested_value in value:
+            cleanup_ttnn_value(nested_value)
+
+
 def cleanup_object_graph(obj, seen=None):
     if obj is None:
         return
@@ -19,12 +37,12 @@ def cleanup_object_graph(obj, seen=None):
     seen.add(obj_id)
 
     if isinstance(obj, ttnn.Tensor):
-        ttnn.deallocate(obj)
+        cleanup_ttnn_value(obj)
         return
 
     if isinstance(obj, LazyWeight):
         if obj._value is not None:
-            cleanup_object_graph(obj._value, seen)
+            cleanup_ttnn_value(obj._value)
             obj._value = None
         return
 

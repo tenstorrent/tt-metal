@@ -24,6 +24,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.tests.demos.cleanup_utils import cleanup_ttnn_value
 from models.tt_transformers.tt.common import (
     Mode,
     copy_host_to_device,
@@ -32,25 +33,6 @@ from models.tt_transformers.tt.common import (
     get_padded_prefill_len,
     num_blocks_in_seq,
 )
-
-
-def _cleanup_ttnn_value(value):
-    if value is None:
-        return
-
-    if isinstance(value, ttnn.Tensor):
-        ttnn.deallocate(value)
-        return
-
-    if isinstance(value, dict):
-        for nested_value in value.values():
-            _cleanup_ttnn_value(nested_value)
-        return
-
-    if isinstance(value, (list, tuple, set)):
-        for nested_value in value:
-            _cleanup_ttnn_value(nested_value)
-
 
 # =============================================================================
 # Protocol: LLMModel
@@ -1060,16 +1042,16 @@ class TracedLLMExecutor:
         for key, trace_id in list(self.trace_id_prefill.items()):
             if trace_id is not None:
                 ttnn.release_trace(self.mesh_device, trace_id)
-            _cleanup_ttnn_value(self.trace_inputs_prefill[key])
-            _cleanup_ttnn_value(self.trace_output_prefill[key])
+            cleanup_ttnn_value(self.trace_inputs_prefill[key])
+            cleanup_ttnn_value(self.trace_output_prefill[key])
             self.trace_id_prefill[key] = None
             self.trace_inputs_prefill[key] = None
             self.trace_output_prefill[key] = None
         for key, trace_id in list(self.trace_ids_decode.items()):
             if trace_id is not None:
                 ttnn.release_trace(self.mesh_device, trace_id)
-            _cleanup_ttnn_value(self.trace_inputs_decode[key])
-            _cleanup_ttnn_value(self.trace_output_decode[key])
+            cleanup_ttnn_value(self.trace_inputs_decode[key])
+            cleanup_ttnn_value(self.trace_output_decode[key])
             self.trace_ids_decode[key] = None
             self.trace_inputs_decode[key] = None
             self.trace_output_decode[key] = None
