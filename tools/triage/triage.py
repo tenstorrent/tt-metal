@@ -448,6 +448,9 @@ def parse_arguments(
     )
     import sys
 
+    if script_path is not None:
+        script_path = Path(script_path).resolve()
+
     docs: dict[Path, str] = {}
     assert __doc__ is not None, "Help message must be provided in the script docstring."
     docs[Path(__file__).resolve()] = __doc__
@@ -491,7 +494,7 @@ def parse_arguments(
         return arguments
 
     detailed_help = any([a.name == "--help" or a.name == "-h" or a.name == "/?" for a in left])
-    doc = __doc__ if script_path is None else scripts[Path(script_path).resolve()].documentation
+    doc = __doc__ if script_path is None else scripts[script_path].documentation
     if detailed_help:
         help_message = doc
         if script_path is None:
@@ -499,7 +502,7 @@ def parse_arguments(
         else:
             help_message += "\n\nYou can also use arguments of dependent scripts:\n"
         for script in scripts.values():
-            if script_path is None or script.path != Path(script_path).resolve():
+            if script_path is None or script.path != script_path:
                 script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
                     help_message += f"\n{script.documentation}\n"
@@ -508,7 +511,7 @@ def parse_arguments(
     else:
         help_message = printable_usage(doc)
         for script in scripts.values():
-            if script_path is None or script.path != Path(script_path).resolve():
+            if script_path is None or script.path != script_path:
                 script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
                     usage = printable_usage(script.documentation)
