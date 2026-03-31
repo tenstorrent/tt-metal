@@ -97,7 +97,7 @@ jobs:
 
   validate-model-traces:
     needs: display-manifest-options
-    uses: ./.github/workflows/ttnn-sweep-validation-impl.yaml
+    uses: ./.github/workflows/ttnn-model-trace-sweep-validation-impl.yaml
     secrets: inherit
     with:
       manifest-path: ${{ needs.display-manifest-options.outputs.manifest-path }}
