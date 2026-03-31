@@ -22,6 +22,7 @@ Tensor unary_impl(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     TT_FATAL(!op_chain.empty(), "Op chain cannot be empty");
     DataType input_dtype = input_tensor.dtype();
+    // TYPECAST/BITCAST should always be the last operation in the chain when present; use its output dtype (param 1)
     DataType output_dtype = input_dtype;
     if (op_chain.back().type() == UnaryOpType::TYPECAST || op_chain.back().type() == UnaryOpType::BITCAST) {
         output_dtype = static_cast<DataType>(*op_chain.back().get_param_if<float>(1));

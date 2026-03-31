@@ -814,9 +814,11 @@ def test_unary_comp_ops(input_shapes, scalar, ttnn_op, use_legacy, device):
     [
         (torch.float32, ttnn.float32, 0.016),
         (torch.bfloat16, ttnn.bfloat16, 0.012),
+        (torch.bfloat16, ttnn.bfloat8_b, 0.24),
     ],
 )
 def test_unary_tanhshrink_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, device):
+    torch.manual_seed(0)
     in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
     input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     if ttnn_dtype == ttnn.bfloat8_b:
@@ -827,35 +829,6 @@ def test_unary_tanhshrink_ttnn(input_shapes, torch_dtype, ttnn_dtype, atol, devi
     golden_tensor = golden_function(in_data1)
 
     assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
-    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([3, 128, 32])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype",
-    [
-        (torch.float32, ttnn.float32),
-        (torch.bfloat16, ttnn.bfloat16),
-        (torch.bfloat16, ttnn.bfloat8_b),
-    ],
-)
-def test_unary_tanhshrink_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
-    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
-    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    if ttnn_dtype == ttnn.bfloat8_b:
-        in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
-
-    output_tensor = ttnn.tanhshrink(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.tanhshrink)
-    golden_tensor = golden_function(in_data1)
-
-    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.25)
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
 
 

@@ -15,6 +15,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/copy_dest_values.h"
 #include "api/compute/compute_kernel_api.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -25,11 +26,15 @@ void kernel_main() {
     constexpr auto cb_output = tt::CBIndex::c_2;
     constexpr auto cb_tmp0 = tt::CBIndex::c_1;
 
+    experimental::CircularBuffer cb_in(cb_input);
+    experimental::CircularBuffer cb_out(cb_output);
+    experimental::CircularBuffer cb_tmp(cb_tmp0);
+
     init_sfpu(cb_input, cb_output);
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_wait_front(cb_input, 1);
-        cb_reserve_back(cb_output, 1);
-        cb_reserve_back(cb_tmp0, 1);
+        cb_in.wait_front(1);
+        cb_out.reserve_back(1);
+        cb_tmp.reserve_back(1);
 
         tile_regs_acquire();
 
@@ -45,8 +50,8 @@ void kernel_main() {
         pack_tile(0, cb_tmp0);
         tile_regs_release();
 
-        cb_push_back(cb_tmp0, 1);
-        cb_wait_front(cb_tmp0, 1);
+        cb_tmp.push_back(1);
+        cb_tmp.wait_front(1);
 
         tile_regs_acquire();
 
@@ -84,8 +89,8 @@ void kernel_main() {
         pack_tile(0, cb_output);
         tile_regs_release();
 
-        cb_pop_front(cb_tmp0, 1);
-        cb_pop_front(cb_input, 1);
-        cb_push_back(cb_output, 1);
+        cb_tmp.pop_front(1);
+        cb_in.pop_front(1);
+        cb_out.push_back(1);
     }
 }

@@ -7,9 +7,11 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace ttnn::operations::unary_ng {
 

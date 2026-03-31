@@ -1087,6 +1087,7 @@ void bind_unary_chain(nb::module_& mod) {
         Keyword Args:
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): sub core grids to be used for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1557,16 +1558,6 @@ void bind_unary_composite_float_with_default(
             nb::arg("memory_config") = nb::none()});
 }
 
-namespace {
-Tensor logit_wrapper(
-    const Tensor& t,
-    std::optional<float> eps,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return ttnn::logit(t, eps, memory_config, std::nullopt, sub_core_grids);
-}
-}  // namespace
-
 void bind_unary_logit(nb::module_& mod, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
@@ -1578,6 +1569,8 @@ void bind_unary_logit(nb::module_& mod, const std::string& info_doc = "") {
         Keyword args:
             eps (float, optional): The epsilon for input clamp bound. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
+            sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grids for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -1605,11 +1598,12 @@ void bind_unary_logit(nb::module_& mod, const std::string& info_doc = "") {
     ttnn::bind_function<"logit">(
         mod,
         doc.c_str(),
-        &logit_wrapper,
+        &ttnn::logit,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("eps") = nb::none(),
         nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
         nb::arg("sub_core_grids") = nb::none());
 }
 

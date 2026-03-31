@@ -5,7 +5,15 @@
 #include "unary_ng_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
+#include <bit>
+#include <cmath>
+#include <cstdint>
+#include <limits>
 #include <optional>
+#include <span>
+#include <string_view>
+
+#include <fmt/core.h>
 #include <tt_stl/assert.hpp>
 #include "ttnn/tensor/types.hpp"
 namespace ttnn::operations::unary_ng {
@@ -51,6 +59,7 @@ std::pair<std::string, std::string> make_unary_comp(
     return {fmt::format("{}_tile_init();", name), fmt::format("{}_tile({}, {:#x}u);", name, idst, as_uint(param0))};
 }
 
+// For ops whose parameter is an integer value (e.g. shift count, bitmask): value-cast to uint32.
 template <typename T>
 std::pair<std::string, std::string> make_uint_op(const char* name, T param0_raw, const std::string& idst) {
     return {
@@ -58,6 +67,7 @@ std::pair<std::string, std::string> make_uint_op(const char* name, T param0_raw,
         fmt::format("{}_tile({}, {}u);", name, idst, static_cast<uint32_t>(param0_raw))};
 }
 
+// For ops whose parameter is a float encoded as its IEEE-754 bit pattern: bit-cast to uint32.
 template <typename T>
 std::pair<std::string, std::string> make_float_param_op(const char* name, T param0_raw, const std::string& idst) {
     float param0 = static_cast<float>(param0_raw);

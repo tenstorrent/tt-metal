@@ -10,6 +10,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/fill.h"
+#include "experimental/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -21,10 +22,13 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
+    experimental::CircularBuffer cb_in(cb_input);
+    experimental::CircularBuffer cb_out(cb_output);
+
     init_sfpu(cb_input, cb_output);
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_wait_front(cb_input, 1);
-        cb_reserve_back(cb_output, 1);
+        cb_in.wait_front(1);
+        cb_out.reserve_back(1);
         tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_input);
         copy_tile(cb_input, 0, 0);
@@ -38,6 +42,9 @@ void kernel_main() {
         fill_tile(1, *true_value);
         fill_tile(2, *false_value);
 #endif
+#ifndef SFPU_OP_CHAIN_0
+#error "where_tss_kernel requires SFPU_OP_CHAIN_0 to be defined via get_block_defines"
+#endif
         SFPU_OP_CHAIN_0
         tile_regs_commit();
         tile_regs_wait();
@@ -45,7 +52,7 @@ void kernel_main() {
         pack_tile(0, cb_output);
         tile_regs_release();
 
-        cb_pop_front(cb_input, 1);
-        cb_push_back(cb_output, 1);
+        cb_in.pop_front(1);
+        cb_out.push_back(1);
     }
 }
