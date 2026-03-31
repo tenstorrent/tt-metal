@@ -66,7 +66,7 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
             shard_spec,
         ),
     )
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, device)
 
     output = ttnn_optimized_sharded_vit.vit_patch_embeddings(
         config, pixel_values, parameters=parameters, unittest_check=True
@@ -84,7 +84,7 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     torch.manual_seed(0)
 
     config = transformers.ViTConfig.from_pretrained(model_name)
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, device)
     model = load_torch_model(model_location_generator, embedding=True)
 
     dataset = load_dataset("huggingface/cats-image", revision="ccdec0af347ae11c5315146402c3e16c8bbf4149")
@@ -163,7 +163,7 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.ViTConfig.from_pretrained(model_name)
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, device)
     model = transformers.models.vit.modeling_vit.ViTAttention(config).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
@@ -212,7 +212,7 @@ def test_vit_intermediate(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.ViTConfig.from_pretrained(model_name)
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, device)
     model = transformers.models.vit.modeling_vit.ViTIntermediate(config).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
@@ -242,7 +242,7 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
     config = transformers.ViTConfig.from_pretrained(model_name)
-    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, device)
     model = transformers.models.vit.modeling_vit.ViTOutput(config).eval()
 
     torch_intermediate = torch_random((batch_size, sequence_size, config.intermediate_size), -1, 1, dtype=torch.float32)
