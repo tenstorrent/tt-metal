@@ -1880,6 +1880,8 @@ class AttentionBlock:
             ("ccl_receiver_cb_residual", ccl_residual_cb),
             ("ccl_receiver_has_residual", has_residual),
             ("ccl_receiver_num_tiles", ccl_num_tiles),
+            # CCL sync semaphore
+            ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
         ]
 
         # Add SDPA TRISC compile-time args when enabled

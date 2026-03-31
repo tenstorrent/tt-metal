@@ -233,8 +233,18 @@ class DecoderStage(StageKind):
         recv_socket = pipeline_block.get_downstream_socket()
         downstream_sockets = pipeline_block.get_upstream_sockets()
 
+        grid_size = mesh_device.compute_with_storage_grid_size()
+        total_cores = grid_size.x * grid_size.y
+        zero_position_ids_host = ttnn.from_torch(
+            torch.zeros((total_cores, 1), dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
         self._state = {
             "d": d,
+            "zero_position_ids_host": zero_position_ids_host,
             "attn_semaphores": attn_semaphores,
             "moe_semaphores": moe_semaphores,
             "reduce_semaphores": reduce_semaphores,
@@ -249,6 +259,9 @@ class DecoderStage(StageKind):
         self._state["decoder_program_context"] = self._build_decoder_program_context()
 
         logger.info(f"[rank={my_mesh_id}] {type(self).__name__} setup complete")
+
+    def reset_position_ids(self) -> None:
+        ttnn.copy_host_to_device_tensor(self._state["zero_position_ids_host"], self._state["d"]["ttnn_position_ids"])
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         DecoderBlock.execute(*self._state["decoder_program_context"])
