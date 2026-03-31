@@ -482,12 +482,20 @@ class TextAttention(LightweightModule):
         )
 
         # Slice to actual number of heads
-        # Note: nlp_create_qkv_heads_decode output shape is [1, H_padded, B, d]
-        # After RoPE/reshape, tensors are [1, B, H_padded, d] for Q,K but V stays [1, H_padded, B, d]
+        # Note: nlp_create_qkv_heads_decode produces V in [1, B, H, d] on current TTNN versions.
+        # Keep this robust since older comments assumed [1, H, B, d].
         q = q[:, :, : self.num_heads_per_device]
         k = k[:, :, : self.num_kv_heads_per_device]
-        # V hasn't been through reshape, so heads are in dim 1
-        v = v[:, : self.num_kv_heads_per_device, :, :]
+        # V is created in HEIGHT_SHARDED layout; slicing sharded tensors can fail on small core-grids.
+        # Convert to interleaved before slicing.
+        v = ttnn.to_memory_config(v, ttnn.L1_MEMORY_CONFIG)
+        # If V is [1, B, H, d], slice heads in dim=2. If it is [1, H, B, d], slice heads in dim=1.
+        if v.shape[1] == batch_size:
+            v = v[:, :, : self.num_kv_heads_per_device, :]
+            v_is_bhbd = True
+        else:
+            v = v[:, : self.num_kv_heads_per_device, :, :]
+            v_is_bhbd = False
 
         # Get KV cache references
         k_cache, v_cache = kv_cache
@@ -496,10 +504,9 @@ class TextAttention(LightweightModule):
         k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
         v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
 
-        # Reshape V for cache - K is already in correct format [1, B, H, d]
-        # V is [1, H, B, d] -> [1, B, H, d] to match K format
-        # paged_update_cache expects input_tensor.shape[1] == page_table.shape[0] (batch_size)
-        v = ttnn.permute(v, (0, 2, 1, 3))  # [1, H, B, d] -> [1, B, H, d]
+        # Ensure V is [1, B, H, d] to match K format for cache update.
+        if not v_is_bhbd:
+            v = ttnn.permute(v, (0, 2, 1, 3))  # [1, H, B, d] -> [1, B, H, d]
 
         # Create sharded memory config for paged_update_cache
         # paged_update_cache requires HEIGHT sharded input tensors in [1, B, H, d] format
