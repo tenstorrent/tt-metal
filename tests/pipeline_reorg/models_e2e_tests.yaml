@@ -98,7 +98,7 @@
 
 - name: Qwen3-32B e2e tests (Galaxy)
   cmd: |
-    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B FAKE_DEVICE=TG
+    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "pcc-64L"
     pytest --timeout 1000 models/demos/llama3_70b_galaxy/demo/text_qwen_demo.py -k "batch-32"
   model: qwen3-32b-galaxy
@@ -124,7 +124,8 @@
 
 - name: Whisper e2e tests
   cmd: |
-    pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation" --timeout=600
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    pytest --timeout=600 models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation"
   model: whisper
   skus:
     wh_n150:
