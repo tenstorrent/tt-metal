@@ -277,6 +277,18 @@ public:
     bool add_forbidden_constraint(const std::set<TargetNode>& target_nodes, GlobalNode global_node);
 
     /**
+     * @brief Add explicit forbidden constraint (two full lists, Cartesian product)
+     *
+     * Forbids every (target, global) pair in `target_nodes` × `global_nodes`. Both sets must be
+     * non-empty explicit lists; empty target or global set is rejected (returns false, logged).
+     *
+     * @param target_nodes Non-empty set of target nodes
+     * @param global_nodes Non-empty set of global nodes (e.g. chips / ASICs)
+     * @return true if all pairs were added and constraints remain valid
+     */
+    bool add_forbidden_constraint(const std::set<TargetNode>& target_nodes, const std::set<GlobalNode>& global_nodes);
+
+    /**
      * @brief Add cardinality constraint (at-least-N constraint)
      *
      * Requires that at least `min_count` of the provided (target, global) mapping pairs
