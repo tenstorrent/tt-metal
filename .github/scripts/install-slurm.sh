@@ -10,12 +10,6 @@ SLURM_URL="https://github.com/SchedMD/slurm/releases/download/slurm-25-11-4-1/${
 SLURM_SHA256="237f515adcb37b99ff6cb3e1fa81691a5f7188e94c3b6b495858b4eaecf6531d"
 SLURM_PREFIX="${SLURM_PREFIX:-/opt/slurm}"
 
-# munge-devel is required by Slurm's configure script (mandatory dependency).
-# Available in AlmaLinux 9 base repos — no EPEL needed.
-echo "==> Installing Slurm build dependencies..."
-dnf install -y munge-devel
-dnf clean all
-
 WORKDIR="/tmp/slurm-build"
 rm -rf "${WORKDIR}"
 mkdir -p "${WORKDIR}"

@@ -292,40 +292,41 @@ COPY --from=sfpi-builder /install/ /install/
 # which produces /opt/openmpi-<tag>-ulfm/ in the final image.
 #############################################################
 
-FROM quay.io/pypa/manylinux_2_34_x86_64 AS openmpi-builder
+FROM ubuntu:22.04 AS openmpi-builder
 ARG OMPI_TAG
 ARG OMPI_COMMIT_SHA
 
 # Enforce strict error handling: exit on error, unset vars, pipe failures
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
-RUN FILES=(/etc/yum.repos.d/*.repo) && \
-  sed --in-place -e 's/^mirrorlist=/# mirrorlist=/g' -e 's/^# baseurl=/baseurl=/' "${FILES[@]}"
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Build deps matching manylinux (AlmaLinux 9) for ABI compatibility
-RUN dnf install -y \
+# Build deps for OpenMPI + Slurm source build
+RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf \
     automake \
     bison \
     bzip2 \
     ca-certificates \
+    curl \
     flex \
     gcc \
-    make \
-    hwloc-devel \
     gfortran \
-    gmp-devel \
     gawk \
     git \
-    libevent-devel \
-    libibverbs-devel \
-    libmpc-devel \
-    libzstd-devel \
-    mpfr-devel \
-    pmix-devel \
-    zlib-devel \
-    wget \
-    && dnf clean all
+    libgmp-dev \
+    libhwloc-dev \
+    libibverbs-dev \
+    libevent-dev \
+    libmpc-dev \
+    libmpfr-dev \
+    libmunge-dev \
+    libpmix-dev \
+    libzstd-dev \
+    make \
+    perl \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Build Slurm headers + libslurm from source (replaces slurm-devel which needs EPEL).
 # Installed to /opt/slurm — OpenMPI configure uses --with-slurm=/opt/slurm.

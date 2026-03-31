@@ -28,19 +28,6 @@ fi
 
 cd "${WORKDIR}"
 
-# Fix C23 build failure with GCC 14 in part_persist.h.
-# OpenMPI's configure auto-detects GCC 14 on manylinux_2_34 and sets CC="gcc -std=gnu23".
-# In C23, `false` is `_Bool`, and `req->req_ompi.req_complete = false` in part_persist.h
-# assigns `_Bool` to `volatile void *` — a constraint violation (hard error, not a warning).
-# The field req_complete is `volatile void *` and the rest of the codebase uses
-# REQUEST_PENDING ((void *)0L) and REQUEST_COMPLETED ((void *)1L) for assignments.
-# This one occurrence uses `false` then immediately overwrites via OPAL_ATOMIC_SWAP_PTR
-# with REQUEST_PENDING — so the `false` assignment is both type-incorrect and redundant.
-# Fix: replace `= false` with `= REQUEST_PENDING` to match the codebase convention.
-echo "Fixing C23 part_persist type error (req_complete = false -> REQUEST_PENDING)..."
-sed -i 's/req->req_ompi\.req_complete = false;/req->req_ompi.req_complete = REQUEST_PENDING;/' \
-    ompi/mca/part/persist/part_persist.h
-
 # Run autogen.pl to generate configure script (required when building from git)
 echo "Running autogen.pl..."
 ./autogen.pl
