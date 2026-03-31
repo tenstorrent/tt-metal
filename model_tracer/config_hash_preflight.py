@@ -3,9 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """Config hash preflight check.
 
-Verifies that the branch's config_hash computation in generic_ops_tracer.py
-produces identical hashes for a reconstructed master JSON.  Any mismatch means
-the hashing logic has drifted from what produced the stored hashes.
+Verifies that the branch's config_hash computation in ``generic_ops_tracer.py``
+produces identical hashes for a reconstructed master JSON.
+
+Hash source of truth used by this preflight:
+    model_tracer.generic_ops_tracer.recompute_config_hashes()
+        -> _compute_config_hash()
+
+If hashes differ, the variation comes from the *current branch's* hash
+implementation in generic_ops_tracer (normalization + hash inputs), not from an
+independent algorithm in this script. In other words, this preflight compares:
+    stored hashes in input JSON
+    vs
+    hashes recomputed by generic_ops_tracer on this checkout
 
 Usage:
     python model_tracer/config_hash_preflight.py <master.json>
@@ -84,6 +94,9 @@ def format_report(json_path, total, changed_entries, decision, allow_partial):
     pct = (changed / total * 100.0) if total else 0.0
     lines = [
         "Config hash preflight",
+        "  Hash source:     model_tracer.generic_ops_tracer.recompute_config_hashes()",
+        "  Hash method:     _compute_config_hash()",
+        "  Variation means: branch generic_ops_tracer hash logic differs from stored hashes",
         f"  JSON:            {json_path}",
         f"  Configs:         {total}",
         f"  Changed:         {changed} ({pct:.1f}%)",
