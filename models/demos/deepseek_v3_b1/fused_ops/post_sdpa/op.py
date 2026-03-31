@@ -18,7 +18,7 @@ The 18 inactive cores receive mcast3 data but skip matmul via is_matmul5_core=fa
 
 CCL All-Reduce uses two cores:
 - Sender core (11, 9): gather3 receiver + dual fabric writers (NCRISC link 1, BRISC link 0)
-- Receiver core (12, 9): fabric reader (BRISC) + reduction compute (TRISC)
+- Receiver core (12, 9): fabric reader (NCRISC) + reduction compute (TRISC)
 Note: sender core (11, 9) is also a matmul4/mcast3 core; gather3 now delivers there directly.
 
 CB Layout:
@@ -1045,7 +1045,7 @@ class PostSDPA:
                     "receiver_core": gather_core,
                     "sender_ncrisc_common_rt_args": allreduce_config.get_sender_ncrisc_common_rt_args(coord),
                     "sender_brisc_common_rt_args": allreduce_config.get_sender_brisc_common_rt_args(coord),
-                    "receiver_brisc_common_rt_args": allreduce_config.get_receiver_brisc_common_rt_args(coord),
+                    "receiver_ncrisc_common_rt_args": allreduce_config.get_receiver_ncrisc_common_rt_args(coord),
                 }
 
                 # ========================================================================
@@ -1444,8 +1444,8 @@ class PostSDPA:
                 ]
 
             if receiver_group is not None:
-                program.kernels[receiver_group.brisc_kernel_index].common_runtime_args = ccl[
-                    "receiver_brisc_common_rt_args"
+                program.kernels[receiver_group.ncrisc_kernel_index].common_runtime_args = ccl[
+                    "receiver_ncrisc_common_rt_args"
                 ]
 
             # ==================================================================

@@ -29,7 +29,7 @@
 //
 // CCL Core Layout:
 // - CCL sender core (11, 9): gather3 receiver + dual fabric writers (NCRISC link 1, BRISC link 0)
-// - CCL receiver core (12, 9): fabric reader (BRISC) + reduction compute (TRISC)
+// - CCL receiver core (12, 9): fabric reader (NCRISC) + reduction compute (TRISC)
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
@@ -71,7 +71,7 @@ struct Core {
     static constexpr bool is_matmul5_core = get_named_compile_time_arg_val("is_matmul5_core") == 1;
     // CCL sender core (11, 9) - receives gather3, sends via fabric
     static constexpr bool is_allreduce_sender_core = get_named_compile_time_arg_val("is_allreduce_sender_core") == 1;
-    // CCL receiver core (12, 9) - receives remote data via fabric, runs reduction
+    // CCL receiver core (12, 9) - NCRISC reader (fabric data), TRISC reduction
     static constexpr bool is_allreduce_receiver_core =
         get_named_compile_time_arg_val("is_allreduce_receiver_core") == 1;
 };
@@ -89,6 +89,7 @@ void kernel_main() {
 // - Matmul5 reader (112 active cores): setup weights buffer
 // - Gather3 sender (112 active cores): send matmul5 output to gather core
 // - CCL sender core (11, 9): NCRISC writer (fabric link 1)
+// - CCL receiver core (12, 9): NCRISC reader
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // Matmul4 CTArgs
@@ -154,6 +155,18 @@ void kernel_main() {
         get_named_compile_time_arg_val("allreduce_writer_link_index"),
         get_named_compile_time_arg_val("allreduce_writer_signal_local_ready"),
         get_named_compile_time_arg_val("allreduce_skip_local_push")>;
+
+    using AllReduceReaderCTArgs = deepseek_b1_ops::AllReduce::ReaderCTArgs<
+        get_named_compile_time_arg_val("allreduce_recv_local_data_cb_id"),
+        get_named_compile_time_arg_val("allreduce_remote_data_cb_id"),
+        get_named_compile_time_arg_val("allreduce_residual_cb_id"),
+        get_named_compile_time_arg_val("allreduce_has_residual"),
+        get_named_compile_time_arg_val("allreduce_total_num_tiles"),
+        get_named_compile_time_arg_val("allreduce_page_size_bytes"),
+        get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
+        get_named_compile_time_arg_val("allreduce_last_chunk_tiles"),
+        get_named_compile_time_arg_val("allreduce_num_chunks"),
+        get_named_compile_time_arg_val("allreduce_num_links")>;
 #endif
 // ============================================================================
 // BRISC (Writer)
@@ -161,7 +174,6 @@ void kernel_main() {
 // - Mcast3 sender (gather core): broadcast to 13x10 grid (130 cores)
 // - Gather3 receiver (sender core 11,9): receive from 112 active matmul5 cores
 // - CCL sender core (11, 9): BRISC writer (fabric link 0)
-// - CCL receiver core (12, 9): BRISC reader
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
     // Matmul4/2 CTArgs (BRISC is no-op for matmul)
@@ -213,8 +225,6 @@ void kernel_main() {
     };
 
 #ifndef SKIP_CCL
-    // BRISC has dual role: WriterSingleLink on sender core + Reader on receiver core.
-    // Both CT arg sets are available; if constexpr guards execution.
     using AllReduceBriscWriterCTArgs = deepseek_b1_ops::AllReduce::WriterLinkCTArgs<
         get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
         get_named_compile_time_arg_val("allreduce_input_num_tiles"),
@@ -226,18 +236,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("allreduce_writer_link_index"),
         get_named_compile_time_arg_val("allreduce_writer_signal_local_ready"),
         get_named_compile_time_arg_val("allreduce_skip_local_push")>;
-
-    using AllReduceReaderCTArgs = deepseek_b1_ops::AllReduce::ReaderCTArgs<
-        get_named_compile_time_arg_val("allreduce_recv_local_data_cb_id"),
-        get_named_compile_time_arg_val("allreduce_remote_data_cb_id"),
-        get_named_compile_time_arg_val("allreduce_residual_cb_id"),
-        get_named_compile_time_arg_val("allreduce_has_residual"),
-        get_named_compile_time_arg_val("allreduce_total_num_tiles"),
-        get_named_compile_time_arg_val("allreduce_page_size_bytes"),
-        get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
-        get_named_compile_time_arg_val("allreduce_last_chunk_tiles"),
-        get_named_compile_time_arg_val("allreduce_num_chunks"),
-        get_named_compile_time_arg_val("allreduce_num_links")>;
 #endif
 // ============================================================================
 // TRISC (Compute)
@@ -564,18 +562,6 @@ void kernel_main() {
         deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> writer;
         writer(args);
     }
-
-#elif defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_allreduce_sender_core) {
-        DeviceZoneScopedN("CCL_SENDER_WRITER");
-        deepseek_b1_ops::AllReduce::SenderFabricArgs args{};
-        args.intermediate_buffer_address = get_common_arg_val<uint32_t>(0);
-        args.dest_noc_x = get_common_arg_val<uint32_t>(1);
-        args.dest_noc_y = get_common_arg_val<uint32_t>(2);
-        args.per_core_rta_start_idx = 0;
-        deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceBriscWriterCTArgs> writer;
-        writer(args);
-    }
     if constexpr (Core::is_allreduce_receiver_core) {
         DeviceZoneScopedN("CCL_READER");
         deepseek_b1_ops::AllReduce::ReceiverArgs args{};
@@ -587,6 +573,18 @@ void kernel_main() {
         args.local_ready_sem_bank_addr = get_common_arg_val<uint32_t>(5);
         deepseek_b1_ops::AllReduce::Reader<AllReduceReaderCTArgs> reader;
         reader(args);
+    }
+
+#elif defined(COMPILE_FOR_BRISC)
+    if constexpr (Core::is_allreduce_sender_core) {
+        DeviceZoneScopedN("CCL_SENDER_WRITER");
+        deepseek_b1_ops::AllReduce::SenderFabricArgs args{};
+        args.intermediate_buffer_address = get_common_arg_val<uint32_t>(0);
+        args.dest_noc_x = get_common_arg_val<uint32_t>(1);
+        args.dest_noc_y = get_common_arg_val<uint32_t>(2);
+        args.per_core_rta_start_idx = 0;
+        deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceBriscWriterCTArgs> writer;
+        writer(args);
     }
 
 #elif defined(COMPILE_FOR_TRISC)

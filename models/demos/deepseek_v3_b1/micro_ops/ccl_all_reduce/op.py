@@ -9,9 +9,9 @@ Two-core implementation:
 - Sender core: NCRISC + BRISC fabric writers, ``DM_DYNAMIC_NOC``, one link per RISC when ``num_links==2``.
   Per-link fabric sem bank addresses are passed in per-core runtime args.
 - Receiver core: dedicated L1 CB for the local operand (NOC read from sender),
-  fabric receive + streaming remote CB pushes, TRISC reduction.
+  fabric receive + streaming remote CB pushes (NCRISC reader), TRISC reduction.
 - BRISC signals ``local_ready`` after confirming local data presence;
-  the receiver waits once before NOC-reading the sender.
+  the receiver NCRISC waits once before NOC-reading the sender.
 - Semaphores: ``num_links`` for fabric plus one extra for ``local_ready``.
 - Input tensor must be L1-sharded on the sender core; intermediate, output, and optional residual on
   the receiver core.  ``persistent_output_tensor`` is required.
@@ -215,7 +215,7 @@ class AllReduceConfig:
     Public API is RISC-type based for easy consumption by fused ops:
       Named CT args: get_ncrisc_named_ct_args, get_brisc_named_ct_args, get_trisc_named_ct_args
       Common RT:     get_sender_ncrisc_common_rt_args, get_sender_brisc_common_rt_args,
-                     get_receiver_brisc_common_rt_args
+                     get_receiver_ncrisc_common_rt_args
       Per-core RT:   get_ncrisc_per_core_rt_args, get_brisc_per_core_rt_args
       CB descriptors: get_cb_descriptors
     """
@@ -375,17 +375,17 @@ class AllReduceConfig:
     # -- Named CT args (per RISC, passed to UnifiedKernelDescriptor) -------
 
     def get_ncrisc_named_ct_args(self, coord):
-        return self._sender_writer_named_ct_args(
+        writer_ct = self._sender_writer_named_ct_args(
             link_index=self._ncrisc_link_index,
             signal_local_ready=self._ncrisc_signal_local_ready,
         )
+        return writer_ct + self._receiver_reader_named_ct_args(coord)
 
     def get_brisc_named_ct_args(self, coord):
-        writer_ct = self._sender_writer_named_ct_args(
+        return self._sender_writer_named_ct_args(
             link_index=self._brisc_link_index,
             signal_local_ready=self._brisc_signal_local_ready,
         )
-        return writer_ct + self._receiver_reader_named_ct_args(coord)
 
     def get_trisc_named_ct_args(self, coord):
         return self._receiver_compute_named_ct_args(coord)
@@ -398,7 +398,7 @@ class AllReduceConfig:
     def get_sender_brisc_common_rt_args(self, coord):
         return self._sender_writer_common_rt(coord)
 
-    def get_receiver_brisc_common_rt_args(self, coord):
+    def get_receiver_ncrisc_common_rt_args(self, coord):
         return self._receiver_common_rt(coord)
 
     # -- Per-core RT args (fabric connection) ------------------------------
@@ -649,10 +649,10 @@ class BypassAllReduceConfig:
                 }
 
     def get_ncrisc_named_ct_args(self, coord):
-        return _writer_named_ct_schema(num_links=self.num_links)
+        return _writer_named_ct_schema(num_links=self.num_links) + _reader_named_ct_schema(num_links=self.num_links)
 
     def get_brisc_named_ct_args(self, coord):
-        return _writer_named_ct_schema(num_links=self.num_links) + _reader_named_ct_schema(num_links=self.num_links)
+        return _writer_named_ct_schema(num_links=self.num_links)
 
     def get_trisc_named_ct_args(self, coord):
         return _compute_named_ct_schema()
@@ -663,7 +663,7 @@ class BypassAllReduceConfig:
     def get_sender_brisc_common_rt_args(self, coord):
         return _sender_writer_common_rt_schema()
 
-    def get_receiver_brisc_common_rt_args(self, coord):
+    def get_receiver_ncrisc_common_rt_args(self, coord):
         return _receiver_common_rt_schema()
 
     def get_ncrisc_per_core_rt_args(self, coord, program, core):
@@ -851,10 +851,10 @@ class DeepseekMinimalAllReduce:
                     sender_group.brisc_kernel_index
                 ].common_runtime_args = allreduce_config.get_sender_brisc_common_rt_args(coord)
                 program.kernels[sender_group.trisc_kernel_index].common_runtime_args = []
-                program.kernels[receiver_group.ncrisc_kernel_index].common_runtime_args = []
                 program.kernels[
-                    receiver_group.brisc_kernel_index
-                ].common_runtime_args = allreduce_config.get_receiver_brisc_common_rt_args(coord)
+                    receiver_group.ncrisc_kernel_index
+                ].common_runtime_args = allreduce_config.get_receiver_ncrisc_common_rt_args(coord)
+                program.kernels[receiver_group.brisc_kernel_index].common_runtime_args = []
                 program.kernels[receiver_group.trisc_kernel_index].common_runtime_args = []
 
                 ncrisc_per_core_rt = program.kernels[sender_group.ncrisc_kernel_index].runtime_args[sender_core.x][

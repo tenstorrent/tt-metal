@@ -4,7 +4,7 @@
 #pragma once
 
 // Two-core all-reduce: sender core runs dual fabric writers (NCRISC + BRISC,
-// DM_DYNAMIC_NOC, one link per RISC), receiver core runs reader (BRISC) and
+// DM_DYNAMIC_NOC, one link per RISC), receiver core runs reader (NCRISC) and
 // compute (TRISC).  No sync_cb needed: local operand is NOC-copied to a
 // receiver-only CB, so TRISC is not racing another RISC on the same local CB.
 // The sender RISC with signal_local_ready=1 signals the receiver after
@@ -243,7 +243,7 @@ public:
 
 private:
     void impl([[maybe_unused]] const ReceiverArgs& args) {
-#if defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_NCRISC)
         if constexpr (CT::has_residual) {
             cb_reserve_back(CT::residual_cb_id, CT::total_num_tiles);
             cb_push_back(CT::residual_cb_id, CT::total_num_tiles);

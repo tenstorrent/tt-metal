@@ -34,7 +34,7 @@ void kernel_main() {
     }
 #endif
 
-#if defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_NCRISC)
     if constexpr (is_receiver) {
         using ReaderCT = deepseek_b1_ops::AllReduce::ReaderCTArgs<
             get_named_compile_time_arg_val("allreduce_recv_local_data_cb_id"),
