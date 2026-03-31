@@ -113,6 +113,23 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
             pack_src_format[output_id], pack_dst_format[output_id], face_r_dim)),
         "");
 
+#ifdef ARCH_BLACKHOLE
+    // For pack_untilize, the init function needs to know the src format to determine the is_8bit_format for the tilize workaround. 
+    // 8bit datums in input format do not require the tilize workaround on blackhole.
+    // For regular pack, the src format is not needed.
+    const std::uint32_t src_format = get_output_src_format(output_id);
+    const bool is_8bit_format = IS_8BIT_FORMAT(src_format);
+    _llk_pack_init_<untilize, zero_output, tilize>(
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        face_r_dim,
+        tile_c_dim,
+        num_faces,
+        false,  // partial_face,
+        false,  // narrow_tile,
+        num_tiles,
+        is_8bit_format /* skip_bh_tilize_workaround */);
+#else
     _llk_pack_init_<untilize, zero_output, tilize>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
@@ -122,6 +139,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
         false,  // partial_face,
         false,  // narrow_tile,
         num_tiles);
+#endif
 }
 
 template <bool out_of_order_output, bool untilize>
