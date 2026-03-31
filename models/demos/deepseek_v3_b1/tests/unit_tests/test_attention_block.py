@@ -94,7 +94,8 @@ def test_attention_block(
     num_devices = mesh_rows * mesh_cols
     skip_ccl = False
     # skip_ccl is not supported in this test
-    num_links = 1
+    num_links_bcast = 1
+    num_links_allreduce = 1
 
     # Validate mesh size
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -106,7 +107,9 @@ def test_attention_block(
     # Configure a single worker sub-device covering the full compute grid
     device_grid_size = submesh.compute_with_storage_grid_size()
 
-    attention_block_semaphores = AttentionBlock.create_semaphores(submesh, num_links=num_links)
+    attention_block_semaphores = AttentionBlock.create_semaphores(
+        submesh, num_links_bcast=num_links_bcast, num_links_allreduce=num_links_allreduce
+    )
 
     # ========================================================================
     # Configuration
@@ -642,6 +645,9 @@ def test_attention_block(
     gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
+    ccl_sender_core = ttnn.CoreCoord(11, 9)
+    ccl_sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ccl_sender_core, ccl_sender_core)])
+
     sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
     sdpa_worker_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sdpa_output_cores]
@@ -716,8 +722,25 @@ def test_attention_block(
     # logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create CCL tensors and semaphores
+    # Create CCL tensors
     # ========================================================================
+    # CCL intermediate: receiver core (12,9) — remote data buffer for all-reduce
+    ccl_intermediate_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
+    ccl_intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, ccl_intermediate_shard_spec
+    )
+    mesh_ccl_intermediate_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
+    ttnn_ccl_intermediate = ttnn.from_torch(
+        mesh_ccl_intermediate_torch,
+        device=submesh,
+        layout=ttnn.TILE_LAYOUT,
+        tile=a_tile,
+        dtype=ttnn.bfloat16,
+        memory_config=ccl_intermediate_mem_config,
+        mesh_mapper=mesh_mapper,
+    )
+
+    # Final output: receiver core (12,9) — all-reduce output + residual add
     output_shard_spec = ttnn.ShardSpec(gather_core_grid, (M, output_size), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
     mesh_output_torch = torch.cat([torch.zeros((M, output_size), dtype=torch.bfloat16)] * num_devices, dim=0)
@@ -880,15 +903,18 @@ def test_attention_block(
             ttnn_sdpa_forwarder_scratch,
             program_config.device_chunk_size,  # sdpa_per_device_chunk_size
             ttnn_attention_block_output,
+            # CCL all-reduce tensors
+            ccl_intermediate_tensor=ttnn_ccl_intermediate,
             # Shared semaphores, and some default values
-            attention_block_semaphores,
-            reduce_cluster_axis,
-            0,  # sdpa_cluster_axis
-            num_links,
-            epsilon,
-            use_fp32,
-            skip_ccl,
-            noc_mode,
+            attention_block_semaphores=attention_block_semaphores,
+            reduce_cluster_axis=reduce_cluster_axis,
+            sdpa_cluster_axis=0,
+            num_links_bcast=num_links_bcast,
+            num_links_allreduce=num_links_allreduce,
+            epsilon=epsilon,
+            fp32_dest_acc_en=use_fp32,
+            skip_ccl=skip_ccl,
+            noc_mode=noc_mode,
             num_iterations=num_internal_iterations,
             fabric_config=device_params["fabric_config"],
         )

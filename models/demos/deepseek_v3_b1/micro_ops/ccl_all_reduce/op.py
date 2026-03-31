@@ -26,7 +26,12 @@ CB ID layout (each ID is unique per logical buffer):
   1  recv_local_data_cb_id  receiver core NOC-read copy of local data
   2  remote_data_cb_id      receiver core fabric-received remote data
   3  output_cb_id           receiver core reduction output
-  4  residual_cb_id         receiver core optional residual
+  4  residual_cb_id         receiver core optional residual (None = no residual)
+
+Residual contract (three states):
+  residual_cb_id=None,  residual_tensor_mesh=None   -> no residual (has_residual=0)
+  residual_cb_id=<int>, residual_tensor_mesh=None   -> residual active, CB managed externally
+  residual_cb_id=<int>, residual_tensor_mesh=tensor -> residual active, CB created by AllReduceConfig
 """
 
 from dataclasses import dataclass
@@ -223,7 +228,6 @@ class AllReduceConfig:
     def __init__(
         self,
         mesh_device,
-        input_tensor_mesh,
         intermediate_tensor,
         output_tensor,
         semaphores,
@@ -234,9 +238,11 @@ class AllReduceConfig:
         recv_local_data_cb_id=1,
         remote_data_cb_id=2,
         output_cb_id=3,
+        input_tensor_mesh=None,
         residual_tensor_mesh=None,
-        residual_cb_id=4,
+        residual_cb_id=None,
         skip_local_push=False,
+        sender_core=None,
     ):
         self.mesh_device = mesh_device
         self.cluster_axis = int(cluster_axis)
@@ -245,9 +251,11 @@ class AllReduceConfig:
         self.recv_local_data_cb_id = int(recv_local_data_cb_id)
         self.remote_data_cb_id = int(remote_data_cb_id)
         self.output_cb_id = int(output_cb_id)
-        self.residual_cb_id = int(residual_cb_id)
+        self.has_residual = residual_cb_id is not None
+        self.residual_cb_id = int(residual_cb_id) if self.has_residual else 0
+        self._owns_residual_cb = self.has_residual and residual_tensor_mesh is not None
+        self._owns_local_data_cb = input_tensor_mesh is not None
         self.skip_local_push = bool(skip_local_push)
-        self.has_residual = residual_tensor_mesh is not None
 
         if self.num_links < 1 or self.num_links > MAX_NUM_LINKS:
             raise ValueError(f"num_links must be in [1, {MAX_NUM_LINKS}], got {self.num_links}")
@@ -266,40 +274,53 @@ class AllReduceConfig:
                 f"All-reduce currently supports exactly 2 devices along cluster_axis={self.cluster_axis}, got {axis_size}"
             )
 
-        self.input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
+        self.input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh) if self._owns_local_data_cb else None
         self.intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor)
         self.output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
-        self.residual_tensors_per_device = ttnn.get_device_tensors(residual_tensor_mesh) if self.has_residual else None
+        self.residual_tensors_per_device = (
+            ttnn.get_device_tensors(residual_tensor_mesh) if self._owns_residual_cb else None
+        )
 
-        input_sample = self.input_tensors_per_device[0]
-        shard_width = input_sample.memory_config().shard_spec.shape[1]
-        tiny_tile_w = input_sample.tile.tile_shape[1]
-        input_num_pages = shard_width // tiny_tile_w
-        if input_num_pages % 32 != 0:
-            raise ValueError(
-                f"Input tiny tile count must be divisible by 32 for 32x32 reinterpretation, got {input_num_pages}"
-            )
+        # Derive tile metadata from input tensor (if provided) or output tensor
+        metadata_sample = (
+            self.input_tensors_per_device[0] if self._owns_local_data_cb else self.output_tensors_per_device[0]
+        )
+        shard_width = metadata_sample.memory_config().shard_spec.shape[1]
+        tiny_tile_w = metadata_sample.tile.tile_shape[1]
+        num_pages = shard_width // tiny_tile_w
+        if num_pages % 32 != 0:
+            raise ValueError(f"Tile count must be divisible by 32 for 32x32 reinterpretation, got {num_pages}")
 
-        self.total_num_tiles = input_num_pages // 32
+        self.total_num_tiles = num_pages // 32
         self.element_size = 2
         self.tile_size_bytes = CCL_TILE_H * CCL_TILE_W * self.element_size
         self.chunk = resolve_chunk_config(self.total_num_tiles, self.tile_size_bytes, chunk_num_tiles)
 
-        self.data_format = input_sample.dtype
+        self.data_format = metadata_sample.dtype
         self.standard_tile_descriptor = ttnn.TileDescriptor(CCL_TILE_H, CCL_TILE_W)
 
-        input_grid_start = input_sample.memory_config().shard_spec.grid.bounding_box().start
         out_sample = self.output_tensors_per_device[0]
         out_grid_start = out_sample.memory_config().shard_spec.grid.bounding_box().start
-
-        self.sender_core = ttnn.CoreCoord(int(input_grid_start.x), int(input_grid_start.y))
         self.receiver_core = ttnn.CoreCoord(int(out_grid_start.x), int(out_grid_start.y))
+
+        if self._owns_local_data_cb:
+            input_grid_start = self.input_tensors_per_device[0].memory_config().shard_spec.grid.bounding_box().start
+            self.sender_core = ttnn.CoreCoord(int(input_grid_start.x), int(input_grid_start.y))
+            if sender_core is not None and (sender_core.x != self.sender_core.x or sender_core.y != self.sender_core.y):
+                raise ValueError(
+                    f"Explicit sender_core {sender_core} does not match input tensor grid start {self.sender_core}"
+                )
+        else:
+            if sender_core is None:
+                raise ValueError("sender_core must be provided when input_tensor_mesh is not supplied")
+            self.sender_core = sender_core
+
         im_grid_start = self.intermediate_tensors_per_device[0].memory_config().shard_spec.grid.bounding_box().start
         if im_grid_start != self.receiver_core:
             raise ValueError(
                 f"Intermediate must be L1-sharded on receiver core {self.receiver_core}, got {im_grid_start}"
             )
-        if self.has_residual:
+        if self._owns_residual_cb:
             res_start = self.residual_tensors_per_device[0].memory_config().shard_spec.grid.bounding_box().start
             if res_start != self.receiver_core:
                 raise ValueError(f"Residual must be L1-sharded on receiver core {self.receiver_core}, got {res_start}")
@@ -318,20 +339,22 @@ class AllReduceConfig:
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
-                device = self.input_tensors_per_device[device_idx].device()
+                device = mesh_device.get_device(coord)
 
                 if self.cluster_axis == 0:
                     neighbor_coord = ttnn.MeshCoordinate(1 - row, col)
                 else:
                     neighbor_coord = ttnn.MeshCoordinate(row, 1 - col)
                 neighbor_idx = int(neighbor_coord[0]) * mesh_cols + int(neighbor_coord[1])
-                neighbor_device = self.input_tensors_per_device[neighbor_idx].device()
+                neighbor_device = mesh_device.get_device(neighbor_coord)
                 neighbor_recv_phys = neighbor_device.worker_core_from_logical_core(self.receiver_core)
                 neighbor_intermediate_addr = self.intermediate_tensors_per_device[neighbor_idx].buffer_address()
 
                 sender_phys = device.worker_core_from_logical_core(self.sender_core)
                 receiver_phys = device.worker_core_from_logical_core(self.receiver_core)
-                input_l1_addr = self.input_tensors_per_device[device_idx].buffer_address()
+                input_l1_addr = (
+                    self.input_tensors_per_device[device_idx].buffer_address() if self._owns_local_data_cb else 0
+                )
 
                 self._per_device[coord] = {
                     "device_idx": device_idx,
@@ -367,6 +390,19 @@ class AllReduceConfig:
         self._ncrisc_signal_local_ready = 0
         self._ncrisc_writer_active = self.num_links >= 2
         self._brisc_writer_active = True
+
+    # ======================================================================
+    # Deferred setters
+    # ======================================================================
+
+    def set_local_data_addr(self, addr):
+        """Set the L1 address of the local data buffer on the sender core.
+
+        Required when input_tensor_mesh is not provided (externally managed CB).
+        Must be called before get_*_common_rt_args().
+        """
+        for coord in self._per_device:
+            self._per_device[coord]["sender_local_data_l1_addr"] = int(addr)
 
     # ======================================================================
     # Public RISC-type based API
@@ -428,25 +464,32 @@ class AllReduceConfig:
     # -- CB descriptors ----------------------------------------------------
 
     def get_cb_descriptors(self, coord):
-        """Return all CB descriptors: sender-side local data CB + receiver-side CBs."""
+        """Return CB descriptors owned by this config.
+
+        When ``_owns_local_data_cb`` is True the sender-side local data CB is
+        included; otherwise the caller is responsible for creating it externally.
+        """
         info = self._per_device[coord]
         idx = info["device_idx"]
-
-        sender_local_cb = ttnn.cb_descriptor_from_sharded_tensor(
-            self.local_data_cb_id, self.input_tensors_per_device[idx]
-        )
-        sender_local_cb.core_ranges = self.sender_core_set
-        sender_local_cb.total_size = self.total_num_tiles * self.tile_size_bytes
-        sender_local_cb.format_descriptors = [
-            ttnn.CBFormatDescriptor(
-                buffer_index=self.local_data_cb_id,
-                data_format=self.data_format,
-                page_size=self.tile_size_bytes,
-                tile=self.standard_tile_descriptor,
-            )
-        ]
-
         receiver_core_set = self.receiver_core_set
+
+        cbs = []
+
+        if self._owns_local_data_cb:
+            sender_local_cb = ttnn.cb_descriptor_from_sharded_tensor(
+                self.local_data_cb_id, self.input_tensors_per_device[idx]
+            )
+            sender_local_cb.core_ranges = self.sender_core_set
+            sender_local_cb.total_size = self.total_num_tiles * self.tile_size_bytes
+            sender_local_cb.format_descriptors = [
+                ttnn.CBFormatDescriptor(
+                    buffer_index=self.local_data_cb_id,
+                    data_format=self.data_format,
+                    page_size=self.tile_size_bytes,
+                    tile=self.standard_tile_descriptor,
+                )
+            ]
+            cbs.append(sender_local_cb)
 
         recv_local_cb = ttnn.CBDescriptor(
             total_size=self.total_num_tiles * self.tile_size_bytes,
@@ -487,8 +530,8 @@ class AllReduceConfig:
             )
         ]
 
-        cbs = [sender_local_cb, recv_local_cb, remote_cb, output_cb]
-        if self.has_residual:
+        cbs.extend([recv_local_cb, remote_cb, output_cb])
+        if self._owns_residual_cb:
             residual_cb = ttnn.cb_descriptor_from_sharded_tensor(
                 self.residual_cb_id, self.residual_tensors_per_device[idx]
             )
@@ -606,41 +649,41 @@ class BypassAllReduceConfig:
     def __init__(
         self,
         mesh_device,
-        input_tensor_mesh,
         local_data_cb_id=0,
         recv_local_data_cb_id=1,
         remote_data_cb_id=2,
         output_cb_id=3,
-        residual_cb_id=4,
+        residual_cb_id=None,
         num_links=1,
+        sender_core=None,
     ):
         self.mesh_device = mesh_device
-        self.input_tensor_mesh = input_tensor_mesh
         self.num_links = int(num_links)
         self.local_data_cb_id = int(local_data_cb_id)
         self.recv_local_data_cb_id = int(recv_local_data_cb_id)
         self.remote_data_cb_id = int(remote_data_cb_id)
         self.output_cb_id = int(output_cb_id)
-        self.residual_cb_id = int(residual_cb_id)
+        self.has_residual = residual_cb_id is not None
+        self.residual_cb_id = int(residual_cb_id) if self.has_residual else 0
 
         if self.num_links < 1 or self.num_links > MAX_NUM_LINKS:
             raise ValueError(f"num_links must be in [1, {MAX_NUM_LINKS}], got {self.num_links}")
 
-        input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
-        input_grid_start = input_tensors_per_device[0].memory_config().shard_spec.grid.bounding_box().start
-        self.sender_core = ttnn.CoreCoord(int(input_grid_start.x), int(input_grid_start.y))
+        if sender_core is not None:
+            self.sender_core = sender_core
+        else:
+            self.sender_core = ttnn.CoreCoord(0, 0)
         self.receiver_core = self.sender_core
+
+        worker_core = self.sender_core
+        worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)])
 
         self._per_device = {}
         mesh_rows, mesh_cols = mesh_device.shape
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
-                idx = row * mesh_cols + col
-                device = input_tensors_per_device[idx].device()
-                shard_grid_start = input_tensors_per_device[idx].memory_config().shard_spec.grid.bounding_box().start
-                worker_core = ttnn.CoreCoord(shard_grid_start.x, shard_grid_start.y)
-                worker_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)])
+                device = mesh_device.get_device(coord)
                 worker_core_physical = device.worker_core_from_logical_core(worker_core)
                 self._per_device[coord] = {
                     "worker_core": worker_core,
@@ -700,7 +743,6 @@ class DeepseekMinimalAllReduce:
     @staticmethod
     def configure(
         mesh_device,
-        input_tensor_mesh,
         intermediate_tensor=None,
         output_tensor=None,
         semaphores=None,
@@ -711,21 +753,23 @@ class DeepseekMinimalAllReduce:
         recv_local_data_cb_id=1,
         remote_data_cb_id=2,
         output_cb_id=3,
+        input_tensor_mesh=None,
         residual_tensor_mesh=None,
-        residual_cb_id=4,
+        residual_cb_id=None,
         skip_local_push=False,
         skip_ccl=False,
+        sender_core=None,
     ):
         if skip_ccl:
             return BypassAllReduceConfig(
                 mesh_device=mesh_device,
-                input_tensor_mesh=input_tensor_mesh,
                 local_data_cb_id=local_data_cb_id,
                 recv_local_data_cb_id=recv_local_data_cb_id,
                 remote_data_cb_id=remote_data_cb_id,
                 output_cb_id=output_cb_id,
                 residual_cb_id=residual_cb_id,
                 num_links=num_links,
+                sender_core=sender_core,
             )
 
         if semaphores is None:
@@ -735,7 +779,6 @@ class DeepseekMinimalAllReduce:
 
         return AllReduceConfig(
             mesh_device=mesh_device,
-            input_tensor_mesh=input_tensor_mesh,
             intermediate_tensor=intermediate_tensor,
             output_tensor=output_tensor,
             semaphores=semaphores,
@@ -746,9 +789,11 @@ class DeepseekMinimalAllReduce:
             recv_local_data_cb_id=recv_local_data_cb_id,
             remote_data_cb_id=remote_data_cb_id,
             output_cb_id=output_cb_id,
+            input_tensor_mesh=input_tensor_mesh,
             residual_tensor_mesh=residual_tensor_mesh,
             residual_cb_id=residual_cb_id,
             skip_local_push=skip_local_push,
+            sender_core=sender_core,
         )
 
     @staticmethod
@@ -773,14 +818,15 @@ class DeepseekMinimalAllReduce:
 
         allreduce_config = DeepseekMinimalAllReduce.configure(
             mesh_device=mesh_device,
-            input_tensor_mesh=input_tensor_mesh,
             intermediate_tensor=intermediate_tensor,
             output_tensor=output_tensor,
             semaphores=semaphores,
             cluster_axis=cluster_axis,
             num_links=num_links,
             chunk_num_tiles=chunk_num_tiles,
+            input_tensor_mesh=input_tensor_mesh,
             residual_tensor_mesh=residual_tensor_mesh,
+            residual_cb_id=4 if residual_tensor_mesh is not None else None,
             skip_local_push=False,
             skip_ccl=False,
         )

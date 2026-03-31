@@ -461,7 +461,7 @@ class PostSDPA:
             remote_data_cb_id=ccl_remote_data_cb,
             output_cb_id=ccl_output_cb,
             residual_tensor_mesh=residual_tensor_mesh,
-            residual_cb_id=ccl_residual_cb,
+            residual_cb_id=ccl_residual_cb if residual_tensor_mesh is not None else None,
             skip_local_push=True,
             skip_ccl=not ccl_enabled,
         )
