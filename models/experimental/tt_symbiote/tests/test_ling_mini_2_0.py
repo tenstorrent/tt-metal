@@ -121,11 +121,10 @@ def test_ling_mini_2_0(mesh_device):
     model.eval()
     torch.set_grad_enabled(False)
 
-    # Warmup run
+    # Warmup run without trace
     outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_cache)
-
     paged_cache.reset()
-    TracedRun.release_all()
+    # Actual run with trace
     outputs = model.generate(**inputs, max_new_tokens=4, use_cache=True, past_key_values=paged_cache)
     paged_cache.reset()
 

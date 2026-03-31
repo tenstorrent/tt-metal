@@ -128,11 +128,13 @@ def load_model(mesh_device, model_name="inclusionAI/Ling-mini-2.0"):
 
     model.eval()
     torch.set_grad_enabled(False)
-    return model, tokenizer
+    paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
+    return model, tokenizer, paged_cache
 
 
-def warmup(model, tokenizer, mesh_device):
+def warmup(model, tokenizer, mesh_device, paged_cache):
     print("Warming up...")
+    "That's awesoome. Let me test out functionality"
     messages = [{"role": "user", "content": "Hello there. What is your name. Tell me about yourself."}]
     inputs = tokenizer.apply_chat_template(
         messages,
@@ -144,15 +146,13 @@ def warmup(model, tokenizer, mesh_device):
     if "token_type_ids" in inputs:
         del inputs["token_type_ids"]
 
-    paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
     model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_cache)
-    TracedRun.release_all()
+    paged_cache.reset()
     print("Warmup complete.")
 
 
-def chat_loop(model, tokenizer, mesh_device, max_new_tokens=256):
+def chat_loop(model, tokenizer, paged_cache, mesh_device, max_new_tokens=256):
     messages = []
-    paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
     print("\n--- Ling-mini-2.0 Chatbot ---")
     print("Type 'quit' or 'exit' to stop, '/clear' to reset history.\n")
 
@@ -216,9 +216,9 @@ def main():
     DispatchManager.DisableTiming()  # Disable timing during interactive chat
     mesh_device = setup_mesh_device()
     try:
-        model, tokenizer = load_model(mesh_device, args.model)
-        warmup(model, tokenizer, mesh_device)
-        chat_loop(model, tokenizer, mesh_device, args.max_new_tokens)
+        model, tokenizer, paged_cache = load_model(mesh_device, args.model)
+        warmup(model, tokenizer, mesh_device, paged_cache)
+        chat_loop(model, tokenizer, paged_cache, mesh_device, args.max_new_tokens)
     finally:
         cleanup(mesh_device)
 

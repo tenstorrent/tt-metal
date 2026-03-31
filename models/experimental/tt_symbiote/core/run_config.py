@@ -933,12 +933,21 @@ class TracedRun(LightweightRun):
     """
     Traced execution mode with automatic caching.
     Only traces modules decorated with @trace_enabled.
+
+    Per-(module, cache_key) three-phase lifecycle:
+      1. **Warm-up** (first encounter): Normal forward execution, no trace
+         capture. Primes JIT, CCL, and device memory allocator.
+      2. **Capture** (second encounter): ``_capture_trace`` records the op
+         sequence into a DRAM buffer. The system is already in steady state.
+      3. **Replay** (third encounter onward): ``execute_trace`` replays the
+         clean trace with near-zero host dispatch overhead.
     """
 
     _device: Any = None
     _cq_id: int = 0
     _input_memory_config: Any = None
     _trace_cache: Dict[Tuple, TraceEntry] = {}
+    _warmup_keys: Set[Tuple] = set()  # keys that have completed warm-up (run 1)
 
     @classmethod
     def configure(
@@ -952,6 +961,7 @@ class TracedRun(LightweightRun):
         cls._cq_id = cq_id
         cls._input_memory_config = input_memory_config or ttnn.DRAM_MEMORY_CONFIG
         cls._trace_cache = {}
+        cls._warmup_keys = set()
 
     @classmethod
     def cache_size(cls) -> int:
@@ -1193,23 +1203,24 @@ class TracedRun(LightweightRun):
                 return result
             return post_process_ttnn_module_output(self, result)
 
-        # Traced execution path
+        # Traced execution path — per-(module, cache_key) lifecycle:
+        #   1st encounter: warm-up forward (no trace capture)
+        #   2nd encounter: _capture_trace (clean capture)
+        #   3rd+ encounter: execute_trace (replay)
         cache_key = TracedRun._make_cache_key(self.module_name, func_args)
 
         if cache_key in TracedRun._trace_cache:
-            # Execute cached trace
-            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
+            # === RUN 3+: REPLAY ===
             entry = TracedRun._trace_cache[cache_key]
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
             TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
             TracedRun._copy_kwargs_to_trace_buffer(func_kwargs, entry.trace_kwargs)
             ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
             result = entry.trace_output
-        else:
+        elif cache_key in TracedRun._warmup_keys:
+            # === RUN 2: CAPTURE (system already warmed up for this key) ===
             _TRACE_RUNNING = True
-            print(
-                f"{self.__class__.__name__}: {self.module_name} on device {self.device} [First Run - Capturing Trace]"
-            )
-            # Capture new trace
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} " f"[Capturing Trace]")
             begin2 = time.time()
             entry = TracedRun._capture_trace(self, func_args, func_kwargs, cache_key)
             end2 = time.time()
@@ -1217,6 +1228,13 @@ class TracedRun(LightweightRun):
                 "TTNN", self.module_name, self.__class__.__name__ + "_capture_trace", {}, end2 - begin2
             )
             result = entry.trace_output
+            _TRACE_RUNNING = False
+        else:
+            # === RUN 1: WARM-UP (normal forward, no trace) ===
+            TracedRun._warmup_keys.add(cache_key)
+            _TRACE_RUNNING = True
+            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} " f"[Warm-up (no trace)]")
+            result = self.forward(*func_args, **func_kwargs)
             _TRACE_RUNNING = False
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
