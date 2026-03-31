@@ -1015,13 +1015,11 @@ static std::vector<Tensor> pool2d(
         auto in_shape = input_tensor_4d.padded_shape();
 
         if (batch_size == 1) {
-            // Fast path: input is (1, 1, H*W, C). View + reduce + view (views are zero-copy).
-            ttnn::Shape flat({in_shape[0], 1, in_shape[1] * in_shape[2], in_shape[3]});
-            Tensor flat_input = ttnn::experimental::view(input_tensor_4d, flat);
+            // Fast path: input is already (1, 1, H*W, C). Just reduce dim 2.
+            Tensor output =
+                ttnn::operations::reduction::pool_sum(input_tensor_4d, 2, mem_config, compute_kernel_config, scalar);
 
-            Tensor output = ttnn::operations::reduction::pool_sum(
-                flat_input, int(flat.rank() - 2), mem_config, compute_kernel_config, scalar);
-
+            // Fix logical channel count (zero-copy view)
             auto op = output.padded_shape();
             ttnn::Shape out_logical({1, 1, 1, channels});
             ttnn::Shape out_padded({op[0], 1, 1, op[3]});

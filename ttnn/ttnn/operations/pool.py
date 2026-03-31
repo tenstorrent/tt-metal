@@ -53,16 +53,24 @@ def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
     """Global average pooling via avg_pool2d reduction path.
 
     Args:
-        input_tensor: Input tensor in (N, H, W, C) format (NHWC).
+        input_tensor: Input tensor in (N, H, W, C), (H, W, C), or (H, W) format.
         memory_config: Optional memory configuration.
         dtype: Optional output data type (unused, kept for API compatibility).
 
     Returns:
-        Output tensor in (N, 1, 1, C) format.
+        Output tensor with spatial dims reduced to 1.
     """
     shape = input_tensor.shape
-    N, H, W, C = shape[0], shape[1], shape[2], shape[3]
-    # avg_pool2d expects ROW_MAJOR input
+    rank = len(shape)
+    if rank == 4:
+        N, H, W, C = shape[0], shape[1], shape[2], shape[3]
+    elif rank == 3:
+        N, H, W, C = 1, shape[0], shape[1], shape[2]
+    elif rank == 2:
+        N, H, W, C = 1, shape[0], shape[1], 1
+    else:
+        raise ValueError(f"global_avg_pool2d: expected rank 2, 3, or 4, got {rank}")
+
     if input_tensor.layout != ttnn.ROW_MAJOR_LAYOUT:
         input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
     flat = ttnn.reshape(input_tensor, (1, 1, N * H * W, C))
@@ -77,7 +85,12 @@ def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
         padding=(0, 0),
         memory_config=memory_config,
     )
-    return ttnn.reshape(result, (N, 1, 1, C))
+    if rank == 4:
+        return ttnn.reshape(result, (N, 1, 1, C))
+    elif rank == 3:
+        return ttnn.reshape(result, (1, 1, C))
+    else:
+        return ttnn.reshape(result, (1, 1))
 
 
 ttnn.global_avg_pool2d = global_avg_pool2d
