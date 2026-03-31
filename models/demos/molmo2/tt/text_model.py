@@ -14,6 +14,7 @@ Implements the full decoder-only transformer:
 Supports:
 - Autoregressive generation with KV cache
 - Mixed text/vision token sequences
+- On a mesh device, lm_head is column-parallel (vocab sharded on dim 3) with all_gather to full logits
 """
 
 from typing import List, Optional, Tuple
@@ -81,6 +82,8 @@ class TextModel(LightweightModule):
 
         is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
+        num_mesh_devices = mesh_device.get_num_devices() if is_mesh_device else 1
+        self._lm_head_column_parallel = is_mesh_device and num_mesh_devices > 1
 
         # Cache file naming
         if weight_cache_path is None:
@@ -160,16 +163,24 @@ class TextModel(LightweightModule):
             dtype=dtype,
         )
 
-        # Language model head
+        # Language model head (column-parallel over vocab on mesh: shard dim K×N matmul's N across devices)
         # Note: lm_head is at top level, not under model.transformer
         lm_head = state_dict["lm_head.weight"]
+        lm_head_vocab = lm_head.shape[0]
+        if self._lm_head_column_parallel:
+            assert (
+                lm_head_vocab % num_mesh_devices == 0
+            ), f"lm_head vocab {lm_head_vocab} must divide mesh size {num_mesh_devices} for column sharding"
         lm_head_t = torch.transpose(lm_head, -2, -1).unsqueeze(0).unsqueeze(0)
+        lm_head_mesh_mapper = (
+            ttnn.ShardTensorToMesh(mesh_device, dim=3) if self._lm_head_column_parallel else mesh_mapper
+        )
 
         self.lm_head = ttnn.as_tensor(
             lm_head_t,
             dtype=dtype,
             device=mesh_device,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=lm_head_mesh_mapper,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name("lm_head.weight") if weight_cache_path else None,
@@ -181,6 +192,19 @@ class TextModel(LightweightModule):
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
+        )
+
+    def _gather_lm_head_logits(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        """Concatenate column-parallel vocab shards along dim=3 (same axis as Attention/MLP TP)."""
+        if not self._lm_head_column_parallel:
+            return logits
+        return ttnn.all_gather(
+            logits,
+            dim=3,
+            cluster_axis=1,
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
         )
 
     def embed_tokens(
@@ -268,13 +292,14 @@ class TextModel(LightweightModule):
         if output_hidden_states:
             all_hidden_states.append(x)
 
-        # Language model head
+        # Language model head (gather vocab shards → full logits on each device)
         logits = ttnn.linear(
             x,
             self.lm_head,
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        logits = self._gather_lm_head_logits(logits)
 
         return logits, new_kv_caches
 
@@ -347,6 +372,7 @@ class TextModel(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        logits = self._gather_lm_head_logits(logits)
 
         return logits
 
