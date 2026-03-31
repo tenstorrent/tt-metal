@@ -309,17 +309,19 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         TT_FATAL(!blocking, "Blocking is not supported when recording a trace.");
         trace_nodes_.push_back(MeshTraceNode{});
         auto& trace_node = trace_nodes_.back();
+        bool use_prefetcher_cache =
+            mesh_workload.impl().max_program_kernels_sizeB_ <= this->prefetcher_cache_sizeB_;
         for (auto& [device_range, program] : mesh_workload.get_programs()) {
 #if defined(TRACY_ENABLE)
             // With tracy enabled, each device has a different program runtime ID in the launch message, so we need to
             // handle each device separately rather than grouping them.
             for (auto& coord : device_range) {
                 trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
-                    coord, program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers)));
+                    coord, program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
             }
 #else
             trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
-                device_range, program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers)));
+                device_range, program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
 #endif
         }
         trace_node.multicast_go_signals = mcast_go_signals;
@@ -1193,6 +1195,10 @@ void FDMeshCommandQueue::record_end() {
                 hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::KERNEL_CONFIG))};
         allocator.allocate_trace_programs(trace_nodes);
 
+        // Each device range produces an independent trace byte stream, so reset the prefetcher
+        // cache manager to give each range a clean slate.
+        this->reset_prefetcher_cache_manager();
+
         auto& sysmem_manager_for_trace = mesh_device_->get_device(range.start_coord())->sysmem_manager();
         auto& worker_launch_message_buffer_state = cq_shared_state_->worker_launch_message_buffer_state;
         for (uint32_t sub_device_id = 0; sub_device_id < mesh_device_->num_sub_devices(); sub_device_id++) {
@@ -1270,6 +1276,32 @@ void FDMeshCommandQueue::record_end() {
             uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
             auto& cached_program_command_sequence =
                 program.get_trace_cached_program_command_sequences().at(command_hash);
+
+            // Set up prefetcher cache info for this program. The prefetcher cache is a ring buffer
+            // in the prefetcher's SRAM; it caches kernel binaries read from device DRAM to avoid
+            // repeated DRAM reads on re-execution. Skip if the binary is already resident in the
+            // worker SRAM ring buffer (send_binary == false) — no DRAM read will happen at all.
+            // For programs whose binary fits in the cache, query its position in the SRAM ring
+            // buffer. For programs that don't fit (binary too large), reset the cache so that later
+            // programs can gradually reload it.
+            if (node.dispatch_metadata.send_binary && cached_program_command_sequence.prefetcher_cache_used) {
+                auto cache_result = prefetcher_cache_manager_->get_cache_offset(
+                    program.get_id(), cached_program_command_sequence.kernel_bins_sizeB);
+                TT_ASSERT(
+                    cache_result.has_value(),
+                    "Prefetcher cache query failed for program {} with size {} in trace recording",
+                    program.get_id(),
+                    cached_program_command_sequence.kernel_bins_sizeB);
+                node.dispatch_metadata.prefetcher_cache_info = {
+                    .mesh_max_program_kernels_sizeB = cached_program_command_sequence.kernel_bins_sizeB,
+                    .is_cached = cache_result->is_cached,
+                    .offset = cache_result->offset * prefetcher_dram_aligned_block_size_};
+            } else if (node.dispatch_metadata.send_binary) {
+                // Binary too large for the prefetcher cache. Reset the cache so that later
+                // programs can reload it from scratch.
+                this->reset_prefetcher_cache_manager();
+            }
+
             auto& worker_launch_msg_state = worker_launch_message_buffer_state[*sub_device_id];
             // Update the generated dispatch commands based on the state of the CQ and the ring buffer
             program_dispatch::update_traced_program_dispatch_commands(
