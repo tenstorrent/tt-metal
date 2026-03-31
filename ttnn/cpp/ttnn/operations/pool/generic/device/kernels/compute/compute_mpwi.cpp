@@ -140,8 +140,8 @@ void kernel_main() {
             tile_regs_acquire();
             uint32_t intra_kernel_h = 0;
             uint32_t intra_kernel_w = 0;
-            copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
             reconfig_data_format_srca(compute_tmp_idx_cb_id);
+            copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
             if (first_iteration) {  // move the initial indexes from the reader to DST
                 cb_wait_front(in_idx_cb_id, 1);
                 copy_tile(in_idx_cb_id, mpwi_cb_tile_idx, index_dst_idx);
@@ -156,8 +156,8 @@ void kernel_main() {
                 // clear the accumulation tiles since they will contain garbage data which is partially loaded
                 // since max SFPU offset if 62 DST rows, but 4 rows are loaded each time so we load 2 rows of
                 // DST tiles 1 and 3 during the reduction of tiles 0 and 2
-                copy_tile_to_dst_init_short(clear_value_cb_id);
                 reconfig_data_format_srca(clear_value_cb_id);
+                copy_tile_to_dst_init_short(clear_value_cb_id);
                 copy_tile(clear_value_cb_id, mpwi_cb_tile_idx, data_accum_dst_idx);
 
                 // make a copy of the initial indexes to be used for restoring between C blocks
@@ -168,16 +168,16 @@ void kernel_main() {
                 bool last_chunk = chunk == interm_reduction_chunks - 1;
 
                 cb_wait_front(curr_in_cb_id, 1);
-                copy_tile_to_dst_init_short(curr_in_cb_id);
                 reconfig_data_format_srca(curr_in_cb_id);
+                copy_tile_to_dst_init_short(curr_in_cb_id);
                 copy_tile(curr_in_cb_id, mpwi_cb_tile_idx, data_dst_idx);
 
                 // increments happen between every chunk within a C block, and between C blocks
                 bool increment_needed = false;
                 if (last_c_block && last_chunk) {  // increment for the next kernel position
                     increment_needed = true;
-                    copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
                     reconfig_data_format_srca(compute_tmp_idx_cb_id);
+                    copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
                     // update the current index column
                     if (current_idx_col + stride_w + eff_kernel_w > in_w_padded) {
                         // we reached the right edge, wrap down and to the left
@@ -198,8 +198,8 @@ void kernel_main() {
                 } else if (is_large_kernel) {  // only need to increment within C block if multiple chunks
                     if (!last_chunk) {         // increment for the next chunk within the same C block
                         increment_needed = true;
-                        copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
                         reconfig_data_format_srca(compute_tmp_idx_cb_id);
+                        copy_tile_to_dst_init_short(compute_tmp_idx_cb_id);
                         if (intra_kernel_w + sticks_per_chunk < kernel_w) {  // move right in this row
                             intra_kernel_w += sticks_per_chunk;
                             copy_tile(intra_kernel_right_inc_cb_id, mpwi_cb_tile_idx, inc_dst_idx);
