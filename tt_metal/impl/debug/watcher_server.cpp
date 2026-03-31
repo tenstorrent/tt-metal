@@ -390,9 +390,9 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
         data.assert_status().tripped() = dev_msgs::DebugAssertOK;
         data.assert_status().which() = DEBUG_SANITIZE_SENTINEL_OK_8;
 
-        // Initialize debug ring buffer. Quasar MPSC buffer is already zeroed on create.
-        // WH/BH SPSC buffer needs current_ptr set to -1 as sentinel.
-        if (hal.get_arch() != tt::ARCH::QUASAR) {
+        // Initialize debug ring buffer. MPSC buffer is zeroed on create.
+        // SPSC buffer needs current_ptr set to -1 as sentinel.
+        if (!hal.has_mpsc_ring_buffer()) {
             auto* ring_buf = reinterpret_cast<debug_spsc_ring_buf_msg_t*>(data.debug_ring_buf().data().data());
             ring_buf->current_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
             ring_buf->wrapped = 0;

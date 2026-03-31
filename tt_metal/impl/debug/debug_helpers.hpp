@@ -220,11 +220,9 @@ inline EnableSymbolsInfo get_enable_symbols_info(HalProgrammableCoreType core_ty
     return info;
 }
 
-// Format ring buffer output - auto-detects SPSC (WH/BH) vs MPSC (Quasar) based on arch
-// For MPSC, thread_indices and core_type are used to prefix entries with processor name
-// Returns vector of lines like ["[0x00270028,...,", " 0x001f0020,...,", "]"]
-// or for MPSC: ["[[DM0]0x00270028,...,", " [DM0]0x001f0020,...,", "]"]
-inline std::vector<std::string> FormatRingBuffer(
+// Format ring buffer data as hex values, 8 per line
+// If thread_indices provided (MPSC), prefixes each entry with processor name like [DM0]
+inline std::string FormatRingBuffer(
     std::span<const uint32_t> data,
     std::span<const uint32_t> thread_indices = {},
     HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX) {
@@ -232,45 +230,23 @@ inline std::vector<std::string> FormatRingBuffer(
         return {};
     }
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const bool is_mpsc = (hal.get_arch() == tt::ARCH::QUASAR);
+    const bool is_mpsc = hal.has_mpsc_ring_buffer();
 
-    std::vector<std::string> lines;
-    std::string line = "[";
+    std::string result = "\n\tdebug_ring_buffer=\n\t[";
     for (size_t i = 0; i < data.size(); i++) {
         if (is_mpsc && !thread_indices.empty()) {
             auto name = hal.get_processor_class_name(core_type, thread_indices[i], false);
-            line += fmt::format("[{}]0x{:08x},", name, data[i]);
+            result += fmt::format("[{}]0x{:08x},", name, data[i]);
         } else {
-            line += fmt::format("0x{:08x},", data[i]);
+            result += fmt::format("0x{:08x},", data[i]);
         }
         if ((i + 1) % 8 == 0 && i + 1 < data.size()) {
-            lines.push_back(line);
-            line = " ";  // Continuation lines start with space
+            result += "\n\t ";  // Newline + indent for continuation
         }
     }
-    line.pop_back();  // Remove trailing comma
-    line += "]";
-    lines.push_back(line);
-    return lines;
-}
-
-// SPSC overload - extracts data in newest-first order and formats
-inline std::vector<std::string> FormatRingBuffer(
-    const debug_spsc_ring_buf_msg_t& buf, HalProgrammableCoreType core_type = HalProgrammableCoreType::TENSIX) {
-    if (buf.current_ptr == DEBUG_RING_BUFFER_STARTING_INDEX) {
-        return {};
-    }
-    // Extract newest-first: walk backwards from current_ptr, wrap at 0
-    std::vector<uint32_t> data;
-    int16_t ptr = buf.current_ptr;
-    int16_t count = buf.wrapped ? DEBUG_RING_BUFFER_SPSC_ELEMENTS : (ptr + 1);
-    for (int16_t i = 0; i < count; i++) {
-        data.push_back(buf.data[ptr]);
-        if (--ptr < 0) {
-            ptr = DEBUG_RING_BUFFER_SPSC_ELEMENTS - 1;
-        }
-    }
-    return FormatRingBuffer(data, {}, core_type);
+    result.pop_back();  // Remove trailing comma
+    result += "]";
+    return result;
 }
 
 }  // namespace tt::tt_metal

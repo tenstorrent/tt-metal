@@ -360,6 +360,9 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
             fmt::format_to(it, "-D{} ", define);
         }
         fmt::format_to(it, "-DDISPATCH_MESSAGE_ADDR={} ", build_config.dispatch_message_addr);
+        if (hal.has_mpsc_ring_buffer()) {
+            fmt::format_to(it, "-DMPSC_RING_BUFFER ");
+        }
     }
     if (this->is_fw_) {
         this->defines_ += "-DFW_BUILD ";

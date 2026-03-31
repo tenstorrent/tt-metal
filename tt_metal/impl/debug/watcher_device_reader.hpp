@@ -58,11 +58,9 @@ private:
     std::map<CoreCoord, uint32_t> logical_core_to_eth_link_retraining_count;
     std::map<HalProgrammableCoreType, EnableSymbolsInfo> symbols_info_cache_;
 
-    // MPSC ring buffer reader state (Quasar only) - tracks last consumed position per core
-    // Mutable because this is reader state updated during const Dump operations
+    // MPSC state cached on host: slots get overwritten (lock-free), so we track position and
+    // buffer history per core. SPSC doesn't need this since current_ptr/wrapped give full state.
     mutable std::map<CoreCoord, uint32_t> mpsc_last_consumed_pos_;
-    // MPSC ring buffer entries (Quasar only) - maintains full buffer contents per core for display
-    // Stores entries newest-first, limited to buffer capacity (32 entries)
     mutable std::map<CoreCoord, std::vector<MpscRingBufEntry>> mpsc_ring_buf_entries_;
 };
 

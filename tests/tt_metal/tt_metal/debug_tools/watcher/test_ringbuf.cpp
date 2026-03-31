@@ -35,40 +35,32 @@ using namespace tt::tt_metal;
 namespace {
 const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp";
 
-// Overflow amount for single-processor tests
-constexpr uint32_t OVERFLOW_AMOUNT = 12;
-
 // Pushes per processor for multi-threaded test (24 x 5 = 120, fits in 128-element MPSC buffer)
 constexpr uint32_t PUSHES_PER_PROCESSOR_MULTI = 5;
 
-// Expected strings for single-processor tests (SPSC for WH/BH, MPSC for Quasar)
+// Expected strings for single-processor tests
 // Pattern: SPSC uses (idx << 16) | (idx + 1), MPSC uses (thread_idx << 16) | seq
 // Newest first, limited to buffer capacity
 std::vector<std::string> get_expected_single_processor(
     HalProgrammableCoreType core_type, uint32_t thread_idx, uint32_t num_pushes) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
+    bool is_mpsc = hal.has_mpsc_ring_buffer();
     uint32_t capacity = hal.get_ring_buffer_capacity();
     uint32_t first_visible = (num_pushes > capacity) ? num_pushes - capacity : 0;
 
-    std::vector<uint32_t> data;
-    std::vector<uint32_t> thread_indices;
+    std::vector<std::string> result = {"debug_ring_buffer="};
     for (uint32_t seq = num_pushes - 1; seq >= first_visible && seq < num_pushes; seq--) {
-        if (is_quasar) {
-            data.push_back((thread_idx << 16) | seq);
-            thread_indices.push_back(thread_idx);
+        if (is_mpsc) {
+            auto proc_name = hal.get_processor_class_name(core_type, thread_idx, false);
+            result.push_back(fmt::format("[{}]0x{:08x}", proc_name, (thread_idx << 16) | seq));
         } else {
-            data.push_back((seq << 16) | (seq + 1));
+            result.push_back(fmt::format("0x{:08x}", (seq << 16) | (seq + 1)));
         }
     }
-
-    std::vector<std::string> result = {"debug_ring_buffer="};
-    auto lines = is_quasar ? FormatRingBuffer(data, thread_indices, core_type) : FormatRingBuffer(data);
-    result.insert(result.end(), lines.begin(), lines.end());
     return result;
 }
 
-// Expected strings for Quasar multi-threaded test (all 24 processors)
+// Expected strings for Quasar multi-threaded test (all DMs + TRISCs)
 // Verifies all processors wrote all entries (order is non-deterministic)
 std::vector<std::string> get_expected_multi_threaded(
     HalProgrammableCoreType core_type, uint32_t num_processors, uint32_t pushes_per_proc) {
@@ -89,13 +81,7 @@ void RunMultiThreadedTest(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     HalProgrammableCoreType core_type) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    uint32_t tensix_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
-    uint32_t num_dm = hal.get_processor_types_count(tensix_idx, static_cast<uint32_t>(HalProcessorClassType::DM));
-    uint32_t num_triscs =
-        hal.get_processor_types_count(tensix_idx, static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
-    uint32_t num_neos = num_triscs / hal.get_processor_class_num_fw_binaries(
-                                         tensix_idx, static_cast<uint32_t>(HalProcessorClassType::COMPUTE));
-    uint32_t total_processors = num_dm + num_triscs;
+    uint32_t total_processors = hal.get_max_processors_per_core();
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -109,7 +95,7 @@ void RunMultiThreadedTest(
         kernel,
         logical_core,
         tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = num_dm,
+            .num_threads_per_cluster = 8,
             .compile_args = {PUSHES_PER_PROCESSOR_MULTI},
             .defines = {{"MULTI_THREADED_TEST", "1"}}});
 
@@ -118,7 +104,7 @@ void RunMultiThreadedTest(
         kernel,
         logical_core,
         tt::tt_metal::experimental::quasar::QuasarComputeConfig{
-            .num_threads_per_cluster = num_neos,
+            .num_threads_per_cluster = 4,
             .compile_args = {PUSHES_PER_PROCESSOR_MULTI},
             .defines = {{"MULTI_THREADED_TEST", "1"}}});
 
@@ -135,7 +121,6 @@ void RunTest(
     HalProcessorIdentifier processor) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
-    uint32_t tensix_idx = hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
 
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -146,23 +131,19 @@ void RunTest(
     CoreCoord logical_core = {0, 0};
     CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
 
-    // Single-processor tests
-    uint32_t num_pushes = hal.get_ring_buffer_capacity() + OVERFLOW_AMOUNT;
+    uint32_t num_pushes = hal.get_ring_buffer_capacity() + 12;  // overflow to test wraparound
 
     switch (processor.core_type) {
         case HalProgrammableCoreType::TENSIX:
             switch (processor.processor_class) {
-                case HalProcessorClassType::DM:
+                case HalProcessorClassType::DM: {
                     if (is_quasar) {
-                        uint32_t num_dm =
-                            hal.get_processor_types_count(tensix_idx, static_cast<uint32_t>(HalProcessorClassType::DM));
                         tt::tt_metal::experimental::quasar::CreateKernel(
                             program,
                             kernel,
                             logical_core,
                             tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                                .num_threads_per_cluster = num_dm,
-                                .compile_args = {num_pushes, processor.processor_type}});
+                                .num_threads_per_cluster = 8, .compile_args = {num_pushes, processor.processor_type}});
                     } else {
                         DataMovementConfig dm_config{
                             .processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type),
@@ -172,7 +153,7 @@ void RunTest(
                         CreateKernel(program, kernel, logical_core, dm_config);
                     }
                     break;
-
+                }
                 case HalProcessorClassType::COMPUTE:
                     if (is_quasar) {
                         tt::tt_metal::experimental::quasar::CreateKernel(
@@ -193,16 +174,14 @@ void RunTest(
                                 .defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
                     }
                     break;
-                default: TT_THROW("Unsupported processor class");
             }
             break;
-
-        case HalProgrammableCoreType::ACTIVE_ETH: {
-            auto eth_cores = device->get_active_ethernet_cores(true);
-            if (eth_cores.empty()) {
-                GTEST_SKIP() << "Device has no active ethernet cores";
+        case HalProgrammableCoreType::ACTIVE_ETH:
+            if (device->get_active_ethernet_cores(true).empty()) {
+                log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
+                GTEST_SKIP();
             }
-            logical_core = *eth_cores.begin();
+            logical_core = *(device->get_active_ethernet_cores(true).begin());
             virtual_core = device->ethernet_core_from_logical_core(logical_core);
             CreateKernel(
                 program,
@@ -210,14 +189,12 @@ void RunTest(
                 logical_core,
                 EthernetConfig{.noc = tt_metal::NOC::NOC_0, .compile_args = {num_pushes}});
             break;
-        }
-
-        case HalProgrammableCoreType::IDLE_ETH: {
-            auto eth_cores = device->get_inactive_ethernet_cores();
-            if (eth_cores.empty()) {
-                GTEST_SKIP() << "Device has no inactive ethernet cores";
+        case HalProgrammableCoreType::IDLE_ETH:
+            if (device->get_inactive_ethernet_cores().empty()) {
+                log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
+                GTEST_SKIP();
             }
-            logical_core = *eth_cores.begin();
+            logical_core = *(device->get_inactive_ethernet_cores().begin());
             virtual_core = device->ethernet_core_from_logical_core(logical_core);
             CreateKernel(
                 program,
@@ -225,19 +202,17 @@ void RunTest(
                 logical_core,
                 EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .compile_args = {num_pushes}});
             break;
-        }
-
-        case HalProgrammableCoreType::DRAM: {
+        case HalProgrammableCoreType::DRAM:
             log_info(LogTest, "Skipping: DRAM cores do not support watcher ring buffer tests.");
             GTEST_SKIP();
-        }
-
-        default: TT_THROW("Unsupported core type");
+        case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported core type");
     }
-
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
+
+    // Run the program
     fixture->RunProgram(mesh_device, workload, true);
-    log_info(LogTest, "Checking file: {}", fixture->log_file_name);
+
+    log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
 
     // Validate output
     uint32_t thread_idx = processor.processor_type;
@@ -247,8 +222,6 @@ void RunTest(
     EXPECT_TRUE(FileContainsAllStringsInOrder(
         fixture->log_file_name, get_expected_single_processor(processor.core_type, thread_idx, num_pushes)));
 }
-
-}  // namespace
 
 // Test parameters
 struct RingBufferTestParams {
@@ -278,16 +251,11 @@ TEST_P(WatcherRingBufferTest, TestWatcherRingBuffer) {
         GTEST_SKIP() << "Multi-threaded test is Quasar-only";
     }
 
-    // IDLE_ETH requires slow dispatch
-    bool is_idle_eth = (params.processor.core_type == HalProgrammableCoreType::IDLE_ETH);
-    if (is_idle_eth && !this->IsSlowDispatch()) {
-        GTEST_SKIP() << "IDLE_ETH requires Slow Dispatch";
-    }
-
-    // Slow dispatch tests only on Quasar or IDLE_ETH
+    // Quasar and IDLE_ETH require slow dispatch
     bool is_quasar = (hal.get_arch() == tt::ARCH::QUASAR);
-    if (this->IsSlowDispatch() && !is_quasar && !is_idle_eth) {
-        GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
+    bool is_idle_eth = (params.processor.core_type == HalProgrammableCoreType::IDLE_ETH);
+    if ((is_quasar || is_idle_eth) && !this->IsSlowDispatch()) {
+        GTEST_SKIP() << "Quasar and IDLE_ETH require Slow Dispatch";
     }
 
     for (auto& mesh_device : this->devices_) {
@@ -330,3 +298,5 @@ INSTANTIATE_TEST_SUITE_P(
         // Multi-threaded test (Quasar only, all 24 processors)
         RingBufferTestParams{"MultiThreaded", {TENSIX, DM, 0}, /*multi_threaded=*/true}),
     [](const ::testing::TestParamInfo<RingBufferTestParams>& info) { return info.param.test_name; });
+
+}  // namespace

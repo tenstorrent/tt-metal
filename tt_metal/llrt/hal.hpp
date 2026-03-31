@@ -375,10 +375,11 @@ public:
 
     tt::ARCH get_arch() const { return arch_; }
 
-    // Returns ring buffer capacity based on architecture (MPSC for Quasar, SPSC for others)
+    bool has_mpsc_ring_buffer() const { return arch_ == tt::ARCH::QUASAR; }
     uint32_t get_ring_buffer_capacity() const {
-        return (arch_ == tt::ARCH::QUASAR) ? DEBUG_RING_BUFFER_MPSC_ELEMENTS : DEBUG_RING_BUFFER_SPSC_ELEMENTS;
+        return has_mpsc_ring_buffer() ? DEBUG_RING_BUFFER_MPSC_ELEMENTS : DEBUG_RING_BUFFER_SPSC_ELEMENTS;
     }
+    uint32_t get_ring_buffer_mask() const { return get_ring_buffer_capacity() - 1; }
 
     // Returns the NoC topology type (MESH or TORUS)
     NoCTopologyType get_noc_topology() const { return noc_topology_; }

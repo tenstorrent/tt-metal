@@ -864,23 +864,32 @@ void WatcherDeviceReader::Core::DumpEthLinkStatus() const {
 void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
     const auto& hal = reader_.env.get_hal();
 
-    // On Quasar, use MPSC ring buffer format
-    if (hal.get_arch() == tt::ARCH::QUASAR) {
+    if (hal.has_mpsc_ring_buffer()) {
         DumpMpscRingBuffer(to_stdout);
         return;
     }
 
-    // WH/BH: SPSC ring buffer - cast byte array wrapper to impl struct
-    const auto* ring_buf_data =
+    // SPSC ring buffer - cast byte array wrapper to impl struct
+    const auto* rb =
         reinterpret_cast<const debug_spsc_ring_buf_msg_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
 
-    string out;
-    auto lines = FormatRingBuffer(*ring_buf_data, programmable_core_type_);
-    if (!lines.empty()) {
-        out = "\n\tdebug_ring_buffer=\n\t" + fmt::format("{}", fmt::join(lines, "\n\t"));
+    if (rb->current_ptr == DEBUG_RING_BUFFER_STARTING_INDEX) {
+        return;  // No data
     }
 
-    // This function can either dump to stdout or the log file.
+    // Extract newest-first: walk backwards from current_ptr, wrap at 0
+    uint32_t capacity = hal.get_ring_buffer_capacity();
+    uint32_t mask = hal.get_ring_buffer_mask();
+    uint32_t count = rb->wrapped ? capacity : static_cast<uint32_t>(rb->current_ptr + 1);
+    uint32_t curr = static_cast<uint32_t>(rb->current_ptr);
+
+    std::vector<uint32_t> data;
+    data.reserve(count);
+    for (uint32_t i = 0; i < count; i++) {
+        data.push_back(rb->data[(curr + capacity - i) & mask]);
+    }
+
+    std::string out = FormatRingBuffer(data, {}, programmable_core_type_);
     if (to_stdout) {
         log_info(tt::LogMetal, "Last ring buffer status: {}", out);
     } else {
@@ -888,20 +897,13 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
     }
 }
 
-// TODO: add some TT_FATALs to check metadata corruption
 void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
-    // Quasar MPSC ring buffer
     const auto& hal = reader_.env.get_hal();
-    auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type_);
-    auto watcher_offset = dev_msgs_factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::watcher);
-    auto ring_buf_field_offset =
-        dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::debug_ring_buf);
-    auto ring_buf_offset = watcher_offset + ring_buf_field_offset;
-    const auto* raw_ptr = reinterpret_cast<const uint8_t*>(l1_read_buf_.data());
-    const auto* rb = reinterpret_cast<const debug_mpsc_ring_buf_msg_t*>(raw_ptr + ring_buf_offset);
+    const auto* rb =
+        reinterpret_cast<const debug_mpsc_ring_buf_msg_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
 
-    constexpr uint32_t capacity = DEBUG_RING_BUFFER_MPSC_ELEMENTS;
-    constexpr uint32_t mask = DEBUG_RING_BUFFER_MPSC_MASK;
+    uint32_t capacity = hal.get_ring_buffer_capacity();
+    uint32_t mask = hal.get_ring_buffer_mask();
 
     // Track position and buffer per core
     uint32_t& last_pos = reader_.mpsc_last_consumed_pos_[virtual_coord_];
@@ -909,14 +911,22 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
 
     // Collect new valid entries (oldest to newest)
     std::vector<MpscRingBufEntry> new_entries;
-    for (uint32_t pos = last_pos; pos < last_pos + capacity; pos++) {
+    const uint32_t start_pos = last_pos;
+    for (uint32_t i = 0; i < capacity; i++) {
+        const uint32_t pos = start_pos + i;
         const auto& slot = rb->slots[pos & mask];
 
-        // Detected empty slot/in-flight write. Break and fetch remaining entries next poll
+        // Slot not published yet (empty or in-flight). Fetch rest next poll.
         if (!debug_ring_buffer_is_slot_valid(slot.write_id, pos)) {
             break;
         }
-        new_entries.push_back({slot.data, debug_ring_buffer_get_thread_idx(slot.write_id)});
+        uint32_t thread_idx = debug_ring_buffer_get_thread_idx(slot.write_id);
+        TT_FATAL(
+            thread_idx < hal.get_max_processors_per_core(),
+            "Invalid thread_idx {} in MPSC ring buffer (max {})",
+            thread_idx,
+            hal.get_max_processors_per_core());
+        new_entries.push_back({slot.data, thread_idx});
         last_pos = pos + 1;
     }
 
@@ -930,25 +940,24 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
         }
     }
 
-    // Output full buffer if non-empty
-    if (!entries.empty()) {
-        // Extract data and thread indices for formatter
-        std::vector<uint32_t> data, thread_indices;
-        data.reserve(entries.size());
-        thread_indices.reserve(entries.size());
-        for (const auto& e : entries) {
-            data.push_back(e.data);
-            thread_indices.push_back(e.thread_idx);
-        }
+    if (entries.empty()) {
+        return;
+    }
 
-        auto lines = FormatRingBuffer(data, thread_indices, programmable_core_type_);
-        string out = "\n\tdebug_ring_buffer=\n\t" + fmt::format("{}", fmt::join(lines, "\n\t"));
+    // Extract data and thread indices for formatter
+    std::vector<uint32_t> data, thread_indices;
+    data.reserve(entries.size());
+    thread_indices.reserve(entries.size());
+    for (const auto& e : entries) {
+        data.push_back(e.data);
+        thread_indices.push_back(e.thread_idx);
+    }
 
-        if (to_stdout) {
-            log_info(tt::LogMetal, "Last ring buffer status: {}", out);
-        } else {
-            fprintf(reader_.f, "%s", out.c_str());
-        }
+    std::string out = FormatRingBuffer(data, thread_indices, programmable_core_type_);
+    if (to_stdout) {
+        log_info(tt::LogMetal, "{}", out);
+    } else {
+        fprintf(reader_.f, "%s", out.c_str());
     }
 }
 
