@@ -9,7 +9,6 @@
 #include <unordered_map>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/reflection.hpp>
@@ -82,15 +81,6 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(
     return ttnn::device_operation::detail::extract_tensor_coordinates_impl(tensors, mesh_device);
 }
 
-// Sets runtime ID for all programs in `workload`.
-inline void set_runtime_id(tt::tt_metal::distributed::MeshWorkload& workload) {
-    auto op_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
-    tt::tt_metal::experimental::inspector::EmitMeshWorkloadRuntimeId(workload, op_id);
-    for (auto& [_, program] : workload.get_programs()) {
-        program.set_runtime_id(op_id);
-    }
-}
-
 // Tracks all programs in `workload` and returns true if any program was hooked.
 inline bool track_workload(tt::tt_metal::distributed::MeshWorkload& workload, ttnn::MeshDevice* mesh_device) {
     bool hook_program = false;
@@ -126,6 +116,46 @@ void apply_override_runtime_arguments(
         factory.override_runtime_arguments(cached_program_proxy, attrs, tensor_args, return_value);
     } else {
         factory.override_runtime_arguments(program, shared_vars, attrs, tensor_args, return_value);
+    }
+}
+
+/**
+ * Update output tensor topologies with either custom topologies or imputed defaults.
+ *
+ * @param tensor_return_value The output tensor(s) to update (mutated in place).
+ * @param input_tensors Pre-extracted input tensors for computing default topology.
+ * @param custom_topologies Optional custom topologies from the operation (empty if none provided).
+ */
+template <typename TensorReturnValue>
+void update_output_tensor_topologies(
+    TensorReturnValue& tensor_return_value,
+    const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
+    std::vector<tt::tt_metal::TensorTopology> custom_topologies) {
+    std::vector<std::reference_wrapper<Tensor>> output_tensors;
+    tt::stl::reflection::update_object_of_type<Tensor>(
+        [&output_tensors](Tensor& t) { output_tensors.push_back(std::ref(t)); }, tensor_return_value);
+
+    if (!custom_topologies.empty()) {
+        TT_FATAL(
+            custom_topologies.size() == output_tensors.size(),
+            "Number of custom topologies ({}) does not match number of output tensors ({})",
+            custom_topologies.size(),
+            output_tensors.size());
+
+        for (auto i = 0ul; i < custom_topologies.size(); i++) {
+            output_tensors[i].get().update_tensor_topology(custom_topologies[i]);
+        }
+    } else {
+        auto output_topology_result =
+            ttnn::device_operation::detail::compute_output_placements_and_shape(input_tensors);
+
+        for (auto& tensor : output_tensors) {
+            auto topology = tt::tt_metal::TensorTopology(
+                output_topology_result.second,
+                output_topology_result.first,
+                tensor.get().tensor_topology().mesh_coords());
+            tensor.get().update_tensor_topology(topology);
+        }
     }
 }
 

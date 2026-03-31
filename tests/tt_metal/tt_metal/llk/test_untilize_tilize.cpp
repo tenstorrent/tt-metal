@@ -23,6 +23,7 @@
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/float8.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -88,6 +89,10 @@ struct TestConfig {
     uint32_t face_r_dim = 16;
     std::optional<UntilizeType> untilize_type = std::nullopt;
     std::optional<TilizeType> tilize_type = std::nullopt;
+    tt::DataFormat input_fmt = tt::DataFormat::Float16_b;
+    tt::DataFormat output_fmt = tt::DataFormat::Float16_b;
+    // Pre-generated source data; if empty, create_arange_vector_of_bfloat16 is used.
+    std::vector<uint32_t> src0_data;
     GoldenFunc golden_function;
 };
 
@@ -130,7 +135,7 @@ void run_single_core_tilize_program(
     uint32_t num_input_tiles = num_tiles;
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(
-            num_input_tiles * test_config.input_single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
+            num_input_tiles * test_config.input_single_tile_size, {{src0_cb_index, test_config.input_fmt}})
             .set_page_size(src0_cb_index, test_config.input_single_tile_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
@@ -155,7 +160,7 @@ void run_single_core_tilize_program(
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(
             num_output_tiles * test_config.output_single_tile_size,
-            {{ouput_cb_index, test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b}})
+            {{ouput_cb_index, test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : test_config.output_fmt}})
             .set_page_size(ouput_cb_index, test_config.output_single_tile_size);
     tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
@@ -225,7 +230,9 @@ void run_single_core_tilize_program(
             .compile_args = compute_kernel_args,
             .defines = defines});
 
-    std::vector<uint32_t> src0_vec = create_arange_vector_of_bfloat16(input_dram_buffer_size, false);
+    std::vector<uint32_t> src0_vec = test_config.src0_data.empty()
+                                         ? create_arange_vector_of_bfloat16(input_dram_buffer_size, false)
+                                         : test_config.src0_data;
     tt_metal::detail::WriteToBuffer(src0_dram_buffer, src0_vec);
 
     std::vector<uint32_t> src1_vec;
@@ -276,6 +283,7 @@ void run_single_core_tilize_program(
         .face_r_dim = test_config.face_r_dim,
         .face_c_dim = 16,
         .num_faces = test_config.num_faces_per_tile,
+        .datum_bytes = tt::datum_size(test_config.input_fmt),
     };
     bool pass = true;
 
@@ -459,6 +467,30 @@ TEST_F(MeshDeviceFixture, TensixComputePackUntilizeDst) {
                 .num_tiles_r = num_tile[0],
                 .num_tiles_c = num_tile[1],
                 .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+                .golden_function = ::unit_tests::compute::gold_standard_untilize};
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
+    }
+}
+
+TEST_F(BlackholeSingleCardFixture, TensixComputePackUntilizeFp8e4m3) {
+    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+    for (auto num_tile : num_tiles) {
+        for (bool dst_full_sync_en : {true, false}) {
+            uint32_t num_t = num_tile[0] * num_tile[1];
+            auto src_data = create_random_vector_of_float8_e4m3(
+                tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_t, /*rand_max_float=*/20, /*seed=*/42);
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .dst_full_sync_en = dst_full_sync_en,
+                .fp32_dest_acc_en = false,
+                .input_single_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3),
+                .output_single_tile_size = tt::tile_size(tt::DataFormat::Fp8_e4m3),
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .untilize_type = unit_tests::compute::tilize::UntilizeType::PACK,
+                .input_fmt = tt::DataFormat::Fp8_e4m3,
+                .output_fmt = tt::DataFormat::Fp8_e4m3,
+                .src0_data = src_data,
                 .golden_function = ::unit_tests::compute::gold_standard_untilize};
             unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
         }

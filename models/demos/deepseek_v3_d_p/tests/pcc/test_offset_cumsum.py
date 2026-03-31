@@ -153,24 +153,33 @@ def test_offset_cumsum(
 
     all_passed = True
 
-    # Verify dispatch_offsets on each device
+    mesh_rows, mesh_cols = mesh_device.shape
+
+    def get_row_idx(dev_idx):
+        coord_row = dev_idx // mesh_cols
+        coord_col = dev_idx % mesh_cols
+        return coord_row if sp_axis == 0 else coord_col
+
+    # Verify dispatch_offsets on each device (each device holds only its own [1, W] row)
     for dev_idx, dt in enumerate(ttnn.get_device_tensors(tt_offsets)):
         tt_out = ttnn.to_torch(dt).to(torch.int32)
         while tt_out.dim() > 2:
             tt_out = tt_out.squeeze(0)
 
-        logger.info(f"Device {dev_idx} offsets: tt_shape={tt_out.shape}, ref_shape={torch_offsets.shape}")
+        row_idx = get_row_idx(dev_idx)
+        ref_row = torch_offsets[row_idx : row_idx + 1, :]
+        logger.info(f"Device {dev_idx} (row_idx={row_idx}) offsets: tt_shape={tt_out.shape}, ref_shape={ref_row.shape}")
 
-        if tt_out.shape != torch_offsets.shape:
-            logger.error(f"Device {dev_idx}: offsets shape mismatch tt={tt_out.shape} ref={torch_offsets.shape}")
+        if tt_out.shape != ref_row.shape:
+            logger.error(f"Device {dev_idx}: offsets shape mismatch tt={tt_out.shape} ref={ref_row.shape}")
             all_passed = False
             continue
 
-        if not torch.equal(tt_out, torch_offsets):
-            diff_mask = tt_out != torch_offsets
+        if not torch.equal(tt_out, ref_row):
+            diff_mask = tt_out != ref_row
             num_diff = diff_mask.sum().item()
-            logger.error(f"Device {dev_idx}: offsets {num_diff}/{torch_offsets.numel()} elements differ")
-            logger.error(f"  Max abs diff: {(tt_out - torch_offsets).abs().max().item()}")
+            logger.error(f"Device {dev_idx}: offsets {num_diff}/{ref_row.numel()} elements differ")
+            logger.error(f"  Max abs diff: {(tt_out - ref_row).abs().max().item()}")
             all_passed = False
         else:
             logger.info(f"Device {dev_idx} offsets: PASS")

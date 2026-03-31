@@ -718,7 +718,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         // KernelGroup to hold value of number of dfbs
                         auto local_dfb_val = per_core_num_dfbs_.find(core);
                         if (local_dfb_val != per_core_num_dfbs_.end()) {
-                            num_dfbs += local_dfb_val->second;
+                            num_dfbs = local_dfb_val->second;
                         }
                     }
                 }
