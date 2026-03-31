@@ -17,7 +17,7 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
-#include "tt_metal/common/thread_pool.hpp"
+#include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_cluster.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include "tt_metal/common/thread_pool.hpp"
+#include "tt_metal/impl/threading/thread_pool.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include <llrt/tt_cluster.hpp>

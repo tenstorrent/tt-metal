@@ -17,7 +17,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <common/TracyTTDeviceData.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
-#include "thread_pool.hpp"
+#include "impl/threading/thread_pool.hpp"
 
 namespace tt::tt_metal {
 
