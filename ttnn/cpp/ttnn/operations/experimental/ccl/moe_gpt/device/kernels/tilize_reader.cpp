@@ -286,7 +286,6 @@ void kernel_main() {
     const auto expert_activation_output_tensor_addr_gen = TensorAccessor(
         expert_activation_output_args, expert_activation_output_address, expert_activation_output_page_size);
     const auto e_t_output_tensor_addr_gen = TensorAccessor(e_t_output_args, e_t_output_address, e_t_output_page_size);
-#endif
 
     // Constants
     constexpr uint32_t one_page = 1;
@@ -656,7 +655,6 @@ void kernel_main() {
             uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
             noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
         }
-#endif
 
         // Multicast e_t buffer, per_expert_counts, and total_chunks to non-drain-sync cores
         if (num_tilize_cores > 1) {
@@ -880,7 +878,6 @@ void kernel_main() {
         uint32_t l1_read_addr = get_read_ptr(per_expert_total_tokens_cb_id);
         noc_async_write_page(0, per_expert_total_tokens_output_tensor_addr_gen, l1_read_addr);
     }
-#endif
 
     // Explicit write barrier for expert_activation DRAM write, e_t L1 write, and per_expert_total_tokens L1 write
     // (drain core only issued these writes)

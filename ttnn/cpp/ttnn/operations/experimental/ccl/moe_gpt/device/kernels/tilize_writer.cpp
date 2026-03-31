@@ -433,7 +433,6 @@ void kernel_main() {
         noc_index);
 
     uint32_t normal_iteration_bytes_to_mcast = tiles_per_global_chunk * tilize_output_page_size;
-#endif
 
     /* start loop iterations */
 
