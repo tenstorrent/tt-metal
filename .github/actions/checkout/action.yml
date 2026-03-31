@@ -37,9 +37,12 @@ runs:
     - name: Undo bootstrap sparse/partial-clone config
       shell: bash
       run: |
-        git sparse-checkout disable 2>/dev/null || true
-        git config --unset remote.origin.partialclonefilter 2>/dev/null || true
-        git config --unset remote.origin.promisor 2>/dev/null || true
+        # The bootstrap sparse checkout uses --filter=tree:0 (partial clone),
+        # leaving git in a state where blobs outside the sparse patterns are
+        # never downloaded. Unsetting config keys alone is not enough because
+        # git lazy-fetch still serves only the originally fetched blobs.
+        # Removing .git forces actions/checkout to perform a fresh full fetch.
+        rm -rf .git
 
     - name: Configure credentials for private submodule
       if: inputs.submodules != 'false' && inputs.private-submodule-token != ''
