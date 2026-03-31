@@ -101,7 +101,7 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
 }
 
 template <bool untilize = false, bool zero_output = false, bool tilize = false>
-inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1) {
+inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t num_tiles = 1, const std::uint32_t input_operand = 0) {
     // TODO (https://github.com/tenstorrent/tt-metal/issues/18948): Revisit for narrow_tile
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
@@ -114,10 +114,10 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
         "");
 
 #ifdef ARCH_BLACKHOLE
-    // For pack_untilize, the init function needs to know the src format to determine the is_8bit_format for the tilize workaround. 
-    // 8bit datums in input format do not require the tilize workaround on blackhole.
-    // For regular pack, the src format is not needed.
-    const std::uint32_t src_format = get_output_src_format(output_id);
+    // For pack with tilize enabled, check if the original input format is 8-bit.
+    // 8-bit datums (Int8, UInt8, Fp8_e4m3, Lf8) do not require the tilize workaround on Blackhole.
+    // unpack_src_format is now available in PACK context via genfiles.cpp
+    const std::uint32_t src_format = static_cast<std::uint32_t>(unpack_src_format[input_operand]);
     const bool is_8bit_format = IS_8BIT_FORMAT(src_format);
     _llk_pack_init_<untilize, zero_output, tilize>(
         pack_src_format[output_id],

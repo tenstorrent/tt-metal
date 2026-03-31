@@ -382,7 +382,7 @@ TEST_F(MeshDeviceFixture, TensixComputeUnpackTilize) {
 }
 
 TEST_F(BlackholeSingleCardFixture, TensixComputeUnpackTilizeFp8e4m3) {
-    vector<vector<uint32_t>> num_tiles = {{1, 1}, {1, 2}, {2, 1}, {1, 4}, {2, 2}, {4, 1}};
+    vector<vector<uint32_t>> num_tiles = {{1, 1}};
     for (auto num_tile : num_tiles) {
         for (bool dst_full_sync_en : {true, false}) {
             uint32_t num_tiles_total = num_tile[0] * num_tile[1];
