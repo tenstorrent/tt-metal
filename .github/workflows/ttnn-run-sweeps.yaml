@@ -766,3 +766,208 @@ jobs:
       dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  ttnn-sweeps-n150:
+    name: ttnn sweeps N150
+    needs: [resolve-inputs, build-artifact, call-sweeps-impl]
+    if: |
+      !cancelled() &&
+      needs.call-sweeps-impl.result == 'success' &&
+      needs.call-sweeps-impl.outputs.n150-matrix != '' &&
+      needs.call-sweeps-impl.outputs.n150-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-hw.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.call-sweeps-impl.outputs.n150-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-n300:
+    name: ttnn sweeps N300
+    needs: [resolve-inputs, build-artifact, call-sweeps-impl]
+    if: |
+      !cancelled() &&
+      needs.call-sweeps-impl.result == 'success' &&
+      needs.call-sweeps-impl.outputs.n300-matrix != '' &&
+      needs.call-sweeps-impl.outputs.n300-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-hw.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.call-sweeps-impl.outputs.n300-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-p150b:
+    name: ttnn sweeps P150b
+    needs: [resolve-inputs, build-artifact, call-sweeps-impl]
+    if: |
+      !cancelled() &&
+      needs.call-sweeps-impl.result == 'success' &&
+      needs.call-sweeps-impl.outputs.p150b-matrix != '' &&
+      needs.call-sweeps-impl.outputs.p150b-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-hw.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.call-sweeps-impl.outputs.p150b-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-sweeps-galaxy:
+    name: ttnn sweeps Galaxy/T3K
+    needs: [resolve-inputs, build-artifact, call-sweeps-impl]
+    if: |
+      !cancelled() &&
+      needs.call-sweeps-impl.result == 'success' &&
+      needs.call-sweeps-impl.outputs.galaxy-matrix != '' &&
+      needs.call-sweeps-impl.outputs.galaxy-matrix != '{"include":[]}'
+    uses: ./.github/workflows/ttnn-run-sweeps-hw.yaml
+    secrets: inherit
+    with:
+      matrix: ${{ needs.call-sweeps-impl.outputs.galaxy-matrix }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+
+  ttnn-homogenize-run-result:
+    name: Homogenize run result
+    needs:
+      - resolve-inputs
+      - build-artifact
+      - ttnn-sweeps-n150
+      - ttnn-sweeps-n300
+      - ttnn-sweeps-p150b
+      - ttnn-sweeps-galaxy
+    if: |
+      !cancelled() &&
+      (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n150.result == 'skipped') &&
+      (needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-n300.result == 'skipped') &&
+      (needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-p150b.result == 'skipped') &&
+      (needs.ttnn-sweeps-galaxy.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'skipped') &&
+      (needs.ttnn-sweeps-n150.result != 'skipped' || needs.ttnn-sweeps-n300.result != 'skipped' || needs.ttnn-sweeps-p150b.result != 'skipped' || needs.ttnn-sweeps-galaxy.result != 'skipped')
+    container:
+      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        GITHUB_ACTIONS: true
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    runs-on: ubuntu-latest
+    steps:
+      - name: 🧬 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          path: docker-job
+      - name: ⬇️  Setup Job
+        uses: ./docker-job/.github/actions/setup-job
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Download all sweep results
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          pattern: sweeps-results*
+          path: /work/tests/sweep_framework/results_export
+          merge-multiple: true
+      - name: Homogenize sweep results
+        run: |
+          # Determine run type based on sweep name
+          RUN_TYPE="nightly"
+          if [[ "${{ needs.resolve-inputs.outputs.sweep-name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+            RUN_TYPE="comprehensive"
+          elif [[ "${{ needs.resolve-inputs.outputs.sweep-name }}" == "ALL SWEEPS (Model Traced)" ]]; then
+            RUN_TYPE="model_traced"
+          elif [[ "${{ needs.resolve-inputs.outputs.sweep-name }}" == "ALL SWEEPS (Lead Models)" ]]; then
+            RUN_TYPE="lead_models"
+          fi
+          echo "RUN_TYPE=$RUN_TYPE" >> $GITHUB_ENV
+          python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
+      - name: Upload runs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-run-result
+          path: /work/tests/sweep_framework/results_export/oprun_*.json
+          retention-days: 7
+      - name: Push results to database (lead models only)
+        if: env.RUN_TYPE == 'lead_models'
+        env:
+          TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          ARCH_NAME: ${{ needs.resolve-inputs.outputs.arch }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+        run: |
+          pip install psycopg2-binary
+          python /work/.github/actions/sweep-run-analysis/scripts/push_sweep_results.py \
+            /work/tests/sweep_framework/results_export/ \
+            "lead models"
+
+  ttnn-upload-results:
+    name: Upload sweep results to SFTP server
+    needs:
+      - resolve-inputs
+      - ttnn-homogenize-run-result
+      - call-sweeps-impl
+    if: |
+      !cancelled() &&
+      (needs.ttnn-homogenize-run-result.result == 'success' || needs.call-sweeps-impl.result == 'success') &&
+      (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.call-sweeps-impl.result != 'skipped') &&
+      needs.resolve-inputs.outputs.upload-results == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository (actions only)
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/actions
+      - name: Download sweep results
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        with:
+          name: sweeps-run-result
+          path: tests/sweep_framework/results_export
+      - name: List all downloaded files
+        run: |
+          ls -hal tests/sweep_framework/results_export
+      - name: Upload via SFTP
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
+          username: ml-kernel-op-test-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+          path: ${{ github.workspace }}
