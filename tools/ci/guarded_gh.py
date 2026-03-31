@@ -44,6 +44,7 @@ ALLOWED_PUSH_REFSPECS = {
 ALLOWED_COMMIT_OPTS = {"-m", "--message"}
 
 DENY_CHARS = {";", "&&", "||", "|", "`", "$("}
+FREE_TEXT_OPTIONS = {"--body", "--title", "-m", "--message"}
 
 
 @dataclass(frozen=True)
@@ -81,7 +82,16 @@ def repo_for_command(tokens: Sequence[str]) -> str | None:
 
 
 def deny_for_suspicious_tokens(tokens: Sequence[str]) -> Decision | None:
+    skip_next = False
     for tok in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if tok in FREE_TEXT_OPTIONS:
+            skip_next = True
+            continue
+        if any(tok.startswith(f"{opt}=") for opt in FREE_TEXT_OPTIONS):
+            continue
         for marker in DENY_CHARS:
             if marker in tok:
                 return Decision(False, f"Denied: suspicious token detected: {tok!r}")
