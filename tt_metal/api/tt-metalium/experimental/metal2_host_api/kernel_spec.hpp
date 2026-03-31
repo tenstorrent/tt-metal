@@ -145,10 +145,10 @@ struct KernelSpec {
         // Schema for unnamed/variable RTAs + CRTAs
         // (Must be of uint32_t; can be treated as varargs in the kernel code)
         using NumRTAsPerNode = std::vector<std::pair<NodeCoord, size_t>>;  // {node, num_rtas}
-        NumRTAsPerNode num_runtime_args_per_node;
-        size_t num_common_runtime_args;
+        NumRTAsPerNode num_runtime_args_per_node;                          // default: empty
+        size_t num_common_runtime_args = 0;
     };
-    RuntimeArgSchema runtime_arguments_schema;
+    RuntimeArgSchema runtime_arguments_schema{};
 
     //////////////////////////////////////////////////////////////////////////////
     // Kernel-controlled hardware resource configuration
