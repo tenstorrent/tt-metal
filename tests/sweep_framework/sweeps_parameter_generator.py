@@ -14,7 +14,7 @@ import sys
 import ast
 from collections import defaultdict
 
-from model_tracer.mesh_metadata import infer_mesh_shape, parse_int_sequence
+from model_tracer.mesh_metadata import infer_mesh_shape
 from framework.constants import format_hardware_suffix, format_mesh_suffix
 from framework.permutations import permutations
 from framework.serialize import serialize_structured
