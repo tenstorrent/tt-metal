@@ -7,6 +7,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import base64
 import re
 import shlex
 import shutil
@@ -46,6 +47,25 @@ ALLOWED_STATUS = {
 }
 
 
+def redact_secrets(text: str) -> str:
+    if not text:
+        return text
+    redacted = text
+    redacted = re.sub(r"https://x-access-token:[^@]+@github\.com/", "https://x-access-token:***@github.com/", redacted)
+    redacted = re.sub(r"\bghp_[A-Za-z0-9]+\b", "ghp_***", redacted)
+    secret_keys = (
+        "TARGET_PR_PUSH_TOKEN",
+        "GITHUB_TOKEN",
+        "ISSUE_REPO_GITHUB_TOKEN",
+        "CURSOR_API_KEY",
+    )
+    for key in secret_keys:
+        value = os.environ.get(key, "")
+        if value:
+            redacted = redacted.replace(value, "***")
+    return redacted
+
+
 def run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess[str]:
     proc = subprocess.run(
         cmd,
@@ -54,11 +74,12 @@ def run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subproce
         capture_output=capture,
     )
     if check and proc.returncode != 0:
-        stdout = proc.stdout.strip() if proc.stdout else ""
-        stderr = proc.stderr.strip() if proc.stderr else ""
+        stdout = redact_secrets(proc.stdout.strip() if proc.stdout else "")
+        stderr = redact_secrets(proc.stderr.strip() if proc.stderr else "")
+        cmd_string = redact_secrets(" ".join(shlex.quote(c) for c in cmd))
         raise RuntimeError(
             "Command failed with non-zero exit status "
-            f"{proc.returncode}: {' '.join(shlex.quote(c) for c in cmd)}\n"
+            f"{proc.returncode}: {cmd_string}\n"
             f"stdout:\n{stdout}\n\nstderr:\n{stderr}"
         )
     return proc
@@ -132,10 +153,11 @@ def run_streaming(
         else:
             stderr = timeout_msg + "\n"
     if check and returncode != 0:
+        cmd_string = redact_secrets(" ".join(shlex.quote(c) for c in cmd))
         raise RuntimeError(
             "Command failed with non-zero exit status "
-            f"{returncode}: {' '.join(shlex.quote(c) for c in cmd)}\n"
-            f"stdout:\n{stdout.strip()}\n\nstderr:\n{stderr.strip()}"
+            f"{returncode}: {cmd_string}\n"
+            f"stdout:\n{redact_secrets(stdout.strip())}\n\nstderr:\n{redact_secrets(stderr.strip())}"
         )
     return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr=stderr)
 
@@ -583,6 +605,11 @@ def ensure_git_identity() -> None:
         run(["git", "config", "user.email", "ci-auto-disable-bot@tenstorrent.invalid"], capture=True)
 
 
+def auth_extraheader_for_github(token: str) -> str:
+    basic = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
+    return f"AUTHORIZATION: basic {basic}"
+
+
 def write_summary(path: Path, data: dict[str, Any]) -> None:
     lines: list[str] = []
     lines.append("# Auto Disable Actions")
@@ -893,8 +920,20 @@ def main() -> int:
             push_token = os.environ.get("TARGET_PR_PUSH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
             if not push_token:
                 raise RuntimeError("TARGET_PR_PUSH_TOKEN or GITHUB_TOKEN is required for PR branch push")
-            push_url = f"https://x-access-token:{push_token}@github.com/{target_pr_repo}.git"
-            run(["git", "push", "-u", push_url, f"HEAD:refs/heads/{branch}"], capture=True)
+            push_url = f"https://github.com/{target_pr_repo}.git"
+            auth_header = auth_extraheader_for_github(push_token)
+            run(
+                [
+                    "git",
+                    "-c",
+                    f"http.https://github.com/.extraheader={auth_header}",
+                    "push",
+                    "-u",
+                    push_url,
+                    f"HEAD:refs/heads/{branch}",
+                ],
+                capture=True,
+            )
 
             log(f"action: creating draft PR for issue #{issue_number}")
             pr = run_guarded_gh(
@@ -947,11 +986,12 @@ def main() -> int:
                 }
             )
         except Exception as exc:
-            log(f"action: failed issue #{issue_number}: {exc}")
-            set_status(item, "needs_human", event="action_failed", details=str(exc))
+            safe_exc = redact_secrets(str(exc))
+            log(f"action: failed issue #{issue_number}: {safe_exc}")
+            set_status(item, "needs_human", event="action_failed", details=safe_exc)
             result["state_updates"] += 1
             result["skipped"].append(
-                {"source_slack_ts": source_ts, "issue_number": issue_number, "reason": f"action_failed:{exc}"}
+                {"source_slack_ts": source_ts, "issue_number": issue_number, "reason": f"action_failed:{safe_exc}"}
             )
 
     out_path = Path(args.output_json)
