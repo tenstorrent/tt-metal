@@ -282,8 +282,7 @@ private:
         uint8_t N = local_dfb_interface_.num_tcs_to_rr;
         // Okay to read first tile counter because we ISR always fires when all TCs have same amount to post/ack
         dfb::PackedTileCounter ptc0 = local_dfb_interface_.tc_slots[0].packed_tile_counter;
-        uint16_t expected_slot0 = (transactions_issued / N + (0u < (transactions_issued % N) ? 1u : 0u))
-                                    * local_dfb_interface_.num_entries_per_txn_id_per_tc;
+        uint16_t expected_slot0 = transactions_issued / N + (0u < (transactions_issued % N) ? 1u : 0u);
 
         uint16_t actual_slot0;
         if constexpr (is_producer) {
@@ -309,8 +308,7 @@ private:
                 dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
                 uint8_t tensix_id = dfb::get_tensix_id(ptc);
                 uint8_t tc_id     = dfb::get_counter_id(ptc);
-                uint16_t reads_to_slot = transactions_issued / N + (i < (transactions_issued % N) ? 1u : 0u);
-                uint16_t expected      = reads_to_slot * local_dfb_interface_.num_entries_per_txn_id_per_tc;
+                uint16_t expected = transactions_issued / N + (i < (transactions_issued % N) ? 1u : 0u);
                 uint16_t actual;
                 if constexpr (is_producer) {
                     actual = static_cast<uint16_t>(fast_llk_intf_read_posted(tensix_id, tc_id));
