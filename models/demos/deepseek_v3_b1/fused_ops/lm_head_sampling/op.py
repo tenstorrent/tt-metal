@@ -233,7 +233,7 @@ class LMHeadSampling:
         broadcast_topology_override=None,
         is_mtp_base_stage=False,
         is_mtp_verify_stage=False,
-        base_token_tensor=None,
+        metadata_tensor=None,
         eh_subblock_k=None,
         eh_gather_output_buf_tensor=None,
     ):
@@ -293,7 +293,7 @@ class LMHeadSampling:
             and eh_projection_tensor is not None
         )
         # MTP Verify stage is enabled if the verification tensors are provided
-        is_mtp_verify_stage = is_mtp_verify_stage and base_token_tensor is not None
+        is_mtp_verify_stage = is_mtp_verify_stage and metadata_tensor is not None
         assert not (
             is_mtp_base_stage and is_mtp_verify_stage
         ), "is_mtp_base_stage and is_mtp_verify_stage are mutually exclusive"
@@ -419,23 +419,20 @@ class LMHeadSampling:
         in0_tile = input_tensor_sample.get_tile()
         input_shape = input_tensor_sample.shape
         data_format = input_tensor_sample.dtype
-        numel = 7168  # int(input_shape[0]) * int(input_shape[1])
+        numel = 7168
         scalar_packed = float_to_uint32(1.0 / math.sqrt(float(numel)))
         epsilon_packed = float_to_uint32(epsilon)
 
         # CCL broadcast page info
         # Matmul shape info from input and vocab tensors
-        num_tiles_k = 224  # input_shape[1] // in0_tile.tile_shape[1]
+        num_tiles_k = 224
         print(f"[lm_head_sampling] num_tiles_k={num_tiles_k}", flush=True)
         # RMS tile geometry follows activation width K, not padded (K + metadata) broadcast width.
         activation_cols_for_rms = int(input_shape[1])
         if is_mtp_verify_stage:
             activation_cols_for_rms -= _SPEC_VERIFY_METADATA_BF16_COLS
         # RMSNorm in this path must match broadcast_rms tile/page interpretation.
-        full_32x32_tile = ttnn.Tile((32, 32))
-        half_16x32_tile = ttnn.Tile((16, 32))
-        is_16x32_tile = False
-        rms_interpreted_tile = half_16x32_tile if is_16x32_tile else full_32x32_tile
+        rms_interpreted_tile = ttnn.Tile((32, 32))
         rms_tile_height, rms_tile_width = rms_interpreted_tile.tile_shape
         rms_tile_size = rms_interpreted_tile.get_tile_size(data_format)
         rms_num_tiles = 7  # (input_shape[0] * input_shape[1]) // (rms_tile_height * rms_tile_width)
@@ -879,11 +876,11 @@ class LMHeadSampling:
                         f"[OP:{device_idx}:C] eh_gather_receiver_data_addr={eh_gather_receiver_data_addr}", flush=True
                     )
 
-                # MTP token path + verify metadata staging: named compile-time args (not common runtime).
-                base_token_output_l1_addr = 0
-                if is_mtp_verify_stage and is_exit_device:
-                    _base_token_buf = ttnn.get_device_tensors(base_token_tensor)[device_idx]
-                    base_token_output_l1_addr = int(_base_token_buf.buffer_address())
+                # MTP metadata landing buffer on argmax final core (NCRISC unicast from exit input core).
+                metadata_output_l1_addr = 0
+                if metadata_tensor is not None and is_exit_device:
+                    _metadata_buf = ttnn.get_device_tensors(metadata_tensor)[device_idx]
+                    metadata_output_l1_addr = int(_metadata_buf.buffer_address())
 
                 sender_core_phys_for_mtp = device.worker_core_from_logical_core(mcast_sender_core)
                 mtp_embedding_dram_base = (
@@ -1032,7 +1029,7 @@ class LMHeadSampling:
                     ("mtp_input_core_noc_x", mtp_input_core_noc_x),
                     ("mtp_input_core_noc_y", mtp_input_core_noc_y),
                     ("mtp_argmax_output_addr", mtp_argmax_output_l1_addr),
-                    ("base_token_output_l1_addr", base_token_output_l1_addr),
+                    ("metadata_output_l1_addr", metadata_output_l1_addr),
                 ]
                 ncrisc_named_compile_time_args.extend(bcast_config.get_ncrisc_named_ct_args(coord))
 
@@ -1110,7 +1107,7 @@ class LMHeadSampling:
                     ("gather_dst_cb", eh_gather_dst_cb if enable_mtp_on_device else 0),
                     ("gather_dst_num_pages", eh_gather_dst_num_pages),
                     ("gather_send_total_bytes", eh_gather_send_total_bytes),
-                    ("base_token_output_l1_addr", base_token_output_l1_addr),
+                    ("metadata_output_l1_addr", metadata_output_l1_addr),
                 ]
                 brisc_named_compile_time_args.extend(bcast_config.get_brisc_named_ct_args(coord))
 
@@ -1502,7 +1499,7 @@ class LMHeadSampling:
                             ),
                         ]
                     )
-                if is_mtp_verify_stage and is_exit_device:
+                if is_exit_device:
                     semaphore_descriptors.extend(
                         [
                             ttnn.SemaphoreDescriptor(
@@ -1809,8 +1806,8 @@ class LMHeadSampling:
             )
             if eh_gather_output_buf_tensor is not None:
                 io_tensors.append(eh_gather_output_buf_tensor)
-        if is_mtp_verify_stage:
-            io_tensors.extend([base_token_tensor])
+        if metadata_tensor is not None:
+            io_tensors.append(metadata_tensor)
         if not skip_ccl:
             io_tensors.append(fabric_scratch_tensor)
         print(f"[OP] calling generic_op with {len(io_tensors)} io_tensors", flush=True)

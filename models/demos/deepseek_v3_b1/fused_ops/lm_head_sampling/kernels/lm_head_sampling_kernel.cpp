@@ -238,7 +238,7 @@ void kernel_main() {
     constexpr uint32_t mtp_input_core_noc_x = get_named_compile_time_arg_val("mtp_input_core_noc_x");
     constexpr uint32_t mtp_input_core_noc_y = get_named_compile_time_arg_val("mtp_input_core_noc_y");
     constexpr uint32_t mtp_argmax_output_addr = get_named_compile_time_arg_val("mtp_argmax_output_addr");
-    constexpr uint32_t base_token_output_l1_addr = get_named_compile_time_arg_val("base_token_output_l1_addr");
+    constexpr uint32_t metadata_output_l1_addr = get_named_compile_time_arg_val("metadata_output_l1_addr");
 
     // ── Sharded buffer setup (registers tensor-backed CBs before main loop) ──
     //   input_core:  CB 0 (rmsnorm_input), CB 7 (rmsnorm_gamma)
@@ -308,15 +308,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_sender_idx"),
     };
 
-    // EH matmul CB1 Reset Address
-    uint32_t eh_in1_base_wr = 0;
-    uint32_t eh_in1_base_rd = 0;
-    // if constexpr (Core::is_eh_matmul_core) {
-    //     auto& iface = get_local_cb_interface(eh_in1_cb);
-    //     eh_in1_base_wr = iface.fifo_wr_ptr;
-    //     eh_in1_base_rd = iface.fifo_rd_ptr;
-    // }
-
 #elif defined(COMPILE_FOR_BRISC)
     // ========================================================================
     // BRISC — CCL broadcast reader, mcast sender, argmax writer,
@@ -379,7 +370,7 @@ void kernel_main() {
     };
     const uint32_t persistent_next_iter_global_sem_addr = sampling_args.persistent_dst_sem_addr;
 
-    constexpr uint32_t base_token_output_l1_addr = get_named_compile_time_arg_val("base_token_output_l1_addr");
+    constexpr uint32_t metadata_output_l1_addr = get_named_compile_time_arg_val("metadata_output_l1_addr");
 
     // ── Mcast sender (input_core) ───────────────────────────────────
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
@@ -533,7 +524,6 @@ void kernel_main() {
             mcast;
 
     uint32_t iteration_count = 0;
-    constexpr uint32_t SENTINEL = 0xFFFFFFFF;
     constexpr uint32_t TOKEN_TYPE_BASE = 0;
     constexpr uint32_t TOKEN_TYPE_SPEC = 1;
 
@@ -628,7 +618,7 @@ void kernel_main() {
             unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
         }
 
-        if constexpr (Core::is_spec_stage && Core::is_input_core && Core::is_exit_device) {
+        if constexpr (Core::is_input_core && Core::is_exit_device) {
             constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
             constexpr uint32_t argmax_noc_x = get_named_compile_time_arg_val("argmax_core_noc_x");
             constexpr uint32_t argmax_noc_y = get_named_compile_time_arg_val("argmax_core_noc_y");
@@ -639,8 +629,8 @@ void kernel_main() {
             uint32_t rmsnorm_buffer_addr = get_read_ptr(rmsnorm_input_cb);
             uint32_t metadata_src = rmsnorm_buffer_addr + activation_size_bytes;
 
-            // Write the metadata to the base token buffer on the argmax final core
-            uint64_t metadata_dst = get_noc_addr(argmax_noc_x, argmax_noc_y, base_token_output_l1_addr);
+            // Write the metadata to the metadata output buffer on the argmax final core
+            uint64_t metadata_dst = get_noc_addr(argmax_noc_x, argmax_noc_y, metadata_output_l1_addr);
             noc_async_write(metadata_src, metadata_dst, metadata_size);
             noc_async_write_barrier();
 
@@ -829,11 +819,21 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_BRISC)
         if constexpr (Core::is_argmax_final_core) {
+            // Wait for metadata unicast from exit input core (same buffer spec stage reads).
+            volatile tt_l1_ptr uint32_t* metadata_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(get_named_compile_time_arg_val("metadata_ready_semaphore_id")));
+            noc_semaphore_wait(metadata_ready_sem, 1);
+            noc_semaphore_set(metadata_ready_sem, 0);
+
+            auto metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_output_l1_addr);
+            uint32_t base_token_type = metadata[2];
+            uint32_t base_token_pos = metadata[3];
+
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
             constexpr uint32_t argmax_socket_cb = get_named_compile_time_arg_val("argmax_socket_cb");
             cb_wait_front(argmax_socket_cb, 1);
-            uint32_t token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
-            write_token_metadata_to_socket_cb(eh_gather_dst_cb, 1, token_id, TOKEN_TYPE_BASE, 0);
+            uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
+            write_token_metadata_to_socket_cb(eh_gather_dst_cb, 1, base_token_id, base_token_type, base_token_pos);
             cb_pop_front(argmax_socket_cb, 1);
         }
 #endif
@@ -848,7 +848,7 @@ void kernel_main() {
     // token from metadata L1 (transferred by NCRISC during the broadcast phase), and
     // writes a TOKEN_META page with both tokens back to CB 6.
     //
-    // Metadata layout from base stage (at verify_output_staging_addr):
+    // Metadata layout from base stage (at metadata_output_l1_addr):
     //   [0] = num_tokens, [1] = tok0_id, [2] = tok0_type, [3] = tok0_pos, ...
     // ========================================================================
     auto update_speculative_state = [&]() {
@@ -867,17 +867,27 @@ void kernel_main() {
             constexpr uint32_t argmax_socket_cb = ArgmaxCTArgs::socket_cb_id;
             cb_wait_front(argmax_socket_cb, 1);
             invalidate_l1_cache();
-            uint32_t speculative_token =
-                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
+            uint32_t spec_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
 
             // Read the base token from metadata L1 (transferred by NCRISC during the broadcast phase)
-            auto metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base_token_output_l1_addr);
-            uint32_t base_token = metadata[1];
+            auto metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_output_l1_addr);
+            uint32_t base_token_id = metadata[1];
+            uint32_t base_token_type = TOKEN_TYPE_BASE;  // metadata[2];
+            uint32_t base_token_pos = metadata[3] + 1;
+            uint32_t spec_token_type = TOKEN_TYPE_SPEC;  // metadata[4];
+            uint32_t spec_token_pos = metadata[5] + 2;
             cb_pop_front(argmax_socket_cb, 1);
 
             // Push the base and speculative tokens to the argmax socket CB that will be written to the socket later
             write_token_metadata_to_socket_cb(
-                argmax_socket_cb, 1, base_token, TOKEN_TYPE_BASE, 0, speculative_token, TOKEN_TYPE_SPEC, 1);
+                argmax_socket_cb,
+                1,
+                base_token_id,
+                base_token_type,
+                base_token_pos,
+                spec_token_id,
+                spec_token_type,
+                spec_token_pos);
         }
 #endif
     };

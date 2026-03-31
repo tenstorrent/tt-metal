@@ -324,20 +324,19 @@ class SpecLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
-        # Base token tensors — all on argmax_final_core.
-        # base_token_tensor is 64 bytes (TOKEN_META landing buffer for NCRISC NOC write).
-        TOKEN_META_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
-        token_meta_mem_config = ttnn.MemoryConfig(
+        # Metadata buffer on argmax_final_core (64 B TOKEN_META page; NCRISC unicast target).
+        METADATA_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
+        metadata_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(argmax_final_core_grid, (1, TOKEN_META_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(argmax_final_core_grid, (1, METADATA_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
         )
-        base_token_tensor = ttnn.from_torch(
-            torch.zeros((num_devices, 1, TOKEN_META_ELEMS), dtype=torch.uint32),
+        metadata_tensor = ttnn.from_torch(
+            torch.zeros((num_devices, 1, METADATA_ELEMS), dtype=torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=token_meta_mem_config,
+            memory_config=metadata_mem_config,
             mesh_mapper=mesh_mapper,
         )
 
@@ -360,7 +359,7 @@ class SpecLMHeadStage(StageKind):
             "ttnn_indices": ttnn_indices,
             "ttnn_output_index": ttnn_output_index,
             "scratch_buffer": scratch_buffer,
-            "base_token_tensor": base_token_tensor,
+            "metadata_tensor": metadata_tensor,
             "lmhead_input_socket": pipeline_block.get_downstream_socket(),
             "lmhead_output_socket": pipeline_block.get_upstream_socket(),
             "bcast_semaphores": bcast_inputs.semaphores,
@@ -545,20 +544,19 @@ class SpecLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
-        # Base token tensors — all on argmax_final_core.
-        # base_token_tensor is 64 bytes (TOKEN_META landing buffer for NCRISC NOC write).
-        TOKEN_META_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
-        token_meta_mem_config = ttnn.MemoryConfig(
+        # Metadata buffer on argmax_final_core (64 B TOKEN_META page; NCRISC unicast target).
+        METADATA_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
+        metadata_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(argmax_final_core_grid, (1, TOKEN_META_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(argmax_final_core_grid, (1, METADATA_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
         )
-        base_token_tensor = ttnn.from_torch(
-            torch.zeros((num_devices, 1, TOKEN_META_ELEMS), dtype=torch.uint32),
+        metadata_tensor = ttnn.from_torch(
+            torch.zeros((num_devices, 1, METADATA_ELEMS), dtype=torch.uint32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=token_meta_mem_config,
+            memory_config=metadata_mem_config,
             mesh_mapper=mesh_mapper,
         )
 
@@ -581,7 +579,7 @@ class SpecLMHeadStage(StageKind):
             "ttnn_indices": ttnn_indices,
             "ttnn_output_index": ttnn_output_index,
             "scratch_buffer": scratch_buffer,
-            "base_token_tensor": base_token_tensor,
+            "metadata_tensor": metadata_tensor,
             "lmhead_input_socket": pipeline_block.get_downstream_socket(),
             "lmhead_output_socket": pipeline_block.get_upstream_socket(),
             "bcast_semaphores": bcast_inputs.semaphores,
@@ -626,7 +624,7 @@ class SpecLMHeadStage(StageKind):
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
             is_mtp_base_stage=False,
             is_mtp_verify_stage=True,
-            base_token_tensor=d["base_token_tensor"],
+            metadata_tensor=d["metadata_tensor"],
         )
         print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.launch_compute done", flush=True)
 
@@ -816,6 +814,21 @@ class BaseLMHeadStage(StageKind):
             mesh_mapper=mesh_mapper,
         )
 
+        METADATA_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
+        metadata_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(argmax_final_core_grid, (1, METADATA_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        metadata_tensor = ttnn.from_torch(
+            torch.zeros((num_devices, 1, METADATA_ELEMS), dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=metadata_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
         # MTP output tensor allocation
         ttnn_mtp_output = None
         if self._enable_mtp:
@@ -919,6 +932,7 @@ class BaseLMHeadStage(StageKind):
             "ttnn_indices": ttnn_indices,
             "ttnn_output_index": ttnn_output_index,
             "scratch_buffer": scratch_buffer,
+            "metadata_tensor": metadata_tensor,
             "lmhead_input_socket": lmhead_input_socket,
             "lmhead_output_socket": lmhead_output_socket,
             "bcast_semaphores": bcast_inputs.semaphores,
@@ -979,6 +993,7 @@ class BaseLMHeadStage(StageKind):
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
             is_mtp_base_stage=True,
             eh_gather_output_buf_tensor=d.get("eh_gather_output_buf"),
+            metadata_tensor=d.get("metadata_tensor"),
         )
         print(f"[STAGE P{ctx.my_mesh_id}] BaseLMHeadStage.launch_compute done", flush=True)
 

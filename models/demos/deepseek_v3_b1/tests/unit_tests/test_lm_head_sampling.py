@@ -873,7 +873,7 @@ class _SyntheticWeightProvider:
             h_gamma=ttnn_h_gamma,
             e_gamma=ttnn_e_gamma,
             eh_projection=ttnn_eh_proj,
-            decoder=None
+            decoder=None,
         )
 
 
@@ -4582,6 +4582,7 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
     iterations = 100
+    run_golden = False
 
     config = create_single_galaxy_spec_decode_pipeline_configuration(
         _SyntheticWeightProvider(),
@@ -4598,9 +4599,12 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
         token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
 
         if pipeline.my_mesh_id == 0:
-            # print(f"[TEST] computing golden...", flush=True)
-            # golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
-            # print(f"[TEST] golden computed, creating config", flush=True)
+            if run_golden:
+                print(f"[TEST] computing golden...", flush=True)
+                golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
+                print(f"[TEST] golden computed, creating config", flush=True)
+            else:
+                print(f"[TEST] skipping golden computation", flush=True)
             for iteration in range(iterations):
                 print(f"[TEST P{pid}] iter {iteration} write_token", flush=True)
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
@@ -4625,32 +4629,40 @@ def test_persistent_mode_mtp(mesh_device, use_fp32):
                 tok1_type = raw[5].item()
                 tok1_pos = raw[6].item()
 
-                # dbg = golden_debug[iteration]
-                # chunk_strs = " ".join(f"[{i * 896}]={v:.6f}" for i, v in enumerate(dbg["logit_chunks"]))
-                # spec_rms_chunk_strs = " ".join(f"[{i * 896}]={v:.6f}" for i, v in enumerate(dbg["spec_rmsnorm_chunks"]))
-                # expected_base, expected_spec = golden[iteration]
+                if run_golden:
+                    dbg = golden_debug[iteration]
+                    chunk_strs = " ".join(f"[{i * 896}]={v:.6f}" for i, v in enumerate(dbg["logit_chunks"]))
+                    spec_rms_chunk_strs = " ".join(
+                        f"[{i * 896}]={v:.6f}" for i, v in enumerate(dbg["spec_rmsnorm_chunks"])
+                    )
+                    expected_base, expected_spec = golden[iteration]
+                else:
+                    expected_base = None
+                    expected_spec = None
+
                 type_name = {0: "BASE", 1: "SPEC"}
                 print(
                     f"[TEST P{pid}] iter {iteration} "
                     f"ntok={num_tokens} t0={tok0_id}/{type_name.get(tok0_type,'?')} "
                     f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
-                    # f"golden base token={golden[iteration][0]}",
-                    # f"golden spec token={golden[iteration][1]}",
+                    f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
+                    f"golden base token={expected_base} golden spec token={expected_spec}",
                     flush=True,
                 )
-                # print(
-                #     f"[TEST P{pid}] iter {iteration} "
-                #     f"golden concat[0]={dbg['concat_0']:.6f} concat[7168]={dbg['concat_7168']:.6f} "
-                #     f"mtp_logits: {chunk_strs}",
-                #     flush=True,
-                # )
-                # print(
-                #     f"[TEST P{pid}] iter {iteration} "
-                #     f"golden spec_rmsnorm[0]={dbg['spec_rmsnorm_0']:.6f} "
-                #     f"[mid]={dbg['spec_rmsnorm_mid']:.6f} [last]={dbg['spec_rmsnorm_last']:.6f} "
-                #     f"absmax={dbg['spec_rmsnorm_absmax']:.6f} chunks: {spec_rms_chunk_strs}",
-                #     flush=True,
-                # )
+                if run_golden:
+                    print(
+                        f"[TEST P{pid}] iter {iteration} "
+                        f"golden concat[0]={dbg['concat_0']:.6f} concat[7168]={dbg['concat_7168']:.6f} "
+                        f"mtp_logits: {chunk_strs}",
+                        flush=True,
+                    )
+                    print(
+                        f"[TEST P{pid}] iter {iteration} "
+                        f"golden spec_rmsnorm[0]={dbg['spec_rmsnorm_0']:.6f} "
+                        f"[mid]={dbg['spec_rmsnorm_mid']:.6f} [last]={dbg['spec_rmsnorm_last']:.6f} "
+                        f"absmax={dbg['spec_rmsnorm_absmax']:.6f} chunks: {spec_rms_chunk_strs}",
+                        flush=True,
+                    )
         print(f"[TEST P{pid}] all iterations done, barrier", flush=True)
         pipeline.barrier()
         print(f"[TEST P{pid}] barrier done, terminate", flush=True)
