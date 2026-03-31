@@ -452,21 +452,130 @@ Prioritize: production kernels > test kernels > experimental kernels.
 ## PHASE 3: PARALLEL IMPLEMENTATION
 
 Instance numbering resets each phase. Phase 3 has up to 3 instances.
-Run AFTER phase 2 output is reviewed and approved. Instance assignments will be determined based on the phase 2 design. The user will update this section after reviewing phase 2.
+The phase 2 design (`docs/matmul_api_design.md`) has been reviewed and approved with these decisions:
+- **Q6 (mm_block_init ownership)**: APPROVED — remove `mm_block_init` from the helper. Caller calls it once at kernel start. Update `bmm_large_block_zm.cpp` to add the init call.
+- **Q1 (in0_transpose)**: Keep inline for now. Will revisit during phase 3 if needed.
 
 ### INSTANCE 1 — Core Helper Implementation
-**Output**: Modified/new files in `ttnn/cpp/ttnn/kernel_lib/matmul_*`
-**Task**: Implement the core type system and matmul helper(s) from the phase 2 design. After implementation, run the existing matmul C++ integration tests and Python tests to verify backward compatibility (nothing broken). Read the approved `docs/matmul_api_design.md` as your primary input.
+
+**Output**: Modified/new files in `ttnn/cpp/ttnn/kernel_lib/`
+
+**Task**: Implement the two helpers from the phase 2 design.
+
+**Steps**:
+1. Read `docs/llk_matmul_orchestration.md` (this file) for context — especially LESSONS FROM PRIOR ATTEMPTS and CONSTRAINTS.
+2. Read `docs/matmul_api_design.md` — this is your primary specification. Pay close attention to Sections B (type system), C (function signatures), the Appendix (pseudocode), and Section H (open questions with approved decisions above).
+3. Implement:
+   - **Modify** `ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp/inl` — add the new template params (`packer_l1_acc`, `pack_last_to_interm`, `pack_relu`), switch to 4-phase DST, remove `mm_block_init` from the helper body. All new template params have defaults so existing call sites are unchanged.
+   - **Create** `ttnn/cpp/ttnn/kernel_lib/bias_add_helpers.hpp/inl` — the `add_bias_bcast_rows` helper per the design.
+   - **Update** `bmm_large_block_zm.cpp` (both production and programming_examples) to add `mm_block_init` call before the helper (since the helper no longer calls it internally).
+4. Build with `./build_metal.sh` and fix any compile errors.
+5. Run existing matmul C++ integration tests to verify backward compatibility:
+   ```
+   ./build/test/tt_metal/integration/matmul/test_matmul_block_helper
+   ```
+   Report pass/fail counts and architecture (run `tt-smi`).
+6. Run existing matmul Python tests:
+   ```
+   pytest tests/ttnn/unit_tests/operations/test_matmul.py -x --no-header -q
+   ```
+   Report pass/fail counts.
+
+**Rules**:
+- Follow the pseudocode in the design doc Appendix closely. It was derived from the production kernel's actual code paths.
+- Use `pack_tile_block` (not a per-tile loop) for packing, per Open Question 4.
+- Do NOT use environment variables for any feature selection.
+- Do NOT create param structs — flat independent params per constraint 9.
+- Write output summary to `docs/phase3_instance1_results.md`.
+
+---
 
 ### INSTANCE 2 — Isolated Helper Tests
+
 **Output**: New test files in `tests/tt_metal/tt_metal/integration/matmul/`
-**Task**: Write C++ integration tests that exercise the new helpers **in isolation** — not through a TTNN op, but by directly calling the helpers in a test kernel. Tests should cover the key feature dimensions from the phase 1 feature matrix (e.g., with/without spill-reload, with/without bias, with/without L1 accumulation, transpose, etc.). Each test should validate PCC against a reference. Read the approved `docs/matmul_api_design.md` and the phase 1 `docs/analysis_feature_matrix.md` to determine which feature combinations to test.
+
+**Task**: Write C++ integration tests that exercise the new helpers in isolation.
+
+**Steps**:
+1. Read `docs/llk_matmul_orchestration.md` (this file) for context.
+2. Read `docs/matmul_api_design.md` — Sections C (function signatures) and D (coverage matrix) to understand what feature combinations exist.
+3. Read `docs/analysis_feature_matrix.md` — to understand which features are most common across kernels.
+4. Read the existing test file for patterns: `tests/tt_metal/tt_metal/integration/matmul/test_matmul_block_helper.cpp`
+5. Write new test cases that cover these feature combinations (prioritized by coverage):
+
+   **matmul_block tests:**
+   - Basic (no L1_ACC, no pack_last_to_interm) — should match existing test behavior
+   - `packer_l1_acc=true`, `pack_last_to_interm=false` — L1 accumulation, pack to output
+   - `packer_l1_acc=true`, `pack_last_to_interm=true` — L1 accumulation, pack to interm (for bias pipeline)
+   - `packer_l1_acc=false`, `pack_last_to_interm=true` — software spill, pack to interm
+   - `pack_relu=true` — RELU on last K-block
+   - `PostComputeFn` with a simple SFPU activation
+   - `num_k_blocks=1` (no spill/reload) and `num_k_blocks>1` (with spill/reload) for each L1_ACC mode
+   - `transpose=true` variants
+
+   **add_bias_bcast_rows tests:**
+   - Basic bias addition (no PostBiasFn)
+   - Bias addition with PostBiasFn (SFPU activation)
+   - Varying subblock dimensions
+
+   **Composition tests (matmul_block → add_bias_bcast_rows):**
+   - `matmul_block<..., pack_last_to_interm=true>` followed by `add_bias_bcast_rows`
+   - Same with `packer_l1_acc=true`
+
+6. Each test should:
+   - Set up input tensors with known values (or random with seed)
+   - Run the helper kernel
+   - Compare output against a CPU/PyTorch reference
+   - Assert PCC >= 0.999
+7. Build and run tests. Report pass/fail counts and architecture (run `tt-smi`).
+
+**Rules**:
+- Tests must exercise helpers directly in test kernels, NOT through TTNN ops.
+- Follow the existing test file's patterns for device setup, CB configuration, and kernel launch.
+- Write output summary to `docs/phase3_instance2_results.md`.
+
+---
 
 ### INSTANCE 3 — Migration + Regression Tests
-**Output**: Migrated kernel files + test results
-**Task**: Migrate the first 2-3 target kernels per the phase 2 migration sequence. After each migration, run: (a) the isolated helper tests from instance 2 (if available), and (b) the existing matmul Python tests (588 tests) and any other test suites that exercise the migrated kernels. Report results with pass/fail counts. Read the approved `docs/matmul_api_design.md` as your primary input.
 
-**Phase 3 note**: The exact split between instances 1-3 depends on the phase 2 design. The user will refine these instructions after reviewing the design. Instances 1 and 2 can run in parallel. Instance 3 should run after instances 1 and 2 complete (it needs both the helpers and the tests).
+**Output**: Migrated kernel files + test results
+
+**Task**: Migrate the production kernel to use the new helpers, following the phase 2 migration sequence.
+
+**Prerequisites**: Instances 1 and 2 must be complete. Their changes must be on the branch before this instance starts. The user will coordinate this.
+
+**Steps**:
+1. Read `docs/llk_matmul_orchestration.md` (this file) for context.
+2. Read `docs/matmul_api_design.md` — Sections E (migration sequence) and F (code sketches). The code sketch in F1 is your primary reference for the production kernel migration.
+3. Read the instance 1 and 2 results: `docs/phase3_instance1_results.md` and `docs/phase3_instance2_results.md` to understand the current state of helpers and tests.
+4. Read the current production kernel:
+   `ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp`
+5. Migrate following the design doc's migration sequence:
+
+   **Step 1 — Verify backward compat** (quick):
+   Run the existing matmul tests to establish a baseline. Record pass/fail counts.
+
+   **Step 2 — Migrate production kernel** (primary target):
+   Rewrite `bmm_large_block_zm_fused_bias_activation.cpp` to use `matmul_block` and `add_bias_bcast_rows` helpers for all paths EXCEPT `in0_transpose` (stays inline) and `SKIP_COMPUTE` (caller-managed). Follow the code sketch in design doc Section F1.
+
+   **Step 3 — Run full regression**:
+   ```
+   pytest tests/ttnn/unit_tests/operations/test_matmul.py -x --no-header -q
+   ./build/test/tt_metal/integration/matmul/test_matmul_block_helper
+   ```
+   Compare pass/fail counts against Step 1 baseline. Any regressions must be investigated and fixed before proceeding.
+
+   **Step 4 (if time permits) — Migrate test kernel**:
+   Migrate `tests/tt_metal/tt_metal/test_kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp` per design doc Section E step 3.
+
+6. Report all results with architecture (run `tt-smi`).
+
+**Rules**:
+- The production kernel migration is the critical deliverable. Do NOT skip the regression tests.
+- If a regression is found, fix it before migrating more kernels.
+- Keep `in0_transpose` paths as inline code per the approved decision.
+- Do NOT use environment variables.
+- Write output summary to `docs/phase3_instance3_results.md`.
 
 ---
 
