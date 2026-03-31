@@ -50,11 +50,11 @@ ttnn::TensorSpec DeepseekMoEPostCombineReduceDeviceOperation::compute_output_spe
     const ttnn::Shape output_shape(output_shape_vec);
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
-    // Use ROW_MAJOR layout to match our fake tilization approach
+    // Use TILE layout for hardware tilization output
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout(
-            combine_output.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), output_memory_config));
+            combine_output.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
 }
 
 ttnn::Tensor DeepseekMoEPostCombineReduceDeviceOperation::create_output_tensors(

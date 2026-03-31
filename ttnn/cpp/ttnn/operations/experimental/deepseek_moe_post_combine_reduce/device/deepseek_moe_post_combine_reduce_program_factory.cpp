@@ -52,14 +52,32 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     TT_FATAL(
         emb_dim_tiles <= 8, "Embedding dimension tiles {} must fit in 8 DST registers for batching", emb_dim_tiles);
 
+    // Hardware tilize requires exactly 32 tokens per core
+    constexpr uint32_t REQUIRED_TOKENS_PER_CORE = 32;
+    TT_FATAL(
+        num_tokens % REQUIRED_TOKENS_PER_CORE == 0,
+        "Number of tokens {} must be divisible by {} for hardware tilization",
+        num_tokens,
+        REQUIRED_TOKENS_PER_CORE);
+
     // Use row-major ordering: cores go (0,0), (1,0), (2,0), ... then (0,1), (1,1), ...
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-    // Use minimum of tokens or available cores
-    uint32_t num_cores = std::min(num_tokens, num_cores_total);
+    // Check if we have enough cores for the required tokens per core
+    uint32_t num_cores_needed = num_tokens / REQUIRED_TOKENS_PER_CORE;
+    TT_FATAL(
+        num_cores_needed <= num_cores_total,
+        "Need {} cores ({} tokens / {} tokens per core) but only {} cores available",
+        num_cores_needed,
+        num_tokens,
+        REQUIRED_TOKENS_PER_CORE,
+        num_cores_total);
+
+    // Use exactly num_tokens / 32 cores (validated above)
+    uint32_t num_cores = num_cores_needed;
 
     // Create CoreRange covering all available cores
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
@@ -103,11 +121,11 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_weight_config);
 
     // CB16: output - TILE_LAYOUT final result
-    // Size: 7 tiles (one token's reduced output)
-    // Double-buffered for pipelining between compute and writer
-    uint32_t output_cb_size = emb_dim_tiles * tile_size;
+    // Size: 224 tiles (32 tokens × 7 tile-rows per token)
+    // Single-buffered (not double-buffered) to save L1 space - we produce/consume all at once
+    uint32_t output_cb_size = 224 * tile_size;  // 32 tokens worth of tiles
     tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(2 * output_cb_size, {{tt::CBIndex::c_16, output_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(output_cb_size, {{tt::CBIndex::c_16, output_cb_data_format}})
             .set_page_size(tt::CBIndex::c_16, tile_size);
     auto cb_output_handle = tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_output_config);
 
@@ -119,6 +137,15 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
         tt::tt_metal::CircularBufferConfig(2 * accumulator_cb_size, {{tt::CBIndex::c_24, output_cb_data_format}})
             .set_page_size(tt::CBIndex::c_24, tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_accumulator_config);
+
+    // CB17: row-major intermediate buffer for batching 32 tokens before tilize
+    // Size: 32 rows × 7168 elements × 2 bytes = 458,752 bytes
+    // This holds 32 tokens in row-major format before hardware tilization
+    uint32_t rowmajor_cb_size = 32 * emb_dim * 2;  // 32 tokens, bfloat16
+    tt::tt_metal::CircularBufferConfig cb_rowmajor_config =
+        tt::tt_metal::CircularBufferConfig(rowmajor_cb_size, {{tt::CBIndex::c_17, output_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_17, emb_dim * 2);  // One row = 7168 elements × 2 bytes
+    tt::tt_metal::CreateCircularBuffer(program, core_range_set, cb_rowmajor_config);
 
     // Buffer info
     auto* combine_buffer = combine_output.buffer();
@@ -153,11 +180,6 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
         emb_dim_tiles,
     };
 
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // Create Kernels
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-    // Reader: Loads ROW_MAJOR expert outputs + weight scalars from DRAM
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_reduce/device/kernels/"
@@ -165,7 +187,6 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
         core_range_set,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    // Compute: DST-batched multiply-accumulate (8 tiles/batch, no tilize!)
     auto compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_reduce/device/kernels/"
@@ -178,7 +199,6 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
             .compile_args = compute_compile_time_args,
         });
 
-    // Writer: Writes TILE_LAYOUT output to DRAM
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_reduce/device/kernels/"
@@ -186,16 +206,13 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
         core_range_set,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    uint32_t tokens_per_core = num_tokens / num_cores;
-    uint32_t extra_tokens = num_tokens % num_cores;
-
+    // Each core processes exactly 32 tokens (validated above)
     uint32_t token_start = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores[i];
 
-        uint32_t tokens_for_this_core = tokens_per_core + (i < extra_tokens ? 1 : 0);
+        uint32_t tokens_for_this_core = REQUIRED_TOKENS_PER_CORE;
 
-        // Reader runtime args
         std::vector<uint32_t> reader_runtime_args = {
             combine_buffer->address(),
             weight_buffer->address(),
@@ -203,13 +220,11 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
             token_start,
         };
 
-        // Compute runtime args
         std::vector<uint32_t> compute_runtime_args = {
             tokens_for_this_core,
             token_start,
         };
 
-        // Writer runtime args
         std::vector<uint32_t> writer_runtime_args = {
             output_buffer->address(),
             tokens_for_this_core,

@@ -18,28 +18,29 @@ void kernel_main() {
 
     constexpr uint32_t tile_size = 2048;
 
-    constexpr uint32_t output_page_size = emb_dim_tiles * tile_size;
+    // For TILE layout, page size is one tile
+    const InterleavedAddrGen<output_is_dram> output_addrg = {.bank_base_address = output_addr, .page_size = tile_size};
 
-    const InterleavedAddrGen<output_is_dram> output_addrg = {
-        .bank_base_address = output_addr, .page_size = output_page_size};
+    // Each core produces 224 tiles from 32 tokens (32 rows × 224 tile-columns)
+    constexpr uint32_t tiles_total = 224;
+    cb_wait_front(cb_output, tiles_total);
 
-    for (uint32_t token_idx = 0; token_idx < tokens_per_core; ++token_idx) {
-        uint32_t global_token_idx = token_start_idx + token_idx;
+    uint32_t cb_read_addr = get_read_ptr(cb_output);
 
-        cb_wait_front(cb_output, emb_dim_tiles);
+    // Calculate starting tile index in output tensor
+    // Output tensor: [3200, 7168] in TILE layout = [100 tile-rows, 224 tile-columns]
+    // token_start_idx is the starting row (0, 32, 64, ..., 3168)
+    // Divide by 32 to get tile-row index (0, 1, 2, ..., 99)
+    uint32_t tile_row = token_start_idx / 32;
+    uint32_t start_tile_idx = tile_row * 224;
 
-        SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
-        DPRINT_DATA1(DPRINT << "writing data to DRAM -- " << "\n" << ENDL());
-        for (uint32_t j = 0; j < emb_dim_tiles; j++) {
-            DPRINT_DATA1(DPRINT << "tile " << j << " values = " << TileSlice(cb_output, j, sr, true, false) << ENDL());
-        }
-        uint32_t output_read_addr = get_read_ptr(cb_output);
-
-        uint32_t output_page_idx = global_token_idx;
-        noc_async_write_page(output_page_idx, output_addrg, output_read_addr);
-
-        noc_async_write_barrier();
-
-        cb_pop_front(cb_output, emb_dim_tiles);
+    // Write all 224 tiles contiguously (each core writes one tile-row)
+    for (uint32_t tile_idx = 0; tile_idx < 224; ++tile_idx) {
+        noc_async_write_page(start_tile_idx + tile_idx, output_addrg, cb_read_addr);
+        cb_read_addr += tile_size;
     }
+
+    noc_async_write_barrier();
+
+    cb_pop_front(cb_output, tiles_total);
 }
