@@ -24,7 +24,8 @@ from typing import Any
 
 DEFAULT_PR_REPO = "ebanerjeeTT/tt-metal"
 DEFAULT_PR_BASE = "main"
-ISSUE_REPO_TEST = "tenstorrent/temporary-issue-dump"
+PRIMARY_REPO = "tenstorrent/tt-metal"
+ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 GUARDED_GH = [sys.executable, "tools/ci/guarded_gh.py"]
 PROTECTED_AGENT_PATHS = {
     "tools/ci/guarded_gh.py",
@@ -36,6 +37,20 @@ DEFAULT_REQUIRED_PR_CHECK_WORKFLOWS = [
 OPTIONAL_EARLY_WORKFLOWS = {
     "pr-gate.yaml",
     "merge-gate.yaml",
+}
+ALLOWED_MOCK_WORKFLOW_OUTCOMES = {
+    "success",
+    "failure",
+    "cancelled",
+    "neutral",
+    "skipped",
+    "timed_out",
+    "action_required",
+    "stale",
+    "startup_failure",
+    "in_progress",
+    "queued",
+    "unknown",
 }
 ALLOWED_STATUS = {
     "new",
@@ -296,7 +311,7 @@ def load_disable_command_spec() -> str:
 Apply the smallest safe CI-only disable for a failing signal, but do not perform git/gh operations.
 
 ## Input
-- Required: one GitHub issue URL/number in tenstorrent/temporary-issue-dump during testing, or in tenstorrent/tt-metal after production promotion.
+- Required: one GitHub issue URL/number in ebanerjeeTT/issue_dump during testing, or in tenstorrent/tt-metal after production promotion.
 - Optional: one or more job URLs for stronger evidence.
 
 ## Hard Constraints
@@ -443,16 +458,53 @@ def parse_extra_workflows(raw: str) -> list[str]:
     return workflows
 
 
-def dispatch_required_pr_check_workflows(branch: str, workflows: list[str], pr_repo: str) -> dict[str, str]:
+def parse_mock_workflow_outcomes(raw: str) -> dict[str, str]:
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid --fork-workflow-outcomes JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("--fork-workflow-outcomes must be a JSON object")
+    outcomes: dict[str, str] = {}
+    for key, value in parsed.items():
+        workflow = str(key).strip()
+        outcome = str(value).strip().lower()
+        if not workflow:
+            continue
+        if outcome not in ALLOWED_MOCK_WORKFLOW_OUTCOMES:
+            raise ValueError(
+                f"unsupported mock outcome {outcome!r} for {workflow!r}; "
+                f"allowed: {sorted(ALLOWED_MOCK_WORKFLOW_OUTCOMES)}"
+            )
+        outcomes[workflow] = outcome
+    return outcomes
+
+
+def dispatch_required_pr_check_workflows(
+    branch: str,
+    workflows: list[str],
+    pr_repo: str,
+    *,
+    simulate_only: bool,
+    mock_outcomes: dict[str, str],
+) -> dict[str, str]:
     runs: dict[str, str] = {}
     for workflow in workflows:
-        log(f"dispatch: triggering workflow {workflow} for branch {branch}")
-        dispatched = run_guarded_gh(["gh", "workflow", "run", workflow, "--repo", pr_repo, "--ref", branch])
-        runs[workflow] = parse_first_url(dispatched.stdout)
-        if runs[workflow]:
-            log(f"dispatch: workflow {workflow} run URL {runs[workflow]}")
+        if simulate_only:
+            outcome = mock_outcomes.get(workflow, "unknown")
+            runs[workflow] = f"(fork-mode simulated outcome: {outcome})"
+            log(f"dispatch: fork-mode would trigger workflow {workflow} for branch {branch} (mock outcome={outcome})")
         else:
-            log(f"dispatch: workflow {workflow} dispatched (run URL not returned)")
+            log(f"dispatch: triggering workflow {workflow} for branch {branch}")
+            dispatched = run_guarded_gh(["gh", "workflow", "run", workflow, "--repo", pr_repo, "--ref", branch])
+            runs[workflow] = parse_first_url(dispatched.stdout)
+            if runs[workflow]:
+                log(f"dispatch: workflow {workflow} run URL {runs[workflow]}")
+            else:
+                log(f"dispatch: workflow {workflow} dispatched (run URL not returned)")
     return runs
 
 
@@ -738,6 +790,11 @@ def main() -> int:
     parser.add_argument("--target-pr-repo", default=DEFAULT_PR_REPO)
     parser.add_argument("--target-pr-base", default=DEFAULT_PR_BASE)
     parser.add_argument(
+        "--fork-workflow-outcomes",
+        default="{}",
+        help="JSON object mapping workflow id to mocked outcome for fork-mode simulation",
+    )
+    parser.add_argument(
         "--extra-pr-check-workflows",
         default="",
         help="Comma-separated optional early workflows to run after PR create (allowed: pr-gate.yaml, merge-gate.yaml)",
@@ -746,11 +803,13 @@ def main() -> int:
     args = parser.parse_args()
     target_pr_repo = args.target_pr_repo.strip() or DEFAULT_PR_REPO
     target_pr_base = args.target_pr_base.strip() or DEFAULT_PR_BASE
+    fork_mode = target_pr_repo != PRIMARY_REPO
     extra_pr_check_workflows = parse_extra_workflows(args.extra_pr_check_workflows)
+    mock_workflow_outcomes = parse_mock_workflow_outcomes(args.fork_workflow_outcomes)
     log(
         "execute_disable_actions: start "
         f"dry_run={args.dry_run} model={args.model} max_attempts_per_item={args.max_attempts_per_item} "
-        f"target_pr_repo={target_pr_repo}"
+        f"target_pr_repo={target_pr_repo} fork_mode={fork_mode}"
     )
 
     if not args.dry_run:
@@ -1045,11 +1104,23 @@ def main() -> int:
             pr_url = pr.stdout.strip().splitlines()[-1].strip()
             log(f"action: created PR {pr_url} for issue #{issue_number}")
             required_check_runs = dispatch_required_pr_check_workflows(
-                branch, [*DEFAULT_REQUIRED_PR_CHECK_WORKFLOWS, *extra_pr_check_workflows], target_pr_repo
+                branch,
+                [*DEFAULT_REQUIRED_PR_CHECK_WORKFLOWS, *extra_pr_check_workflows],
+                target_pr_repo,
+                simulate_only=fork_mode,
+                mock_outcomes=mock_workflow_outcomes,
             )
             post_triggered_workflows_comment(pr_url, required_check_runs, target_pr_repo)
-            log(f"action: invoking kickoff workflow agent for PR {pr_url}")
-            kickoff_tail = invoke_kickoff_agent(pr_url, args.model)
+            if fork_mode:
+                kickoff_outcome = mock_workflow_outcomes.get("kickoff-agent", "unknown")
+                kickoff_tail = (
+                    "fork-mode: skipped kickoff agent dispatch; "
+                    f"would invoke kickoff for {pr_url} (mock outcome={kickoff_outcome})"
+                )
+                log(kickoff_tail)
+            else:
+                log(f"action: invoking kickoff workflow agent for PR {pr_url}")
+                kickoff_tail = invoke_kickoff_agent(pr_url, args.model)
             item["disable_pr"] = {
                 "number": parse_pr_number(pr_url),
                 "url": pr_url,

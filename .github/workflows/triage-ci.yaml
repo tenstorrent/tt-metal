@@ -68,6 +68,10 @@ on:
         description: "Base branch in target PR repo"
         required: false
         default: "main"
+      fork-workflow-outcomes:
+        description: "JSON mapping of mocked workflow outcomes in fork mode"
+        required: false
+        default: "{}"
       fork-push-check-only:
         description: "If checked, only verify fork branch creation and skip all triage/AI work"
         required: false
@@ -253,6 +257,7 @@ jobs:
           extra-pr-check-workflows: ${{ github.event.inputs['extra-pr-check-workflows'] || '' }}
           target-pr-repo: ${{ github.event.inputs['target-pr-repo'] || 'ebanerjeeTT/tt-metal' }}
           target-pr-base: ${{ github.event.inputs['target-pr-base'] || 'main' }}
+          fork-workflow-outcomes: ${{ github.event.inputs['fork-workflow-outcomes'] || '{}' }}
           model: ${{ github.event.inputs['auto-disable-model'] || 'claude-4-sonnet' }}
           dry-run: ${{ github.event.inputs['auto-disable-dry-run'] || 'false' }}
           output-dir: build_ci/auto_disable

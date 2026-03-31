@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Sequence
 
 
-ISSUE_REPO_TEST = "tenstorrent/temporary-issue-dump"
+ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 PRIMARY_REPO = "tenstorrent/tt-metal"
 TEST_PR_REPO = "ebanerjeeTT/tt-metal"
 ALLOWED_WORKFLOW_IDS = {

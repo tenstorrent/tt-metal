@@ -36,6 +36,10 @@ inputs:
     description: "Base branch for auto-disable draft PRs"
     required: false
     default: "main"
+  fork-workflow-outcomes:
+    description: "JSON object of mocked workflow outcomes when target-pr-repo is a fork"
+    required: false
+    default: "{}"
   output-dir:
     description: "Directory for generated artifacts"
     required: false
@@ -120,6 +124,7 @@ runs:
           --extra-pr-check-workflows "${{ inputs.extra-pr-check-workflows }}" \
           --target-pr-repo "${{ inputs.target-pr-repo }}" \
           --target-pr-base "${{ inputs.target-pr-base }}" \
+          --fork-workflow-outcomes '${{ inputs.fork-workflow-outcomes }}' \
           --model "${{ inputs.model }}" \
           $dry
         echo "[triage] Disable action execution finished."

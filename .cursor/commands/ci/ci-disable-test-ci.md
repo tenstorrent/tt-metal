@@ -4,7 +4,7 @@
 Apply the smallest safe CI-only disable for a failing signal, but do not perform git/gh operations.
 
 ## Input
-- Required: one GitHub issue URL/number in `tenstorrent/temporary-issue-dump` during testing, or in `tenstorrent/tt-metal` after production promotion.
+- Required: one GitHub issue URL/number in `ebanerjeeTT/issue_dump` during testing, or in `tenstorrent/tt-metal` after production promotion.
 - Optional: one or more job URLs for stronger evidence.
 
 ## Hard Constraints
