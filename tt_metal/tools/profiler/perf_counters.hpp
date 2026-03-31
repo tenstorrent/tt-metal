@@ -237,7 +237,26 @@ enum PerfCounterType : uint8_t {
     L1_3_NOC_RING3_PORT_4_GRANT,
     L1_3_NOC_RING3_PORT_5_GRANT,
     L1_3_NOC_RING3_PORT_6_GRANT,
-    L1_3_NOC_RING3_PORT_7_GRANT
+    L1_3_NOC_RING3_PORT_7_GRANT,
+    // Ethernet L1 counters (different port mapping from Tensix)
+    // WH Ethernet: no mux, 8 ports. BH Ethernet: 3-bit mux, 4 positions.
+    // Mux 0 (WH ports 0-3 / BH ports 0-3)
+    ETH_L1_0_NOC_RING1_OUTGOING_0,  // WH port 0 / BH: NOC Ring 0 port 0
+    ETH_L1_0_NOC_RING1_OUTGOING_1,  // WH port 1 / BH: NOC Ring 0 port 1
+    ETH_L1_0_NOC_RING1_INCOMING_0,  // WH port 2 / BH: NOC Ring 0 port 2
+    ETH_L1_0_NOC_RING1_INCOMING_1,  // WH port 3 / BH: NOC Ring 0 port 3
+    ETH_L1_0_NOC_RING0_OUTGOING_0,  // WH port 4 / BH: NOC Ring 0 port 4 (not used on BH mux 0)
+    ETH_L1_0_NOC_RING0_OUTGOING_1,  // WH port 5
+    ETH_L1_0_NOC_RING0_INCOMING_0,  // WH port 6
+    ETH_L1_0_NOC_RING0_INCOMING_1,  // WH port 7
+    ETH_L1_0_NOC_RING1_OUTGOING_0_GRANT,
+    ETH_L1_0_NOC_RING1_OUTGOING_1_GRANT,
+    ETH_L1_0_NOC_RING1_INCOMING_0_GRANT,
+    ETH_L1_0_NOC_RING1_INCOMING_1_GRANT,
+    ETH_L1_0_NOC_RING0_OUTGOING_0_GRANT,
+    ETH_L1_0_NOC_RING0_OUTGOING_1_GRANT,
+    ETH_L1_0_NOC_RING0_INCOMING_0_GRANT,
+    ETH_L1_0_NOC_RING0_INCOMING_1_GRANT
 };
 
 union PerfCounter {
@@ -277,7 +296,7 @@ constexpr size_t NUM_COUNTER_GROUPS = sizeof(counter_groups) / sizeof(counter_gr
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 20> unpack_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
      {PerfCounterType::FIDELITY_PHASE_STALLS, 2},
@@ -289,18 +308,19 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 20> unpack_counters =
      {PerfCounterType::UNPACK1_BUSY_THREAD0, 8},
      {PerfCounterType::UNPACK0_BUSY_THREAD1, 9},
      {PerfCounterType::UNPACK1_BUSY_THREAD1, 10},
-     // Additional grant counters (counter_sel with bit 16 set = out_fmt grant mode)
-     // Note: SRCA_WRITE(261) and SRCB_WRITE(259) above are already grant counters
+     // Grant counters (counter_sel with bit 16 set = out_fmt grant mode)
      {PerfCounterType::MATH_INSTRN_NOT_BLOCKED_SRC, 256},
      {PerfCounterType::INSTRN_2_HF_CYCLES, 257},
      {PerfCounterType::INSTRN_1_HF_CYCLE, 258},
+     {PerfCounterType::SRCB_WRITE_ACTUAL, 259},
      {PerfCounterType::SRCA_WRITE_NOT_BLOCKED_OVR, 260},
+     {PerfCounterType::SRCA_WRITE_ACTUAL, 261},
      {PerfCounterType::SRCB_WRITE_NOT_BLOCKED_PORT, 262},
      {PerfCounterType::SRCA_WRITE_THREAD0, 263},
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
-constexpr size_t NUM_UNPACK_COUNTERS = 20;
+constexpr size_t NUM_UNPACK_COUNTERS = 22;
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_BUSY, 18},
@@ -320,7 +340,29 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
      {PerfCounterType::AVAILABLE_MATH, 272}}};  // AVAILABLE_MATH = math not stalled by scoreboard
 constexpr size_t NUM_PACK_COUNTERS = 14;
 
-// L1 bank 0 counters (MUX_CTRL[6:4] = 0): unpacker, TDMA bundles, ring0 NOC
+// L1 bank 0 counters — port mapping differs between Tensix and Ethernet cores
+#if defined(COMPILE_FOR_ERISC)
+// Ethernet L1 bank 0: WH has no mux (ports 0-7 = Ring1 Out/In + Ring0 Out/In)
+// BH Ethernet mux 0: ports 0-3 = NOC Ring 0
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
+    {{PerfCounterType::ETH_L1_0_NOC_RING1_OUTGOING_0, 0},
+     {PerfCounterType::ETH_L1_0_NOC_RING1_OUTGOING_1, 1},
+     {PerfCounterType::ETH_L1_0_NOC_RING1_INCOMING_0, 2},
+     {PerfCounterType::ETH_L1_0_NOC_RING1_INCOMING_1, 3},
+     {PerfCounterType::ETH_L1_0_NOC_RING0_OUTGOING_0, 4},
+     {PerfCounterType::ETH_L1_0_NOC_RING0_OUTGOING_1, 5},
+     {PerfCounterType::ETH_L1_0_NOC_RING0_INCOMING_0, 6},
+     {PerfCounterType::ETH_L1_0_NOC_RING0_INCOMING_1, 7},
+     {PerfCounterType::ETH_L1_0_NOC_RING1_OUTGOING_0_GRANT, 256},
+     {PerfCounterType::ETH_L1_0_NOC_RING1_OUTGOING_1_GRANT, 257},
+     {PerfCounterType::ETH_L1_0_NOC_RING1_INCOMING_0_GRANT, 258},
+     {PerfCounterType::ETH_L1_0_NOC_RING1_INCOMING_1_GRANT, 259},
+     {PerfCounterType::ETH_L1_0_NOC_RING0_OUTGOING_0_GRANT, 260},
+     {PerfCounterType::ETH_L1_0_NOC_RING0_OUTGOING_1_GRANT, 261},
+     {PerfCounterType::ETH_L1_0_NOC_RING0_INCOMING_0_GRANT, 262},
+     {PerfCounterType::ETH_L1_0_NOC_RING0_INCOMING_1_GRANT, 263}}};
+#else
+// Tensix L1 bank 0 (MUX_CTRL[6:4] = 0): unpacker, TDMA bundles, ring0 NOC
 // Port 1 differs between architectures: BH has unified packer, WH has unpacker#1/ECC/pack1
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
     {{PerfCounterType::L1_0_UNPACKER_0, 0},
@@ -344,6 +386,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_0_counters = {
      {PerfCounterType::L1_0_NOC_RING0_OUTGOING_1_GRANT, 261},
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_0_GRANT, 262},
      {PerfCounterType::L1_0_NOC_RING0_INCOMING_1_GRANT, 263}}};
+#endif
 constexpr size_t NUM_L1_0_COUNTERS = 16;
 
 // L1 bank 1 counters (MUX_CTRL[6:4] = 1): packer/risc, ext unpacker, ring1 NOC
