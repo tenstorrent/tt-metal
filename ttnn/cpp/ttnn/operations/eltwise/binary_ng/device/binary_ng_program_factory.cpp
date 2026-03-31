@@ -927,6 +927,32 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         }
     }
 
+    // Determine max tiles per cycle based on sharding and output data type
+    // Multi-tile processing only enabled when all tensors are sharded
+    uint32_t num_tiles_per_cycle = 1;  // Conservative default
+    bool enable_multi_tile = false;
+
+    // Enable for no-broadcast case when all tensors are sharded
+    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::NONE && a_sharded && b_sharded &&
+        c_sharded) {
+        enable_multi_tile = true;
+    }
+    // Enable for scalar value case (not scalar broadcast) when input and output are sharded
+    if (!b.has_value() && a_sharded && c_sharded) {
+        enable_multi_tile = true;
+    }
+
+    if (enable_multi_tile && !is_where_op) {
+        if (!is_sfpu_op) {
+            // FPU kernels: 16-bit types can handle 8 tiles,
+            num_tiles_per_cycle = 8;  // Default for 16-bit types (BF16, BF8, BF4)
+        } else {
+            // SFPU kernel should handle 4, but for unknown reason, only 2 works
+            // no document and example to show why 4 does not work, need further investigation
+            num_tiles_per_cycle = 2;
+        }
+    }
+
     bool op_has_exp =
         op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP || op_type == BinaryOpType::LOGADDEXP2;
     const bool inputs_row_major =
@@ -948,7 +974,12 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
                                                   : a_data_format;
         uint32_t a_intermediate_single_tile_size = tt::tile_size(a_intermediate_format);
         create_cb(
-            tt::CBIndex::c_3, program, all_device_cores, a_intermediate_single_tile_size, 1, a_intermediate_format);
+            tt::CBIndex::c_3,
+            program,
+            all_device_cores,
+            a_intermediate_single_tile_size,
+            num_tiles_per_cycle,
+            a_intermediate_format);
     }
 
     // If b is a scalar, we only need one tile in the CB
@@ -967,7 +998,12 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
                                                   : b_data_format;
         uint32_t b_intermediate_single_tile_size = tt::tile_size(b_intermediate_format);
         create_cb(
-            tt::CBIndex::c_4, program, all_device_cores, b_intermediate_single_tile_size, 1, b_intermediate_format);
+            tt::CBIndex::c_4,
+            program,
+            all_device_cores,
+            b_intermediate_single_tile_size,
+            num_tiles_per_cycle,
+            b_intermediate_format);
     }
 
     if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
@@ -1075,7 +1111,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
-    const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
     bool use_llk_bcast =
         CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype);
 

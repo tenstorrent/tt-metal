@@ -1715,6 +1715,51 @@ def test_binary_sharded_scalar_row_major(scalar, a_shape, shard_type, shard_size
     assert_with_pcc(tt_out, torch.add(a_pt, scalar))
 
 
+@pytest.mark.parametrize("scalar", [-0.25])
+@pytest.mark.parametrize(
+    "a_shape, shard_type, shard_size, core_range",
+    (
+        [
+            torch.Size([1, 1, 6400, 32]),
+            ttnn.ShardStrategy.HEIGHT,
+            [3200, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+        ],
+    ),
+)
+@pytest.mark.parametrize(
+    "dtype_torch, dtype_ttnn",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+def test_binary_sharded_scalar_tile(
+    scalar, a_shape, shard_type, shard_size, core_range, dtype_torch, dtype_ttnn, device
+):
+    torch.manual_seed(0)
+    a_sharded_config = ttnn.create_sharded_memory_config(
+        shard_size,
+        core_grid=core_range,
+        strategy=shard_type,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=dtype_torch), dtype_ttnn)(a_shape)
+    a_tt = ttnn.from_torch(
+        a_pt,
+        dtype=dtype_ttnn,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=a_sharded_config,
+    )
+    tt_out = ttnn.add(a_tt, scalar, use_legacy=False)
+    tt_out = ttnn.to_torch(tt_out)
+    atol = 1e-2 if dtype_ttnn == ttnn.bfloat16 else 1e-5
+    assert_with_pcc(tt_out, torch.add(a_pt, scalar))
+
+
 class TestBinaryRowMajor:
     SHAPES = [
         pytest.param((1, 1, 32, 32), id="tile_aligned"),
