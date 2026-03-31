@@ -4,21 +4,22 @@
 
 """
 Pipeline orchestration: configuration, factory functions, Pipeline.
-Stage kinds (Embedding, LMHead, Passthrough) live in stage.py.
+Stage kinds (Embedding, LMHead, Passthrough) live in stage.py; MoE/dense decoder in decoder_stage.py.
 """
 
 from __future__ import annotations
 
 from typing import Any, Callable
 
+from loguru import logger
+
 import ttnn
+from models.demos.deepseek_v3_b1.demo.decoder_stage import DenseDecoderStage, MoEDecoderStage
 from models.demos.deepseek_v3_b1.demo.stage import (
     ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
     TOKEN_META_PAGE_SIZE_BYTES,
     BaseLMHeadStage,
-    DenseDecoderStage,
     EmbeddingStage,
-    MoEDecoderStage,
     PassthroughPayload,
     PassthroughStage,
     SpecLMHeadStage,
@@ -200,10 +201,10 @@ def create_single_pod_pipeline_configuration(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
-    """16-stage single-pod: Embed -> Dense(0,1,2) -> MoE(3..12) -> LMHead -> Token fwd.
+    """16-stage single-pod: Embed -> Dense(0,1,2) -> Decoder(3..12) -> LMHead -> Token fwd.
 
     If dense_layer_id_override is set (e.g. 0), all dense stages use that layer id.
-    If moe_layer_id_override is set (e.g. 3), all MoE stages use that layer id.
+    If moe_layer_id_override is set (e.g. 3), all decoder stages use that layer id.
     """
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
 
@@ -224,10 +225,16 @@ def create_single_pod_pipeline_configuration(
         )
 
     def _dense_stage(layer_id: int):
-        return lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d))
+        return lambda d: DenseDecoderStage(
+            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
+            layer_idx=layer_id,
+        )
 
-    def _moe_stage(layer_id: int):
-        return lambda d: MoEDecoderStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
+    def _decoder_stage(layer_id: int):
+        return lambda d: MoEDecoderStage(
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
+            layer_idx=layer_id,
+        )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
     moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
@@ -237,7 +244,7 @@ def create_single_pod_pipeline_configuration(
         1: _dense_stage(dense_ids[0]),
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
-        **{i: _moe_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
         14: stage_14,
         15: lambda d: PassthroughStage(fwd_payload),
     }
@@ -253,10 +260,10 @@ def create_sp4_pipeline_configuration(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
-    """64-stage super-pod: Embed -> Dense(0,1,2) -> MoE(3..60) -> LMHead -> Token fwd.
+    """64-stage super-pod: Embed -> Dense(0,1,2) -> Decoder(3..60) -> LMHead -> Token fwd.
 
     If dense_layer_id_override is set (e.g. 0), all dense stages use that layer id.
-    If moe_layer_id_override is set (e.g. 3), all MoE stages use that layer id.
+    If moe_layer_id_override is set (e.g. 3), all decoder stages use that layer id.
     """
     fwd_payload = PassthroughPayload.ACTIVATION_W_TOKEN_META if enable_mtp else PassthroughPayload.TOKEN
 
@@ -277,10 +284,16 @@ def create_sp4_pipeline_configuration(
         )
 
     def _dense_stage(layer_id: int):
-        return lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d))
+        return lambda d: DenseDecoderStage(
+            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
+            layer_idx=layer_id,
+        )
 
-    def _moe_stage(layer_id: int):
-        return lambda d: MoEDecoderStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
+    def _decoder_stage(layer_id: int):
+        return lambda d: MoEDecoderStage(
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
+            layer_idx=layer_id,
+        )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
     moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
@@ -290,7 +303,7 @@ def create_sp4_pipeline_configuration(
         1: _dense_stage(dense_ids[0]),
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
-        **{i: _moe_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
         62: stage_62,
         63: lambda d: PassthroughStage(fwd_payload),
     }
@@ -384,7 +397,11 @@ class Pipeline:
         print(f"[PIPE P{self._my_mesh_id}] phase1: done", flush=True)
 
     def setup(self) -> None:
-        """Phase 2: Allocate tensors, weights, semaphores on device."""
+        """Phase 2: Allocate tensors, weights, semaphores on device.
+
+        Decoder/dense stages also build :meth:`DecoderBlock.get_program_context` here so
+        program construction finishes before :meth:`start_pipeline`.
+        """
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before setup()")
         print(f"[PIPE P{self._my_mesh_id}] phase2: setup tensors", flush=True)
@@ -402,7 +419,7 @@ class Pipeline:
         print(f"[PIPE P{self._my_mesh_id}] phase3: done", flush=True)
 
     def start_compute(self) -> None:
-        """Phase 4: Launch stage compute (e.g. LMHeadSampling.op)."""
+        """Phase 4: Launch stage compute (e.g. ``LMHeadSampling.op``, ``DecoderBlock.execute``)."""
         if self._pipeline_block is None:
             raise RuntimeError("Pipeline.configure_block() must be called before start_compute()")
         print(f"[PIPE P{self._my_mesh_id}] phase4: launch_compute", flush=True)
@@ -411,10 +428,23 @@ class Pipeline:
 
     def setup_and_run(self) -> None:
         """Run all four phases in order."""
+        logger.info("Configuring block")
         self.configure_block()
+
+        logger.info("Setting up")
         self.setup()
+        logger.info("Pipeline setup complete, waiting for all stages to complete...")
+        self.barrier()
+
+        logger.info("Starting pipeline")
         self.start_pipeline()
+        logger.info("Pipeline started, waiting for all stages to complete...")
+        self.barrier()
+
+        logger.info("Starting compute")
         self.start_compute()
+        logger.info("Compute started, waiting for all stages to complete...")
+        self.barrier()
 
     def write_token(self, token_tensor: ttnn.Tensor) -> None:
         if self._pipeline_block is None:

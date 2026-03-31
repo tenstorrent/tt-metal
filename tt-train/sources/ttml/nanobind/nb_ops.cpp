@@ -371,9 +371,9 @@ void py_module(nb::module_& m) {
         "rand",
         &ttml::ops::rand,
         nb::arg("shape"),
+        nb::arg("a") = 0.0f,
+        nb::arg("b") = 1.0f,
         nb::kw_only(),
-        nb::arg("low") = 0.0f,
-        nb::arg("high") = 1.0f,
         nb::arg("seed") = std::nullopt,
         nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
         nb::arg("layout") = tt::tt_metal::Layout::TILE);
@@ -382,9 +382,9 @@ void py_module(nb::module_& m) {
         "randn",
         &ttml::ops::randn,
         nb::arg("shape"),
-        nb::kw_only(),
         nb::arg("mean") = 0.0f,
         nb::arg("std") = 1.0f,
+        nb::kw_only(),
         nb::arg("seed") = std::nullopt,
         nb::arg("dtype") = tt::tt_metal::DataType::BFLOAT16,
         nb::arg("layout") = tt::tt_metal::Layout::TILE);

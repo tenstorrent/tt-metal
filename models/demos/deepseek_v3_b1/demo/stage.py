@@ -22,10 +22,8 @@ from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, S
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.prepare_weights import (
-    DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
-    DeepSeekV3MoELayerWeights,
     DeepSeekV3MTPWeights,
 )
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_broadcast_test_inputs
@@ -78,7 +76,17 @@ class StageKind(ABC):
         """Create and return the PipelineBlock for this stage."""
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        """Post-creation setup (tensor allocation, etc). Default: no-op."""
+        """Post-creation setup (tensor allocation, etc).
+
+        Decoder stages may also compile/build device programs here so ``launch_compute`` only
+        enqueues execution. Default: no-op.
+        """
+
+    def run_auxiliary_sockets(self) -> None:
+        """Start auxiliary (bypass) d2d_exchange kernels. Default: no-op."""
+
+    def terminate_auxiliary(self) -> None:
+        """Terminate auxiliary sockets. Default: no-op."""
 
     def run_auxiliary_sockets(self) -> None:
         """Start auxiliary (bypass) d2d_exchange kernels. Default: no-op."""
@@ -87,7 +95,7 @@ class StageKind(ABC):
         """Terminate auxiliary sockets. Default: no-op."""
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        """Launch compute kernels after pipeline_block.run(). Default: no-op."""
+        """Run stage compute after ``pipeline_block.run()`` (execute pre-built programs where applicable). Default: no-op."""
 
 
 class EmbeddingStage(StageKind):
@@ -152,48 +160,221 @@ class PassthroughStage(StageKind):
         )
 
 
-class MoEDecoderStage(StageKind):
-    """Decoder stage that runs an MoE layer; activation in, activation out. Compute stubbed for now."""
+class SpecLMHeadStage(StageKind):
+    """MTP LMHead+Sampling+Verification stage: receives base token, runs its own LM head,
+    then verifies its speculative token against the base token."""
 
-    def __init__(self, weights: DeepSeekV3MoELayerWeights) -> None:
+    M = 1
+    K = ACTIVATION_DIM
+    NUM_MATMUL_CORES = 101
+    N_PER_CORE = 160
+    N_TOTAL = NUM_MATMUL_CORES * N_PER_CORE
+    A_TILE = ttnn.Tile([1, 32])
+    B_TILE = ttnn.Tile([32, 32])
+    OUT_TILE = ttnn.Tile([1, 32])
+    ARGMAX_FINAL_CORE = ttnn.CoreCoord(0, 0)
+    LMHEAD_INPUT_CORE = ttnn.CoreCoord(10, 9)
+
+    def __init__(
+        self,
+        weights: DeepSeekV3LMHeadWeights,
+        *,
+        fp32_dest_acc_en: bool = True,
+        persistent_mode: bool = True,
+    ) -> None:
         self._weights = weights
+        self._fp32_dest_acc_en = fp32_dest_acc_en
+        self._persistent_mode = persistent_mode
+        self._state: dict[str, Any] = {}
+        print(f"[STAGE] SpecLMHeadStage.__init__ fp32={fp32_dest_acc_en} persistent={persistent_mode}", flush=True)
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+        print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.create_pipeline_block", flush=True)
         mesh_device = ctx.mesh_device
+        my_mesh_id = ctx.my_mesh_id
+        pipeline_config = ctx.pipeline_config
+        entry_core = ttnn.MeshCoreCoord(
+            pipeline_config[my_mesh_id].entry_node_coord,
+            SpecLMHeadStage.LMHEAD_INPUT_CORE,
+        )
+        exit_core = ttnn.MeshCoreCoord(
+            pipeline_config[my_mesh_id].exit_node_coord,
+            SpecLMHeadStage.ARGMAX_FINAL_CORE,
+        )
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            upstream_d2d_socket_fifo_size=ACTIVATION_W_TOKEN_META_FIFO_SIZE,
+            downstream_d2d_socket_fifo_size=TOKEN_META_FIFO_SIZE,
+            upstream_d2d_socket_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
+            downstream_d2d_socket_page_size=TOKEN_META_PAGE_SIZE_BYTES,
+            entry_node_downstream=entry_core,
+            exit_node_upstream=exit_core,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        pass
-
-    def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
-        pass
-
-
-class DenseDecoderStage(StageKind):
-    """Decoder stage that runs a dense layer; activation in, activation out. Compute stubbed for now."""
-
-    def __init__(self, weights: DeepSeekV3DenseLayerWeights) -> None:
-        self._weights = weights
-
-    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+        print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.setup start", flush=True)
         mesh_device = ctx.mesh_device
-        return PipelineBlock(
-            mesh_device,
-            PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+        my_mesh_id = ctx.my_mesh_id
+        pipeline_config = ctx.pipeline_config
+
+        # +32 for metadata (32 * 2 bytes = 64 bytes of metadata)
+        torch_a = torch.zeros((SpecLMHeadStage.M, SpecLMHeadStage.K + METADATA_NUM_ELEMS), dtype=torch.bfloat16)
+        mesh_shape = mesh_device.shape
+        mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
+        sender_coord = pipeline_config[my_mesh_id].entry_node_coord
+        num_devices = mesh_rows * mesh_cols
+
+        cls = SpecLMHeadStage
+
+        mcast_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(cls.LMHEAD_INPUT_CORE, cls.LMHEAD_INPUT_CORE)])
+        matmul_core_grid = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(9, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(10, 0), ttnn.CoreCoord(10, 0)),
+            ]
+        )
+        argmax_final_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(cls.ARGMAX_FINAL_CORE, cls.ARGMAX_FINAL_CORE)])
+
+        input_a_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(mcast_core_grid, (cls.M, cls.K + METADATA_NUM_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(matmul_core_grid, (cls.M, cls.N_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        indices_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(matmul_core_grid, (cls.M, cls.N_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        output_index_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(argmax_final_core_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR),
         )
 
-    def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+        bcast_inputs = build_broadcast_test_inputs(
+            mesh_device=mesh_device,
+            mesh_rows=mesh_rows,
+            mesh_cols=mesh_cols,
+            sender_coord=ttnn.MeshCoordinate(sender_coord[0], sender_coord[1]),
+            output_shape=torch_a.shape,
+            input_shard_shape=(SpecLMHeadStage.M, (SpecLMHeadStage.K + METADATA_NUM_ELEMS)),
+            tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            layout=ttnn.TILE_LAYOUT,
+            input_dtype=ttnn.bfloat16,
+            bcast_core=SpecLMHeadStage.LMHEAD_INPUT_CORE,
+            input_tensor_torch=torch_a,
+            create_output_tensor_mesh=True,
+            create_semaphores=True,
+            tile=SpecLMHeadStage.A_TILE,
+            output_mesh_mapper="shard_dim0",
+        )
+        input_tensor_mesh = bcast_inputs.input_tensor_mesh
+        intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
+
+        torch_indices_flat = torch.arange(LogicalModelDimensions.VOCAB_SIZE, dtype=torch.int32).reshape(
+            1, LogicalModelDimensions.VOCAB_SIZE
+        )
+        indices_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=1)
+        ttnn_indices = ttnn.from_torch(
+            torch_indices_flat,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=indices_mem_config,
+            mesh_mapper=indices_mesh_mapper,
+        )
+        ttnn_scores = ttnn.from_torch(
+            torch.zeros((cls.M, cls.N_TOTAL), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=output_mem_config,
+            tile=cls.OUT_TILE,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        ttnn_output_index = ttnn.from_torch(
+            torch.zeros((num_devices, 1, 1), dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=output_index_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+        winner_page_bytes = 16
+        scratch_shape = (1, ((mesh_rows + mesh_cols) * winner_page_bytes) // 4)
+        scratch_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(argmax_final_core_grid, scratch_shape, ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        scratch_buffer = ttnn.from_torch(
+            torch.zeros((num_devices, *scratch_shape), dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=scratch_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+        # Base token tensors — all on argmax_final_core.
+        # base_token_tensor is 64 bytes (TOKEN_META landing buffer for NCRISC NOC write).
+        TOKEN_META_ELEMS = TOKEN_META_PAGE_SIZE_BYTES // 4
+        token_meta_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(argmax_final_core_grid, (1, TOKEN_META_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        base_token_tensor = ttnn.from_torch(
+            torch.zeros((num_devices, 1, TOKEN_META_ELEMS), dtype=torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=token_meta_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+        device_grid_size = mesh_device.compute_with_storage_grid_size()
+        worker_crs = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1),
+                )
+            }
+        )
+
+        self._state = {
+            "input_tensor_mesh": input_tensor_mesh,
+            "intermediate_tensor_mesh": intermediate_tensor_mesh,
+            "ttnn_gamma": self._weights.final_norm,
+            "ttnn_b": self._weights.lm_head,
+            "ttnn_scores": ttnn_scores,
+            "ttnn_indices": ttnn_indices,
+            "ttnn_output_index": ttnn_output_index,
+            "scratch_buffer": scratch_buffer,
+            "base_token_tensor": base_token_tensor,
+            "lmhead_input_socket": pipeline_block.get_downstream_socket(),
+            "lmhead_output_socket": pipeline_block.get_upstream_socket(),
+            "bcast_semaphores": bcast_inputs.semaphores,
+            "global_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
+            "global_stage2_semaphore": ttnn.create_global_semaphore(mesh_device, argmax_final_core_grid, 0),
+        }
+        if self._persistent_mode:
+            self._state["persistent_next_iter_semaphore"] = ttnn.create_global_semaphore(mesh_device, worker_crs, 1)
+        print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.setup done", flush=True)
+
+    def run_auxiliary_sockets(self) -> None:
+        pass
+
+    def terminate_auxiliary(self) -> None:
         pass
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:

@@ -41,6 +41,7 @@ HostStorage::HostStorage(HostStorage&& other, TensorSpec spec, TensorTopology to
 const DistributedHostBuffer& HostStorage::buffer() const { return tensor.buffer(); }
 
 const HostTensor& HostStorage::host_tensor() const { return tensor; }
+HostTensor& HostStorage::host_tensor() { return tensor; }
 
 HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
     return HostStorage(tensor.transform(callable));
@@ -92,6 +93,10 @@ void DeviceStorage::reset_root_mesh_buffer() {
 }
 
 bool DeviceStorage::is_allocated() const { return this->mesh_buffer != nullptr && this->mesh_buffer->is_allocated(); }
+
+distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() const {
+    return this->mesh_buffer ? this->mesh_buffer->device() : nullptr;
+}
 
 distributed::MeshDevice* DeviceStorage::get_device() const {
     if (this->mesh_buffer != nullptr) {

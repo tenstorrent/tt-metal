@@ -1155,7 +1155,7 @@ def test_decoder(
         downstream_sockets=None,
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
-        persistent_mode=True,
+        persistent_mode=False,
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)
@@ -1558,7 +1558,7 @@ def test_decoder_mlp(
         downstream_sockets=None,
         fabric_config=device_params["fabric_config"],
         persistent_next_iter_semaphore=persistent_next_iter_semaphore,
-        persistent_mode=True,
+        persistent_mode=False,
     )
     for i in range(num_iters):
         moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.execute(*decoder_program_context)

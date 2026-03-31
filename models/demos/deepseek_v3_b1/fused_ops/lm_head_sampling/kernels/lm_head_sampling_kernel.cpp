@@ -946,5 +946,5 @@ void kernel_main() {
             break;
         }
     }
-    mcast.teardown();
+    mcast.teardown(mcast_args);
 }

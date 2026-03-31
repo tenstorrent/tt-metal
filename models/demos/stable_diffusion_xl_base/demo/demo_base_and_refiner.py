@@ -13,7 +13,6 @@ from loguru import logger
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
-    SDXL_BASE_REFINER_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
     determinate_min_batch_size,
     prepare_device,
@@ -54,8 +53,8 @@ def run_demo_inference(
     timesteps=None,
     sigmas=None,
 ):
-    if vae_on_device and is_blackhole():
-        pytest.skip("Device VAE not supported on Blackhole")
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
 
     batch_size = determinate_min_batch_size(ttnn_device, use_cfg_parallel)
 
@@ -212,15 +211,12 @@ def run_demo_inference(
     [
         (
             {
-                "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
             True,
         ),
         (
-            {
-                "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
-            },
+            {},
             False,
         ),
     ],
@@ -327,8 +323,6 @@ def test_demo_base_and_refiner(
     timesteps,
     sigmas,
 ):
-    if image_resolution == (512, 512) and is_blackhole():
-        pytest.skip("512x512 not supported on Blackhole")
     prepare_device(mesh_device, use_cfg_parallel)
     return run_demo_inference(
         mesh_device,
