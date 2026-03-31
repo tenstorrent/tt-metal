@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Unified Reduce-to-All Kernel — Ring + Cross-Column algorithm.
- * Phase 1: FC BRISC=FWD, FC NCRISC=BWD (matching sdpa_reduce_to_all).
- * Phase 2: FC BRISC closes FWD, opens cross-column conn, forwards R3.
+ * Unified Reduce-to-All Kernel — Ring + Cross-Column algorithm: similar to reduce to one b1 kernel but all 8 devices
+ * have the final output. Phase 1: FC BRISC=FWD, FC NCRISC=BWD (matching sdpa_reduce_to_all). Phase 2: FC BRISC closes
+ * FWD, opens cross-column conn, forwards R3.
  */
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
@@ -62,25 +62,25 @@ void kernel_main() {
     ReduceToAll::WorkerWriterArgs rt_args{};
     if constexpr (CTArgs::is_fabric_core == 0) {
         rt_args = {
-            get_arg_val<uint32_t>(0),   // fc_noc_x
-            get_arg_val<uint32_t>(1),   // fc_noc_y
-            get_arg_val<uint32_t>(2),   // is_type_a
-            get_arg_val<uint32_t>(3),   // r1_slot_offset
-            get_arg_val<uint32_t>(4),   // r1_slot_bit
-            get_arg_val<uint32_t>(5),   // r1_sem_addr
-            get_arg_val<uint32_t>(6),   // r2_slot_offset
-            get_arg_val<uint32_t>(7),   // r2_slot_bit
-            get_arg_val<uint32_t>(8),   // r2_sem_addr
-            get_arg_val<uint32_t>(9),   // r1_dst_l1_addr
-            get_arg_val<uint32_t>(10),  // r1_dst_sem_addr
-            get_arg_val<uint32_t>(11),  // r2_dst_l1_addr
-            get_arg_val<uint32_t>(12),  // r2_dst_sem_addr
-            get_arg_val<uint32_t>(13),  // r3_dst_l1_addr
-            get_arg_val<uint32_t>(14),  // r3_dst_sem_addr
-            get_arg_val<uint32_t>(15),  // output_base_addr
-            get_arg_val<uint32_t>(16),  // r3_slot_offset
-            get_arg_val<uint32_t>(17),  // r3_slot_bit
-            get_arg_val<uint32_t>(18),  // r3_sem_addr
+            get_arg_val<uint32_t>(0),                  // fc_noc_x
+            get_arg_val<uint32_t>(1),                  // fc_noc_y
+            get_arg_val<uint32_t>(2),                  // is_type_a
+            get_arg_val<uint32_t>(3),                  // r1_slot_offset
+            get_arg_val<uint32_t>(4),                  // r1_slot_bit
+            get_semaphore(get_arg_val<uint32_t>(5)),   // r1_sem_addr (from sem ID)
+            get_arg_val<uint32_t>(6),                  // r2_slot_offset
+            get_arg_val<uint32_t>(7),                  // r2_slot_bit
+            get_semaphore(get_arg_val<uint32_t>(8)),   // r2_sem_addr (from sem ID)
+            get_arg_val<uint32_t>(9),                  // r1_dst_l1_addr
+            get_arg_val<uint32_t>(10),                 // r1_dst_sem_addr
+            get_arg_val<uint32_t>(11),                 // r2_dst_l1_addr
+            get_arg_val<uint32_t>(12),                 // r2_dst_sem_addr
+            get_arg_val<uint32_t>(13),                 // r3_dst_l1_addr
+            get_arg_val<uint32_t>(14),                 // r3_dst_sem_addr
+            get_arg_val<uint32_t>(15),                 // output_base_addr
+            get_arg_val<uint32_t>(16),                 // r3_slot_offset
+            get_arg_val<uint32_t>(17),                 // r3_slot_bit
+            get_semaphore(get_arg_val<uint32_t>(18)),  // r3_sem_addr (from sem ID)
         };
     }
 

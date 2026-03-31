@@ -104,28 +104,15 @@ def setup_reduce_to_all_test(mesh_device):
 
     ref_output = ReduceToAllB1.golden(data_per_device)
 
-    # Create semaphores (all trace-safe — created before trace capture)
+    # Create global semaphores for round receive (trace-safe — created before trace capture)
     compute_grid = submesh_device.compute_with_storage_grid_size()
     available_cores = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))]
     )
     ttnn.synchronize_device(submesh_device)
 
-    # 3 round receive semaphores
+    # 3 round receive semaphores (global — incremented by remote fabric packets)
     semaphores = [ttnn.create_global_semaphore(submesh_device, available_cores, 0) for _ in range(3)]
-
-    # 4 bitmask forwarding semaphores (matching sdpa_reduce_to_all pattern)
-    fwd_r1_gs = ttnn.create_global_semaphore(submesh_device, available_cores, 0)
-    fwd_r2_gs = ttnn.create_global_semaphore(submesh_device, available_cores, 0)
-    bwd_r1_gs = ttnn.create_global_semaphore(submesh_device, available_cores, 0)
-    bwd_r2_gs = ttnn.create_global_semaphore(submesh_device, available_cores, 0)
-    r3_fwd_gs = ttnn.create_global_semaphore(submesh_device, available_cores, 0)
-
-    fwd_r1_sem_addr = ttnn.get_global_semaphore_address(fwd_r1_gs)
-    fwd_r2_sem_addr = ttnn.get_global_semaphore_address(fwd_r2_gs)
-    bwd_r1_sem_addr = ttnn.get_global_semaphore_address(bwd_r1_gs)
-    bwd_r2_sem_addr = ttnn.get_global_semaphore_address(bwd_r2_gs)
-    r3_fwd_sem_addr = ttnn.get_global_semaphore_address(r3_fwd_gs)
 
     ttnn.synchronize_device(submesh_device)
 
@@ -136,11 +123,6 @@ def setup_reduce_to_all_test(mesh_device):
         "output_tensor": output_tensor,
         "ref_output": ref_output,
         "semaphores": semaphores,
-        "fwd_r1_sem_addr": fwd_r1_sem_addr,
-        "fwd_r2_sem_addr": fwd_r2_sem_addr,
-        "bwd_r1_sem_addr": bwd_r1_sem_addr,
-        "bwd_r2_sem_addr": bwd_r2_sem_addr,
-        "r3_fwd_sem_addr": r3_fwd_sem_addr,
     }
 
 
@@ -181,11 +163,6 @@ def _call_op(config):
         config["intermediate_tensor"],
         config["output_tensor"],
         config["semaphores"],
-        config["fwd_r1_sem_addr"],
-        config["fwd_r2_sem_addr"],
-        config["bwd_r1_sem_addr"],
-        config["bwd_r2_sem_addr"],
-        config["r3_fwd_sem_addr"],
     )
 
 
@@ -200,11 +177,6 @@ def run_reduce_to_all(mesh_device, num_iterations=1):
         config["intermediate_tensor"],
         config["output_tensor"],
         config["semaphores"],
-        config["fwd_r1_sem_addr"],
-        config["fwd_r2_sem_addr"],
-        config["bwd_r1_sem_addr"],
-        config["bwd_r2_sem_addr"],
-        config["r3_fwd_sem_addr"],
         num_iterations=num_iterations,
     )
     ttnn.synchronize_device(config["submesh_device"])

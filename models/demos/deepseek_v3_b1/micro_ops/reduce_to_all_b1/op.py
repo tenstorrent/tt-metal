@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Reduce-to-All B1 — Ring + Cross-Column (modelled on sdpa_reduce_to_all).
+Reduce-to-All B1 — Ring + Cross-Column
 
 Requires FABRIC_2D_TORUS_X (or TORUS_XY) for 1-hop ring wrap-around.
 
@@ -51,11 +51,6 @@ class ReduceToAllB1:
         intermediate_tensor: ttnn.Tensor,
         output_tensor: ttnn.Tensor,
         semaphores: list,
-        fwd_r1_sem_addr: int,
-        fwd_r2_sem_addr: int,
-        bwd_r1_sem_addr: int,
-        bwd_r2_sem_addr: int,
-        r3_fwd_sem_addr: int,
         num_iterations: int = 1,
     ) -> ttnn.Tensor:
         mesh_device = input_tensor_mesh.device()
@@ -121,6 +116,13 @@ class ReduceToAllB1:
 
         print(f"[ReduceToAllB1] num_compute_tiles={num_compute_tiles} payload={payload_size_bytes}")
         print(f"[ReduceToAllB1] num_workers_per_link={num_workers_per_link} total={len(shard_cores)}")
+
+        # Forwarder bitmask semaphore IDs (program-local, matching sdpa_reduce_to_all)
+        fwd_r1_sem_id = 0
+        fwd_r2_sem_id = 1
+        bwd_r1_sem_id = 2
+        bwd_r2_sem_id = 3
+        r3_fwd_sem_id = 4
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 
@@ -284,8 +286,8 @@ class ReduceToAllB1:
                             self.r1_count = 0
                             self.r2_count = 0
 
-                    fwd_cfg = DirCfg(fwd_r1_sem_addr, fwd_r2_sem_addr, 0)
-                    bwd_cfg = DirCfg(bwd_r1_sem_addr, bwd_r2_sem_addr, ncrisc_buf_offset)
+                    fwd_cfg = DirCfg(fwd_r1_sem_id, fwd_r2_sem_id, 0)
+                    bwd_cfg = DirCfg(bwd_r1_sem_id, bwd_r2_sem_id, ncrisc_buf_offset)
 
                     for worker_idx, core in enumerate(link_info["cores"]):
                         is_type_a = ((row + worker_idx) % 2) == 0
@@ -330,17 +332,17 @@ class ReduceToAllB1:
                             output_tensor_device.buffer_address(),  # 15
                             r3_slot_off,  # 16
                             r3_slot_b,  # 17
-                            r3_fwd_sem_addr,  # 18
+                            r3_fwd_sem_id,  # 18 (sem ID, resolved via get_semaphore)
                         ]
                         brisc_per_core_args.append((core, worker_args))
 
                     # FC BRISC: FWD forwarding + R3 cross-column forwarding
-                    # [0] fwd_r1_sem, [1] fwd_r2_sem, [2] r3_fwd_sem,
+                    # [0] fwd_r1_sem_id, [1] fwd_r2_sem_id, [2] r3_fwd_sem_id,
                     # then FWD conn args, then cross-column conn args (appended later)
-                    brisc_per_core_args.append((fc, [fwd_r1_sem_addr, fwd_r2_sem_addr, r3_fwd_sem_addr]))
+                    brisc_per_core_args.append((fc, [fwd_r1_sem_id, fwd_r2_sem_id, r3_fwd_sem_id]))
 
-                    # FC NCRISC: BWD forwarding (2 sem addrs + conn appended later)
-                    ncrisc_per_core_args.append((fc, [bwd_r1_sem_addr, bwd_r2_sem_addr]))
+                    # FC NCRISC: BWD forwarding (2 sem IDs + conn appended later)
+                    ncrisc_per_core_args.append((fc, [bwd_r1_sem_id, bwd_r2_sem_id]))
 
                 # === CB Descriptors ===
                 compute_tile_desc = ttnn.TileDescriptor(compute_tile_height, compute_tile_width)
@@ -422,6 +424,15 @@ class ReduceToAllB1:
 
                 cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb4_desc, cb5_desc]
 
+                # Forwarder bitmask semaphores (program-local, on FC cores only)
+                forwarder_semaphores = [
+                    ttnn.SemaphoreDescriptor(id=fwd_r1_sem_id, core_ranges=fabric_core_set, initial_value=0),
+                    ttnn.SemaphoreDescriptor(id=fwd_r2_sem_id, core_ranges=fabric_core_set, initial_value=0),
+                    ttnn.SemaphoreDescriptor(id=bwd_r1_sem_id, core_ranges=fabric_core_set, initial_value=0),
+                    ttnn.SemaphoreDescriptor(id=bwd_r2_sem_id, core_ranges=fabric_core_set, initial_value=0),
+                    ttnn.SemaphoreDescriptor(id=r3_fwd_sem_id, core_ranges=fabric_core_set, initial_value=0),
+                ]
+
                 # === Unified kernel descriptor ===
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source=kernel_path,
@@ -457,7 +468,7 @@ class ReduceToAllB1:
 
                 program = ttnn.ProgramDescriptor(
                     kernels=kernel_result.kernels,
-                    semaphores=[],
+                    semaphores=forwarder_semaphores,
                     cbs=cb_list,
                 )
 

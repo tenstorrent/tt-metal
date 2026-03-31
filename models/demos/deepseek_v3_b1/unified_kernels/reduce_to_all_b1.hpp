@@ -4,7 +4,7 @@
 #pragma once
 
 /**
- * Unified Reduce-to-All B1 — Ring + Cross-Column (modelled on sdpa_reduce_to_all)
+ * Unified Reduce-to-All B1 — Ring + Cross-Column
  *
  * Phase 1 — Column all-reduce (2-round ring, A/B split, all 1-hop):
  *   Type A workers: R1 → FWD (row+1), R2 → BWD (row-1)
@@ -168,9 +168,9 @@ struct ReduceToAllB1 {
         uint32_t fc_noc_x;
         uint32_t fc_noc_y;
         uint32_t is_type_a;
-        uint32_t r1_slot_offset;  // byte offset from packet_cb base
-        uint32_t r1_slot_bit;     // bitmask bit to signal
-        uint32_t r1_sem_addr;     // forwarder bitmask sem
+        uint32_t r1_slot_offset;
+        uint32_t r1_slot_bit;
+        uint32_t r1_sem_addr;
         uint32_t r2_slot_offset;
         uint32_t r2_slot_bit;
         uint32_t r2_sem_addr;
@@ -181,9 +181,9 @@ struct ReduceToAllB1 {
         uint32_t r3_dst_l1_addr;
         uint32_t r3_dst_sem_addr;
         uint32_t output_base_addr;
-        uint32_t r3_slot_offset;  // byte offset from packet_cb base for R3 FC slot
-        uint32_t r3_slot_bit;     // bitmask bit to signal on r3_fwd_sem
-        uint32_t r3_sem_addr;     // FC's r3 bitmask sem address
+        uint32_t r3_slot_offset;
+        uint32_t r3_slot_bit;
+        uint32_t r3_sem_addr;
     };
 
     struct ComputeArgs {};
@@ -265,8 +265,7 @@ struct ReduceToAllB1 {
 
             uint64_t sem_noc = get_noc_addr(fc_noc_x, fc_noc_y, fc_sem_addr);
             noc_semaphore_inc(sem_noc, fc_slot_bit);
-            noc_async_write_barrier();
-            noc_async_atomic_barrier();
+            noc_async_full_barrier();
         }
 #endif
 
@@ -289,8 +288,8 @@ struct ReduceToAllB1 {
                 const uint32_t r2_base = buf_base + CTArgs::r2_buffer_offset;
 
                 size_t arg_idx = 0;
-                const uint32_t r1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-                const uint32_t r2_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+                const uint32_t r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                const uint32_t r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
                 auto bwd_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
@@ -360,9 +359,9 @@ struct ReduceToAllB1 {
                 const uint32_t r3_base = buf_base + CTArgs::r3_buffer_offset;
 
                 size_t arg_idx = 0;
-                const uint32_t r1_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-                const uint32_t r2_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-                const uint32_t r3_sem_addr_val = get_arg_val<uint32_t>(arg_idx++);
+                const uint32_t r1_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                const uint32_t r2_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
+                const uint32_t r3_sem_addr_val = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
                 auto fwd_sender =
                     tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
