@@ -20,7 +20,6 @@ Usage:
     python_env/bin/pytest models/common/tests/demos/llama3_8b/demo.py -k "batch-32" -v
 """
 
-import gc
 import json
 import os
 from pathlib import Path
@@ -32,7 +31,7 @@ from loguru import logger
 import ttnn
 from models.common.models.executor import run_perf_benchmark, run_teacher_forcing
 from models.common.models.llama3_8b.model import EagerLlamaExecutor, Llama3Transformer1D, TracedLlamaExecutor
-from models.common.modules.lazy_weight import LazyWeight
+from models.common.tests.demos.cleanup_utils import cleanup_model_case
 
 # =============================================================================
 # Expected metrics
@@ -181,63 +180,6 @@ def create_model_and_args(mesh_device, optimizations="performance"):
     return model, model_args
 
 
-def _cleanup_object_graph(obj, seen=None):
-    if obj is None:
-        return
-    if seen is None:
-        seen = set()
-
-    obj_id = id(obj)
-    if obj_id in seen:
-        return
-    seen.add(obj_id)
-
-    if isinstance(obj, ttnn.Tensor):
-        ttnn.deallocate(obj)
-        return
-
-    if isinstance(obj, LazyWeight):
-        if obj._value is not None:
-            _cleanup_object_graph(obj._value, seen)
-            obj._value = None
-        return
-
-    if isinstance(obj, dict):
-        for value in obj.values():
-            _cleanup_object_graph(value, seen)
-        return
-
-    if isinstance(obj, (list, tuple, set)):
-        for value in obj:
-            _cleanup_object_graph(value, seen)
-        return
-
-    state = getattr(obj, "__dict__", None)
-    if state is None:
-        return
-
-    for name, value in list(state.items()):
-        _cleanup_object_graph(value, seen)
-        if isinstance(value, ttnn.Tensor):
-            setattr(obj, name, None)
-
-    if hasattr(obj, "_device_weights_loaded"):
-        obj._device_weights_loaded = False
-
-
-def _cleanup_model_case(model, mesh_device):
-    ttnn.synchronize_device(mesh_device)
-    if model is not None:
-        _cleanup_object_graph(model)
-    ttnn.synchronize_device(mesh_device)
-    gc.collect()
-
-
-# def _requested_mesh_shape():
-#     device_name = os.environ.get("MESH_DEVICE", "N150")
-#     return {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8)}.get(device_name, (1, 1))
-
-
 # =============================================================================
 # Tests
 # =============================================================================
@@ -265,12 +207,6 @@ def _cleanup_model_case(model, mesh_device):
     ],
     indirect=True,
 )
-# @pytest.mark.parametrize(
-#     "device_params",
-#     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 50000000, "num_command_queues": 1}],
-#     indirect=True,
-# )
-# @pytest.mark.parametrize("mesh_device", [_requested_mesh_shape()], indirect=True)
 @pytest.mark.parametrize("optimizations", ["performance", "accuracy"])
 def test_llama3_8b(test_config, ttnn_mesh_device, optimizations):
     """Main test function for TTTv2 Llama 3.1-8B."""
@@ -297,7 +233,7 @@ def test_llama3_8b(test_config, ttnn_mesh_device, optimizations):
                 case_name=f"{optimizations}/{test_config}",
             )
     finally:
-        _cleanup_model_case(model, ttnn_mesh_device)
+        cleanup_model_case(model, ttnn_mesh_device)
 
 
 # =============================================================================
