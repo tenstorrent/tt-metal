@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
 
 namespace tt::tt_metal::experimental::metal2_host_api {
@@ -55,7 +56,7 @@ struct DataflowBufferSpec {
     std::optional<tt::DataFormat> data_format_metadata = std::nullopt;
 
     // Optional; used to pass tile type info from host to kernel
-    std::optional<Tile> tile_format_metadata = std::nullopt;
+    std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
 
     //////////////////////////////
     // Advanced options
