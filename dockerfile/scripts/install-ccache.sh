@@ -3,13 +3,14 @@
 # Apt's version for 20.04 predates remote_storage support
 set -euo pipefail
 
-CCACHE_VERSION="${CCACHE_VERSION:-4.10.2}"
-# SHA256 for ccache-4.10.2-linux-x86_64.tar.xz
+CCACHE_VERSION="${CCACHE_VERSION:-4.13.2}"
+# SHA256 for ccache-4.13.2-linux-x86_64-glibc.tar.xz
+# Note: starting v4.11, upstream renamed the tarball to include -glibc suffix
 # Verified by downloading and computing hash with compute-hashes.sh
-CCACHE_SHA256="${CCACHE_SHA256:-80cab87bd510eca796467aee8e663c398239e0df1c4800a0b5dff11dca0b4f18}"
+CCACHE_SHA256="${CCACHE_SHA256:-e9e2bcec3cd816ba58ff1c331fdeaa3465760683eeec9f462c31b909e2651e35}"
 
 INSTALL_DIR="${INSTALL_DIR:-/usr/local}"
-DOWNLOAD_URL="https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/ccache-${CCACHE_VERSION}-linux-x86_64.tar.xz"
+DOWNLOAD_URL="https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/ccache-${CCACHE_VERSION}-linux-x86_64-glibc.tar.xz"
 TMPFILE="/tmp/ccache.tar.xz"
 
 echo "Installing ccache ${CCACHE_VERSION}..."

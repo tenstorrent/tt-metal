@@ -15,8 +15,8 @@
 # These must match the versions in the main Dockerfile
 #############################################################
 
-ARG CCACHE_VERSION=4.10.2
-ARG CCACHE_SHA256=80cab87bd510eca796467aee8e663c398239e0df1c4800a0b5dff11dca0b4f18
+ARG CCACHE_VERSION=4.13.2
+ARG CCACHE_SHA256=e9e2bcec3cd816ba58ff1c331fdeaa3465760683eeec9f462c31b909e2651e35
 
 ARG MOLD_VERSION=2.40.4
 ARG MOLD_SHA256=4c999e19ffa31afa5aa429c679b665d5e2ca5a6b6832ad4b79668e8dcf3d8ec1
