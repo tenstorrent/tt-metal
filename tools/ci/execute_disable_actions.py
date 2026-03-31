@@ -52,6 +52,12 @@ def redact_secrets(text: str) -> str:
         return text
     redacted = text
     redacted = re.sub(r"https://x-access-token:[^@]+@github\.com/", "https://x-access-token:***@github.com/", redacted)
+    redacted = re.sub(r"AUTHORIZATION:\s*basic\s+[A-Za-z0-9+/=]+", "AUTHORIZATION: basic ***", redacted)
+    redacted = re.sub(
+        r"http\.https://github\.com/\.extraheader=AUTHORIZATION:\s*basic\s+[A-Za-z0-9+/=]+",
+        "http.https://github.com/.extraheader=AUTHORIZATION: basic ***",
+        redacted,
+    )
     redacted = re.sub(r"\bghp_[A-Za-z0-9]+\b", "ghp_***", redacted)
     secret_keys = (
         "TARGET_PR_PUSH_TOKEN",
@@ -63,15 +69,26 @@ def redact_secrets(text: str) -> str:
         value = os.environ.get(key, "")
         if value:
             redacted = redacted.replace(value, "***")
+            encoded_basic = base64.b64encode(f"x-access-token:{value}".encode("utf-8")).decode("ascii")
+            redacted = redacted.replace(encoded_basic, "***")
+            encoded_raw = base64.b64encode(value.encode("utf-8")).decode("ascii")
+            redacted = redacted.replace(encoded_raw, "***")
     return redacted
 
 
-def run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    cmd: list[str], *, check: bool = True, capture: bool = True, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    proc_env = None
+    if env:
+        proc_env = os.environ.copy()
+        proc_env.update(env)
     proc = subprocess.run(
         cmd,
         check=False,
         text=True,
         capture_output=capture,
+        env=proc_env,
     )
     if check and proc.returncode != 0:
         stdout = redact_secrets(proc.stdout.strip() if proc.stdout else "")
@@ -605,9 +622,27 @@ def ensure_git_identity() -> None:
         run(["git", "config", "user.email", "ci-auto-disable-bot@tenstorrent.invalid"], capture=True)
 
 
-def auth_extraheader_for_github(token: str) -> str:
-    basic = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
-    return f"AUTHORIZATION: basic {basic}"
+def push_branch_with_token(branch: str, target_pr_repo: str, token: str) -> None:
+    push_url = f"https://github.com/{target_pr_repo}.git"
+    askpass_script = Path(tempfile.mkdtemp(prefix="git-askpass-")) / "askpass.sh"
+    askpass_script.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  *Username*) echo "x-access-token" ;;\n'
+        '  *) echo "$GIT_PUSH_TOKEN" ;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    askpass_script.chmod(0o700)
+    run(
+        ["git", "push", "-u", push_url, f"HEAD:refs/heads/{branch}"],
+        capture=True,
+        env={
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_ASKPASS": str(askpass_script),
+            "GIT_PUSH_TOKEN": token,
+        },
+    )
 
 
 def write_summary(path: Path, data: dict[str, Any]) -> None:
@@ -920,20 +955,7 @@ def main() -> int:
             push_token = os.environ.get("TARGET_PR_PUSH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
             if not push_token:
                 raise RuntimeError("TARGET_PR_PUSH_TOKEN or GITHUB_TOKEN is required for PR branch push")
-            push_url = f"https://github.com/{target_pr_repo}.git"
-            auth_header = auth_extraheader_for_github(push_token)
-            run(
-                [
-                    "git",
-                    "-c",
-                    f"http.https://github.com/.extraheader={auth_header}",
-                    "push",
-                    "-u",
-                    push_url,
-                    f"HEAD:refs/heads/{branch}",
-                ],
-                capture=True,
-            )
+            push_branch_with_token(branch, target_pr_repo, push_token)
 
             log(f"action: creating draft PR for issue #{issue_number}")
             pr = run_guarded_gh(
