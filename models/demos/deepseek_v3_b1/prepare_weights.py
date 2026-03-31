@@ -62,6 +62,8 @@ def _compute_tp(device) -> tuple[int, int]:
 
 
 def _mesh_shape(device) -> tuple[int, int]:
+    if device.get_num_devices() == 1:
+        return (1, 1)
     return (device.shape[0], device.shape[1])
 
 
@@ -1047,6 +1049,83 @@ def get_layer_raw_tensors(
     return q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm
 
 
+_DENSE_SHARED_N = 2048
+_DENSE_NUM_ROUTED = 8
+_DENSE_EXPERT_N = 2048
+
+
+def _extract_torch_weights(
+    state_dict: dict[str, torch.Tensor],
+    layer_idx: int,
+    *,
+    is_moe: bool,
+    num_routed_experts: int = NUM_ROUTED_EXPERTS,
+) -> dict[str, Any]:
+    """Extract transformed torch tensors for one layer, keyed by canonical weight names.
+
+    Tensors are in matmul-ready layout (transposed, deinterleaved, split) --
+    the same transforms that ``get_layer_raw_tensors`` applies for attention,
+    extended with FFN / MoE weights.  Suitable for golden computation.
+    """
+    q_a, q_b, kv_a, kv_b1, kv_b2, o_proj, attn_norm, q_norm, kv_norm, ffn_norm = get_layer_raw_tensors(
+        state_dict, layer_idx
+    )
+
+    result: dict[str, Any] = {
+        "q_a_proj": q_a,
+        "q_b_proj": q_b,
+        "kv_a_proj": kv_a,
+        "kv_b1_proj": kv_b1,
+        "kv_b2_proj": kv_b2,
+        "o_proj": o_proj,
+        "attn_norm": attn_norm,
+        "q_norm": q_norm,
+        "kv_norm": kv_norm,
+        "ffn_norm": ffn_norm,
+    }
+
+    if is_moe:
+        result["shared_gate_proj"] = state_dict[_key(layer_idx, "mlp.shared_experts.gate_proj.weight")].T.contiguous()
+        result["shared_up_proj"] = state_dict[_key(layer_idx, "mlp.shared_experts.up_proj.weight")].T.contiguous()
+        result["shared_down_proj"] = state_dict[_key(layer_idx, "mlp.shared_experts.down_proj.weight")].T.contiguous()
+        result["gate_mm"] = state_dict[_key(layer_idx, "mlp.gate.weight")].T.contiguous()
+        result["gate_bias"] = state_dict[_key(layer_idx, "mlp.gate.e_score_correction_bias")]
+
+        routed_gate: list[torch.Tensor] = []
+        routed_up: list[torch.Tensor] = []
+        routed_down: list[torch.Tensor] = []
+        for e in range(num_routed_experts):
+            routed_gate.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.gate_proj.weight")].T.contiguous())
+            routed_up.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.up_proj.weight")].T.contiguous())
+            routed_down.append(state_dict[_key(layer_idx, f"mlp.experts.{e}.down_proj.weight")].T.contiguous())
+        result["routed_gate_proj"] = routed_gate
+        result["routed_up_proj"] = routed_up
+        result["routed_down_proj"] = routed_down
+    else:
+        gate_full = state_dict[_key(layer_idx, "mlp.gate_proj.weight")].T.contiguous()
+        up_full = state_dict[_key(layer_idx, "mlp.up_proj.weight")].T.contiguous()
+        down_full = state_dict[_key(layer_idx, "mlp.down_proj.weight")].T.contiguous()
+
+        result["shared_gate_proj"] = gate_full[:, :_DENSE_SHARED_N].contiguous()
+        result["shared_up_proj"] = up_full[:, :_DENSE_SHARED_N].contiguous()
+        result["shared_down_proj"] = down_full[:_DENSE_SHARED_N, :].contiguous()
+
+        routed_gate = []
+        routed_up = []
+        routed_down = []
+        for e in range(_DENSE_NUM_ROUTED):
+            start = _DENSE_SHARED_N + e * _DENSE_EXPERT_N
+            end = start + _DENSE_EXPERT_N
+            routed_gate.append(gate_full[:, start:end].contiguous())
+            routed_up.append(up_full[:, start:end].contiguous())
+            routed_down.append(down_full[start:end, :].contiguous())
+        result["routed_gate_proj"] = routed_gate
+        result["routed_up_proj"] = routed_up
+        result["routed_down_proj"] = routed_down
+
+    return result
+
+
 # Gate routing constants (bias/indices layout on sender core)
 _GATE_BIAS_INDICES_SHAPE = (16, 16)
 _GATE_NUM_INDICES = 256
@@ -1402,6 +1481,7 @@ def prepare_dense_layer_weights(
     *,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
+    store_torch: bool = False,
 ) -> ModelWeights:
     """Prepare fused weights for a single dense decoder layer."""
     logger.info("Preparing dense layer {}...", layer_idx)
@@ -1416,6 +1496,7 @@ def prepare_dense_layer_weights(
         device, state_dict, layer_idx, is_moe=False, move_to_device=move_to_device, cache_config=cache_config
     )
     assert isinstance(routed, DenseRoutedExpertWeights)
+    torch_weights = _extract_torch_weights(state_dict, layer_idx, is_moe=False) if store_torch else None
     logger.info("  dense layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return ModelWeights(
         {
@@ -1435,7 +1516,8 @@ def prepare_dense_layer_weights(
             "routed_gate_proj": [routed.routed_gate_proj],
             "routed_up_proj": [routed.routed_up_proj],
             "routed_down_proj": [routed.routed_down_proj],
-        }
+        },
+        torch_weights,
     )
 
 
@@ -1447,6 +1529,7 @@ def prepare_moe_layer_weights(
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
+    store_torch: bool = False,
 ) -> ModelWeights:
     """Prepare fused weights for a single MoE decoder layer."""
     logger.info("Preparing MoE layer {}...", layer_idx)
@@ -1469,6 +1552,11 @@ def prepare_moe_layer_weights(
     assert isinstance(attn.gate_mm, OverlappedTensor)
     assert attn.gate_bias is not None
     assert isinstance(routed, MoERoutedExpertWeights)
+    torch_weights = (
+        _extract_torch_weights(state_dict, layer_idx, is_moe=True, num_routed_experts=num_routed_experts)
+        if store_torch
+        else None
+    )
     logger.info("  MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
     return ModelWeights(
         {
@@ -1490,7 +1578,8 @@ def prepare_moe_layer_weights(
             "routed_gate_proj": routed.routed_gate_proj,
             "routed_up_proj": routed.routed_up_proj,
             "routed_down_proj": routed.routed_down_proj,
-        }
+        },
+        torch_weights,
     )
 
 

@@ -46,7 +46,8 @@ from models.demos.deepseek_v3_b1.overlap_specs import (
     KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
 )
-from models.demos.deepseek_v3_b1.prepare_weights import _fuse_kv_b12, _fuse_o_proj_gate_mm_norms
+from models.demos.deepseek_v3_b1.prepare_weights import prepare_moe_layer_weights
+from models.demos.deepseek_v3_b1.tests.unit_tests.conftest import _reference_layer_state_dict
 
 
 def create_fabric_router_config(max_payload_size):
@@ -163,6 +164,13 @@ def test_post_sdpa(
     # Set up sub-device
     compute_grid_size = submesh.compute_with_storage_grid_size()
 
+    # Prepare layer weights via ModelWeights (single source of truth)
+    _NUM_REF_ROUTED_EXPERTS = 4
+    _state_dict = _reference_layer_state_dict(layer_idx=0, is_moe=True, num_routed_experts=_NUM_REF_ROUTED_EXPERTS)
+    layer = prepare_moe_layer_weights(
+        submesh, _state_dict, 0, num_routed_experts=_NUM_REF_ROUTED_EXPERTS, move_to_device=True, store_torch=True
+    )
+
     # Tile dimensions
     a_tile = ttnn.Tile([M, 32])  # 1x32 tiles for input/activation
     b_tile = ttnn.Tile([32, 32])  # 32x32 tiles for weights
@@ -203,23 +211,12 @@ def test_post_sdpa(
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
     # ========================================================================
-    # Create PyTorch tensors (per-device)
+    # Extract torch tensors from ModelWeights for golden computation
     # ========================================================================
     torch.manual_seed(0)
 
-    # kv_b2_proj: [512, 8192 * num_tp] — full TP width, split along output (heads) dim per column
-    torch_kv_b2_proj_weights = torch.randn((K1, intermediate * num_tp), dtype=torch.bfloat16)
-    # o_proj: [8192 * num_tp, 7168] — full TP height, split along input (heads) dim per column
-    torch_o_proj_weights = torch.randn((K2 * num_tp, output_size), dtype=torch.bfloat16)
-
-    torch_kv_b1_proj_dummy = torch.zeros(
-        (kv_b12_cfg.kv_b1_proj_shape[0] * num_tp, kv_b12_cfg.kv_b1_proj_shape[1]), dtype=torch.bfloat16
-    )
-    torch_gate_mm_dummy = torch.zeros(o_proj_cfg.gate_mm_shape, dtype=torch.bfloat16)
-    torch_attn_norm_dummy = torch.zeros(o_proj_cfg.attn_norm_shape, dtype=torch.bfloat16)
-    torch_q_norm_dummy = torch.zeros(o_proj_cfg.q_norm_shape, dtype=torch.bfloat16)
-    torch_kv_norm_dummy = torch.zeros(o_proj_cfg.kv_norm_shape, dtype=torch.bfloat16)
-    torch_ffn_norm_dummy = torch.zeros(o_proj_cfg.ffn_norm_shape, dtype=torch.bfloat16)
+    torch_kv_b2_proj_weights = layer.torch_tensor("kv_b2_proj")
+    torch_o_proj_weights = layer.torch_tensor("o_proj")
 
     # One input per mesh row: [num_matmul1_cores * num_tp, K1] covers all TP columns in the row
     device_inputs = []
@@ -291,28 +288,16 @@ def test_post_sdpa(
     logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create overlapped weight tensors
+    # Weight tensors from ModelWeights
     # ========================================================================
     single_device = ttnn.get_device_tensors(ttnn_input)[0].device()
 
-    # Weights1 = kv_b2_proj (second half of fused kv_b12 buffer)
-    kv_b12 = _fuse_kv_b12(submesh, torch_kv_b1_proj_dummy, torch_kv_b2_proj_weights)
-    kv_b2_overlapped = kv_b12["kv_b2_proj"]
+    kv_b2_overlapped = layer["kv_b2_proj"]
     logger.info(
         f"Created kv_b2 overlapped tensor: shard {kv_b2_overlapped.shard_shape} on {matmul1_grid.num_cores()} cores"
     )
 
-    # Weights2 = o_proj (first element of fused o_proj/gate/gamma buffer)
-    o_norms = _fuse_o_proj_gate_mm_norms(
-        submesh,
-        torch_o_proj_weights,
-        torch_gate_mm_dummy,
-        torch_attn_norm_dummy,
-        torch_q_norm_dummy,
-        torch_kv_norm_dummy,
-        torch_ffn_norm_dummy,
-    )
-    o_proj_overlapped = o_norms["o_proj"]
+    o_proj_overlapped = layer["o_proj"]
     logger.info(
         f"Created o_proj overlapped tensor: shard {o_proj_overlapped.shard_shape} on {matmul2_grid.num_cores()} cores"
     )
@@ -601,6 +586,14 @@ def test_post_sdpa_with_sdpa_phase(
 
     # Set up sub-device (not supported in slow dispatch mode)
     compute_grid_size = submesh.compute_with_storage_grid_size()
+
+    # Prepare layer weights via ModelWeights (single source of truth)
+    _NUM_REF_ROUTED_EXPERTS = 4
+    _state_dict = _reference_layer_state_dict(layer_idx=0, is_moe=True, num_routed_experts=_NUM_REF_ROUTED_EXPERTS)
+    layer = prepare_moe_layer_weights(
+        submesh, _state_dict, 0, num_routed_experts=_NUM_REF_ROUTED_EXPERTS, move_to_device=True, store_torch=True
+    )
+
     # Tile dimensions
     a_tile = ttnn.Tile([M, 32])  # 1x32 tiles for input/activation
     b_tile = ttnn.Tile([32, 32])  # 32x32 tiles for weights
@@ -668,19 +661,8 @@ def test_post_sdpa_with_sdpa_phase(
     # ========================================================================
     torch.manual_seed(0)
 
-    # kv_b2_proj: [512, 8192 * num_tp] — full TP width, split along output (heads) dim per column
-    torch_kv_b2_proj_weights = torch.randn((K1, intermediate * num_tp), dtype=torch.bfloat16)
-    # o_proj: [8192 * num_tp, 7168] — full TP height, split along input (heads) dim per column
-    torch_o_proj_weights = torch.randn((K2 * num_tp, output_size), dtype=torch.bfloat16)
-
-    torch_kv_b1_proj_dummy = torch.zeros(
-        (kv_b12_cfg.kv_b1_proj_shape[0] * num_tp, kv_b12_cfg.kv_b1_proj_shape[1]), dtype=torch.bfloat16
-    )
-    torch_gate_mm_dummy = torch.zeros(o_proj_cfg.gate_mm_shape, dtype=torch.bfloat16)
-    torch_attn_norm_dummy = torch.zeros(o_proj_cfg.attn_norm_shape, dtype=torch.bfloat16)
-    torch_q_norm_dummy = torch.zeros(o_proj_cfg.q_norm_shape, dtype=torch.bfloat16)
-    torch_kv_norm_dummy = torch.zeros(o_proj_cfg.kv_norm_shape, dtype=torch.bfloat16)
-    torch_ffn_norm_dummy = torch.zeros(o_proj_cfg.ffn_norm_shape, dtype=torch.bfloat16)
+    torch_kv_b2_proj_weights = layer.torch_tensor("kv_b2_proj")
+    torch_o_proj_weights = layer.torch_tensor("o_proj")
 
     # SDPA input tensors per device: L [8, 4096], MS [8, 256]
     # MS tensor layout: for each worker core c (0..7), within columns [c*32, (c+1)*32]:
@@ -815,26 +797,16 @@ def test_post_sdpa_with_sdpa_phase(
     logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create overlapped weight tensors
+    # Weight tensors from ModelWeights
     # ========================================================================
     single_device = ttnn.get_device_tensors(ttnn_input)[0].device()
 
-    kv_b12 = _fuse_kv_b12(submesh, torch_kv_b1_proj_dummy, torch_kv_b2_proj_weights)
-    kv_b2_overlapped = kv_b12["kv_b2_proj"]
+    kv_b2_overlapped = layer["kv_b2_proj"]
     logger.info(
         f"Created kv_b2 overlapped tensor: shard {kv_b2_overlapped.shard_shape} on {matmul1_grid.num_cores()} cores"
     )
 
-    o_norms = _fuse_o_proj_gate_mm_norms(
-        submesh,
-        torch_o_proj_weights,
-        torch_gate_mm_dummy,
-        torch_attn_norm_dummy,
-        torch_q_norm_dummy,
-        torch_kv_norm_dummy,
-        torch_ffn_norm_dummy,
-    )
-    o_proj_overlapped = o_norms["o_proj"]
+    o_proj_overlapped = layer["o_proj"]
     logger.info(
         f"Created o_proj overlapped tensor: shard {o_proj_overlapped.shard_shape} on {matmul2_grid.num_cores()} cores"
     )

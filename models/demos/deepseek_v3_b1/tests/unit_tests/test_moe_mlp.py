@@ -24,7 +24,6 @@ from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.prepare_weights import (
-    _compute_tp,
     create_gate_bias_tensor,
     create_gate_indices_tensor,
     prepare_attention_weights,
@@ -172,7 +171,7 @@ def create_shared_expert_tensors(
     mcast_gather_core = DownProj.MCAST_GATHER_CORE
     sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(mcast_gather_core, mcast_gather_core)])
 
-    _, moe_tp = _compute_tp(device)
+    moe_tp = 8 if device.get_num_devices() >= 8 else 1
     K_down_full = K_down * moe_tp
 
     assert layer_idx is not None, "layer_idx must be provided"

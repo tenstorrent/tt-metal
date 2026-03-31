@@ -20,7 +20,12 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 from models.demos.deepseek_v3_b1.overlap_specs import GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC
-from models.demos.deepseek_v3_b1.prepare_weights import _create_shared_down_proj, _fuse_gate_up
+from models.demos.deepseek_v3_b1.prepare_weights import (
+    _MOE_TP1_SHARED_DOWN_K,
+    _MOE_TP1_SHARED_GATE_UP_N,
+    prepare_shared_expert_weights,
+)
+from models.demos.deepseek_v3_b1.tests.unit_tests.conftest import _reference_layer_state_dict
 
 
 @pytest.mark.parametrize(
@@ -75,20 +80,7 @@ def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
     torch.manual_seed(42)
 
     torch_activation = torch.randn((M, K_gate), dtype=torch.bfloat16)
-    torch_gate_weights = torch.randn((K_gate, K_down), dtype=torch.bfloat16)
-    torch_up_weights = torch.randn((K_gate, K_down), dtype=torch.bfloat16)
-    torch_down_weights = torch.randn((K_down, N), dtype=torch.bfloat16)
     torch_bias = torch.randn((M, N), dtype=torch.bfloat16)
-
-    # Golden reference
-    torch_expected = SharedExpertOp.golden(
-        torch_activation.float(),
-        torch_gate_weights.float(),
-        torch_up_weights.float(),
-        torch_down_weights.float(),
-        torch_bias.float(),
-    ).bfloat16()
-    logger.info(f"Golden output shape: {torch_expected.shape}")
 
     # ========================================================================
     # Activation tensor: [1, K_gate] HEIGHT_SHARDED on sender (12,9)
@@ -108,13 +100,23 @@ def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
     # ========================================================================
     # Gate/Up/Down weights
     # ========================================================================
-    # _fuse_gate_up hard-codes weights to bfloat4_b; use the manual flow to test bfloat8_b weights
     if use_fused_weights:
-        gate_up = _fuse_gate_up(device, torch_gate_weights, torch_up_weights)
-        ttnn_down_weights = _create_shared_down_proj(device, torch_down_weights)
-        ttnn_gate_up_weights = gate_up["gate_proj"].fused_tensor
-        logger.info("Created shared expert weights via fused overlap")
+        _NUM_REF_ROUTED_EXPERTS = 4
+        state_dict = _reference_layer_state_dict(layer_idx=0, is_moe=True, num_routed_experts=_NUM_REF_ROUTED_EXPERTS)
+        shared = prepare_shared_expert_weights(device, state_dict, 0, is_moe=True, move_to_device=True)
+        ttnn_gate_up_weights = shared.shared_gate_proj.fused_tensor
+        ttnn_down_weights = shared.shared_down_proj
+
+        prefix = "model.layers.0.mlp.shared_experts"
+        torch_gate_weights = state_dict[f"{prefix}.gate_proj.weight"].T.contiguous()[:, :_MOE_TP1_SHARED_GATE_UP_N]
+        torch_up_weights = state_dict[f"{prefix}.up_proj.weight"].T.contiguous()[:, :_MOE_TP1_SHARED_GATE_UP_N]
+        torch_down_weights = state_dict[f"{prefix}.down_proj.weight"].T.contiguous()[:_MOE_TP1_SHARED_DOWN_K, :]
+        logger.info("Created shared expert weights via prepare_shared_expert_weights")
     else:
+        torch_gate_weights = torch.randn((K_gate, K_down), dtype=torch.bfloat16)
+        torch_up_weights = torch.randn((K_gate, K_down), dtype=torch.bfloat16)
+        torch_down_weights = torch.randn((K_down, N), dtype=torch.bfloat16)
+
         a_cores_list, b_cores_list = SharedExpertOp.build_ab_grids()
         compute_cores_list = a_cores_list + b_cores_list
 
@@ -166,6 +168,16 @@ def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
             tile=b_tile,
         )
         logger.info(f"Down weights: shard ({K_down}, {N_per_core}) on {DownProj.NUM_MATMUL_CORES} cores")
+
+    # Golden reference
+    torch_expected = SharedExpertOp.golden(
+        torch_activation.float(),
+        torch_gate_weights.float(),
+        torch_up_weights.float(),
+        torch_down_weights.float(),
+        torch_bias.float(),
+    ).bfloat16()
+    logger.info(f"Golden output shape: {torch_expected.shape}")
 
     # ========================================================================
     # Bias: [1, N] HEIGHT_SHARDED on sender (12,9)

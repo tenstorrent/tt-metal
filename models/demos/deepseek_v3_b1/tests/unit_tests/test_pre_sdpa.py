@@ -19,12 +19,12 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
-from models.demos.deepseek_v3_b1.prepare_weights import _fuse_kv_b12, _fuse_o_proj_gate_mm_norms, _fuse_q_ab_kv_a
+from models.demos.deepseek_v3_b1.prepare_weights import prepare_moe_layer_weights
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     build_broadcast_test_inputs,
     create_fabric_router_config,
 )
-from models.demos.deepseek_v3_b1.utils import generate_mm_weights
+from models.demos.deepseek_v3_b1.tests.unit_tests.conftest import _reference_layer_state_dict
 
 
 def deinterleave_kv_cache(kv: torch.Tensor, device_chunk_size: int, num_devices: int) -> torch.Tensor:
@@ -207,6 +207,15 @@ def test_pre_sdpa(
     semaphores = PreSDPA.create_semaphores(submesh, skip_ccl)
 
     # ========================================================================
+    # Prepare layer weights via ModelWeights (single source of truth)
+    # ========================================================================
+    _NUM_REF_ROUTED_EXPERTS = 4
+    state_dict = _reference_layer_state_dict(layer_idx=0, is_moe=True, num_routed_experts=_NUM_REF_ROUTED_EXPERTS)
+    layer = prepare_moe_layer_weights(
+        submesh, state_dict, 0, num_routed_experts=_NUM_REF_ROUTED_EXPERTS, move_to_device=True, store_torch=True
+    )
+
+    # ========================================================================
     # Configuration
     # ========================================================================
     # Input tensor shapes
@@ -371,42 +380,24 @@ def test_pre_sdpa(
     logger.info(f"Qnope cores: {qnope_num_cores}, Qrope cores: {qrope_num_cores}")
 
     # ========================================================================
-    # Create PyTorch tensors
+    # Extract torch tensors from ModelWeights for golden computation
     # ========================================================================
     torch.manual_seed(0)
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
-    torch_gamma = torch.randn(shape, dtype=torch.bfloat16)
-    torch_matmul_weights = generate_mm_weights(matmul_weights_shape, dtype=torch.bfloat16)
-    torch_rmsnorm2_gamma = torch.randn((1, rmsnorm2_width), dtype=torch.bfloat16)
+    torch_gamma = layer.torch_tensor("attn_norm")
+    torch_matmul_weights = layer.torch_tensor("q_a_proj")
+    torch_rmsnorm2_gamma = layer.torch_tensor("q_norm")
 
-    # Matmul2 weights - full tensor with layout [all_qnope | all_qrope] for num_tp * 64 heads.
-    # Golden receives this directly; per-TP slices are extracted for shuffling + mesh distribution.
     total_qnope_heads = num_tp * NUM_QNOPE_HEADS
     total_qrope_heads = num_tp * NUM_QROPE_HEADS
     total_qnope_dim = total_qnope_heads * QNOPE_HEAD_DIM
     total_qrope_dim = total_qrope_heads * QROPE_HEAD_DIM
-    torch_matmul2_weights_full_unshuffled = generate_mm_weights(
-        (matmul2_weights_shape[0], total_qnope_dim + total_qrope_dim), dtype=torch.bfloat16
-    )
+    torch_matmul2_weights_full_unshuffled = layer.torch_tensor("q_b_proj")
 
-    # Matmul3 weights - [num_tp * num_qnope_heads, qnope_head_dim, qnope_out_dim] for golden
-    # Each TP slice of 64 heads is height-sharded on 64 cores per device.
-    torch_matmul3_weights = generate_mm_weights(
-        (num_tp * NUM_QNOPE_HEADS, QNOPE_HEAD_DIM, QNOPE_OUT_DIM), dtype=torch.bfloat16
-    )
+    kv_b1_raw = layer.torch_tensor("kv_b1_proj")
+    torch_matmul3_weights = kv_b1_raw.reshape(kv_b1_raw.shape[0] // QNOPE_HEAD_DIM, QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
 
-    # kv_b2_proj weights (placeholder — not consumed by pre-SDPA but required by the fused buffer)
-    torch_kv_b2_proj_weights = torch.zeros(
-        (QNOPE_OUT_DIM, num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM), dtype=torch.bfloat16
-    )
-
-    # DKV matmul weights (raw, unshuffled — prepare_weights handles shard reordering)
-    torch_dkv_matmul_weights = generate_mm_weights(dkv_matmul_weights_shape, dtype=torch.bfloat16)
-
-    # Placeholder tensors for get_tt_o_proj_and_gate_mm_weights (not consumed by pre-SDPA)
-    torch_o_proj_weights = torch.zeros((num_tp * 8192, 7168), dtype=torch.bfloat16)
-    torch_gate_mm_weights = torch.zeros((7168, 256), dtype=torch.bfloat16)
-    torch_ffn_norm = torch.zeros((1, 7168), dtype=torch.bfloat16)
+    torch_dkv_matmul_weights = layer.torch_tensor("kv_a_proj")
 
     # ========================================================================
     # Create RoPE tensors (sin, cos, trans_mat)
@@ -454,26 +445,10 @@ def test_pre_sdpa(
     input_tensor_mesh = bcast_inputs.input_tensor_mesh
     intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
 
-    # Fused matmul1 (q_a_proj packed), matmul2 (q_b_proj shuffled), and DKV matmul (kv_a_proj)
-    # weights as overlapped tensors sharing a single L1 buffer.
-    qab_kva = _fuse_q_ab_kv_a(
-        submesh,
-        torch_matmul_weights,
-        torch_matmul2_weights_full_unshuffled,
-        torch_dkv_matmul_weights,
-    )
-    matmul_weights_overlapped = qab_kva["q_a_proj"]
-    matmul2_weights_overlapped = qab_kva["q_b_proj"]
-    dkv_matmul_weights_overlapped = qab_kva["kv_a_proj"]
-
-    # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj
-    torch_matmul3_weights_flat = torch_matmul3_weights.reshape(num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
-    kv_b12 = _fuse_kv_b12(
-        submesh,
-        torch_matmul3_weights_flat,
-        torch_kv_b2_proj_weights,
-    )
-    matmul3_weights_overlapped = kv_b12["kv_b1_proj"]
+    matmul_weights_overlapped = layer["q_a_proj"]
+    matmul2_weights_overlapped = layer["q_b_proj"]
+    dkv_matmul_weights_overlapped = layer["kv_a_proj"]
+    matmul3_weights_overlapped = layer["kv_b1_proj"]
 
     # SDPA input tensor - height sharded on SDPA input grid (cols 0-3, rows 1-2)
     # After 3-phase CreateQHeads tilization:
@@ -569,22 +544,11 @@ def test_pre_sdpa(
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
 
-    # KV Cache Branch RMSNorm gamma
-    torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
+    torch_dkv_rmsnorm_gamma = layer.torch_tensor("kv_norm")
 
-    # Fused o_proj, gate_mm, and RMSNorm gammas — we only need the 3 gamma overlapped views.
-    o_norms = _fuse_o_proj_gate_mm_norms(
-        submesh,
-        torch_o_proj_weights,
-        torch_gate_mm_weights,
-        torch_gamma,
-        torch_rmsnorm2_gamma,
-        torch_dkv_rmsnorm_gamma,
-        torch_ffn_norm,
-    )
-    gamma_overlapped = o_norms["attn_norm"]
-    rmsnorm2_gamma_overlapped = o_norms["q_norm"]
-    dkv_rmsnorm_gamma_overlapped = o_norms["kv_norm"]
+    gamma_overlapped = layer["attn_norm"]
+    rmsnorm2_gamma_overlapped = layer["q_norm"]
+    dkv_rmsnorm_gamma_overlapped = layer["kv_norm"]
 
     # KRoPE cos/sin: DRAM INTERLEAVED (each krope core reads its width slice)
     krope_num_cores = kv_cache_branch_rope_crs.num_cores()

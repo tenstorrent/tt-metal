@@ -23,11 +23,8 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
 from models.demos.deepseek_v3_b1.fused_ops.moe_routed_expert.op import MoeRoutedExpert
-from models.demos.deepseek_v3_b1.prepare_weights import (
-    _compute_tp,
-    _create_moe_routed_experts,
-    _fuse_o_proj_gate_mm_norms,
-)
+from models.demos.deepseek_v3_b1.prepare_weights import _create_moe_routed_experts, prepare_attention_weights
+from models.demos.deepseek_v3_b1.tests.unit_tests.conftest import _reference_layer_state_dict
 
 
 @pytest.mark.parametrize("use_hardcoded_expert_index", [True, pytest.param(False, marks=pytest.mark.skip_post_commit)])
@@ -64,12 +61,12 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
     # Create input, weights, and gate tensors
     torch.manual_seed(0)
     torch_input = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gate_mm_weights = torch.randn((K, N), dtype=torch.bfloat16)
-    torch_bias = torch.randn(
-        (1, 8, 32), dtype=torch.bfloat16
-    )  # Gate bias (batch=1, 8, 32) - matches golden expectation
-    # Expert indices 0-255, transposed as expected by gate
     torch_indices = torch.arange(N, dtype=torch.int32).reshape(16, 16).T.contiguous().to(torch.uint16)
+
+    _NUM_REF_ROUTED_EXPERTS = 4
+    state_dict = _reference_layer_state_dict(layer_idx=0, is_moe=True, num_routed_experts=_NUM_REF_ROUTED_EXPERTS)
+    torch_gate_mm_weights = state_dict["model.layers.0.mlp.gate.weight"].T.contiguous()
+    torch_bias = state_dict["model.layers.0.mlp.gate.e_score_correction_bias"].reshape(1, 8, 32)
 
     # Input tensor: sharded on sender core OUTSIDE the compute grid
     # Same location as pre_sdpa mcast sender: (device_grid_x - 1, 9)
@@ -122,23 +119,10 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
         f"Created mcast output tensor with shard shape ({M}, {K}) on {mcast_output_core_grid.num_cores()} cores"
     )
 
-    # Gate matmul weights via overlapped tensor (fused with o_proj + gammas, matching production layout)
-    mla_tp, _ = _compute_tp(device)
-    torch_o_proj_weights = torch.zeros((8192 * mla_tp, K), dtype=torch.bfloat16)
-    torch_attn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
-    torch_q_norm = torch.zeros((1, 1536), dtype=torch.bfloat16)
-    torch_kv_norm = torch.zeros((1, 512), dtype=torch.bfloat16)
-    torch_ffn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
-    o_norms = _fuse_o_proj_gate_mm_norms(
-        device,
-        torch_o_proj_weights,
-        torch_gate_mm_weights,
-        torch_attn_norm,
-        torch_q_norm,
-        torch_kv_norm,
-        torch_ffn_norm,
-    )
-    ttnn_gate_mm_weights = o_norms["gate_mm"]
+    # Gate matmul weights via prepare_attention_weights (fused with o_proj + gammas in production layout)
+    attn = prepare_attention_weights(device, state_dict, 0, is_moe=True, move_to_device=True)
+    ttnn_gate_mm_weights = attn.gate_mm
+    ttnn_gate_bias = attn.gate_bias
     compute_core_grid = ttnn_gate_mm_weights.core_range_set
     logger.info(f"Created gate matmul weights as overlapped tensor on {compute_core_grid.num_cores()} cores")
 
@@ -184,20 +168,6 @@ def test_moe_routed_expert(device, use_hardcoded_expert_index):
         tile=tile_16x16,
     )
     logger.info(f"Created gate input tensor with shard shape (16, 16) on sender core ({input_core.x}, {input_core.y})")
-
-    # Gate bias tensor: sharded on sender core (transposed as expected by gate)
-    # Reshape from (1, 8, 32) to (16, 16) and transpose (matches unit test pattern)
-    torch_bias_reshaped = torch_bias.reshape(16, 16)
-    torch_bias_transposed = torch.transpose(torch_bias_reshaped, 0, 1).contiguous()
-    ttnn_gate_bias = ttnn.from_torch(
-        torch_bias_transposed,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=gate_input_mem_config,
-        tile=tile_16x16,
-    )
-    logger.info(f"Created gate bias tensor with shard shape (16, 16) on sender core")
 
     # Gate indices tensor: sharded on sender core (uint16 indices, already transposed)
     ttnn_gate_indices = ttnn.from_torch(
@@ -620,9 +590,12 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
     # Create PyTorch tensors (same for all devices since we replicate)
     torch.manual_seed(0)
     torch_input = torch.randn((M, K), dtype=torch.bfloat16)
-    torch_gate_mm_weights = torch.randn((K, N), dtype=torch.bfloat16)
-    torch_bias = torch.randn((1, 8, 32), dtype=torch.bfloat16)
     torch_indices = torch.arange(N, dtype=torch.int32).reshape(16, 16).T.contiguous().to(torch.uint16)
+
+    _NUM_REF_ROUTED_EXPERTS = 4
+    state_dict = _reference_layer_state_dict(layer_idx=0, is_moe=True, num_routed_experts=_NUM_REF_ROUTED_EXPERTS)
+    torch_gate_mm_weights = state_dict["model.layers.0.mlp.gate.weight"].T.contiguous()
+    torch_bias = state_dict["model.layers.0.mlp.gate.e_score_correction_bias"].reshape(1, 8, 32)
 
     # Get device info from mesh for grid setup
     device_grid_size = submesh.compute_with_storage_grid_size()
@@ -642,23 +615,10 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
     # Mesh mapper for replication
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
 
-    # Gate matmul weights via overlapped tensor (fused with o_proj + gammas, matching production layout)
-    mla_tp, _ = _compute_tp(submesh)
-    torch_o_proj_weights = torch.zeros((8192 * mla_tp, K), dtype=torch.bfloat16)
-    torch_attn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
-    torch_q_norm = torch.zeros((1, 1536), dtype=torch.bfloat16)
-    torch_kv_norm = torch.zeros((1, 512), dtype=torch.bfloat16)
-    torch_ffn_norm = torch.zeros((1, K), dtype=torch.bfloat16)
-    o_norms = _fuse_o_proj_gate_mm_norms(
-        submesh,
-        torch_o_proj_weights,
-        torch_gate_mm_weights,
-        torch_attn_norm,
-        torch_q_norm,
-        torch_kv_norm,
-        torch_ffn_norm,
-    )
-    ttnn_gate_mm_weights = o_norms["gate_mm"]
+    # Gate matmul weights via prepare_attention_weights (fused with o_proj + gammas in production layout)
+    attn = prepare_attention_weights(submesh, state_dict, 0, is_moe=True, move_to_device=True)
+    ttnn_gate_mm_weights = attn.gate_mm
+    ttnn_gate_bias = attn.gate_bias
     compute_core_grid = ttnn_gate_mm_weights.core_range_set
     logger.info(f"Created gate matmul weights as overlapped tensor on {compute_core_grid.num_cores()} cores")
 
@@ -714,19 +674,6 @@ def test_moe_routed_expert_with_reduce(bh_2d_mesh_device, use_hardcoded_expert_i
     )
     ttnn_gate_input = ttnn.from_torch(
         torch.zeros((16, 16), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=gate_input_mem_config,
-        tile=tile_16x16,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # Gate bias tensor
-    torch_bias_reshaped = torch_bias.reshape(16, 16)
-    torch_bias_transposed = torch.transpose(torch_bias_reshaped, 0, 1).contiguous()
-    ttnn_gate_bias = ttnn.from_torch(
-        torch_bias_transposed,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=submesh,
