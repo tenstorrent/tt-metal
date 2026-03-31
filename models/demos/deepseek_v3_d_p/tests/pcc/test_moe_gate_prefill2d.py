@@ -134,7 +134,7 @@ def test_forward_pass(
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.float32,
         memory_config=sharded_mem_config,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(
