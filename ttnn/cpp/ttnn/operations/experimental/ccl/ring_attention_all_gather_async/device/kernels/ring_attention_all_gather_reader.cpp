@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -77,6 +78,7 @@ void kernel_main() {
 
     uint32_t output_tile_id_start = 0;
     // Read local slice to our buffers, before sending them over
+    DeviceZoneScopedN("AG-READER-local-read");
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         uint32_t tiles_read = input_tile_id_start[input_idx];
         uint32_t tiles_to_read = input_tile_id_end[input_idx];
@@ -132,7 +134,10 @@ void kernel_main() {
         // In the linear case, I expect num_targets_forward_direction slices from the right
         // In the ring case, I expect num_targets_forward_direction slices from the right (keep in mind this differs for
         // odd/even chips)
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
+        {
+            DeviceZoneScopedN("AG-READER-sem-wait-slice");
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), slices_received + 1);
+        }
         // Got it
         slices_received++;
 
@@ -147,6 +152,7 @@ void kernel_main() {
         }
 
         if constexpr (fuse_op) {
+            DeviceZoneScopedN("AG-READER-signal-sdpa");
             // Signal matmul to go
             op_signaler.synchronize_workers_and_signal_op(actual_sender_chip_id);
         }

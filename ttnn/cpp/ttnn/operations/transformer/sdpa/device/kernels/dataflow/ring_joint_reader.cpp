@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -169,8 +170,12 @@ void kernel_main() {
     uint32_t ring_index = fused_op_receiver.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        // find out which is the latest ring_id that synchronized
-        uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        uint32_t ring_id;
+        {
+            DeviceZoneScopedN("READER-wait-ag-sync");
+            // find out which is the latest ring_id that synchronized
+            ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        }
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;
