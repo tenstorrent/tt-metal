@@ -136,6 +136,36 @@ params += [
     )
 ]
 
+# HEIGHT_SHARDED: Input height is not divisible by 32 - 4 cores
+params += [
+    pytest.param(
+        [[1, 1, 100, 64]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
+            "input_mem_config": [
+                ttnn.create_sharded_memory_config(
+                    shape=(100, 64),  # Global shape - non-tile-aligned logical height
+                    core_grid=ttnn.CoreGrid(y=4, x=1),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=False,
+                )
+            ],
+            "output_mem_config": ttnn.create_sharded_memory_config(
+                shape=(128, 64),  # Global shape - padded height 100→128, shard=32×64
+                core_grid=ttnn.CoreGrid(y=4, x=1),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=False,
+            ),
+            "output_tensor_shape": [1, 1, 128, 64],
+            "pad_value": 6.25,
+        },
+        id="height_sharded_input_height_not_divisible_by_32",
+    )
+]
+
 # HEIGHT_SHARDED: Pad width - 2 cores
 params += [
     pytest.param(
