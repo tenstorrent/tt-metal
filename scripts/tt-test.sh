@@ -8,9 +8,10 @@
 # always gets a clean device.
 #
 # Simulator mode (TT_METAL_SIMULATOR set):
-#   Skips flock, device resets, dirty tracking, triage, and --dev features
-#   (none of these work on the simulator). Keeps dispatch timeout for hang
-#   detection (default 120s, override via TT_METAL_OPERATION_TIMEOUT_SECONDS).
+#   Skips flock, device resets, dirty tracking, and triage (these require real
+#   hardware). --dev features (watcher, asserts) still work on the simulator.
+#   Keeps dispatch timeout for hang detection (default 120s, override via
+#   TT_METAL_OPERATION_TIMEOUT_SECONDS).
 #
 # Usage: scripts/tt-test.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
 #
@@ -18,7 +19,7 @@
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
 #               sanitization), lightweight ebreak asserts, and auto-triage
 #               on hang with full triage + watcher log dump.
-#               (ignored on simulator — these features require real hardware)
+#               (on simulator: watcher and asserts work; triage is skipped)
 #   --run-all   Run all tests instead of stopping on first failure (-x).
 #               Useful for eval scoring where you need full pass/fail counts.
 #
@@ -140,38 +141,41 @@ else
     export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress > ${TRIAGE_LOG} 2>&1"
 fi
 
-if [[ "$SIM_MODE" == true ]]; then
-    if [[ "$DEV_MODE" == true ]]; then
-        echo "TT_TEST: WARNING: --dev mode ignored on simulator (watcher/asserts/triage unsupported)" >&2
-    fi
-    echo "TT_TEST: [sim] dispatch_timeout=${DISPATCH_TIMEOUT}s" >&2
-elif [[ "$DEV_MODE" == true ]]; then
-    # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at the
-    # exact instruction. The dispatch timeout then fires and runs triage, which
-    # captures callstacks from ALL cores — showing both the assert site and any
-    # cores blocked waiting on the halted one.
-    export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
-
-    # LLK asserts: enables LLK_ASSERT() in the compute API / LLK layer.
-    # Catches invalid hardware configurations, wrong unpack/pack parameters,
-    # and API misuse deep in the compute pipeline. Also compiles as ebreak.
-    export TT_METAL_LLK_ASSERTS=1
-
+if [[ "$DEV_MODE" == true ]]; then
     # Polling watcher: enables all device-side instrumentation (NoC sanitizer,
     # waypoints, CB sanitization) with the host polling thread. Recent watcher
     # server improvements (t=0 sampling, 100ms quanta) minimize overhead for
     # short tests. Watcher log is dumped on hang for full diagnostic context.
-    #
-    # WATCHER_DISABLE_ASSERT disables the watcher's own assert mechanism (which
-    # would conflict with the lightweight ebreak asserts above). We want ebreak
-    # asserts to halt the core so triage can capture callstacks from all cores,
-    # rather than having watcher handle asserts independently.
     export TT_METAL_WATCHER=1
     export TT_METAL_WATCHER_NOINLINE=1
-    export TT_METAL_WATCHER_DISABLE_ASSERT=1
     export TT_METAL_WATCHER_DISABLE_DISPATCH=1
 
-    echo "TT_TEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s" >&2
+    if [[ "$SIM_MODE" == true ]]; then
+        # On sim, triage is unavailable. Lightweight/LLK asserts compile as
+        # ebreak which just causes a hang — without triage there's nothing to
+        # capture the callstack, so they're useless. Leave them off and let
+        # watcher handle asserts directly.
+        echo "TT_TEST: [sim+dev] watcher=polling(+assert) triage=OFF timeout=${DISPATCH_TIMEOUT}s" >&2
+    else
+        # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at
+        # the exact instruction. The dispatch timeout then fires and runs triage,
+        # which captures callstacks from ALL cores — showing both the assert site
+        # and any cores blocked waiting on the halted one.
+        export TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1
+
+        # LLK asserts: enables LLK_ASSERT() in the compute API / LLK layer.
+        # Catches invalid hardware configurations, wrong unpack/pack parameters,
+        # and API misuse deep in the compute pipeline. Also compiles as ebreak.
+        export TT_METAL_LLK_ASSERTS=1
+
+        # Disable watcher's own assert handling — we want ebreak asserts to halt
+        # the core so triage can capture callstacks from ALL cores, rather than
+        # having watcher handle asserts independently.
+        export TT_METAL_WATCHER_DISABLE_ASSERT=1
+        echo "TT_TEST: [dev] asserts=ebreak llk_asserts=ON watcher=polling triage=ON timeout=${DISPATCH_TIMEOUT}s" >&2
+    fi
+elif [[ "$SIM_MODE" == true ]]; then
+    echo "TT_TEST: [sim] dispatch_timeout=${DISPATCH_TIMEOUT}s" >&2
 else
     echo "TT_TEST: dispatch_timeout=${DISPATCH_TIMEOUT}s" >&2
 fi
