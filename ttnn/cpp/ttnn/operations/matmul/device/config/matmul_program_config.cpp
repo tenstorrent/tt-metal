@@ -289,6 +289,7 @@ MatmulProgramConfig create_matmul_1d_systolic_array_program_config(
         .fuse_batch = true,
         .fused_activation = fused_activation,
         .mcast_in0 = is_wide,
+        .allowed_worker_cores = CoreRangeSet(CoreRange({0, 0}, {core_coord.x - 1, core_coord.y - 1})),
     };
 }
 
@@ -395,7 +396,8 @@ MatmulMultiCoreReuseMultiCast1DProgramConfig get_mcast_1d_config(
         .per_core_N = per_core_N,
         .fuse_batch = fuse_batch,
         .fused_activation = fused_activation,
-        .mcast_in0 = mcast_in0};
+        .mcast_in0 = mcast_in0,
+        .allowed_worker_cores = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}))};
 }
 
 MatmulProgramConfig create_matmul_program_config(
@@ -700,6 +702,7 @@ MatmulProgramConfig get_matmul_program_config(
                 .fuse_batch = true,
                 .fused_activation = fused_activation,
                 .mcast_in0 = mcast_in0,
+                .allowed_worker_cores = input_tensor_a.shard_spec().value().grid,
             };
         }
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and

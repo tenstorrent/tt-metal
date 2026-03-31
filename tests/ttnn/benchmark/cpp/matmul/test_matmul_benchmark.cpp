@@ -260,7 +260,6 @@ void RunMatmulBenchmark(
         dev_ptr);
 
     ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig program_config{
-        /* compute_with_storage_grid_size */ {grid_size.height(), grid_size.width()},
         in0_block_w,
         out_subblock.height(),
         out_subblock.width(),
@@ -270,7 +269,10 @@ void RunMatmulBenchmark(
         per_core_N,
         /*transpose_mcast=*/false,
         /*fused_activation=*/std::nullopt,
-        /*fuse_batch=*/true};
+        /*fuse_batch=*/true,
+        /*allowed_worker_cores=*/
+        CoreRangeSet(
+            std::set<CoreRange>{CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.width() - 1, grid_size.height() - 1))})};
 
     const ttnn::DeviceComputeKernelConfig compute_kernel_config = ttnn::init_device_compute_kernel_config(
         device->arch(),
@@ -296,7 +298,6 @@ void RunMatmulBenchmark(
         .output_dtype = dtype,
         .compute_kernel_config = compute_kernel_config,
         .untilize_out = false,
-        .user_core_coord = std::nullopt,
         .user_fused_activation = std::nullopt,
         .user_run_batched = false,
         .transpose_a = false,

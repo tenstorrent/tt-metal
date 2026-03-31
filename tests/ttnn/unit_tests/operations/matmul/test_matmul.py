@@ -1974,7 +1974,11 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    output = ttnn.matmul(input_tensor_a, input_tensor_b, memory_config=ttnn.L1_MEMORY_CONFIG)
+    output = ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
 
     output = ttnn.to_torch(output)
 
@@ -2703,8 +2707,11 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
+    # Half sync mode
     output1 = ttnn.matmul(input_tensor_a, input_tensor_b)
+    # Full sync mode
     output2 = ttnn.matmul(input_tensor_a, input_tensor_b)
+    # Half sync mode
     output3 = ttnn.matmul(input_tensor_a, input_tensor_b)
 
     output_tensor = ttnn.to_torch(output1)
@@ -3368,7 +3375,7 @@ def test_matmul_activation_with_sharded_input(device):
 def _setup_subdevice(device, skip_rows=1):
     """Create two sub-devices: row(s) 0..skip_rows-1 as a 'dummy' sub-device
     and the remaining rows as the 'worker' sub-device.  Returns a tuple of
-    (sub_device_manager, worker_sub_device_id, worker_core_grid) that the
+    (sub_device_manager, worker_sub_device_id) that the
     caller must tear down via _teardown_subdevice().
     """
     grid = device.compute_with_storage_grid_size()
@@ -3388,8 +3395,7 @@ def _setup_subdevice(device, skip_rows=1):
     device.load_sub_device_manager(sub_device_manager)
     device.set_sub_device_stall_group([dummy_sub_device_id, worker_sub_device_id])
 
-    worker_core_grid = ttnn.CoreGrid(x=cols, y=rows - skip_rows)
-    return sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs
+    return sub_device_manager, worker_sub_device_id, worker_crs
 
 
 def _teardown_subdevice(device, sub_device_manager):
@@ -3418,7 +3424,7 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
     if grid.y < 2:
         pytest.skip("Need at least 2 rows for sub-device test")
 
-    sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs = _setup_subdevice(device)
+    sub_device_manager, worker_sub_device_id, worker_crs = _setup_subdevice(device)
     try:
         torch.manual_seed(0)
         torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
