@@ -3091,6 +3091,26 @@ TEST_F(TopologySolverTest, MappingConstraintsForbiddenManyToOne) {
     EXPECT_EQ(constraints.get_valid_mappings(2).count(11), 0u);
 }
 
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenTwoFullListsCartesian) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, std::set<TestGlobalNode>{10, 11});
+    constraints.add_required_constraint(2, std::set<TestGlobalNode>{10, 12});
+    EXPECT_TRUE(constraints.add_forbidden_constraint(std::set<TestTargetNode>{1, 2}, std::set<TestGlobalNode>{10}));
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(1).count(11), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).size(), 1u);
+    EXPECT_EQ(constraints.get_valid_mappings(2).count(12), 1u);
+}
+
+TEST_F(TopologySolverTest, MappingConstraintsForbiddenTwoListsRequiresBothNonEmpty) {
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.add_required_constraint(1, 10);
+    EXPECT_FALSE(constraints.add_forbidden_constraint(std::set<TestTargetNode>{}, std::set<TestGlobalNode>{10}));
+    EXPECT_FALSE(constraints.add_forbidden_constraint(std::set<TestTargetNode>{1}, std::set<TestGlobalNode>{}));
+    EXPECT_FALSE(constraints.add_forbidden_constraint(std::set<TestTargetNode>{}, std::set<TestGlobalNode>{}));
+    EXPECT_EQ(constraints.get_valid_mappings(1).size(), 1u);
+}
+
 TEST_F(TopologySolverTest, MappingConstraintsForbiddenContradiction) {
     // Test that forbidden constraint cannot contradict required constraint
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
