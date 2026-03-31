@@ -7,7 +7,6 @@
 #include <chrono>
 #include <cstdint>
 #include <thread>
-#include <utility>
 
 // Platform-specific headers for pause/yield intrinsics.
 //
@@ -87,7 +86,7 @@ template <uint32_t N_SPINS = 100, uint32_t MAX_WAIT_US = 16, typename... Ts>
 __attribute__((flatten)) inline void nice_spin_until(auto predicate, Ts&&... args) {
     uint32_t counter = 0;
     uint32_t sleep_us = 1;
-    while (!predicate(std::forward<Ts>(args)...)) {
+    while (!predicate(args...)) {
         ++counter;
         if (counter < N_SPINS) {
             pause();
