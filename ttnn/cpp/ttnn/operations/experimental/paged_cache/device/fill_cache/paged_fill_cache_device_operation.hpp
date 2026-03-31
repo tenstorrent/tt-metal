@@ -10,8 +10,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "paged_fill_cache_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-
 #include "paged_fill_cache_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {

@@ -12,6 +12,7 @@
 #include "bcast_multi_core_w_program_factory.hpp"
 #include "bcast_multi_core_hw_program_factory.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 

@@ -7,7 +7,6 @@
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_device_operation_types.hpp"
 #include "ttnn/operations/ccl/all_broadcast/device/all_broadcast_program_factory.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/global_semaphore.hpp>

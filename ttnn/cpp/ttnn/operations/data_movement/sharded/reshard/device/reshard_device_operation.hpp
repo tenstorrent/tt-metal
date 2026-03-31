@@ -13,6 +13,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 

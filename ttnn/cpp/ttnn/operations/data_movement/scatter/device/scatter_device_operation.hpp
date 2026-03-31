@@ -15,6 +15,7 @@
 #include "scatter_program_factory.hpp"
 #include "scatter_reduce_bfloat16_program_factory.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 

@@ -11,8 +11,8 @@
 #include "factories/untilize_with_unpadding_multi_core_col_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_block_interleaved_program_factory.hpp"
 #include "factories/untilize_with_unpadding_multi_core_nd_sharded_program_factory.hpp"
-#include "ttnn/device_operation.hpp"
 #include <variant>
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 

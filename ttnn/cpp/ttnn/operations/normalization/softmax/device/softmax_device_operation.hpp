@@ -16,6 +16,7 @@
 
 #include <optional>
 #include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 struct SoftmaxDeviceOperation {

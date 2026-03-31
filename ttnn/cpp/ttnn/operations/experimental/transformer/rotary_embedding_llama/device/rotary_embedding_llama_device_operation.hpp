@@ -9,7 +9,6 @@
 #include "rotary_embedding_llama_multi_core_program_factory.hpp"
 #include "rotary_embedding_llama_multi_core_prefill_sharded_program_factory.hpp"
 #include "rotary_embedding_llama_sharded_program_factory.hpp"
-#include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 

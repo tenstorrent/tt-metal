@@ -7,8 +7,6 @@
 #include "send_async_op_device_operation_types.hpp"
 #include "send_async_op_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-
 namespace ttnn::experimental::prim {
 
 struct SendAsyncDeviceOperation {

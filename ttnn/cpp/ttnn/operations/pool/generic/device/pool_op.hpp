@@ -15,6 +15,7 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::pool {
 // Generic pool uop -- called from the macro-ops

@@ -12,7 +12,6 @@
 #include "unary_program_factory.hpp"
 #include "unary_sharded_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
 
 #include "unary_device_operation_types.hpp"
 

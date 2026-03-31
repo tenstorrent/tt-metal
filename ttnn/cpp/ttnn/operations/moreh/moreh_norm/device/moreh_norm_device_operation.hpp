@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/device_operation.hpp"
 
 #define DEFINE_PROGRAM_FACTORY(FactoryName)                                                 \
     struct FactoryName {                                                                    \

@@ -14,7 +14,6 @@
 
 #include "hostdevcommon/kernel_structs.h"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::prim {

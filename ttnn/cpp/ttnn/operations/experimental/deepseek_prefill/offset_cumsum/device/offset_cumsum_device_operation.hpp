@@ -10,8 +10,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "offset_cumsum_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-
 #include "offset_cumsum_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {

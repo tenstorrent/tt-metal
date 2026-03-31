@@ -10,6 +10,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include "ttnn/types.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn {
 namespace operations::point_to_point {

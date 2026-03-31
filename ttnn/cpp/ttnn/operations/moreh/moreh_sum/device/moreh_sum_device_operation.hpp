@@ -9,6 +9,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/device_operation.hpp"
 
 #define MOREH_SUM_FACTORY_H(name)                                                           \
     struct name {                                                                           \

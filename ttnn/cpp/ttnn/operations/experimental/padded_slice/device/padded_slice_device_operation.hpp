@@ -13,8 +13,6 @@
 #include "padded_slice_rm_program_factory.hpp"
 #include "padded_slice_tile_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-
 namespace ttnn::experimental::prim {
 
 struct PaddedSliceDeviceOperation {

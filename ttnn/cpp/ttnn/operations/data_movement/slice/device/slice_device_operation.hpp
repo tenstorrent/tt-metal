@@ -16,6 +16,7 @@
 #include <optional>
 #include <variant>
 #include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::data_movement {
 

@@ -10,7 +10,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>

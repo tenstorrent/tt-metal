@@ -9,6 +9,7 @@
 #include "copy_device_operation_types.hpp"
 #include "copy_program_factory.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 

@@ -4,6 +4,7 @@
 
 #pragma once
 #include "ttnn/types.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_arange {
 

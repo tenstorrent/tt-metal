@@ -8,7 +8,6 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
 
 #include "sdpa_decode_device_operation_types.hpp"
 #include "sdpa_decode_program_factory.hpp"

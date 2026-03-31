@@ -12,6 +12,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include <tt_stl/span.hpp>
+#include "ttnn/operation.hpp"
 
 namespace ttnn::operations::data_movement {
 

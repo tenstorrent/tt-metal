@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn::operations::moreh::moreh_group_norm_backward {
 struct MorehGroupNormBackwardInputGradOperation {
