@@ -491,9 +491,9 @@ def train():
     elif model_type == "qwen3":
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "qwen3"))
         from safetensors.torch import load_file as load_safetensors_torch
-        from model_qwen3 import Qwen3ForCausalLM, Qwen3Config, load_weights_from_hf
+        from model_qwen3 import Qwen3Config
 
-        tie_word_embeddings = tc.get("weight_tying", "disabled").lower() == "enabled"
+        use_tp = device_config.enable_tp and device_config.total_devices() > 1
 
         hidden_size = tc.get("embedding_dim", 1024)
         num_heads = tc.get("num_heads", 16)
@@ -510,7 +510,22 @@ def train():
             attention_bias=False,
             attention_dropout=tc.get("dropout_prob", 0.0),
         )
-        tt_model = Qwen3ForCausalLM(qwen3_config, tie_word_embeddings=tie_word_embeddings)
+
+        if use_tp:
+            from model_qwen3_distributed import DistributedQwen3ForCausalLM, load_weights_from_hf_distributed
+
+            shard_dim = 1
+            tt_model = DistributedQwen3ForCausalLM(
+                qwen3_config,
+                tie_word_embeddings=False,
+                shard_dim=shard_dim,
+            )
+        else:
+            from model_qwen3 import Qwen3ForCausalLM, load_weights_from_hf
+
+            tie_word_embeddings = tc.get("weight_tying", "disabled").lower() == "enabled"
+            tt_model = Qwen3ForCausalLM(qwen3_config, tie_word_embeddings=tie_word_embeddings)
+
         max_sequence_length = qwen3_config.max_position_embeddings
 
         print("Loading Qwen3 weights from safetensors...")
@@ -518,7 +533,16 @@ def train():
         hf_state_dict = {}
         for f in st_files:
             hf_state_dict.update(load_safetensors_torch(f))
-        load_weights_from_hf(tt_model, hf_state_dict, qwen3_config, tie_word_embeddings=tie_word_embeddings)
+        if use_tp:
+            load_weights_from_hf_distributed(
+                tt_model,
+                hf_state_dict,
+                qwen3_config,
+                tie_word_embeddings=False,
+                shard_dim=shard_dim,
+            )
+        else:
+            load_weights_from_hf(tt_model, hf_state_dict, qwen3_config, tie_word_embeddings=tie_word_embeddings)
         del hf_state_dict
     else:
         raise ValueError(f"Unsupported model_type: {model_type}. Supported: gpt2, llama")

@@ -1,0 +1,14 @@
+training_config:
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_1_7B.yaml"
+  batch_size: 1
+  max_steps: 10
+  eval_every: 0
+  model_save_interval: 0
+
+device_config:
+  enable_ddp: False
+  enable_tp: True
+  mesh_shape: [1, 4]
+
+transformer_config:
+  max_sequence_length: 256
