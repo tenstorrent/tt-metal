@@ -87,9 +87,7 @@ def _host_input_tensor_for_pipeline(mesh_device):
     [
         {
             "l1_small_size": 16384,
-            # Non-traced pipeline: avoid reserving a large trace region (e.g. 40MB) — that competes with
-            # DRAM for UMT5 (`model_t5` encoder) and can OOM on N150-class devices.
-            "trace_region_size": 6000000,
+            "trace_region_size": 7800000,
             "num_command_queues": 2,
         }
     ],
@@ -98,10 +96,10 @@ def _host_input_tensor_for_pipeline(mesh_device):
 @pytest.mark.parametrize("num_iterations", [4])
 @pytest.mark.parametrize(
     "batch_size, expected_compile_time, expected_throughput_fps",
-    [(1, 120.0, 0.84)],
+    [(1, 0.75, 5.68)],
 )
 @pytest.mark.timeout(600)
-def test_perf_lingbot_va_e2e_2cq_no_trace(
+def test_perf_lingbot_va_e2e_2cq_trace(
     mesh_device,
     num_iterations,
     batch_size,
@@ -113,14 +111,11 @@ def test_perf_lingbot_va_e2e_2cq_no_trace(
         pytest.skip(f"Checkpoint dir not found: {ckpt}")
 
     message = _make_message()
-    save_dir = Path(__file__).resolve().parent / "out_perf_e2e_lingbot_va"
-    save_dir.mkdir(parents=True, exist_ok=True)
 
     tt_model = TtLingbotVA.prepare(
         checkpoint_path=ckpt,
         message=message,
         mesh_device=mesh_device,
-        save_dir=save_dir,
         num_inference_steps=1,
         action_num_inference_steps=1,
         frame_chunk_size=1,
@@ -128,7 +123,7 @@ def test_perf_lingbot_va_e2e_2cq_no_trace(
 
     image_host, dram_input_memory_config, l1_input_memory_config = _host_input_tensor_for_pipeline(mesh_device)
 
-    pipe_cfg = PipelineConfig(use_trace=False, num_command_queues=2, all_transfers_on_separate_command_queue=False)
+    pipe_cfg = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
     pipeline = create_pipeline_from_config(
         pipe_cfg,
         tt_model,
@@ -157,7 +152,7 @@ def test_perf_lingbot_va_e2e_2cq_no_trace(
     logger.info("Average model performance={:.2f} fps", num_iterations * batch_size / (end - start))
 
     prep_perf_report(
-        model_name="lingbot_va-2cq-notrace",
+        model_name="lingbot_va-2cq-trace",
         batch_size=batch_size,
         inference_and_compile_time=compile_time,
         inference_time=inference_time,

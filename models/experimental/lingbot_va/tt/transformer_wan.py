@@ -814,6 +814,7 @@ class WanTransformer3DModel(Module):
         cache_name: str = "pos",
         timestep_per_frame: torch.Tensor | None = None,
         dump_iter: int | None = None,
+        single_run: bool = False,
     ) -> torch.Tensor:
         """
         Forward pass.
@@ -828,47 +829,82 @@ class WanTransformer3DModel(Module):
         Returns:
             Video path: (B, out_channels, F, H, W). Action path: (B, N, action_dim).
         """
-        B, C, F, H, W = spatial.shape
         _ = dump_iter  # Kept in signature for call compatibility; debug tensor dumps were removed.
-        pF, pH, pW = self.patch_size
-        if action_mode:
-            patch_F, patch_H, patch_W = F, H, W
-        else:
-            patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
-        N = patch_F * patch_H * patch_W
+        if single_run:
+            # Fast path for perf runs: caller precomputes all preprocessing tensors.
+            # Expected:
+            # - spatial: pre-embedded spatial_1BND
+            # - prompt: prepared prompt_1BLP
+            # - timestep: prepared temb (temb_11BD for non-per-token, temb_1BND for per-token)
+            # - timestep_per_frame: prepared block_temb (timestep_proj_1BTD or timestep_proj_1BN6D)
+            # - grid_id: dict with rope features and shape metadata
+            if not isinstance(grid_id, dict):
+                raise ValueError("single_run=True requires grid_id to be a metadata dict")
+            required_keys = {"rope_cos", "rope_sin", "trans_mat", "N", "F", "H", "W", "use_per_token"}
+            if not required_keys.issubset(grid_id.keys()):
+                missing = required_keys - set(grid_id.keys())
+                raise ValueError(f"single_run metadata missing keys: {sorted(missing)}")
 
-        rope_cos_1HND, rope_sin_1HND, trans_mat = self.get_rope_features(grid_id)
+            rope_cos_1HND = grid_id["rope_cos"]
+            rope_sin_1HND = grid_id["rope_sin"]
+            trans_mat = grid_id["trans_mat"]
+            N = grid_id["N"]
+            F = grid_id["F"]
+            H = grid_id["H"]
+            W = grid_id["W"]
+            use_per_token = grid_id["use_per_token"]
+            action_mode = grid_id.get("action_mode", action_mode)
 
-        use_per_token = timestep_per_frame is not None
-        if use_per_token:
-            patches_per_frame = patch_H * patch_W
-            N_padded = get_padded_vision_seq_len(N, self.parallel_config.sequence_parallel.factor)
-            temb_1BND, timestep_proj_1BN6D, prompt_1BLP = self.prepare_per_token_conditioning(
-                timestep_per_frame,
-                prompt,
-                action_mode=action_mode,
-                patches_per_frame=patches_per_frame,
-                N_padded=N_padded,
-            )
+            spatial_1BND = spatial
+            prompt_1BLP = prompt
+            block_temb = timestep_per_frame
+            if block_temb is None:
+                raise ValueError("single_run=True requires precomputed block timestep tensor in timestep_per_frame")
+            if use_per_token:
+                temb_1BND = timestep
+            else:
+                temb_11BD = timestep
         else:
-            temb_11BD, timestep_proj_1BTD, prompt_1BLP = self.prepare_conditioning(
-                timestep, prompt, action_mode=action_mode
-            )
+            B, C, F, H, W = spatial.shape
+            pF, pH, pW = self.patch_size
+            if action_mode:
+                patch_F, patch_H, patch_W = F, H, W
+            else:
+                patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
+            N = patch_F * patch_H * patch_W
 
-        if action_mode:
-            spatial_1BNI, N = self.preprocess_action_input(spatial)
-            spatial_1BND = self.action_embedder(
-                spatial_1BNI,
-                compute_kernel_config=self.hifi4_compute_kernel_config,
-            )
-        else:
-            spatial_1BNI, N = self.preprocess_spatial_input(spatial)
-            spatial_1BND = self.patch_embedding(spatial_1BNI)
+            rope_cos_1HND, rope_sin_1HND, trans_mat = self.get_rope_features(grid_id)
+
+            use_per_token = timestep_per_frame is not None
+            if use_per_token:
+                patches_per_frame = patch_H * patch_W
+                N_padded = get_padded_vision_seq_len(N, self.parallel_config.sequence_parallel.factor)
+                temb_1BND, timestep_proj_1BN6D, prompt_1BLP = self.prepare_per_token_conditioning(
+                    timestep_per_frame,
+                    prompt,
+                    action_mode=action_mode,
+                    patches_per_frame=patches_per_frame,
+                    N_padded=N_padded,
+                )
+            else:
+                temb_11BD, timestep_proj_1BTD, prompt_1BLP = self.prepare_conditioning(
+                    timestep, prompt, action_mode=action_mode
+                )
+
+            if action_mode:
+                spatial_1BNI, N = self.preprocess_action_input(spatial)
+                spatial_1BND = self.action_embedder(
+                    spatial_1BNI,
+                    compute_kernel_config=self.hifi4_compute_kernel_config,
+                )
+            else:
+                spatial_1BNI, N = self.preprocess_spatial_input(spatial)
+                spatial_1BND = self.patch_embedding(spatial_1BNI)
+
+            block_temb = timestep_proj_1BN6D if use_per_token else timestep_proj_1BTD
 
         use_cache = cache_name in self._attn_caches
         caches = self._attn_caches[cache_name] if use_cache else None
-
-        block_temb = timestep_proj_1BN6D if use_per_token else timestep_proj_1BTD
 
         for block_idx, block in enumerate(self.blocks):
             cached_k_tt = None
@@ -961,6 +997,8 @@ class WanTransformer3DModel(Module):
                 compute_kernel_config=self.hifi4_compute_kernel_config,
                 dtype=ttnn.float32,
             )
+            if single_run:
+                return proj_out_1BNA
             out_action = self.postprocess_action_output(proj_out_1BNA, N)
             return out_action
         else:
@@ -969,5 +1007,7 @@ class WanTransformer3DModel(Module):
                 compute_kernel_config=self.hifi4_compute_kernel_config,
                 dtype=ttnn.float32,
             )
+            if single_run:
+                return proj_out_1BNI
             out_video = self.postprocess_spatial_output(proj_out_1BNI, F, H, W, N)
             return out_video
