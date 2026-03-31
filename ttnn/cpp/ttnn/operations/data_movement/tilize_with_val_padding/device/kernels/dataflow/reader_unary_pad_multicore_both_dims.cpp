@@ -6,10 +6,41 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(begin_addr);
-    for (uint32_t i = 0; i < n; ++i) {
-        ptr[i] = val;
+// Alignment-aware fill: writes 4 bytes at a time for the aligned middle,
+// and uses element-sized writes for unaligned start/end to avoid rv32 unaligned faults.
+// Assumption: if val_size < 4, multiple vals are packed into a single uint32_t val.
+template <uint32_t val_size>
+FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
+    static_assert(val_size == 2 || val_size == 4, "Unsupported val_size");
+    using IntType = std::conditional_t<(val_size == 2), uint16_t, uint32_t>;
+
+    const uint32_t end_addr = start_addr + n_bytes;
+    const uint32_t start_addr_4B = (start_addr + 0x3) & 0xFFFFFFFC;
+    const uint32_t end_addr_4B = end_addr & 0xFFFFFFFC;
+
+    // Write 4 bytes at a time for the aligned region
+    {
+        auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_addr_4B);
+        auto* end_ptr_4B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(end_addr_4B);
+        for (auto* ptr = start_ptr_4B; ptr < end_ptr_4B; ++ptr) {
+            *ptr = val;
+        }
+    }
+
+    // For data-types smaller than 4 bytes, handle unaligned start/end
+    if constexpr (val_size < 4) {
+        auto* start_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr);
+        auto* end_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr);
+        auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr_4B);
+        auto* end_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr_4B);
+        const IntType val_ = static_cast<IntType>(val);
+
+        for (auto* ptr = start_ptr; ptr < start_ptr_4B; ++ptr) {
+            *ptr = val_;
+        }
+        for (auto* ptr = end_ptr_4B; ptr < end_ptr; ++ptr) {
+            *ptr = val_;
+        }
     }
 }
 
@@ -33,7 +64,6 @@ void kernel_main() {
                           uint32_t start_column_id,
                           uint32_t width_size,
                           uint32_t size_2d,
-                          uint32_t element_size,
                           uint32_t single_block_size) {
         uint32_t padding_rows = num_rows == 32 ? 0 : 32 - num_rows;
         bool has_rows = (num_rows + padding_rows) > 0;
@@ -52,7 +82,7 @@ void kernel_main() {
             uint32_t this_block_size = unpadded_X_size - prev_size;
             if (this_block_size < width_size) {
                 uint32_t to_pad = width_size - this_block_size;
-                fill_with_val(l1_write_addr + this_block_size + element_size, (to_pad) >> 2, pad_value);
+                fill_with_val<element_size>(l1_write_addr + this_block_size, to_pad, pad_value);
             }
 
             // Block before copying data from tmp to cb buffer
@@ -61,7 +91,7 @@ void kernel_main() {
         }
 
         for (uint32_t pad_row = 0; pad_row < padding_rows; pad_row++) {
-            fill_with_val(l1_write_addr, (width_size >> 2), pad_value);
+            fill_with_val<element_size>(l1_write_addr, width_size, pad_value);
             l1_write_addr += width_size;
         }
 
@@ -93,7 +123,6 @@ void kernel_main() {
                         start_column_id_u,
                         sub_block_width_size,
                         size_2d,
-                        element_size,
                         single_sub_block_size_row_arg);
                 }
             }
