@@ -23,8 +23,6 @@ from callstack_provider import (
     format_callstack_with_message,
     run as get_callstack_provider,
     CallstackProvider,
-    get_function_die,
-    extract_template_params,
 )
 from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
@@ -204,28 +202,12 @@ def dump_lightweight_asserts(
             )
             arguments_and_locals = ""
             top_frame = callstack_data.kernel_callstack_with_message.callstack[0]
-            try:
-                function_die = get_function_die(top_frame)
-                if function_die is not None:
-                    template_params = extract_template_params(function_die)
-                    if template_params:
-                        arguments_and_locals += "\nTemplate arguments:\n"
-                        for param_name, param_value in template_params:
-                            if param_name and param_name in assert_code:
-                                arguments_and_locals += f"- [info]{param_name}[/] = [command]{param_value}[/]\n"
-                            else:
-                                arguments_and_locals += f"- {param_name or '?'} = {param_value}\n"
-                        for param_name, _ in template_params:
-                            if param_name:
-                                assert_code = assert_code.replace(param_name, f"[info]{param_name}[/]")
-            except Exception as e:
-                if os.getenv("TT_TRIAGE_DEBUG_TEMPLATES"):
-                    log_check_risc(
-                        risc_name,
-                        location,
-                        False,
-                        f"[warning]Template arguments unavailable: {e}[/]",
-                    )
+            if len(top_frame.template_parameters) > 0:
+                arguments_and_locals += "\nTemplate parameters:\n"
+                arguments_and_locals += serialize_variables(top_frame.template_parameters, assert_code)
+                for var in top_frame.template_parameters:
+                    if var.name is not None:
+                        assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
             if len(top_frame.arguments) > 0:
                 arguments_and_locals += "\nRuntime arguments:\n"
                 arguments_and_locals += serialize_variables(top_frame.arguments, assert_code)
