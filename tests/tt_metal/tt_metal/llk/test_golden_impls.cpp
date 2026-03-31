@@ -21,16 +21,14 @@ namespace unit_tests::compute {
 std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_vec, const GoldenConfig& config) {
     vector<uint32_t> dst_vec;
 
-    // Due to each element being 32 bits, for bfloat16 thats 2 elements
-
     int num_tile_rows = config.num_tiles_r_dim;
     int num_tile_cols = config.num_tiles_c_dim;
 
-    // Due to each element being 32 bits, for bfloat16 thats 2 elements
-    int num_c_dim = config.face_c_dim / 2;
-    // Untilize outputs correct number of r_dim & num_faces
-    // But assumes increments are still default 16x16 faces
-    int face_size = 16 * 16 / 2;
+    // Number of uint32 words per face row: face_c_dim elements × datum_bytes / 4 bytes per uint32
+    // BF16 (datum_bytes=2): 16*2/4 = 8  FP8 (datum_bytes=1): 16*1/4 = 4
+    int num_c_dim = config.face_c_dim * static_cast<int>(config.datum_bytes) / 4;
+    // Standard 16x16 face size in uint32 words
+    int face_size = 16 * 16 * static_cast<int>(config.datum_bytes) / 4;
     int tile_size = face_size * (config.tiny_tile ? config.num_faces : 4);
 
     std::set<int> ind;
