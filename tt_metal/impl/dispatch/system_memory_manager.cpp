@@ -32,6 +32,7 @@
 // Doorbell delay injection for KMD overhead simulation.
 // Set TT_DOORBELL_DELAY_NS to inject a spin delay before each MMIO doorbell
 // write, simulating ioctl round-trip overhead.
+// Set TT_DOORBELL_STATS=1 to print doorbell counts on process exit.
 static uint64_t get_doorbell_delay_ns() {
     const char* env = std::getenv("TT_DOORBELL_DELAY_NS");
     return env ? std::strtoull(env, nullptr, 10) : 0;
@@ -44,6 +45,27 @@ static inline void spin_delay_ns(uint64_t ns) {
     while (std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::steady_clock::now() - start).count() < (int64_t)ns) {}
 }
+
+static std::atomic<uint64_t> doorbell_fetch_q_count{0};
+static std::atomic<uint64_t> doorbell_completion_q_count{0};
+
+static struct DoorbellStatsReporter {
+    ~DoorbellStatsReporter() {
+        const char* env = std::getenv("TT_DOORBELL_STATS");
+        if (!env || std::string(env) != "1") {
+            return;
+        }
+        uint64_t fq = doorbell_fetch_q_count.load(std::memory_order_relaxed);
+        uint64_t cq = doorbell_completion_q_count.load(std::memory_order_relaxed);
+        fprintf(
+            stderr,
+            "DOORBELL_STATS: fetch_q_writes=%lu completion_q_writes=%lu total=%lu delay_ns=%lu\n",
+            fq,
+            cq,
+            fq + cq,
+            doorbell_delay_ns);
+    }
+} doorbell_stats_reporter;
 #include <tracy/Tracy.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
@@ -614,6 +636,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
+    doorbell_completion_q_count.fetch_add(1, std::memory_order_relaxed);
     spin_delay_ns(doorbell_delay_ns);
     this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
     auto& ctx = tt::tt_metal::MetalContext::instance(this->context_id);
@@ -819,6 +842,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     if (stall_prefetcher) {
         command_size_16B |= (1 << ((sizeof(DispatchSettings::prefetch_q_entry_type) * 8) - 1));
     }
+    doorbell_fetch_q_count.fetch_add(1, std::memory_order_relaxed);
     spin_delay_ns(doorbell_delay_ns);
     this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
