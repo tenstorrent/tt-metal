@@ -156,7 +156,6 @@ blackhole:
   - tests/ttnn/unit_tests/operations/eltwise/test_remainder.py
 
   # Core tests
-  - tests/ttnn/unit_tests/base_functionality/test_untilize_bfloat8_b.py
   - tests/ttnn/unit_tests/base_functionality/test_tilize_pad_cb.py
   - tests/ttnn/unit_tests/base_functionality/test_to_and_from_device.py
   - tests/ttnn/unit_tests/base_functionality/test_cpp_logging.py
