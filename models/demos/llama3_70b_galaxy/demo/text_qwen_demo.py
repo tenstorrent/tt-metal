@@ -611,10 +611,13 @@ def test_qwen_demo_text(
         if pcc_check:
             vocab_size = 151936  # Qwen vocab size
             # Always assume 6U Galaxy configuration
-            if is_ci_env:
-                ref_output_path = f"/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32b-Instruct/qwen3_32b_text_demo_ref_outputs/qwen3_32b_ref_outputs_{num_layers}L_decode.refpt"
-            else:
-                ref_output_path = f"/proj_sw/user_dev/qwen3_32b_text_demo_ref_outputs/qwen3_32b_ref_outputs_{num_layers}L_decode.refpt"
+            #if is_ci_env:
+            #    ref_output_path = f"/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32b-Instruct/qwen3_32b_text_demo_ref_outputs/qwen3_32b_ref_outputs_{num_layers}L_decode.refpt"
+            #else:
+            #    ref_output_path = f"/proj_sw/user_dev/qwen3_32b_text_demo_ref_outputs/qwen3_32b_ref_outputs_{num_layers}L_decode.refpt"
+
+            ref_output_path = f"models/tt_transformers/tests/reference_outputs/Qwen3-32B.refpt"
+
             assert os.path.exists(ref_output_path), f"Reference output file with path {ref_output_path} does not exist!"
             torch_reference = torch.load(ref_output_path)
             assert torch_reference["all_ref_logits"].shape == (
