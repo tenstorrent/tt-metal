@@ -10,9 +10,9 @@ on:
     inputs:
       allow-partial-hash-changes:
         type: boolean
-        description: "Continue if some, but not all, config hashes change during preflight"
+        description: "Continue if some config hashes are changed during preflight"
         required: false
-        default: false
+        default: true
 
 permissions:
   contents: read
