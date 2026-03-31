@@ -124,11 +124,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         for (int n = 0; n < num_tiles_accum; n++)
         {
-            if (n == 1)
-            {
-                _llk_math_eltwise_binary_init_<ELTWISE_BINARY_OP, MATH_FIDELITY, false /*EN_DI*/, REUSE_DEST_TYPE>(
-                    ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tile testing not yet supported
-            }
             for (int tile = 0; tile < tiles_in_block; tile++)
             {
                 const int global_tile_idx = block * tiles_in_block + tile;
