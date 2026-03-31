@@ -549,8 +549,7 @@ def test_copy_to_memory_config_rm_interleaved_to_legacy_2d_sharded(
     torch.manual_seed(0)
     torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
 
-    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     output_shard_spec = ttnn.ShardSpec(output_grid, output_shard_shape_2d, shard_orientation)
     output_mem_config = ttnn.MemoryConfig(output_shard_layout, ttnn.BufferType.L1, output_shard_spec)
@@ -2510,3 +2509,21 @@ def test_copy_to_memory_config_cache_test_inputs_same_logical_shape_but_differen
     ), "Expected 2 program cache entries (cache miss on third call), got {device.num_program_cache_entries()}"
 
     device.disable_and_clear_program_cache()
+
+
+def test_to_memory_config_tile_interleaved_to_width_sharded_bf8(device):
+    torch.manual_seed(0)
+    shape = [1, 1, 8192, 2048]
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    shard_shape = (8192, 256)
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
+
+    output_tensor = ttnn.copy_to_memory_config(input_tensor, output_memory_config=output_mem_config)
+
+    output_torch = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_input, output_torch, 0.9999)
