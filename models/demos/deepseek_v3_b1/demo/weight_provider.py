@@ -17,6 +17,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.prepare_weights import (
     _MTP_LAYER_IDX,
     NUM_ROUTED_EXPERTS,
@@ -56,22 +57,6 @@ class WeightProvider(Protocol):
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         ...
-
-
-class LogicalModelDimensions:
-    """HF / logical tensor dimensions for DeepSeek V3 B1. Must match prepare_weights and stage expectations."""
-
-    HIDDEN_SIZE = 7168
-    VOCAB_SIZE = 129280
-    Q_A_DIM = 1536
-    Q_B_OUT = 24576
-    KV_A_DIM = 576
-    KV_B_LORA_RANK = 512
-    KV_B_PROJ_OUT = 32768
-    O_PROJ_OUT = 16384
-    MOE_INTERMEDIATE_SIZE = 2048
-    INTERMEDIATE_SIZE = 18432
-    GATE_NUM_INDICES = 256
 
 
 def _layer_key(layer_id: int, suffix: str) -> str:
