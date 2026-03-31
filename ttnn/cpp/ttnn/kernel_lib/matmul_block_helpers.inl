@@ -25,7 +25,8 @@ template <
     bool packer_l1_acc,
     bool pack_last_to_interm,
     bool pack_relu,
-    typename PostComputeFn>
+    typename PostComputeFn,
+    typename PreKBlockFn>
 ALWI void matmul_block(
     uint32_t block_w,
     uint32_t in0_num_subblocks,
@@ -34,7 +35,8 @@ ALWI void matmul_block(
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
     uint32_t batch,
-    PostComputeFn post_compute) {
+    PostComputeFn post_compute,
+    PreKBlockFn pre_k_block) {
 
     // Compile-time validation
     static_assert(in0_cb != out_cb, "matmul_block: in0_cb and out_cb must be different CBs");
@@ -86,6 +88,9 @@ ALWI void matmul_block(
                     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
                 }
             }
+
+            // PreKBlockFn: per-K-block preprocessing (e.g., in0_transpose)
+            pre_k_block(block, num_k_blocks, last_out);
 
             // Wait for full input blocks
             cb_wait_front(in0_cb, in0_block_num_tiles);
