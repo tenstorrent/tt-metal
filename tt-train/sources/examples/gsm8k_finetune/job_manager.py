@@ -189,7 +189,7 @@ export TT_TRAIN_OVERRIDES_PATH="{training_overrides_path}"
 cd {output_dir}
 
 # Run the training script
-python {script_path}
+{run_invocation}
 """
 
 
@@ -357,6 +357,11 @@ class JobManager:
         mesh_graph_desc_path = output_dir / "mesh_graph_descriptor.textproto"
         training_overrides_path = output_dir / "training_overrides.yaml"
 
+        if training_config.run_command_override:
+            run_invocation = training_config.run_command_override
+        else:
+            run_invocation = f"python {script_path}"
+
         script_content = SLURM_SCRIPT_TEMPLATE.format(
             partition=partition,
             nodes=nodes,
@@ -367,6 +372,7 @@ class JobManager:
             nodelist_directive=nodelist_directive,
             mesh_graph_desc_path=str(mesh_graph_desc_path),
             training_overrides_path=str(training_overrides_path),
+            run_invocation=run_invocation,
         )
 
         return script_content

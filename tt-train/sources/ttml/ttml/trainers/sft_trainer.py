@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import pickle
+import sys
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -231,7 +232,7 @@ class SFTTrainer:
                 data_iter = iter(self.train_dataloader)
                 return next(data_iter)
 
-        bar = tqdm(range(cfg.max_steps), desc="SFTTrainer")
+        bar = tqdm(range(cfg.max_steps), desc="SFTTrainer", file=sys.stdout)
         for _ in bar:
             # self.step is 0-based so external lr_schedule callables (e.g.
             # SpeedrunScheduler.lr_at) receive the expected step index.

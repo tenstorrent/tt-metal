@@ -8,6 +8,7 @@ GSM8K Fine-tuning Script
 Fine-tunes a Llama/Qwen model on the GSM8K math word problems dataset using TT-Metal.
 """
 
+import logging
 import os
 import sys
 from functools import partial
@@ -20,6 +21,18 @@ from transformers import AutoTokenizer
 from huggingface_hub import snapshot_download
 
 import ttml
+
+# Route DEBUG/INFO/WARNING to stdout; ERROR/CRITICAL stay on stderr.
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.DEBUG)
+_root_logger.handlers.clear()
+_stdout_handler = logging.StreamHandler(sys.stdout)
+_stdout_handler.setLevel(logging.DEBUG)
+_stdout_handler.addFilter(lambda r: r.levelno < logging.ERROR)
+_stderr_handler = logging.StreamHandler(sys.stderr)
+_stderr_handler.setLevel(logging.ERROR)
+_root_logger.addHandler(_stdout_handler)
+_root_logger.addHandler(_stderr_handler)
 from ttml.common.config import (
     TrainingConfig,
     DeviceConfig,
