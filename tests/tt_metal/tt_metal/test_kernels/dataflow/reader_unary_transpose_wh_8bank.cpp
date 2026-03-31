@@ -78,6 +78,7 @@ void kernel_main() {
         for (uint32_t w = 0; w < Wt; w++) {
             for (uint32_t h = 0; h < Ht; h++) {
 #ifdef ARCH_QUASAR
+                DPRINT << "reading tile " << i_tile << ENDL();
                 dfb_in.read_in(noc, s, {.page_id = i_tile});
 #else
                 cb.reserve_back(onetile);
@@ -94,4 +95,8 @@ void kernel_main() {
         }  // Wt
         i_tile_N += HtWt;  // stride in batch/channel
     }  // N
+
+#ifdef ARCH_QUASAR
+    dfb_in.finish();
+#endif
 }
