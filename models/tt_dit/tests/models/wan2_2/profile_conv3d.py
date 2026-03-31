@@ -89,7 +89,7 @@ WARMUP = 2
 TIMED = 4
 
 
-def make_tensors(mesh_device, T, H, W, C_in, C_out, kernel_size):
+def make_tensors(mesh_device, T, H, W, C_in, C_out, kernel_size, C_in_block):
     padded_C_in = aligned_channels(C_in)
     tt_input = ttnn.from_torch(
         torch.randn(1, T, H, W, padded_C_in, dtype=torch.float32),
@@ -99,11 +99,14 @@ def make_tensors(mesh_device, T, H, W, C_in, C_out, kernel_size):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    w = torch.randn(C_out, C_in, *kernel_size, dtype=torch.float32).permute(2, 3, 4, 1, 0)
-    if padded_C_in != C_in:
-        w = torch.nn.functional.pad(w, (0, 0, 0, padded_C_in - C_in))
+    # Weights in PyTorch format (C_out, C_in, kD, kH, kW), padded and prepared via
+    # prepare_conv3d_weights for correct multi-C_in_block layout.
+    w = torch.randn(C_out, padded_C_in, *kernel_size, dtype=torch.float32)
     tt_weight = ttnn.from_torch(
-        w.reshape(-1, C_out), device=mesh_device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, pad_value=0
+        w, device=mesh_device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, pad_value=0
+    )
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, C_in_block=C_in_block, device=mesh_device
     )
     tt_bias = ttnn.from_torch(
         torch.randn(1, C_out, dtype=torch.float32),
@@ -164,7 +167,7 @@ def profile_layer(mesh_device, grid_size, ckc, name, layer_info, warmup=WARMUP, 
     print(f"{'='*80}", flush=True)
 
     torch.manual_seed(42)
-    tt_input, tt_weight, tt_bias = make_tensors(mesh_device, T, H, W, C_in, C_out, kernel_size)
+    tt_input, tt_weight, tt_bias = make_tensors(mesh_device, T, H, W, C_in, C_out, kernel_size, conv_config.C_in_block)
 
     # Warmup
     for i in range(warmup):
