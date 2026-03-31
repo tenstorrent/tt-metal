@@ -21,6 +21,14 @@ struct NoPostCompute {
     ALWI void operator()(uint32_t /* out_subblock_num_tiles */) const {}
 };
 
+// Default no-op pre-K-block functor.
+// Called at the start of each K-block iteration, before input CB waits.
+// Receives (block_index, num_k_blocks, is_last_block).
+// Use for per-K-block preprocessing (e.g., in0_transpose, global CB pointer manipulation).
+struct NoPreKBlock {
+    ALWI void operator()(uint32_t, uint32_t, bool) const {}
+};
+
 }  // namespace matmul_block_config
 
 /**
@@ -59,6 +67,10 @@ struct NoPostCompute {
  *                     (default: false)
  *   PostComputeFn     Functor called per output sub-block on the last K-block,
  *                     after matmul but before packing. (default: NoPostCompute)
+ *   PreKBlockFn       Functor called at the start of each K-block iteration,
+ *                     before input CB waits. Receives (block, num_k_blocks,
+ *                     is_last). Use for per-K-block preprocessing such as
+ *                     in0_transpose. (default: NoPreKBlock)
  *
  * ── Runtime Parameters ─────────────────────────────────────────────────────
  *
@@ -70,6 +82,7 @@ struct NoPostCompute {
  *   out_subblock_w     Output sub-block width in tiles.
  *   batch              Number of independent batch slices (default: 1).
  *   post_compute       PostComputeFn instance (default: {}).
+ *   pre_k_block        PreKBlockFn instance (default: {}).
  */
 template <
     uint32_t in0_cb,
@@ -80,7 +93,8 @@ template <
     bool packer_l1_acc = false,
     bool pack_last_to_interm = false,
     bool pack_relu = false,
-    typename PostComputeFn = matmul_block_config::NoPostCompute>
+    typename PostComputeFn = matmul_block_config::NoPostCompute,
+    typename PreKBlockFn = matmul_block_config::NoPreKBlock>
 ALWI void matmul_block(
     uint32_t block_w,
     uint32_t in0_num_subblocks,
@@ -89,7 +103,8 @@ ALWI void matmul_block(
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
     uint32_t batch = 1,
-    PostComputeFn post_compute = {});
+    PostComputeFn post_compute = {},
+    PreKBlockFn pre_k_block = {});
 
 }  // namespace compute_kernel_lib
 
