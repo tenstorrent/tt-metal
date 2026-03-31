@@ -18,6 +18,7 @@ class Embedding(LightweightModule):
         super().__init__()
 
         self.mesh_device = mesh_device
+
         base_name = args.get_state_dict_prefix("", None) + "tok_embeddings.weight"
         torch_weight = state_dict[base_name].unsqueeze(0).unsqueeze(0)
         cache_name = None if args.dummy_weights else weight_cache_path / base_name
@@ -31,8 +32,8 @@ class Embedding(LightweightModule):
             cache_file_name=cache_name,
         )
 
-    def forward(self, x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
-        x = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        x = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x
 
 
@@ -41,7 +42,7 @@ class ScaledEmbedding(Embedding):
         super().__init__(mesh_device, args, weight_cache_path, state_dict, dtype)
         self.embed_scale = embed_scale
 
-    def forward(self, x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
-        e = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
-        s = ttnn.multiply(e, self.embed_scale, memory_config=memory_config)
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        e = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        s = ttnn.multiply(e, self.embed_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return s

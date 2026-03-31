@@ -9,7 +9,6 @@ from transformers.models.mixtral.modeling_mixtral import MixtralBlockSparseTop2M
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor
@@ -24,7 +23,7 @@ def convert2ref(state_dict):
     return out
 
 
-@pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
+@pytest.mark.parametrize("mode", ["prefill", "decode"])
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_mixtral_mlp_inference(mesh_device, reset_seeds, mode):
     seqlen = 32
@@ -63,7 +62,7 @@ def test_mixtral_mlp_inference(mesh_device, reset_seeds, mode):
 
     reference_output = reference_model(torch_input)
 
-    if mode == Mode.DECODE:
+    if mode == "decode":
         shard_grid = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}  # 8 cores: x=0 to x=7, y=0
         )

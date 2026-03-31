@@ -8,18 +8,15 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, skip_with_llk_assert
-from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, sample_host
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.tt_transformers.tt.common import PagedAttentionConfig, sample_host
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
-from models.tt_transformers.tt.prefetcher import Prefetcher
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39475")
 @torch.no_grad()
 @pytest.mark.timeout(1800)
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("use_prefetcher", ([False]))
 @pytest.mark.parametrize(
     "weights, layers",
     [
@@ -81,7 +78,6 @@ def test_model_inference(
     reset_seeds,
     ensure_gc,
     request,
-    use_prefetcher,
 ):
     model_name_env = os.getenv("HF_MODEL")
     if model_name_env:
@@ -99,9 +95,6 @@ def test_model_inference(
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
 
-    use_hf_rope = request.config.getoption("--use_hf_rope")
-    if use_hf_rope:
-        logger.info("Using HF style rope")
     test_id = request.node.callspec.id
     mode_accuracy = "accuracy" in test_id
     instruct = False  # True if weights == "instruct" else False
@@ -111,13 +104,6 @@ def test_model_inference(
     # Also avoid comparing PCC for dummy weights
     cache_pcc = layers == 1 and not dummy_weights
 
-    # Setup prefetcher
-    # num_tensors is 5 because we are prefetching qkv + do + ff1 + ff3 + ff2
-    num_tensors = 5 if use_prefetcher else 0
-    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
-    if use_prefetcher:
-        prefetcher.init(mode=Mode.DECODE)
-
     model_args = ModelArgs(
         mesh_device,
         instruct=instruct,
@@ -126,8 +112,6 @@ def test_model_inference(
         max_seq_len=max_seq_len,
         max_batch_size=batch_size,
         cache_hf=True,
-        prefetcher=prefetcher,
-        use_hf_rope=use_hf_rope,
     )
 
     # Define minimum PCC for each iteration
@@ -137,17 +121,12 @@ def test_model_inference(
         pcc = 0.94 if mode_accuracy else 0.86
 
     model_name = model_args.base_model_name
-
-    # Set num_layers for prefetcher if it is not None
-    if prefetcher is not None:
-        prefetcher.num_layers = model_args.n_layers
-
     if layers == 1:  # quick mode has tight PCC checks for known models
         model_name = model_args.base_model_name
 
         # Define tight final PCC thresholds for quick mode
         final_model_pcc = {
-            "Llama-3.1-8B": (0.9649 if model_args.device_name == "N150" else 0.965) if mode_accuracy else 0.954,
+            "Llama-3.1-8B": 0.965 if mode_accuracy else 0.954,
             "Llama-3.1-70B": 0.973,
             "Llama-3.2-1B": 0.999 if mode_accuracy else 0.991,
             "Llama-3.2-3B": 0.954 if mode_accuracy else 0.945,
@@ -193,26 +172,19 @@ def test_model_inference(
         model_args.n_layers = layers
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
-    reference_state_dict = None
-    if dummy_weights:
-        reference_state_dict = {
-            k[len(state_dict_prefix) :]: v
-            for k, v in state_dict.items()
-            if (
-                any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
-                or any(
-                    [
-                        f"{state_dict_prefix}{name}" in k
-                        for name in [
-                            "tok_embeddings.weight",
-                            "learnable_embedding.weight",
-                            "norm.weight",
-                            "output.weight",
-                        ]
-                    ]
-                )
+    reference_state_dict = {
+        k[len(state_dict_prefix) :]: v
+        for k, v in state_dict.items()
+        if (
+            any([f"{state_dict_prefix}layers.{i}." in k for i in range(model_args.n_layers)])
+            or any(
+                [
+                    f"{state_dict_prefix}{name}" in k
+                    for name in ["tok_embeddings.weight", "learnable_embedding.weight", "norm.weight", "output.weight"]
+                ]
             )
-        }
+        )
+    }
 
     prompts = ["This is a test"] * model_args.max_batch_size
     if dummy_weights:
@@ -231,9 +203,8 @@ def test_model_inference(
 
     reference_model = None
     if run_ref_pt:
-        reference_model = model_args.reference_transformer(load_checkpoint=not dummy_weights)
-        if dummy_weights:
-            reference_model.load_state_dict(reference_state_dict)
+        reference_model = model_args.reference_transformer()
+        reference_model.load_state_dict(reference_state_dict)
 
     # Embedding on host
     embd = model_args.reference_embedding(reference_model)
@@ -288,11 +259,7 @@ def test_model_inference(
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
-        prefetcher=prefetcher if use_prefetcher else None,
     )
-    if use_prefetcher:
-        tt_model.prefetcher.prefetch()
-
     logger.info("Model and caches loaded.")
 
     if run_ref_pt:
@@ -331,18 +298,18 @@ def test_model_inference(
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
-            model_args.get_residual_mem_config(Mode.DECODE, prefetcher),
+            model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos, prefetcher)
+        rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
 
         # Run TT model
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
             rot_mats_global=rot_mats,
-            mode=Mode.DECODE,
+            mode="decode",
             page_table=page_table_tt,
         )
 

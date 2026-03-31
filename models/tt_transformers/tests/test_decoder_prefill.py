@@ -9,13 +9,13 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, get_rot_transformation_mat, precompute_freqs
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.prefetcher import Prefetcher
-from models.tt_transformers.tt.rope import get_rot_mats, get_rot_mats_hf
+from models.tt_transformers.tt.rope import get_rot_mats
 
 
 @torch.no_grad()
@@ -50,10 +50,6 @@ from models.tt_transformers.tt.rope import get_rot_mats, get_rot_mats_hf
         128,
     ),
 )
-@pytest.mark.parametrize(
-    "use_prefetcher",
-    ([False]),
-)
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
     max_seq_len,
@@ -62,7 +58,6 @@ def test_decoder_inference(
     mesh_device,
     reset_seeds,
     ensure_gc,
-    use_prefetcher,
 ):
     model_name_env = os.getenv("HF_MODEL")
     if max_seq_len > 256 and model_name_env and "Mistral-7B" in model_name_env:
@@ -73,33 +68,26 @@ def test_decoder_inference(
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    num_tensors = 0
-    prefetcher = Prefetcher(mesh_device, num_tensors=num_tensors, num_layers=1) if use_prefetcher else None
-    if use_prefetcher:
-        prefetcher.init(mode=Mode.PREFILL)
-
-    model_args = ModelArgs(
-        mesh_device,
-        max_batch_size=batch_size,
-        max_seq_len=max_seq_len,
-        cache_hf=True,
-        prefetcher=prefetcher,
-        use_hf_rope=False,
-    )
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
 
-    reference_model = model_args.reference_decoder(load_checkpoint=True)
+    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    first_layer_prefix = model_args.get_state_dict_prefix("TransformerBlock", 0)
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
+
+    reference_model = model_args.reference_decoder()
+    reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 0
     generation_length = 1
     all_tests_pass = True
 
-    rot_mats_fn = get_rot_mats_hf if model_args.use_hf_rope else get_rot_mats
-
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = rot_mats_fn(
+    rot_mats = get_rot_mats(
         head_dim=model_args.head_dim,
         device=mesh_device,
         seq_len=max_seq_len,
@@ -116,19 +104,16 @@ def test_decoder_inference(
         )
     else:
         rot_mats_local = None
-
-    transformation_mats = {}
-    if not model_args.use_hf_rope:
-        transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
-        transformation_mats_prefill = ttnn.as_tensor(
-            transformation_mat_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        transformation_mats = {"prefill": transformation_mats_prefill}
+    transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
+    transformation_mats_prefill = ttnn.as_tensor(
+        transformation_mat_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    transformation_mats = {"prefill": transformation_mats_prefill}
 
     # Setup page table
     page_table_tt = None
@@ -166,7 +151,6 @@ def test_decoder_inference(
         transformation_mats=transformation_mats,
         args=model_args,
         paged_attention_config=paged_attention_config,
-        prefetcher=prefetcher,
     )
 
     for i in range(generation_length):
@@ -185,16 +169,12 @@ def test_decoder_inference(
             tt_decode_input,
         )
         positions = torch.LongTensor(range(max_seq_len))
-
-        cos, sin = precompute_freqs(
+        freqs_cis_i = precompute_freqs_cis(
             model_args.head_dim,
             model_args.max_seq_len * 2,
             model_args.rope_theta,
             model_args.rope_scaling.factor if model_args.rope_scaling else None,
-            model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
-            model_args.rope_scaling.rope_type.value if model_args.rope_scaling else "llama3",
-        )
-        freqs_cis_i = torch.complex(cos, sin)[positions]
+        )[positions]
 
         # Reference model
         attn_mask = torch.triu(torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min), diagonal=1)
@@ -222,7 +202,7 @@ def test_decoder_inference(
             rot_mats_global=rot_mats,
             rot_mats_local=rot_mats_local,
             user_id=0,
-            mode=Mode.PREFILL,
+            mode="prefill",
             page_table=page_table_tt,
         )
         tt_out = ttnn.to_torch(

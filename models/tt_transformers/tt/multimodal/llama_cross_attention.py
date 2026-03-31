@@ -5,7 +5,6 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.common import Mode
 
 
 class TtLlamaCrossAttention(LightweightModule):
@@ -183,7 +182,7 @@ class TtLlamaCrossAttention(LightweightModule):
                 transpose_k_heads=False,
             )
 
-        xk = self.k_norm(xk, mode=Mode.DECODE)
+        xk = self.k_norm(xk, mode="decode")
 
         k_cache, v_cache = xattn_cache
 
@@ -228,7 +227,7 @@ class TtLlamaCrossAttention(LightweightModule):
         xq = ttnn.transpose(xq, 1, 2)
         xq = ttnn.to_layout(xq, layout=ttnn.TILE_LAYOUT)
 
-        xq = self.q_norm(xq, mode=Mode.DECODE)
+        xq = self.q_norm(xq, mode="decode")
 
         xk, xv = xattn_cache
         cache_seq_len = xk.shape[-2]
@@ -302,7 +301,7 @@ class TtLlamaCrossAttention(LightweightModule):
                 num_buffers_per_channel=2,
             )
 
-        return ttnn.to_memory_config(output, self.configuration.get_residual_mem_config(Mode.DECODE, None))
+        return ttnn.to_memory_config(output, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
     def forward_prefill(
         self,
@@ -344,7 +343,7 @@ class TtLlamaCrossAttention(LightweightModule):
             xq, xq, num_heads=self.n_local_heads, num_kv_heads=self.n_local_heads // 2, transpose_k_heads=False
         )
 
-        xq = self.q_norm(xq, mode=Mode.PREFILL)
+        xq = self.q_norm(xq, mode="prefill")
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
@@ -413,7 +412,7 @@ class TtLlamaCrossAttention(LightweightModule):
         vision_tokens=None,
         cross_page_table=None,
     ):
-        if mode == Mode.PREFILL:
+        if mode == "prefill":
             return self.forward_prefill(
                 x_11SH,
                 xattn_mask,

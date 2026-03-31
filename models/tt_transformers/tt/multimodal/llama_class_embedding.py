@@ -40,5 +40,6 @@ class TtLlamaClassEmbedding(LightweightModule):
         # Broadcast class embedding to match input batch size
         class_embedding = ttnn.concat([self.class_embedding] * bsz, dim=1)  # Broadcast batch size
         x = ttnn.concat([class_embedding, x], dim=2)  # Output ROW_MAJOR_LAYOUT
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)  # Convert back to TILE_LAYOUT
+        x = ttnn.tilize(x)  # Convert back to TILE_LAYOUT
+
         return x

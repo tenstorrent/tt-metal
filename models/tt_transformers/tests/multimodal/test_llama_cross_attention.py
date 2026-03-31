@@ -14,7 +14,6 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
 from models.tt_transformers.tests.multimodal.utils import load_partial_weights
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention import TtLlamaCrossAttention
 
@@ -121,8 +120,8 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
     """
     n_iter = 10
     for i in range(n_iter):
-        mode = Mode.PREFILL if i == 0 else Mode.DECODE
-        seq_len = text_seq_len if mode == Mode.PREFILL else 1
+        mode = "prefill" if i == 0 else "decode"
+        seq_len = text_seq_len if mode == "prefill" else 1
         pt_x = (torch.rand(batch, seq_len, dim) * 2) - 1
         tt_x = pt_x.clone()
 
@@ -155,12 +154,12 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         full_text_mask_expand = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
 
         # Key and Values projections are stored in cache thus the cross-attention features are replaced with None and only Query input is passed to compute its projection and proceed to the computation of attention.
-        # We wish to compare only the hidden state from reference model that outputs this layer so this is the 1st output of the subclass method indexed as [0].
+        # We wish to compare only the hidden state from reference model that outputs this layer so this is the 1st ouput of the subclass method indexed as [0].
         pt_out = reference_model.forward(
             pt_x, None, past_key_value=past_key_values, attention_mask=xattn_mask, cache_position=[layer_idx]
         )[0] * full_text_mask.squeeze(1)
 
-        if mode == Mode.PREFILL:
+        if mode == "prefill":
             outputs = []
             for b in range(batch):
                 tt_tensor_xattn_tokens = model_args.prepare_residual_tensor_prefill(
@@ -205,7 +204,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         else:
             tt_x = model_args.prepare_residual_tensor_decode(
                 tt_x,
-                model_args.get_attn_input_mem_config(Mode.DECODE, None),
+                model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 force_replicated=True,
             )
 
@@ -255,7 +254,7 @@ def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds
         logger.info(f"PCC: {pcc_message}")
         all_tests_pass = all_tests_pass and passing
 
-        if mode == Mode.PREFILL:
+        if mode == "prefill":
             tt_xattn_cache_torch = [
                 ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
                     batch,

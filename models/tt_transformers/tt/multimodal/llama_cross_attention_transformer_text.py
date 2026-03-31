@@ -11,7 +11,6 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import nearest_32
-from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
@@ -79,6 +78,8 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="norm",
                 is_distributed=configuration.is_distributed_norm,
+                sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
+                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 tt_ccl=self.tt_ccl,
             ),
             configuration,
@@ -277,7 +278,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         current_pos,
         rot_mats_global=None,
         user_id=0,
-        mode=Mode.DECODE,
+        mode="decode",
         page_table=None,
         kv_cache=None,
         cross_page_table=None,
@@ -320,9 +321,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
 
         if get_last_token != -1:
             h = ttnn.slice(h, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, h.shape[-1]))
-
-        lm_head_norm_config = self.configuration.get_norm_config("lm_head", mode, None)
-        h = self.norm(h, mode=mode, norm_config=lm_head_norm_config)
+        h = self.norm(h, mode=mode)
 
         # TODO: Switch to using dram-sharded LM head and remove this
         # Note: workaround for sharded_to_interleaved memory corruption (#15113)
@@ -340,7 +339,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             output = ttnn.linear(
                 h,
                 out_weight,
-                compute_kernel_config=self.configuration.compute_kernel_config_hifi2_na,
+                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
                 core_grid=None,
                 dtype=ttnn.bfloat16,
                 program_config=pc,

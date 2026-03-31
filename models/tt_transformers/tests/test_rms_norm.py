@@ -11,7 +11,6 @@ import ttnn
 from models.common.rmsnorm import RMSNorm as RMSNorm
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.model_config import ModelArgs
 
@@ -34,7 +33,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
     "max_seq_len",
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-@pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
+@pytest.mark.parametrize("mode", ["prefill", "decode"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_rms_norm_inference(
     max_seq_len,
@@ -64,6 +63,8 @@ def test_rms_norm_inference(
         weight_dtype=dtype,
         add_unit_offset=model_args.rms_norm_add_unit_offset,
         is_distributed=model_args.is_distributed_norm,
+        sharded_program_config=model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
+        sharded_output_config=model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
         tt_ccl=tt_ccl,
     )
 
@@ -87,11 +88,12 @@ def test_rms_norm_inference(
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
-        memory_config=(model_args.get_residual_mem_config(mode)),
+        memory_config=(
+            model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        ),
     )
 
-    norm_config = model_args.get_norm_config("attn", mode, None)
-    tt_output = tt_model(tt_input, mode=mode, norm_config=norm_config)
+    tt_output = tt_model(tt_input, mode=mode)
 
     # DistributedNorm outputs are replicated across devices
     tt_output_torch = ttnn.to_torch(

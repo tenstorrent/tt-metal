@@ -8,12 +8,13 @@ from typing import Optional
 import pytest
 from loguru import logger
 from PIL import Image as PIL_Image
+from pkg_resources import resource_filename
 from termcolor import cprint
 from transformers import AutoProcessor
 
 import ttnn
 
-IMG_PATH = Path("models/tt_transformers/demo/sample_prompts/llama_models").resolve()
+IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
 from models.common.llama_models import GeneratorText
 from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
@@ -89,7 +90,7 @@ def test_multimodal_demo_text(
         [{"type": "image", "image": img}, {"type": "text", "text": "If I had to write a haiku for this one"}],
         [
             {"type": "image", "image": img2},
-            {"type": "text", "text": "Counting the number of individual spaghetti strands in this image"},
+            {"type": "text", "text": "Couting the number of individual spaghetti strands in this image"},
         ],
         [{"type": "image", "image": ocr_image}, {"type": "text", "text": "The full text in this image is as follows"}],
         [

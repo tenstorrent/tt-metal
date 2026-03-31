@@ -11,13 +11,13 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.sampling.generator import SamplingGenerator
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode, copy_host_to_device
+from models.tt_transformers.tt.common import copy_host_to_device
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
-from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
+from models.tt_transformers.tt.rope import RotarySetup
 
 
 class Transformer(LightweightModule):
@@ -32,7 +32,6 @@ class Transformer(LightweightModule):
         use_paged_kv_cache=False,
         attention_class=None,
         rope_setup_class=None,
-        prefetcher=None,
     ):
         super().__init__()
         self.args = args
@@ -44,8 +43,7 @@ class Transformer(LightweightModule):
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
-        self.decoders_optimizations = args.decoders_optimizations
-        self.prefetcher = prefetcher
+
         self.tt_ccl = TT_CCL(self.mesh_device)
 
         embd_kwargs = {
@@ -62,8 +60,7 @@ class Transformer(LightweightModule):
             embd_cls = Embedding
         self.embd = embd_cls(**embd_kwargs)
 
-        DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
-        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
+        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
         self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,
             batch_size=args.max_batch_size,
@@ -72,18 +69,16 @@ class Transformer(LightweightModule):
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
             use_qk_fused=args.use_qk_fused,
-            prefetcher=prefetcher,
         )
 
         if args.rope_theta_local:
-            self.rope_local_setup = DefaultRopeSetup(
+            self.rope_local_setup = RotarySetup(
                 mesh_device,
                 args.max_batch_size,
                 args.head_dim,
                 args.max_seq_len,
                 args.rope_theta_local,
                 use_qk_fused=args.use_qk_fused,
-                prefetcher=None,
             )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
@@ -101,7 +96,6 @@ class Transformer(LightweightModule):
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
                 attention_class=attention_class,
-                prefetcher=prefetcher,
             )
             for i in tqdm(range(self.n_layers))
         ]
@@ -117,13 +111,14 @@ class Transformer(LightweightModule):
                 weight_key="norm",
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 is_distributed=self.args.is_distributed_norm,
+                sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
+                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),
             args,
-            tt_ccl=self.tt_ccl,
-            prefetcher=prefetcher,
-            TG=args.is_galaxy,
+            self.tt_ccl,
+            args.is_galaxy,
         )
 
         self.lm_head = LMHead(
@@ -135,13 +130,12 @@ class Transformer(LightweightModule):
             state_dict_prefix=state_dict_prefix,
             weight_cache_path=weight_cache_path,
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
-            prefetcher=prefetcher,
         )
 
         # Initialize on-device sampling if supported
         # Sampling on device is supported only if each device has maximum logits size of 64*1024
         sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
-        self._supports_on_device_sampling = prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
+        self._supports_on_device_sampling = self.args.vocab_size // sampling_splits <= 64 * 1024
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
                 args=args,
@@ -158,80 +152,11 @@ class Transformer(LightweightModule):
             (0, 0, get_last_token, 0),
             (1, 1, get_last_token + 32, logits.shape[-1]),
         )
-        logits = self._apply_norm_and_lm_head(logits)
-        return logits
-
-    def extract_last_tokens_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
-        """Extract each user's last-token hidden state from batched prefill output.
-
-        Reads hidden states to host, extracts the relevant row for each user,
-        and sends the combined tensor back to device with the correct column-sharded
-        mesh mapping (ShardTensorToMesh dim=-1) so the DistributedNorm all-gather
-        produces the correct full hidden dim.
-
-        Args:
-            hidden_states: [padded_batch, 1, prefill_seq_len, dim_per_device] on device (column-sharded, TILE_LAYOUT)
-            last_token_idx_list: list of length padded_batch with per-user last token positions
-            padded_batch: number of slots (typically 32)
-            prefill_seq_len: padded sequence length per user
-
-        Returns:
-            user_tokens: [1, 1, padded_batch, dim_per_device] per device, column-sharded, TILE_LAYOUT
-        """
-        active_indices = [lt for lt in last_token_idx_list if lt > 0]
-        all_same = len(set(active_indices)) <= 1
-
-        if all_same and active_indices:
-            common_last = active_indices[0]
-            get_last = (common_last // 32) * 32
-            R = common_last % 32
-            block = ttnn.slice(
-                hidden_states,
-                (0, 0, get_last, 0),
-                (padded_batch, 1, get_last + 32, hidden_states.shape[-1]),
-            )
-        else:
-            block = hidden_states
-            R = None
-
-        host_tensors = [ttnn.to_torch(dt) for dt in ttnn.get_device_tensors(block)]
-        host_full = torch.cat(host_tensors, dim=-1)
-
-        if R is not None:
-            combined = host_full[:, :, R : R + 1, :].reshape(1, 1, padded_batch, -1).contiguous()
-        else:
-            rows = []
-            for slot in range(padded_batch):
-                lt_idx = last_token_idx_list[slot]
-                rows.append(host_full[slot : slot + 1, :, lt_idx : lt_idx + 1, :])
-            combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
-
-        user_tokens = ttnn.from_torch(
-            combined,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-        )
-        return user_tokens
-
-    def process_logits_after_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
-        """Extract last tokens and run norm + lm_head once for all users."""
-        user_tokens = self.extract_last_tokens_batched_prefill(
-            hidden_states, last_token_idx_list, padded_batch, prefill_seq_len
-        )
-        return self._apply_norm_and_lm_head(user_tokens)
-
-    def _apply_norm_and_lm_head(self, x):
-        """Shared norm + lm_head for prefill logit processing. Input: [1, 1, 32, hidden_dim]."""
-        x = self.norm(
-            x, mode=Mode.PREFILL, norm_config=self.args.get_norm_config("lm_head", Mode.PREFILL, self.prefetcher)
-        )
-        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(Mode.PREFILL, None)
-        if lm_head_input_mem_cfg.is_sharded():
-            x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
-        logits = self.lm_head(x)
-        logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        logits = self.norm(logits, mode="prefill")
+        if self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
+            logits = ttnn.interleaved_to_sharded(logits, self.model_config["LM_HEAD_INPUT_MEMCFG"])
+        logits = self.lm_head(logits)
+        logits = ttnn.to_layout(logits, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return logits
 
     def process_hidden_states_after_prefill_trace(self, hidden_states, last_token_idx):
@@ -254,20 +179,13 @@ class Transformer(LightweightModule):
         )
         return hidden_states
 
-    def prepare_prefill_inputs_trace(
-        self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0, **kwargs
-    ):
+    def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
         """
         host_inputs = self.prepare_inputs_prefill(
-            tokens,
-            page_table=page_table,
-            chunk_page_table=chunk_page_table,
-            trace_enabled=True,
-            batch_size=batch_size,
-            user_id=user_id,
+            tokens, page_table=page_table, chunk_page_table=chunk_page_table, trace_enabled=True
         )
         return host_inputs
 
@@ -285,9 +203,6 @@ class Transformer(LightweightModule):
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
-        batch_size=1,
-        user_id=0,
-        **kwargs,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -300,16 +215,8 @@ class Transformer(LightweightModule):
         device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be a 2D tensor"
-        # For batched prefill, tokens come in as [padded_batch, S]
-        # Each user's tokens are at their slot index in dimension 0
-        # Reshape to [1, 1, 1, padded_batch * S] for embedding
-        if batch_size > 1:
-            # Tokens are in slot-based format [padded_batch, S_per_user]
-            S = tokens.shape[-1]  # Per-user sequence length
-            tokens = tokens.reshape(1, 1, 1, -1)  # Flatten to [1, 1, 1, padded_batch * S]
-        else:
-            tokens = tokens.reshape(1, 1, 1, -1)
-            S = tokens.shape[-1]
+        tokens = tokens.reshape(1, 1, 1, -1)
+        S = tokens.shape[-1]
         tokens = ttnn.from_torch(
             tokens,
             device=device,
@@ -324,53 +231,60 @@ class Transformer(LightweightModule):
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
-        mat_len = self.rope_setup.cos_matrix_prefill.shape[2]
+        mat_len = self.rope_setup.cos_matrix.shape[2]
+        # Use last_token_idx if provided, otherwise fall back to S (padded sequence length)
         seq_len = last_token_idx + 1 if last_token_idx is not None else S
-        assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
+        assert mat_len >= seq_len, f"Seqence length {seq_len} exceeds max seq len {mat_len}"
 
+        # The padding is needed just to make SDPA happy, we will be selecting the token that is within the range of the rot mat.
         required_end = start_pos + S
-        pad_len = max(0, required_end - mat_len)
+        if required_end > mat_len:
+            pad_len = required_end - mat_len
+        else:
+            pad_len = 0
 
-        # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix
-        # In case of trace, we will use the whole matrix for all seq_lens supported by trace
-        prefill_start_pos = 0 if trace_enabled else start_pos
+        # We set slice_end to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix ; in case of trace, we will use the whole matrix for all seq_lens supported by trace
+        slice_start = 0 if trace_enabled else start_pos
         slice_end = self.args.max_seq_len if trace_enabled else min(mat_len, required_end)
-
-        cos_slice = self.rope_setup.cos_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
-        sin_slice = self.rope_setup.sin_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
-
+        cos_slice = self.rope_setup.cos_matrix[:, :, slice_start:slice_end, :]
+        sin_slice = self.rope_setup.sin_matrix[:, :, slice_start:slice_end, :]
         if pad_len > 0:
-            # Padding: [(before, after), ...] for each dim; pad at end of 3rd dim (dim=2) by pad_len
+            # padding: [(before, after), ...] for each dim; pad at end of 3rd dim (dim=2) by pad_len
             padding = [(0, 0)] * 4
             padding[2] = (0, pad_len)
             cos_slice = ttnn.pad(cos_slice, padding=padding, value=0.0)
             sin_slice = ttnn.pad(sin_slice, padding=padding, value=0.0)
-
-        tt_rot_mats_prefill_global = [cos_slice, sin_slice]
+        tt_rot_mats_prefill_global = [
+            cos_slice,
+            sin_slice,
+        ]
 
         if hasattr(self, "rope_local_setup"):
-            local_mat_len = self.rope_local_setup.cos_matrix_prefill.shape[2]
+            local_mat_len = self.rope_local_setup.cos_matrix.shape[2]
             local_required_end = start_pos + S
-            local_pad_len = max(0, local_required_end - local_mat_len)
+            if local_required_end > local_mat_len:
+                local_pad_len = local_required_end - local_mat_len
+            else:
+                local_pad_len = 0
+
             local_slice_end = self.args.max_seq_len if trace_enabled else min(local_mat_len, local_required_end)
-
-            local_cos_slice = self.rope_local_setup.cos_matrix_prefill[:, :, prefill_start_pos:local_slice_end, :]
-            local_sin_slice = self.rope_local_setup.sin_matrix_prefill[:, :, prefill_start_pos:local_slice_end, :]
-
+            local_cos_slice = self.rope_local_setup.cos_matrix[:, :, slice_start:local_slice_end, :]
+            local_sin_slice = self.rope_local_setup.sin_matrix[:, :, slice_start:local_slice_end, :]
             if local_pad_len > 0:
-                # Pad at end of 3rd dim (dim=2) by local_pad_len
+                # pad at end of 3rd dim (dim=2) by local_pad_len
                 local_padding = [(0, 0)] * 4
                 local_padding[2] = (0, local_pad_len)
                 local_cos_slice = ttnn.pad(local_cos_slice, padding=local_padding, value=0.0)
                 local_sin_slice = ttnn.pad(local_sin_slice, padding=local_padding, value=0.0)
 
-            tt_rot_mats_prefill_local = [local_cos_slice, local_sin_slice]
+            tt_rot_mats_prefill_local = [
+                local_cos_slice,
+                local_sin_slice,
+            ]
         else:
             tt_rot_mats_prefill_local = None
 
         if page_table is not None:
-            # For batched prefill, replicate page_table to all devices (same as single-user path)
-            # The KV cache fill will loop over users and use batch_idx=user_id for each
             tt_page_table = ttnn.from_torch(
                 page_table,
                 device=device,
@@ -461,10 +375,7 @@ class Transformer(LightweightModule):
             )
         return tokens, current_pos_tt, rope_idxs, page_table
 
-    def _transform_decode_inputs_device(
-        self,
-        tokens,
-    ):
+    def _transform_decode_inputs_device(self, tokens):
         """
         Inputs are ttnn tensors on device. This function applies any on-device
         transformations which should happen before forward decode.
@@ -473,13 +384,12 @@ class Transformer(LightweightModule):
 
         Embed tokens
         """
-        decode_residual_mem_cfg = self.args.get_residual_mem_config(Mode.DECODE, self.prefetcher)
-        tt_tokens = self.embd(
-            tokens,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.prefetcher is None else decode_residual_mem_cfg,
-        )
+        tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
-        tt_tokens = ttnn.to_memory_config(tt_tokens, decode_residual_mem_cfg)
+        tt_tokens = ttnn.to_memory_config(
+            tt_tokens,
+            self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
+        )
         return tt_tokens
 
     def concat_host_output(self, tt_out, is_log_probs=False):
@@ -562,7 +472,6 @@ class Transformer(LightweightModule):
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
-        batch_size=1,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -574,13 +483,12 @@ class Transformer(LightweightModule):
             rot_mats_global=rot_mats_global,
             rot_mats_local=rot_mats_local,
             user_id=user_id,
-            mode=Mode.PREFILL,
+            mode="prefill",
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
             kv_cache=kv_cache,
-            batch_size=batch_size,
         )
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
@@ -603,15 +511,13 @@ class Transformer(LightweightModule):
         """
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs)
         rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs) if hasattr(self, "rope_local_setup") else None
-
         x_embed = self._transform_decode_inputs_device(x)
-
         tt_logits = self.forward(
             x_embed,
             current_pos,
             rot_mats_global=rot_mats_global,
             rot_mats_local=rot_mats_local,
-            mode=Mode.DECODE,
+            mode="decode",
             page_table=page_table,
             kv_cache=kv_cache,
         )
@@ -638,29 +544,22 @@ class Transformer(LightweightModule):
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
                 num_links=num_links,
-                memory_config=tt_logits.memory_config() if self.prefetcher is None else ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=tt_logits.memory_config(),
                 cluster_axis=cluster_axis,
                 topology=self.args.ccl_topology(),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
                 num_buffers_per_channel=2,
-                subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
             )
 
-        tt_logits = ttnn.untilize(
-            tt_logits,
-            use_multicore=True,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            sub_core_grids=self.prefetcher.all_worker_cores_range_set if self.prefetcher is not None else None,
-        )
+        tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
+
+        if not self.args.is_galaxy:
+            # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
+            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
 
         return tt_logits, None
-
-    def switch_mode(self, mode: Mode):
-        if self.prefetcher is not None:
-            self.prefetcher.init(mode)
-            self.prefetcher.prefetch()
 
     def forward(
         self,
@@ -669,31 +568,20 @@ class Transformer(LightweightModule):
         rot_mats_global=None,
         rot_mats_local=None,
         user_id=0,
-        mode: Mode = Mode.DECODE,
+        mode="decode",
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
-        batch_size=1,
     ):
-        if mode == Mode.DECODE:
-            # Run prefetcher if it is enabled
-            if self.prefetcher is not None:
-                self.prefetcher.run()
-
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
-            activation_dtype = self.args.decoders_optimizations.get_tensor_dtype(
+            activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
                 decoder_id=i, tensor=TensorGroup.ACTIVATION
             )
-
-            if mode == Mode.DECODE and not self.args.is_galaxy:
-                x = ttnn.to_memory_config(
-                    x,
-                    self.args.get_residual_mem_config(mode, self.prefetcher),
-                    activation_dtype,
-                )
+            if mode == "decode" and not self.args.is_galaxy:
+                x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"], activation_dtype)
             elif activation_dtype is not None and x.dtype != activation_dtype:
                 x = ttnn.typecast(x, activation_dtype)
 
@@ -708,14 +596,9 @@ class Transformer(LightweightModule):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
-                batch_size=batch_size,
             )
 
-        if mode == Mode.DECODE:
-            if self.prefetcher is not None:
-                self.prefetcher.stop()
-
-        if mode == Mode.PREFILL and get_last_token == -1:
+        if mode == "prefill" and get_last_token == -1:
             return x
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
@@ -723,18 +606,15 @@ class Transformer(LightweightModule):
             x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
         # Output norm
-        x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))
+        x = self.norm(x, mode=mode)
 
-        lm_head_input_mem_cfg = self.args.get_lm_head_input_mem_config(
-            mode, None if mode == Mode.PREFILL else self.prefetcher
-        )
-        if mode == Mode.PREFILL and lm_head_input_mem_cfg.is_sharded():
-            x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
-        if mode == Mode.DECODE and self.prefetcher is not None:
-            x = ttnn.to_memory_config(x, self.args.get_lm_head_input_mem_config(mode, self.prefetcher))
+        if mode == "prefill" and self.model_config["LM_HEAD_INPUT_MEMCFG"].is_sharded():
+            x = ttnn.interleaved_to_sharded(x, self.model_config["LM_HEAD_INPUT_MEMCFG"])
 
         x = self.lm_head(x)
-        if mode == Mode.PREFILL:
-            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if mode == "prefill":
+            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         return x
