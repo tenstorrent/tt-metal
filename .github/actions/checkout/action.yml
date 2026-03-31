@@ -34,6 +34,11 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Disable sparse checkout from bootstrap
+      shell: bash
+      run: |
+        git sparse-checkout disable 2>/dev/null || true
+
     - name: Configure credentials for private submodule
       if: inputs.submodules != 'false' && inputs.private-submodule-token != ''
       shell: bash
