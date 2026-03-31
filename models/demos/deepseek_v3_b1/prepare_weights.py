@@ -26,13 +26,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
-from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions as D
-from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, ShardMeshMapper, SourceTensorSelection, TensorTarget
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 
-# Bump when any standalone tensor preprocessing logic changes to invalidate caches.
-CURRENT_TRANSFORM_VERSION = 1
-
+OverlappedTensor = ttnn.OverlappedTensor
 
 # Serialization: manifest version and dtype name mapping
 _MANIFEST_VERSION = 1

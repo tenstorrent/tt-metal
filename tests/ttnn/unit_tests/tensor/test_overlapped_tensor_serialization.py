@@ -17,7 +17,9 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensorSpec, OverlappedTensor, overlap_tensors
+from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensorSpec, overlap_tensors
+
+OverlappedTensor = ttnn.OverlappedTensor
 
 
 def _core_range_set_eq(a: ttnn.CoreRangeSet, b: ttnn.CoreRangeSet) -> bool:

@@ -132,27 +132,7 @@ def tilize_and_pack(data_2d: torch.Tensor, spec: OverlappedTensorSpec) -> bytes:
             raise ValueError(f"Unsupported dtype: {spec.dtype}")
 
 
-@dataclass
-class OverlappedTensor:
-    """A logical view of a sub-tensor within a fused (overlapped) device buffer.
-
-    The fused tensor is a raw byte container whose own tensor properties
-    (dtype, layout, shard spec) are generally meaningless for the individual
-    sub-tensors.  This class carries the intended per-sub-tensor properties
-    alongside a shared reference to the underlying fused buffer.
-    """
-
-    fused_tensor: ttnn.Tensor
-    tensor_shape: tuple[int, int]
-    shard_shape: tuple[int, int]
-    core_range_set: ttnn.CoreRangeSet
-    dtype: ttnn.DataType
-    tile_shape: tuple[int, int]
-    byte_offset: int = 0
-    total_size: int = 0
-
-    def get_tile(self) -> ttnn.Tile:
-        return ttnn.Tile(self.tile_shape)
+OverlappedTensor = ttnn.OverlappedTensor
 
 
 def overlap_tensors(

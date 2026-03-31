@@ -624,6 +624,58 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                 Load tensor to file using FlatBuffer format with inline file storage.
             )doc");
 
+    nb::class_<OverlappedTensorView>(m_tensor, "OverlappedTensor", R"doc(
+        A logical view of a sub-tensor within a fused (overlapped) device buffer.
+
+        The fused tensor is a raw byte container whose own tensor properties
+        (dtype, layout, shard spec) are generally meaningless for the individual
+        sub-tensors.  This class carries the intended per-sub-tensor properties
+        alongside a shared reference to the underlying fused buffer.
+    )doc")
+        .def(
+            "__init__",
+            [](OverlappedTensorView* self,
+               Tensor fused_tensor,
+               std::array<uint32_t, 2> tensor_shape,
+               std::array<uint32_t, 2> shard_shape,
+               CoreRangeSet core_range_set,
+               DataType dtype,
+               std::array<uint32_t, 2> tile_shape,
+               uint64_t byte_offset,
+               uint64_t total_size) {
+                new (self) OverlappedTensorView{
+                    .name = "",
+                    .fused_tensor = std::move(fused_tensor),
+                    .tensor_shape = tensor_shape,
+                    .shard_shape = shard_shape,
+                    .core_range_set = std::move(core_range_set),
+                    .dtype = dtype,
+                    .tile_shape = tile_shape,
+                    .byte_offset = byte_offset,
+                    .total_size = total_size,
+                };
+            },
+            nb::arg("fused_tensor"),
+            nb::arg("tensor_shape"),
+            nb::arg("shard_shape"),
+            nb::arg("core_range_set"),
+            nb::arg("dtype"),
+            nb::arg("tile_shape"),
+            nb::arg("byte_offset") = 0,
+            nb::arg("total_size") = 0)
+        .def_rw("fused_tensor", &OverlappedTensorView::fused_tensor)
+        .def_rw("tensor_shape", &OverlappedTensorView::tensor_shape)
+        .def_rw("shard_shape", &OverlappedTensorView::shard_shape)
+        .def_rw("core_range_set", &OverlappedTensorView::core_range_set)
+        .def_rw("dtype", &OverlappedTensorView::dtype)
+        .def_rw("tile_shape", &OverlappedTensorView::tile_shape)
+        .def_rw("byte_offset", &OverlappedTensorView::byte_offset)
+        .def_rw("total_size", &OverlappedTensorView::total_size)
+        .def(
+            "get_tile",
+            [](const OverlappedTensorView& self) { return Tile(self.tile_shape); },
+            "Return a Tile object constructed from the tile_shape.");
+
     m_tensor
         .def(
             "dump_overlapped_tensors",
@@ -636,18 +688,9 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                 std::vector<OverlappedTensorView> views;
                 views.reserve(nb::len(py_views));
                 for (auto [key, value] : py_views) {
-                    nb::object obj = nb::borrow(value);
-                    views.push_back(OverlappedTensorView{
-                        .name = nb::cast<std::string>(key),
-                        .fused_tensor = nb::cast<Tensor>(obj.attr("fused_tensor")),
-                        .tensor_shape = nb::cast<std::array<uint32_t, 2>>(obj.attr("tensor_shape")),
-                        .shard_shape = nb::cast<std::array<uint32_t, 2>>(obj.attr("shard_shape")),
-                        .core_range_set = nb::cast<CoreRangeSet>(obj.attr("core_range_set")),
-                        .dtype = nb::cast<DataType>(obj.attr("dtype")),
-                        .tile_shape = nb::cast<std::array<uint32_t, 2>>(obj.attr("tile_shape")),
-                        .byte_offset = nb::cast<uint64_t>(obj.attr("byte_offset")),
-                        .total_size = nb::cast<uint64_t>(obj.attr("total_size")),
-                    });
+                    auto view = nb::cast<OverlappedTensorView>(value);
+                    view.name = nb::cast<std::string>(key);
+                    views.push_back(std::move(view));
                 }
                 dump_overlapped_tensors(file_name, views);
             },
@@ -666,19 +709,9 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                     throw std::runtime_error("File " + file_name + " must have " + std::string(kExt) + " extension");
                 }
                 auto views = load_overlapped_tensors(file_name, device);
-                nb::module_ mod = nb::module_::import_("models.demos.deepseek_v3_b1.blitz_overlap_tensors");
-                nb::object cls = mod.attr("OverlappedTensor");
                 nb::dict result;
-                for (const auto& v : views) {
-                    result[nb::cast(v.name)] =
-                        cls(nb::cast(v.fused_tensor),
-                            nb::make_tuple(v.tensor_shape[0], v.tensor_shape[1]),
-                            nb::make_tuple(v.shard_shape[0], v.shard_shape[1]),
-                            nb::cast(v.core_range_set),
-                            nb::cast(v.dtype),
-                            nb::make_tuple(v.tile_shape[0], v.tile_shape[1]),
-                            nb::cast(v.byte_offset),
-                            nb::cast(v.total_size));
+                for (auto& v : views) {
+                    result[nb::cast(v.name)] = nb::cast(std::move(v));
                 }
                 return result;
             },

@@ -22,8 +22,10 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
+
+OverlappedTensor = ttnn.OverlappedTensor
 from models.demos.deepseek_v3_b1.prepare_weights import (
     _MTP_LAYER_IDX,
     CURRENT_TRANSFORM_VERSION,
