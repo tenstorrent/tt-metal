@@ -9,7 +9,6 @@
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
-#include "tools/profiler/kernel_profiler.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -104,7 +103,6 @@ void kernel_main() {
     uint32_t slice_writes = 0;
 
     uint32_t row_offset = 0;
-    DeviceZoneScopedN("AG-WRITER-send-local-slice");
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         /**
          * Write out the local slice to forward and backward devices
@@ -190,7 +188,6 @@ void kernel_main() {
     noc_async_write_barrier();
     // increment locally
     if constexpr (fuse_op && direction == 1) {
-        DeviceZoneScopedN("AG-WRITER-signal-local-ready");
         /**
          * Synchronize and signal that the local tensor slice is available
          *
@@ -230,7 +227,6 @@ void kernel_main() {
         }
     }
 
-    DeviceZoneScopedN("AG-WRITER-forward-slices");
     while (slice_writes < writes_expected) {
         // Direction == backward
         // Did I get something from my left to send to my right?
