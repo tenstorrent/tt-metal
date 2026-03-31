@@ -1477,7 +1477,6 @@ class Molmo2Generator:
 
             # Capture trace (double capture when First_run=true: first pass ends in attention, second ends here)
             first_run = os.getenv("First_run", "false").lower() == "true"
-            print("first Run Demo : ", first_run, " : ", os.getenv("First_run"))
             num_runs = 2 if first_run else 1
             for run_idx in range(num_runs):
                 current_run_trace = bool(first_run and run_idx == 0)
