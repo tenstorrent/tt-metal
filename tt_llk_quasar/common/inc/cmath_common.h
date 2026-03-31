@@ -14,6 +14,11 @@ namespace ckernel::math
 constexpr static std::uint32_t ELTWISE_MATH_ROWS = MATH_ROWS; // 8 for quasar, 4 for trinity
 constexpr static std::uint32_t MOVE_MATH_ROWS[3] = {8, 4, 1};
 constexpr static unsigned int SFP_ROWS           = 2;
+
+// SFPU register-file base addresses: dest region vs SrcS (used by SFPU load/store)
+constexpr static unsigned int SFPU_DEST_BASE_ADDR = 0x0;
+constexpr static unsigned int SFPU_SRCS_BASE_ADDR = 0x400;
+
 #if defined(LLK_TRISC_ISOLATE_SFPU)
 constexpr static std::uint32_t TRISC_ID = 3;
 #else

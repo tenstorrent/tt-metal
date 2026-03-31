@@ -203,8 +203,12 @@ class FormatConfig:
     unpack_A_dst (DataFormat): The destination format for source register A in the Unpacker, which is the format of our data in the source register.
     unpack_B_src (Optional[DataFormat]): The source format for source register B in the Unpacker, which is the format of our data in L1. Optional; defaults to `unpack_A_src` if `same_src_format=True`.
     unpack_B_dst (Optional[DataFormat]): The destination format for source register B in the Unpacker, which is the format of our data in the source register. Optional; defaults to `unpack_A_dst` if `same_src_format=True`.
+    unpack_S_src (DataFormat): The source format for source register S in the Unpacker (L1). Defaults to `unpack_A_src` when omitted.
+    unpack_S_dst (DataFormat): The destination format for source register S in the Unpacker (register). Defaults to `unpack_A_dst` when omitted.
     pack_src (DataFormat): The source format for the Packer.
     pack_dst (DataFormat): The destination format for the Packer.
+    pack_S_src (DataFormat): The source format for the S path in the Packer. Defaults to `pack_src` when omitted.
+    pack_S_dst (DataFormat): The destination format for the S path in the Packer. Defaults to `pack_dst` when omitted.
     math (DataFormat): The format used for _llk_math_ functions.
 
     Optional Parameters:
@@ -213,6 +217,10 @@ class FormatConfig:
 
     unpack_B_src (Optional[DataFormat]): The source format for source register B in the Unpacker which is the format of our data in L1, used only if `same_src_format=False` i.e when source registers don't share the same formats we distinguish source register A and B formats.
     unpack_B_dst (Optional[DataFormat]): The destination format for source register B in the Unpacker, which is the format of our data in src register used only if `same_src_format=False` i.e when source registers don't share the same formats we distinguish source register A and B formats.
+    unpack_S_src (Optional[DataFormat]): Optional override for `unpack_S_src`; otherwise defaults to `unpack_A_src`.
+    unpack_S_dst (Optional[DataFormat]): Optional override for `unpack_S_dst`; otherwise defaults to `unpack_A_dst`.
+    pack_S_src (Optional[DataFormat]): Optional override for `pack_S_src`; otherwise defaults to `pack_src`.
+    pack_S_dst (Optional[DataFormat]): Optional override for `pack_S_dst`; otherwise defaults to `pack_dst`.
 
     Example:
     >>> formats = FormatConfig(
@@ -232,8 +240,12 @@ class FormatConfig:
     unpack_A_dst: DataFormat
     unpack_B_src: Optional[DataFormat]
     unpack_B_dst: Optional[DataFormat]
+    unpack_S_src: DataFormat
+    unpack_S_dst: DataFormat
     pack_src: DataFormat
     pack_dst: DataFormat
+    pack_S_src: DataFormat
+    pack_S_dst: DataFormat
     math: DataFormat
 
     def __init__(
@@ -243,11 +255,14 @@ class FormatConfig:
         pack_src: DataFormat,
         pack_dst: DataFormat,
         math: DataFormat,
-        same_src_format: bool = True,  # if True, source registers A and B have the same formats, don't need to pass next 2 parameters
-        # if our src registers have the same formats, then we only pass 5 formats into the FormatConfig object
-        # and we set unpack_B_src and unpack_B_dst the same format as input formats for source register A
+        same_src_format: bool = True,  # If True, A and B share unpack formats; omit unpack_B_src / unpack_B_dst (they are set from A).
+        # Optional unpack_S_* and pack_S_* default to the A and main pack paths when omitted (mirrors common "S same as A" usage).
         unpack_B_src: Optional[DataFormat] = None,
         unpack_B_dst: Optional[DataFormat] = None,
+        unpack_S_src: Optional[DataFormat] = None,
+        unpack_S_dst: Optional[DataFormat] = None,
+        pack_S_src: Optional[DataFormat] = None,
+        pack_S_dst: Optional[DataFormat] = None,
     ):
 
         self.unpack_A_src = unpack_A_src
@@ -265,6 +280,14 @@ class FormatConfig:
                 )
             self.unpack_B_src = unpack_B_src
             self.unpack_B_dst = unpack_B_dst
+        self.unpack_S_src = (
+            unpack_S_src if unpack_S_src is not None else self.unpack_A_src
+        )
+        self.unpack_S_dst = (
+            unpack_S_dst if unpack_S_dst is not None else self.unpack_A_dst
+        )
+        self.pack_S_src = pack_S_src if pack_S_src is not None else self.pack_src
+        self.pack_S_dst = pack_S_dst if pack_S_dst is not None else self.pack_dst
 
     @property
     def output_format(self) -> DataFormat:
@@ -285,11 +308,15 @@ struct FormatConfig
 {
     std::uint32_t unpack_A_src = 0;
     std::uint32_t unpack_B_src = 0;
+    std::uint32_t unpack_S_src = 0;
     std::uint32_t unpack_A_dst = 0;
     std::uint32_t unpack_B_dst = 0;
+    std::uint32_t unpack_S_dst = 0;
     std::uint32_t math = 0;
     std::uint32_t pack_src = 0;
     std::uint32_t pack_dst = 0;
+    std::uint32_t pack_S_src = 0;
+    std::uint32_t pack_S_dst = 0;
 };
 """
 ]
@@ -300,27 +327,39 @@ FORMATS_CONFIG_STRUCT_COMPILETIME = [
     "{",
     "    const std::uint32_t unpack_A_src;",
     "    const std::uint32_t unpack_B_src;",
+    "    const std::uint32_t unpack_S_src;",
     "    const std::uint32_t unpack_A_dst;",
     "    const std::uint32_t unpack_B_dst;",
+    "    const std::uint32_t unpack_S_dst;",
     "    const std::uint32_t math;",
     "    const std::uint32_t pack_src;",
     "    const std::uint32_t pack_dst;",
+    "    const std::uint32_t pack_S_src;",
+    "    const std::uint32_t pack_S_dst;",
     "",
     "    constexpr FormatConfig(",
     "        std::uint32_t unpack_A_src_,",
     "        std::uint32_t unpack_B_src_,",
+    "        std::uint32_t unpack_S_src_,",
     "        std::uint32_t unpack_A_dst_,",
     "        std::uint32_t unpack_B_dst_,",
+    "        std::uint32_t unpack_S_dst_,",
     "        std::uint32_t math_,",
     "        std::uint32_t pack_src_,",
-    "        std::uint32_t pack_dst_) :",
+    "        std::uint32_t pack_dst_,",
+    "        std::uint32_t pack_S_src_,",
+    "        std::uint32_t pack_S_dst_) :",
     "        unpack_A_src(unpack_A_src_),",
     "        unpack_B_src(unpack_B_src_),",
+    "        unpack_S_src(unpack_S_src_),",
     "        unpack_A_dst(unpack_A_dst_),",
     "        unpack_B_dst(unpack_B_dst_),",
+    "        unpack_S_dst(unpack_S_dst_),",
     "        math(math_),",
     "        pack_src(pack_src_),",
-    "        pack_dst(pack_dst_)",
+    "        pack_dst(pack_dst_),",
+    "        pack_S_src(pack_S_src_),",
+    "        pack_S_dst(pack_S_dst_)",
     "    {",
     "    }",
     "};",

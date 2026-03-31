@@ -21,6 +21,8 @@ using namespace ckernel;
 template <std::uint8_t INSTRN_COUNT, std::uint8_t INSTRN_LOOP_COUNT>
 inline void _llk_unpack_srcs_config_()
 {
+    static_assert(INSTRN_LOOP_COUNT <= 256, "INSTRN_LOOP_COUNT maximum is 256");
+    static_assert(INSTRN_COUNT <= 4, "INSTRN_COUNT maximum is 4");
     cfg_rmw(THCON_UNPACKER2_REG0_INSTRN_LOOP_COUNT_RMW, INSTRN_LOOP_COUNT - 1);
     cfg_rmw(THCON_UNPACKER2_REG0_INSTRN_COUNT_RMW, INSTRN_COUNT - 1);
 }
@@ -28,6 +30,8 @@ inline void _llk_unpack_srcs_config_()
 template <std::uint8_t INSTRN_COUNT, std::uint8_t INSTRN_LOOP_COUNT>
 inline void _llk_pack_srcs_config_()
 {
+    static_assert(INSTRN_LOOP_COUNT <= 256, "INSTRN_LOOP_COUNT maximum is 256");
+    static_assert(INSTRN_COUNT <= 4, "INSTRN_COUNT maximum is 4");
     cfg_rmw(THCON_PACKER1_REG0_INSTRN_LOOP_COUNT_RMW, INSTRN_LOOP_COUNT - 1);
     cfg_rmw(THCON_PACKER1_REG0_INSTRN_COUNT_RMW, INSTRN_COUNT - 1);
 }
