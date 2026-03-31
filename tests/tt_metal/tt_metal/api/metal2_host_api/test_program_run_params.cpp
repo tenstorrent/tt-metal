@@ -156,7 +156,7 @@ TEST_F(ProgramRunParamsTestQuasar, InvalidNodeForKernelFails) {
 
 TEST_F(ProgramRunParamsTestQuasar, WrongRuntimeArgsCountFails) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithRTAs(node, /*per_node=*/3, /*common=*/0);
+    ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/0);
     Program program = MakeProgramFromSpec(spec);
 
     // Provide wrong count (2 instead of 3)
@@ -167,7 +167,7 @@ TEST_F(ProgramRunParamsTestQuasar, WrongRuntimeArgsCountFails) {
 
 TEST_F(ProgramRunParamsTestQuasar, WrongCommonRuntimeArgsCountFails) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithRTAs(node, /*per_node=*/0, /*common=*/2);
+    ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/0, /*num_common_rtas=*/2);
     Program program = MakeProgramFromSpec(spec);
 
     // Provide wrong common args count (3 instead of 2)
@@ -193,7 +193,7 @@ TEST_F(ProgramRunParamsTestQuasar, MissingKernelParamsFails) {
 
 TEST_F(ProgramRunParamsTestQuasar, MissingNodeRTAsFails) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithRTAs(node, /*per_node=*/2, /*common=*/0);
+    ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/0);
     Program program = MakeProgramFromSpec(spec);
 
     // Don't provide the per-node RTAs (empty runtime_args)
@@ -248,7 +248,7 @@ TEST_F(ProgramRunParamsTestQuasar, DFBNumEntriesOverrideFails) {
 
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_ZeroRTAs) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithRTAs(node, /*per_node=*/0, /*common=*/0);
+    ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/0, /*num_common_rtas=*/0);
     Program program = MakeProgramFromSpec(spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {}, {});
@@ -258,7 +258,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_ZeroRTAs) {
 
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_PerNodeRTAsOnly) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithRTAs(node, /*per_node=*/3, /*common=*/0);
+    ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/0);
     Program program = MakeProgramFromSpec(spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {100, 200, 300}, {});
@@ -268,7 +268,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_PerNodeRTAsOnly) {
 
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_CommonRTAsOnly) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithRTAs(node, /*per_node=*/0, /*common=*/2);
+    ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/0, /*num_common_rtas=*/2);
     Program program = MakeProgramFromSpec(spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {}, {10, 20});
@@ -278,7 +278,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_CommonRTAsOnly) {
 
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_BothRTATypes) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithRTAs(node, /*per_node=*/3, /*common=*/2);
+    ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/3, /*num_common_rtas=*/2);
     Program program = MakeProgramFromSpec(spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {100, 200, 300}, {10, 20});
@@ -290,18 +290,18 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_BothKernelsWithRTAs) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithBothKernelRTAs(
         node,
-        /*dm_per_node=*/2,
-        /*dm_common=*/1,
-        /*compute_per_node=*/3,
-        /*compute_common=*/2);
+        /*dm_per_node_rtas=*/2,
+        /*dm_common_rtas=*/1,
+        /*compute_per_node_rtas=*/3,
+        /*compute_common_rtas=*/2);
     Program program = MakeProgramFromSpec(spec);
 
     auto params = MakeRunParamsForMinimalSpec(
         node,
-        /*dm_per_node=*/{1, 2},
-        /*dm_common=*/{10},
-        /*compute_per_node=*/{100, 200, 300},
-        /*compute_common=*/{50, 60});
+        /*dm_per_node_args=*/{1, 2},
+        /*dm_common_args=*/{10},
+        /*compute_per_node_args=*/{100, 200, 300},
+        /*compute_common_args=*/{50, 60});
 
     EXPECT_NO_THROW(SetProgramRunParameters(program, params));
 }
@@ -328,7 +328,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsSucceeds_DFBRunParamsWithNoOverri
 
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_SameValuesSucceeds) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithRTAs(node, /*per_node=*/2, /*common=*/1);
+    ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/1);
     Program program = MakeProgramFromSpec(spec);
 
     auto params = MakeRunParamsForMinimalSpec(node, {100, 200}, {10});
@@ -341,7 +341,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_SameValuesSucceeds) {
 
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_DifferentValuesSucceeds) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithRTAs(node, /*per_node=*/2, /*common=*/1);
+    ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/1);
     Program program = MakeProgramFromSpec(spec);
 
     auto params1 = MakeRunParamsForMinimalSpec(node, {100, 200}, {10});
@@ -355,7 +355,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_DifferentValuesSucceeds) {
 
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_ChangingCommonRTACountFails) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithRTAs(node, /*per_node=*/0, /*common=*/2);
+    ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/0, /*num_common_rtas=*/2);
     Program program = MakeProgramFromSpec(spec);
 
     // First call with 2 common RTAs (matches schema)
@@ -375,7 +375,7 @@ TEST_F(ProgramRunParamsTestQuasar, SetRunParamsTwice_ChangingCommonRTACountFails
 
 TEST_F(ProgramRunParamsTestQuasar, SetRunParamsMultipleTimes_Succeeds) {
     NodeCoord node{0, 0};
-    ProgramSpec spec = MakeSpecWithRTAs(node, /*per_node=*/2, /*common=*/2);
+    ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/2);
     Program program = MakeProgramFromSpec(spec);
 
     // Call SetProgramRunParameters multiple times with varying values
