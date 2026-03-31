@@ -30,8 +30,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-# Import mesh utilities from shared constants module
-from constants import get_mesh_shape_string, strip_mesh_suffix
+# Import grouping utilities from shared constants module
+from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix
 
 
 def chunk_modules(items, size):
@@ -43,6 +43,78 @@ def chunk_modules(items, size):
 def get_mesh_shape(module_name):
     """Extract mesh shape string from module name (wrapper for get_mesh_shape_string)."""
     return get_mesh_shape_string(module_name)
+
+
+def get_hardware_group(module_name):
+    """Extract normalized hardware group from module name suffix."""
+    return parse_hardware_suffix(module_name)
+
+
+def get_runner_config_for_hardware_group(hardware_group):
+    """Map a normalized hardware tuple to CI runner metadata."""
+    if hardware_group is None:
+        return {
+            "test_group_name": "wormhole-n150-sweeps",
+            "arch": "wormhole_b0",
+            "runs_on": "tt-ubuntu-2204-n150-stable",
+            "runner_label": "N150",
+            "tt_smi_cmd": "tt-smi -r",
+        }
+
+    board_type, device_series, card_count = hardware_group
+
+    if board_type == "blackhole" or device_series == "p150b":
+        return {
+            "test_group_name": "blackhole-p150b-sweeps",
+            "arch": "blackhole",
+            "runs_on": "tt-ubuntu-2204-p150b-viommu-stable",
+            "runner_label": "p150b",
+            "tt_smi_cmd": "tt-smi -r",
+        }
+
+    if device_series == "tt_galaxy_wh":
+        return {
+            "test_group_name": "wormhole-galaxy-sweeps",
+            "arch": "wormhole_b0",
+            "runs_on": ["topology-6u", "in-service", "bare-metal"],
+            "runner_label": "topology-6u",
+            "tt_smi_cmd": "tt-smi -glx_reset_auto",
+        }
+
+    if device_series == "n300" and card_count == 4:
+        return {
+            "test_group_name": "wormhole-n300-llmbox-sweeps",
+            "arch": "wormhole_b0",
+            "runs_on": "tt-ubuntu-2204-n300-llmbox-stable",
+            "runner_label": "n300-llmbox",
+            "tt_smi_cmd": "tt-smi -r",
+        }
+
+    if device_series == "n300":
+        return {
+            "test_group_name": "wormhole-n300-sweeps",
+            "arch": "wormhole_b0",
+            "runs_on": "tt-ubuntu-2204-n300-stable",
+            "runner_label": "N300",
+            "tt_smi_cmd": "tt-smi -r",
+        }
+
+    return {
+        "test_group_name": "wormhole-n150-sweeps",
+        "arch": "wormhole_b0",
+        "runs_on": "tt-ubuntu-2204-n150-stable",
+        "runner_label": "N150",
+        "tt_smi_cmd": "tt-smi -r",
+    }
+
+
+def _format_hardware_group_label(hardware_group):
+    """Build a readable label for logs and batch display."""
+    if hardware_group is None:
+        return "default"
+
+    board_type, device_series, card_count = hardware_group
+    return f"{board_type}/{device_series}/{card_count}c"
 
 
 def get_lead_models_mesh_runner_config():
@@ -96,14 +168,20 @@ def compute_lead_models_matrix(modules, batch_size):
     """
     config = get_lead_models_mesh_runner_config()
 
-    # Group modules by mesh shape
+    # Group modules by mesh shape, with hardware-based fallback when mesh suffixes are absent.
     mesh_shape_modules = defaultdict(list)
+    hardware_modules = defaultdict(list)
     unmatched_modules = []
 
     for module in modules:
         mesh_shape = get_mesh_shape(module)
         if mesh_shape:
             mesh_shape_modules[mesh_shape].append(module)
+            continue
+
+        hardware_group = get_hardware_group(module)
+        if hardware_group:
+            hardware_modules[hardware_group].append(module)
         else:
             unmatched_modules.append(module)
 
@@ -129,7 +207,15 @@ def compute_lead_models_matrix(modules, batch_size):
         for mesh_shape in runner_config["mesh_shapes"]:
             runner_modules.extend(mesh_shape_modules.get(mesh_shape, []))
 
-        # Route modules without a mesh suffix to the first (default) runner config,
+        # Hardware-grouped files are already routed to the correct runner family.
+        for hardware_group, mods in hardware_modules.items():
+            _, device_series, card_count = hardware_group
+            wants_galaxy = device_series == "tt_galaxy_wh" or card_count > 1
+            is_galaxy_runner = runner_config["test_group_name"] == "lead-models-galaxy"
+            if wants_galaxy == is_galaxy_runner:
+                runner_modules.extend(mods)
+
+        # Route modules without a grouping suffix to the first (default) runner config,
         # which is conventionally the single-chip N150 runner.
         is_default_runner = runner_config == config[0]
         if is_default_runner:
@@ -138,9 +224,9 @@ def compute_lead_models_matrix(modules, batch_size):
         if not runner_modules:
             continue
 
-        # Strip mesh suffixes to get base module names that sweeps_runner can find
-        # The VectorExportSource will automatically load mesh-variant JSONs
-        base_modules = sorted(set(strip_mesh_suffix(m) for m in runner_modules))
+        # Strip grouping suffixes to get base module names that sweeps_runner can find.
+        # The VectorExportSource will automatically load grouped JSON variants.
+        base_modules = sorted(set(strip_grouping_suffix(m) for m in runner_modules))
 
         # For Galaxy runners (multi-chip), split into 3 parallel jobs
         # For single-chip runners, use the standard batch size
@@ -172,19 +258,26 @@ def compute_lead_models_matrix(modules, batch_size):
             )
 
     # Log summary
-    total_base_modules = len(set(strip_mesh_suffix(m) for m in modules))
+    total_base_modules = len(set(strip_grouping_suffix(m) for m in modules))
     print(
         f"Lead models run: {len(modules)} vector files ({total_base_modules} unique modules), "
         f"{len(include_entries)} matrix entries",
         file=sys.stderr,
     )
     for mesh_shape, mods in sorted(mesh_shape_modules.items()):
-        unique_base = len(set(strip_mesh_suffix(m) for m in mods))
+        unique_base = len(set(strip_grouping_suffix(m) for m in mods))
         print(f"  mesh {mesh_shape}: {len(mods)} vectors ({unique_base} unique modules)", file=sys.stderr)
-    if unmatched_modules:
-        unique_base = len(set(strip_mesh_suffix(m) for m in unmatched_modules))
+    for hardware_group, mods in sorted(hardware_modules.items()):
+        unique_base = len(set(strip_grouping_suffix(m) for m in mods))
+        board_type, device_series, card_count = hardware_group
         print(
-            f"  no mesh suffix (default runner): {len(unmatched_modules)} vectors ({unique_base} unique modules)",
+            f"  hardware {board_type}/{device_series}/{card_count}c: {len(mods)} vectors ({unique_base} unique modules)",
+            file=sys.stderr,
+        )
+    if unmatched_modules:
+        unique_base = len(set(strip_grouping_suffix(m) for m in unmatched_modules))
+        print(
+            f"  no grouping suffix (default runner): {len(unmatched_modules)} vectors ({unique_base} unique modules)",
             file=sys.stderr,
         )
 
@@ -203,9 +296,12 @@ def compute_standard_matrix(modules, batch_size, suite_name):
     Returns:
         Tuple of (include_entries, batches, ccl_batches)
     """
-    # Strip mesh suffixes to get base module names that sweeps_runner can find
-    # The VectorExportSource will automatically load mesh-variant JSONs
-    base_modules = sorted(set(strip_mesh_suffix(m) for m in modules))
+    if suite_name == "model_traced":
+        return compute_model_traced_hardware_matrix(modules, batch_size, suite_name)
+
+    # Strip grouping suffixes to get base module names that sweeps_runner can find.
+    # The VectorExportSource will automatically load grouped JSON variants.
+    base_modules = sorted(set(strip_grouping_suffix(m) for m in modules))
 
     ccl_modules = [m for m in base_modules if m.startswith("ccl.")]
 
@@ -257,6 +353,59 @@ def compute_standard_matrix(modules, batch_size, suite_name):
             )
 
     return include_entries, batches, ccl_batches
+
+
+def compute_model_traced_hardware_matrix(modules, batch_size, suite_name):
+    """Compute matrix for model_traced runs using hardware-grouped vector files."""
+    hardware_modules = defaultdict(list)
+    unmatched_modules = []
+
+    for module in modules:
+        hardware_group = get_hardware_group(module)
+        if hardware_group:
+            hardware_modules[hardware_group].append(module)
+        else:
+            unmatched_modules.append(module)
+
+    include_entries = []
+    batches = []
+
+    grouped_items = sorted(hardware_modules.items(), key=lambda item: item[0])
+    if unmatched_modules:
+        grouped_items.append((None, unmatched_modules))
+
+    for hardware_group, grouped_modules in grouped_items:
+        base_modules = sorted(set(strip_grouping_suffix(m) for m in grouped_modules))
+        runner_config = get_runner_config_for_hardware_group(hardware_group)
+        hardware_label = _format_hardware_group_label(hardware_group)
+        runner_batches = chunk_modules(base_modules, batch_size)
+        batches.extend(runner_batches)
+
+        for batch in runner_batches:
+            include_entries.append(
+                {
+                    **runner_config,
+                    "module_selector": batch,
+                    "batch_display": f"{hardware_label}:{batch}",
+                    "suite_name": suite_name,
+                }
+            )
+
+    total_base_modules = len(set(strip_grouping_suffix(m) for m in modules))
+    print(
+        f"Model traced run: {len(modules)} vector files ({total_base_modules} unique modules), "
+        f"{len(include_entries)} matrix entries",
+        file=sys.stderr,
+    )
+    for hardware_group, grouped_modules in grouped_items:
+        unique_base = len(set(strip_grouping_suffix(m) for m in grouped_modules))
+        print(
+            f"  hardware {_format_hardware_group_label(hardware_group)}: "
+            f"{len(grouped_modules)} vectors ({unique_base} unique modules)",
+            file=sys.stderr,
+        )
+
+    return include_entries, batches, []
 
 
 def main():
