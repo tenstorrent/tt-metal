@@ -97,6 +97,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
+        case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -764,6 +765,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             return {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
+        case UnaryOpType::DIGAMMA: return {"digamma_tile_init();", fmt::format("digamma_tile({});", idst)};
         case UnaryOpType::LGAMMA:
         case UnaryOpType::IDENTITY:
         case UnaryOpType::BITCAST:

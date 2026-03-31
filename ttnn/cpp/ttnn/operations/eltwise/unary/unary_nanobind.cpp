@@ -2245,12 +2245,12 @@ void py_module(nb::module_& mod) {
         R"doc(Performs cosh function on :attr:`input_tensor`.)doc",
         "[supported range -9 to 9]",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
-    bind_unary_composite_2param<"digamma", &ttnn::digamma>(
+    bind_unary_operation_subcoregrids<"digamma">(
         mod,
-        R"doc(Performs digamma function on :attr:`input_tensor`.)doc",
-        "[supported for values greater than 0].",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(TILE)doc");
+        &ttnn::digamma,
+        R"doc(Performs digamma (logarithmic derivative of the gamma function) on :attr:`input_tensor`.)doc",
+        "[supported for values greater than 0]",
+        R"doc(BFLOAT16, FLOAT32)doc");
     bind_unary_composite_2param<"multigammaln", &ttnn::multigammaln>(
         mod,
         R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc",

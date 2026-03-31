@@ -52,6 +52,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDSIGMOID:
         case UnaryOpType::SOFTSIGN: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
+        case UnaryOpType::DIGAMMA: return "SFPU_OP_DIGAMMA_INCLUDE";
         case UnaryOpType::CBRT: return "SFPU_OP_CBRT_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     }
@@ -178,6 +179,7 @@ std::pair<std::string, std::string> get_op_init_and_func(
         case UnaryOpType::HARDSIGMOID: return {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
         case UnaryOpType::HARDSWISH:
         case UnaryOpType::LGAMMA: return {};
+        case UnaryOpType::DIGAMMA: return {"digamma_tile_init();", fmt::format("digamma_tile({});", idst)};
         case UnaryOpType::SOFTSIGN: return {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
         case UnaryOpType::CBRT: return {"cbrt_tile_init();", fmt::format("cbrt_tile({});", idst)};
         default: TT_FATAL(false, "Undefined unary_ng op type {}", op_type);
