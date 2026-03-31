@@ -1026,14 +1026,15 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
         )
 
         # Run batched matmul
-        output_t = ttnn.matmul(
-            in0_t,
-            in1_t,
-            program_config=program_config,
-            memory_config=out_memory_config,
-            dtype=ttnn.bfloat16,
-            output_tile=ttnn.Tile((tile_h, tile_w)),
-        )
+        with device.cache_entries_counter.measure():
+            output_t = ttnn.matmul(
+                in0_t,
+                in1_t,
+                program_config=program_config,
+                memory_config=out_memory_config,
+                dtype=ttnn.bfloat16,
+                output_tile=ttnn.Tile((tile_h, tile_w)),
+            )
 
         # Validate correctness
         output_tensor = ttnn.to_torch(output_t)
@@ -1053,7 +1054,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 @pytest.mark.parametrize(
