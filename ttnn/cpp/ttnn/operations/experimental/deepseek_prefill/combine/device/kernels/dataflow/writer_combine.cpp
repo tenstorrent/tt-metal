@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/assert.h"
 #include "api/debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
@@ -16,16 +17,6 @@
 #define DPRINT_COMBINE \
     if (0)             \
     DebugPrinter()
-#endif
-
-#define ENABLE_PERF_TRACE 1
-#if ENABLE_PERF_TRACE
-inline uint32_t read_wall_clock() { return *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
-#define PERF_BEGIN(var) uint32_t var##_start = read_wall_clock()
-#define PERF_END(var, accum) accum += (read_wall_clock() - var##_start)
-#else
-#define PERF_BEGIN(var)
-#define PERF_END(var, accum)
 #endif
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
@@ -107,8 +98,11 @@ void kernel_main() {
     uint32_t zero_init_semaphore_address = get_semaphore(zero_init_semaphore_id);
     uint32_t zero_init_barrier_l1_offset = get_semaphore(zero_init_barrier_semaphore_id);
 
-    // Read NOC coordinates for all cores (for inter-core barrier signaling)
-    uint64_t all_core_barrier_noc_addrs[2];
+    // Read NOC coordinates for all cores (for inter-core barrier signaling).
+    // Max 2 cores: one reader + one writer per link, capped by effective_num_links.
+    constexpr uint32_t MAX_BARRIER_CORES = 2;
+    ASSERT(num_cores <= MAX_BARRIER_CORES);
+    uint64_t all_core_barrier_noc_addrs[MAX_BARRIER_CORES];
     for (uint32_t c = 0; c < num_cores; c++) {
         uint32_t noc_x = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t noc_y = get_arg_val<uint32_t>(rt_args_idx++);
@@ -126,24 +120,11 @@ void kernel_main() {
     DPRINT_COMBINE << "Combine Writer: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
                    << " linearized_mesh_coord=" << linearized_mesh_coord << ENDL();
 
-#if ENABLE_PERF_TRACE
-    uint32_t perf_total_start = read_wall_clock();
-    uint32_t perf_zero_wait_cycles = 0;
-    uint32_t perf_fabric_setup_cycles = 0;
-    uint32_t perf_cb_wait_cycles = 0;
-    uint32_t perf_fabric_send_cycles = 0;
-    uint32_t perf_write_barrier_cycles = 0;
-    uint32_t perf_exit_barrier_cycles = 0;
-    uint32_t perf_num_sends = 0;
-#endif
-
     // Wait for reader to complete zero-init
-    PERF_BEGIN(zero_wait);
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
     noc_semaphore_wait(zero_init_sem_ptr, 1);
     noc_semaphore_set(zero_init_sem_ptr, 0);
-    PERF_END(zero_wait, perf_zero_wait_cycles);
 
 #ifdef DEST_CHIP_ID
     constexpr uint32_t total_mesh_devices = mesh_rows * mesh_cols;
@@ -151,7 +132,6 @@ void kernel_main() {
     constexpr uint8_t dest_mesh_ids[total_mesh_devices] = DEST_MESH_ID;
     constexpr std::array<bool, 4> directions = DIRECTIONS;
 
-    PERF_BEGIN(fab_setup);
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> fabric_connections;
     open_direction_connections_async(directions, fabric_connections, rt_args_idx);
 
@@ -177,7 +157,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
     noc_semaphore_wait(init_sem_ptr, combine_devices - 1);
     noc_semaphore_set(init_sem_ptr, 0);
-    PERF_END(fab_setup, perf_fabric_setup_cycles);
 
     DPRINT_COMBINE << "Fabric setup complete" << ENDL();
 #endif
@@ -194,14 +173,12 @@ void kernel_main() {
 
     // Sentinel-terminated fabric send loop
     while (true) {
-        PERF_BEGIN(cb_w);
         cb_wait_front(cb_route_info_id, 1);
         volatile uint32_t* route_info = (volatile uint32_t*)(get_read_ptr(cb_route_info_id));
 
         uint32_t route = route_info[0];
         if (route == ROUTE_INFO_SENTINEL) {
             cb_pop_front(cb_route_info_id, 1);
-            PERF_END(cb_w, perf_cb_wait_cycles);
             break;
         }
         uint32_t distance = route_info[1];
@@ -210,13 +187,11 @@ void kernel_main() {
 
         cb_wait_front(cb_output_for_writer_id, 1);
         uint32_t output_data_addr = get_read_ptr(cb_output_for_writer_id);
-        PERF_END(cb_w, perf_cb_wait_cycles);
 
         DPRINT_COMBINE << "Fabric send: route=" << route << " distance=" << distance << " page_idx=" << output_page_idx
                        << ENDL();
 
 #ifdef DEST_CHIP_ID
-        PERF_BEGIN(fab_send);
         fabric_set_unicast_route<false>((volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
         fabric_send_noc_unicast<fabric_max_packet_size>(
             output_addr_gen,
@@ -226,23 +201,16 @@ void kernel_main() {
             output_page_idx,
             (int)aligned_output_page_size,
             l1_alignment);
-        PERF_END(fab_send, perf_fabric_send_cycles);
 #endif
 
         cb_pop_front(cb_output_for_writer_id, 1);
-#if ENABLE_PERF_TRACE
-        perf_num_sends++;
-#endif
     }
 
 #ifdef DEST_CHIP_ID
-    PERF_BEGIN(wr_barr);
     noc_async_write_barrier();
-    PERF_END(wr_barr, perf_write_barrier_cycles);
 
     // Exit semaphore exchange
     {
-        PERF_BEGIN(exit_barr);
         const uint64_t exit_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
         send_init_semaphore_to_configured_targets<
             linearized_mesh_coord,
@@ -258,18 +226,8 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
         noc_semaphore_wait(exit_sem_ptr, combine_devices - 1);
         noc_semaphore_set(exit_sem_ptr, 0);
-        PERF_END(exit_barr, perf_exit_barrier_cycles);
     }
 
     close_direction_connections(directions, fabric_connections);
-#endif
-
-#if ENABLE_PERF_TRACE
-    uint32_t perf_total = read_wall_clock() - perf_total_start;
-    DPRINT << "PERF combine_writer chip=" << linearized_mesh_coord << " total=" << perf_total
-           << " zero_wait=" << perf_zero_wait_cycles << " fab_setup=" << perf_fabric_setup_cycles
-           << " cb_wait=" << perf_cb_wait_cycles << " fab_send=" << perf_fabric_send_cycles
-           << " wr_barr=" << perf_write_barrier_cycles << " exit_barr=" << perf_exit_barrier_cycles
-           << " n_sends=" << perf_num_sends << ENDL();
 #endif
 }

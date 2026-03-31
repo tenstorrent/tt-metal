@@ -19,6 +19,12 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+
+# Blackhole supports larger fabric packets (max 15232 bytes) vs Wormhole (max 7616 bytes).
+MAX_PAYLOAD_SIZE_BH = 14 * 1024
+MAX_PAYLOAD_SIZE_WH = 7 * 1024
+MAX_PAYLOAD_SIZE = MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH
 
 
 @dataclass
