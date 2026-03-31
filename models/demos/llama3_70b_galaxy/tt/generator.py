@@ -592,7 +592,7 @@ class Generator(WarmupForwardMixin):
                     return scattered
 
                 updates = {}
-                for f in fields(SamplingParams):
+                for f in fields(params):
                     if f.name == "seed":
                         # Seeds stay in original order; no reordering to slot indices.
                         updates[f.name] = getattr(params, f.name)
