@@ -20,7 +20,8 @@ std::string format_device_label(const FabricNodeId& node_id) {
         auto tray_id = psd.get_tray_id(asic_id);
         auto asic_location = psd.get_asic_location(asic_id);
         return fmt::format("{} [T{}/N{}]", node_id, *tray_id, *asic_location);
-    } catch (...) {
+    } catch (const std::exception&) {
+        // For expected non-fatal lookup failures, fall back to a simple label.
         return fmt::format("{}", node_id);
     }
 }
