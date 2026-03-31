@@ -13,6 +13,7 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/graph/graph_query_op_constraints.hpp"
 #include "ttnn/operations/trace.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::graph {
 
