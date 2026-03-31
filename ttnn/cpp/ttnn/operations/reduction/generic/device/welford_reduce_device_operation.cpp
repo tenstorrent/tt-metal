@@ -73,25 +73,24 @@ WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::
             tt::tt_metal::PageConfig(Layout::TILE),
             MemoryConfig(operation_attributes.output_mem_config.buffer_type())));
 
-    // TODO: Add support for sharded outputs.
-    // if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
-    //     if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-    //         const auto& nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
-    //         return tensor_spec.width_sharded(nd_shard_spec.grid, nd_shard_spec.orientation);
-    //     }
+    if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
+        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+            const auto& nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
+            return tensor_spec.width_sharded(nd_shard_spec.grid, nd_shard_spec.orientation);
+        }
 
-    //     auto nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
-    //     if (operation_attributes.dim == tt::tt_metal::ReduceOpDim::W ||
-    //         operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) {
-    //         nd_shard_spec.shard_shape[-1] = 1;
-    //     }
-    //     if ((operation_attributes.dim == tt::tt_metal::ReduceOpDim::H ||
-    //          operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) &&
-    //         nd_shard_spec.shard_shape.rank() > 1) {
-    //         nd_shard_spec.shard_shape[-2] = tt::div_up(nd_shard_spec.shard_shape[-2], tensor_args.logical_shape()[-2]);
-    //     }
-    //     return tensor_spec.sharded(std::move(nd_shard_spec), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
-    // }
+        auto nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
+        if (operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::W ||
+            operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::HW) {
+            nd_shard_spec.shard_shape[-1] = 1;
+        }
+        if ((operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::H ||
+             operation_attributes.reduce_dim == tt::tt_metal::ReduceOpDim::HW) &&
+            nd_shard_spec.shard_shape.rank() > 1) {
+            nd_shard_spec.shard_shape[-2] = tt::div_up(nd_shard_spec.shard_shape[-2], tensor_args.logical_shape()[-2]);
+        }
+        return tensor_spec.sharded(std::move(nd_shard_spec), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
+    }
 
     return tensor_spec;
 }
