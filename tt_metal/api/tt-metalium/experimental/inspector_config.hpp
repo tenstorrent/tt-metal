@@ -13,6 +13,11 @@
 
 namespace tt::tt_metal::inspector {
 
+// Scope constants — used by producers and the serializer to avoid string typos.
+inline constexpr const char* kScopeEnvironment = "Environment";
+inline constexpr const char* kScopeRtOptions = "RtOptions";
+inline constexpr const char* kScopeTtnnConfig = "TtnnConfig";
+
 struct ConfigurationEntry {
     std::string name;
     std::string value;
@@ -21,11 +26,8 @@ struct ConfigurationEntry {
 
 using ConfigCallback = std::function<std::vector<ConfigurationEntry>()>;
 
-// TTNN sets this at library load time via a file-scope static initializer in config.cpp.
-// Inspector calls it (if set) when getConfiguration RPC is invoked.
-inline ConfigCallback& ttnn_config_callback() {
-    static ConfigCallback callback;
-    return callback;
-}
+// The storage for this callback is defined out-of-line in data.cpp
+// (within the Inspector/Metalium library) to ensure all DSOs share the same instance.
+ConfigCallback& ttnn_config_callback();
 
 }  // namespace tt::tt_metal::inspector

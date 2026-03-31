@@ -4,6 +4,8 @@
 
 #include <tt_stl/reflection.hpp>
 #include "data.hpp"
+#include <cstdlib>
+#include <iterator>
 #include <stdexcept>
 #include "rpc_server_controller.hpp"
 #include "logger.hpp"
@@ -435,19 +437,26 @@ void Data::populate_core_entries_by_category(
     }
 }
 
+// Single shared instance of the TTNN config callback, defined here so all DSOs
+// (TTNN and Inspector/Metalium) reference the same storage.
+ConfigCallback& ttnn_config_callback() {
+    static ConfigCallback callback;
+    return callback;
+}
+
 // Helper: add an rtoptions entry, catching any exceptions from getters that throw when unset
-#define RT_ENTRY(name_str, expr)                                             \
-    try {                                                                    \
-        entries.push_back({name_str, fmt::format("{}", expr), "RtOptions"}); \
-    } catch (...) {                                                          \
-        entries.push_back({name_str, "(unset)", "RtOptions"});               \
+#define RT_ENTRY(name_str, expr)                                                 \
+    try {                                                                        \
+        entries.push_back({name_str, fmt::format("{}", expr), kScopeRtOptions}); \
+    } catch (...) {                                                              \
+        entries.push_back({name_str, "(unset)", kScopeRtOptions});               \
     }
-#define RT_OPT_ENTRY(name_str, expr)                                                                          \
-    try {                                                                                                     \
-        auto v = expr;                                                                                        \
-        entries.push_back({name_str, v.has_value() ? fmt::format("{}", v.value()) : "(unset)", "RtOptions"}); \
-    } catch (...) {                                                                                           \
-        entries.push_back({name_str, "(unset)", "RtOptions"});                                                \
+#define RT_OPT_ENTRY(name_str, expr)                                                                              \
+    try {                                                                                                         \
+        auto v = expr;                                                                                            \
+        entries.push_back({name_str, v.has_value() ? fmt::format("{}", v.value()) : "(unset)", kScopeRtOptions}); \
+    } catch (...) {                                                                                               \
+        entries.push_back({name_str, "(unset)", kScopeRtOptions});                                                \
     }
 
 void collect_environment_entries(std::vector<ConfigurationEntry>& entries) {
@@ -455,7 +464,7 @@ void collect_environment_entries(std::vector<ConfigurationEntry>& entries) {
         std::string name_str(name);
         const char* val = std::getenv(name_str.c_str());
         if (val) {
-            entries.push_back({std::move(name_str), std::string(val), "Environment"});
+            entries.push_back({std::move(name_str), std::string(val), kScopeEnvironment});
         }
     }
 }
@@ -466,13 +475,13 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT_ENTRY("root_dir", rt.get_root_dir());
     // These getters TT_THROW (which logs a critical message) when unset, so guard them
     if (rt.is_cache_dir_specified()) { RT_ENTRY("cache_dir", rt.get_cache_dir()); }
-    else { entries.push_back({"cache_dir", "(unset)", "RtOptions"}); }
+    else { entries.push_back({"cache_dir", "(unset)", kScopeRtOptions}); }
     RT_ENTRY("logs_dir", rt.get_logs_dir());
     if (rt.is_kernel_dir_specified()) { RT_ENTRY("kernel_dir", rt.get_kernel_dir()); }
-    else { entries.push_back({"kernel_dir", "(unset)", "RtOptions"}); }
+    else { entries.push_back({"kernel_dir", "(unset)", kScopeRtOptions}); }
     RT_ENTRY("system_kernel_dir", rt.get_system_kernel_dir());
     if (rt.is_core_grid_override_todeprecate()) { RT_ENTRY("core_grid_override_todeprecate", rt.get_core_grid_override_todeprecate()); }
-    else { entries.push_back({"core_grid_override_todeprecate", "(unset)", "RtOptions"}); }
+    else { entries.push_back({"core_grid_override_todeprecate", "(unset)", kScopeRtOptions}); }
 
     // General
     RT_ENTRY("build_map_enabled", rt.get_build_map_enabled());
@@ -580,10 +589,12 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
         const auto& disabled = rt.get_watcher_disabled_features();
         std::string joined;
         for (const auto& s : disabled) {
-            if (!joined.empty()) joined += ", ";
+            if (!joined.empty()) {
+                joined += ", ";
+            }
             joined += s;
         }
-        entries.push_back({"watcher_disabled_features", joined.empty() ? "(empty)" : joined, "RtOptions"});
+        entries.push_back({"watcher_disabled_features", joined.empty() ? "(empty)" : joined, kScopeRtOptions});
     }
 
     // Inspector
@@ -615,10 +626,10 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
             auto config = rt.get_dispatch_core_config();
             auto type_idx = static_cast<int>(config.get_dispatch_core_type());
             auto axis_idx = static_cast<int>(config.get_dispatch_core_axis());
-            entries.push_back({"dispatch_core_config_type", (type_idx < 2) ? dispatch_core_types[type_idx] : fmt::format("{}", type_idx), "RtOptions"});
-            entries.push_back({"dispatch_core_config_axis", (axis_idx < 2) ? dispatch_core_axes[axis_idx] : fmt::format("{}", axis_idx), "RtOptions"});
+            entries.push_back({"dispatch_core_config_type", (type_idx < 2) ? dispatch_core_types[type_idx] : fmt::format("{}", type_idx), kScopeRtOptions});
+            entries.push_back({"dispatch_core_config_axis", (axis_idx < 2) ? dispatch_core_axes[axis_idx] : fmt::format("{}", axis_idx), kScopeRtOptions});
         } catch (...) {
-            entries.push_back({"dispatch_core_config", "(unset)", "RtOptions"});
+            entries.push_back({"dispatch_core_config", "(unset)", kScopeRtOptions});
         }
     }
 
@@ -626,27 +637,26 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     {
         try {
             const auto& fts = rt.get_fabric_telemetry_settings();
-            entries.push_back({"fabric_telemetry_enabled", fmt::format("{}", fts.enabled), "RtOptions"});
-            entries.push_back({"fabric_telemetry_chips_monitor_all", fmt::format("{}", fts.chips.monitor_all), "RtOptions"});
-            entries.push_back({"fabric_telemetry_channels_monitor_all", fmt::format("{}", fts.channels.monitor_all), "RtOptions"});
-            entries.push_back({"fabric_telemetry_eriscs_monitor_all", fmt::format("{}", fts.eriscs.monitor_all), "RtOptions"});
-            entries.push_back({"fabric_telemetry_stats_mask", fmt::format("{}", fts.stats_mask), "RtOptions"});
+            entries.push_back({"fabric_telemetry_enabled", fmt::format("{}", fts.enabled), kScopeRtOptions});
+            entries.push_back({"fabric_telemetry_chips_monitor_all", fmt::format("{}", fts.chips.monitor_all), kScopeRtOptions});
+            entries.push_back({"fabric_telemetry_channels_monitor_all", fmt::format("{}", fts.channels.monitor_all), kScopeRtOptions});
+            entries.push_back({"fabric_telemetry_eriscs_monitor_all", fmt::format("{}", fts.eriscs.monitor_all), kScopeRtOptions});
+            entries.push_back({"fabric_telemetry_stats_mask", fmt::format("{}", fts.stats_mask), kScopeRtOptions});
         } catch (...) {
-            entries.push_back({"fabric_telemetry_settings", "(unset)", "RtOptions"});
+            entries.push_back({"fabric_telemetry_settings", "(unset)", kScopeRtOptions});
         }
     }
 
     // Per-feature debug settings
     {
-        static const char* feature_names[] = {"dprint", "read_debug_delay", "write_debug_delay", "atomic_debug_delay", "enable_l1_data_cache"};
         for (int i = 0; i < tt::llrt::RunTimeDebugFeatureCount; ++i) {
             auto feature = static_cast<tt::llrt::RunTimeDebugFeatures>(i);
-            const char* fname = feature_names[i];
-            try { entries.push_back({fmt::format("feature_{}_enabled", fname), fmt::format("{}", rt.get_feature_enabled(feature)), "RtOptions"}); } catch (...) {}
-            try { entries.push_back({fmt::format("feature_{}_file_name", fname), rt.get_feature_file_name(feature), "RtOptions"}); } catch (...) {}
-            try { entries.push_back({fmt::format("feature_{}_one_file_per_risc", fname), fmt::format("{}", rt.get_feature_one_file_per_risc(feature)), "RtOptions"}); } catch (...) {}
-            try { entries.push_back({fmt::format("feature_{}_prepend_device_core_risc", fname), fmt::format("{}", rt.get_feature_prepend_device_core_risc(feature)), "RtOptions"}); } catch (...) {}
-            try { entries.push_back({fmt::format("feature_{}_all_chips", fname), fmt::format("{}", rt.get_feature_all_chips(feature)), "RtOptions"}); } catch (...) {}
+            const char* fname = tt::llrt::RunTimeDebugFeatureNames[i];
+            RT_ENTRY(fmt::format("feature_{}_enabled", fname), rt.get_feature_enabled(feature));
+            RT_ENTRY(fmt::format("feature_{}_file_name", fname), rt.get_feature_file_name(feature));
+            RT_ENTRY(fmt::format("feature_{}_one_file_per_risc", fname), rt.get_feature_one_file_per_risc(feature));
+            RT_ENTRY(fmt::format("feature_{}_prepend_device_core_risc", fname), rt.get_feature_prepend_device_core_risc(feature));
+            RT_ENTRY(fmt::format("feature_{}_all_chips", fname), rt.get_feature_all_chips(feature));
         }
     }
     // clang-format on
@@ -682,11 +692,11 @@ void Data::rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builde
         entry.setName(all_entries[i].name);
         entry.setValue(all_entries[i].value);
 
-        if (all_entries[i].scope == "Environment") {
+        if (all_entries[i].scope == kScopeEnvironment) {
             entry.setScope(rpc::ConfigurationScope::ENVIRONMENT);
-        } else if (all_entries[i].scope == "RtOptions") {
+        } else if (all_entries[i].scope == kScopeRtOptions) {
             entry.setScope(rpc::ConfigurationScope::RT_OPTIONS);
-        } else if (all_entries[i].scope == "TtnnConfig") {
+        } else if (all_entries[i].scope == kScopeTtnnConfig) {
             entry.setScope(rpc::ConfigurationScope::TTNN_CONFIG);
         } else {
             entry.setScope(rpc::ConfigurationScope::UNKNOWN);

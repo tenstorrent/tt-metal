@@ -38,7 +38,8 @@ static const int register_inspector_config = [] {
     tt::tt_metal::inspector::ttnn_config_callback() = []() {
         std::vector<tt::tt_metal::inspector::ConfigurationEntry> entries;
         for (const auto& [name, value] : CONFIG.get_config_entries()) {
-            entries.push_back({name, value.find("nullopt") != std::string::npos ? "(unset)" : value, "TtnnConfig"});
+            entries.push_back(
+                {name, value == "nullopt" ? "(unset)" : value, tt::tt_metal::inspector::kScopeTtnnConfig});
         }
         return entries;
     };
