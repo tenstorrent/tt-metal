@@ -65,12 +65,13 @@ moe_gate_decode_dict = {
 moe_gate_prefill_dict = {
     "SliceDeviceOperation": 8,
     "ShardedToInterleavedDeviceOperation": 4,
+    "TilizeDeviceOperation": 4,
+    "ReshapeViewDeviceOperation": 3,
     "TypecastDeviceOperation": 3,
-    "InterleavedToShardedDeviceOperation": 2,
-    "ReshapeViewDeviceOperation": 2,
     "GenericOpDeviceOperation": 2,
+    "InterleavedToShardedDeviceOperation": 2,
     "ConcatDeviceOperation": 2,
-    "TilizeWithValPaddingDeviceOperation": 1,
+    "UntilizeDeviceOperation": 1,
     "MatmulDeviceOperation": 1,
 }
 
@@ -94,7 +95,7 @@ def galaxy_type():
     "use_unoptimized_moe_gate, mode, warmup_iters, num_iters, perf_target_us",
     [
         (False, "decode", 5, 10, 96.43),
-        (False, "prefill", 5, 10, 238.63),
+        (False, "prefill", 5, 10, 239.18),
         (True, "decode", 5, 10, 807.11),
         (True, "prefill", 5, 10, 856.07),
     ],
