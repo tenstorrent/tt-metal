@@ -67,12 +67,7 @@ void SetProgramRunParameters(Program& program, const ProgramRunParams& params) {
     }
 
     // Process DFB runtime parameters
-    // Currently, only validate that no unimplemented overrides are attempted
-    for (const auto& dfb_params : params.dfb_run_params) {
-        TT_FATAL(
-            !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),
-            "DFB size overrides are not yet implemented.");
-    }
+    // (Not yet supported)
 }
 
 ProgramRunParamsView GetProgramRunParamsView(Program& program) {
@@ -96,7 +91,12 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
 
     for (const auto& kernel_params : params.kernel_run_params) {
         const KernelSpecName& kernel_name = kernel_params.kernel_spec_name;
-        kernels_with_params.insert(kernel_name);
+        auto [it, inserted] = kernels_with_params.insert(kernel_name);
+        TT_FATAL(
+            inserted,
+            "Duplicate kernel_spec_name '{}' in ProgramRunParams.kernel_run_params. Each kernel must appear exactly "
+            "once.",
+            kernel_name);
 
         // Check that the kernel exists
         const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name);
@@ -157,6 +157,19 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
             kernels_with_params.contains(name),
             "Kernel '{}' is registered in the Program but has no runtime parameters specified in ProgramRunParams",
             name);
+    }
+
+    // Validate DFB runtime parameters
+    std::unordered_set<DFBSpecName> dfbs_with_params;
+    for (const auto& dfb_params : params.dfb_run_params) {
+        auto [it, inserted] = dfbs_with_params.insert(dfb_params.dfb_spec_name);
+        TT_FATAL(
+            inserted,
+            "Duplicate dfb_spec_name '{}' in ProgramRunParams.dfb_run_params. Each DFB must appear at most once.",
+            dfb_params.dfb_spec_name);
+        TT_FATAL(
+            !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),
+            "DFB size overrides are not yet implemented.");
     }
 }
 
