@@ -297,7 +297,9 @@ class TriageScript:
                     dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py"
                     for dep in triage_script.config.depends
                 ]
-                triage_script.config.depends = [(script_path.parent / dep).resolve() for dep in triage_script.config.depends]
+                triage_script.config.depends = [
+                    (script_path.parent / dep).resolve() for dep in triage_script.config.depends
+                ]
 
             return triage_script
         finally:
