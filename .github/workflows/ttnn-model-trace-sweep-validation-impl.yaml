@@ -42,6 +42,8 @@ jobs:
   prepare-validation-inputs:
     name: Prepare validation inputs
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
     outputs:
       master-json-artifact-name: ${{ steps.set-artifact-names.outputs.master-json-artifact-name }}
       preflight-artifact-name: ${{ steps.set-artifact-names.outputs.preflight-artifact-name }}
