@@ -60,11 +60,6 @@ on:
         description: "Optional comma-separated early workflows after PR create (pr-gate.yaml,merge-gate.yaml)"
         required: false
         default: ""
-      private-repo-access-check-only:
-        description: "If checked, run only private issue repo access probe"
-        required: false
-        type: boolean
-        default: false
       auto-disable-dry-run:
         description: "If checked, produce plan only and skip push/PR/kickoff execution"
         required: false
@@ -78,42 +73,7 @@ permissions:
   pull-requests: write
 
 jobs:
-  private-repo-access-check:
-    if: ${{ inputs['private-repo-access-check-only'] }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Verify private issue repo API access
-        env:
-          ISSUE_REPO_GITHUB_TOKEN: ${{ secrets.ISSUE_REPO_GITHUB_TOKEN || secrets.EVAN_PAT }}
-        run: |
-          set -euo pipefail
-          if [ -z "${ISSUE_REPO_GITHUB_TOKEN:-}" ]; then
-            echo "Missing secret ISSUE_REPO_GITHUB_TOKEN"
-            exit 1
-          fi
-          python - <<'PY'
-          import json
-          import os
-          import urllib.request
-
-          token = os.environ["ISSUE_REPO_GITHUB_TOKEN"]
-          req = urllib.request.Request(
-              "https://api.github.com/repos/tenstorrent/temporary-issue-dump",
-              headers={
-                  "Accept": "application/vnd.github+json",
-                  "Authorization": f"Bearer {token}",
-                  "X-GitHub-Api-Version": "2022-11-28",
-                  "User-Agent": "tt-metal-triage-ci",
-              },
-          )
-          with urllib.request.urlopen(req, timeout=30) as resp:
-              payload = json.loads(resp.read().decode("utf-8"))
-          print(json.dumps({"can_access_repo": True, "full_name": payload.get("full_name"), "private": payload.get("private")}))
-          PY
-
   triage-ci-autonomy:
-    if: ${{ !inputs['private-repo-access-check-only'] }}
     name: "Run CI triage autonomy pipeline"
     runs-on: ubuntu-latest
     timeout-minutes: 15
