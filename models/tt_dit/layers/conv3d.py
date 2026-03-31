@@ -13,6 +13,7 @@ import ttnn
 
 from ..parallel.config import MochiVAEParallelConfig, vae_neighbor_pad
 from ..parallel.manager import CCLManager
+from ..utils.tensor import local_device_to_torch
 from .module import Module, Parameter
 
 if TYPE_CHECKING:
@@ -129,7 +130,7 @@ class ContextParallelConv3d(Module):
             prepared = ttnn.experimental.prepare_conv3d_weights(
                 weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
             )
-            state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+            state["weight"] = local_device_to_torch(prepared)  # ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
         if "bias" in state:
             state["bias"] = state["bias"].reshape(1, -1)
 

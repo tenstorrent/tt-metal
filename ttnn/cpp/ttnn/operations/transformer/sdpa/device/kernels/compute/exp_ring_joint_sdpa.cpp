@@ -183,8 +183,8 @@ void kernel_main() {
             lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
         }
 
+        const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
         if constexpr (use_streaming_compute) {
-            const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
             sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -284,8 +284,9 @@ void kernel_main() {
                 cb_prev_out,
                 cb_out,
                 lw_mask,
-                false,   // is_causal
-                false);  // is_balanced
+                false,  // is_causal
+                false,  // is_balanced
+                is_last_ring_iter);
         }
     }
 }

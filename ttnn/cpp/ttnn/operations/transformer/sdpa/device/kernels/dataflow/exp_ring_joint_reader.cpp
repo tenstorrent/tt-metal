@@ -49,6 +49,7 @@ void kernel_main() {
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t q_per_core = global_q_end - global_q_start;
 
     const uint32_t is_chain_participant = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_injector = get_arg_val<uint32_t>(argidx++);
@@ -169,6 +170,10 @@ void kernel_main() {
 
     uint32_t chunks_signaled_by_remote = 0;
 
+    // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
+    // fronted in the CB, so we only need to read it once on the first active ring iteration.
+    bool q_pushed = false;
+
     /**
      * Iterate over ring indices.
      * On the first iteration, read from local K, V.
@@ -221,6 +226,8 @@ void kernel_main() {
             const bool should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
                                         (q_iter_local < next_core_q_chunks);
             const bool should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
+
+            const bool need_q_read = (q_per_core > 1) || !q_pushed;
 
             for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
                 /**
@@ -330,7 +337,7 @@ void kernel_main() {
                 // Push Q one subblock at a time so compute can start QK matmul incrementally.
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
-                if (k_chunk == 0) {
+                if (k_chunk == 0 && need_q_read) {
                     if constexpr (use_q_subblock_push) {
                         const auto& q_gen = is_joint_q ? joint_q_generator : q_generator;
                         for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
@@ -351,6 +358,7 @@ void kernel_main() {
                             false /*transpose*/
                         );
                     }
+                    q_pushed = true;
                 }
 
                 // V: either read locally (injector or not participant) or receive from previous core
