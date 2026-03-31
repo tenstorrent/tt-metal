@@ -11,7 +11,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import comp_allclose_and_pcc
+from models.common.utility_functions import comp_allclose_and_pcc, torch_random
 from loguru import logger
 
 
@@ -1127,3 +1127,35 @@ def test_sampling(device, tensor_shape, dtype, layout):
     assert torch.equal(
         prealloc_result, ttnn_result_in_torch
     ), f"Preallocated sampling result does not match non-preallocated: {prealloc_result} vs {ttnn_result_in_torch}"
+
+
+@pytest.mark.parametrize(
+    "input_shape, dims, keepdim",
+    [
+        # Multi-dimensional reductions
+        ((32, 64, 128), [0, 1], False),
+        ((32, 64, 128), [1, 2], False),
+        ((8, 16, 32, 64), [0, 1], False),
+        ((8, 16, 32, 64), [2, 3], False),
+    ],
+)
+def test_sum_multi_dim_row_major(device, input_shape, dims, keepdim):
+    """Test sum operation with multiple dimensions and ROW_MAJOR_LAYOUT"""
+    torch.manual_seed(0)
+    torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
+    torch_output_tensor = torch.sum(torch_input_tensor, dim=dims, keepdim=keepdim)
+
+    # Create tensor without specifying layout - defaults to ROW_MAJOR
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, device=device)
+
+    assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input should be in ROW_MAJOR_LAYOUT"
+
+    output_tensor = ttnn.sum(input_tensor, dim=dims, keepdim=keepdim)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # This test uses larger absolute values, so we need to use a larger atol.
+    atol = 10
+    rtol = 0.05
+    pcc = 0.999
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"

@@ -452,8 +452,14 @@ Tensor non_height_width_reduce(
         MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
+    auto tensor_to_reduce = input_tensor;
+    if (tensor_to_reduce.layout() != Layout::TILE) {
+        auto padded_shape = data_movement::pad_to_tile_shape(tensor_to_reduce.padded_shape());
+        tensor_to_reduce = ttnn::tilize_with_val_padding(
+            tensor_to_reduce, padded_shape, 0.0f, memory_config, std::nullopt, /*use_multicore=*/true, sub_core_grids);
+    }
     Tensor output_tensor = ttnn::experimental::reduction::fast_reduce_nc(
-        input_tensor, dims, /*output=*/std::nullopt, memory_config, config, sub_core_grids);
+        tensor_to_reduce, dims, /*output=*/std::nullopt, memory_config, config, sub_core_grids);
     auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());
     output_tensor = ttnn::slice(output_tensor, start, end, step);
     return output_tensor;
