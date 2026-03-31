@@ -378,6 +378,122 @@ def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op):
     assert passing, f"op={op} {output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
 
 
+# Test that generic reduction ops work correctly with Width and Height sharding.
+@pytest.mark.parametrize(
+    "input_shape, shard_2d_shape, end_x, end_y, memory_layout",
+    [
+        # HEIGHT_SHARDED: each core gets a horizontal slice (some rows, full width)
+        ([8, 8, 32, 32], [1024, 32], 1, 0, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([4, 4, 64, 64], [512, 64], 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        # WIDTH_SHARDED: each core gets a vertical slice (full height, some columns)
+        ([8, 8, 32, 128], [2048, 32], 3, 0, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        ([4, 4, 64, 256], [1024, 32], 7, 0, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+    ],
+)
+@pytest.mark.parametrize("keepdim", [True])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "std", "var"])
+def test_generic_ops_wh_shard(device, input_shape, shard_2d_shape, end_x, end_y, memory_layout, keepdim, layout, op):
+    dim = -2
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(end_x, end_y))}),
+        shard_2d_shape,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    memory_config = ttnn.MemoryConfig(
+        memory_layout=memory_layout,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+    torch_input_tensor = torch.rand(input_shape)
+
+    # torch.max/min don't accept a tuple for dim; use amax/amin which do.
+    torch_op_name = {"max": "amax", "min": "amin"}.get(op, op)
+    torch_op = getattr(torch, torch_op_name)
+    torch_output_tensor = torch_op(torch_input_tensor, dim=dim, keepdim=keepdim)
+
+    ttnn_op = getattr(ttnn, op)
+    pad_value = 1.0 if op == "prod" else None
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.float32,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+        pad_value=pad_value,
+    )
+    op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim)
+
+    # Verify output is sharded with correct properties (doc: "Output sharding will mirror the input")
+    output_mem_config = op_output_tensor.memory_config()
+    assert output_mem_config.is_sharded(), f"op={op}: expected output to be sharded"
+    assert (
+        output_mem_config.buffer_type == ttnn.BufferType.L1
+    ), f"op={op}: expected L1 buffer type, got {output_mem_config.buffer_type}"
+    assert (
+        output_mem_config.memory_layout == memory_layout
+    ), f"op={op}: expected memory layout {memory_layout}, got {output_mem_config.memory_layout}"
+    output_shard_spec = output_mem_config.shard_spec
+    assert output_shard_spec is not None, f"op={op}: expected output to have shard_spec"
+
+    def round_up_to_tile(dim_size):
+        """Round up to the nearest multiple of TILE_SIZE (e.g. 1 -> 32, 33 -> 64).
+
+        Adding (TILE_SIZE - 1) before integer-dividing by TILE_SIZE effectively
+        computes ceil(dim_size / TILE_SIZE), i.e. the number of tiles needed.
+        Multiplying back by TILE_SIZE converts from tile count to element count.
+        """
+        return ((dim_size + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+
+    # Compute expected 2D output shard shape.
+    # Legacy sharding flattens the tensor to 2D: [product(dims[:-1]), dims[-1]].
+    # After reducing dim with keepdim=True, that product changes.
+    # Output is always TILE layout, so the last two dims must be tile-padded
+    # BEFORE flattening to 2D (physical_shape pads then flattens, not the
+    # other way around).
+    output_shape = list(input_shape)
+    normalized_dim = dim if dim >= 0 else dim + len(input_shape)
+    if keepdim:
+        output_shape[normalized_dim] = 1
+    else:
+        del output_shape[normalized_dim]
+
+    # Tile-pad the last two dims before flattening, matching physical_shape().
+    rank = len(output_shape)
+    padded_shape = list(output_shape)
+    for i in range(max(0, rank - 2), rank):
+        padded_shape[i] = round_up_to_tile(padded_shape[i])
+
+    output_2d_height = 1
+    for d in padded_shape[:-1]:
+        output_2d_height *= d
+    output_2d_width = padded_shape[-1]
+    num_cores = (end_x + 1) * (end_y + 1)
+
+    if memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        # Height is split across cores, width stays full
+        expected_shard_h = (output_2d_height + num_cores - 1) // num_cores
+        expected_shard_w = output_2d_width
+    else:
+        # Width is split across cores, height stays full
+        expected_shard_h = output_2d_height
+        expected_shard_w = (output_2d_width + num_cores - 1) // num_cores
+
+    actual_shard_shape = list(output_shard_spec.shape)
+    assert actual_shard_shape == [expected_shard_h, expected_shard_w], (
+        f"op={op}: expected output shard shape [{expected_shard_h}, {expected_shard_w}], " f"got {actual_shard_shape}"
+    )
+
+    output_tensor = ttnn.to_torch(op_output_tensor)
+
+    atol = rtol = 0.1
+    pcc = 0.99
+    passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
+    assert passing, f"op={op} {output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
+
+
 # Test that generic reduction ops work correctly with a scalar applied to the input.
 @pytest.mark.parametrize("op", ["sum", "mean", "max", "min", "std", "var"])
 @pytest.mark.parametrize("scalar", [1.0, -2.0, 2.0, -2.43, 2.43, 4.0])

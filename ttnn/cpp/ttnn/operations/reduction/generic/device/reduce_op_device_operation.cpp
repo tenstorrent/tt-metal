@@ -58,22 +58,26 @@ ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output
             MemoryConfig(operation_attributes.output_mem_config.buffer_type())));
 
     if (operation_attributes.output_mem_config.nd_shard_spec().has_value()) {
+        const auto& nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
         if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            const auto& nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
             return tensor_spec.width_sharded(nd_shard_spec.grid, nd_shard_spec.orientation);
         }
+        if (operation_attributes.output_mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+            return tensor_spec.height_sharded(nd_shard_spec.grid, nd_shard_spec.orientation);
+        }
 
-        auto nd_shard_spec = *operation_attributes.output_mem_config.nd_shard_spec();
+        auto nd_shard_spec_copy = nd_shard_spec;
         if (operation_attributes.dim == tt::tt_metal::ReduceOpDim::W ||
             operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) {
-            nd_shard_spec.shard_shape[-1] = 1;
+            nd_shard_spec_copy.shard_shape[-1] = 1;
         }
         if ((operation_attributes.dim == tt::tt_metal::ReduceOpDim::H ||
              operation_attributes.dim == tt::tt_metal::ReduceOpDim::HW) &&
-            nd_shard_spec.shard_shape.rank() > 1) {
-            nd_shard_spec.shard_shape[-2] = tt::div_up(nd_shard_spec.shard_shape[-2], tensor_args.logical_shape()[-2]);
+            nd_shard_spec_copy.shard_shape.rank() > 1) {
+            nd_shard_spec_copy.shard_shape[-2] = 1;
         }
-        return tensor_spec.sharded(std::move(nd_shard_spec), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
+        return tensor_spec.sharded(
+            std::move(nd_shard_spec_copy), tt::tt_metal::TensorSpec::ShardShapeAlignment::REQUIRED);
     }
 
     return tensor_spec;
