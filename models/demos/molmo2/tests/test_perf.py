@@ -65,6 +65,8 @@ def test_decode_latency(device):
     """
     from models.demos.molmo2.tt.load_weights import load_state_dict_from_safetensors
     from models.demos.molmo2.tt.text_attention import TextAttention
+    from models.demos.molmo2.tt.text_model import init_decode_position, init_kv_cache
+    from models.demos.molmo2.tt.text_rotary_setup import TextRotarySetup
 
     model_id = os.environ.get("HF_MODEL", "allenai/Molmo2-8B")
     layer_num = 0
@@ -98,12 +100,37 @@ def test_decode_latency(device):
     x = torch.randn(1, 1, 1, hidden_dim)
     x_ttnn = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-    # Create dummy rot_mats and KV cache
-    cos_sin = torch.ones(1, 1, head_dim // 2)
-    rot_mat = ttnn.from_torch(cos_sin, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    # Create rot_mats, KV cache, and current_pos for decode API
+    rotary_setup = TextRotarySetup(
+        mesh_device=device,
+        head_dim=head_dim,
+        max_seq_len=8192,
+        rope_theta=1000000.0,
+        batch_size=1,
+        datatype=ttnn.bfloat16,
+    )
+    rot_mats = rotary_setup.get_rot_mats_prefill(seq_len=1, start_pos=0)  # [cos, sin]
+    kv_cache = init_kv_cache(
+        mesh_device=device,
+        num_layers=1,
+        batch_size=1,
+        num_kv_heads=num_kv_heads,
+        max_seq_len=8192,
+        head_dim=head_dim,
+        dtype=ttnn.bfloat8_b,
+    )[0]
+    current_pos = init_decode_position(device, batch_size=1, initial_pos=0)
 
     def run_decode():
-        _ = attn.forward_decode(x_ttnn, rot_mat)
+        # forward_decode deallocates its input tensor; pass a fresh copy each iteration
+        x_in = ttnn.clone(x_ttnn)
+        _ = attn.forward_decode(
+            x_in,
+            rot_mats,
+            None,  # transformation_mat (unused for half-span RoPE)
+            kv_cache,
+            current_pos,
+        )
 
     mean_ms, min_ms, max_ms = time_fn(run_decode, warmup=2, repeats=10, device=device)
     print(f"\nTextAttention decode (no trace): mean={mean_ms:.1f}ms, min={min_ms:.1f}ms, max={max_ms:.1f}ms")
@@ -153,6 +180,7 @@ def test_vision_block_latency(device):
     block = VisionBlock(
         mesh_device=device,
         state_dict=state_dict,
+        layer_num=layer_num,
         state_dict_prefix=f"model.vision_backbone.image_vit.transformer.resblocks.{layer_num}",
         hidden_dim=hidden_dim,
         num_heads=16,
