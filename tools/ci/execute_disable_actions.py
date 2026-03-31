@@ -360,6 +360,8 @@ def run_disable_editor(action: dict[str, Any], issue_url: str, model: str) -> tu
         + (f"Evidence job URLs: {', '.join(job_urls)}\n" if job_urls else "")
         + (f"Disable scope hint: {scope_hint}\n" if scope_hint else "")
         + (f"Source Slack: {slack_link}\n" if slack_link else "")
+        + "Treat the provided job URLs and disable scope hint as sufficient evidence to proceed.\n"
+        + "Do not refuse solely because external URLs are inaccessible in CI.\n"
         + "If evidence is weak, make no code edits and explain in JSON summary.\n"
         + "You must emit the marker and JSON contract from the command specification."
     )
