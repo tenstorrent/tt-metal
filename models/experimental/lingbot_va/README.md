@@ -32,7 +32,7 @@ At a high level (no GPU path; reference and prep run on **CPU**, model math on *
 | Kind                                                   | Measured value |
 | ------------------------------------------------------ | -------------- |
 | **Device** (`tests/perf/test_perf_ttnn_lingbot_va.py`) | 0.5            |
-| **End-to-end** (`tests/perf/test_perf_e2e.py`)         | 0.84           |
+| **End-to-end** (`tests/perf/test_perf_e2e.py`)         | 5.68           |
 
 
 ## PyTorch / CPU components
@@ -160,7 +160,7 @@ pytest models/experimental/lingbot_va/tests/perf/test_perf_ttnn_lingbot_va.py::t
 **End-to-end perf (pipeline wall-clock, `prep_perf_report`):**
 
 ```bash
-pytest models/experimental/lingbot_va/tests/perf/test_perf_e2e.py::test_perf_lingbot_va_e2e_2cq_no_trace -v -s
+pytest models/experimental/lingbot_va/tests/perf/test_perf_e2e.py::test_perf_lingbot_va_e2e_2cq_trace -v -s
 ```
 
 ## Demo Scripts
