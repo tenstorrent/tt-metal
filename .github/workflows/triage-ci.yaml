@@ -262,6 +262,30 @@ jobs:
           dry-run: ${{ github.event.inputs['auto-disable-dry-run'] || 'false' }}
           output-dir: build_ci/auto_disable
 
+      - name: M4 extract deterministic failing jobs from aggregate workflow data
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          # Use repo-scoped GITHUB_TOKEN for aggregate-workflow-data artifact reads.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/extract_failing_jobs.py
+
+      - name: M4 create issues and post Slack bootstrap messages
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+          AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/m4_create_issues_and_notify.py \
+            --failing-jobs-json "build_ci/ci_ticketing/create_tickets/failing_jobs.json" \
+            --output-json "build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json" \
+            --max-candidates 5 \
+            --model "${{ github.event.inputs['auto-disable-model'] || 'claude-4-sonnet' }}"
+
       - name: Upload auto-disable artifacts
         if: ${{ !inputs['data-gathering-mode'] }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
@@ -273,6 +297,8 @@ jobs:
             build_ci/auto_disable/execution_result.json
             build_ci/auto_disable/summary.md
             build_ci/auto_disable/debug
+            build_ci/ci_ticketing/create_tickets/failing_jobs.json
+            build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json
           retention-days: 7
 
       - name: Upload triage state artifact
