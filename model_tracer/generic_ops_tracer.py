@@ -31,6 +31,7 @@ import json
 import copy
 import hashlib
 import re
+import uuid
 from tqdm import tqdm
 import argparse
 from datetime import datetime
@@ -38,6 +39,8 @@ from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
+
+from model_tracer.mesh_metadata import infer_device_count, infer_mesh_shape
 
 
 def get_base_dir():
@@ -289,6 +292,87 @@ def collect_operation_jsons(trace_dir):
     return json_files
 
 
+def _extract_mesh_device_info(mesh_data):
+    """Build machine-level mesh metadata from serialized mesh_device info."""
+    inferred_mesh_shape = infer_mesh_shape(
+        mesh_shape=mesh_data.get("shape"),
+        distribution_shape=mesh_data.get("distribution_shape"),
+        device_ids=mesh_data.get("device_ids"),
+    )
+    inferred_device_count = infer_device_count(
+        device_ids=mesh_data.get("device_ids"),
+        device_count=None,
+        mesh_shape=inferred_mesh_shape,
+        distribution_shape=mesh_data.get("distribution_shape"),
+    )
+
+    result = {}
+    device_ids = mesh_data.get("device_ids", []) or []
+    if device_ids:
+        result["device_ids"] = device_ids
+    if inferred_device_count:
+        result["device_count"] = inferred_device_count
+    if inferred_mesh_shape:
+        result["mesh_device_shape"] = inferred_mesh_shape
+    return result or None
+
+
+def _clean_serialized_trace_value(value, mesh_device_info_ref):
+    """Recursively clean traced values and promote mesh metadata from nested tensors.
+
+    Handles tensors nested directly in args/kwargs as well as list-of-tensor inputs
+    like ttnn.concat(arg0=[tensor_a, tensor_b, ...]).
+    """
+    if isinstance(value, list):
+        return [_clean_serialized_trace_value(item, mesh_device_info_ref) for item in value]
+
+    if not isinstance(value, dict):
+        return value
+
+    value_clean = {}
+    mesh_data = value.get("mesh_device") if isinstance(value.get("mesh_device"), dict) else None
+
+    if mesh_data:
+        extracted_mesh_info = _extract_mesh_device_info(mesh_data)
+        if mesh_device_info_ref[0] is None and extracted_mesh_info is not None:
+            mesh_device_info_ref[0] = extracted_mesh_info
+
+        placements = mesh_data.get("placements", [])
+        distribution_shape = mesh_data.get("distribution_shape", [])
+        mesh_shape = infer_mesh_shape(
+            mesh_shape=mesh_data.get("shape"),
+            distribution_shape=distribution_shape,
+            device_ids=mesh_data.get("device_ids"),
+        ) or (mesh_data.get("shape", []) or [])
+
+        for key, nested_value in value.items():
+            if key == "mesh_device":
+                continue
+            value_clean[key] = _clean_serialized_trace_value(nested_value, mesh_device_info_ref)
+
+        if placements:
+            value_clean["tensor_placement"] = {
+                "placement": str(placements),
+                "distribution_shape": str(distribution_shape),
+                "mesh_device_shape": str(mesh_shape),
+            }
+    else:
+        for key, nested_value in value.items():
+            value_clean[key] = _clean_serialized_trace_value(nested_value, mesh_device_info_ref)
+
+    # Remove redundant shape if it matches original_shape
+    if "shape" in value_clean and "original_shape" in value_clean:
+        if value_clean["shape"] == value_clean["original_shape"]:
+            del value_clean["shape"]
+
+    # Remove redundant dtype if it matches original_dtype
+    if "dtype" in value_clean and "original_dtype" in value_clean:
+        if value_clean["dtype"] == value_clean["original_dtype"]:
+            del value_clean["dtype"]
+
+    return value_clean
+
+
 def convert_json_to_master_format(json_file, test_source, machine_info):
     """Convert individual JSON file to master format"""
     try:
@@ -308,64 +392,9 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
             position = arg.get("position", 0)
             arg_key = f"arg{position}"
             arg_value = arg.get("value", {})
-
-            # Extract mesh_device info from tensor arguments
-            if isinstance(arg_value, dict) and "mesh_device" in arg_value:
-                mesh_data = arg_value["mesh_device"]
-
-                # Extract device info (only once, they should all be the same)
-                if mesh_device_info is None:
-                    mesh_device_info = {
-                        "device_ids": mesh_data.get("device_ids", []),
-                        "device_count": len(mesh_data.get("device_ids", [])),
-                        "mesh_device_shape": mesh_data.get("shape", []),
-                    }
-
-                # Extract tensor placement info and store it per-tensor
-                placements = mesh_data.get("placements", [])
-                distribution_shape = mesh_data.get("distribution_shape", [])
-                mesh_shape = mesh_data.get("shape", [])
-
-                # Remove mesh_device from the argument value
-                arg_value_clean = {k: v for k, v in arg_value.items() if k != "mesh_device"}
-
-                # Add per-tensor placement info if it exists
-                if placements:
-                    arg_value_clean["tensor_placement"] = {
-                        "placement": str(placements),
-                        "distribution_shape": str(distribution_shape),
-                        "mesh_device_shape": str(mesh_shape),
-                    }
-
-                # Remove redundant shape if it matches original_shape
-                if "shape" in arg_value_clean and "original_shape" in arg_value_clean:
-                    if arg_value_clean["shape"] == arg_value_clean["original_shape"]:
-                        del arg_value_clean["shape"]
-
-                # Remove redundant dtype if it matches original_dtype
-                if "dtype" in arg_value_clean and "original_dtype" in arg_value_clean:
-                    if arg_value_clean["dtype"] == arg_value_clean["original_dtype"]:
-                        del arg_value_clean["dtype"]
-
-                arguments[arg_key] = arg_value_clean
-            else:
-                # Also clean up non-mesh tensors
-                if isinstance(arg_value, dict):
-                    arg_value_clean = arg_value.copy()
-
-                    # Remove redundant shape if it matches original_shape
-                    if "shape" in arg_value_clean and "original_shape" in arg_value_clean:
-                        if arg_value_clean["shape"] == arg_value_clean["original_shape"]:
-                            del arg_value_clean["shape"]
-
-                    # Remove redundant dtype if it matches original_dtype
-                    if "dtype" in arg_value_clean and "original_dtype" in arg_value_clean:
-                        if arg_value_clean["dtype"] == arg_value_clean["original_dtype"]:
-                            del arg_value_clean["dtype"]
-
-                    arguments[arg_key] = arg_value_clean
-                else:
-                    arguments[arg_key] = arg_value
+            mesh_device_info_ref = [mesh_device_info]
+            arguments[arg_key] = _clean_serialized_trace_value(arg_value, mesh_device_info_ref)
+            mesh_device_info = mesh_device_info_ref[0]
 
         # Add kwargs as named arguments (they come after positional args)
         excluded_arg_keys = get_excluded_arg_keys()
@@ -373,60 +402,9 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
         for key, value in kwargs.items():
             if key in excluded_arg_keys:
                 continue
-            # Also check kwargs for mesh_device info
-            if isinstance(value, dict) and "mesh_device" in value:
-                mesh_data = value["mesh_device"]
-
-                if mesh_device_info is None:
-                    mesh_device_info = {
-                        "device_ids": mesh_data.get("device_ids", []),
-                        "device_count": len(mesh_data.get("device_ids", [])),
-                        "mesh_device_shape": mesh_data.get("shape", []),
-                    }
-
-                placements = mesh_data.get("placements", [])
-                distribution_shape = mesh_data.get("distribution_shape", [])
-                mesh_shape = mesh_data.get("shape", [])
-
-                value_clean = {k: v for k, v in value.items() if k != "mesh_device"}
-
-                # Add per-tensor placement info if it exists
-                if placements:
-                    value_clean["tensor_placement"] = {
-                        "placement": str(placements),
-                        "distribution_shape": str(distribution_shape),
-                        "mesh_device_shape": str(mesh_shape),
-                    }
-
-                # Remove redundant shape if it matches original_shape
-                if "shape" in value_clean and "original_shape" in value_clean:
-                    if value_clean["shape"] == value_clean["original_shape"]:
-                        del value_clean["shape"]
-
-                # Remove redundant dtype if it matches original_dtype
-                if "dtype" in value_clean and "original_dtype" in value_clean:
-                    if value_clean["dtype"] == value_clean["original_dtype"]:
-                        del value_clean["dtype"]
-
-                arguments[key] = value_clean
-            else:
-                # Also clean up non-mesh tensors in kwargs
-                if isinstance(value, dict):
-                    value_clean = value.copy()
-
-                    # Remove redundant shape if it matches original_shape
-                    if "shape" in value_clean and "original_shape" in value_clean:
-                        if value_clean["shape"] == value_clean["original_shape"]:
-                            del value_clean["shape"]
-
-                    # Remove redundant dtype if it matches original_dtype
-                    if "dtype" in value_clean and "original_dtype" in value_clean:
-                        if value_clean["dtype"] == value_clean["original_dtype"]:
-                            del value_clean["dtype"]
-
-                    arguments[key] = value_clean
-                else:
-                    arguments[key] = value
+            mesh_device_info_ref = [mesh_device_info]
+            arguments[key] = _clean_serialized_trace_value(value, mesh_device_info_ref)
+            mesh_device_info = mesh_device_info_ref[0]
 
         # Merge mesh_device info into machine_info
         enhanced_machine_info = machine_info.copy() if machine_info else {}
@@ -515,7 +493,54 @@ def _normalize_for_hash(obj):
                 _normalize_for_hash(item)
 
 
-def update_master_file(master_file_path, operations, test_source):
+def _extract_hardware_and_mesh(machine_info):
+    """Extract the hash-relevant hardware and mesh fields from machine_info."""
+    hardware = None
+    if machine_info:
+        board_type = machine_info.get("board_type")
+        if board_type:
+            device_series = machine_info.get("device_series")
+            if isinstance(device_series, list):
+                device_series = device_series[0] if device_series else None
+            hardware = (board_type, device_series, machine_info.get("card_count", 1))
+
+    mesh_config = None
+    if machine_info and "tensor_placements" in machine_info:
+        placements = machine_info.get("tensor_placements", [])
+        if placements:
+            placement = placements[0]
+            mesh_shape_value = placement.get("mesh_device_shape")
+            if mesh_shape_value:
+                try:
+                    mesh_shape = json.loads(mesh_shape_value) if isinstance(mesh_shape_value, str) else mesh_shape_value
+                    if mesh_shape:
+                        placement_str = placement.get("placement", "")
+                        shard_dim = None
+                        if "PlacementShard" in placement_str:
+                            match = re.search(r"PlacementShard\((\d+)\)", placement_str)
+                            if match:
+                                shard_dim = int(match.group(1))
+                        mesh_config = {
+                            "mesh_shape": mesh_shape,
+                            "placement_type": "shard" if shard_dim is not None else "replicate",
+                            "shard_dim": shard_dim,
+                        }
+                except Exception:
+                    pass
+
+    return hardware, mesh_config
+
+
+def _compute_config_hash(op_name, op_args, machine_info):
+    """Compute the stable config hash used for fresh traces and recomputation."""
+    hardware, mesh_config = _extract_hardware_and_mesh(machine_info)
+    hash_args = copy.deepcopy(op_args)
+    _normalize_for_hash(hash_args)
+    normalized = {"operation": op_name, "arguments": hash_args, "hardware": hardware, "mesh": mesh_config}
+    return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+
+
+def update_master_file(master_file_path, operations, test_source, trace_uid=None):
     """Update master JSON file with operations"""
     import hashlib
 
@@ -573,51 +598,7 @@ def update_master_file(master_file_path, operations, test_source):
             # New configuration - assign new config_id
             # Compute config_hash for stable tracking (same logic as load_ttnn_ops_data_v2.py)
             machine_info = operation.get("machine_info")
-
-            # Extract hardware tuple
-            hardware = None
-            if machine_info:
-                board_type = machine_info.get("board_type")
-                if board_type:
-                    device_series = machine_info.get("device_series")
-                    if isinstance(device_series, list):
-                        device_series = device_series[0] if device_series else None
-                    hardware = (board_type, device_series, machine_info.get("card_count", 1))
-
-            # Extract mesh config
-            mesh_config = None
-            if machine_info and "tensor_placements" in machine_info:
-                placements = machine_info.get("tensor_placements", [])
-                if placements:
-                    p = placements[0]
-                    mesh_shape_str = p.get("mesh_device_shape")
-                    if mesh_shape_str:
-                        try:
-                            mesh_shape = (
-                                json.loads(mesh_shape_str) if isinstance(mesh_shape_str, str) else mesh_shape_str
-                            )
-                            if mesh_shape:
-                                import re
-
-                                placement_str = p.get("placement", "")
-                                shard_dim = None
-                                if "PlacementShard" in placement_str:
-                                    match = re.search(r"PlacementShard\((\d+)\)", placement_str)
-                                    if match:
-                                        shard_dim = int(match.group(1))
-                                mesh_config = {
-                                    "mesh_shape": mesh_shape,
-                                    "placement_type": "shard" if shard_dim is not None else "replicate",
-                                    "shard_dim": shard_dim,
-                                }
-                        except:
-                            pass
-
-            # Compute SHA-256 hash (normalize a copy so stored arguments are untouched)
-            hash_args = copy.deepcopy(op_args)
-            _normalize_for_hash(hash_args)
-            normalized = {"operation": op_name, "arguments": hash_args, "hardware": hardware, "mesh": mesh_config}
-            config_hash = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+            config_hash = _compute_config_hash(op_name, op_args, machine_info)
 
             config_entry = {
                 "config_id": next_config_id,
@@ -628,6 +609,7 @@ def update_master_file(master_file_path, operations, test_source):
                         "source": test_source,
                         "machine_info": machine_info,
                         "count": operation.get("execution_count", 1),
+                        "trace_uid": trace_uid or operation.get("trace_uid"),
                     }
                 ],
             }
@@ -691,6 +673,7 @@ def update_master_file(master_file_path, operations, test_source):
                 new_source = test_source
                 new_machine_info = operation.get("machine_info")
                 new_count = operation.get("execution_count", 1)
+                new_trace_uid = trace_uid or operation.get("trace_uid")
 
                 found_execution = None
                 for execution in matching_config["executions"]:
@@ -712,6 +695,8 @@ def update_master_file(master_file_path, operations, test_source):
                 if found_execution:
                     # Update existing execution - take max count
                     found_execution["count"] = max(found_execution.get("count", 1), new_count)
+                    if new_trace_uid:
+                        found_execution["trace_uid"] = new_trace_uid
                 else:
                     # Add new execution entry
                     matching_config["executions"].append(
@@ -719,6 +704,7 @@ def update_master_file(master_file_path, operations, test_source):
                             "source": new_source,
                             "machine_info": new_machine_info,
                             "count": new_count,
+                            "trace_uid": new_trace_uid,
                         }
                     )
 
@@ -886,6 +872,7 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
     metadata = {
         "test_source": test_path,
         "timestamp": datetime.now().isoformat(),
+        "trace_uid": str(uuid.uuid4()),
         "machine_info": get_machine_info(),
         "trace_count": len(json_files),
     }
@@ -909,6 +896,7 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         "exit_code": result.returncode,
         "trace_files": json_files,
         "trace_dir": trace_dir,
+        "trace_uid": metadata["trace_uid"],
         "keep_traces": keep_traces,
         "output_dir": output_dir,
         "test_stats": test_stats,
@@ -1110,9 +1098,6 @@ def recompute_config_hashes(json_file):
     using _normalize_for_hash to strip device-specific fields and
     canonicalize shard_spec before hashing.
     """
-    import hashlib
-    import re as _re
-
     print(f"🔄 Recomputing config hashes in {os.path.basename(json_file)}...")
 
     with open(json_file, "r") as f:
@@ -1128,46 +1113,7 @@ def recompute_config_hashes(json_file):
             executions = config.get("executions", [])
             if executions and isinstance(executions[0], dict):
                 machine_info = executions[0].get("machine_info")
-
-            hardware = None
-            if machine_info:
-                board_type = machine_info.get("board_type")
-                if board_type:
-                    device_series = machine_info.get("device_series")
-                    if isinstance(device_series, list):
-                        device_series = device_series[0] if device_series else None
-                    hardware = (board_type, device_series, machine_info.get("card_count", 1))
-
-            mesh_config = None
-            if machine_info and "tensor_placements" in machine_info:
-                placements = machine_info.get("tensor_placements", [])
-                if placements:
-                    p = placements[0]
-                    mesh_shape_str = p.get("mesh_device_shape")
-                    if mesh_shape_str:
-                        try:
-                            mesh_shape = (
-                                json.loads(mesh_shape_str) if isinstance(mesh_shape_str, str) else mesh_shape_str
-                            )
-                            if mesh_shape:
-                                placement_str = p.get("placement", "")
-                                shard_dim = None
-                                if "PlacementShard" in placement_str:
-                                    match = _re.search(r"PlacementShard\((\d+)\)", placement_str)
-                                    if match:
-                                        shard_dim = int(match.group(1))
-                                mesh_config = {
-                                    "mesh_shape": mesh_shape,
-                                    "placement_type": "shard" if shard_dim is not None else "replicate",
-                                    "shard_dim": shard_dim,
-                                }
-                        except Exception:
-                            pass
-
-            hash_args = copy.deepcopy(op_args)
-            _normalize_for_hash(hash_args)
-            normalized = {"operation": op_name, "arguments": hash_args, "hardware": hardware, "mesh": mesh_config}
-            new_hash = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+            new_hash = _compute_config_hash(op_name, op_args, machine_info)
 
             if new_hash != old_hash:
                 config["config_hash"] = new_hash
@@ -1297,6 +1243,7 @@ Examples (Import existing traces):
             valid_operations = load_valid_operations()
             excluded_operations = get_excluded_operations()
             machine_info = get_machine_info()
+            trace_uid = result.get("trace_uid")
 
             # Extract test source name and possibly override machine_info from metadata
             if args.load:
@@ -1326,8 +1273,11 @@ Examples (Import existing traces):
                         # Use machine_info from metadata if present
                         if "machine_info" in metadata:
                             machine_info = metadata["machine_info"]
+                            trace_uid = metadata.get("trace_uid", trace_uid)
                             print(f"📋 Loaded metadata from trace directory")
                             print(f"   Original source: {metadata.get('test_source')}")
+                            if metadata.get("trace_uid"):
+                                print(f"   Trace UID: {metadata.get('trace_uid')}")
                             if "machine_info" in metadata and metadata["machine_info"]:
                                 machine_desc = (
                                     metadata["machine_info"][0]
@@ -1433,7 +1383,10 @@ Examples (Import existing traces):
             else:
                 os.makedirs(args.output_dir, exist_ok=True)
                 master_file = os.path.join(args.output_dir, "ttnn_operations_master.json")
-            new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source)
+            if trace_uid:
+                new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source, trace_uid)
+            else:
+                new_configs_added = update_master_file(master_file, filtered_operations_unique, test_source)
 
             print(f"📝 Added {new_configs_added} new unique configurations to {master_file}")
             print(f"   Source: {test_source}")
