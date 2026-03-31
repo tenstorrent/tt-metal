@@ -40,33 +40,33 @@
 
 
 targets:
-  lead_models:
-    - model:
-        - deepseek_v3
-      trace: [2]
+  # lead_models:
+  #   - model:
+  #       - deepseek_v3
+  #     trace: [2]
 
   model_traced:
     - model:
-        - deepseek-llm-7b-chat
-        - deepseek-r1-distill-qwen-32b
-        - efficientnetb0
-        - falcon7b
-        - llama-3.2-11b-vision-instruct
-        - llama-3.2-1b-instruct
-        - llama-krikri-8b-instruct
-        - mistral-7b-instruct-v0.3
-        - phi-3-mini-128k-instruct
-        - qwen2.5-coder-32b
-        - qwen2.5-coder-7b-instruct
-        - qwen3-32b
-        - qwen3-32b_2
-        - segmentation
-        - sentence_bert
-        - stable_diffusion_xl_base
-        - vit
-        - vit_2
+        # - deepseek-llm-7b-chat
+        # - deepseek-r1-distill-qwen-32b
+        # - efficientnetb0
+        # - falcon7b
+        # - llama-3.2-11b-vision-instruct
+        # - llama-3.2-1b-instruct
+        # - llama-krikri-8b-instruct
+        # - mistral-7b-instruct-v0.3
+        # - phi-3-mini-128k-instruct
+        # - qwen2.5-coder-32b
+        # - qwen2.5-coder-7b-instruct
+        # - qwen3-32b
+        # - qwen3-32b_2
+        # - segmentation
+        # - sentence_bert
+        # - stable_diffusion_xl_base
+        # - vit
+        # - vit_2
         - whisper
-      trace: [1,3,4]
+      trace: [1]
 
 registry:
   - trace_id: 1
