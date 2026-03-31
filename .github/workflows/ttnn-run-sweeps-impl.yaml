@@ -148,7 +148,7 @@ jobs:
   ttnn-generate-sweeps:
     # Generates sweep vectors for: single sweeps, model traced, lead models, and non-CCL modules for nightly/comprehensive
     # CCL module generation is handled by ttnn-generate-sweeps-ccl job (only for Nightly/Comprehensive)
-    name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }}
+    name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }} (${{ matrix.generate_mode }})
     needs: [build-artifact, generate-master-json-from-db]
     if: needs.build-artifact.result == 'success' && (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
     strategy:
