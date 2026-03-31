@@ -300,7 +300,7 @@ class ttMLA:
             return {"memory_config": ttnn.DRAM_MEMORY_CONFIG, "dtype": self.MM_DEFAULT_DTYPES[weight_name]}
         return {
             "memory_config": cfg["out_mem_config"],
-            "program_config": None,
+            "program_config": cfg["program_config"],
             "dtype": cfg["out_dtype"],
         }
 

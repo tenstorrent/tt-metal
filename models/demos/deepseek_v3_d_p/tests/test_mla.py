@@ -102,11 +102,9 @@ def random_weights(config_only):
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 16 * 1024], ids=["seq128k", "seq100k"])
+@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
-# kv_cache is single user at the moment
-# @pytest.mark.parametrize("compare_pcc_kv_cache")
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
 def test_mla(
     use_pretrained,
@@ -177,15 +175,18 @@ def test_mla(
     num_layers = 1
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank
     seq_len_local = seq_len // mesh_shape[sp_axis]
-    torch_kv_cache = torch.zeros(num_layers, 1, seq_len_local, kvpe_cache_head_dim)
+    torch_kvpe_cache = torch.zeros(num_layers, 1, seq_len_local, kvpe_cache_head_dim)
 
+    BH_NUM_DRAM_BANKS = 8
     core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in [0, 1, 2, 3, 4, 5, 6, 7]
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
     ]
     grid = ttnn.CoreRangeSet(core_ranges)
 
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32  # this is a predefined constant
+
     kv_nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape=[1, 1, 32, 576],
+        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim],
         grid=grid,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
@@ -196,7 +197,7 @@ def test_mla(
     )
 
     tt_kvpe_cache = ttnn.from_torch(
-        torch_kv_cache,
+        torch_kvpe_cache,
         dtype=ttnn.bfloat8_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
