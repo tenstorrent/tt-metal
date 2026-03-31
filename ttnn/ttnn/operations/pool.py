@@ -83,6 +83,16 @@ def global_avg_pool2d(input_tensor, *, memory_config=None, dtype=None):
 ttnn.global_avg_pool2d = global_avg_pool2d
 
 
+def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
+    import torch
+
+    output_size = (1, 1)
+    return torch.nn.functional.adaptive_avg_pool2d(input_tensor, output_size)
+
+
+ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)
+
+
 def golden_rotate(
     input_tensor: ttnn.Tensor,
     angle: float,
