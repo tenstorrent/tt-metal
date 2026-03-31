@@ -177,7 +177,7 @@ class ModelPipeline:
 
             # On last step of prefill, we get base token + first spec token (needs to be verified)
             if not unverified_spec_tokens:
-                unverified_spec_tokens.append({result.token_1: result.token_1_pos})
+                unverified_spec_tokens.append(result.token_1)
                 emit(result.token_0)
             else:
                 if result.token_0_type == TokenType.BASE:
