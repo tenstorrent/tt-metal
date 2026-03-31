@@ -296,14 +296,15 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
 @pytest.mark.parametrize(
     "shapes",
     [
-        ([2, 1, 512, 2048], [1, 1, 256, 256], 2, 4),
-        ([4, 4, 128, 128], [2, 2, 64, 64], 2, 4),
-        ([4, 4, 128, 128], [2, 2, 64, 64], 0, 0),
+        ([2, 1, 256, 2048], [1, 1, 128, 256], 2, 4),
+        ([4, 4, 64, 128], [2, 2, 32, 64], 2, 4),
+        ([4, 4, 64, 128], [2, 2, 32, 64], 0, 0),
     ],
 )
 @pytest.mark.parametrize("keepdim", [True])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("op", ["mean", "sum", "max", "min", "std", "var"])
-def test_generic_ops_ndim_shard(device, shapes, keepdim, op):
+def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op):
     dim = -2
     input_shape, shard_shape, end_x, end_y = shapes
 
@@ -328,11 +329,47 @@ def test_generic_ops_ndim_shard(device, shapes, keepdim, op):
         torch_input_tensor,
         dtype=ttnn.float32,
         device=device,
-        layout=ttnn.TILE_LAYOUT,
+        layout=layout,
         memory_config=memory_config,
         pad_value=pad_value,
     )
     op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim)
+
+    # Verify output is sharded with correct properties (doc: "Output sharding will mirror the input")
+    output_mem_config = op_output_tensor.memory_config()
+    assert output_mem_config.is_sharded(), f"op={op}: expected output to be sharded"
+    assert (
+        output_mem_config.buffer_type == ttnn.BufferType.L1
+    ), f"op={op}: expected L1 buffer type, got {output_mem_config.buffer_type}"
+    output_nd_spec = output_mem_config.nd_shard_spec
+    assert output_nd_spec is not None, f"op={op}: expected output to have nd_shard_spec"
+
+    # Expected output shard shape: same as input shard shape, but the reduced dim
+    # becomes 1 when keepdim=True, or is removed when keepdim=False.
+    # Output is always TILE layout (per nanobind doc), so the last two shard
+    # dimensions are tile-aligned (multiples of 32) regardless of input layout.
+    expected_output_shard_shape = list(shard_shape)
+    normalized_dim = dim if dim >= 0 else dim + len(input_shape)
+    if keepdim:
+        expected_output_shard_shape[normalized_dim] = 1
+    else:
+        del expected_output_shard_shape[normalized_dim]
+    # Align the last two shard dims up to tile boundaries, since the output is
+    # always TILE layout. E.g. a reduced dim of logical size 1 becomes 32 (one full tile).
+    rank = len(expected_output_shard_shape)
+    for i in range(max(0, rank - 2), rank):
+        # The formula rounds up to the nearest multiple of TILE_SIZE:
+        #   1. Add (TILE_SIZE - 1) so that integer division rounds up instead of down
+        #   2. Integer-divide by TILE_SIZE to get the number of tiles needed
+        #   3. Multiply back by TILE_SIZE to convert from tile count to element count
+        expected_output_shard_shape[i] = (
+            (expected_output_shard_shape[i] + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+        ) * ttnn.TILE_SIZE
+    actual_output_shard_shape = list(output_nd_spec.shard_shape)
+    assert actual_output_shard_shape == expected_output_shard_shape, (
+        f"op={op}: expected output shard shape {expected_output_shard_shape}, " f"got {actual_output_shard_shape}"
+    )
+
     output_tensor = ttnn.to_torch(op_output_tensor)
 
     atol = rtol = 0.1
