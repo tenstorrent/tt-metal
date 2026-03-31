@@ -63,8 +63,12 @@ PrefetchKernel::PrefetchKernel(
         get_reads_dispatch_cores) {
     static_config_.is_h_variant = h_variant;
     static_config_.is_d_variant = d_variant;
-    uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
+    // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
+    // respect code space
+    force_watcher_no_inline_ =
+        descriptor_.rtoptions().get_watcher_enabled() && (not descriptor_.rtoptions().get_watcher_noinline());
 
+    uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
     DispatchWorkerType type = PREFETCH;
     if (h_variant && d_variant) {
         this->logical_core_ = dispatch_core_manager.prefetcher_core(device_id, channel, cq_id);
@@ -78,6 +82,7 @@ PrefetchKernel::PrefetchKernel(
         type = PREFETCH_D;
     }
     this->kernel_type_ = FDKernelType::DISPATCH;
+    this->send_to_brisc_ = true;
     // Log prefetcher core info based on virtual core to inspector
     auto virtual_core = this->GetVirtualCore();
     tt::tt_metal::Inspector::set_prefetcher_core_info(virtual_core, type, cq_id, device_id, servicing_device_id);
@@ -556,16 +561,7 @@ void PrefetchKernel::CreateKernel() {
 
     // Compile at Os on IERISC to fit in code region.
     auto optimization_level = (GetCoreType() == CoreType::WORKER) ? KernelBuildOptLevel::O2 : KernelBuildOptLevel::Os;
-    configure_kernel_variant(
-        dispatch_kernel_file_names[PREFETCH],
-        {},
-        defines,
-        false,
-        true,
-        // TEMP: Disable function inlining on Prefetcher when watcher is enabled but no_inline is not specified to
-        // respect code space
-        descriptor_.rtoptions().get_watcher_enabled() && (not descriptor_.rtoptions().get_watcher_noinline()),
-        optimization_level);
+    configure_kernel_variant(dispatch_kernel_file_names[PREFETCH], {}, defines, optimization_level);
 }
 
 void PrefetchKernel::ConfigureCore() {

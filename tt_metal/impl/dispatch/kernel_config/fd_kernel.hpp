@@ -214,9 +214,6 @@ protected:
         const std::string& path,
         const std::vector<uint32_t>& compile_args,
         std::map<std::string, std::string> defines_in,
-        bool is_active_eth_core,
-        bool send_to_brisc,
-        bool force_watcher_no_inline,
         tt::tt_metal::KernelBuildOptLevel opt_level = tt::tt_metal::KernelBuildOptLevel::Os);
     int GetPort(const FDKernel* other, const std::vector<FDKernel*>& kernels) const {
         for (int idx = 0; idx < kernels.size(); idx++) {
@@ -246,6 +243,8 @@ protected:
     int node_id_;
     uint8_t cq_id_;
     noc_selection_t noc_selection_;
+    bool send_to_brisc_ = false;            // WH/BH only: selects RISCV_0 (true) vs RISCV_1 (false)
+    bool force_watcher_no_inline_ = false;  // Prefetcher enables to fit in code region when watcher is enabled
 
     std::vector<FDKernel*> upstream_kernels_;
     std::vector<FDKernel*> downstream_kernels_;
