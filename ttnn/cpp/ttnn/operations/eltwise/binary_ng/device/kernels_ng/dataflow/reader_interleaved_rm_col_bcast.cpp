@@ -9,12 +9,15 @@
 
 namespace {
 // Broadcast reads land in a scratch slot offset by source low bits; normalize the seed value to row start before fill.
-FORCE_INLINE void copy_one_element(uint32_t dst_l1_addr, uint32_t src_l1_addr, uint32_t element_size) {
-    if (element_size == 1) {
+template <uint32_t element_size>
+FORCE_INLINE void copy_one_element(uint32_t dst_l1_addr, uint32_t src_l1_addr) {
+    static_assert(element_size == 1 || element_size == 2 || element_size == 4);
+
+    if constexpr (element_size == 1) {
         auto* src_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(src_l1_addr);
         auto* dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(dst_l1_addr);
         dst_ptr[0] = src_ptr[0];
-    } else if (element_size == 2) {
+    } else if constexpr (element_size == 2) {
         auto* src_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_l1_addr);
         auto* dst_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst_l1_addr);
         dst_ptr[0] = src_ptr[0];
@@ -164,7 +167,7 @@ void kernel_main() {
                                 noc_async_read(addr_a, scratch_l1_addr, element_size_aligned_a);
                                 noc_async_read_barrier();
 
-                                copy_one_element(row_l1_addr, scratch_l1_addr, element_size);
+                                copy_one_element<element_size>(row_l1_addr, scratch_l1_addr);
                                 FILL_TILE_WITH_FIRST_COLUMN_RM(row_l1_addr, current_chunk_elements);
                             }
 
@@ -199,7 +202,7 @@ void kernel_main() {
                                 noc_async_read(addr_b, scratch_l1_addr, element_size_aligned_b);
                                 noc_async_read_barrier();
 
-                                copy_one_element(row_l1_addr, scratch_l1_addr, element_size);
+                                copy_one_element<element_size>(row_l1_addr, scratch_l1_addr);
                                 FILL_TILE_WITH_FIRST_COLUMN_RM(row_l1_addr, current_chunk_elements);
                             }
 #endif
