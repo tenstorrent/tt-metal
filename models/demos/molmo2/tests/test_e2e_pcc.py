@@ -157,10 +157,9 @@ def ref_block_forward(
     ff_norm.weight.data = ff_norm_weight
     ff_normed = ff_norm(x)
 
-    # SwiGLU (HF order: GATE, UP)
+    # SwiGLU (HuggingFace fused ff_proj: first half = up, second half = gate)
     ff_proj_out = F.linear(ff_normed, ff_proj)
-    gate = ff_proj_out[..., :intermediate_dim]
-    up = ff_proj_out[..., intermediate_dim:]
+    up, gate = ff_proj_out.chunk(2, dim=-1)
     swiglu = F.silu(gate) * up
     mlp_out = F.linear(swiglu, ff_out)
 
