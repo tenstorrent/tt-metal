@@ -178,7 +178,7 @@ void DispatchSKernel::CreateKernel() {
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
     };
-    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines, false, false, false);
+    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines);
 }
 
 void DispatchSKernel::ConfigureCore() {

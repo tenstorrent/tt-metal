@@ -756,6 +756,7 @@ public:
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 
     bool get_dram_backed_cq() const { return dram_backed_cq; }
+    void set_dram_backed_cq(bool enable) { dram_backed_cq = enable; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 
