@@ -14,10 +14,36 @@
 #include <reflect>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/reflection.hpp>
+#include <tt-metalium/experimental/inspector_config.hpp>
 
 namespace ttnn::core {
 
 Config CONFIG{};
+
+std::vector<std::pair<std::string, std::string>> Config::get_config_entries() const {
+    std::vector<std::pair<std::string, std::string>> entries;
+    reflect::for_each(
+        [&](auto I) {
+            entries.emplace_back(
+                std::string(reflect::member_name<I>(this->attributes)),
+                fmt::format("{}", reflect::get<I>(this->attributes)));
+        },
+        this->attributes);
+    return entries;
+}
+
+// Auto-register TTNN config with Inspector at library load time.
+// The callback is invoked lazily when getConfiguration RPC is queried.
+static const int register_inspector_config = [] {
+    tt::tt_metal::inspector::ttnn_config_callback() = []() {
+        std::vector<tt::tt_metal::inspector::ConfigurationEntry> entries;
+        for (const auto& [name, value] : CONFIG.get_config_entries()) {
+            entries.push_back({name, value.find("nullopt") != std::string::npos ? "(unset)" : value, "TtnnConfig"});
+        }
+        return entries;
+    };
+    return 0;
+}();
 
 std::optional<std::filesystem::path> Config::get_report_path_impl() const {
     if (this->attributes.report_name.has_value()) {

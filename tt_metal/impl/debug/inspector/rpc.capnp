@@ -151,6 +151,18 @@ struct ChipBlocksByType {
     blocks @1 :BlocksByTypePerChip;
 }
 
+enum ConfigurationScope {
+    environment @0;
+    rtOptions @1;
+    ttnnConfig @2;
+}
+
+struct ConfigurationEntry {
+    name @0 :Text;
+    value @1 :Text;
+    scope @2 :ConfigurationScope;
+}
+
 interface Inspector {
     # Get programs currently alive
     getPrograms @0 () -> (programs :List(ProgramData));
@@ -184,4 +196,7 @@ interface Inspector {
 
     # Chip -> block type -> list of logical (x,y). One entry per chip.
     getBlocksByType @9 () -> (chips :List(ChipBlocksByType));
+
+    # Get configuration data (environment variables, runtime options, TTNN config)
+    getConfiguration @10 () -> (entries :List(ConfigurationEntry));
 }

@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include "rpc_server_controller.hpp"
 #include "logger.hpp"
+#include <tt-metalium/experimental/inspector_config.hpp>
+#include "impl/debug/inspector/rtoptions_config_generated.hpp"
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
@@ -61,6 +63,7 @@ Data::Data()
             get_rpc_server().setGetBlocksByTypeCallback([this](auto result) { this->rpc_get_blocks_by_type(result); });
             get_rpc_server().setGetMetalDeviceIdMappingsCallback(
                 [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
+            get_rpc_server().setGetConfigurationCallback([this](auto result) { this->rpc_get_configuration(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
@@ -430,6 +433,49 @@ void Data::populate_core_entries_by_category(
         // Populate the core entry with the key, info, and event id
         auto entry = entries[i++];
         Data::populate_core_entry(entry, k, info, event_id);
+    }
+}
+
+void Data::rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builder& results) {
+    // Collect all configuration entries from built-in and external providers
+    std::vector<ConfigurationEntry> all_entries;
+
+    // 1. Environment variables (generated from EnvVarID enum)
+    auto env_entries = get_environment_config_entries();
+    all_entries.insert(
+        all_entries.end(), std::make_move_iterator(env_entries.begin()), std::make_move_iterator(env_entries.end()));
+
+    // 2. RtOptions derived values (generated from rtoptions.hpp getters)
+    const auto& rt = MetalContext::instance().rtoptions();
+    auto rt_entries = get_rtoptions_config_entries(rt);
+    all_entries.insert(
+        all_entries.end(), std::make_move_iterator(rt_entries.begin()), std::make_move_iterator(rt_entries.end()));
+
+    // 3. TTNN config (registered via static callback at library load time)
+    auto& ttnn_cb = ttnn_config_callback();
+    if (ttnn_cb) {
+        auto ttnn_entries = ttnn_cb();
+        all_entries.insert(
+            all_entries.end(),
+            std::make_move_iterator(ttnn_entries.begin()),
+            std::make_move_iterator(ttnn_entries.end()));
+    }
+
+    // Serialize into Cap'n Proto
+    auto entries = results.initEntries(all_entries.size());
+    for (size_t i = 0; i < all_entries.size(); ++i) {
+        auto entry = entries[i];
+        entry.setName(all_entries[i].name);
+        entry.setValue(all_entries[i].value);
+
+        // Map scope string to Cap'n Proto enum
+        if (all_entries[i].scope == "Environment") {
+            entry.setScope(rpc::ConfigurationScope::ENVIRONMENT);
+        } else if (all_entries[i].scope == "RtOptions") {
+            entry.setScope(rpc::ConfigurationScope::RT_OPTIONS);
+        } else {
+            entry.setScope(rpc::ConfigurationScope::TTNN_CONFIG);
+        }
     }
 }
 
