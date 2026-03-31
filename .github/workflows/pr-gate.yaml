@@ -93,6 +93,9 @@ jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml and build-artifact.yaml internally.
   # This workflow only needs to pass the platform string to downstream workflows.
 
+  # Check Harbor availability first - outputs harbor-prefix for downstream jobs
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   # Single docker build job - deduplicates container builds across asan-build, build, and clang-tidy
   build-docker-images:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -110,9 +113,23 @@ jobs:
       # so "re-run after a main update" failures are explainable as code conflicts rather
       # than invisible infrastructure drift.
 
+  resolve-docker-pull-refs:
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    needs: [check-harbor, build-docker-images]
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
+      basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
+      manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
+      llk-ci-docker-image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+
   asan-build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    needs: build-docker-images
+    needs: [resolve-docker-pull-refs, build-docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -125,13 +142,12 @@ jobs:
       skip-tt-train: true
       # Use the merge commit (github.sha) — see build-docker-images job for rationale.
       # Pass pre-built docker images to avoid duplicate builds
-      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
-      ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
-      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
-      basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
-      basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
-      manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
-
+      ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
+      ci-test-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-test-docker-image }}
+      dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      basic-dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-dev-docker-image }}
+      basic-ttnn-runtime-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-ttnn-runtime-docker-image }}
+      manylinux-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.manylinux-docker-image }}
   find-changed-files:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
@@ -158,7 +174,7 @@ jobs:
         uses: ./.github/actions/find-changed-files
 
   metalium-smoke-tests:
-    needs: [ asan-build, find-changed-files ]
+    needs: [asan-build, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -179,7 +195,6 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-metalium
       upload-coverage: false
-
   ttnn-smoke-tests:
     needs: [ asan-build, find-changed-files ]
     if: ${{
@@ -203,10 +218,9 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
       upload-coverage: false
-
   build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    needs: build-docker-images
+    needs: [resolve-docker-pull-refs, build-docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -224,12 +238,12 @@ jobs:
       distributed: false
       # Use the merge commit (github.sha) — see build-docker-images job for rationale.
       # Pass pre-built docker images to avoid duplicate builds
-      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
-      ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
-      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
-      basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
-      basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
-      manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
+      ci-build-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
+      ci-test-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.ci-test-docker-image }}
+      dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
+      basic-dev-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-dev-docker-image }}
+      basic-ttnn-runtime-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-ttnn-runtime-docker-image }}
+      manylinux-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.manylinux-docker-image }}
 
   build-docs:
     if: >-
@@ -243,7 +257,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
   metalium-examples:
-    needs: [ build, find-changed-files ]
+    needs: [build, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -261,9 +275,8 @@ jobs:
       package-artifact-name: ${{ needs.build.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
       product: tt-metalium
-
   ttnn-examples:
-    needs: [ build, find-changed-files ]
+    needs: [build, find-changed-files ]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
@@ -305,14 +318,14 @@ jobs:
   # enough to run during PRs without bringing infra to a grinding halt.
   # A proper scan is run in Merge Gate to ensure only clean code lands.
   clang-tidy-light:
-    needs: [build-docker-images]
+    needs: [resolve-docker-pull-refs]
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     timeout-minutes: 140
     runs-on: ubuntu-latest
-    container: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+    container: ${{ needs.resolve-docker-pull-refs.outputs.ci-build-docker-image }}
     permissions:
       pull-requests: write
-      contents: write  # to allow auto-closing conversations
+      contents: write # to allow auto-closing conversations
     steps:
     - name: Change ownership of /github/home
       run: sudo chown -R $(whoami) /github/home  # Thanks GH...
@@ -421,7 +434,7 @@ jobs:
 
   # LLK Functional Unit Tests on Wormhole (PR gate - runs when LLK engine, tests, or perf code changed)
   llk-test-wormhole:
-    needs: [ build-docker-images, find-changed-files ]
+    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
@@ -433,7 +446,7 @@ jobs:
     uses: ./.github/workflows/llk-setup-and-test.yaml
     secrets: inherit
     with:
-      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      docker_image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
       runs_on: tt-ubuntu-2204-n150-stable
       test_splits: 2
       pytest_markers: "not perf and not nightly and not quasar"
@@ -441,7 +454,7 @@ jobs:
 
   # LLK Functional Unit Tests on Blackhole (PR gate - runs when LLK engine, tests, or perf code changed)
   llk-test-blackhole:
-    needs: [ build-docker-images, find-changed-files ]
+    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
@@ -453,7 +466,7 @@ jobs:
     uses: ./.github/workflows/llk-setup-and-test.yaml
     secrets: inherit
     with:
-      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      docker_image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
       runs_on: tt-ubuntu-2204-p150b-stable
       test_splits: 2
       pytest_markers: "not perf and not nightly and not quasar"
@@ -461,7 +474,7 @@ jobs:
 
   # LLK Quasar Build Check (compile-only, no hardware needed)
   llk-build-quasar:
-    needs: [ build-docker-images, find-changed-files ]
+    needs: [resolve-docker-pull-refs, build-docker-images, find-changed-files]
     if: ${{
         github.event.action != 'destroyed' &&
         (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
@@ -471,7 +484,7 @@ jobs:
     uses: ./.github/workflows/llk-build-quasar.yaml
     secrets: inherit
     with:
-      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      docker_image: ${{ needs.resolve-docker-pull-refs.outputs.llk-ci-docker-image }}
       runs_on: tt-ubuntu-2204-xlarge-stable
       test_splits: 1
       pytest_markers: "quasar"

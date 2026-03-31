@@ -97,12 +97,17 @@ jobs:
               echo "run-cpp-unit=true" >> $GITHUB_OUTPUT
               ;;
           esac
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: [check-harbor, determine-tests]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -110,53 +115,53 @@ jobs:
       tracy: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
   single-card-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
-    needs: [build-artifact, determine-tests]
+    needs: [check-harbor, build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       requested-models: ${{ inputs.trigger_type == 'manual' && inputs.single-card-demo || 'all' }}
       arch: wormhole_b0
   single-card-perf-models-tests:
     if: ${{ needs.determine-tests.outputs.run-perf-models == 'true' }}
-    needs: [build-artifact, determine-tests]
+    needs: [check-harbor, build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/perf-models-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   single-card-perf-device-models-tests:
     if: ${{ needs.determine-tests.outputs.run-perf-device-models == 'true' }}
-    needs: [build-artifact, determine-tests]
+    needs: [check-harbor, build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   single-card-ttnn-models-frequent:
     if: ${{ needs.determine-tests.outputs.run-ttnn-models-frequent == 'true' }}
-    needs: [build-artifact, determine-tests]
+    needs: [check-harbor, build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/fast-dispatch-full-regressions-and-models-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   cpp-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-cpp-unit == 'true' }}
-    needs: [build-artifact, determine-tests]
+    needs: [check-harbor, build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: wormhole_b0
       runner-label: tt-ubuntu-2204-n300-stable
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

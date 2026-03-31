@@ -1,8 +1,6 @@
 name: "Build tt-metal artifacts"
-
 permissions:
   packages: write
-
 on:
   workflow_call:
     inputs:
@@ -120,6 +118,11 @@ on:
         type: string
         default: ""
         description: "Pre-built ManyLinux Docker image tag"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
     outputs:
       ci-build-docker-image:
         description: >-
@@ -162,7 +165,6 @@ on:
               jobs.build-wheel.outputs.artifact-name ||
               (jobs.download-artifacts.result == 'success' &&
                jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
-
   workflow_dispatch:
     inputs:
       tracy:
@@ -216,6 +218,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
       fetch-depth:
         required: false
         type: number
@@ -260,7 +267,6 @@ jobs:
         with:
           platform: ${{ inputs.platform }}
           enable-lto: ${{ inputs.enable-lto || false }}
-
   # =============================================================================
   # ARCHITECTURE NOTE: Docker Image Caching
   # =============================================================================
@@ -284,7 +290,6 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture }}
       ref: ${{ inputs.ref }}
-
   download-artifacts:
     if: ${{ inputs.use-artifacts-from-run != '' }}
     runs-on: ubuntu-latest
@@ -298,7 +303,6 @@ jobs:
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
-
       - name: Download artifacts from workflow run
         id: download
         env:
@@ -308,7 +312,6 @@ jobs:
           workflow_run_id: ${{ inputs.use-artifacts-from-run }}
           working-directory: ${{ github.workspace }}/artifacts
           tracy: ${{ inputs.tracy }}
-
       - name: Upload build artifact for downstream jobs
         uses: actions/upload-artifact@v4
         with:
@@ -316,7 +319,6 @@ jobs:
           path: ${{ github.workspace }}/artifacts/ttm_any.tar.zst
           if-no-files-found: error
           retention-days: 1
-
       - name: Upload wheel artifact
         if: ${{ steps.download.outputs.wheel-artifact-name != '' }}
         uses: actions/upload-artifact@v4
@@ -325,7 +327,6 @@ jobs:
           path: ${{ github.workspace }}/artifacts/*.whl
           if-no-files-found: ignore
           retention-days: 1
-
       - name: Upload packages artifact
         if: ${{ steps.download.outputs.packages-artifact-name != '' }}
         uses: actions/upload-artifact@v4
@@ -334,7 +335,6 @@ jobs:
           path: ${{ github.workspace }}/artifacts/*.deb
           if-no-files-found: ignore
           retention-days: 1
-
   build-artifact:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == '' }}
@@ -356,10 +356,10 @@ jobs:
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
     container:
       image: >-
-        harbor.ci.tenstorrent.net/${{
-          inputs.ci-build-docker-image ||
-          needs.build-docker-image.outputs.ci-build-tag ||
-          'docker-image-unresolved!' }}
+        ${{
+          (inputs.ci-build-docker-image != '' && inputs.ci-build-docker-image) ||
+          format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!')
+        }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -630,9 +630,10 @@ jobs:
     with:
       python-version: ${{ needs.determine-python-version.outputs.python-version }}
       docker-image: >-
-        ${{ inputs.manylinux-docker-image ||
-            needs.build-docker-image.outputs.manylinux-tag ||
-            'docker-image-unresolved!' }}
+        ${{
+          (inputs.manylinux-docker-image != '' && inputs.manylinux-docker-image) ||
+          format('{0}{1}', inputs.harbor-prefix, needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!')
+        }}
       ref: ${{ inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}

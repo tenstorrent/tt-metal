@@ -17,13 +17,18 @@ on:
           - "ubuntu-24.04"
         description: "Platform to build and test"
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
       contents: read
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-wheel: true
       platform: ${{ inputs.platform == 'ubuntu-24.04' && 'Ubuntu 24.04' || 'Ubuntu 22.04' }}
       enable-lto: false

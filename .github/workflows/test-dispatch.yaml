@@ -56,14 +56,18 @@ on:
 
 run-name: ${{ inputs.description }}
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   # NOTE: build-artifact.yaml handles platform parsing internally.
   # Just pass platform and enable-lto inputs directly.
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       tracy: ${{ inputs.tracy }}
       build-wheel: true
       ref: ${{ inputs.commit || github.sha }}
@@ -71,11 +75,11 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   test-dispatch:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     timeout-minutes: 120
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     container:
-      image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && 'harbor.ci.tenstorrent.net/' || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved' }}
+      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved') }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO

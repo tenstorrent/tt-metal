@@ -1,0 +1,114 @@
+name: "[internal] Build Docker tool images"
+
+# Reusable workflow that builds missing tool images (ccache, mold, doxygen, etc.).
+# Tool images are pushed to GHCR.
+#
+# Expects tool-data JSON from preflight containing tool_tags, any_missing, and *_exists flags.
+# Uses manual docker buildx bake (dockerfile/docker-bake.hcl) to build missing tools.
+permissions:
+  packages: write
+
+env:
+  BAKE_OUTPUT: type=image,push=true,compression=zstd,compression-level=22,force-compression=true,oci-mediatypes=true
+
+on:
+  workflow_dispatch:
+    inputs:
+      tool-data:
+        required: true
+        type: string
+        description: "JSON from preflight containing tool_tags, any_missing, and *_exists flags"
+  workflow_call:
+    inputs:
+      tool-data:
+        required: true
+        type: string
+        description: "JSON from preflight containing tool_tags, any_missing, and *_exists flags"
+    outputs:
+      tool-tags:
+        description: "Compact JSON string containing all tool image tags"
+        value: ${{ jobs.metadata.outputs.tool_tags }}
+
+jobs:
+  metadata:
+    name: "Tool metadata"
+    runs-on: ubuntu-latest
+    outputs:
+      tool_tags: ${{ steps.metadata.outputs.tool_tags }}
+    steps:
+      - name: Extract tool tags JSON
+        id: metadata
+        env:
+          TOOL_DATA: ${{ inputs.tool-data }}
+        run: |
+          set -euo pipefail
+          TOOL_TAGS=$(echo "$TOOL_DATA" | jq -ce '.tool_tags')
+          echo "tool_tags=$TOOL_TAGS" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: "🔧 Build missing tools"
+    if: fromJson(inputs.tool-data).any_missing == 'true'
+    timeout-minutes: 60
+    runs-on: tt-ubuntu-2204-large-stable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: https://ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare bake overrides
+        id: bake
+        env:
+          TOOL_DATA: ${{ inputs.tool-data }}
+        run: |
+          set -euo pipefail
+
+          TOOL_TAGS=$(echo "$TOOL_DATA" | jq -c '.tool_tags')
+          TARGETS=""
+          SET=""
+
+          add_if_missing() {
+            local name="$1"
+            local exists
+            exists=$(echo "$TOOL_DATA" | jq -r ".${name}_exists")
+            if [ "$exists" != "true" ]; then
+              local tag
+              tag=$(echo "$TOOL_TAGS" | jq -r ".\"${name}-tag\"")
+              TARGETS+="${name},"
+              SET+="${name}.tags=${tag}"$'\n'
+              SET+="${name}.output=${BAKE_OUTPUT}"$'\n'
+            fi
+          }
+
+          add_if_missing ccache
+          add_if_missing mold
+          add_if_missing doxygen
+          add_if_missing cba
+          add_if_missing gdb
+          add_if_missing cmake
+          add_if_missing yq
+          add_if_missing sfpi
+          add_if_missing openmpi
+
+          TARGETS="${TARGETS%,}"
+
+          echo "targets=$TARGETS" >> $GITHUB_OUTPUT
+          {
+            echo "set<<EOF"
+            echo "$SET"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Build and push missing tool images
+        if: steps.bake.outputs.targets != ''
+        uses: ./.github/actions/manual-docker-bake
+        with:
+          targets: ${{ steps.bake.outputs.targets }}
+          set-lines: ${{ steps.bake.outputs.set }}

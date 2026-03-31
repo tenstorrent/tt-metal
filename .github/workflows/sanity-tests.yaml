@@ -197,15 +197,19 @@ permissions:
 
 run-name: Sanity tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   # NOTE: build-artifact.yaml handles platform parsing internally.
   # Just pass platform and enable-lto inputs directly.
   build-artifact:
+    needs: check-harbor
     if: ${{ inputs.dev-docker-image == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
@@ -256,6 +260,18 @@ jobs:
             echo "packages-artifact-name=${{ needs.build-artifact.outputs.packages-artifact-name }}" >> "$GITHUB_OUTPUT"
           fi
 
+  resolve-docker-pull-refs:
+    needs: [check-harbor, resolve-artifacts]
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' }}
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      dev-docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      basic-dev-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
+      ci-test-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
+      basic-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
+      test-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
+
   tests-to-run:
     needs: [resolve-artifacts]
     if: ${{ always() && !cancelled() }}
@@ -293,13 +309,13 @@ jobs:
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: [resolve-artifacts, tests-to-run]
+    needs: [resolve-docker-pull-refs, tests-to-run]
     secrets: inherit
     if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       enabled-skus: "wh_n300_civ2"
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 240 || 0 }}
@@ -309,7 +325,7 @@ jobs:
 
   # FD Model Tests
   models-unit-tests:
-    needs: [resolve-artifacts, tests-to-run]
+    needs: [resolve-docker-pull-refs, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -322,7 +338,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
@@ -331,7 +347,7 @@ jobs:
       timeout: ${{ inputs.enable-watcher && 120 || 35 }}
 
   tt-train-cpp-unit-tests:
-    needs: [resolve-artifacts, tests-to-run]
+    needs: [resolve-docker-pull-refs, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -344,7 +360,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       gtest_filter: "*-*NIGHTLY_*"
       enable-watcher: ${{ inputs.enable-watcher || false }}
@@ -353,7 +369,7 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   run-profiler-regression:
-    needs: [resolve-artifacts, tests-to-run]
+    needs: [resolve-docker-pull-refs, tests-to-run]
 
     strategy:
       fail-fast: false
@@ -368,7 +384,7 @@ jobs:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
       post_commit_only: true
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
@@ -377,11 +393,11 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
     if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
-    needs: [resolve-artifacts, tests-to-run]
+    needs: [resolve-docker-pull-refs, tests-to-run]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
@@ -390,7 +406,7 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   ops-unit-tests:
-    needs: [resolve-artifacts, tests-to-run]
+    needs: [resolve-docker-pull-refs, tests-to-run]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -403,7 +419,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
@@ -412,15 +428,15 @@ jobs:
       ref: ${{ inputs.ref || github.sha }}
 
   ttsim-integration-tests:
-    needs: [resolve-artifacts, tests-to-run]
+    needs: [resolve-docker-pull-refs, tests-to-run]
     if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ttsim-integration-tests == 'true' }}
     strategy:
       fail-fast: false
     uses: ./.github/workflows/ttsim.yaml
     secrets: inherit
     with:
-      basic-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
-      test-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
+      basic-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.basic-docker-image }}
+      test-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.test-docker-image }}
       package-artifact-name: ${{ needs.resolve-artifacts.outputs.packages-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       run-ttsim-integration-tests: true

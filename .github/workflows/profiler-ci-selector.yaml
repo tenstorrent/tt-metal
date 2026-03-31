@@ -99,7 +99,10 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact-profiler:
+    needs: check-harbor
     if: >-
       ${{
         github.event_name == 'schedule' ||
@@ -117,6 +120,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       tracy: true
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
@@ -130,11 +134,11 @@ jobs:
         (github.event_name == 'workflow_call' && inputs.run_t3k_profiler) ||
         (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_t3k_profiler == 'true' || github.event.inputs.run_t3k_profiler == true))
       }}
-    needs: build-artifact-profiler
+    needs: [check-harbor, build-artifact-profiler]
     secrets: inherit
     uses: ./.github/workflows/profiler-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-profiler.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
       topology: config-t3000
@@ -147,11 +151,11 @@ jobs:
         (github.event_name == 'workflow_call' && inputs.run_galaxy_profiler) ||
         (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_galaxy_profiler == 'true' || github.event.inputs.run_galaxy_profiler == true))
       }}
-    needs: build-artifact-profiler
+    needs: [check-harbor, build-artifact-profiler]
     secrets: inherit
     uses: ./.github/workflows/profiler-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-profiler.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
       topology: topology-6u
@@ -164,7 +168,7 @@ jobs:
         (github.event_name == 'workflow_call' && inputs.run_blackhole_profiler) ||
         (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_blackhole_profiler == 'true' || github.event.inputs.run_blackhole_profiler == true))
       }}
-    needs: build-artifact-profiler
+    needs: [check-harbor, build-artifact-profiler]
     secrets: inherit
     uses: ./.github/workflows/run-profiler-regression.yaml
     with:
@@ -172,7 +176,7 @@ jobs:
       runner-label: P150b
       # Full profiler regression (non post-commit)
       post_commit_only: false
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-profiler.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
 
@@ -183,7 +187,7 @@ jobs:
         (github.event_name == 'workflow_call' && inputs.run_n300_profiler) ||
         (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_n300_profiler == 'true' || github.event.inputs.run_n300_profiler == true))
       }}
-    needs: build-artifact-profiler
+    needs: [check-harbor, build-artifact-profiler]
     secrets: inherit
     uses: ./.github/workflows/run-profiler-regression.yaml
     with:
@@ -191,7 +195,7 @@ jobs:
       runner-label: N300
       # Full profiler regression (non post-commit)
       post_commit_only: false
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-profiler.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
 
@@ -202,7 +206,7 @@ jobs:
         (github.event_name == 'workflow_call' && inputs.run_n150_profiler) ||
         (github.event_name == 'workflow_dispatch' && (github.event.inputs.run_n150_profiler == 'true' || github.event.inputs.run_n150_profiler == true))
       }}
-    needs: build-artifact-profiler
+    needs: [check-harbor, build-artifact-profiler]
     secrets: inherit
     uses: ./.github/workflows/run-profiler-regression.yaml
     with:
@@ -210,6 +214,6 @@ jobs:
       runner-label: N150
       # Full profiler regression (non post-commit)
       post_commit_only: false
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-profiler.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}

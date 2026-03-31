@@ -58,14 +58,32 @@ jobs:
         with:
           platform: ${{ inputs.platform }}
 
-  build-artifact-tracy:
-      name: "Build artifact with tracy (for testing)"
-      needs: parse-platform
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+  build-artifact:
+      needs: [check-harbor, parse-platform]
       uses: ./.github/workflows/build-artifact.yaml
       permissions:
         packages: write
       secrets: inherit
       with:
+        harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+        platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+        build-wheel: true
+        tracy: false
+        fetch-depth: 0
+        skip-tt-train: false
+        enable-lto: false
+
+  build-artifact-tracy:
+      name: "Build artifact with tracy (for testing)"
+      needs: [check-harbor, parse-platform]
+      uses: ./.github/workflows/build-artifact.yaml
+      permissions:
+        packages: write
+      secrets: inherit
+      with:
+        harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
         platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
         build-wheel: true
         tracy: true
@@ -75,12 +93,13 @@ jobs:
 
   build-artifact-release:
       name: "Build artifact for release (without tracy)"
-      needs: parse-platform
+      needs: [check-harbor, parse-platform]
       uses: ./.github/workflows/build-artifact.yaml
       permissions:
         packages: write
       secrets: inherit
       with:
+        harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
         platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
         build-wheel: true
         tracy: false
@@ -105,12 +124,12 @@ jobs:
           fi
 
   release-demo-tests:
-    needs: [build-artifact-tracy, determine-test-skus]
+    needs: [check-harbor, build-artifact-tracy, determine-test-skus]
     if: ${{ inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/release-demo-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact-tracy.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-tracy.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact-tracy.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-tracy.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.determine-test-skus.outputs.enabled-skus }}
@@ -151,12 +170,12 @@ jobs:
 
   # Only run docs release once per run on the main platform
   release-docs:
-    needs: [build-artifact-release, parse-platform]
+    needs: [check-harbor, build-artifact-release, parse-platform]
     if: ${{ inputs.platform == inputs.main-platform && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ inputs.tag-version }}
-      docker-image: ${{ needs.build-artifact-release.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact-release.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
     secrets: inherit

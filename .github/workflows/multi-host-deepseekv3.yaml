@@ -79,12 +79,16 @@ on:
 run-name: "DeepSeek V3 – ${{ github.event_name == 'schedule' && 'nightly' || inputs.setup }} [${{ github.event_name == 'schedule' && 'nightly' || (inputs.deepseekv3_unit_tests && 'unit ' || '') }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress' || '' }}]"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -97,7 +101,7 @@ jobs:
       - arch-wormhole_b0
       - bare-metal
       - in-service
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -160,7 +164,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -184,7 +188,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -209,7 +213,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 150
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -233,7 +237,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 150
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -258,7 +262,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -292,7 +296,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -327,7 +331,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 400 || 40 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -361,7 +365,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 400 || 40 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -395,7 +399,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -429,7 +433,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -464,7 +468,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 480 || 120 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -498,7 +502,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 480 || 120 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib

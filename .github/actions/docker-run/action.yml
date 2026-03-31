@@ -3,7 +3,12 @@ description: "Run commands in docker"
 
 inputs:
   run_args:
-    description: 'Commands to run in docker'
+    description: |
+      Commands to run in docker.
+      TRUST BOUNDARY: run_args is interpolated directly into a shell script.
+      Only pass values from trusted sources (hardcoded workflow YAML, matrix
+      definitions in the repo). Never pass user-controlled input (workflow_dispatch
+      string inputs, PR metadata, issue bodies, etc.) without validation.
     required: true
   docker_os_arch:
     description: 'Docker image architecture'
@@ -65,10 +70,19 @@ runs:
           echo "CIV2_NO_PROXY=$NO_PROXY" >> $GITHUB_ENV
           echo "CIV2_no_proxy=$no_proxy" >> $GITHUB_ENV
         fi
+    - name: Extract registry from image tag
+      id: registry
+      shell: bash
+      run: |
+        IMAGE_TAG="${TT_METAL_DOCKER_IMAGE_TAG}"
+        REGISTRY="${IMAGE_TAG%%/*}"
+        echo "registry=${REGISTRY}" >> "$GITHUB_OUTPUT"
+      env:
+        TT_METAL_DOCKER_IMAGE_TAG: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
     - name: Docker login
       uses: docker/login-action@v3
       with:
-        registry: https://ghcr.io
+        registry: ${{ steps.registry.outputs.registry }}
         username: ${{ inputs.docker_username }}
         password: ${{ inputs.docker_password }}
     - name: Pull docker image
@@ -80,7 +94,7 @@ runs:
         shell: bash
         username: ${{ inputs.docker_username }}
         password: ${{ inputs.docker_password }}
-        registry: ghcr.io
+        registry: ${{ steps.registry.outputs.registry }}
         image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG || 'docker-image-unresolved!'}}
         # The most important option below is `--rm`. Otherwise, the machines will fill up with undeleted containers.
         # The mounting of /etc/passwd, /etc/shadow, and /etc/bashrc is required in order for the correct file permissions
@@ -111,7 +125,7 @@ runs:
           -e GITHUB_SHA=${{ github.sha }}
           -e GITHUB_REF_NAME=${{ github.ref_name }}
           -e GITHUB_RUN_ID=${{ github.run_id }}
-          -e GITHUB_TRIGGERING_ACTOR=${{ github.github_triggering_actor }}
+          -e GITHUB_TRIGGERING_ACTOR=${{ github.triggering_actor }}
           -e RUNNER_NAME=${{ runner.name }}
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e HTTP_PROXY={0}', env.CIV2_HTTP_PROXY)) || '' }}
           ${{ (inputs.forward_civ2_proxy_env_vars && format('-e http_proxy={0}', env.CIV2_http_proxy)) || '' }}

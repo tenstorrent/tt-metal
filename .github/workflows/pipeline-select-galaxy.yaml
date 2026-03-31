@@ -125,6 +125,8 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 run-name: ${{ inputs.description }}
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   # Centralized logic to determine what should run
   determine-tests:
     runs-on: ubuntu-latest
@@ -191,12 +193,13 @@ jobs:
               ;;
           esac
   build-artifact:
+    needs: [check-harbor, determine-tests]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
-    needs: determine-tests
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
@@ -205,54 +208,54 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
   galaxy-quick:
     if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
-    needs: [build-artifact, determine-tests]
+    needs: [check-harbor, build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/galaxy-quick-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   galaxy-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
-    needs: [build-artifact, determine-tests]
+    needs: [check-harbor, build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-unit || 'all' }}
       topology: 'topology-6u'
   galaxy-integration-tests:
     if: ${{ needs.determine-tests.outputs.run-integration == 'true' }}
-    needs: [build-artifact, determine-tests]
+    needs: [check-harbor, build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/galaxy-integration-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: wh_galaxy
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-integration || 'all' }}
   galaxy-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
-    needs: [build-artifact, determine-tests]
+    needs: [check-harbor, build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-demo || 'all' }}
   galaxy-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
-    needs: [build-artifact, determine-tests]
+    needs: [check-harbor, build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/galaxy-perf-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: wh_galaxy_perf
