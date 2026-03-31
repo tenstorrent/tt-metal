@@ -61,7 +61,7 @@ class Transformer(LightweightModule):
         else:
             embd_cls = Embedding
         self.embd = embd_cls(**embd_kwargs)
-
+        self.args.use_hf_rope = True
         DefaultRopeSetup = HfRotarySetup if self.args.use_hf_rope else RotarySetup
         ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else DefaultRopeSetup
         self.rope_setup = ActualRopeSetupClass(
