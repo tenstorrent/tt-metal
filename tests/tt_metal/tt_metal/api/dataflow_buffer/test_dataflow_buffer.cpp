@@ -109,8 +109,10 @@ void run_single_dfb_program(
 
     Program program = CreateProgram();
 
+    uint32_t num_entries = num_entries_in_buffer.has_value() ? num_entries_in_buffer.value() : dfb_config.num_entries;
+
     auto zero_coord = distributed::MeshCoordinate(0, 0);
-    uint32_t buffer_size = dfb_config.entry_size * (num_entries_in_buffer.has_value() ? num_entries_in_buffer.value() : dfb_config.num_entries);
+    uint32_t buffer_size = dfb_config.entry_size * num_entries;
     distributed::DeviceLocalBufferConfig local_buffer_config{.page_size = buffer_size, .buffer_type = BufferType::DRAM};
     distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
     auto in_buffer = distributed::MeshBuffer::create(buffer_config, local_buffer_config, mesh_device.get());
@@ -121,8 +123,7 @@ void run_single_dfb_program(
 
     CoreCoord logical_core = CoreCoord(0, 0);
 
-    uint32_t num_entries_per_producer = dfb_config.num_entries / dfb_config.num_producers;
-    std::vector<uint32_t> producer_cta = {(uint32_t)in_buffer->address(), num_entries_per_producer, (uint32_t)dfb_config.enable_implicit_sync};
+    std::vector<uint32_t> producer_cta = {(uint32_t)in_buffer->address(), (uint32_t)dfb_config.enable_implicit_sync};
     tt::tt_metal::TensorAccessorArgs(in_buffer).append_to(producer_cta);
 
     KernelHandle producer_kernel;
@@ -141,13 +142,9 @@ void run_single_dfb_program(
             experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
     }
 
-    uint32_t num_entries_per_consumer = dfb_config.cap == dfb::AccessPattern::STRIDED
-                                            ? dfb_config.num_entries / dfb_config.num_consumers
-                                            : dfb_config.num_entries;
     std::vector<uint32_t> consumer_cta = {
         (uint32_t)out_buffer->address(),
-        num_entries_per_consumer,
-        (uint32_t)dfb_config.cap == dfb::AccessPattern::BLOCKED,
+        (uint32_t)(dfb_config.cap == dfb::AccessPattern::BLOCKED),
         (uint32_t)dfb_config.enable_implicit_sync};
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(consumer_cta);
 
@@ -174,9 +171,9 @@ void run_single_dfb_program(
 
     auto dfb = program.impl().get_dataflow_buffer(logical_dfb_id);
 
-    SetRuntimeArgs(program, producer_kernel, logical_core, {(uint32_t)dfb->config.producer_risc_mask});
+    SetRuntimeArgs(program, producer_kernel, logical_core, {num_entries, (uint32_t)dfb->config.producer_risc_mask});
     SetRuntimeArgs(
-        program, consumer_kernel, logical_core, {(uint32_t)dfb->config.consumer_risc_mask, (uint32_t)logical_dfb_id});
+        program, consumer_kernel, logical_core, {num_entries, (uint32_t)dfb->config.consumer_risc_mask, (uint32_t)logical_dfb_id});
 
     execute_program_and_verify(
         mesh_device,
@@ -212,8 +209,9 @@ void run_in_dfb_out_dfb_program(
 
     CoreCoord logical_core = CoreCoord(0, 0);
 
-    uint32_t num_entries_per_producer = dm2tensix_config.num_entries / dm2tensix_config.num_producers;
-    std::vector<uint32_t> producer_cta = {(uint32_t)in_buffer->address(), num_entries_per_producer};
+    std::vector<uint32_t> producer_cta = {
+        (uint32_t)in_buffer->address(),
+        0 /*implicit_sync=false*/};
     tt::tt_metal::TensorAccessorArgs(in_buffer).append_to(producer_cta);
 
     auto producer_kernel = experimental::quasar::CreateKernel(
@@ -234,8 +232,10 @@ void run_in_dfb_out_dfb_program(
         logical_core,
         experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = compute_cta});
 
-    uint32_t num_entries_per_consumer = tensix2dm_config.num_entries / tensix2dm_config.num_consumers;
-    std::vector<uint32_t> consumer_cta = {(uint32_t)out_buffer->address(), num_entries_per_consumer, (uint32_t)tensix2dm_config.cap == dfb::AccessPattern::BLOCKED};
+    std::vector<uint32_t> consumer_cta = {
+        (uint32_t)out_buffer->address(),
+        (uint32_t)(tensix2dm_config.cap == dfb::AccessPattern::BLOCKED),
+        0 /*implicit_sync=false*/};
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(consumer_cta);
     auto consumer_kernel = experimental::quasar::CreateKernel(
         program,
@@ -253,13 +253,13 @@ void run_in_dfb_out_dfb_program(
     auto input_dfb = program.impl().get_dataflow_buffer(input_dfb_id);
     auto output_dfb = program.impl().get_dataflow_buffer(output_dfb_id);
 
-    SetRuntimeArgs(program, producer_kernel, logical_core, {(uint32_t)input_dfb->config.producer_risc_mask});
+    SetRuntimeArgs(program, producer_kernel, logical_core, {dm2tensix_config.num_entries, (uint32_t)input_dfb->config.producer_risc_mask});
     SetRuntimeArgs(
         program,
         compute_kernel,
         logical_core,
         {(uint32_t)input_dfb_id, (uint32_t)output_dfb_id});
-    SetRuntimeArgs(program, consumer_kernel, logical_core, {(uint32_t)output_dfb->config.consumer_risc_mask, (uint32_t)output_dfb_id});
+    SetRuntimeArgs(program, consumer_kernel, logical_core, {tensix2dm_config.num_entries, (uint32_t)output_dfb->config.consumer_risc_mask, (uint32_t)output_dfb_id});
 
     execute_program_and_verify(mesh_device, program, in_buffer, out_buffer, zero_coord, buffer_size);
 }

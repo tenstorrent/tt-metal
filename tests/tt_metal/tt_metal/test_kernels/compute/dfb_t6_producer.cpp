@@ -7,28 +7,26 @@
 #include "api/debug/dprint.h"
 
 void kernel_main() {
-    const uint32_t num_entries_per_producer = get_compile_time_arg_val(1);
+    uint32_t num_entries   = get_arg_val<uint32_t>(0);
+    uint32_t producer_mask = get_arg_val<uint32_t>(1);
+    const uint32_t num_producers = static_cast<uint32_t>(__builtin_popcount(producer_mask));
+
+    // Compute which logical producer slot this TRISC occupies within the mask.
+    uint32_t trisc_id    = static_cast<uint32_t>(ckernel::csr_read<ckernel::CSR::TRISC_ID>());
+    uint32_t producer_idx = static_cast<uint32_t>(__builtin_popcount(producer_mask & ((1u << trisc_id) - 1u)));
 
     experimental::DataflowBuffer dfb(0);
 
-    DPRINT << "num_entries_per_producer: " << num_entries_per_producer << ENDL();
+    // DPRINT << "t6 producer trisc_id: " << trisc_id << " producer_idx: " << producer_idx
+    //        << " num_entries: " << num_entries << ENDL();
 
-    // for (uint32_t tensix_id = 0; tensix_id < 4; tensix_id++) {
-    //     for (uint32_t tc_id = 0; tc_id < 16; tc_id++) {
-    //         DPRINT << "tensix_id: " << tensix_id << " tc_id: " << tc_id
-    //                << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id)) << ENDL();
-    //     }
-    // }
-
-    for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
-        // DPRINT << "rbw" << ENDL();
-        dfb.reserve_back(1);
-        // DPRINT << "rbd" << ENDL();
-        // DPRINT << "rdi" << ENDL();
-        // generate
+    for (uint32_t tile_id = 0; tile_id < num_entries; tile_id++) {
+        if (tile_id % num_producers != producer_idx) {
+            continue;
+        }
         DPRINT << "producer tile id " << tile_id << ENDL();
+        dfb.reserve_back(1);
         dfb.push_back(1);
-        // DPRINT << "pbd" << ENDL();
     }
     DPRINT << "PFW" << ENDL();
     dfb.finish();
