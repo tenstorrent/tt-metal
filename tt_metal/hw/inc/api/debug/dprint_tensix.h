@@ -245,7 +245,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
                         break;
                     case (uint32_t)DataFormat::Int8:
                         // Same function can be used here as for UInt8 since we are passing the data format to the function.
-                        dprint_tensix_dest_reg_row_uint8(data_format_reg_field_value, row); 
+                        dprint_tensix_dest_reg_row_uint8(data_format_reg_field_value, row);
                         break;
                     default: DPRINT << "Unsupported data format: " << data_format_reg_field_value << ENDL(); break;
                 }
