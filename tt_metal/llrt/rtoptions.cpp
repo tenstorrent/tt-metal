@@ -1977,6 +1977,14 @@ void RunTimeOptions::resolve_mesh_coords_to_chip_ids(const tt::tt_metal::distrib
     }
 }
 
+std::vector<std::string_view> get_env_var_names() {
+    std::vector<std::string_view> names;
+    for (const auto [id, name] : enchantum::entries_generator<EnvVarID>) {
+        names.push_back(name);
+    }
+    return names;
+}
+
 }  // namespace tt::llrt
 
 // NOLINTEND(bugprone-branch-clone)

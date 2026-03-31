@@ -44,33 +44,11 @@ add_custom_command(
 )
 list(APPEND IMPL_SRC ${INSPECTOR_RPC_GENERATED_SOURCE})
 
-# Generate rtoptions + environment variable configuration serialization
-set(RTOPTIONS_HPP ${PROJECT_SOURCE_DIR}/tt_metal/llrt/rtoptions.hpp)
-set(RTOPTIONS_CPP ${PROJECT_SOURCE_DIR}/tt_metal/llrt/rtoptions.cpp)
-set(RTOPTIONS_CONFIG_GENERATED_HEADER ${CMAKE_CURRENT_BINARY_DIR}/impl/debug/inspector/rtoptions_config_generated.hpp)
-set(RTOPTIONS_CONFIG_GENERATED_SOURCE ${CMAKE_CURRENT_BINARY_DIR}/impl/debug/inspector/rtoptions_config_generated.cpp)
-add_custom_command(
-    OUTPUT
-        ${RTOPTIONS_CONFIG_GENERATED_HEADER}
-        ${RTOPTIONS_CONFIG_GENERATED_SOURCE}
-    COMMAND
-        python3 ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rtoptions_config.py ${RTOPTIONS_HPP}
-        ${RTOPTIONS_CPP} ${RTOPTIONS_CONFIG_GENERATED_HEADER} ${RTOPTIONS_CONFIG_GENERATED_SOURCE}
-    DEPENDS
-        ${RTOPTIONS_HPP}
-        ${RTOPTIONS_CPP}
-        ${CMAKE_CURRENT_SOURCE_DIR}/debug/inspector/generate_rtoptions_config.py
-    COMMENT "Generating rtoptions configuration serialization for Inspector"
-)
-list(APPEND IMPL_SRC ${RTOPTIONS_CONFIG_GENERATED_SOURCE})
-
 # Disable clang-tidy for generated Inspector files
 set_source_files_properties(
     ${INSPECTOR_RPC_GENERATED_SOURCE}
     ${INSPECTOR_RPC_GENERATED_HEADER}
     ${INSPECTOR_RPC_CAPNP_SOURCES}
-    ${RTOPTIONS_CONFIG_GENERATED_SOURCE}
-    ${RTOPTIONS_CONFIG_GENERATED_HEADER}
     PROPERTIES
         SKIP_LINTING
             TRUE
@@ -83,7 +61,6 @@ if(TARGET all_generated_files)
         DEPENDS
             ${INSPECTOR_RPC_CAPNP_HEADER}
             ${INSPECTOR_RPC_GENERATED_HEADER}
-            ${RTOPTIONS_CONFIG_GENERATED_HEADER}
     )
     add_dependencies(all_generated_files capnp_generated_files)
 endif()

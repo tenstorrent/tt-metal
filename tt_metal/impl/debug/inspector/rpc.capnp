@@ -155,6 +155,7 @@ enum ConfigurationScope {
     environment @0;
     rtOptions @1;
     ttnnConfig @2;
+    unknown @3;
 }
 
 struct ConfigurationEntry {

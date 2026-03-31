@@ -814,4 +814,7 @@ private:
 // Function declarations for operation timeout and synchronization
 std::chrono::duration<float> get_timeout_duration_for_operations();
 
+// Returns the names of all known TT_METAL environment variables (from the EnvVarID enum).
+std::vector<std::string_view> get_env_var_names();
+
 }  // namespace tt::llrt
