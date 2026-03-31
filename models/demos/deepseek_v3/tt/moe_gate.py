@@ -327,10 +327,16 @@ class MoEGate(AbstractModule):
             ttnn.deallocate(cur_logits)
 
         ttnn.deallocate(logits)
+        ttnn.deallocate(scores_correction_bias)
+        ttnn.deallocate(ttnn_output_tensor)
+        ttnn.deallocate(ttnn_input_indices)
+        ttnn.deallocate(ttnn_output_indices)
 
         if cfg["mode"] == "prefill":
             topk_experts_weights = ttnn.concat(topk_experts_weights_list, dim=0)
             topk_experts_indices = ttnn.concat(topk_experts_indices_list, dim=0)
+            ttnn.deallocate(topk_experts_weights_list)
+            ttnn.deallocate(topk_experts_indices_list)
         # here we only take the 1x8  out of 32x32
         topk_experts_weights = topk_experts_weights[:total_batch_size, 0, :8]
         topk_experts_indices = topk_experts_indices[:total_batch_size, 0, :8]
