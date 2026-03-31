@@ -2418,3 +2418,88 @@ def test_copy_to_memory_config_tilized_override_runtime_arguments(
         device.num_program_cache_entries() == 1
     ), f"Expected 1 program cache entry (cache hit on second call), got {device.num_program_cache_entries()}"
     assert not torch.equal(outputs[0], outputs[1]), "Outputs should differ to confirm different data was processed"
+
+
+@pytest.mark.parametrize(
+    "hw, kernel, stride, pad, shard_shape, grid",
+    [
+        # avg_pool2d output: [1, 1, 1024, 1] with padded width 16 → 4 ND shards of [1, 1, 256, 1]
+        (
+            (64, 64),
+            (2, 2),
+            (2, 2),
+            0,
+            [1, 1, 256, 1],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        ),
+    ],
+)
+def test_copy_to_memory_config_cache_test_inputs_same_logical_shape_but_different_padded_shape(
+    device, hw, kernel, stride, pad, shard_shape, grid
+):
+    """
+    Runs avg_pool2d to produce a row-major interleaved tensor whose padded_shape width
+    is larger than its logical_shape width, then converts to ND sharded via copy_to_memory_config.
+    Validates that the sharded output data matches the avg_pool2d result and caching is based on the logical shape.
+    """
+    h, w = hw
+    kh, kw = kernel
+    sh, sw = stride
+
+    torch_input = torch.randn(1, 1, h, w, dtype=torch.bfloat16)
+
+    mem_cfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    x_tt = ttnn.from_torch(
+        torch_input.reshape(h, w),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=mem_cfg,
+    )
+    x_flat = ttnn.reshape(x_tt, [1, 1, h * w, 1], memory_config=mem_cfg)
+    x_rm = ttnn.to_layout(x_flat, ttnn.ROW_MAJOR_LAYOUT, None, memory_config=None)
+
+    y = ttnn.avg_pool2d(
+        x_rm,
+        1,
+        h,
+        w,
+        1,
+        [kh, kw],
+        [sh, sw],
+        [pad, pad],
+        False,
+        True,
+        None,
+        memory_config=mem_cfg,
+        applied_shard_scheme=None,
+        compute_kernel_config=None,
+        reallocate_halo_output=False,
+        config_tensor_in_dram=True,
+    )
+
+    y2_torch = torch.randn([1, 1, 1024, 1], dtype=torch.bfloat16)
+    y2 = ttnn.from_torch(y2_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    y_torch = ttnn.to_torch(y)
+
+    nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+
+    y_sharded = ttnn.copy_to_memory_config(y, sharded_memory_config)
+    y_sharded2 = ttnn.copy_to_memory_config(y2, sharded_memory_config)
+
+    assert (
+        device.num_program_cache_entries() == 1
+    ), "Expected 1 program cache entry (cache hit on second call), got {device.num_program_cache_entries()}"
+
+    check_mem_config(y_sharded, sharded_memory_config, is_nd_sharded=True)
+    check_mem_config(y_sharded2, sharded_memory_config, is_nd_sharded=True)
+    y_sharded_torch = ttnn.to_torch(y_sharded)
+    y_sharded2_torch = ttnn.to_torch(y_sharded2)
+    assert_equal(y_torch, y_sharded_torch)
+    assert_equal(y2_torch, y_sharded2_torch)
+    device.disable_and_clear_program_cache()

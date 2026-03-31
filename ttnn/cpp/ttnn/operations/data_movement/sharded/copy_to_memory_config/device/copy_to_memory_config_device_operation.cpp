@@ -101,7 +101,7 @@ ttsl::hash::hash_t CopyToMemoryConfigDeviceOperation::compute_program_hash(
         input_tensor.dtype(),
         input_tensor.memory_config(),
         input_tensor.layout(),
-        input_tensor.padded_shape());
+        input_tensor.logical_shape());
 }
 
 Tensor copy_to_memory_config(
