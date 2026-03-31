@@ -12,31 +12,36 @@
 namespace ckernel::sfpu
 {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <bool APPROXIMATION_MODE /*unused*/, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void _calculate_exp2_()
 {
-    const bool SCALE_EN                       = false; // Exp2 does not use scale.
-    const bool SKIP_POSITIVE_CHECK            = false; // Exp2 does not skip positive check.
-    const std::uint16_t exp_base_scale_factor = p_sfpu::kCONST_1_FP16B;
-
+    // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        // log(2) = 0.6931471805;
-        v = v * 0.6931471805f;
-        // exp = e^(v)
-        sfpi::vFloat exp = _calculate_exponential_piecewise_<APPROXIMATION_MODE, SCALE_EN, SKIP_POSITIVE_CHECK>(v, exp_base_scale_factor);
-        sfpi::dst_reg[0] = exp;
+
+        v = v * sfpi::vConstFloatPrgm0;
+        sfpi::vFloat result;
+
+        if constexpr (is_fp32_dest_acc_en)
+        {
+            result = _sfpu_exp_fp32_accurate_(v);
+        }
+        else
+        {
+            result = _sfpu_exp_21f_bf16_<true>(v);
+            result = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(result, 0));
+        }
+
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE /*unused*/>
 inline void _init_exp2_()
 {
-    const std::uint32_t EXP_BASE_SCALE_FACTOR = 0x3F800000;
-    const bool FAST_APPROX                    = false; // Exp2 does not use fast approximation.
-    _init_exponential_<APPROXIMATION_MODE, FAST_APPROX, EXP_BASE_SCALE_FACTOR>();
+    sfpi::vConstFloatPrgm0 = 0.6931471805f;
 }
 
 } // namespace ckernel::sfpu
