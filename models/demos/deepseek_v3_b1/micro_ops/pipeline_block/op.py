@@ -159,7 +159,6 @@ class PipelineBlock:
             assert d2h_socket_fifo_size >= d2h_socket_page_size
 
         assert h2d_socket_fifo_size >= token_size_bytes
-        assert downstream_d2d_socket_page_size == embedding_size_bytes
         assert upstream_d2d_socket_page_size == d2h_socket_page_size
 
         self.h2d_socket = ttnn.H2DSocket(
@@ -187,6 +186,7 @@ class PipelineBlock:
             ),
             d2h_upstream_core=ttnn.MeshCoreCoord(pipeline_config[self.num_procs].entry_node_coord, pipeline_core_coord),
             embedding_tensor=embedding_tensor,
+            downstream_socket_page_size=downstream_d2d_socket_page_size,
         )
 
         self.exit_socket_interface = SocketInterface(

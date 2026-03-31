@@ -8,9 +8,9 @@ rank_bindings:
     # TT_METAL_WATCHER_NOINLINE: "1"
     # TT_METAL_WATCHER_DISABLE_ETH_LINK_STATUS: "1"
     # TT_METAL_LOGS_PATH: "rank0"
-    # TT_METAL_DPRINT_CORES: all
-    # TT_METAL_DPRINT_CHIPS: all
-    # TT_METAL_DPRINT_FILE: dprint_logs/rank0.txt
+    TT_METAL_DPRINT_CORES: all
+    TT_METAL_DPRINT_CHIPS: all
+    TT_METAL_DPRINT_FILE: dprint_logs/rank0.txt
 - rank: 1
   mesh_id: 1
   mesh_host_rank: 0
@@ -20,9 +20,9 @@ rank_bindings:
     # TT_METAL_WATCHER_NOINLINE: "1"
     # TT_METAL_WATCHER_DISABLE_ETH_LINK_STATUS: "1"
     # TT_METAL_LOGS_PATH: "rank1"
-    # TT_METAL_DPRINT_CORES: all
-    # TT_METAL_DPRINT_CHIPS: all
-    # TT_METAL_DPRINT_FILE: dprint_logs/rank1.txt
+    TT_METAL_DPRINT_CORES: all
+    TT_METAL_DPRINT_CHIPS: all
+    TT_METAL_DPRINT_FILE: dprint_logs/rank1.txt
 - rank: 2
   mesh_id: 2
   mesh_host_rank: 0

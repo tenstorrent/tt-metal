@@ -34,7 +34,7 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_br
 TOKEN_PAGE_SIZE_BYTES = 64
 TOKEN_FIFO_SIZE = 1024
 ACTIVATION_DIM = 7168
-PADDED_ACTIVATION_DIM = ACTIVATION_DIM + 1024
+
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
 ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 1
 PIPELINE_CORE_COORD = ttnn.CoreCoord(11, 0)
@@ -48,6 +48,7 @@ ARGMAX_RELAY_CORE = ttnn.CoreCoord(12, 2)
 embedding_dim = 7168
 mtp_output_dim = 7168
 num_dram_banks = 8
+METADATA_NUM_ELEMS = 32
 mtp_n_per_core = mtp_output_dim // num_dram_banks
 mtp_padded_dim = num_dram_banks * mtp_n_per_core
 
@@ -56,7 +57,7 @@ TOKEN_META_PAGE_SIZE_BYTES = TOKEN_PAGE_SIZE_BYTES
 TOKEN_META_FIFO_SIZE = TOKEN_FIFO_SIZE
 
 # Activation + token metadata payload: logits + 1 metadata tile (token).
-ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES = ACTIVATION_FIFO_SIZE + TOKEN_PAGE_SIZE_BYTES
+ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES = ACTIVATION_PAGE_SIZE_BYTES + TOKEN_PAGE_SIZE_BYTES
 ACTIVATION_W_TOKEN_META_FIFO_SIZE = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
 
 
@@ -102,9 +103,9 @@ class EmbeddingStage(StageKind):
             mesh_device,
             PIPELINE_CORE_COORD,
             upstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            downstream_d2d_socket_fifo_size=ACTIVATION_W_TOKEN_META_FIFO_SIZE,
             upstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            downstream_d2d_socket_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
             h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
             d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
             d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
@@ -205,7 +206,6 @@ class SpecLMHeadStage(StageKind):
 
     M = 1
     K = ACTIVATION_DIM
-    PADDED_K = PADDED_ACTIVATION_DIM
     NUM_MATMUL_CORES = 101
     N_PER_CORE = 160
     N_TOTAL = NUM_MATMUL_CORES * N_PER_CORE
@@ -259,7 +259,7 @@ class SpecLMHeadStage(StageKind):
         pipeline_config = ctx.pipeline_config
 
         # +32 for metadata (32 * 2 bytes = 64 bytes of metadata)
-        torch_a = torch.zeros((SpecLMHeadStage.M, (SpecLMHeadStage.PADDED_K)), dtype=torch.bfloat16)
+        torch_a = torch.zeros((SpecLMHeadStage.M, SpecLMHeadStage.K + METADATA_NUM_ELEMS), dtype=torch.bfloat16)
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
         sender_coord = pipeline_config[my_mesh_id].entry_node_coord
@@ -279,7 +279,7 @@ class SpecLMHeadStage(StageKind):
         input_a_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(mcast_core_grid, (cls.M, cls.PADDED_K), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(mcast_core_grid, (cls.M, cls.K + METADATA_NUM_ELEMS), ttnn.ShardOrientation.ROW_MAJOR),
         )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -304,7 +304,7 @@ class SpecLMHeadStage(StageKind):
             mesh_cols=mesh_cols,
             sender_coord=ttnn.MeshCoordinate(sender_coord[0], sender_coord[1]),
             output_shape=torch_a.shape,
-            input_shard_shape=(SpecLMHeadStage.M, (SpecLMHeadStage.PADDED_K)),
+            input_shard_shape=(SpecLMHeadStage.M, (SpecLMHeadStage.K + METADATA_NUM_ELEMS)),
             tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             layout=ttnn.TILE_LAYOUT,
             input_dtype=ttnn.bfloat16,
@@ -497,19 +497,15 @@ class BaseLMHeadStage(StageKind):
         lmhead_exit_core = ttnn.MeshCoreCoord(
             pipeline_config[my_mesh_id].exit_node_coord, BaseLMHeadStage.ARGMAX_FINAL_CORE
         )
-        if self._send_mtp_output_downstream:
-            down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
-            down_fifo = ACTIVATION_W_TOKEN_META_FIFO_SIZE
-        else:
-            down_page = TOKEN_PAGE_SIZE_BYTES
-            down_fifo = TOKEN_FIFO_SIZE
+        down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+        down_fifo = ACTIVATION_W_TOKEN_META_FIFO_SIZE
         # Flag here we are creating socket page size of
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            upstream_d2d_socket_fifo_size=ACTIVATION_W_TOKEN_META_FIFO_SIZE,
             downstream_d2d_socket_fifo_size=down_fifo,
-            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            upstream_d2d_socket_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
             downstream_d2d_socket_page_size=down_page,
             entry_node_downstream=lmhead_entry_core,
             exit_node_upstream=lmhead_exit_core,
@@ -520,7 +516,7 @@ class BaseLMHeadStage(StageKind):
         mesh_device = ctx.mesh_device
         my_mesh_id = ctx.my_mesh_id
         pipeline_config = ctx.pipeline_config
-        torch_a = torch.zeros((BaseLMHeadStage.M, (BaseLMHeadStage.K + 1024)), dtype=torch.bfloat16)
+        torch_a = torch.zeros((BaseLMHeadStage.M, BaseLMHeadStage.K + METADATA_NUM_ELEMS), dtype=torch.bfloat16)
 
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
@@ -572,7 +568,7 @@ class BaseLMHeadStage(StageKind):
             mesh_cols=mesh_cols,
             sender_coord=ttnn.MeshCoordinate(sender_coord[0], sender_coord[1]),
             output_shape=torch_a.shape,
-            input_shard_shape=(BaseLMHeadStage.M, (BaseLMHeadStage.K + 1024)),
+            input_shard_shape=(BaseLMHeadStage.M, (BaseLMHeadStage.K + METADATA_NUM_ELEMS)),
             tensor_mem_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             layout=ttnn.TILE_LAYOUT,
             input_dtype=ttnn.bfloat16,

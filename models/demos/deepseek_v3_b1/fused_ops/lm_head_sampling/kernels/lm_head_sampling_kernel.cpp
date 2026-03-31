@@ -412,7 +412,6 @@ void kernel_main() {
     constexpr uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("mcast_eh_src_cb");
     constexpr uint32_t mcast_eh_dst_cb = get_named_compile_time_arg_val("mcast_eh_dst_cb");
 
-    DPRINT << "mcast_eh_args" << ENDL();
     deepseek_b1_ops::Mcast::SenderArgs mcast_eh_args{
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_x"),
         get_named_compile_time_arg_val("mcast_eh_dest_noc_start_y"),

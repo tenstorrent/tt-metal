@@ -50,6 +50,7 @@ class HostInterface:
         loopback_mode=False,
         embedding_cb_index=None,
         fabric_packet_header_cb_index=None,
+        downstream_socket_page_size=None,
     ):
         assert h2d_socket is not None or d2h_socket is not None, "Either h2d_socket or d2h_socket must be provided"
 
@@ -159,6 +160,7 @@ class HostInterface:
             ), f"Expected embedding tensor to be DRAM interleaved with page size {self.embedding_page_size} bytes for shape {self.embedding_tensor.shape}"
             # Tensor is DRAM interleaved, and row major. Page size is inner dim (2D: shape[1], 4D: shape[3]).
             self.embedding_page_size = self.embedding_tensor.shape[-1] * dtype_size(self.embedding_tensor.dtype)
+            self.downstream_socket_page_size = downstream_socket_page_size if downstream_socket_page_size is not None else self.embedding_page_size
             self.embedding_cb_index = 2 if embedding_cb_index is None else embedding_cb_index
 
         self.fabric_packet_header_cb_index = (
@@ -179,7 +181,7 @@ class HostInterface:
         if use_fabric:
             fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
             if self.has_embedding:
-                page_size_per_link = self.embedding_page_size // self.num_fwd_links
+                page_size_per_link = self.downstream_socket_page_size // self.num_fwd_links
             else:
                 page_size_per_link = self.h2d_page_size // self.num_fwd_links
             num_whole_fabric_packets_per_link = page_size_per_link // fabric_max_payload_size
@@ -206,7 +208,7 @@ class HostInterface:
         # Add CTAs for fused embedding op if needed
         if self.has_embedding:
             h2d_socket_kernel_ct_args.extend(
-                [self.embedding_cb_index, self.embedding_page_size, self.embedding_tensor.buffer_address()]
+                [self.embedding_cb_index, self.embedding_page_size, self.embedding_tensor.buffer_address(), self.downstream_socket_page_size]
             )
             h2d_socket_kernel_ct_args.extend(get_interleaved_tensor_accessor_args(self.embedding_tensor))
 

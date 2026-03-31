@@ -1214,8 +1214,7 @@ class LMHeadSampling:
                 rmsnorm_input_cb_descriptor.format_descriptors[0].tile = rms_tile_descriptor
                 rmsnorm_input_cb_descriptor.format_descriptors[0].page_size = rms_tile_size
                 print("old rmsnorm_input_cb_descriptor.total_size", rmsnorm_input_cb_descriptor.total_size)
-                if is_mtp_verify_stage:
-                    rmsnorm_input_cb_descriptor.total_size = (rms_num_tiles + 1) * rms_tile_size
+                rmsnorm_input_cb_descriptor.total_size = (rms_num_tiles) * rms_tile_size
                 print("new rmsnorm_input_cb_descriptor.total_size", rmsnorm_input_cb_descriptor.total_size)
                 print(f"[OP:{device_idx}:I1] CB0 rmsnorm_input done", flush=True)
 

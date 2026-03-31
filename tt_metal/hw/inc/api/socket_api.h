@@ -246,6 +246,8 @@ void set_receiver_socket_page_size(SocketReceiverInterface& socket, uint32_t pag
 #if !(defined TRISC_PACK || defined TRISC_MATH)
     uint32_t fifo_start_addr = socket.fifo_addr;
     uint32_t fifo_total_size = socket.fifo_total_size;
+    DPRINT << "page_size=" << page_size << ENDL();
+    DPRINT << "fifo_total_size=" << fifo_total_size << ENDL();
     ASSERT(page_size <= fifo_total_size);
     uint32_t& fifo_rd_ptr = socket.read_ptr;
     uint32_t next_fifo_rd_ptr = fifo_start_addr + align(fifo_rd_ptr - fifo_start_addr, page_size);
@@ -282,9 +284,13 @@ bool socket_wait_for_pages(
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_sent_addr);
     uint32_t bytes_recv;
     uint32_t iter_count = 0;
+    DPRINT << "num_bytes=" << num_bytes << ENDL();
     do {
         invalidate_l1_cache();
+        DPRINT << "bytes_sent_ptr=" << *bytes_sent_ptr << ENDL();
+        DPRINT << "socket.bytes_acked=" << socket.bytes_acked << ENDL();
         bytes_recv = *bytes_sent_ptr - socket.bytes_acked;
+        DPRINT << "bytes_recv=" << bytes_recv << ENDL();
         iter_count++;
         if (early_exit_iter_count && iter_count >= early_exit_iter_count) {
             return false;

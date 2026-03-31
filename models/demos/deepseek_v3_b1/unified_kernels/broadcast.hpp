@@ -116,19 +116,28 @@ struct Broadcast {
                     if constexpr (CTArgs::use_socket) {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
+                        DPRINT << "set socket page size" << ENDL();
                         set_receiver_socket_page_size(recv, args.socket_page_size);
+                        DPRINT << "wait for pages" << ENDL();
                         socket_wait_for_pages(recv, args.socket_num_pages);
+                        DPRINT << "reserve back" << ENDL();
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         invalidate_l1_cache();
+                        DPRINT << "async read" << ENDL();
                         noc_async_read(
                             get_noc_addr(recv.read_ptr),
                             get_write_ptr(CTArgs::cb0_id),  //
                             args.socket_page_size,
                             1 - noc_index);
+                        DPRINT << "async read barrier" << ENDL();
                         noc_async_read_barrier(1 - noc_index);
+                        DPRINT << "push back" << ENDL();
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                        DPRINT << "pop pages" << ENDL();
                         socket_pop_pages(recv, args.socket_num_pages);
+                        DPRINT << "notify sender" << ENDL();
                         socket_notify_sender(recv, 1 - noc_index);
+                        DPRINT << "update socket config" << ENDL();
                         update_socket_config(recv);
 
                     } else {
