@@ -95,7 +95,7 @@ class ScriptPriority(Enum):
 class ScriptConfig:
     data_provider: bool = False
     disabled: bool = False
-    depends: list[str] = field(default_factory=list)
+    depends: list[Path] = field(default_factory=list)
     priority: ScriptPriority = ScriptPriority.MEDIUM
 
 
@@ -239,7 +239,7 @@ class TriageScript:
                 raise
 
     @staticmethod
-    def load(script_path: str) -> "TriageScript":
+    def load(script_path: Path | str) -> "TriageScript":
         resolved = Path(script_path).resolve()
         script_path = str(resolved)  # TriageScript.path is str (intentional)
         base_path = str(resolved.parent)  # sys.path requires str entries
@@ -298,8 +298,7 @@ class TriageScript:
                     dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py"
                     for dep in triage_script.config.depends
                 ]
-                # ScriptConfig.depends is list[str]; values used as dict keys and passed to load()
-                triage_script.config.depends = [str(resolved.parent / dep) for dep in triage_script.config.depends]
+                triage_script.config.depends = [(resolved.parent / dep).resolve() for dep in triage_script.config.depends]
 
             return triage_script
         finally:
@@ -307,9 +306,10 @@ class TriageScript:
                 sys.path.remove(base_path)
 
     @staticmethod
-    def load_all(script_path: str) -> dict[str, "TriageScript"]:
-        scripts: dict[str, TriageScript] = {}
-        loading: list[str] = []
+    def load_all(script_path: Path | str) -> dict[Path, "TriageScript"]:
+        script_path = Path(script_path).resolve()
+        scripts: dict[Path, TriageScript] = {}
+        loading: list[Path] = []
         script = TriageScript.load(script_path)
         scripts[script_path] = script
 
@@ -330,7 +330,7 @@ class TriageScript:
         return scripts
 
 
-def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScript]:
+def resolve_execution_order(scripts: dict[Path, TriageScript]) -> list[TriageScript]:
     # Build script dependents graph and script missing dependencies map
     script_dependents = defaultdict(list)  # dep_path -> list of scripts depending on it
     script_missing_dependencies = defaultdict(int)  # script_path -> number of unmet dependencies
@@ -365,9 +365,10 @@ def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScri
 
     # If some scripts remain with non-zero in-degree, we have a cycle
     if len(result) != len(scripts):
-        remaining_scripts = set(scripts.keys()) - {s.config.name for s in result}
+        executed_paths = {Path(s.path).resolve() for s in result}
+        remaining_scripts = set(scripts.keys()) - executed_paths
         raise ValueError(
-            f"Bad dependency detected in scripts: {', '.join(remaining_scripts)}\n"
+            f"Bad dependency detected in scripts: {', '.join(str(p) for p in remaining_scripts)}\n"
             f"  Circular dependency, dependency on disabled or non-existing script is not allowed.\n"
             f"  Please check if all dependencies are met and scripts are enabled."
         )
@@ -428,8 +429,8 @@ def process_arguments(args: ScriptArguments) -> None:
 
 
 def parse_arguments(
-    scripts: dict[str, TriageScript] = {},
-    script_path: str | None = None,
+    scripts: dict[Path, TriageScript] = {},
+    script_path: Path | str | None = None,
     argv: list[str] | None = None,
     only_triage_script_args=False,
 ) -> ScriptArguments:
@@ -491,7 +492,7 @@ def parse_arguments(
         return arguments
 
     detailed_help = any([a.name == "--help" or a.name == "-h" or a.name == "/?" for a in left])
-    doc = __doc__ if script_path is None else scripts[script_path].documentation
+    doc = __doc__ if script_path is None else scripts[Path(script_path).resolve()].documentation
     if detailed_help:
         help_message = doc
         if script_path is None:
@@ -499,7 +500,7 @@ def parse_arguments(
         else:
             help_message += "\n\nYou can also use arguments of dependent scripts:\n"
         for script in scripts.values():
-            if script.path != script_path:
+            if script.path != str(script_path):
                 script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
                     help_message += f"\n{script.documentation}\n"
@@ -508,7 +509,7 @@ def parse_arguments(
     else:
         help_message = printable_usage(doc)
         for script in scripts.values():
-            if script.path != script_path:
+            if script.path != str(script_path):
                 script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
                     usage = printable_usage(script.documentation)
@@ -828,7 +829,7 @@ def run_script(
         script_path = script_path.resolve()
         if not script_path.exists():
             raise FileNotFoundError(f"Script {script_path} does not exist.")
-        script_path = str(script_path)  # load_all() and scripts dict require str
+        # load_all() normalizes to Path internally
 
     # Load script and its dependencies
     scripts = TriageScript.load_all(script_path)
@@ -854,7 +855,8 @@ def run_script(
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
                 raise TTTriageError(f"{script.name}: Data provider script did not return any data.")
-    script = scripts[script_path] if script_path in scripts else None
+    script_key = Path(script_path).resolve()
+    script = scripts[script_key] if script_key in scripts else None
     if return_result:
         return result
     serialize_result(script, result)
@@ -897,9 +899,9 @@ def main():
 
     # Load tt-triage scripts
     # TODO: do we need to check for subdirectories?
-    scripts: dict[str, TriageScript] = {}
+    scripts: dict[Path, TriageScript] = {}
     for script in script_files:
-        script_path = str(application_path / script)  # scripts dict key and load() param require str
+        script_path = (application_path / script).resolve()
         try:
             triage_script = TriageScript.load(script_path)
             if triage_script.config.disabled:
