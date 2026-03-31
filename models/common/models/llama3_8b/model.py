@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTTv2 Llama 3.1-8B Transformer model.
+TTTv2 Llama 3.1-8B Transformer model and executors.
 
-Pure model — forward methods only. No input/output processing, no trace
-management, no vLLM adaptation. Those belong in executor.py / generator.py.
+Model:
+    Llama3Transformer1D — pure forward methods, no input/output processing
+
+Executors (thin wrappers around engines in models/common/models/executor.py):
+    EagerLlamaExecutor  — direct execution
+    TracedLlamaExecutor — traced execution with capture/replay
 
 Architecture:
     Llama3Transformer1D (1D only — non-TG)
@@ -20,17 +24,15 @@ Architecture:
     ├── LMHead1D
     └── Sampling1D (optional)
 
-Dependencies:
-    - ttnn
-    - models.common.modules.* (TTTv2 modules)
-    - models.common.lightweightmodule (base class)
-    No torch. No TTTv1 imports.
+Loop policy functions (run_teacher_forcing, run_perf_benchmark) are in
+models/common/models/executor.py.
 """
 
 from dataclasses import dataclass, field
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.models.executor import EagerLLMExecutor, TracedLLMExecutor
 from models.common.modules.attention.attention_1d import Attention1D, Attention1DConfig
 from models.common.modules.embedding.embedding_1d import Embedding1D, Embedding1DConfig
 from models.common.modules.lm_head.lm_head_1d import LMHead1D, LMHead1DConfig
@@ -39,37 +41,6 @@ from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
 from models.common.modules.tt_ccl import TT_CCL, default_topology, get_tt_ccl
-
-# =============================================================================
-# RMSNorm gather helpers
-# =============================================================================
-
-
-def _all_gather_rmsnorm_tensor(
-    norm: RMSNorm1D, x: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None
-) -> ttnn.Tensor:
-    cfg = norm.config
-    if cfg.mesh_device.get_num_devices() == 1 or x.shape[-1] == cfg.weight.source.numel():
-        return x
-
-    if memory_config is None:
-        memory_config = x.memory_config()
-
-    tt_ccl = cfg.tt_ccl or get_tt_ccl(cfg.mesh_device)
-    return ttnn.experimental.all_gather_async(
-        x,
-        persistent_output_buffer=None,
-        dim=3,
-        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
-        num_links=tt_ccl.get_num_links(),
-        topology=default_topology(cfg.mesh_device),
-        memory_config=memory_config,
-        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        chunks_per_sync=10,
-        num_workers_per_link=2,
-        num_buffers_per_channel=2,
-    )
-
 
 # =============================================================================
 # TransformerBlock1D
@@ -614,3 +585,349 @@ class Llama3Transformer1D(LightweightModule):
             )
 
         return instance
+
+
+# =============================================================================
+# RMSNorm gather helpers
+# =============================================================================
+
+
+def _all_gather_rmsnorm_tensor(
+    norm: RMSNorm1D, x: ttnn.Tensor, *, memory_config: ttnn.MemoryConfig | None = None
+) -> ttnn.Tensor:
+    cfg = norm.config
+    if cfg.mesh_device.get_num_devices() == 1 or x.shape[-1] == cfg.weight.source.numel():
+        return x
+
+    if memory_config is None:
+        memory_config = x.memory_config()
+
+    tt_ccl = cfg.tt_ccl or get_tt_ccl(cfg.mesh_device)
+    return ttnn.experimental.all_gather_async(
+        x,
+        persistent_output_buffer=None,
+        dim=3,
+        multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+        num_links=tt_ccl.get_num_links(),
+        topology=default_topology(cfg.mesh_device),
+        memory_config=memory_config,
+        barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+        chunks_per_sync=10,
+        num_workers_per_link=2,
+        num_buffers_per_channel=2,
+    )
+
+
+# =============================================================================
+# EagerLlamaExecutor — thin wrapper
+# =============================================================================
+
+
+class EagerLlamaExecutor:
+    """Thin wrapper: passes Llama model to EagerLLMExecutor.
+
+    All actual logic lives in the engine. This class exists to:
+    1. Provide a model-specific type for type hints
+    2. Preserve the existing API for demos and tests
+    """
+
+    def __init__(self, model: Llama3Transformer1D, mesh_device: ttnn.MeshDevice, model_args=None):
+        # Attach model_args to model so engine can access it via model.model_args
+        if model_args is not None:
+            model.model_args = model_args
+        self._engine = EagerLLMExecutor(model, mesh_device)
+
+    @property
+    def model(self):
+        return self._engine.model
+
+    @property
+    def mesh_device(self):
+        return self._engine.mesh_device
+
+    @property
+    def model_args(self):
+        return self._engine.model_args
+
+    @property
+    def mode(self):
+        return self._engine.mode
+
+    @mode.setter
+    def mode(self, value):
+        self._engine.mode = value
+
+    # =========================================================================
+    # KV Cache — delegate to engine
+    # =========================================================================
+
+    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+        return self._engine.allocate_kv_cache(kv_cache_shape, dtype, num_layers)
+
+    def _assert_kv_cache_identity(self, kv_cache):
+        return self._engine._assert_kv_cache_identity(kv_cache)
+
+    # =========================================================================
+    # Input Preparation — delegate to engine
+    # =========================================================================
+
+    def prepare_prefill_inputs(
+        self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
+    ):
+        return self._engine.prepare_prefill_inputs(
+            tokens, start_pos, page_table, chunk_page_table, trace_enabled, last_token_idx
+        )
+
+    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
+        return self._engine.prepare_decode_inputs_host(tokens, current_pos, page_table)
+
+    def prepare_decode_inputs_device(self, tokens, current_pos, page_table=None):
+        return self._engine.prepare_decode_inputs_device(tokens, current_pos, page_table)
+
+    # =========================================================================
+    # Compile — delegate to engine
+    # =========================================================================
+
+    def compile_prefill(
+        self,
+        *,
+        tokens,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        start_pos=None,
+    ):
+        return self._engine.compile_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=empty_slots,
+            start_pos=start_pos,
+        )
+
+    def compile_decode(
+        self,
+        *,
+        tokens,
+        start_pos,
+        page_table=None,
+        kv_cache=None,
+        sampling_params=None,
+    ):
+        return self._engine.compile_decode(
+            tokens=tokens,
+            start_pos=start_pos,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            sampling_params=sampling_params,
+        )
+
+    def compile(
+        self,
+        *,
+        prefill_tokens,
+        prefill_page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        start_pos=None,
+        sampling_params=None,
+    ):
+        return self._engine.compile(
+            prefill_tokens=prefill_tokens,
+            prefill_page_table=prefill_page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=empty_slots,
+            start_pos=start_pos,
+            sampling_params=sampling_params,
+        )
+
+    # =========================================================================
+    # Forward — delegate to engine
+    # =========================================================================
+
+    def prefill_forward(
+        self,
+        tokens,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        enable_trace=True,
+        sampling_params=None,
+        start_pos=None,
+        warmup_prefill=True,
+    ):
+        return self._engine.prefill_forward(
+            tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=empty_slots,
+            enable_trace=enable_trace,
+            sampling_params=sampling_params,
+            start_pos=start_pos,
+            warmup_prefill=warmup_prefill,
+        )
+
+    def _prefill_single_user(self, tokens, page_table, user_id, last_token_idx, num_cached_tokens=0):
+        return self._engine._prefill_single_user(tokens, page_table, user_id, last_token_idx, num_cached_tokens)
+
+    def decode_forward(
+        self,
+        tokens,
+        start_pos,
+        page_table=None,
+        kv_cache=None,
+        enable_trace=True,
+        read_from_device=True,
+        sampling_params=None,
+    ):
+        return self._engine.decode_forward(
+            tokens,
+            start_pos,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            enable_trace=enable_trace,
+            read_from_device=read_from_device,
+            sampling_params=sampling_params,
+        )
+
+    # =========================================================================
+    # Cleanup — delegate to engine
+    # =========================================================================
+
+    def cleanup(self):
+        return self._engine.cleanup()
+
+
+# =============================================================================
+# TracedLlamaExecutor — thin wrapper
+# =============================================================================
+
+
+class TracedLlamaExecutor:
+    """Thin wrapper: passes Llama model to TracedLLMExecutor.
+
+    All actual logic lives in the engine. This class exists to:
+    1. Provide a model-specific type for type hints
+    2. Preserve the existing API for demos and tests
+    """
+
+    def __init__(self, model: Llama3Transformer1D, mesh_device: ttnn.MeshDevice, model_args=None):
+        # Attach model_args to model so engine can access it via model.model_args
+        if model_args is not None:
+            model.model_args = model_args
+        self._engine = TracedLLMExecutor(model, mesh_device)
+
+    @property
+    def model(self):
+        return self._engine.model
+
+    @property
+    def mesh_device(self):
+        return self._engine.mesh_device
+
+    @property
+    def model_args(self):
+        return self._engine.model_args
+
+    @property
+    def mode(self):
+        return self._engine.mode
+
+    @mode.setter
+    def mode(self, value):
+        self._engine.mode = value
+
+    # Expose internal state for tests/debugging
+    @property
+    def trace_id_prefill(self):
+        return self._engine.trace_id_prefill
+
+    @property
+    def trace_ids_decode(self):
+        return self._engine.trace_ids_decode
+
+    @property
+    def already_warmed_up_prefill(self):
+        return self._engine.already_warmed_up_prefill
+
+    # =========================================================================
+    # KV Cache — delegate to engine
+    # =========================================================================
+
+    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+        return self._engine.allocate_kv_cache(kv_cache_shape, dtype, num_layers)
+
+    # =========================================================================
+    # Warmup — delegate to engine
+    # =========================================================================
+
+    def warmup_model_prefill(
+        self, kv_cache=None, enable_trace=True, can_sample_on_device=False, non_greedy_decoding_on_device=False
+    ):
+        return self._engine.warmup_model_prefill(
+            kv_cache=kv_cache,
+            enable_trace=enable_trace,
+            can_sample_on_device=can_sample_on_device,
+            non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+        )
+
+    # =========================================================================
+    # Forward — delegate to engine
+    # =========================================================================
+
+    def prefill_forward(
+        self,
+        tokens,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        enable_trace=True,
+        sampling_params=None,
+        start_pos=None,
+        warmup_prefill=True,
+    ):
+        return self._engine.prefill_forward(
+            tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=empty_slots,
+            enable_trace=enable_trace,
+            sampling_params=sampling_params,
+            start_pos=start_pos,
+            warmup_prefill=warmup_prefill,
+        )
+
+    def decode_forward(
+        self,
+        tokens,
+        start_pos,
+        page_table=None,
+        kv_cache=None,
+        enable_trace=True,
+        read_from_device=True,
+        sampling_params=None,
+    ):
+        return self._engine.decode_forward(
+            tokens,
+            start_pos,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            enable_trace=enable_trace,
+            read_from_device=read_from_device,
+            sampling_params=sampling_params,
+        )
+
+    # =========================================================================
+    # Cleanup — delegate to engine
+    # =========================================================================
+
+    def cleanup(self):
+        return self._engine.cleanup()

@@ -2,14 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Executors for Llama 3.1-8B.
+LLM Executor Engines — thick engines that own prefill/decode implementation.
 
-EagerLlamaExecutor    — direct execution (canonical path, no tracing)
-TracedLlamaExecutor   — traced execution (sibling, not wrapper)
-TeacherForceExecutor  — accuracy measurement via teacher forcing
-PerfBenchmarkExecutor — performance measurement (TTFT, tok/s/u)
+EagerLLMExecutor  — direct execution (no tracing)
+TracedLLMExecutor — traced execution (capture/replay)
 
-Scope: text-only, DP=1, paged attention, non-TG (1D).
+These are reusable engines. Model-specific executors (e.g., EagerLlamaExecutor)
+are thin wrappers that pass the model to these engines.
+
+Design principle: Thick engine, thin model executor.
+- Engine owns the implementation (prefill/decode forward, KV cache, trace capture/replay)
+- Model executor owns the model (passes transformer to engine)
+- Model-specific details come from model.model_args or model attributes
 """
 
 import time
@@ -20,7 +24,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.models.llama3_8b.model import Llama3Transformer1D, _all_gather_rmsnorm_tensor
 from models.tt_transformers.tt.common import (
     Mode,
     copy_host_to_device,
@@ -30,77 +33,87 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
 )
 
-# =============================================================================
-# Shared helpers (used by both executors)
-# =============================================================================
 
+def _cleanup_ttnn_value(value):
+    if value is None:
+        return
 
-def _concat_host_output(tt_out, cluster_shape, is_galaxy=False):
-    """Concatenate multi-device output into a single host tensor."""
-    torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out)]
-    row_dim, col_dim = (1, -1)
+    if isinstance(value, ttnn.Tensor):
+        ttnn.deallocate(value)
+        return
 
-    rows, cols = cluster_shape
-    mesh_shape = [torch_out_tensors[i : i + cols] for i in range(0, len(torch_out_tensors), cols)]
-    row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
-    return torch.cat(row_concatenated, dim=row_dim)
+    if isinstance(value, dict):
+        for nested_value in value.values():
+            _cleanup_ttnn_value(nested_value)
+        return
 
-
-def _process_output_prefill(tt_out, last_token_idx, vocab_size, cluster_shape):
-    """Device→host for prefill. Returns logits for the last token."""
-    assert tt_out.storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
-    return _concat_host_output(tt_out, cluster_shape)[0, 0, last_token_idx, :vocab_size]
-
-
-def _process_output_decode(tt_out, B, vocab_size, num_devices, cluster_shape):
-    """Device→host for decode. Returns logits [B, 1, vocab_size]."""
-    if num_devices > 1:
-        tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
-    else:
-        tt_out = ttnn.to_torch(tt_out).float()
-    return tt_out[:, :, :B, :vocab_size].view(B, 1, -1)
-
-
-def _process_output_decode_tokens(tt_out, B, cluster_shape):
-    """Device→host for decode when sampling on device. Returns token ids [B]."""
-    padded_batch_size = 32
-    tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
-    return _concat_host_output(tt_out, cluster_shape)[0, 0, :B, 0]
-
-
-def _get_prefill_user_page_table(page_table, kv_cache, prefill_len, trace_enabled, prefill_seq_len):
-    """Slice and pad page table for a single prefill user."""
-    block_size = get_block_size(kv_cache)
-    num_blocks = num_blocks_in_seq(prefill_len, block_size)
-    if trace_enabled:
-        num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
-    return page_table[:, :num_blocks]
+    if isinstance(value, (list, tuple, set)):
+        for nested_value in value:
+            _cleanup_ttnn_value(nested_value)
 
 
 # =============================================================================
-# EagerLlamaExecutor — direct execution
+# Protocol: LLMModel
+# =============================================================================
+# The engine expects a model with these attributes/methods. This is a duck-typed
+# protocol, not a formal interface (no ABC). Any model that provides these can
+# be used with the engine.
+#
+# Required attributes:
+#   - vocab_size: int
+#   - n_layers: int
+#   - num_devices: int
+#   - rope_setup: has .get_rot_idxs(), .get_rot_mats(), .cos_matrix, .sin_matrix, .load_device_weights()
+#   - sampling: Sampling1D | None
+#   - mesh_device: ttnn.MeshDevice
+#
+# Required methods:
+#   - embed_prefill(tokens_tt) -> ttnn.Tensor
+#   - embed_decode(tokens_tt) -> ttnn.Tensor
+#   - prefill_forward(x_embed, rot_mats, user_id, page_table, chunk_page_table, chunk_start_idx, get_last_token) -> ttnn.Tensor
+#   - decode_forward(x_embed, current_pos, rot_mats, page_table) -> ttnn.Tensor
+#   - gather_and_untilize_logits(logits) -> ttnn.Tensor
+#   - increment_positions(current_pos, rot_mat_idxs) -> None
+#   - set_kv_cache(kv_cache) -> None
+
+
+# =============================================================================
+# EagerLLMExecutor — thick engine for direct execution
 # =============================================================================
 
 
-class EagerLlamaExecutor:
-    """Direct (non-traced) executor for Llama 3.1-8B.
+class EagerLLMExecutor:
+    """Eager executor engine — owns prefill/decode implementation.
 
-    Handles: input preparation, output processing, chunked prefill,
-    KV cache allocation, and on-device sampling.
-    TracedLlamaExecutor is a sibling that adds trace capture/replay.
+    Common LLM operations live here. Model-specific details come from
+    the model object (model.model_args).
+
+    This is a thick engine: it owns the full implementation of prefill/decode,
+    including input prep, output processing, chunked prefill, and KV cache allocation.
     """
 
-    def __init__(self, model: Llama3Transformer1D, mesh_device: ttnn.MeshDevice, model_args=None):
+    def __init__(self, model, mesh_device: ttnn.MeshDevice):
+        """Initialize eager executor engine.
+
+        Args:
+            model: Transformer model with prefill_forward(), decode_forward(), model_args, etc.
+            mesh_device: TT mesh device for execution.
+        """
         self.model = model
         self.mesh_device = mesh_device
-        self.model_args = model_args
         self.mode = None
+        self._kv_cache = None
+
+    @property
+    def model_args(self):
+        """Model args come from the model object."""
+        return getattr(self.model, "model_args", None)
 
     # =========================================================================
     # KV Cache
     # =========================================================================
 
-    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
+    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers) -> list:
         """Allocate paged KV cache on device. Returns list[list[ttnn.Tensor]]."""
         cache_kv = torch.zeros(kv_cache_shape, dtype=dtype)
         kv_cache = []
@@ -132,26 +145,27 @@ class EagerLlamaExecutor:
                 for kv in ["k", "v"]
             ]
             kv_cache.append(kv_tt_i)
+
         self._kv_cache = kv_cache
         self.model.set_kv_cache(kv_cache)
         return kv_cache
 
     def _assert_kv_cache_identity(self, kv_cache):
         """Verify kv_cache passed to forward is the same object bound at allocation."""
-        if kv_cache is not None and hasattr(self, "_kv_cache"):
+        if kv_cache is not None and self._kv_cache is not None:
             assert kv_cache is self._kv_cache, (
                 "kv_cache passed to forward differs from the allocated cache. "
                 "Call allocate_kv_cache() again after reallocating."
             )
 
     # =========================================================================
-    # Input preparation
+    # Input Preparation
     # =========================================================================
 
     def prepare_prefill_inputs(
         self, tokens, start_pos=0, page_table=None, chunk_page_table=None, trace_enabled=False, last_token_idx=None
     ):
-        """Prepare prefill inputs. Returns (tokens_or_embed, rot_mats, page_table_tt, chunk_page_table_tt)."""
+        """Prepare prefill inputs. Returns (tokens_or_embed, cos, sin, page_table_tt, chunk_page_table_tt)."""
         device = None if trace_enabled else self.mesh_device
 
         assert tokens.dim() == 2, "tokens must be 2D"
@@ -171,7 +185,6 @@ class EagerLlamaExecutor:
             tokens_embd = None
 
         rope = self.model.rope_setup
-        # Load device weights if not already loaded
         rope.load_device_weights()
         mat_len = rope.cos_matrix.shape[2]
         seq_len = last_token_idx + 1 if last_token_idx is not None else S
@@ -272,23 +285,117 @@ class EagerLlamaExecutor:
         return copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
 
     # =========================================================================
-    # Prefill
+    # Compile
+    # =========================================================================
+
+    def compile_prefill(
+        self,
+        *,
+        tokens: torch.Tensor,
+        page_table: torch.Tensor | None = None,
+        kv_cache: list | None = None,
+        prompt_lens: torch.Tensor | None = None,
+        empty_slots: list[int] | None = None,
+        start_pos: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Compile prefill for specific inputs. Returns logits from warmup run."""
+        logits = self.prefill_forward(
+            tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=empty_slots,
+            start_pos=start_pos,
+            enable_trace=False,
+            warmup_prefill=False,
+        )
+        ttnn.synchronize_device(self.mesh_device)
+        return logits
+
+    def compile_decode(
+        self,
+        *,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor | None = None,
+        kv_cache: list | None = None,
+        sampling_params=None,
+    ) -> None:
+        """Compile decode for specific inputs. One warmup run, discard output."""
+        self.decode_forward(
+            tokens,
+            start_pos,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            enable_trace=False,
+            read_from_device=False,
+            sampling_params=sampling_params,
+        )
+        ttnn.synchronize_device(self.mesh_device)
+
+    def compile(
+        self,
+        *,
+        prefill_tokens: torch.Tensor,
+        prefill_page_table: torch.Tensor | None = None,
+        kv_cache: list | None = None,
+        prompt_lens: torch.Tensor | None = None,
+        empty_slots: list[int] | None = None,
+        start_pos: torch.Tensor | None = None,
+        sampling_params=None,
+    ) -> None:
+        """Compile prefill + decode. Decode uses argmax of prefill output."""
+        logits = self.compile_prefill(
+            tokens=prefill_tokens,
+            page_table=prefill_page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=empty_slots,
+            start_pos=start_pos,
+        )
+        decode_tokens = torch.argmax(logits[:, -1:, :], dim=-1).view(-1)
+        batch_size = prefill_tokens.shape[0]
+        decode_start_pos = torch.full((batch_size,), prefill_tokens.shape[-1], dtype=torch.long)
+        self.compile_decode(
+            tokens=decode_tokens,
+            start_pos=decode_start_pos,
+            page_table=prefill_page_table,
+            kv_cache=kv_cache,
+            sampling_params=sampling_params,
+        )
+
+    # =========================================================================
+    # Prefill Forward
     # =========================================================================
 
     def prefill_forward(
         self,
-        tokens,
-        page_table=None,
-        kv_cache=None,
-        prompt_lens=None,
-        empty_slots=None,
-        enable_trace=True,
+        tokens: torch.Tensor,
+        page_table: torch.Tensor | None = None,
+        kv_cache: list | None = None,
+        prompt_lens: torch.Tensor | None = None,
+        empty_slots: list[int] | None = None,
+        enable_trace: bool = True,
         sampling_params=None,
-        start_pos=None,
-        warmup_prefill=True,
-        **kwargs,
-    ):
-        """Per-user prefill loop with chunked prefill + prefix caching."""
+        start_pos: torch.Tensor | None = None,
+        warmup_prefill: bool = True,
+    ) -> torch.Tensor:
+        """Per-user prefill loop with chunked prefill + prefix caching.
+
+        Args:
+            tokens: Input token IDs, shape [batch_size, seq_len].
+            page_table: Page table for paged attention, shape [batch_size, max_blocks].
+            kv_cache: Per-layer KV cache from allocate_kv_cache().
+            prompt_lens: Actual prompt length per user, shape [batch_size].
+            empty_slots: List of user IDs to prefill.
+            enable_trace: Whether tracing is enabled (ignored in eager mode).
+            sampling_params: Sampling parameters (not used in prefill).
+            start_pos: Starting position for prefix caching, shape [batch_size].
+            warmup_prefill: Whether to run warmup (ignored in eager mode).
+
+        Returns:
+            Logits tensor, shape [batch_size, 1, vocab_size].
+        """
         self.mode = Mode.PREFILL
         self._assert_kv_cache_identity(kv_cache)
 
@@ -296,7 +403,6 @@ class EagerLlamaExecutor:
             enable_trace = False
 
         batch_size, batch_seq_len = tokens.shape
-        max_batch = self.model_args.max_batch_size if self.model_args else batch_size
         vocab_size = self.model.vocab_size
         cluster_shape = self.model_args.cluster_shape if self.model_args else [1, 1]
 
@@ -432,21 +538,35 @@ class EagerLlamaExecutor:
             )
 
     # =========================================================================
-    # Decode
+    # Decode Forward
     # =========================================================================
 
     def decode_forward(
         self,
-        tokens,
-        start_pos,
-        page_table=None,
-        kv_cache=None,
-        enable_trace=True,
-        read_from_device=True,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor | None = None,
+        kv_cache: list | None = None,
+        enable_trace: bool = True,
+        read_from_device: bool = True,
         sampling_params=None,
-        **kwargs,
-    ):
-        """Single decode step. Returns (logits_or_tokens, log_probs)."""
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Single decode step.
+
+        Args:
+            tokens: Input token IDs, shape [batch_size].
+            start_pos: Current position per user, shape [batch_size].
+            page_table: Page table for paged attention.
+            kv_cache: Per-layer KV cache (for identity assertion).
+            enable_trace: Whether tracing is enabled (ignored in eager mode).
+            read_from_device: Whether to return host tensors.
+            sampling_params: Sampling parameters for on-device sampling.
+
+        Returns:
+            (logits_or_tokens, log_probs) tuple.
+            If sampling_params is None: logits [B, 1, vocab_size], None
+            If sampling_params provided: tokens [B], None
+        """
         self.mode = Mode.DECODE
         self._assert_kv_cache_identity(kv_cache)
         B = tokens.shape[0]
@@ -463,8 +583,6 @@ class EagerLlamaExecutor:
             self.model.sampling.apply_decode_state(
                 [per_request_params],
                 reset_batch=False,
-                prompt_tokens=kwargs.get("prompt_tokens"),
-                output_tokens=kwargs.get("output_tokens"),
             )
             self.model.sampling.seed_manager.get_new_values()
 
@@ -497,41 +615,70 @@ class EagerLlamaExecutor:
             logits_host = logits.cpu()
             ttnn.synchronize_device(self.mesh_device)
             return _process_output_decode(logits_host, B, vocab_size, num_devices, cluster_shape), None
+
         return (logits, None)
 
+    # =========================================================================
+    # Cleanup
+    # =========================================================================
+
+    def cleanup(self) -> None:
+        """No-op for eager executor."""
+
 
 # =============================================================================
-# TracedLlamaExecutor — traced execution (sibling)
+# TracedLLMExecutor — thick engine with trace capture/replay
 # =============================================================================
 
 
-class TracedLlamaExecutor:
-    """Traced executor for Llama 3.1-8B. Sibling of EagerLlamaExecutor.
+class TracedLLMExecutor:
+    """Traced executor engine — adds trace capture/replay to eager execution.
 
-    Same model, same config. Execution uses TTNN trace capture/replay.
-    Follows tt_cnn's TracedModelExecutor pattern.
+    Same public API as EagerLLMExecutor. Compile methods capture traces,
+    forward methods replay or fall back to eager.
     """
 
-    def __init__(self, model: Llama3Transformer1D, mesh_device: ttnn.MeshDevice, model_args=None):
+    def __init__(self, model, mesh_device: ttnn.MeshDevice):
+        """Initialize traced executor engine.
+
+        Args:
+            model: Transformer model with prefill_forward(), decode_forward(), model_args, etc.
+            mesh_device: TT mesh device for execution.
+        """
         self.model = model
         self.mesh_device = mesh_device
-        self.model_args = model_args
-        self._direct = EagerLlamaExecutor(model, mesh_device, model_args)
+        self._eager = EagerLLMExecutor(model, mesh_device)
         self._cleaned_up = False
 
-        self.trace_id_prefill = defaultdict(lambda: None)
-        self.trace_inputs_prefill = defaultdict(lambda: None)
-        self.trace_output_prefill = defaultdict(lambda: None)
+        # Prefill traces: keyed by padded seq_len
+        self.trace_id_prefill: dict[int, int | None] = defaultdict(lambda: None)
+        self.trace_inputs_prefill: dict[int, tuple | None] = defaultdict(lambda: None)
+        self.trace_output_prefill: dict[int, ttnn.Tensor | None] = defaultdict(lambda: None)
 
-        self.trace_ids_decode = defaultdict(lambda: None)
-        self.trace_inputs_decode = defaultdict(lambda: None)
-        self.trace_output_decode = defaultdict(lambda: None)
+        # Decode traces: keyed by sampling_on_device (bool)
+        self.trace_ids_decode: dict[bool, int | None] = defaultdict(lambda: None)
+        self.trace_inputs_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
+        self.trace_output_decode: dict[bool, tuple | None] = defaultdict(lambda: None)
 
         self.mode = None
         self.already_warmed_up_prefill = False
 
-    def allocate_kv_cache(self, *args, **kwargs):
-        return self._direct.allocate_kv_cache(*args, **kwargs)
+    @property
+    def model_args(self):
+        """Model args come from the model object."""
+        return getattr(self.model, "model_args", None)
+
+    # =========================================================================
+    # Delegate KV cache to eager engine
+    # =========================================================================
+
+    def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers) -> list:
+        """Allocate paged KV cache on device. Delegates to eager engine."""
+        return self._eager.allocate_kv_cache(kv_cache_shape, dtype, num_layers)
+
+    @property
+    def _kv_cache(self):
+        return self._eager._kv_cache
 
     # =========================================================================
     # Warmup
@@ -548,7 +695,7 @@ class TracedLlamaExecutor:
         if not self.model_args:
             return
 
-        kv_cache = getattr(self._direct, "_kv_cache", None)
+        kv_cache = self._kv_cache
         is_paged = kv_cache is not None and hasattr(self.model, "layers") and len(self.model.layers) > 0
         if is_paged:
             attn_cfg = self.model.layers[0].attention.config
@@ -580,25 +727,38 @@ class TracedLlamaExecutor:
         logger.info("Prefill warmup complete")
 
     # =========================================================================
+    # Trace Key Computation
+    # =========================================================================
+
+    def _get_prefill_trace_key(self, tokens: torch.Tensor) -> int:
+        """Prefill trace key = padded seq_len."""
+        return get_padded_prefill_len(tokens.shape[-1])
+
+    def _get_decode_trace_key(self, sampling_params) -> bool:
+        """Decode trace key = whether sampling is on device."""
+        return sampling_params is not None
+
+    # =========================================================================
     # Prefill (traced)
     # =========================================================================
 
     def prefill_forward(
         self,
-        tokens,
-        page_table=None,
-        kv_cache=None,
-        prompt_lens=None,
-        empty_slots=None,
-        enable_trace=True,
+        tokens: torch.Tensor,
+        page_table: torch.Tensor | None = None,
+        kv_cache: list | None = None,
+        prompt_lens: torch.Tensor | None = None,
+        empty_slots: list[int] | None = None,
+        enable_trace: bool = True,
         sampling_params=None,
-        start_pos=None,
-        warmup_prefill=True,
-        **kwargs,
-    ):
+        start_pos: torch.Tensor | None = None,
+        warmup_prefill: bool = True,
+    ) -> torch.Tensor:
         """Traced prefill: lazy capture on first call per seq_len, replay after."""
+        from models.common.models.llama3_8b.model import _all_gather_rmsnorm_tensor
+
         self.mode = Mode.PREFILL
-        self._direct._assert_kv_cache_identity(kv_cache)
+        self._eager._assert_kv_cache_identity(kv_cache)
 
         if page_table is None:
             enable_trace = False
@@ -672,7 +832,7 @@ class TracedLlamaExecutor:
                 logits = self.model.lm_head.forward(logits)
                 logits = ttnn.to_memory_config(logits, ttnn.DRAM_MEMORY_CONFIG)
             else:
-                logits = self._direct._prefill_single_user(
+                logits = self._eager._prefill_single_user(
                     prefill_ids,
                     page_table=page_table_user,
                     user_id=0 if page_table is not None else user_id,
@@ -712,7 +872,7 @@ class TracedLlamaExecutor:
                 prefill_seq_len,
             )
 
-        host_inputs = self._direct.prepare_prefill_inputs(
+        host_inputs = self._eager.prepare_prefill_inputs(
             tokens,
             page_table=page_table,
             trace_enabled=True,
@@ -728,7 +888,7 @@ class TracedLlamaExecutor:
 
     def _capture_and_run_prefill_trace(self, tokens, page_table, user_id, last_token_idx, prefill_seq_len):
         """Compile + capture trace for a specific prefill seq_len."""
-        self._direct._prefill_single_user(
+        self._eager._prefill_single_user(
             tokens,
             page_table=page_table,
             user_id=user_id,
@@ -736,7 +896,7 @@ class TracedLlamaExecutor:
         )
         logger.info(f"Compiled prefill for seq_len={prefill_seq_len}")
 
-        host_inputs = self._direct.prepare_prefill_inputs(
+        host_inputs = self._eager.prepare_prefill_inputs(
             tokens,
             page_table=page_table,
             trace_enabled=True,
@@ -747,11 +907,9 @@ class TracedLlamaExecutor:
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
 
         tokens_embd = self.model.embed_prefill(device_inputs[0])
-        rot_mats = [device_inputs[1], device_inputs[2]]
         tt_page_table = device_inputs[3]
         tt_chunk_page_table = device_inputs[4]
 
-        max_seq_len = self.model_args.max_seq_len if self.model_args else prefill_seq_len
         logits = self.model.prefill_forward(
             tokens_embd,
             device_inputs[1],
@@ -776,18 +934,17 @@ class TracedLlamaExecutor:
 
     def decode_forward(
         self,
-        tokens,
-        start_pos,
-        page_table=None,
-        kv_cache=None,
-        enable_trace=True,
-        read_from_device=True,
+        tokens: torch.Tensor,
+        start_pos: torch.Tensor,
+        page_table: torch.Tensor | None = None,
+        kv_cache: list | None = None,
+        enable_trace: bool = True,
+        read_from_device: bool = True,
         sampling_params=None,
-        **kwargs,
-    ):
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Traced decode: lazy capture on first call, replay after."""
         self.mode = Mode.DECODE
-        self._direct._assert_kv_cache_identity(kv_cache)
+        self._eager._assert_kv_cache_identity(kv_cache)
         sampling_on_device = sampling_params is not None
         B = tokens.shape[0]
         vocab_size = self.model.vocab_size
@@ -801,13 +958,11 @@ class TracedLlamaExecutor:
             self.model.sampling.apply_decode_state(
                 [per_request_params],
                 reset_batch=False,
-                prompt_tokens=kwargs.get("prompt_tokens"),
-                output_tokens=kwargs.get("output_tokens"),
             )
             self.model.sampling.seed_manager.get_new_values()
 
         if not enable_trace:
-            return self._direct.decode_forward(
+            return self._eager.decode_forward(
                 tokens,
                 start_pos,
                 page_table=page_table,
@@ -815,13 +970,12 @@ class TracedLlamaExecutor:
                 enable_trace=False,
                 read_from_device=read_from_device,
                 sampling_params=sampling_params,
-                **kwargs,
             )
 
         if not self.trace_ids_decode[sampling_on_device]:
             self._capture_decode_trace(tokens, start_pos, page_table, kv_cache, sampling_on_device)
 
-        host_inputs = self._direct.prepare_decode_inputs_host(tokens, start_pos, page_table)
+        host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
         copy_host_to_device(
             host_tensors=host_inputs,
             device_tensors=self.trace_inputs_decode[sampling_on_device],
@@ -851,18 +1005,18 @@ class TracedLlamaExecutor:
 
     def _capture_decode_trace(self, tokens, start_pos, page_table, kv_cache, sampling_on_device):
         """Compile + capture decode trace."""
-        self._direct.decode_forward(
+        self._eager.decode_forward(
             tokens,
             start_pos,
             page_table=page_table,
-            kv_cache=kv_cache,  # passed to _direct for identity assertion
+            kv_cache=kv_cache,
             enable_trace=False,
             read_from_device=False,
             sampling_params=None,
         )
         logger.info("Compiled decode")
 
-        host_inputs = self._direct.prepare_decode_inputs_host(tokens, start_pos, page_table)
+        host_inputs = self._eager.prepare_decode_inputs_host(tokens, start_pos, page_table)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
 
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
@@ -898,28 +1052,38 @@ class TracedLlamaExecutor:
     # Cleanup
     # =========================================================================
 
-    def cleanup(self):
-        """Release all captured traces."""
+    def cleanup(self) -> None:
+        """Release all captured traces and their pinned device tensors."""
         if self._cleaned_up:
             return
 
         for key, trace_id in list(self.trace_id_prefill.items()):
             if trace_id is not None:
                 ttnn.release_trace(self.mesh_device, trace_id)
-                self.trace_id_prefill[key] = None
+            _cleanup_ttnn_value(self.trace_inputs_prefill[key])
+            _cleanup_ttnn_value(self.trace_output_prefill[key])
+            self.trace_id_prefill[key] = None
+            self.trace_inputs_prefill[key] = None
+            self.trace_output_prefill[key] = None
         for key, trace_id in list(self.trace_ids_decode.items()):
             if trace_id is not None:
                 ttnn.release_trace(self.mesh_device, trace_id)
-                self.trace_ids_decode[key] = None
+            _cleanup_ttnn_value(self.trace_inputs_decode[key])
+            _cleanup_ttnn_value(self.trace_output_decode[key])
+            self.trace_ids_decode[key] = None
+            self.trace_inputs_decode[key] = None
+            self.trace_output_decode[key] = None
 
+        self._eager._kv_cache = None
         self._cleaned_up = True
 
 
 # =============================================================================
-# TeacherForceExecutor
+# Loop Policy Functions
 # =============================================================================
 
 
+# todo)) add top-100 accuracy! --> any test that failed top-100 test indicate a model bug --> no chance for quantization issues!
 @dataclass
 class TeacherForceResult:
     """Result from a teacher-forcing evaluation run."""
@@ -937,95 +1101,80 @@ class TeacherForceResult:
         return matches / len(self.predicted_tokens)
 
 
-class TeacherForceExecutor:
-    """Accuracy measurement via teacher forcing.
+def run_teacher_forcing(
+    executor,
+    *,
+    prompt_tokens: torch.Tensor,
+    reference_tokens: torch.Tensor,
+    top5_tokens: torch.Tensor,
+    kv_cache: list,
+    page_table: torch.Tensor | None = None,
+    max_batch_size: int = 1,
+) -> TeacherForceResult:
+    """Run teacher-forcing accuracy measurement.
 
-    Takes only a direct (non-traced) EagerLlamaExecutor — tracing is
-    incompatible with teacher forcing because inputs change every step.
+    Teacher forcing feeds ground truth tokens at each step and measures
+    prediction accuracy. This is the canonical accuracy measurement for LLMs.
+
+    Args:
+        executor: Any executor with prefill_forward() and decode_forward() methods.
+        prompt_tokens: Prompt token IDs, shape [batch_size, prompt_len].
+        reference_tokens: Full reference sequence (prompt + target), shape [total_len].
+        top5_tokens: Top-5 reference tokens per position, shape [num_target_tokens, 5].
+        kv_cache: Per-layer KV cache from allocate_kv_cache().
+        page_table: Page table for paged attention, or None.
+        max_batch_size: Maximum batch size. Must match prompt_tokens.shape[0].
+
+    Returns:
+        TeacherForceResult with predicted tokens and accuracy metrics.
     """
+    batch_size = prompt_tokens.shape[0]
+    assert (
+        batch_size == max_batch_size
+    ), f"Teacher forcing expects active batch to match max_batch_size, got {batch_size} vs {max_batch_size}"
+    prompt_len = prompt_tokens.shape[-1]
+    total_len = len(reference_tokens)
+    num_target = total_len - prompt_len
 
-    def __init__(self, executor: EagerLlamaExecutor):
-        if not isinstance(executor, EagerLlamaExecutor):
-            raise TypeError(
-                f"TeacherForceExecutor requires EagerLlamaExecutor (non-traced), got {type(executor).__name__}. "
-                "Teacher forcing is incompatible with tracing because inputs change every step."
-            )
-        self.executor = executor
+    logger.info(f"Teacher forcing: prefilling {prompt_len} tokens with batch={batch_size}")
+    prefill_output = executor.prefill_forward(
+        prompt_tokens,
+        page_table=page_table,
+        kv_cache=kv_cache,
+        prompt_lens=torch.tensor([prompt_len] * batch_size),
+        empty_slots=list(range(batch_size)),
+        enable_trace=False,
+        warmup_prefill=False,
+    )
 
-    def run(
-        self,
-        prompt_tokens: torch.Tensor,
-        reference_tokens: torch.Tensor,
-        top5_tokens: torch.Tensor,
-        kv_cache: list,
-        page_table: torch.Tensor | None = None,
-        max_batch_size: int = 1,
-    ) -> TeacherForceResult:
-        """Run teacher-forcing evaluation.
+    first_tokens = torch.argmax(prefill_output, dim=-1).view(-1).tolist()
+    predicted_tokens_per_user = [[int(tok)] for tok in first_tokens]
 
-        Args:
-            prompt_tokens: Prompt token IDs, shape [batch_size, prompt_len].
-            reference_tokens: Full reference sequence (prompt + target), shape [total_len].
-            top5_tokens: Top-5 reference tokens per position, shape [num_target_tokens, 5].
-            kv_cache: Per-layer KV cache from allocate_kv_cache.
-            page_table: Page table for paged attention, or None.
-            max_batch_size: Maximum batch size. Must match prompt_tokens.shape[0].
+    logger.info(f"Teacher forcing: decoding {num_target - 1} tokens")
+    for step in range(1, num_target):
+        gt_token = reference_tokens[prompt_len + step - 1]
+        decode_token = torch.full((batch_size,), gt_token, dtype=torch.long)
 
-        Returns:
-            TeacherForceResult with predicted tokens and accuracy metrics.
-        """
-        batch_size = prompt_tokens.shape[0]
-        assert (
-            batch_size == max_batch_size
-        ), f"Teacher forcing expects active batch to match max_batch_size, got {batch_size} vs {max_batch_size}"
-        prompt_len = prompt_tokens.shape[-1]
-        total_len = len(reference_tokens)
-        num_target = total_len - prompt_len
+        current_pos = torch.full((batch_size,), prompt_len + step - 1, dtype=torch.long)
 
-        logger.info(f"Teacher forcing: prefilling {prompt_len} tokens with batch={batch_size}")
-        prefill_output = self.executor.prefill_forward(
-            prompt_tokens,
+        logits, _ = executor.decode_forward(
+            decode_token,
+            current_pos,
             page_table=page_table,
             kv_cache=kv_cache,
-            prompt_lens=torch.tensor([prompt_len] * batch_size),
-            empty_slots=list(range(batch_size)),
             enable_trace=False,
-            warmup_prefill=False,
+            read_from_device=True,
         )
 
-        first_tokens = torch.argmax(prefill_output, dim=-1).view(-1).tolist()
-        predicted_tokens_per_user = [[int(tok)] for tok in first_tokens]
+        next_tokens = torch.argmax(logits[:, -1, :], dim=-1).view(-1).tolist()
+        for user_id, tok in enumerate(next_tokens):
+            predicted_tokens_per_user[user_id].append(int(tok))
 
-        logger.info(f"Teacher forcing: decoding {num_target - 1} tokens")
-        for step in range(1, num_target):
-            gt_token = reference_tokens[prompt_len + step - 1]
-            decode_token = torch.full((batch_size,), gt_token, dtype=torch.long)
-
-            current_pos = torch.full((batch_size,), prompt_len + step - 1, dtype=torch.long)
-
-            logits, _ = self.executor.decode_forward(
-                decode_token,
-                current_pos,
-                page_table=page_table,
-                kv_cache=kv_cache,
-                enable_trace=False,
-                read_from_device=True,
-            )
-
-            next_tokens = torch.argmax(logits[:, -1, :], dim=-1).view(-1).tolist()
-            for user_id, tok in enumerate(next_tokens):
-                predicted_tokens_per_user[user_id].append(int(tok))
-
-        return TeacherForceResult(
-            predicted_tokens=predicted_tokens_per_user[0],
-            predicted_tokens_per_user=predicted_tokens_per_user,
-            reference_top5=top5_tokens[:num_target],
-        )
-
-
-# =============================================================================
-# PerfBenchmarkExecutor
-# =============================================================================
+    return TeacherForceResult(
+        predicted_tokens=predicted_tokens_per_user[0],
+        predicted_tokens_per_user=predicted_tokens_per_user,
+        reference_top5=top5_tokens[:num_target],
+    )
 
 
 @dataclass
@@ -1070,112 +1219,164 @@ class PerfBenchmarkResult:
         }
 
 
-class PerfBenchmarkExecutor:
-    """Performance measurement (TTFT, tok/s/u).
+def run_perf_benchmark(
+    executor,
+    *,
+    tokens: torch.Tensor,
+    kv_cache: list,
+    page_table: torch.Tensor | None = None,
+    num_decode_tokens: int = 128,
+    max_batch_size: int = 1,
+    prompt_lens: torch.Tensor | None = None,
+    start_pos: list[int] | None = None,
+    enable_trace: bool = True,
+    sampling_params=None,
+) -> PerfBenchmarkResult:
+    """Run timed prefill + decode loop for performance measurement.
 
-    Takes any executor (typically TracedLlamaExecutor for realistic numbers).
-    Owns the timed prefill + decode loop; returns PerfBenchmarkResult.
+    Matches TTTv1 methodology: compile prefill is excluded from TTFT.
+    Iteration 0 of decode is the compile iteration (timed separately).
+
+    Args:
+        executor: Any executor with prefill_forward() and decode_forward() methods.
+        tokens: Input token IDs, shape [batch_size, seq_len].
+        kv_cache: Per-layer KV cache from allocate_kv_cache().
+        page_table: Page table for paged attention, or None.
+        num_decode_tokens: Number of decode tokens to generate.
+        max_batch_size: Maximum batch size.
+        prompt_lens: Actual prompt length per user, shape [batch_size].
+        start_pos: Starting position for prefix caching.
+        enable_trace: Whether to enable tracing for decode.
+        sampling_params: Explicit sampling params (None = host argmax).
+
+    Returns:
+        PerfBenchmarkResult with raw timings + derived metrics.
     """
+    batch_size = tokens.shape[0]
+    prompt_len = tokens.shape[1]
+    max_batch_size = max(max_batch_size, batch_size)
+    prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([prompt_len] * batch_size)
 
-    def __init__(self, executor):
-        self.executor = executor
+    prefill_kwargs = dict(
+        page_table=page_table,
+        kv_cache=kv_cache,
+        prompt_lens=prompt_lens,
+        empty_slots=list(range(batch_size)),
+        enable_trace=False,
+        start_pos=start_pos,
+        sampling_params=sampling_params,
+    )
 
-    def run(
-        self,
-        tokens: torch.Tensor,
-        kv_cache: list,
-        page_table: torch.Tensor | None = None,
-        num_decode_tokens: int = 128,
-        max_batch_size: int = 1,
-        prompt_lens: torch.Tensor | None = None,
-        start_pos: list[int] | None = None,
-        enable_trace: bool = True,
-        sampling_params=None,
-    ) -> PerfBenchmarkResult:
-        """Timed prefill + decode loop.
+    # Compile prefill: warmup + first run (excluded from TTFT, matches TTTv1)
+    executor.prefill_forward(tokens, **prefill_kwargs)
+    if hasattr(executor, "mesh_device"):
+        ttnn.synchronize_device(executor.mesh_device)
 
-        Matches TTTv1 methodology: compile prefill is excluded from TTFT.
-        Iteration 0 of decode is the compile iteration (timed separately).
-        Returns PerfBenchmarkResult with raw timings + derived metrics.
-        """
-        batch_size = tokens.shape[0]
-        prompt_len = tokens.shape[1]
-        max_batch_size = max(max_batch_size, batch_size)
-        prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([prompt_len] * batch_size)
+    # Inference prefill: timed run with ops already compiled (this is TTFT)
+    t0 = time.perf_counter()
+    prefill_output = executor.prefill_forward(tokens, **prefill_kwargs)
+    if hasattr(executor, "mesh_device"):
+        ttnn.synchronize_device(executor.mesh_device)
+    prefill_time = time.perf_counter() - t0
 
-        prefill_kwargs = dict(
+    if isinstance(prefill_output, tuple):
+        first_token = prefill_output[0]
+    else:
+        first_token = torch.argmax(prefill_output, dim=-1)
+    first_token = first_token.view(-1)[:batch_size].detach().cpu()
+    generated_token_ids = [[int(tok)] for tok in first_token.tolist()]
+
+    current_tokens = torch.zeros(max_batch_size, dtype=torch.long)
+    current_tokens[:batch_size] = first_token
+
+    current_pos = torch.full((max_batch_size,), -1, dtype=torch.long)
+    current_pos[:batch_size] = prompt_lens[:batch_size]
+
+    compile_time = None
+    decode_times = []
+
+    for i in range(num_decode_tokens):
+        t0 = time.perf_counter()
+        logits, _ = executor.decode_forward(
+            current_tokens,
+            current_pos,
             page_table=page_table,
             kv_cache=kv_cache,
-            prompt_lens=prompt_lens,
-            empty_slots=list(range(batch_size)),
-            enable_trace=False,
-            start_pos=start_pos,
+            enable_trace=enable_trace,
+            read_from_device=True,
             sampling_params=sampling_params,
         )
+        if hasattr(executor, "mesh_device"):
+            ttnn.synchronize_device(executor.mesh_device)
+        elapsed = time.perf_counter() - t0
 
-        # Compile prefill: warmup + first run (excluded from TTFT, matches TTTv1)
-        self.executor.prefill_forward(tokens, **prefill_kwargs)
-        if hasattr(self.executor, "mesh_device"):
-            ttnn.synchronize_device(self.executor.mesh_device)
-
-        # Inference prefill: timed run with ops already compiled (this is TTFT)
-        t0 = time.perf_counter()
-        prefill_output = self.executor.prefill_forward(tokens, **prefill_kwargs)
-        if hasattr(self.executor, "mesh_device"):
-            ttnn.synchronize_device(self.executor.mesh_device)
-        prefill_time = time.perf_counter() - t0
-
-        if isinstance(prefill_output, tuple):
-            first_token = prefill_output[0]
+        if i == 0:
+            compile_time = elapsed
         else:
-            first_token = torch.argmax(prefill_output, dim=-1)
-        first_token = first_token.view(-1)[:batch_size].detach().cpu()
-        generated_token_ids = [[int(tok)] for tok in first_token.tolist()]
+            decode_times.append(elapsed)
 
-        current_tokens = torch.zeros(max_batch_size, dtype=torch.long)
-        current_tokens[:batch_size] = first_token
+        if isinstance(logits, torch.Tensor) and logits.dim() >= 2:
+            next_tok = torch.argmax(logits[:, -1, :], dim=-1)
+        else:
+            next_tok = logits
+        next_tok = next_tok.view(-1)[:batch_size].detach().cpu()
+        for user_id, tok in enumerate(next_tok.tolist()):
+            generated_token_ids[user_id].append(int(tok))
+        current_tokens[:batch_size] = next_tok
+        current_pos[:batch_size] += 1
 
-        current_pos = torch.full((max_batch_size,), -1, dtype=torch.long)
-        current_pos[:batch_size] = prompt_lens[:batch_size]
+    return PerfBenchmarkResult(
+        prefill_time_s=prefill_time,
+        compile_decode_time_s=compile_time or 0.0,
+        decode_times_s=decode_times,
+        batch_size=batch_size,
+        num_decode_tokens=num_decode_tokens,
+        generated_token_ids=generated_token_ids,
+    )
 
-        compile_time = None
-        decode_times = []
 
-        for i in range(num_decode_tokens):
-            t0 = time.perf_counter()
-            logits, _ = self.executor.decode_forward(
-                current_tokens,
-                current_pos,
-                page_table=page_table,
-                kv_cache=kv_cache,
-                enable_trace=enable_trace,
-                read_from_device=True,
-                sampling_params=sampling_params,
-            )
-            if hasattr(self.executor, "mesh_device"):
-                ttnn.synchronize_device(self.executor.mesh_device)
-            elapsed = time.perf_counter() - t0
+# =============================================================================
+# Shared helpers
+# =============================================================================
 
-            if i == 0:
-                compile_time = elapsed
-            else:
-                decode_times.append(elapsed)
 
-            if isinstance(logits, torch.Tensor) and logits.dim() >= 2:
-                next_tok = torch.argmax(logits[:, -1, :], dim=-1)
-            else:
-                next_tok = logits
-            next_tok = next_tok.view(-1)[:batch_size].detach().cpu()
-            for user_id, tok in enumerate(next_tok.tolist()):
-                generated_token_ids[user_id].append(int(tok))
-            current_tokens[:batch_size] = next_tok
-            current_pos[:batch_size] += 1
+def _concat_host_output(tt_out, cluster_shape, is_galaxy=False):
+    """Concatenate multi-device output into a single host tensor."""
+    torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out)]
+    row_dim, col_dim = (1, -1)
 
-        return PerfBenchmarkResult(
-            prefill_time_s=prefill_time,
-            compile_decode_time_s=compile_time or 0.0,
-            decode_times_s=decode_times,
-            batch_size=batch_size,
-            num_decode_tokens=num_decode_tokens,
-            generated_token_ids=generated_token_ids,
-        )
+    rows, cols = cluster_shape
+    mesh_shape = [torch_out_tensors[i : i + cols] for i in range(0, len(torch_out_tensors), cols)]
+    row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
+    return torch.cat(row_concatenated, dim=row_dim)
+
+
+def _process_output_prefill(tt_out, last_token_idx, vocab_size, cluster_shape):
+    """Device→host for prefill. Returns logits for the last token."""
+    assert tt_out.storage_type() == ttnn.StorageType.HOST, "Expected host tensor"
+    return _concat_host_output(tt_out, cluster_shape)[0, 0, last_token_idx, :vocab_size]
+
+
+def _process_output_decode(tt_out, B, vocab_size, num_devices, cluster_shape):
+    """Device→host for decode. Returns logits [B, 1, vocab_size]."""
+    if num_devices > 1:
+        tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
+    else:
+        tt_out = ttnn.to_torch(tt_out).float()
+    return tt_out[:, :, :B, :vocab_size].view(B, 1, -1)
+
+
+def _process_output_decode_tokens(tt_out, B, cluster_shape):
+    """Device→host for decode when sampling on device. Returns token ids [B]."""
+    padded_batch_size = 32
+    tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
+    return _concat_host_output(tt_out, cluster_shape)[0, 0, :B, 0]
+
+
+def _get_prefill_user_page_table(page_table, kv_cache, prefill_len, trace_enabled, prefill_seq_len):
+    """Slice and pad page table for a single prefill user."""
+    block_size = get_block_size(kv_cache)
+    num_blocks = num_blocks_in_seq(prefill_len, block_size)
+    if trace_enabled:
+        num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+    return page_table[:, :num_blocks]
