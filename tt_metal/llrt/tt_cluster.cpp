@@ -383,13 +383,18 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
-        // One topology discovery; pass descriptor into Cluster so UMD does not discover again. Omit sdesc_path so UMD
-        // uses its arch-default SocDescriptor; Metal loads dram_views YAML once in get_metal_desc_from_tt_desc().
-        auto discovered_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
+        // This is the target/desired number of mem channels per arch/device.
+        // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
+        // and assert if workload uses more than available.
+        auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
+        auto grouped_chips = temp_cluster_desc->get_chips_grouped_by_closest_mmio();
+        uint32_t max_chips_per_mmio = 0;
+        for (const auto& [mmio_device_id, chips] : grouped_chips) {
+            max_chips_per_mmio = std::max(max_chips_per_mmio, static_cast<uint32_t>(chips.size()));
+        }
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
-            // Metal uses one host mem channel per MMIO device; see https://github.com/tenstorrent/tt-metal/issues/4087
-            .num_host_mem_ch_per_mmio_device = 1,
-            .cluster_descriptor = discovered_cluster_desc.get(),
+            .num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, max_chips_per_mmio),
+            .cluster_descriptor = temp_cluster_desc.get(),
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
