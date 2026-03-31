@@ -126,3 +126,51 @@ All SFPU function names (`calculate_selu`, `_sfpu_exp_21f_bf16_`, `_float_to_int
 
 ### Output
 - `.claude-analysis/rrelu-1/selu_analysis.md`
+
+---
+
+## Operation: dropout
+## Date: 2026-03-31
+
+### Summary
+Analyzed the SFPU kernel implementation for the `dropout` operation. Dropout is an experimental operation with its own `DropoutProgramFactory` (not dispatched through `UnaryProgramFactory`). The kernel uses raw TTI instructions with a single CC manipulation region per iteration: SFPIADD with CC_GTE0 for probability comparison, CC-guarded SFPMOV to zero dropped elements, and SFPENCC to reset CC before storing.
+
+### Key Findings
+- **Compute kernel**: `ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp` (custom, NOT `eltwise_sfpu.cpp`)
+- **SFPU kernel**: `ckernel_sfpu_dropout.h` -- function `_calculate_dropout_` (identical on WH and BH)
+- **Kernel style**: B_raw_TTI (raw TTI instructions with CC manipulation)
+- **APPROXIMATION_MODE**: `false` (hardcoded in `dropout_program_factory.cpp`), but unused -- the kernel has no approximation-dependent branches
+- **Vector mode**: `VectorMode::RC` (all 4 faces processed, 8 iterations each)
+- **Core instructions**: TT_SFPLOADI (x4), TTI_SFPLOAD, TTI_SFPMUL, TTI_SFPMOV (x2, one for PRNG), TTI_SFPSETSGN, TTI_SFPIADD, TTI_SFPENCC, TTI_SFPSTORE
+- **CC pattern**: Single GTE0 guard per iteration (SFPIADD sets CC where probability >= random, SFPMOV zeroes those lanes, SFPENCC resets)
+- **PRNG**: SFPMOV with instr_mod1=8, lreg_c=9 generates pseudorandom uint32 (hardware PRNG)
+- **Address mode**: ADDR_MOD_7 with all zero increments (both WH and BH), explicit DEST advancement via dst_reg++
+
+### Non-Standard Dispatch Path
+Dropout is defined as `UnaryOpType::DROPOUT` in `unary_op_types.hpp` but is NOT handled in `unary_op_utils.cpp`. It uses a custom experimental program factory at `ttnn/cpp/ttnn/operations/experimental/dropout/`.
+
+### External Service Issues
+- DeepWiki returned HTTP 429 (rate limited). All analysis was performed from source code.
+
+### Files Analyzed
+1. `ttnn/cpp/ttnn/operations/experimental/dropout/device/dropout_program_factory.cpp` -- custom program factory
+2. `ttnn/cpp/ttnn/operations/experimental/dropout/device/kernels/compute/dropout_kernel.cpp` -- compute kernel
+3. `tt_metal/hw/inc/api/compute/eltwise_unary/dropout.h` -- API header
+4. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_dropout.h` -- WH metal wrapper
+5. `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_dropout.h` -- BH metal wrapper
+6. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_dropout.h` -- WH core SFPU kernel
+7. `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_dropout.h` -- BH core SFPU kernel
+8. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h` -- macro definitions
+9. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h` -- WH params dispatch
+10. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h` -- WH init/addrmod
+11. `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu.h` -- BH init/addrmod
+12. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_instr_params.h` -- p_sfpu register constants
+13. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_ops.h` -- TTI instruction definitions
+14. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel.h` -- init_prng_seed function
+15. `runtime/sfpi/include/sfpi_constants.h` -- SFPIADD_MOD1 constant definitions
+
+### Verification
+All SFPU function names (`_calculate_dropout_`, `_init_dropout_`, `calculate_dropout`, `dropout_init`, `dropout_tile`, `dropout_kernel_init`), instruction names (TT_SFPLOADI, TTI_SFPLOAD, TTI_SFPMUL, TTI_SFPMOV, TTI_SFPSETSGN, TTI_SFPIADD, TTI_SFPENCC, TTI_SFPSTORE), and file paths were verified via grep. All passed.
+
+### Output
+- `.claude-analysis/rrelu-1/dropout_analysis.md`
