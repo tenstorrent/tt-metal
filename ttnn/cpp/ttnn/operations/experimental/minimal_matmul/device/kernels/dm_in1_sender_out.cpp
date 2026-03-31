@@ -44,6 +44,7 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
@@ -127,6 +128,18 @@ void kernel_main() {
     }
 #endif
 
+#ifdef SRS_FUSE_OP_SIGNALER
+    // OpSignaler runtime args start after output addresses and optional FUSE_AG args
+    uint32_t srs_fuse_signaler_rt_args_idx = out_addr_rt_arg_idx + N_chunks;
+#ifdef FUSE_AG
+    srs_fuse_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
+#endif
+    OpSignaler srs_fuse_signaler;
+    if constexpr (is_output_writer) {
+        srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
+    }
+#endif
+
     volatile tt_l1_ptr uint32_t* in1_valid_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_valid_semaphore_addr);
     *(in1_valid_semaphore_addr_ptr) = VALID;
@@ -168,6 +181,8 @@ void kernel_main() {
             uint32_t n_tile_end = std::min(n_tile + N_block_tiles, N_end_tile);
             uint32_t current_N_block_tiles = n_tile_end - n_tile;
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
+            bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
+            bool not_first_block = (n_block_iter > 0 || m_block_iter > 0);
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
@@ -252,6 +267,17 @@ void kernel_main() {
 
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
+#ifdef SRS_FUSE_OP_SIGNALER
+                if constexpr (is_output_writer) {
+                    // Synchronize and signal strided reduce scatter readers after
+                    // previous block has been produced and any data from this core has been written to NOC afterwards,
+                    // at the moment all cores are expected to be done writing their corresponding blocks.
+                    if (not_first_block && k_block_iter == max_defer_write_k_block) {
+                        noc_async_write_barrier();
+                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                    }
+                }
+#endif
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
@@ -296,7 +322,7 @@ void kernel_main() {
              * If this isn't the last output block, defer writing until the defer_k_write_block iteration
              * of the next output block.
              */
-            defer_write = !((m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1)));
+            defer_write = !is_last_block;
             defer_write = defer_write && !is_injector_core;
 
             if (!defer_write) {
@@ -324,6 +350,12 @@ void kernel_main() {
                             n_tile,
                             n_tile_end);
                     }
+#ifdef SRS_FUSE_OP_SIGNALER
+                    if (is_last_block) {
+                        noc_async_write_barrier();
+                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                    }
+#endif
                 }
             }
         }
