@@ -2172,3 +2172,46 @@ def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
     golden_tensor = golden_function(in_data)
     golden_tensor = golden_tensor.to(output_tensor.dtype)
     assert_allclose(golden_tensor, output_tensor, rtol=1e-05, atol=0.008)
+
+
+def test_digamma_arange(device):
+    """ULP accuracy test for ttnn.digamma across positive BF16 values.
+
+    The kernel uses the Stirling asymptotic series with upward recurrence to ensure
+    the Stirling argument z_c >= 3 in all evaluation paths:
+      - z <  2: double recurrence  ψ(z) = ψ(z+2) - 1/z - 1/(z+1)
+      - z <  3: single recurrence  ψ(z) = ψ(z+1) - 1/z
+      - z >= 3: direct Stirling
+
+    ULP thresholds vs float32 reference (BF16 hardware):
+      - z in (0.01, 0.5]:  max 1 ULP  — large |ψ(z)|, ULP tolerance is loose
+      - z in (0.5, 2.0):   max 500 ULP — ψ has a zero near z≈1.462; near-zero output
+                                          means BF16 catastrophic cancellation is
+                                          unavoidable (absolute error ~0.002 at magnitude
+                                          ~0.001). Max observed ~480 ULP at z=1.461.
+      - z in [2.0, 3.0]:   max 1 ULP
+      - z in (3, 10]:      max 1 ULP
+      - z in (10, 100]:    max 1 ULP
+    """
+    ranges = [
+        (0.01, 0.5, 1, "small (0.01-0.5)"),
+        (0.5, 2.0, 500, "recur (0.5-2.0) — near digamma zero, BF16 cancellation"),
+        (2.0, 3.0, 1, "recur (2.0-3.0)"),
+        (3.0, 10.0, 1, "mid (3.0-10)"),
+        (10.0, 100.0, 1, "large (10-100)"),
+    ]
+
+    for lo, hi, max_ulp, label in ranges:
+        zs = torch.linspace(lo, hi, 1024, dtype=torch.bfloat16)
+        ref = torch.special.digamma(zs.to(torch.float32)).to(torch.bfloat16)
+
+        tt_in = ttnn.from_torch(
+            zs.reshape(1, 1, 32, -1),
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_out = ttnn.to_torch(ttnn.digamma(tt_in)).reshape(-1)[: len(zs)].to(torch.bfloat16)
+
+        assert_with_ulp(ref, tt_out, ulp_threshold=max_ulp)

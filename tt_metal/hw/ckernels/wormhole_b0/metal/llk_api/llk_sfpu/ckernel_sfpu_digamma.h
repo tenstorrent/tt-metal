@@ -15,15 +15,19 @@ namespace ckernel::sfpu {
 //
 // digamma(z) = log(z) - correction
 //
-// Stirling asymptotic series (valid for z > 0, increasingly accurate for z >= 2):
-//   digamma(z) = log(z) - 1/(2z) - 1/(12z^2) + 1/(120z^4) - 1/(252z^6) + ...
-//
-// Written compactly as:
+// Stirling asymptotic series (valid for z > 0, increasingly accurate for z >= 3):
 //   digamma(z) = log(z) - r*(0.5 + r*p(r^2))
 // where r = 1/z and p(r2) is the Bernoulli polynomial evaluated via Horner.
 //
-// For z < 2 we apply one upward recurrence step to improve accuracy:
-//   digamma(z) = digamma(z+1) - 1/z
+// Upward recurrence is applied to shift z into z_c >= 3 before Stirling:
+//
+//   z < 2:  double recurrence  digamma(z) = digamma(z+2) - 1/z - 1/(z+1)   [z_c = z+2 >= 2]
+//   z < 3:  single recurrence  digamma(z) = digamma(z+1) - 1/z              [z_c = z+1 >= 3]
+//   z >= 3: direct Stirling                                                  [z_c = z   >= 3]
+//
+// Using both thresholds keeps z_c >= 3 for all evaluation paths (except for
+// the extreme z -> 0 limit where z_c -> 2+, which is good enough in practice
+// because the large-magnitude output has loose ULP tolerance in BF16).
 //
 // Bernoulli coefficients (Horner evaluation on r2 = (1/z)^2), from innermost:
 //   c7 = +1/12          = +0.083333333f
@@ -44,10 +48,16 @@ inline void calculate_digamma() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat z = sfpi::dst_reg[0];
 
-        // Upward recurrence for z < 2: digamma(z) = digamma(z+1) - 1/z
+        // Upward recurrence to shift argument into z_c >= 3 for accurate Stirling eval.
         sfpi::vFloat shift = sfpi::vFloat(0.0f);
         sfpi::vFloat z_c = z;
         v_if(z < 2.0f) {
+            // Double recurrence: digamma(z) = digamma(z+2) - 1/z - 1/(z+1)
+            shift = _sfpu_reciprocal_<2>(z) + _sfpu_reciprocal_<2>(z + 1.0f);
+            z_c = z + 2.0f;
+        }
+        v_elseif(z < 3.0f) {
+            // Single recurrence: digamma(z) = digamma(z+1) - 1/z
             shift = _sfpu_reciprocal_<2>(z);
             z_c = z + 1.0f;
         }
@@ -72,7 +82,7 @@ inline void calculate_digamma() {
         // correction = r * (0.5 + r * p(r2))
         sfpi::vFloat correction = r * (sfpi::vFloat(0.5f) + r * poly);
 
-        // digamma(z) = log(z_c) - correction - shift  (shift = 1/z when z < 2, else 0)
+        // digamma(z) = log(z_c) - correction - shift
         sfpi::vFloat result = log_z - correction - shift;
 
         if constexpr (!is_fp32_dest_acc_en) {
