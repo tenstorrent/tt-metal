@@ -37,7 +37,7 @@ inputs:
     required: false
     default: "main"
   fork-workflow-outcomes:
-    description: "JSON object of mocked workflow outcomes when target-pr-repo is a fork"
+    description: "JSON object of mocked workflow results in fork mode; value may be outcome string or object {outcome,error,...}"
     required: false
     default: "{}"
   output-dir:

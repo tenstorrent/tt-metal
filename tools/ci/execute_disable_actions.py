@@ -52,6 +52,7 @@ ALLOWED_MOCK_WORKFLOW_OUTCOMES = {
     "queued",
     "unknown",
 }
+MockWorkflowSpec = dict[str, dict[str, Any]]
 ALLOWED_STATUS = {
     "new",
     "planned",
@@ -458,7 +459,7 @@ def parse_extra_workflows(raw: str) -> list[str]:
     return workflows
 
 
-def parse_mock_workflow_outcomes(raw: str) -> dict[str, str]:
+def parse_mock_workflow_outcomes(raw: str) -> MockWorkflowSpec:
     text = (raw or "").strip()
     if not text:
         return {}
@@ -468,18 +469,26 @@ def parse_mock_workflow_outcomes(raw: str) -> dict[str, str]:
         raise ValueError(f"invalid --fork-workflow-outcomes JSON: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ValueError("--fork-workflow-outcomes must be a JSON object")
-    outcomes: dict[str, str] = {}
+    outcomes: MockWorkflowSpec = {}
     for key, value in parsed.items():
         workflow = str(key).strip()
-        outcome = str(value).strip().lower()
         if not workflow:
             continue
+        outcome = ""
+        error = ""
+        details: dict[str, Any] = {}
+        if isinstance(value, dict):
+            outcome = str(value.get("outcome", "")).strip().lower()
+            error = str(value.get("error", "")).strip()
+            details = {str(k): v for k, v in value.items() if str(k) not in {"outcome", "error"}}
+        else:
+            outcome = str(value).strip().lower()
         if outcome not in ALLOWED_MOCK_WORKFLOW_OUTCOMES:
             raise ValueError(
                 f"unsupported mock outcome {outcome!r} for {workflow!r}; "
                 f"allowed: {sorted(ALLOWED_MOCK_WORKFLOW_OUTCOMES)}"
             )
-        outcomes[workflow] = outcome
+        outcomes[workflow] = {"outcome": outcome, "error": error, "details": details}
     return outcomes
 
 
@@ -489,14 +498,21 @@ def dispatch_required_pr_check_workflows(
     pr_repo: str,
     *,
     simulate_only: bool,
-    mock_outcomes: dict[str, str],
+    mock_outcomes: MockWorkflowSpec,
 ) -> dict[str, str]:
     runs: dict[str, str] = {}
     for workflow in workflows:
         if simulate_only:
-            outcome = mock_outcomes.get(workflow, "unknown")
-            runs[workflow] = f"(fork-mode simulated outcome: {outcome})"
-            log(f"dispatch: fork-mode would trigger workflow {workflow} for branch {branch} (mock outcome={outcome})")
+            spec = mock_outcomes.get(workflow, {"outcome": "unknown", "error": "", "details": {}})
+            outcome = str(spec.get("outcome", "unknown"))
+            error = str(spec.get("error", "")).strip()
+            details = spec.get("details", {})
+            details_suffix = f" details={json.dumps(details, sort_keys=True)}" if details else ""
+            runs[workflow] = f"(fork-mode simulated outcome: {outcome}" + (f"; error: {error}" if error else "") + ")"
+            log(
+                f"dispatch: fork-mode would trigger workflow {workflow} for branch {branch} "
+                f"(mock outcome={outcome}{'; error=' + error if error else ''}{details_suffix})"
+            )
         else:
             log(f"dispatch: triggering workflow {workflow} for branch {branch}")
             dispatched = run_guarded_gh(["gh", "workflow", "run", workflow, "--repo", pr_repo, "--ref", branch])
@@ -792,7 +808,10 @@ def main() -> int:
     parser.add_argument(
         "--fork-workflow-outcomes",
         default="{}",
-        help="JSON object mapping workflow id to mocked outcome for fork-mode simulation",
+        help=(
+            "JSON object mapping workflow id to mocked fork result; value may be outcome string "
+            'or object like {"outcome":"failure","error":"message"}'
+        ),
     )
     parser.add_argument(
         "--extra-pr-check-workflows",
@@ -1112,10 +1131,14 @@ def main() -> int:
             )
             post_triggered_workflows_comment(pr_url, required_check_runs, target_pr_repo)
             if fork_mode:
-                kickoff_outcome = mock_workflow_outcomes.get("kickoff-agent", "unknown")
+                kickoff_spec = mock_workflow_outcomes.get("kickoff-agent", {"outcome": "unknown", "error": ""})
+                kickoff_outcome = str(kickoff_spec.get("outcome", "unknown"))
+                kickoff_error = str(kickoff_spec.get("error", "")).strip()
                 kickoff_tail = (
                     "fork-mode: skipped kickoff agent dispatch; "
-                    f"would invoke kickoff for {pr_url} (mock outcome={kickoff_outcome})"
+                    f"would invoke kickoff for {pr_url} (mock outcome={kickoff_outcome}"
+                    + (f", error={kickoff_error}" if kickoff_error else "")
+                    + ")"
                 )
                 log(kickoff_tail)
             else:
