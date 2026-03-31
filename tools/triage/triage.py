@@ -282,7 +282,7 @@ class TriageScript:
 
             triage_script = TriageScript(
                 name=script_path.name,
-                path=resolved,
+                path=script_path,
                 config=deepcopy(script_config),
                 module=script_module,
                 run_method=run_method,
