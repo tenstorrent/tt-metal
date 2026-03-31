@@ -7,12 +7,18 @@
 # Automatically resets the device after every run, ensuring the next runner
 # always gets a clean device.
 #
+# Simulator mode (TT_METAL_SIMULATOR set):
+#   Skips flock, device resets, dirty tracking, triage, and --dev features
+#   (none of these work on the simulator). Keeps dispatch timeout for hang
+#   detection (default 120s, override via TT_METAL_OPERATION_TIMEOUT_SECONDS).
+#
 # Usage: scripts/tt-test.sh [--dev] [--run-all] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev       Enables polling watcher (NoC sanitizer, waypoints, CB
 #               sanitization), lightweight ebreak asserts, and auto-triage
 #               on hang with full triage + watcher log dump.
+#               (ignored on simulator — these features require real hardware)
 #   --run-all   Run all tests instead of stopping on first failure (-x).
 #               Useful for eval scoring where you need full pass/fail counts.
 #
@@ -29,12 +35,25 @@
 set -o pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DISPATCH_TIMEOUT=5
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
 TRIAGE_LOG="/tmp/tt-test-triage-$$.log"
+
+# --- Detect simulator mode ---
+SIM_MODE=false
+if [[ -n "${TT_METAL_SIMULATOR:-}" ]]; then
+    SIM_MODE=true
+fi
+
+# Sim is much slower than silicon — use a higher default timeout.
+# User can override via TT_METAL_OPERATION_TIMEOUT_SECONDS.
+if [[ "$SIM_MODE" == true ]]; then
+    DISPATCH_TIMEOUT=${TT_METAL_OPERATION_TIMEOUT_SECONDS:-120}
+else
+    DISPATCH_TIMEOUT=5
+fi
 
 # --- Parse flags ---
 DEV_MODE=false
@@ -65,30 +84,32 @@ fi
 TEST_PATH="$1"
 shift
 
-# --- Acquire flock ---
-exec 9>"$LOCK_FILE"
+# --- Acquire flock (hardware only) ---
+if [[ "$SIM_MODE" == false ]]; then
+    exec 9>"$LOCK_FILE"
 
-LOCK_TIMEOUT=600  # 10min: accounts for queued runs holding device during dual-mode testing
-echo "TT_TEST: Waiting for device lock..." >&2
-if ! flock -w "$LOCK_TIMEOUT" 9; then
-    echo "TT_TEST_ERROR: Could not acquire device lock after ${LOCK_TIMEOUT}s" >&2
-    exit 3
-fi
-echo "TT_TEST: Device lock acquired" >&2
-
-# Signal to child processes (e.g. conftest device lock plugin) that the lock
-# is already held — they must not re-acquire it or they will deadlock.
-export TT_DEVICE_LOCK_HELD=1
-
-# --- Check if device needs reset from previous hang ---
-if [[ -f "$DIRTY_FLAG" ]]; then
-    echo "TT_TEST: Device marked dirty from previous run, resetting..." >&2
-    if ! tt-smi -r; then
-        echo "TT_TEST_ERROR: Device reset (tt-smi -r) failed" >&2
+    LOCK_TIMEOUT=600  # 10min: accounts for queued runs holding device during dual-mode testing
+    echo "TT_TEST: Waiting for device lock..." >&2
+    if ! flock -w "$LOCK_TIMEOUT" 9; then
+        echo "TT_TEST_ERROR: Could not acquire device lock after ${LOCK_TIMEOUT}s" >&2
         exit 3
     fi
-    rm -f "$DIRTY_FLAG"
-    echo "TT_TEST: Device reset complete" >&2
+    echo "TT_TEST: Device lock acquired" >&2
+
+    # Signal to child processes (e.g. conftest device lock plugin) that the lock
+    # is already held — they must not re-acquire it or they will deadlock.
+    export TT_DEVICE_LOCK_HELD=1
+
+    # --- Check if device needs reset from previous hang ---
+    if [[ -f "$DIRTY_FLAG" ]]; then
+        echo "TT_TEST: Device marked dirty from previous run, resetting..." >&2
+        if ! tt-smi -r; then
+            echo "TT_TEST_ERROR: Device reset (tt-smi -r) failed" >&2
+            exit 3
+        fi
+        rm -f "$DIRTY_FLAG"
+        echo "TT_TEST: Device reset complete" >&2
+    fi
 fi
 
 # --- Setup environment ---
@@ -103,17 +124,28 @@ fi
 
 export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
 
-# Auto-triage: dispatch layer runs tt-triage when timeout fires (both modes).
-# This only executes on actual hang, not on every test — zero overhead for passing tests.
-# Requires tt-exalens: scripts/install_debugger.sh
-if ! python3 -c "import ttexalens" 2>/dev/null; then
-    echo "TT_TEST: WARNING: tt-exalens not installed — triage on hang will be unavailable." >&2
-    echo "TT_TEST: Install with: scripts/install_debugger.sh" >&2
-fi
+# --- Hang detection setup ---
+# On timeout, the dispatch layer runs this command. On hardware we get a full
+# triage; on sim, triage/exalens are unsupported so we just write a marker file
+# that the hang-detection logic below can check.
 rm -f "$TRIAGE_LOG"
-export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress > ${TRIAGE_LOG} 2>&1"
+if [[ "$SIM_MODE" == true ]]; then
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="echo HANG > ${TRIAGE_LOG}"
+else
+    # Requires tt-exalens: scripts/install_debugger.sh
+    if ! python3 -c "import ttexalens" 2>/dev/null; then
+        echo "TT_TEST: WARNING: tt-exalens not installed — triage on hang will be unavailable." >&2
+        echo "TT_TEST: Install with: scripts/install_debugger.sh" >&2
+    fi
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress > ${TRIAGE_LOG} 2>&1"
+fi
 
-if [[ "$DEV_MODE" == true ]]; then
+if [[ "$SIM_MODE" == true ]]; then
+    if [[ "$DEV_MODE" == true ]]; then
+        echo "TT_TEST: WARNING: --dev mode ignored on simulator (watcher/asserts/triage unsupported)" >&2
+    fi
+    echo "TT_TEST: [sim] dispatch_timeout=${DISPATCH_TIMEOUT}s" >&2
+elif [[ "$DEV_MODE" == true ]]; then
     # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at the
     # exact instruction. The dispatch timeout then fires and runs triage, which
     # captures callstacks from ALL cores — showing both the assert site and any
@@ -146,11 +178,13 @@ fi
 echo "TT_TEST: pytest ${TEST_PATH} $*" >&2
 echo "========================================" >&2
 
-# --- Mark device dirty before running tests ---
+# --- Mark device dirty before running tests (hardware only) ---
 # Pessimistic: assume the device will get corrupted. If the script is killed at any
 # point (SIGKILL, OOM, etc.), the flag persists and the next runner will reset.
 # Cleared on clean exit or after a successful inline reset.
-touch "$DIRTY_FLAG"
+if [[ "$SIM_MODE" == false ]]; then
+    touch "$DIRTY_FLAG"
+fi
 
 # --- Run pytest ---
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
@@ -164,7 +198,7 @@ EXIT_CODE=$?
 
 echo "========================================" >&2
 
-# --- Cleanup: always kill orphans and reset device ---
+# --- Cleanup: kill orphans and reset device (hardware only) ---
 
 # Kill any remaining child processes and their descendants.
 if [[ $EXIT_CODE -ne 0 ]]; then
@@ -174,14 +208,16 @@ if [[ $EXIT_CODE -ne 0 ]]; then
     done
 fi
 
-# Always reset device after every run to guarantee a clean slate.
-echo "TT_TEST: Resetting device..." >&2
-if tt-smi -r; then
-    sleep 2
-    rm -f "$DIRTY_FLAG"
-    echo "TT_TEST: Device reset complete" >&2
-else
-    echo "TT_TEST: Device reset FAILED; leaving device marked dirty" >&2
+if [[ "$SIM_MODE" == false ]]; then
+    # Always reset device after every run to guarantee a clean slate.
+    echo "TT_TEST: Resetting device..." >&2
+    if tt-smi -r; then
+        sleep 2
+        rm -f "$DIRTY_FLAG"
+        echo "TT_TEST: Device reset complete" >&2
+    else
+        echo "TT_TEST: Device reset FAILED; leaving device marked dirty" >&2
+    fi
 fi
 
 # --- Handle result ---
@@ -200,23 +236,28 @@ if [[ $EXIT_CODE -eq 5 ]]; then
 fi
 
 # Determine if this was a hang:
-#   Triage log non-empty = dispatch timeout handler ran tt-triage (definitive hang signal)
+#   Triage log non-empty = dispatch timeout handler fired (definitive hang signal).
+#   On hardware this contains full triage output; on sim it's just a "HANG" marker.
 if [[ -s "$TRIAGE_LOG" ]]; then
     echo "TT_TEST_RESULT: HANG (exit code: $EXIT_CODE)" >&2
     echo "" >&2
 
-    # Dump full triage log
-    echo "=== TRIAGE LOG ===" >&2
-    cat "$TRIAGE_LOG" >&2
-    echo "=== END TRIAGE LOG ===" >&2
-    echo "" >&2
-
-    # In dev mode, also dump watcher log
-    if [[ "$DEV_MODE" == true && -f "$WATCHER_LOG" ]]; then
-        echo "=== WATCHER LOG (last 50 lines) ===" >&2
-        tail -50 "$WATCHER_LOG" >&2
-        echo "=== END WATCHER LOG ===" >&2
+    if [[ "$SIM_MODE" == true ]]; then
+        echo "TT_TEST: Dispatch timeout fired (simulator mode — no triage available)" >&2
+    else
+        # Dump full triage log
+        echo "=== TRIAGE LOG ===" >&2
+        cat "$TRIAGE_LOG" >&2
+        echo "=== END TRIAGE LOG ===" >&2
         echo "" >&2
+
+        # In dev mode, also dump watcher log
+        if [[ "$DEV_MODE" == true && -f "$WATCHER_LOG" ]]; then
+            echo "=== WATCHER LOG (last 50 lines) ===" >&2
+            tail -50 "$WATCHER_LOG" >&2
+            echo "=== END WATCHER LOG ===" >&2
+            echo "" >&2
+        fi
     fi
 
     rm -f "$TRIAGE_LOG"
