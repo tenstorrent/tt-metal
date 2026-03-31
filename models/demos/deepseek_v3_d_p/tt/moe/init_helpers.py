@@ -660,7 +660,7 @@ def create_torch_expert_weights(
         List of dicts with gate_proj, up_proj, down_proj per expert
     """
     weights_list = []
-    for _ in tqdm(range(num_experts), desc="Creating expert weights"):
+    for _ in range(num_experts):
         weights = {
             "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
             "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,

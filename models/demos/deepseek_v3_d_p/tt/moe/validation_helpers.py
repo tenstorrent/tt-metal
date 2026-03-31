@@ -456,9 +456,59 @@ def compare_pcc(threshold: float = 0.99) -> ComposedComparator:
 def compare_recall(threshold: float = 0.999) -> ComposedComparator:
     """Return a recall comparator with the given threshold."""
 
-    def _compare(actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int) -> Tuple[bool, Optional[str]]:
+    def _compare(
+        actual: torch.Tensor, expected: torch.Tensor, _g: int, _c: int, verbose_histogram: bool = False
+    ) -> Tuple[bool, Optional[str]]:
         r = calculate_average_recall(actual, expected)
-        return (True, None) if r >= threshold else (False, f"recall={r:.4f} < {threshold}")
+        if r >= threshold:
+            return (True, None)
+        else:
+            from collections import Counter
+
+            total_elements = len(actual)
+            mismatches = []
+
+            for i, (a, e) in enumerate(zip(actual.long(), expected.long())):
+                match, error_detail = compare_exact(a, e, 0, 0)
+                if not match:
+                    mismatches.append(error_detail)
+
+            if mismatches:
+                num_errors = len(mismatches)
+                total_percent = (num_errors / total_elements) * 100
+
+                # Header showing (1329/4096 total) [32.4%]
+                detail = f"\n*** Mismatch Histogram ({num_errors}/{total_elements} total) [{total_percent:.1f}%] ***"
+
+                if verbose_histogram:
+                    print(detail)
+
+                    counts = Counter(mismatches)
+                    # Sort by frequency (most common errors first)
+                    sorted_counts = counts.most_common()
+
+                    max_label_len = max(len(str(label)) for label in counts.keys())
+                    max_bar_width = 30
+                    max_count = max(counts.values())
+                    scale = max_count / max_bar_width if max_count > max_bar_width else 1
+
+                    for label, count in sorted_counts:
+                        bar = "█" * int(count / scale)
+                        item_percent = (count / total_elements) * 100
+
+                        # Format: Label | Bar (padded) | count/total | [percentage]
+                        print(
+                            f"{str(label).ljust(max_label_len)} | "
+                            f"{bar.ljust(max_bar_width)} "
+                            f"{str(count).rjust(len(str(total_elements)))}/{total_elements} "
+                            f"[{item_percent:5.1f}%]"
+                        )
+
+                    print("-" * (max_label_len + max_bar_width + 25) + "\n")
+            else:
+                detail = f"*** All {total_elements}/{total_elements} matched! [0.0% errors] ***"
+
+        return (False, f"recall={r:.4f} < {threshold}; *** {detail} ***")
 
     return _compare
 

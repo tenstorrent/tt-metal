@@ -14,7 +14,6 @@ This module assembles the full MoE pipeline:
 6. Final: Add routed output + shared output
 """
 
-from pathlib import Path
 from typing import Optional, Union
 
 import torch
@@ -26,11 +25,12 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateFallbackMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+from models.demos.deepseek_v3_d_p.utils.test_utils import get_input_mem_config
 
 
 class TtMoe(LightweightModule):
@@ -55,74 +55,6 @@ class TtMoe(LightweightModule):
         - Final Add: ROW_MAJOR
     """
 
-    @staticmethod
-    def check_cache_complete(cache_path: Path, layer_idx: int, experts_per_chip: int) -> bool:
-        """Check if MoE cache is complete (gate + routed experts + shared expert)."""
-        prefix = f"layer_{layer_idx}"
-        if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate"):
-            return False
-        if not TtRoutedExpert.check_cache_complete(cache_path, f"{prefix}.routed_expert", experts_per_chip):
-            return False
-        if not TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert"):
-            return False
-        return True
-
-    @staticmethod
-    def build_ttnn_cache(
-        gate_weights: dict | None,
-        routed_expert_weights: list[dict] | None,
-        shared_expert_weights: dict | None,
-        experts_per_chip: int,
-        emb_dim: int,
-        hidden_dim: int,
-        mesh_device: ttnn.MeshDevice,
-        routed_expert_weights_dtype: ttnn.DataType,
-        shared_expert_weights_dtype: ttnn.DataType,
-        cache_path: Path,
-        layer_idx: int,
-    ):
-        """Build TTNN cache for MoE (gate + routed experts + shared expert) without device copy."""
-        # Build gate cache (delegate to TtMoEGatePrefill)
-        if gate_weights:
-            from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGateConfig, TtMoEGatePrefill
-
-            # Create minimal config for caching
-            gate_config = TtMoEGateConfig()
-            gate_config.dim = emb_dim
-            gate_config.n_routed_experts = gate_weights["weight"].shape[0]
-
-            TtMoEGatePrefill.build_ttnn_cache(
-                torch_weight=gate_weights["weight"],
-                torch_bias=gate_weights["e_score_correction_bias"],
-                config=gate_config,
-                mesh_device=mesh_device,
-                cache_path=cache_path,
-                cache_name_prefix=f"layer_{layer_idx}.gate",
-            )
-
-        # Build routed expert cache
-        if routed_expert_weights:
-            TtRoutedExpert.build_ttnn_cache(
-                routed_expert_weights,
-                experts_per_chip,
-                mesh_device,
-                routed_expert_weights_dtype,
-                cache_path,
-                f"layer_{layer_idx}.routed_expert",
-            )
-
-        # Build shared expert cache
-        if shared_expert_weights:
-            TtSharedExpert.build_ttnn_cache(
-                shared_expert_weights,
-                emb_dim,
-                hidden_dim,
-                mesh_device,
-                shared_expert_weights_dtype,
-                cache_path,
-                f"layer_{layer_idx}.shared_expert",
-            )
-
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
@@ -141,13 +73,10 @@ class TtMoe(LightweightModule):
         topology: Union[ttnn.Topology, tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear,
         routed_expert_weights: list[dict] = None,
         shared_expert_weights: dict = None,
-        routed_expert_activations_dtype=ttnn.bfloat8_b,
-        routed_expert_weights_dtype=ttnn.bfloat4_b,
-        shared_expert_activations_dtype=ttnn.bfloat16,
-        shared_expert_weights_dtype=ttnn.bfloat8_b,
-        gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
-        weight_cache_path: Optional[Path] = None,
-        layer_idx: int = 0,
+        activations_dtype=ttnn.bfloat8_b,
+        weights_dtype=ttnn.bfloat4_b,
+        gate_weights: dict = None,
+        gate_fallback_mode: GateFallbackMode = GateFallbackMode.HOST_ALL,
     ):
         """
         Initialize TtMoe module.
@@ -172,11 +101,9 @@ class TtMoe(LightweightModule):
                                    per expert. Length must be experts_per_chip.
             shared_expert_weights: Optional dict with gate_proj, up_proj, down_proj
                                    for shared expert.
-            routed_expert_activations_dtype: Data type for routed expert activations
-            routed_expert_weights_dtype: Data type for routed expert weights
-            shared_expert_activations_dtype: Data type for shared expert activations
-            shared_expert_weights_dtype: Data type for shared expert weights
-            gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
+            activations_dtype: Data type for activations (default: bfloat8_b)
+            weights_dtype: Data type for weights (default: bfloat4_b)
+            gate_weights: Optional dict with "weight" and "e_score_correction_bias" keys for gate
             gate_fallback_mode: Fallback mode for gate (default: HOST_ALL)
         """
         super().__init__()
@@ -214,25 +141,16 @@ class TtMoe(LightweightModule):
         gate_config.n_activated_experts = num_experts_per_tok
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
 
-        # Handle cache-only case (gate_weights=None)
-        if gate_weights is not None:
-            gate_weight = gate_weights["weight"]
-            gate_bias = gate_weights["e_score_correction_bias"]
-        else:
-            # Dummy tensors for cache load (ignored when cache exists)
-            gate_weight = torch.empty(num_routed_experts, emb_dim)
-            gate_bias = torch.empty(num_routed_experts)
-
         self.gate = TtMoEGatePrefill(
             gate_config,
             mesh_device,
             dispatch_table=expert_dispatch_table,
-            weight=gate_weight,
-            bias=gate_bias,
+            weight=gate_weights["weight"],
+            bias=gate_weights["e_score_correction_bias"],
             fallback_mode=gate_fallback_mode,
-            weight_cache_path=weight_cache_path,
-            cache_name_prefix=f"layer_{layer_idx}.gate",
         )
+        self.gate_input_mem_config = get_input_mem_config(gate_config, mesh_device.shape)
+
         logger.debug(f"Initializing TtMoe")
         logger.debug(f"  mesh_device.shape={mesh_device.shape}")
         logger.debug(f"  dispatch_group_size={dispatch_group_size}, num_dispatch_groups={num_dispatch_groups}")
@@ -271,7 +189,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
-            init_zeros=False,
+            init_zeros=True,
         )
 
         # Initialize routed expert
@@ -282,10 +200,8 @@ class TtMoe(LightweightModule):
             hidden_dim=hidden_dim,
             max_tokens=max_dispatched_tokens_per_expert,
             torch_weights=routed_expert_weights,
-            activations_dtype=routed_expert_activations_dtype,
-            weights_dtype=routed_expert_weights_dtype,
-            weight_cache_path=weight_cache_path,
-            cache_name_prefix=f"layer_{layer_idx}.routed_expert",
+            activations_dtype=activations_dtype,
+            weights_dtype=weights_dtype,
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -296,10 +212,8 @@ class TtMoe(LightweightModule):
             torch_weights=shared_expert_weights,
             num_links=self.col_num_links,
             topology=self.col_topology,
-            activations_dtype=shared_expert_activations_dtype,
-            weights_dtype=shared_expert_weights_dtype,
-            weight_cache_path=weight_cache_path,
-            cache_name_prefix=f"layer_{layer_idx}.shared_expert",
+            activations_dtype=activations_dtype,
+            weights_dtype=weights_dtype,
         )
 
         # Initialize reduce module for post-combine reduction (col axis: axis 1)
@@ -343,31 +257,20 @@ class TtMoe(LightweightModule):
         # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
         x_for_gate = ttnn.reshape(x, (x.shape[0] * x.shape[1], x.shape[2]))
         x_for_gate = ttnn.to_layout(x_for_gate, ttnn.TILE_LAYOUT)
+        if self.gate_input_mem_config is not None:
+            x_for_gate = ttnn.to_memory_config(x_for_gate, self.gate_input_mem_config)
 
-        scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(x_for_gate)
-        ttnn.deallocate(x_for_gate)  # x_for_gate is no longer needed.
-        gate_logits = (
-            ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
-            if return_intermediates
-            else ttnn.deallocate(gate_logits)
-        )  # gate_logits is only used for debugging/intermediates, move to DRAM or deallocate immediately
-
-        # DEBUG
-        # Print full token counts per expert for monitoring
-        _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
-        _ep_composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
-        _counts_host = ttnn.to_torch(_counts_4d, mesh_composer=_ep_composer).squeeze(2)
-        logger.info(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
+        scores, indices_raw, gate_logits, tt_expert_offsets, tt_expert_token_counts = self.gate(x_for_gate)
 
         # Gate outputs uint16 indices; dispatch requires int32.
         # this should be aligned in the further PR.
         # Typecast in TILE_LAYOUT to avoid alignment issues, then convert to ROW_MAJOR.
-        if indices.dtype != ttnn.int32:
-            indices = ttnn.to_layout(indices, ttnn.TILE_LAYOUT)
-            indices = ttnn.typecast(indices, ttnn.int32)
-            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
+        if indices_raw.dtype != ttnn.int32:
+            indices_raw = ttnn.to_layout(indices_raw, ttnn.TILE_LAYOUT)
+            indices_raw = ttnn.typecast(indices_raw, ttnn.int32)
+            indices_raw = ttnn.to_layout(indices_raw, ttnn.ROW_MAJOR_LAYOUT)
         else:
-            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
+            indices_raw = ttnn.to_layout(indices_raw, ttnn.ROW_MAJOR_LAYOUT)
         #
         # Ensure ROW_MAJOR layout for dispatch compatibility
         scores = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
@@ -375,11 +278,11 @@ class TtMoe(LightweightModule):
         # Reshape back to 3D: (batch*seq, topk) -> (batch, seq, topk)
         seq_dim = x.shape[1]
         batch_dim = x.shape[0]
-        scores = ttnn.reshape(scores, (batch_dim, seq_dim, scores.shape[-1]))
-        indices = ttnn.reshape(indices, (batch_dim, seq_dim, indices.shape[-1]))
+        weights = ttnn.reshape(scores, (batch_dim, seq_dim, scores.shape[-1]))
+        indices = ttnn.reshape(indices_raw, (batch_dim, seq_dim, indices_raw.shape[-1]))
 
-        logger.debug(f"  {scores.shape=} {scores.memory_config()=}")
-        logger.debug(f"  {indices.shape=} {indices.memory_config()=}")
+        logger.debug(f"  weights.shape={weights.shape}")
+        logger.debug(f"  indices.shape={indices.shape}")
 
         # ========================================
         # Step 0: All-gather x to get full emb_dim (replicated across TP axis)
@@ -388,42 +291,40 @@ class TtMoe(LightweightModule):
         # Both shared_expert and dispatch need full emb_dim, so all-gather first
         # Only needed if there are multiple devices in TP axis (axis 1)
         if self.mesh_device.shape[1] > 1:
-            x = ttnn.all_gather(
+            x_full = ttnn.all_gather(
                 x,
                 dim=-1,  # Gather along emb_dim
                 cluster_axis=1,  # Gather across axis 1 (TP axis)
                 num_links=self.col_num_links,
                 topology=self.col_topology,
             )
-        logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
+        else:
+            x_full = x  # No TP sharding, x already has full emb_dim
+        logger.debug(f"[TtMoe.forward] x_full (after all_gather) shape: {x_full.shape}")
 
         # ========================================
         # Step 1: Shared expert (enabled)
         # ========================================
         # Shared expert expects replicated input (full emb_dim)
-        # Convert x to TILE_LAYOUT for shared expert
-        x_tiled = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        logger.debug(f"[TtMoe.forward] x_tiled shape: {x_tiled.shape}")
+        # Convert x_full to TILE_LAYOUT for shared expert
+        x_full_tiled = ttnn.to_layout(x_full, ttnn.TILE_LAYOUT)
+        logger.debug(f"[TtMoe.forward] x_full_tiled shape: {x_full_tiled.shape}")
 
-        shared_output = self.shared_expert(x_tiled)
-        ttnn.deallocate(x_tiled)  # x_tiled is only used for shared expert, deallocate immediately
+        shared_output = self.shared_expert(x_full_tiled)
         logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
 
         # ========================================
         # Step 2: Dispatch (enabled)
         # ========================================
-        # Dispatch expects full emb_dim on each device (x already has this)
+        # Dispatch expects full emb_dim on each device (x_full already has this)
 
         dispatched_buffer, metadata = self.dispatch_module(
-            x,
-            scores,
+            x_full,
+            weights,
             indices,
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
         )
-        ttnn.deallocate(x)
-        scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
-        indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
 
         # ========================================
@@ -472,12 +373,7 @@ class TtMoe(LightweightModule):
         # TtReduceModule uses fused post_combine_reduce kernel:
         # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
-        routed_output = self.reduce_module(
-            combined_output,
-            weights=weights,
-            indices=indices,
-            expert_dispatch_table=self.tt_expert_dispatch_table,
-        )
+        routed_output = self.reduce_module(combined_output, weights=weights)
         logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape
@@ -516,7 +412,7 @@ class TtMoe(LightweightModule):
                 logger.debug(f"[TtMoe.forward] expert_token_counts: {_counts_host.flatten().tolist()}")
 
             intermediates = TtMoEIntermediates(
-                gate_scores=scores,
+                gate_scores=weights,
                 gate_indices=indices,
                 gate_logits=gate_logits,
                 dispatched_buffer=dispatched_buffer,
