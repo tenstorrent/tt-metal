@@ -34,8 +34,7 @@ tt::tt_metal::Tensor allocate_tensor_on_device(
     if (topology.has_value()) {
         tensor_topology = std::move(*topology);
     } else {
-        // Default: all Replicate placements.
-        // TODO (#25340): Implement correct logic and add test for this.
+        // Use Replicate as default value for placements in MeshMapperConfig
         ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
         for (size_t i = 0; i < device->shape().dims(); i++) {
             placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
