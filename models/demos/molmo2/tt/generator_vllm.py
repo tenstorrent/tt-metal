@@ -439,12 +439,9 @@ class Molmo2ProcessorWrapper:
                     # video_frames shape: [num_frames, H, W, C]
                     logger.info(f"    Video frames shape: {video_frames.shape}")
 
-                    # Sample 8 frames evenly if more than 8
+                    # Use all frames from the video (no artificial limit)
                     num_frames = video_frames.shape[0]
-                    if num_frames > 8:
-                        indices = np.linspace(0, num_frames - 1, 8, dtype=int)
-                        video_frames = video_frames[indices]
-                        num_frames = 8
+                    logger.info(f"    Processing all {num_frames} frames")
 
                     # Process frames using demo approach (resize, normalize, stack)
                     # Using imports from top of file: resize_image, normalize_image,
@@ -2108,8 +2105,8 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             logits_ttnn = self.decode_trace_output
         else:
             # Non-traced batched decode path - use batch-sized position tensors
-            # Compute rotation matrices (returns full cos/sin cache for internal slicing)
-            rot_mats = self.model.text_model.rotary_setup.get_rot_mats_decode_traced(rot_mat_idxs_tt)
+            # Let forward_decode compute rot_mats internally based on batch size
+            # (batch>1 uses get_rot_mats_decode_batched, batch=1 uses traced)
 
             # Use vLLM's KV cache if provided (paged), otherwise fall back to internal cache
             if kv_cache is not None and len(kv_cache) > 0 and kv_cache[0] is not None:
@@ -2118,11 +2115,12 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
                 decode_kv_cache = self.kv_caches
 
             # Run forward_decode with batch-sized current_pos
+            # Pass rot_mat_idxs so forward_decode picks correct rot_mats method
             logits_ttnn = self.model.text_model.forward_decode(
                 hidden_states=hidden_states,
                 kv_caches=decode_kv_cache,
                 current_pos=current_pos_tt,  # Batch-sized from vLLM start_pos
-                rot_mats=rot_mats,
+                rot_mat_idxs=rot_mat_idxs_tt,  # Let forward_decode compute batched rot_mats
                 page_table=page_table_tt,
             )
 
@@ -2152,19 +2150,25 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
             ttnn.deallocate(logits_ttnn)
 
         # Reshape logits for vLLM: [batch_size, 1, vocab_size]
-        # Output from forward_decode: [1, 1, padded_batch, vocab_size]
+        # TTNN output: [1, 1, padded_batch, vocab] but to_torch may drop dims
+        # Actual observed shapes after to_torch:
+        #   - 4D: [1, 1, padded_batch, vocab] (rare)
+        #   - 3D: [1, padded_batch, vocab] (common - to_torch drops a dim)
+        #   - 2D: [padded_batch, vocab] (possible)
         if logits.dim() == 4:
-            # [1, 1, padded_batch, vocab] -> [batch, vocab]
+            # [1, 1, padded_batch, vocab] -> [batch, 1, vocab]
             logits = logits[0, 0, :batch_size, :]
-            logits = logits.unsqueeze(1)  # [batch, 1, vocab]
+            logits = logits.unsqueeze(1)
         elif logits.dim() == 3:
-            logits = logits[:batch_size, :1, :]
+            # [1, padded_batch, vocab] -> [batch, 1, vocab]
+            # Batch is in position 1 (the "seq_len" position), NOT position 0
+            logits = logits[0, :batch_size, :]  # [batch, vocab]
+            logits = logits.unsqueeze(1)  # [batch, 1, vocab]
         elif logits.dim() == 2:
             logits = logits[:batch_size, :].unsqueeze(1)
         elif logits.dim() == 1:
             logits = logits.unsqueeze(0).unsqueeze(1)
 
-        logger.info(f"decode_forward returning: shape={logits.shape}")
         return logits
 
     def allocate_kv_cache(
@@ -2614,9 +2618,24 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         """
         batch_size = tokens.shape[0]
 
+        # Reshape tokens for embed_tokens which expects [1, seq_len]
+        # vLLM sends [batch_size, 1], we need [1, padded_batch]
+        # Following tt_transformers model.py:426 approach
+        tokens_flat = tokens.view(-1)  # [batch_size, 1] -> [batch_size]
+
+        # Pad to multiple of 32 for tile alignment
+        pad_size = ((batch_size + 31) // 32) * 32 - batch_size
+        if pad_size > 0:
+            tokens_padded = torch.nn.functional.pad(tokens_flat, (0, pad_size), value=0)
+        else:
+            tokens_padded = tokens_flat
+
+        # Reshape to [1, padded_batch] for embed_tokens
+        tokens_reshaped = tokens_padded.unsqueeze(0)  # [padded_batch] -> [1, padded_batch]
+
         # Convert tokens to device
         tokens_tt = ttnn.from_torch(
-            tokens,
+            tokens_reshaped,
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -2635,8 +2654,10 @@ class Molmo2ForConditionalGeneration(SupportsMultiModal):
         else:
             current_pos_padded = current_pos_clipped
 
+        # CRITICAL: current_pos must be 1D [padded_batch] for paged_update_cache
+        # (paged_update_cache expects update_idxs with batch elements, not [1, batch])
         current_pos_tt = ttnn.from_torch(
-            current_pos_padded.reshape(1, -1),  # Shape: [1, padded_batch]
+            current_pos_padded,  # Shape: [padded_batch] - 1D tensor
             device=self.mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,

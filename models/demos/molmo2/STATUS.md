@@ -1,5 +1,68 @@
 # Molmo2-8B TTNN Status
 
+## Comprehensive Test Results (2026-03-31)
+
+### Summary Matrix
+
+| Test Type | Batch 1 | Batch 32 | Notes |
+|-----------|---------|----------|-------|
+| **Demo Text** | ✅ WORKING | ⚠️ PARTIAL (~40%) | Batch 32 has RoPE/attention issues |
+| **Demo Image** | ✅ WORKING | ⚠️ PARTIAL (1/4) | Batched images show repetition |
+| **Demo Video (8 frames)** | ✅ WORKING | - | Must limit frames |
+| **Demo Video (all frames)** | ❌ GARBAGE | - | Chunked processing broken |
+| **Server Text** | ✅ WORKING | ✅ WORKING (97%) | Server concurrent text excellent |
+| **Server Image** | ✅ WORKING | ❌ CRITICAL | Concurrent images corrupt server |
+| **Server Video** | ❌ seq_len error | - | max_model_len=4096 too small |
+
+### What Is Working
+
+| Feature | Status | Performance | Notes |
+|---------|--------|-------------|-------|
+| Demo Batch 1 Text | ✅ | 32.68 tok/s | Coherent output |
+| Demo Batch 1 Image | ✅ | 35.47 tok/s | Minor repetition |
+| Demo Batch 1 Video (8 frames) | ✅ | 35.08 tok/s | Use `--max-video-frames 8` |
+| Server Batch 1 Text | ✅ | ~1s latency | Coherent output |
+| Server Batch 1 Image | ✅ | ~3s latency | Coherent output |
+| Server Batch 32 Text (concurrent) | ✅ | 97% accuracy | 31/32 correct |
+
+### What Is NOT Working
+
+| Feature | Status | Issue |
+|---------|--------|-------|
+| Demo Batch 32 Text | ⚠️ | ~60% outputs wrong/garbage - RoPE/attention batching bug |
+| Demo Batch 4 Image | ⚠️ | 3/4 outputs repetitive/garbled |
+| Demo Video (>8 frames) | ❌ | Chunked vision processing produces garbage ("coffee, coffee...") |
+| Server Video | ❌ | Sequence length 6974 > max_model_len 4096 |
+| Server Concurrent Images | ❌ | **CRITICAL:** Corrupts server state - all subsequent requests fail |
+
+### Critical Issues
+
+1. **Server Concurrent Images (CRITICAL)**
+   - 4 concurrent image requests cause complete server state corruption
+   - After corruption, even text requests return garbage
+   - Requires server restart + device reset to recover
+
+2. **Video Chunked Processing**
+   - Videos with >8 frames processed in chunks of 8
+   - Cross-frame attention lost between chunks
+   - Output degrades to garbage with more frames
+
+3. **Demo Batch 32 Coherence**
+   - Many batch slots produce wrong answers or garbage
+   - Example: User 4 expects 11, gets "1111111111"
+   - Likely RoPE position encoding or attention mask issue
+
+### Recommendations
+
+| Use Case | Recommended Config |
+|----------|-------------------|
+| Text (production) | Server concurrent (97% accurate) |
+| Image (production) | Batch 1 only (demo or server sequential) |
+| Video | Demo with `--max-video-frames 8` only |
+| **Avoid** | Server concurrent images, demo batch 32, video >8 frames |
+
+---
+
 ## What Is Working
 
 ### Core Model (Image)
@@ -144,3 +207,10 @@ python models/demos/molmo2/demo/demo.py \
 | Skipped attention mask | `image_pooling` called with `attn_mask=None` for trace compatibility |
 | Video multi-crop not supported | Each video frame uses simple 378×378 resize only (no high-res crops) |
 | No video tracing | Vision trace is per-batch-size; video batch size varies by frame count |
+| **Video >8 frames broken** | Chunked vision processing loses cross-frame attention → garbage output |
+| **Server concurrent images** | Causes state corruption → server must be restarted |
+| **Demo batch 32 text** | ~60% of outputs are wrong/garbage due to RoPE/attention bug |
+| **Server video** | max_model_len=4096 too small for video tokens (need 8k-16k) |
+
+---
+Last Updated: 2026-03-31

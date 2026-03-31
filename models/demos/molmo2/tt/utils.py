@@ -32,9 +32,9 @@ FRAME_START_TOKEN = "<frame_start>"
 FRAME_END_TOKEN = "<frame_end>"
 VIDEO_PROMPT = "<|video|>"
 
-# Default video parameters matching HF Molmo2 video processor defaults
-VIDEO_MAX_FRAMES = 8
-VIDEO_MAX_FPS = 2.0
+# Default video parameters - use all frames from video at native fps
+VIDEO_MAX_FRAMES = None  # None = use all frames
+VIDEO_MAX_FPS = None  # None = use video's native fps (no downsampling)
 
 # Molmo2 normalization constants (from HuggingFace Molmo2ImageProcessor)
 # These differ from standard ImageNet normalization
@@ -42,7 +42,8 @@ IMAGENET_MEAN = [0.48145466, 0.4578275, 0.40821073]
 IMAGENET_STD = [0.26862954, 0.26130258, 0.27577711]
 
 # Prefill sequence length buckets for trace reuse
-PREFILL_SEQ_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384]
+# Extended to support longer videos: 100 frames = ~19,600 tokens, 200 frames = ~39,200 tokens
+PREFILL_SEQ_BUCKETS = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072]
 
 
 # =============================================================================
@@ -417,8 +418,8 @@ def preprocess_video_molmo2(
         base_size: Target frame size (378 for Molmo2)
         patch_size: ViT patch size (14)
         pooling_size: [pool_h, pool_w] for cross-attention pooling (default [2, 2])
-        max_frames: Maximum frames to extract
-        max_fps: Maximum frames per second to sample
+        max_frames: Maximum frames to extract (None = all frames)
+        max_fps: Maximum frames per second to sample (None = native fps)
 
     Returns:
         Dict with:
@@ -440,19 +441,21 @@ def preprocess_video_molmo2(
     else:
         video_src = f"file://{video_path}" if not video_path.startswith("file://") else video_path
 
+    # Build video content dict - only include frame limits if specified
+    video_content = {
+        "type": "video",
+        "video": video_src,
+    }
+    if max_frames is not None:
+        video_content["num_frames"] = max_frames
+    if max_fps is not None:
+        video_content["max_fps"] = max_fps
+        video_content["frame_sampling_mode"] = "uniform_last_frame"
+
     messages = [
         {
             "role": "user",
-            "content": [
-                {
-                    "type": "video",
-                    "video": video_src,
-                    "num_frames": max_frames,
-                    "max_fps": max_fps,
-                    "frame_sampling_mode": "uniform_last_frame",
-                },
-                {"type": "text", "text": ""},
-            ],
+            "content": [video_content, {"type": "text", "text": ""}],
         }
     ]
 
