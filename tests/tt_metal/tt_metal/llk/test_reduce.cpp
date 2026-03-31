@@ -602,10 +602,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
-                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
-                        continue;
-                    }
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
                           math_fid == uint8_t(MathFidelity::HiFi4))) {
@@ -644,10 +640,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
-                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
-                        continue;
-                    }
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
                           math_fid == uint8_t(MathFidelity::HiFi4))) {
@@ -691,10 +683,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
-                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
-                        continue;
-                    }
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
                           math_fid == uint8_t(MathFidelity::HiFi4))) {
@@ -737,10 +725,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
-                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
-                        continue;
-                    }
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
                           math_fid == uint8_t(MathFidelity::HiFi4))) {
@@ -780,10 +764,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
-                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
-                        continue;
-                    }
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
                           math_fid == uint8_t(MathFidelity::HiFi4))) {
@@ -827,10 +807,6 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
-                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
-                        // TODO (#40827): AM; Remove when correct 32bit dest address is used
-                        continue;
-                    }
                     if (this->arch_ == tt::ARCH::QUASAR &&
                         !(!fp32_dest_acc_en && !dst_full_sync_en && reduce_type == ReduceType::AVG &&
                           math_fid == uint8_t(MathFidelity::HiFi4))) {
