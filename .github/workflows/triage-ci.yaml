@@ -325,6 +325,7 @@ jobs:
             build_ci/auto_disable/debug
             build_ci/ci_ticketing/create_tickets/failing_jobs.json
             build_ci/ci_ticketing/create_tickets/failing_jobs_cache.json
+            build_ci/ci_ticketing/create_tickets/downloaded_logs
             build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json
             build_ci/ci_ticketing/create_tickets/m4_review_cache.json
           retention-days: 7

@@ -9,6 +9,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -76,13 +77,22 @@ def load_optional_json(path: Path) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def fetch_job_logs(job_url: str, *, read_token: str) -> str:
+def write_job_log_file(*, job_url: str, read_token: str, out_path: Path) -> Path:
     run_id, job_id = parse_job_url(job_url)
     proc = run_guarded_gh(
-        ["gh", "run", "view", str(run_id), "--repo", PRIMARY_REPO, "--job", str(job_id), "--log"],
+        ["gh", "run", "view", str(run_id), "--repo", PRIMARY_REPO, "--job", str(job_id), "--log-failed"],
         github_token=read_token,
     )
-    return (proc.stdout or "").strip()
+    text = (proc.stdout or "").strip()
+    if not text:
+        proc = run_guarded_gh(
+            ["gh", "run", "view", str(run_id), "--repo", PRIMARY_REPO, "--job", str(job_id), "--log"],
+            github_token=read_token,
+        )
+        text = (proc.stdout or "").strip()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(text, encoding="utf-8")
+    return out_path
 
 
 def parse_agent_json(text: str) -> dict[str, Any]:
@@ -163,6 +173,11 @@ def find_exact_previous_decision(
         prev_decision = entry.get("decision")
         if not isinstance(prev_decision, dict):
             continue
+        cached_reason = str(prev_decision.get("reason", "")).lower()
+        if "only log head excerpts provided" in cached_reason:
+            continue
+        if "prompt exceeded os argument length" in cached_reason:
+            continue
         prev_urls = entry.get("job_urls")
         if isinstance(prev_urls, list) and [str(u).strip() for u in prev_urls] == job_urls:
             return prev_decision
@@ -176,12 +191,18 @@ def decision_key(workflow_name: str, job_name: str, job_urls: list[str]) -> str:
     )
 
 
+def sanitize_for_path(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip())
+    sanitized = sanitized.strip("-")
+    return sanitized or "item"
+
+
 def agent_review_and_prepare_outputs(
     *,
     workflow_name: str,
     job_name: str,
     job_urls: list[str],
-    logs: list[str],
+    log_paths: list[str],
     open_issue_context: str,
     recent_slack_context: str,
     model: str,
@@ -195,12 +216,14 @@ def agent_review_and_prepare_outputs(
         "Draft concise Slack incident updates with direct links.",
     )
     log_sections: list[str] = []
-    for idx, (url, text) in enumerate(zip(job_urls, logs, strict=False), start=1):
-        log_sections.append(f"Run {idx} URL: {url}\n--- BEGIN LOG {idx} ---\n{text}\n--- END LOG {idx} ---")
+    for idx, (url, path) in enumerate(zip(job_urls, log_paths, strict=False), start=1):
+        log_sections.append(f"Run {idx} URL: {url}\nRun {idx} local log path: {path}")
     prompt = (
         "You are the M4 reviewer for deterministic CI failures.\n"
         "You MUST manually compare all three logs and determine if terminal failure signatures are the same.\n"
         "You MUST also review existing open issues and recent Slack messages before drafting outputs.\n"
+        "CRITICAL: logs are available as local files below; inspect those files directly instead of relying on excerpts in this prompt.\n"
+        "Use shell/read tools to inspect those paths and determine the terminal failure signature.\n"
         "Criteria: deterministic only if the same job failed 3 times in a row with semantically identical terminal failure.\n\n"
         f"Workflow: {workflow_name}\n"
         f"Job: {job_name}\n"
@@ -215,7 +238,8 @@ def agent_review_and_prepare_outputs(
         "Decide if all three runs share one identical terminal failure signature.\n"
         "If yes, draft issue title/body and draft initial Slack message text.\n"
         "If uncertain, set create_issue=false and draft_slack=false.\n\n"
-        + "\n\n".join(log_sections)
+        + "Log file references:\n"
+        + "\n".join(f"- {section}" for section in log_sections)
         + "\n\nOutput marker exactly on its own line:\n"
         + MARKER
         + "\nThen output compact JSON only:\n"
@@ -334,6 +358,10 @@ def main() -> int:
         "--previous-artifact-dir",
         default="build_ci/m4_cache_prev",
     )
+    parser.add_argument(
+        "--downloaded-logs-dir",
+        default="build_ci/ci_ticketing/create_tickets/downloaded_logs",
+    )
     parser.add_argument("--max-candidates", type=int, default=20)
     parser.add_argument("--max-new-issues", type=int, default=1)
     parser.add_argument(
@@ -379,9 +407,13 @@ def main() -> int:
         if matches:
             prev_review_path = matches[0]
     prev_review_payload = load_optional_json(prev_review_path) or {}
+    prev_review_version = int(prev_review_payload.get("version", 1)) if isinstance(prev_review_payload, dict) else 1
     prev_review_entries = prev_review_payload.get("entries", [])
     if not isinstance(prev_review_entries, list):
         prev_review_entries = []
+    if prev_review_version < 2:
+        prev_review_entries = []
+        log("Ignoring prior m4 review cache (version < 2).")
     open_issues = list_open_issue_bodies(issue_token=issue_token)
     recent_slack_messages = fetch_recent_slack_messages(
         slack_token=slack_token, channel_id=SLACK_CHANNEL_TEST, limit=20
@@ -414,6 +446,10 @@ def main() -> int:
             }
         )
 
+    logs_root = Path(args.downloaded_logs_dir)
+    if logs_root.exists():
+        shutil.rmtree(logs_root)
+    logs_root.mkdir(parents=True, exist_ok=True)
     decisions_by_key: dict[str, dict[str, Any]] = {}
     reused_cache_keys: set[str] = set()
     to_review: list[dict[str, Any]] = []
@@ -443,13 +479,18 @@ def main() -> int:
                 }
             )
             continue
-        logs = [fetch_job_logs(url, read_token=read_token) for url in job_urls]
+        job_slug = sanitize_for_path(f"{workflow_name}-{job_name}")[:120]
+        log_paths: list[str] = []
+        for idx, url in enumerate(job_urls, start=1):
+            log_path = logs_root / job_slug / f"run{idx}.log"
+            write_job_log_file(job_url=url, read_token=read_token, out_path=log_path)
+            log_paths.append(str(log_path))
         to_review.append(
             {
                 "workflow_name": workflow_name,
                 "job_name": job_name,
                 "job_urls": job_urls,
-                "logs": logs,
+                "log_paths": log_paths,
             }
         )
 
@@ -461,7 +502,7 @@ def main() -> int:
                     workflow_name=review_item["workflow_name"],
                     job_name=review_item["job_name"],
                     job_urls=review_item["job_urls"],
-                    logs=review_item["logs"],
+                    log_paths=review_item["log_paths"],
                     open_issue_context=open_issue_context,
                     recent_slack_context=recent_slack_context,
                     model=args.model,
@@ -619,7 +660,7 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
     review_cache_payload = {
-        "version": 1,
+        "version": 2,
         "entries": review_cache_entries,
     }
     review_cache_path = Path(args.review_cache_json)
