@@ -9,9 +9,11 @@ This script implies tt-metal has already been built with mostly default options.
 
 import argparse
 import os
+import shlex
 import subprocess
 import time
 from pathlib import Path
+from typing import List
 
 import yaml
 import git
@@ -52,6 +54,33 @@ def run_and_save_log(args: list[str], log_path: Path):
         return proc.returncode
 
 
+def process_binary_path(path: str) -> List:
+    """Process binary path if necessary and return a list compatible with Python subprocess"""
+    pathlib_path = Path(path)
+    # Sanity check for file existence
+    if not pathlib_path.is_file():
+        raise Exception(f"binary path not found on filesystem: {path}")
+
+    # If suffix contains .py, then prepend python3 binary
+    ext = pathlib_path.suffix
+    if ext == ".py":
+        # Call Python in unbuffered mode so both Python and C++ streams are in the intended order
+        return ["python"] + ["-u"] + [path]
+    return [path]
+
+
+def process_args(args: list[str]):
+    """Process the args from config. Separate spaces into list elements unless they're between quotations."""
+    result = []
+    for arg in args:
+        # Expand any environment variables first
+        arg = os.path.expandvars(arg)
+        lexer = shlex.shlex(arg)
+        lexer.whitespace_split = True
+        result.extend(lexer)
+    return result
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments"""
     tt_metal_runtime_root = get_env("TT_METAL_RUNTIME_ROOT", required=True)
@@ -83,16 +112,6 @@ def main() -> int:
     # Turn off tt-logger to reduce log noise
     os.environ["TT_LOGGER_LEVEL"] = "off"
 
-    # Common parent directories
-    tt_train_path = tt_metal_runtime_root / "tt-train"
-    build_examples = tt_metal_runtime_root / "build" / "tt-train" / "sources" / "examples"
-
-    # Quick sanity checks
-    if not tt_train_path.is_dir():
-        raise Exception(f"{str(tt_train_path)} does not exist or not a directory")
-    if not build_examples.is_dir():
-        raise Exception(f"{str(build_examples)} does not exist or not a directory")
-
     # Save current git commit hash
     git_commit_hash = get_git_commit_hash()
 
@@ -104,13 +123,17 @@ def main() -> int:
 
     with open(model_config) as f:
         models = yaml.safe_load(f)
+        # Check if there are any duplicate filenames
+        filenames = [m["filename"] for m in models["models"]]
+        if len(filenames) != len(set(filenames)):
+            raise Exception(f"Cannot have duplicate filenames in run_models_config.yaml. {filenames}")
 
     # Run each model from config: execute binary, analyze logs, write metrics to JSON
     for model in models["models"]:
         model_name = model["name"]
         model_filename = model["filename"]
-        binary = str(build_examples / model["binary"] / model["binary"])
-        args = [os.path.expandvars(arg) for arg in model["args"]]
+        binary = os.path.expandvars(model["binary"])
+        args = process_args(model["args"]) if model["args"] is not None else []
 
         # Microseconds since epoch (same as shell: date +%s%N | cut -b1-16)
         current_time = int(time.time_ns() // 1_000)
@@ -118,8 +141,8 @@ def main() -> int:
         log_basename = f"{model_filename}_memory_analysis_{current_time}"
         log_path = output_dir / f"{log_basename}.log"
 
-        cmd = [binary] + args
-        print(f"Running {model_filename}: {binary} {args}")
+        cmd = process_binary_path(binary) + args
+        print(f"Running {model_filename}: {' '.join(cmd)}")
         ret_code = run_and_save_log(cmd, log_path)
 
         # Record failing model run but continue to run remaining models

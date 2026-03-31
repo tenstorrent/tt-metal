@@ -29,7 +29,7 @@ def find_step_summaries(content: str) -> List[Dict[str, int | float]]:
     """
     step_pattern = r"Step:\s*(\d+)"
     loss_pattern = r"Loss:\s*([\d.]+)"
-    step_time_pattern = r"Full step time\s+([\d.]+)\s*ms"
+    step_time_pattern = r"Time:\s+([\d.]+)\s*ms"
 
     step_matches = re.findall(step_pattern, content, re.DOTALL)
     loss_matches = re.findall(loss_pattern, content, re.DOTALL)

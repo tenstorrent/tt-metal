@@ -51,7 +51,7 @@ on:
         type: boolean
         default: false
       run_tt_train_cpp_model_tests:
-        description: 'Run tt-train-cpp-models'
+        description: 'Run tt-train-models'
         required: false
         type: boolean
         default: false
@@ -464,7 +464,7 @@ jobs:
       timeout: 90
       gtest_filter: "*"
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  tt-train-cpp-models:
+  tt-train-models:
     needs: [build-artifact, generate-arch-matrix]
     if: |
       (github.event_name == 'schedule' || inputs.run_tt_train_cpp_model_tests) &&
@@ -482,6 +482,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       timeout: 90
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   tt-train-python-unit-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |

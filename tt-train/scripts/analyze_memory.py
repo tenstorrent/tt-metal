@@ -38,9 +38,9 @@ def extract_number_of_parameters(content: str, start_pos: int) -> Optional[int]:
     # Search forward from a reasonable position before start
     search_start = max(0, start_pos - 500)
     text_before = content[search_start:start_pos]
-    match = re.search(r"Number of parameters:\s*(\d+)", text_before)
+    match = re.search(r"Total parameters:\s*(\d{1,3}(?:,\d{3})*)", text_before)
     if match:
-        return int(match.group(1))
+        return int(match.group(1).replace(",", ""))
     return None
 
 
