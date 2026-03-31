@@ -644,6 +644,17 @@ def find_existing_issue_for_job_identity(
     return None
 
 
+def find_existing_issue_for_title(open_issues: list[dict[str, Any]], title: str) -> str | None:
+    wanted = title.strip().lower()
+    if not wanted:
+        return None
+    for issue in open_issues:
+        existing_title = str(issue.get("title", "")).strip().lower()
+        if existing_title == wanted:
+            return str(issue.get("url", "")).strip() or None
+    return None
+
+
 def create_issue(
     *,
     issue_token: str,
@@ -963,6 +974,23 @@ def main() -> int:
             )
             continue
 
+        # Re-check identity here because open_issues mutates within this run
+        # after each created issue, and prepared candidates may contain repeats.
+        existing_by_identity = find_existing_issue_for_job_identity(
+            open_issues,
+            workflow_name=workflow_name,
+            job_name=job_name,
+        )
+        if existing_by_identity:
+            skipped.append(
+                {
+                    "job_name": job_name,
+                    "workflow_name": workflow_name,
+                    "reason": f"already_tracked_job_identity_postcreate:{existing_by_identity}",
+                }
+            )
+            continue
+
         fp = fingerprint_for(workflow_name, job_name, signature)
         existing = find_existing_issue_for_fingerprint(open_issues, fp)
         if existing:
@@ -978,6 +1006,17 @@ def main() -> int:
 
         if not issue_title:
             issue_title = f"CI auto triage: deterministic failure in {job_name}"
+        existing_by_title = find_existing_issue_for_title(open_issues, issue_title)
+        if existing_by_title:
+            skipped.append(
+                {
+                    "job_name": job_name,
+                    "workflow_name": workflow_name,
+                    "reason": f"already_tracked_title:{existing_by_title}",
+                    "issue_title": issue_title,
+                }
+            )
+            continue
         if not issue_body_from_agent:
             issue_body_from_agent = (
                 f"Workflow: `{workflow_name}`\n"
@@ -1006,7 +1045,7 @@ def main() -> int:
             )
             continue
         issue_url = create_issue(issue_token=issue_token, title=issue_title, body=issue_body)
-        open_issues.append({"url": issue_url, "body": issue_body})
+        open_issues.append({"url": issue_url, "title": issue_title, "body": issue_body})
         if not slack_text:
             slack_text = (
                 f"CI auto triage detected a deterministic failure (3x in a row) for `{job_name}` in `{workflow_name}`.\n"

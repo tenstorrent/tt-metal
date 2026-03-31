@@ -36,3 +36,33 @@ def test_parse_batch_agent_json_missing_marker_has_actionable_error():
     message = str(exc.value)
     assert "marker not found" in message
     assert "output excerpt" in message
+
+
+def test_find_existing_issue_for_job_identity_matches_newly_created_body_marker():
+    mod = _load_m4_module()
+    workflow_name = "aggregate-workflow-data"
+    job_name = "Galaxy Qwen3-32B long context demo tests"
+    job_key = mod.job_identity_key(workflow_name, job_name)
+    marker = mod.issue_job_identity_marker(job_key)
+    open_issues = [{"url": "https://github.com/ebanerjeeTT/issue_dump/issues/999", "body": f"foo\n{marker}\nbar"}]
+    existing = mod.find_existing_issue_for_job_identity(
+        open_issues,
+        workflow_name=workflow_name,
+        job_name=job_name,
+    )
+    assert existing == "https://github.com/ebanerjeeTT/issue_dump/issues/999"
+
+
+def test_find_existing_issue_for_title_matches_case_insensitive_exact():
+    mod = _load_m4_module()
+    open_issues = [
+        {
+            "url": "https://github.com/ebanerjeeTT/issue_dump/issues/854",
+            "title": "[CI] Galaxy Qwen3-32B long context demo: trace buffer size exceeds allocated region",
+        }
+    ]
+    existing = mod.find_existing_issue_for_title(
+        open_issues,
+        "[ci] galaxy qwen3-32b long context demo: trace buffer size exceeds allocated region",
+    )
+    assert existing == "https://github.com/ebanerjeeTT/issue_dump/issues/854"
