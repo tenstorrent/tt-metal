@@ -3,11 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-PCC test for TtMoe module.
+PCC test for TtMoe module with integrated gate.
 
 Tests that TTNN TtMoe produces matching outputs to TorchMoe reference.
-This validates the full MoE pipeline: dispatch → routed experts → combine → split → add shared.
+This validates the full MoE pipeline:
+Gate → Dispatch → Routed Experts → Combine → Split → Add Shared.
 """
+
+import random
 
 import pytest
 import torch
@@ -23,19 +26,20 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
     create_fabric_router_config,
+    create_gate_weights,
+    create_shared_expert_weights,
+    create_torch_expert_weights,
     extract_mesh_config,
     get_ep_mesh_composer,
-    get_gate_outputs,
     get_tp_mesh_composer,
-    initialize_test_inputs,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
+    compare_recall,
     log_combine_mismatch_details,
     log_per_chip_statistics,
     validate_combine_output,
+    validate_composed,
     validate_dispatch_buffer,
     validate_dispatch_buffer_pcc,
     validate_dispatch_metadata,
@@ -44,73 +48,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_valida
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
-def create_torch_expert_weights(
-    num_experts: int,
-    emb_dim: int,
-    hidden_dim: int,
-    seed: int = 42,
-) -> list[dict]:
-    """
-    Create random weights for torch experts.
-
-    Args:
-        num_experts: Number of experts to create weights for
-        emb_dim: Embedding dimension
-        hidden_dim: Hidden/intermediate dimension
-        seed: Random seed
-
-    Returns:
-        List of dicts with gate_proj, up_proj, down_proj per expert
-    """
-    torch.manual_seed(seed)
-    weights_list = []
-    for _ in range(num_experts):
-        weights = {
-            "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-            "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-            "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
-        }
-        weights_list.append(weights)
-    return weights_list
-
-
-def create_shared_expert_weights(
-    emb_dim: int,
-    hidden_dim: int,
-    seed: int = 123,
-) -> dict:
-    """
-    Create random weights for shared expert in HF format.
-
-    TtSharedExpert._create_sharded_weight_from_torch handles the transpose
-    from HF format to TTNN format internally.
-
-    Args:
-        emb_dim: Embedding dimension
-        hidden_dim: Hidden/intermediate dimension
-        seed: Random seed
-
-    Returns:
-        Dict with gate_proj, up_proj, down_proj in HF format (out_features, in_features)
-    """
-    torch.manual_seed(seed)
-
-    # HF format: (out_features, in_features)
-    weights = {
-        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
-        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
-    }
-
-    return weights
-
-
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor, run_pcc_check",
     [
         # fmt: off
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, False), # skip PCC validation
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 2, True),  # run PCC validation
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, False), # skip PCC validation
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, True),  # run PCC validation
         pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 2, True, marks=pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")),
         # fmt: on
     ],
@@ -129,7 +72,6 @@ def create_shared_expert_weights(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
             id="linear-8",
         ),
-        # 2D mesh configurations - dispatch along axis 0, shared expert CCL along axis 1
         pytest.param(
             (2, 4),
             {
@@ -182,22 +124,20 @@ def test_ttnn_moe(
     """
     Test TtMoe PCC against TorchMoe reference.
 
-    This test verifies the full MoE pipeline:
-    1. Token dispatch to expert buffers
-    2. Routed expert FFN computation
-    3. Expert output combining
-    4. Split connection (weighted sum)
-    5. Addition with shared expert output
+    Both TtMoe and TorchMoe create their gate internally from gate_weights
+    and run forward(x) end-to-end. Validation compares intermediates directly.
     """
     profiler.clear()
     profiler.start("test_ttnn_moe")
 
-    num_devices = mesh_device.get_num_devices()
+    random.seed(42)
+    torch.manual_seed(42)
 
+    num_devices = mesh_device.get_num_devices()
     mesh_config = extract_mesh_config(mesh_device)
-    sp_axis = mesh_config.sp_axis
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
+    n_sp_devices, n_tp_devices = mesh_device.shape
 
     logger.debug(f"\n{'='*60}")
     logger.debug("TtMoe PCC Test")
@@ -210,79 +150,58 @@ def test_ttnn_moe(
         f"emb_dim={emb_dim}, experts={num_routed_experts}"
     )
 
-    # Compute configuration constants
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
         seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
     )
     logger.debug(f"experts_per_chip={experts_per_chip}, metadata_len={metadata_len}")
     logger.debug(f"max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}")
 
-    total_experts = num_routed_experts
-
     # ========================================
-    # Step 1: Create weights for both torch and TTNN
+    # Step 1: Create weights
     # ========================================
     if run_pcc_check:
-        profiler.start("torch_weights_creation")
-        logger.debug("Creating expert weights...")
-        all_routed_weights = create_torch_expert_weights(total_experts, emb_dim, hidden_dim, seed=42)
-        # Shared expert weights in HF format - TtSharedExpert handles transpose internally
+        profiler.start("weights_creation")
+        all_routed_weights = create_torch_expert_weights(num_routed_experts, emb_dim, hidden_dim, seed=42)
         shared_expert_weights = create_shared_expert_weights(emb_dim, hidden_dim, seed=123)
-        # Pass all routed expert weights - TtRoutedExpert distributes them across devices
-        # (each device gets unique expert weights, not replicated)
-        ttnn_routed_weights = all_routed_weights
-        profiler.end("torch_weights_creation")
+        profiler.end("weights_creation")
     else:
-        # When run_pcc_check=False, pass None to use internal random weight allocation
         all_routed_weights = None
         shared_expert_weights = None
-        ttnn_routed_weights = None
 
-    # ========================================
-    # Step 2: Generate test inputs
-    # ========================================
-    profiler.start("torch_input_creation")
-    logger.debug("Generating test inputs...")
-    x, weights, indices = initialize_test_inputs(
-        dispatch_group_size=dispatch_group_size,
-        seq_len_per_chip=seq_len_per_chip,
-        emb_dim=emb_dim,
-        num_routed_experts=num_routed_experts,
-        num_experts_per_tok=num_experts_per_tok,
-        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-        seed=42,
-        num_dispatch_groups=num_dispatch_groups,
-        skip_x_initialization=not run_pcc_check,  # Skip x initialization when not validating to save time
-    )
-    logger.debug(
-        f"Input shapes: x={x.shape if x is not None else None}, weights={weights.shape}, indices={indices.shape}"
-    )
+    gate_weights = create_gate_weights(num_routed_experts, emb_dim)
 
-    # Create expert dispatch table
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=num_dispatch_groups,
     )
 
-    # Compute gate outputs (offsets and token counts)
-    expert_offsets, expert_token_counts, _ = get_gate_outputs(
-        indices,
-        dispatch_group_size,
-        num_routed_experts,
-        experts_per_chip,
-        seq_len_per_chip,
-        num_experts_per_tok,
-        expert_dispatch_table=expert_dispatch_table,
-    )
-    profiler.end("torch_input_creation")
+    # ========================================
+    # Step 2: Create input tensor
+    # ========================================
+    profiler.start("input_creation")
+    mesh_rows, mesh_cols = mesh_device.shape
+
+    if run_pcc_check:
+        x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
+        tt_x = ttnn.from_torch(
+            x,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+        )
+    else:
+        x = None
+        per_device_x_shape = (dispatch_group_size // mesh_rows, seq_len_per_chip, emb_dim // mesh_cols)
+        tt_x = ttnn.empty(per_device_x_shape, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
+    profiler.end("input_creation")
 
     # ========================================
     # Step 3: Run TorchMoe reference with intermediates
     # ========================================
     if run_pcc_check:
-        profiler.start("torch_forward")
-        logger.debug("Running TorchMoe reference...")
+        profiler.start("torch_moe_creation")
         torch_moe = TorchMoe(
             dispatch_group_size=dispatch_group_size,
             experts_per_chip=experts_per_chip,
@@ -297,82 +216,17 @@ def test_ttnn_moe(
             num_dispatch_groups=num_dispatch_groups,
             routed_expert_weights=all_routed_weights,
             shared_expert_weights=shared_expert_weights,
+            gate_weights=gate_weights,
         )
+        profiler.end("torch_moe_creation")
 
-        torch_output, torch_intermediates = torch_moe(
-            x.float(),
-            weights.float(),
-            indices,
-            expert_offsets,
-            expert_token_counts,
-            return_intermediates=True,
-        )
+        profiler.start("torch_forward")
+        torch_output, torch_intermediates = torch_moe(x, return_intermediates=True)
         profiler.end("torch_forward")
-        logger.debug(f"Torch output shape: {torch_output.shape}")
         logger.debug(f"Torch output stats - min: {torch_output.min():.4f}, max: {torch_output.max():.4f}")
 
     # ========================================
-    # Step 4: Create TTNN tensors
-    # ========================================
-    profiler.start("ttnn_input_creation")
-    logger.debug("Creating TTNN tensors...")
-
-    mesh_rows, mesh_cols = mesh_device.shape
-
-    # For 2D mesh: shard x along dispatch_group_size (dim 0) across axis 0 AND emb_dim (dim -1) across axis 1
-    # This supports both dispatch (SP along axis 0) and shared expert (TP along axis 1)
-    if run_pcc_check:
-        mesh_mapper_2d_input = ttnn.ShardTensor2dMesh(
-            mesh_device,
-            mesh_shape=mesh_device.shape,
-            dims=(0, -1),  # Shard dim 0 across axis 0, shard dim -1 across axis 1
-        )
-        tt_x = ttnn.from_torch(
-            x, mesh_mapper=mesh_mapper_2d_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
-        )
-    else:
-        # Device-only allocation for x (large tensor) - no host-to-device transfer
-        per_device_x_shape = (dispatch_group_size // mesh_rows, seq_len_per_chip, emb_dim // mesh_cols)
-        tt_x = ttnn.empty(per_device_x_shape, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device)
-    logger.debug(f"tt_x.shape: {tt_x.shape}")
-
-    # Weights and indices: shard on dispatch axis, replicate on TP axis
-    mesh_mapper_sp_only = ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(0, None),  # Shard dim 0 across axis 0, replicate on axis 1
-    )
-
-    tt_weights = ttnn.from_torch(
-        weights,
-        mesh_mapper=mesh_mapper_sp_only,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-    )
-    tt_indices = ttnn.from_torch(
-        indices, mesh_mapper=mesh_mapper_sp_only, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
-    )
-
-    # Run TtMoERoutingSetup for TTNN execution path
-    tt_moe_routing_setup = TtMoERoutingSetup(
-        mesh_device=mesh_device, expert_dispatch_table=expert_dispatch_table, num_links=num_links
-    )
-    tt_dispatch_offsets, tt_expert_token_counts, _ = tt_moe_routing_setup(
-        ttnn_top_k_experts_indices=indices,
-        num_routed_experts=num_routed_experts,
-        seq_len_per_chip=seq_len_per_chip,
-        num_experts_per_tok=num_experts_per_tok,
-    )
-
-    # Expert offsets and dispatch table
-    tt_expert_offsets = tt_dispatch_offsets
-    tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
-    ttnn.synchronize_device(mesh_device)
-    profiler.end("ttnn_input_creation")
-
-    # ========================================
-    # Step 5: Create TtMoe and run forward
+    # Step 4: TtMoe forward
     # ========================================
     profiler.start("tt_moe_creation")
     logger.debug("Creating TtMoe...")
@@ -388,31 +242,23 @@ def test_ttnn_moe(
         seq_len_per_chip=seq_len_per_chip,
         emb_dim=emb_dim,
         hidden_dim=hidden_dim,
-        cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
-        routed_expert_weights=ttnn_routed_weights,
+        routed_expert_weights=all_routed_weights,
         shared_expert_weights=shared_expert_weights,
         activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
+        gate_weights=gate_weights,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
 
     profiler.start("tt_forward")
     logger.debug("Running TtMoe forward pass...")
-    tt_output, tt_intermediates = tt_moe(
-        tt_x,
-        tt_weights,
-        tt_indices,
-        tt_expert_offsets,
-        tt_expert_dispatch_table,
-        tt_expert_token_counts,
-        return_intermediates=True,
-    )
+
+    tt_output, tt_intermediates = tt_moe(tt_x, return_intermediates=True)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_forward")
-    logger.debug(f"TTNN output shape: {tt_output.shape}")
 
     # Early return when run_pcc_check=False (profiling mode)
     if not run_pcc_check:
@@ -423,15 +269,35 @@ def test_ttnn_moe(
         return
 
     # ========================================
-    # Step 6: Compare intermediates
+    # Step 5: Validate
     # ========================================
     profiler.start("pcc_validation")
-    logger.debug(f"\n{'='*60}")
     logger.debug("Comparing intermediate outputs...")
-    logger.debug(f"{'='*60}")
 
     all_passed = True
     validation_results = []
+
+    # Gate recall: compare TtMoe gate indices vs TorchMoe gate indices
+    tt_indices = ttnn.to_torch(
+        tt_intermediates.gate_indices,
+        mesh_composer=get_tp_mesh_composer(mesh_device),
+        dtype=torch.int32,
+    )
+    recall_result = validate_composed(
+        tt_indices.view(1, n_sp_devices, seq_len_per_chip, -1),
+        torch_intermediates.gate_indices.view(1, n_sp_devices, seq_len_per_chip, -1),
+        1,
+        n_sp_devices,
+        compare_recall(0.999),
+        name="gate_indices_recall",
+        broadcast_groups=n_tp_devices,
+    )
+    log_validation_results(
+        results=[recall_result],
+        num_dispatch_groups=n_tp_devices,
+        dispatch_group_size=n_sp_devices,
+        title="Gate Recall Validation",
+    )
 
     # Dense tensor checks with PCC
     # fmt: off
@@ -466,8 +332,10 @@ def test_ttnn_moe(
     ]
     # fmt: on
 
+    expert_token_counts = torch_intermediates.expert_token_counts
+
     for name, tt_tensor, torch_tensor, composer, dtype, validate_fn, extra_kwargs in sparse_checks:
-        if tt_tensor is None:
+        if tt_tensor is None or torch_tensor is None:
             logger.warning(f"[{name}] validation SKIPPED")
             continue
         tt_host = (
@@ -497,29 +365,24 @@ def test_ttnn_moe(
             all_passed = False
 
     # Validate combined_output (before reduce step)
-    if tt_intermediates.combined_output is not None:
+    if tt_intermediates.combined_output is not None and torch_intermediates.combined_output is not None:
         name = "combined_output"
-        logger.debug(f"📊 {name} tt shape: {tt_intermediates.combined_output.shape}")
-        logger.debug(f"📊 {name} torch shape: {torch_intermediates.combined_output.shape}")
+        logger.debug(f"  {name} tt shape: {tt_intermediates.combined_output.shape}")
+        logger.debug(f"  {name} torch shape: {torch_intermediates.combined_output.shape}")
 
-        # Convert TTNN combined_output to torch
-        combine_mesh_composer = get_ep_mesh_composer(mesh_device)
         tt_combined_torch = ttnn.to_torch(
             tt_intermediates.combined_output,
-            mesh_composer=combine_mesh_composer,
+            mesh_composer=get_ep_mesh_composer(mesh_device),
             dtype=torch.bfloat16,
         )
-        logger.debug(f"📊 {name} tt_combined_torch shape: {tt_combined_torch.shape}")
 
-        # Validate using EP-rank aware comparison with PCC
         combine_pcc = 0.997
         combine_result = validate_combine_output(
             torch_intermediates.combined_output,
             tt_combined_torch,
-            indices,
+            tt_indices,
             num_dispatch_groups,
             num_routed_experts,
-            # use_pcc=False,
             use_pcc=True,
             pcc_threshold=combine_pcc,
             verbose=True,
@@ -563,8 +426,8 @@ def test_ttnn_moe(
     logger.debug("Note: Final PCC expected to be low until full pipeline is enabled")
     profiler.end("pcc_validation")
 
-    # Assert intermediate checks passed
     assert all_passed, "One or more intermediate comparisons failed"
+    recall_result.assert_passed("Gate recall validation failed")
 
     profiler.end("test_ttnn_moe")
     logger.debug(f"\n{'='*60}")

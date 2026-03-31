@@ -5,10 +5,8 @@ import ttnn
 
 
 def adjust_shapes_for_testing(config, mesh_device):
-    """Scale input dimensions for smaller meshes to preserve per-device shapes."""
-    n_sp_devices, n_tp_devices = mesh_device.shape
-    if n_sp_devices != 32:
-        config.max_seq_len = config.max_seq_len // (32 // n_sp_devices)
+    """Scale TP dimension for smaller meshes. sp_dim (per-device seq len) is always correct."""
+    _, n_tp_devices = mesh_device.shape
     if n_tp_devices != 4:
         config.dim = config.dim // (4 // n_tp_devices)
 

@@ -609,6 +609,82 @@ def get_ep_mesh_composer(mesh_device):
     )
 
 
+def create_gate_weights(
+    num_routed_experts: int,
+    emb_dim: int,
+    dtype: torch.dtype = torch.bfloat16,
+) -> dict:
+    """
+    Create random gate weights with proper scaling for stable sigmoid routing.
+
+    Returns dict matching MoEGate format:
+        "weight": (n_routed_experts, dim)
+        "e_score_correction_bias": (n_routed_experts,)
+    """
+
+    weight = torch.randn(num_routed_experts, emb_dim, dtype=dtype)
+    scale = 1.0 / (emb_dim**0.5)  # kaiming-like scale
+    weight = weight * scale
+    return {
+        "weight": weight,
+        "e_score_correction_bias": torch.randn(num_routed_experts, dtype=dtype) * 0.01,
+    }
+
+
+def create_torch_expert_weights(
+    num_experts: int,
+    emb_dim: int,
+    hidden_dim: int,
+    seed: int = 42,
+) -> list[dict]:
+    """
+    Create random weights for torch experts.
+
+    Args:
+        num_experts: Number of experts to create weights for
+        emb_dim: Embedding dimension
+        hidden_dim: Hidden/intermediate dimension
+        seed: Random seed
+
+    Returns:
+        List of dicts with gate_proj, up_proj, down_proj per expert
+    """
+    torch.manual_seed(seed)
+    weights_list = []
+    for _ in range(num_experts):
+        weights = {
+            "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+            "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+            "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+        }
+        weights_list.append(weights)
+    return weights_list
+
+
+def create_shared_expert_weights(
+    emb_dim: int,
+    hidden_dim: int,
+    seed: int = 123,
+) -> dict:
+    """
+    Create random weights for shared expert in HF format.
+
+    Args:
+        emb_dim: Embedding dimension
+        hidden_dim: Hidden/intermediate dimension
+        seed: Random seed
+
+    Returns:
+        Dict with gate_proj, up_proj, down_proj in HF format (out_features, in_features)
+    """
+    torch.manual_seed(seed)
+    return {
+        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+    }
+
+
 def create_sparse_combine_output(
     num_chips: int,
     seq_len: int,
