@@ -7,17 +7,17 @@ Unit tests for callstack_provider and dump_lightweight_asserts helper functions.
 These tests use mocks and temp files—no device or hardware required.
 """
 
-import os
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-triage_home = os.path.join(metal_home, "tools", "triage")
-sys.path.insert(0, triage_home)
+metal_home = Path(__file__).resolve().parents[3]
+triage_home = metal_home / "tools" / "triage"
+sys.path.insert(0, str(triage_home))
 
 from dump_lightweight_asserts import extract_assert_code
 from callstack_provider import get_function_die, extract_template_params
