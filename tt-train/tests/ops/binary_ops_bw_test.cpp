@@ -123,15 +123,33 @@ TEST_F(BinaryOpsBackwardTest, DivSameShape) {
 }
 
 // ============================================================================
-// Broadcast backward tests
+// Parametrized broadcast backward tests
 // ============================================================================
 
-TEST_F(BinaryOpsBackwardTest, AddBroadcastDim0) {
+struct BroadcastCase {
+    std::vector<size_t> a_shape;
+    std::vector<size_t> b_shape;
+    std::string name;
+};
+
+void PrintTo(const BroadcastCase& c, std::ostream* os) {
+    *os << c.name;
+}
+
+static std::string BroadcastCaseName(const ::testing::TestParamInfo<BroadcastCase>& info) {
+    return info.param.name;
+}
+
+class AddBroadcastBackwardTest : public BinaryOpsBackwardTest, public ::testing::WithParamInterface<BroadcastCase> {};
+class SubBroadcastBackwardTest : public BinaryOpsBackwardTest, public ::testing::WithParamInterface<BroadcastCase> {};
+class MulBroadcastBackwardTest : public BinaryOpsBackwardTest, public ::testing::WithParamInterface<BroadcastCase> {};
+
+TEST_P(AddBroadcastBackwardTest, GradShapeMatchesInput) {
     auto* device = &autograd::ctx().get_device();
-    // a: [2, 1, 1, 4], b: [1, 1, 1, 4] -> b is broadcast along dim 0
-    xt::xarray<float> data_a = {1.F, 2.F, 3.F, 4.F, 5.F, 6.F, 7.F, 8.F};
-    data_a.reshape({2, 1, 1, 4});
-    xt::xarray<float> data_b = {{{{10.F, 20.F, 30.F, 40.F}}}};
+    const auto& p = GetParam();
+
+    xt::xarray<float> data_a = xt::ones<float>(p.a_shape) * 5.0F;
+    xt::xarray<float> data_b = xt::ones<float>(p.b_shape) * 3.0F;
 
     auto a = autograd::create_tensor(core::from_xtensor(data_a, device), true);
     auto b = autograd::create_tensor(core::from_xtensor(data_b, device), true);
@@ -142,66 +160,51 @@ TEST_F(BinaryOpsBackwardTest, AddBroadcastDim0) {
     auto a_grad = core::to_xtensor(a->get_grad());
     auto b_grad = core::to_xtensor(b->get_grad());
 
-    // a_grad: same shape as a, all 1s
+    // d(a+b)/da = 1
     EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a)));
 
-    // b_grad: summed over dim 0 -> [1,1,1,4], each element = 2 (two batches)
-    EXPECT_TRUE(xt::allclose(b_grad, xt::ones_like(data_b) * 2.0F));
-}
-
-TEST_F(BinaryOpsBackwardTest, SubBroadcastDim0) {
-    auto* device = &autograd::ctx().get_device();
-    xt::xarray<float> data_a = {1.F, 2.F, 3.F, 4.F, 5.F, 6.F, 7.F, 8.F};
-    data_a.reshape({2, 1, 1, 4});
-    xt::xarray<float> data_b = {{{{10.F, 20.F, 30.F, 40.F}}}};
-
-    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), true);
-    auto b = autograd::create_tensor(core::from_xtensor(data_b, device), true);
-
-    auto out = a - b;
-    out->backward();
-
-    auto a_grad = core::to_xtensor(a->get_grad());
-    auto b_grad = core::to_xtensor(b->get_grad());
-
-    // a_grad: all 1s
-    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a)));
-
-    // b_grad: summed -1s over dim 0 -> each element = -2
-    EXPECT_TRUE(xt::allclose(b_grad, -xt::ones_like(data_b) * 2.0F));
-}
-
-TEST_F(BinaryOpsBackwardTest, SubBroadcastDim3) {
-    auto* device = &autograd::ctx().get_device();
-    // a: [1, 1, 1, 4], b: [1, 1, 1, 1] -> b is broadcast along dim 3
-    xt::xarray<float> data_a = {{{{1.F, 2.F, 3.F, 4.F}}}};
-    xt::xarray<float> data_b = {3.F};
-    data_b.reshape({1, 1, 1, 1});
-
-    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), true);
-    auto b = autograd::create_tensor(core::from_xtensor(data_b, device), true);
-
-    auto out = a - b;
-    out->backward();
-
-    auto a_grad = core::to_xtensor(a->get_grad());
-    auto b_grad = core::to_xtensor(b->get_grad());
-
-    // d(a-b)/da = 1 -> all ones
-    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a)));
-
-    // d(a-b)/db = -1, summed over dim 3 -> [(-1)*4] = [-4]
-    xt::xarray<float> expected_b_grad = {-4.F};
-    expected_b_grad.reshape({1, 1, 1, 1});
+    // d(a+b)/db = 1, reduced over broadcast dims
+    // Each b element accumulates (a_volume / b_volume) copies of 1
+    auto a_volume = static_cast<float>(data_a.size());
+    auto b_volume = static_cast<float>(data_b.size());
+    xt::xarray<float> expected_b_grad = xt::ones_like(data_b) * (a_volume / b_volume);
     EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad));
 }
 
-TEST_F(BinaryOpsBackwardTest, MulBroadcastDim0) {
+TEST_P(SubBroadcastBackwardTest, GradShapeMatchesInput) {
     auto* device = &autograd::ctx().get_device();
-    // a: [2, 1, 1, 4], b: [1, 1, 1, 4]
-    xt::xarray<float> data_a = {1.F, 2.F, 3.F, 4.F, 5.F, 6.F, 7.F, 8.F};
-    data_a.reshape({2, 1, 1, 4});
-    xt::xarray<float> data_b = {{{{2.F, 2.F, 2.F, 2.F}}}};
+    const auto& p = GetParam();
+
+    xt::xarray<float> data_a = xt::ones<float>(p.a_shape) * 5.0F;
+    xt::xarray<float> data_b = xt::ones<float>(p.b_shape) * 3.0F;
+
+    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), true);
+    auto b = autograd::create_tensor(core::from_xtensor(data_b, device), true);
+
+    auto out = a - b;
+    out->backward();
+
+    auto a_grad = core::to_xtensor(a->get_grad());
+    auto b_grad = core::to_xtensor(b->get_grad());
+
+    // d(a-b)/da = 1
+    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a)));
+
+    // d(a-b)/db = -1, reduced over broadcast dims
+    auto a_volume = static_cast<float>(data_a.size());
+    auto b_volume = static_cast<float>(data_b.size());
+    xt::xarray<float> expected_b_grad = -xt::ones_like(data_b) * (a_volume / b_volume);
+    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad));
+}
+
+TEST_P(MulBroadcastBackwardTest, GradShapeMatchesInput) {
+    auto* device = &autograd::ctx().get_device();
+    const auto& p = GetParam();
+
+    // Use constant tensors so expected gradients are easy to compute analytically.
+    // a = 3, b = 2 everywhere.
+    xt::xarray<float> data_a = xt::ones<float>(p.a_shape) * 3.0F;
+    xt::xarray<float> data_b = xt::ones<float>(p.b_shape) * 2.0F;
 
     auto a = autograd::create_tensor(core::from_xtensor(data_a, device), true);
     auto b = autograd::create_tensor(core::from_xtensor(data_b, device), true);
@@ -212,112 +215,42 @@ TEST_F(BinaryOpsBackwardTest, MulBroadcastDim0) {
     auto a_grad = core::to_xtensor(a->get_grad());
     auto b_grad = core::to_xtensor(b->get_grad());
 
-    // d(a*b)/da = b (broadcast) -> each element of a_grad = 2
+    // d(a*b)/da = b (broadcast) -> each element = 2
     EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a) * 2.0F));
 
-    // d(a*b)/db = a, summed over dim 0 -> [1+5, 2+6, 3+7, 4+8] = [6, 8, 10, 12]
-    xt::xarray<float> expected_b_grad = {{{{6.F, 8.F, 10.F, 12.F}}}};
+    // d(a*b)/db = a, reduced over broadcast dims.
+    // Each b element sees (a_volume / b_volume) copies of a=3, so b_grad = 3 * (a_volume / b_volume).
+    auto a_volume = static_cast<float>(data_a.size());
+    auto b_volume = static_cast<float>(data_b.size());
+    xt::xarray<float> expected_b_grad = xt::ones_like(data_b) * 3.0F * (a_volume / b_volume);
     EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad));
 }
 
-TEST_F(BinaryOpsBackwardTest, MulBroadcastDim3) {
-    auto* device = &autograd::ctx().get_device();
-    // a: [1, 1, 1, 4], b: [1, 1, 1, 1] -> b is broadcast along dim 3
-    xt::xarray<float> data_a = {{{{1.F, 2.F, 3.F, 4.F}}}};
-    xt::xarray<float> data_b = {3.F};
-    data_b.reshape({1, 1, 1, 1});
+// Same-rank broadcast: b has a 1 in exactly one dimension
+static const BroadcastCase kSameRankCases[] = {
+    {{2, 1, 1, 4}, {1, 1, 1, 4}, "Dim0"},
+    {{1, 2, 1, 4}, {1, 1, 1, 4}, "Dim1"},
+    {{1, 1, 2, 4}, {1, 1, 1, 4}, "Dim2"},
+    {{1, 1, 1, 4}, {1, 1, 1, 1}, "Dim3"},
+    {{2, 1, 2, 4}, {1, 1, 1, 4}, "Dim0_Dim2"},
+    {{2, 2, 1, 4}, {1, 1, 1, 4}, "Dim0_Dim1"},
+};
 
-    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), true);
-    auto b = autograd::create_tensor(core::from_xtensor(data_b, device), true);
+// Cross-rank broadcast: b has fewer dimensions than a
+static const BroadcastCase kCrossRankCases[] = {
+    {{2, 1, 1, 4}, {4}, "Rank4_vs_Rank1"},
+    {{2, 1, 1, 4}, {1, 4}, "Rank4_vs_Rank2"},
+    {{2, 1, 1, 4}, {1, 1, 4}, "Rank4_vs_Rank3"},
+};
 
-    auto out = a * b;
-    out->backward();
+INSTANTIATE_TEST_SUITE_P(SameRank, AddBroadcastBackwardTest, ::testing::ValuesIn(kSameRankCases), BroadcastCaseName);
+INSTANTIATE_TEST_SUITE_P(CrossRank, AddBroadcastBackwardTest, ::testing::ValuesIn(kCrossRankCases), BroadcastCaseName);
 
-    auto a_grad = core::to_xtensor(a->get_grad());
-    auto b_grad = core::to_xtensor(b->get_grad());
+INSTANTIATE_TEST_SUITE_P(SameRank, SubBroadcastBackwardTest, ::testing::ValuesIn(kSameRankCases), BroadcastCaseName);
+INSTANTIATE_TEST_SUITE_P(CrossRank, SubBroadcastBackwardTest, ::testing::ValuesIn(kCrossRankCases), BroadcastCaseName);
 
-    // d(a*b)/da = b (broadcast) -> each element = 3
-    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a) * 3.0F));
-
-    // d(a*b)/db = a, summed over dim 3 -> [1+2+3+4] = [10]
-    xt::xarray<float> expected_b_grad = {10.F};
-    expected_b_grad.reshape({1, 1, 1, 1});
-    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad));
-}
-
-// ============================================================================
-// Cross-rank broadcast backward tests (input ranks differ)
-// ============================================================================
-
-TEST_F(BinaryOpsBackwardTest, AddBroadcastCrossRank) {
-    auto* device = &autograd::ctx().get_device();
-    // a: [2, 1, 1, 4], b: [4] -> b is broadcast across ranks
-    xt::xarray<float> data_a = {1.F, 2.F, 3.F, 4.F, 5.F, 6.F, 7.F, 8.F};
-    data_a.reshape({2, 1, 1, 4});
-    xt::xarray<float> data_b = {10.F, 20.F, 30.F, 40.F};
-
-    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), true);
-    auto b = autograd::create_tensor(core::from_xtensor(data_b, device), true);
-
-    auto out = a + b;
-    out->backward();
-
-    auto a_grad = core::to_xtensor(a->get_grad());
-    auto b_grad = core::to_xtensor(b->get_grad());
-
-    // a_grad: all 1s, shape [2,1,1,4]
-    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a)));
-
-    // b_grad: 1s summed over dims 0,1,2 -> each element = 2, shape [4]
-    EXPECT_TRUE(xt::allclose(b_grad, xt::ones_like(data_b) * 2.0F));
-}
-
-TEST_F(BinaryOpsBackwardTest, SubBroadcastCrossRank) {
-    auto* device = &autograd::ctx().get_device();
-    // a: [2, 1, 1, 4], b: [4] -> b is broadcast across ranks
-    xt::xarray<float> data_a = {1.F, 2.F, 3.F, 4.F, 5.F, 6.F, 7.F, 8.F};
-    data_a.reshape({2, 1, 1, 4});
-    xt::xarray<float> data_b = {10.F, 20.F, 30.F, 40.F};
-
-    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), true);
-    auto b = autograd::create_tensor(core::from_xtensor(data_b, device), true);
-
-    auto out = a - b;
-    out->backward();
-
-    auto a_grad = core::to_xtensor(a->get_grad());
-    auto b_grad = core::to_xtensor(b->get_grad());
-
-    // a_grad: all 1s, shape [2,1,1,4]
-    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a)));
-
-    // b_grad: -1s summed over dims 0,1,2 -> each element = -2, shape [4]
-    EXPECT_TRUE(xt::allclose(b_grad, -xt::ones_like(data_b) * 2.0F));
-}
-
-TEST_F(BinaryOpsBackwardTest, MulBroadcastCrossRank) {
-    auto* device = &autograd::ctx().get_device();
-    // a: [2, 1, 1, 4], b: [4] -> b is broadcast across ranks
-    xt::xarray<float> data_a = {1.F, 2.F, 3.F, 4.F, 5.F, 6.F, 7.F, 8.F};
-    data_a.reshape({2, 1, 1, 4});
-    xt::xarray<float> data_b = {2.F, 2.F, 2.F, 2.F};
-
-    auto a = autograd::create_tensor(core::from_xtensor(data_a, device), true);
-    auto b = autograd::create_tensor(core::from_xtensor(data_b, device), true);
-
-    auto out = a * b;
-    out->backward();
-
-    auto a_grad = core::to_xtensor(a->get_grad());
-    auto b_grad = core::to_xtensor(b->get_grad());
-
-    // d(a*b)/da = b (broadcast) -> each element = 2, shape [2,1,1,4]
-    EXPECT_TRUE(xt::allclose(a_grad, xt::ones_like(data_a) * 2.0F));
-
-    // d(a*b)/db = a, summed over dims 0,1,2 -> [1+5, 2+6, 3+7, 4+8] = [6, 8, 10, 12], shape [4]
-    xt::xarray<float> expected_b_grad = {6.F, 8.F, 10.F, 12.F};
-    EXPECT_TRUE(xt::allclose(b_grad, expected_b_grad));
-}
+INSTANTIATE_TEST_SUITE_P(SameRank, MulBroadcastBackwardTest, ::testing::ValuesIn(kSameRankCases), BroadcastCaseName);
+INSTANTIATE_TEST_SUITE_P(CrossRank, MulBroadcastBackwardTest, ::testing::ValuesIn(kCrossRankCases), BroadcastCaseName);
 
 TEST_F(BinaryOpsBackwardTest, DivBroadcastThrows) {
     auto* device = &autograd::ctx().get_device();
