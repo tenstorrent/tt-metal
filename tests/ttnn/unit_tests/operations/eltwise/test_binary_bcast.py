@@ -1756,7 +1756,6 @@ def test_binary_sharded_scalar_tile(
     )
     tt_out = ttnn.add(a_tt, scalar, use_legacy=False)
     tt_out = ttnn.to_torch(tt_out)
-    atol = 1e-2 if dtype_ttnn == ttnn.bfloat16 else 1e-5
     assert_with_pcc(tt_out, torch.add(a_pt, scalar))
 
 
