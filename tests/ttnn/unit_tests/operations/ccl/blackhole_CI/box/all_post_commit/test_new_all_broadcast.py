@@ -23,19 +23,7 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.all_broadcast(
-        input_tensor_mesh,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        topology=all_broadcast_topology,
-        subdevice_id=subdevice_id,
-    )
-    ttnn.synchronize_device(mesh_device)
-
-    # Capture trace
-    logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    for i in range(num_iter):
+    with mesh_device.cache_entries_counter.measure():
         tt_out_tensor = ttnn.all_broadcast(
             input_tensor_mesh,
             num_links=num_links,
@@ -43,6 +31,20 @@ def run_with_trace(
             topology=all_broadcast_topology,
             subdevice_id=subdevice_id,
         )
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture trace
+    logger.info("Capturing trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    with mesh_device.cache_entries_counter.measure():
+        for i in range(num_iter):
+            tt_out_tensor = ttnn.all_broadcast(
+                input_tensor_mesh,
+                num_links=num_links,
+                memory_config=output_mem_config,
+                topology=all_broadcast_topology,
+                subdevice_id=subdevice_id,
+            )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
 
@@ -224,8 +226,8 @@ def run_all_broadcast_impl(
                     passed = False
                     assert eq, f"{i} FAILED: {output}"
     assert (
-        mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
-    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
+        mesh_device.cache_entries_counter.total == 1 or mesh_device.cache_entries_counter.total == num_iters
+    ), f"Device has {mesh_device.cache_entries_counter.total} program cache entries"
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()
     if not passed:
