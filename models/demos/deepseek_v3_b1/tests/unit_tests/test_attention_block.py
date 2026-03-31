@@ -194,11 +194,11 @@ def test_attention_block(
     )
 
     # SDPA output intermediate tensor declared here to overlap with remaining pre-SDPA CBs.
-    # Matches flash_mla's cb_out_im sizing: 51 tiles of [8, 32] at bfloat16 = 26112 B per core.
-    # Shard shape (24, 544) = 3 tile-rows x 17 tile-cols = 51 tiles per core.
+    # 4 slots needed: DKV input RMSNorm output (14336 B) placed after matmul_input_cb (14336 B)
+    # requires 28672 B per core. Shard shape (32, 544) = 4 tile-rows x 17 tile-cols = 34816 B.
     sdpa_out_interm_num_cores = device_grid_size.x * device_grid_size.y
-    sdpa_out_interm_num_slots = 3
-    sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8  # 3 tile-rows of [8, 32]
+    sdpa_out_interm_num_slots = 4
+    sdpa_out_interm_shard_height = sdpa_out_interm_num_slots * 8  # 4 tile-rows of [8, 32]
     sdpa_out_interm_shard_width = 17 * 32  # 17 tile-cols of [8, 32]
     sdpa_out_interm_total_height = sdpa_out_interm_shard_height * sdpa_out_interm_num_cores
 
