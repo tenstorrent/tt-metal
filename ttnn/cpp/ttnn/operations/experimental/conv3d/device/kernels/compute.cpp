@@ -252,9 +252,7 @@ void kernel_main() {
                             }
 
                             // Stall on matmul/bias to finish
-                            {
-                                cb_wait_front(cb_matmul_interm_tiled, output_tiles);
-                            }
+                            cb_wait_front(cb_matmul_interm_tiled, output_tiles);
 
                             if (!is_reducer) {
                                 // not reducer implies that we are a worker and there are multiple workers in this

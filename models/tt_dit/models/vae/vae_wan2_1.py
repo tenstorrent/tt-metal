@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import math
 from typing import TYPE_CHECKING
 
 import torch
@@ -18,7 +17,7 @@ from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
-from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config
+from ...utils.conv3d import _ntuple, aligned_channels, compute_decoder_stage_dims, count_convs, get_conv3d_config
 from ...utils.substate import pop_substate, rename_substate
 from ...utils.tensor import typed_tensor
 
@@ -1160,19 +1159,11 @@ class WanDecoder3d(Module):
         dims = [dim * u for u in [dim_mult[-1]] + dim_mult[::-1]]
 
         # Compute per-stage spatial dims for blocking table lookup.
-        # Stages from latent to full resolution: each upsample doubles H and W.
-        # stage_hw[i] = (H_out, W_out) for conv3d layers at stage i.
-        h_factor = parallel_config.height_parallel.factor
-        w_factor = parallel_config.width_parallel.factor
-        vae_scale = 2 ** (len(dim_mult) - 1)  # 8 for dim_mult=(1,2,4,4)
+        num_stages = len(dim_mult) - 1
         if target_height > 0 and target_width > 0:
-            h_dev = math.ceil(target_height / vae_scale / h_factor) * vae_scale
-            w_dev = (target_width // vae_scale // w_factor) * vae_scale
-            # stage_hw[0] = latent, stage_hw[i] = after i-th upsample
-            stage_hw = [(h_dev // vae_scale, w_dev // vae_scale)]
-            for i in range(len(dim_mult) - 1):
-                prev_h, prev_w = stage_hw[-1]
-                stage_hw.append((prev_h * 2, prev_w * 2))
+            h_factor = parallel_config.height_parallel.factor
+            w_factor = parallel_config.width_parallel.factor
+            stage_hw = compute_decoder_stage_dims(target_height, target_width, h_factor, w_factor, num_stages)
         else:
             stage_hw = [(0, 0)] * len(dim_mult)
 

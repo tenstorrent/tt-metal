@@ -4,6 +4,7 @@
 
 import collections
 import hashlib
+import math
 from itertools import repeat
 
 import torch
@@ -21,6 +22,23 @@ def _ntuple(x, n):
         assert len(x) == n, f"{x} must be a tuple of length {n}"
         return tuple(x)
     return tuple(repeat(x, n))
+
+
+def compute_decoder_stage_dims(target_height, target_width, h_factor, w_factor, num_stages=3):
+    """Compute per-device (H_out, W_out) at each VAE decoder stage.
+
+    Returns a list of (H, W) tuples from latent resolution to full resolution.
+    Height is rounded up (padded), width is rounded down (fractured evenly).
+    """
+    vae_scale = 2**num_stages  # 8 for 3 upsample stages
+    # Height rounds up to handle fractured padding; width rounds down (exact fracturing).
+    h_dev = math.ceil(target_height / vae_scale / h_factor) * vae_scale
+    w_dev = (target_width // vae_scale // w_factor) * vae_scale
+    stages = [(h_dev // vae_scale, w_dev // vae_scale)]
+    for _ in range(num_stages):
+        prev_h, prev_w = stages[-1]
+        stages.append((prev_h * 2, prev_w * 2))
+    return stages
 
 
 # Blocking table: (h_factor, w_factor, C_in, C_out, kernel, H_out, W_out) -> blocking

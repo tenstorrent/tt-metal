@@ -281,6 +281,10 @@ void kernel_main() {
                                     pre_zero_pages<padded_page_bytes>(cb_write_addr, chunk_size);
                                 }
 
+                                // Set NOC state once for the vol2col L1→CB reads.
+                                // Re-set after chunk boundaries (inside the loop).
+                                noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
+
                                 for (uint32_t t = t_block; t < t_block_end; t++) {
                                     const uint32_t t_base = (t - t_block) * stride_t;
                                     for (uint32_t h = h_block; h < h_block_end; h++) {
@@ -356,7 +360,6 @@ void kernel_main() {
 
                                         // Vol2col for this (t, h) across all w
                                         {
-                                            noc_async_read_one_packet_set_state(shard_noc_base, kW_bytes);
                                             for (uint32_t w = w_block; w < w_block_end; w++) {
                                                 const uint32_t w_base = (w - w_block) * stride_w;
 
