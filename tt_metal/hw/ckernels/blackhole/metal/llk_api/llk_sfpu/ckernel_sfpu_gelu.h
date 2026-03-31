@@ -224,41 +224,24 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     // P(x) is a degree-4 correction polynomial fitted to the TRUE function
     // GELU(x)·exp(x²/2) via minimax approximation over x ∈ (-13.1875, -3.125).
     //
-    // Uses inline Cody-Waite range reduction instead of library exp call.
-    // For x ∈ (-13.1875, -3.125), t = -x²/2 ∈ (-86.8, -4.88), so z = t/ln2
-    // ∈ (-125.3, -7.0). No overflow/underflow/NaN possible in this range,
-    // so all special-case checks from _sfpu_exp_f32_accurate_ are skipped.
-    // Degree-5 Taylor (vs degree-7 in library): error < 3.3e-9 relative,
-    // negligible for BF16 output.
+    // Uses Moroz exp_21f instead of Cody-Waite range reduction, saving ~4
+    // instructions. The exp_21f algorithm packs floor(t/ln2) and frac(t/ln2)
+    // into a single int32 via _float_to_int32_for_exp_21f_, then extracts
+    // exponential and fractional parts via exexp_nodebias/exman9.
     v_elseif(x > -13.1875f) {
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
 
-        // Inline range reduction: exp(t) = 2^k · exp(r)
-        // Single-step: BF16 precision (~8 bits) doesn't benefit from
-        // the extended-precision LN2_HI/LN2_LO split (~40-bit precision).
-        constexpr float INV_LN2 = 1.4426950408889634f;
-        constexpr float NEG_LN2 = -0.6931471805599453f;
-        sfpi::vFloat z = t * INV_LN2;
+        // Moroz exp_21f: compact exp via integer bit tricks
+        constexpr float ONE_LN2 = 1.4426950216293334961f;
+        sfpi::vFloat xlog2 = t * ONE_LN2 + 127.0f;
 
-        sfpi::vInt k_int;
-        sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
+        sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
+        sfpi::vInt exponential_part = sfpi::exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));
+        sfpi::vInt fractional_part = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));
 
-        sfpi::vFloat r = k * NEG_LN2 + t;
-
-        // Degree-4 Taylor for exp(r), |r| < ln(2)/2 ≈ 0.347
-        // Max relative error ~2.6e-7, negligible for BF16 output (~8-bit mantissa)
-        sfpi::vFloat p = PolynomialEvaluator::eval(
-            r,
-            sfpi::vConst1,  // 1
-            sfpi::vConst1,  // r
-            0.5f,           // r²/2!
-            1.0f / 6.0f,    // r³/3!
-            1.0f / 24.0f);  // r⁴/4!
-
-        // Scale by 2^k via exponent bit manipulation
-        sfpi::vInt p_exp = sfpi::exexp_nodebias(p);
-        sfpi::vInt new_exp = p_exp + k_int;
-        sfpi::vFloat exp_val = sfpi::setexp(p, new_exp);
+        sfpi::vFloat frac = sfpi::int32_to_float(fractional_part, 0);
+        frac = PolynomialEvaluator::eval(frac, 1.0017248f, 7.839635491371155e-08f, 4.791750143340323e-15f);
+        sfpi::vFloat exp_val = sfpi::setexp(frac, exponential_part);
 
         // Correction polynomial: P(x) ≈ GELU(x)·exp(x²/2)
         // Replaces reciprocal + Mills ratio, saving ~8 ops + LUT init
