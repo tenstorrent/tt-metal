@@ -83,7 +83,7 @@ __attribute__((always_inline)) inline void pause() {
  * @param predicate A callable that returns true when the wait should end
  */
 template <uint32_t N_SPINS = 100, uint32_t MAX_WAIT_US = 16, typename... Ts>
-__attribute__((flatten)) inline void nice_spin_until(auto predicate, Ts&&... args) {
+__attribute__((flatten)) inline void nice_spin_until(auto predicate, const Ts&... args) {
     uint32_t counter = 0;
     uint32_t sleep_us = 1;
     while (!predicate(args...)) {
