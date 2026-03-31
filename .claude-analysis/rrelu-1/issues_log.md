@@ -13,7 +13,7 @@
 |-------|-------------|--------|----------|--------|
 | 1 | Reference Discovery | ok | ~271s | none |
 | 2 | Reference Analysis | ok | ~777s | none |
-| 3 | Implementation | pending | - | - |
+| 3 | Implementation | ok | ~901s | none |
 | 4 | Testing & Debugging | pending | - | - |
 | 5 | Documentation | pending | - | - |
 
