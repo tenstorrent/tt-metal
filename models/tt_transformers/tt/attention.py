@@ -778,7 +778,7 @@ class Attention(LightweightModule):
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                     num_links=self.model_config["ATTN_AGMM_CONFIG"]["num_links"],
                     memory_config_ag=self.args.get_attn_all_gather_output_mem_config(Mode.DECODE, None),
-                    memory_config_mm=self.args.get_attn_dense_output_mem_config(Mode.DECODE, None),
+                    memory_config_mm=None,  # Use all-gather output's mem config; reshard to residual config afterward
                     program_config=self.args.get_attn_all_gather_matmul_program_config(Mode.DECODE, None),
                     compute_kernel_config=self.compute_kernel_config_hifi2,
                     chunks_per_sync=self.model_config["ATTN_AGMM_CONFIG"]["chunks_per_sync"],

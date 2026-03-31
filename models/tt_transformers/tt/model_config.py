@@ -668,7 +668,7 @@ class ModelArgs:
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
             # TODO: #26657 refactor ACTUAL_DEVICE environment variable usage
             self._use_fused_all_gather_matmul = (
-                self.num_devices == 8
+                self.num_devices >= 4
                 and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // ttnn.TILE_SIZE // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
@@ -1840,7 +1840,7 @@ class ModelArgs:
                 )
             else:
                 if self.use_fused_all_gather_matmul:
-                    do_core_grid_size = (8, 1)
+                    do_core_grid_size = (self.num_devices, 1)
                     do_per_core_N = (
                         self.dim // self.num_devices // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1])
                     )
