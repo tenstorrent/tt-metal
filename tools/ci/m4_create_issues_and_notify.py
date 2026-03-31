@@ -20,12 +20,7 @@ from typing import Any
 PRIMARY_REPO = "tenstorrent/tt-metal"
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 SLACK_CHANNEL_TEST = "C0APK6215B5"
-MAX_LOG_CHARS_PER_RUN = 12000
 MARKER = "===FINAL_M4_REVIEW_DECISION==="
-MAX_LOG_HEAD_LINES = 120
-MAX_LOG_TAIL_LINES = 160
-LOG_SNIPPET_CONTEXT = 6
-LOG_ERROR_RE = re.compile(r"(?i)(error|failed|failure|traceback|exception|fatal|assert)")
 
 
 def log(message: str) -> None:
@@ -87,43 +82,7 @@ def fetch_job_logs(job_url: str, *, read_token: str) -> str:
         ["gh", "run", "view", str(run_id), "--repo", PRIMARY_REPO, "--job", str(job_id), "--log"],
         github_token=read_token,
     )
-    text = (proc.stdout or "").strip()
-    return compact_log_for_review(text)
-
-
-def compact_log_for_review(text: str) -> str:
-    if len(text) <= MAX_LOG_CHARS_PER_RUN:
-        return text
-    lines = text.splitlines()
-    if not lines:
-        return text[:MAX_LOG_CHARS_PER_RUN]
-    parts: list[str] = []
-    head = lines[:MAX_LOG_HEAD_LINES]
-    tail = lines[-MAX_LOG_TAIL_LINES:] if len(lines) > MAX_LOG_TAIL_LINES else []
-    parts.append("--- LOG HEAD ---")
-    parts.extend(head)
-    hit_indexes: list[int] = []
-    for idx, line in enumerate(lines):
-        if LOG_ERROR_RE.search(line):
-            hit_indexes.append(idx)
-    if hit_indexes:
-        parts.append("--- ERROR/FAILURE SNIPPETS ---")
-        kept: set[int] = set()
-        for idx in hit_indexes[:25]:
-            start = max(0, idx - LOG_SNIPPET_CONTEXT)
-            end = min(len(lines), idx + LOG_SNIPPET_CONTEXT + 1)
-            for j in range(start, end):
-                if j not in kept:
-                    parts.append(lines[j])
-                    kept.add(j)
-            parts.append("...")
-    if tail:
-        parts.append("--- LOG TAIL ---")
-        parts.extend(tail)
-    compact = "\n".join(parts)
-    if len(compact) <= MAX_LOG_CHARS_PER_RUN:
-        return compact
-    return compact[:MAX_LOG_CHARS_PER_RUN]
+    return (proc.stdout or "").strip()
 
 
 def parse_agent_json(text: str) -> dict[str, Any]:
