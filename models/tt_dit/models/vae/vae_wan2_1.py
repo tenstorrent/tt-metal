@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import torch
@@ -1165,8 +1166,6 @@ class WanDecoder3d(Module):
         w_factor = parallel_config.width_parallel.factor
         vae_scale = 2 ** (len(dim_mult) - 1)  # 8 for dim_mult=(1,2,4,4)
         if target_height > 0 and target_width > 0:
-            import math
-
             h_dev = math.ceil(target_height / vae_scale / h_factor) * vae_scale
             w_dev = (target_width // vae_scale // w_factor) * vae_scale
             # stage_hw[0] = latent, stage_hw[i] = after i-th upsample
