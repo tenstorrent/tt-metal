@@ -87,7 +87,7 @@ def create_decoder_block_tensors(
     """Create all tensors required by DecoderBlock.op().
 
     Three modes of operation:
-    - **preloaded_weights mode** (production): pass a DeepSeekV3MoELayerWeights from
+    - **preloaded_weights mode** (production): pass a ModelWeights from
       load_moe_layer. Skips weight processing and golden tensors.
     - **state_dict + is_moe=True** (MoE tests): calls
       prepare_moe_layer_weights, builds MoE golden tensors.
@@ -773,10 +773,9 @@ def create_decoder_block_tensors(
             "rigged_expert_ids": rigged_expert_ids,
         }
 
-    # ── Routed weight tensors differ between MoE (list) and dense (single tensor) ──
-    routed_gate = layer.routed_gate_proj[0] if is_moe else layer.routed_gate_proj
-    routed_up = layer.routed_up_proj[0] if is_moe else layer.routed_up_proj
-    routed_down = layer.routed_down_proj[0] if is_moe else layer.routed_down_proj
+    routed_gate = layer.routed_gate_proj[0]
+    routed_up = layer.routed_up_proj[0]
+    routed_down = layer.routed_down_proj[0]
 
     result = {
         # Attention weights (from prepare_*_layer_weights)

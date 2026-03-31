@@ -19,11 +19,10 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.prepare_weights import (
-    DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
-    DeepSeekV3MoELayerWeights,
     DenseRoutedExpertWeights,
+    ModelWeights,
     MoERoutedExpertWeights,
     _create_moe_routed_experts,
     prepare_attention_weights,
@@ -283,7 +282,7 @@ def test_prepare_dense_layer_single_layer_4x2(bh_2d_mesh_device):
     layer = prepare_dense_layer_weights(submesh, state, 0)
     elapsed = time.perf_counter() - t0
     logger.info("prepare_dense_layer_weights (1 dense layer, 4x2 mesh): {:.3f} s", elapsed)
-    assert isinstance(layer, DeepSeekV3DenseLayerWeights)
+    assert isinstance(layer, ModelWeights)
     assert layer.q_a_proj.tensor_shape == (3584, 3072)
     assert layer.q_b_proj.tensor_shape == (1536, 12288)
     assert layer.kv_a_proj.tensor_shape == (7168, 576)
@@ -318,7 +317,7 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     logger.info(f"Weights prepared")
     elapsed = time.perf_counter() - t0
     logger.info("prepare_moe_layer_weights (1 MoE layer, 4x2 mesh): {:.3f} s", elapsed)
-    assert isinstance(layer, DeepSeekV3MoELayerWeights)
+    assert isinstance(layer, ModelWeights)
     assert layer.q_a_proj.tensor_shape == (3584, 3072)
     assert layer.q_b_proj.tensor_shape == (1536, 12288)
     assert layer.kv_a_proj.tensor_shape == (7168, 576)

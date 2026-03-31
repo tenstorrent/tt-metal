@@ -23,7 +23,7 @@ from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBl
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3DenseLayerWeights, DeepSeekV3MoELayerWeights
+from models.demos.deepseek_v3_b1.prepare_weights import ModelWeights
 
 # TODO: This shouldn't live in the test file; we should refactor this
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block import create_decoder_block_tensors
@@ -39,7 +39,7 @@ class DecoderStage(StageKind):
         self,
         state_dict: dict[str, torch.Tensor] | None,
         *,
-        weights: DeepSeekV3MoELayerWeights | DeepSeekV3DenseLayerWeights | None,
+        weights: ModelWeights | None,
         layer_idx: int,
         position_id: int,
         max_seq_len: int,
@@ -258,7 +258,7 @@ class MoEDecoderStage(DecoderStage):
     """Decoder stage: bcast + fused attention + MoE + reduce-to-one.
 
     Accepts weights in two forms (mutually exclusive):
-    - ``weights``: a pre-loaded :class:`DeepSeekV3MoELayerWeights` (production path via
+    - ``weights``: a pre-loaded :class:`ModelWeights` (production path via
       ``WeightProvider.load_moe_layer``).
     - ``state_dict``: a raw HF-format state dict (test path; requires ``layer_idx`` and
       ``num_routed_experts`` for weight processing).
@@ -268,7 +268,7 @@ class MoEDecoderStage(DecoderStage):
         self,
         state_dict: dict[str, torch.Tensor] | None = None,
         *,
-        weights: DeepSeekV3MoELayerWeights | None = None,
+        weights: ModelWeights | None = None,
         layer_idx: int = 4,
         num_routed_experts: int = 256,
         position_id: int = 0,
@@ -297,7 +297,7 @@ class DenseDecoderStage(DecoderStage):
     """Dense decoder stage: bcast + fused attention + dense MLP + reduce-to-one.
 
     Accepts weights in two forms (mutually exclusive):
-    - ``weights``: a pre-loaded :class:`DeepSeekV3DenseLayerWeights` (production path via
+    - ``weights``: a pre-loaded :class:`ModelWeights` (production path via
       ``WeightProvider.load_dense_layer``).
     - ``state_dict``: a raw HF-format state dict (test path; requires ``layer_idx``).
     """
@@ -306,7 +306,7 @@ class DenseDecoderStage(DecoderStage):
         self,
         state_dict: dict[str, torch.Tensor] | None = None,
         *,
-        weights: DeepSeekV3DenseLayerWeights | None = None,
+        weights: ModelWeights | None = None,
         layer_idx: int = 0,
         position_id: int = 0,
         max_seq_len: int = 32 * 1024,

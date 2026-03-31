@@ -22,10 +22,9 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     CACHE_TYPE_TENSOR,
     CACHE_TYPE_TENSOR_LIST,
     NUM_ROUTED_EXPERTS,
-    DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
-    DeepSeekV3MoELayerWeights,
+    ModelWeights,
     embedding_fingerprint,
     layer_fingerprints,
     lm_head_fingerprints,
@@ -46,10 +45,10 @@ class WeightProvider(Protocol):
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         ...
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> ModelWeights:
         ...
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> ModelWeights:
         ...
 
 
@@ -241,48 +240,52 @@ class CacheWeightProvider:
                 result[name] = self._cache.load_tensor_list(fp, device=device)
         return result
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> ModelWeights:
         g = self._load_layer_groups(layer_id, device, is_moe=True)
-        return DeepSeekV3MoELayerWeights(
-            q_a_proj=g["q_ab_kv_a"]["q_a_proj"],
-            q_b_proj=g["q_ab_kv_a"]["q_b_proj"],
-            kv_a_proj=g["q_ab_kv_a"]["kv_a_proj"],
-            o_proj=g["o_proj_gate_mm_norms"]["o_proj"],
-            gate_mm=g["o_proj_gate_mm_norms"]["gate_mm"],
-            attn_norm=g["o_proj_gate_mm_norms"]["attn_norm"],
-            q_norm=g["o_proj_gate_mm_norms"]["q_norm"],
-            kv_norm=g["o_proj_gate_mm_norms"]["kv_norm"],
-            ffn_norm=g["o_proj_gate_mm_norms"]["ffn_norm"],
-            gate_bias=g["gate_bias"],
-            kv_b1_proj=g["kv_b12"]["kv_b1_proj"],
-            kv_b2_proj=g["kv_b12"]["kv_b2_proj"],
-            shared_gate_proj=g["gate_up"]["gate_proj"],
-            shared_up_proj=g["gate_up"]["up_proj"],
-            shared_down_proj=g["shared_down_proj"],
-            routed_gate_proj=g["routed_gate_proj"],
-            routed_up_proj=g["routed_up_proj"],
-            routed_down_proj=g["routed_down_proj"],
+        return ModelWeights(
+            {
+                "q_a_proj": g["q_ab_kv_a"]["q_a_proj"],
+                "q_b_proj": g["q_ab_kv_a"]["q_b_proj"],
+                "kv_a_proj": g["q_ab_kv_a"]["kv_a_proj"],
+                "o_proj": g["o_proj_gate_mm_norms"]["o_proj"],
+                "gate_mm": g["o_proj_gate_mm_norms"]["gate_mm"],
+                "attn_norm": g["o_proj_gate_mm_norms"]["attn_norm"],
+                "q_norm": g["o_proj_gate_mm_norms"]["q_norm"],
+                "kv_norm": g["o_proj_gate_mm_norms"]["kv_norm"],
+                "ffn_norm": g["o_proj_gate_mm_norms"]["ffn_norm"],
+                "gate_bias": g["gate_bias"],
+                "kv_b1_proj": g["kv_b12"]["kv_b1_proj"],
+                "kv_b2_proj": g["kv_b12"]["kv_b2_proj"],
+                "shared_gate_proj": g["gate_up"]["gate_proj"],
+                "shared_up_proj": g["gate_up"]["up_proj"],
+                "shared_down_proj": g["shared_down_proj"],
+                "routed_gate_proj": g["routed_gate_proj"],
+                "routed_up_proj": g["routed_up_proj"],
+                "routed_down_proj": g["routed_down_proj"],
+            }
         )
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> ModelWeights:
         g = self._load_layer_groups(layer_id, device, is_moe=False)
-        return DeepSeekV3DenseLayerWeights(
-            q_a_proj=g["q_ab_kv_a"]["q_a_proj"],
-            q_b_proj=g["q_ab_kv_a"]["q_b_proj"],
-            kv_a_proj=g["q_ab_kv_a"]["kv_a_proj"],
-            o_proj=g["o_proj_gate_mm_norms"]["o_proj"],
-            attn_norm=g["o_proj_gate_mm_norms"]["attn_norm"],
-            q_norm=g["o_proj_gate_mm_norms"]["q_norm"],
-            kv_norm=g["o_proj_gate_mm_norms"]["kv_norm"],
-            ffn_norm=g["o_proj_gate_mm_norms"]["ffn_norm"],
-            kv_b1_proj=g["kv_b12"]["kv_b1_proj"],
-            kv_b2_proj=g["kv_b12"]["kv_b2_proj"],
-            shared_gate_proj=g["gate_up"]["gate_proj"],
-            shared_up_proj=g["gate_up"]["up_proj"],
-            shared_down_proj=g["shared_down_proj"],
-            routed_gate_proj=g["routed_gate_proj"],
-            routed_up_proj=g["routed_up_proj"],
-            routed_down_proj=g["routed_down_proj"],
+        return ModelWeights(
+            {
+                "q_a_proj": g["q_ab_kv_a"]["q_a_proj"],
+                "q_b_proj": g["q_ab_kv_a"]["q_b_proj"],
+                "kv_a_proj": g["q_ab_kv_a"]["kv_a_proj"],
+                "o_proj": g["o_proj_gate_mm_norms"]["o_proj"],
+                "attn_norm": g["o_proj_gate_mm_norms"]["attn_norm"],
+                "q_norm": g["o_proj_gate_mm_norms"]["q_norm"],
+                "kv_norm": g["o_proj_gate_mm_norms"]["kv_norm"],
+                "ffn_norm": g["o_proj_gate_mm_norms"]["ffn_norm"],
+                "kv_b1_proj": g["kv_b12"]["kv_b1_proj"],
+                "kv_b2_proj": g["kv_b12"]["kv_b2_proj"],
+                "shared_gate_proj": g["gate_up"]["gate_proj"],
+                "shared_up_proj": g["gate_up"]["up_proj"],
+                "shared_down_proj": g["shared_down_proj"],
+                "routed_gate_proj": [g["routed_gate_proj"]],
+                "routed_up_proj": [g["routed_up_proj"]],
+                "routed_down_proj": [g["routed_down_proj"]],
+            }
         )
 
 
@@ -318,11 +321,11 @@ class SyntheticWeightProvider:
             move_to_device=True,
         )
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> ModelWeights:
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
         return prepare_moe_layer_weights(device, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> ModelWeights:
         sd = _build_synthetic_dense_state_dict(layer_id)
         return prepare_dense_layer_weights(device, sd, layer_id, move_to_device=True)
 
@@ -342,7 +345,7 @@ class StateDictWeightProvider:
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         return prepare_lm_head_weights(self._state_dict, device, move_to_device=True)
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> ModelWeights:
         return prepare_moe_layer_weights(
             device,
             self._state_dict,
@@ -351,5 +354,5 @@ class StateDictWeightProvider:
             move_to_device=True,
         )
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> ModelWeights:
         return prepare_dense_layer_weights(device, self._state_dict, layer_id, move_to_device=True)

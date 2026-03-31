@@ -447,10 +447,9 @@ def create_routed_expert_tensors(
             num_routed_experts=8,
             move_to_device=True,
         )
-        # DenseRoutedExpertWeights: single tensor per projection (mesh-shaped), no list
-        gate_proj_weights = routed_weights.routed_gate_proj
-        up_proj_weights = routed_weights.routed_up_proj
-        down_proj_weights = routed_weights.routed_down_proj
+        gate_proj_weights = routed_weights.routed_gate_proj[0]
+        up_proj_weights = routed_weights.routed_up_proj[0]
+        down_proj_weights = routed_weights.routed_down_proj[0]
         gate_proj_expert_tensors = None  # unused when is_moe=False
         up_proj_expert_tensors = None
         down_proj_expert_tensors = None

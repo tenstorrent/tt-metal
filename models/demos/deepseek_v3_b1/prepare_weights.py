@@ -308,50 +308,58 @@ class MoERoutedExpertWeights:
         _assert_moe_routed_expert_list_contiguous(self.routed_down_proj, "routed_down_proj")
 
 
-@dataclass
-class DeepSeekV3DenseLayerWeights:
-    """Weights for a dense layer (0..first_k_dense_replace-1)."""
+class ModelWeights:
+    """Generic named weight container.
 
-    q_a_proj: OverlappedTensor
-    q_b_proj: OverlappedTensor
-    kv_a_proj: OverlappedTensor
-    o_proj: OverlappedTensor
-    attn_norm: OverlappedTensor
-    q_norm: OverlappedTensor
-    kv_norm: OverlappedTensor
-    ffn_norm: OverlappedTensor
-    kv_b1_proj: OverlappedTensor
-    kv_b2_proj: OverlappedTensor
-    shared_gate_proj: OverlappedTensor
-    shared_up_proj: OverlappedTensor
-    shared_down_proj: ttnn.Tensor
-    routed_gate_proj: ttnn.Tensor
-    routed_up_proj: ttnn.Tensor
-    routed_down_proj: ttnn.Tensor
+    Holds two parallel dicts keyed by the same weight names:
+    one for prepared TTNN device tensors, one for raw torch tensors.
 
+    Access patterns:
+        weights["q_a_proj"]              -> TTNN tensor (OverlappedTensor, ttnn.Tensor, or list)
+        weights.torch_tensor("q_a_proj") -> torch.Tensor (raw, for golden computation)
+        weights.q_a_proj                 -> same as weights["q_a_proj"] (attribute access)
+    """
 
-@dataclass
-class DeepSeekV3MoELayerWeights:
-    """Weights for an MoE layer (first_k_dense_replace..num_layers-1)."""
+    def __init__(
+        self,
+        ttnn_weights: dict[str, Any] | None = None,
+        torch_weights: dict[str, Any] | None = None,
+    ):
+        self._ttnn = ttnn_weights or {}
+        self._torch = torch_weights or {}
 
-    q_a_proj: OverlappedTensor
-    q_b_proj: OverlappedTensor
-    kv_a_proj: OverlappedTensor
-    o_proj: OverlappedTensor
-    gate_mm: OverlappedTensor
-    attn_norm: OverlappedTensor
-    q_norm: OverlappedTensor
-    kv_norm: OverlappedTensor
-    ffn_norm: OverlappedTensor
-    gate_bias: ttnn.Tensor
-    kv_b1_proj: OverlappedTensor
-    kv_b2_proj: OverlappedTensor
-    shared_gate_proj: OverlappedTensor
-    shared_up_proj: OverlappedTensor
-    shared_down_proj: ttnn.Tensor
-    routed_gate_proj: list[ttnn.Tensor]
-    routed_up_proj: list[ttnn.Tensor]
-    routed_down_proj: list[ttnn.Tensor]
+    def __getitem__(self, name: str):
+        return self._ttnn[name]
+
+    def __contains__(self, name: str) -> bool:
+        return name in self._ttnn
+
+    def get(self, name: str, default=None):
+        return self._ttnn.get(name, default)
+
+    def keys(self):
+        return self._ttnn.keys()
+
+    def __getattr__(self, name: str):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        try:
+            return self._ttnn[name]
+        except KeyError:
+            raise AttributeError(f"No weight named '{name}'")
+
+    def ttnn_tensor(self, name: str):
+        return self._ttnn[name]
+
+    def torch_tensor(self, name: str):
+        return self._torch[name]
+
+    def has_torch(self, name: str) -> bool:
+        return name in self._torch
+
+    @property
+    def torch_keys(self):
+        return self._torch.keys()
 
 
 @dataclass
@@ -1394,7 +1402,7 @@ def prepare_dense_layer_weights(
     *,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
-) -> DeepSeekV3DenseLayerWeights:
+) -> ModelWeights:
     """Prepare fused weights for a single dense decoder layer."""
     logger.info("Preparing dense layer {}...", layer_idx)
     t0 = time.perf_counter()
@@ -1409,23 +1417,25 @@ def prepare_dense_layer_weights(
     )
     assert isinstance(routed, DenseRoutedExpertWeights)
     logger.info("  dense layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
-    return DeepSeekV3DenseLayerWeights(
-        q_a_proj=attn.q_a_proj,
-        q_b_proj=attn.q_b_proj,
-        kv_a_proj=attn.kv_a_proj,
-        o_proj=attn.o_proj,
-        attn_norm=attn.attn_norm,
-        q_norm=attn.q_norm,
-        kv_norm=attn.kv_norm,
-        ffn_norm=attn.ffn_norm,
-        kv_b1_proj=attn.kv_b1_proj,
-        kv_b2_proj=attn.kv_b2_proj,
-        shared_gate_proj=shared.shared_gate_proj,
-        shared_up_proj=shared.shared_up_proj,
-        shared_down_proj=shared.shared_down_proj,
-        routed_gate_proj=routed.routed_gate_proj,
-        routed_up_proj=routed.routed_up_proj,
-        routed_down_proj=routed.routed_down_proj,
+    return ModelWeights(
+        {
+            "q_a_proj": attn.q_a_proj,
+            "q_b_proj": attn.q_b_proj,
+            "kv_a_proj": attn.kv_a_proj,
+            "o_proj": attn.o_proj,
+            "attn_norm": attn.attn_norm,
+            "q_norm": attn.q_norm,
+            "kv_norm": attn.kv_norm,
+            "ffn_norm": attn.ffn_norm,
+            "kv_b1_proj": attn.kv_b1_proj,
+            "kv_b2_proj": attn.kv_b2_proj,
+            "shared_gate_proj": shared.shared_gate_proj,
+            "shared_up_proj": shared.shared_up_proj,
+            "shared_down_proj": shared.shared_down_proj,
+            "routed_gate_proj": [routed.routed_gate_proj],
+            "routed_up_proj": [routed.routed_up_proj],
+            "routed_down_proj": [routed.routed_down_proj],
+        }
     )
 
 
@@ -1437,7 +1447,7 @@ def prepare_moe_layer_weights(
     num_routed_experts: int = NUM_ROUTED_EXPERTS,
     move_to_device: bool = False,
     cache_config: CacheConfig | None = None,
-) -> DeepSeekV3MoELayerWeights:
+) -> ModelWeights:
     """Prepare fused weights for a single MoE decoder layer."""
     logger.info("Preparing MoE layer {}...", layer_idx)
     t0 = time.perf_counter()
@@ -1460,25 +1470,27 @@ def prepare_moe_layer_weights(
     assert attn.gate_bias is not None
     assert isinstance(routed, MoERoutedExpertWeights)
     logger.info("  MoE layer {} done in {:.3f}s", layer_idx, time.perf_counter() - t0)
-    return DeepSeekV3MoELayerWeights(
-        q_a_proj=attn.q_a_proj,
-        q_b_proj=attn.q_b_proj,
-        kv_a_proj=attn.kv_a_proj,
-        o_proj=attn.o_proj,
-        gate_mm=attn.gate_mm,
-        attn_norm=attn.attn_norm,
-        q_norm=attn.q_norm,
-        kv_norm=attn.kv_norm,
-        ffn_norm=attn.ffn_norm,
-        gate_bias=attn.gate_bias,
-        kv_b1_proj=attn.kv_b1_proj,
-        kv_b2_proj=attn.kv_b2_proj,
-        shared_gate_proj=shared.shared_gate_proj,
-        shared_up_proj=shared.shared_up_proj,
-        shared_down_proj=shared.shared_down_proj,
-        routed_gate_proj=routed.routed_gate_proj,
-        routed_up_proj=routed.routed_up_proj,
-        routed_down_proj=routed.routed_down_proj,
+    return ModelWeights(
+        {
+            "q_a_proj": attn.q_a_proj,
+            "q_b_proj": attn.q_b_proj,
+            "kv_a_proj": attn.kv_a_proj,
+            "o_proj": attn.o_proj,
+            "gate_mm": attn.gate_mm,
+            "attn_norm": attn.attn_norm,
+            "q_norm": attn.q_norm,
+            "kv_norm": attn.kv_norm,
+            "ffn_norm": attn.ffn_norm,
+            "gate_bias": attn.gate_bias,
+            "kv_b1_proj": attn.kv_b1_proj,
+            "kv_b2_proj": attn.kv_b2_proj,
+            "shared_gate_proj": shared.shared_gate_proj,
+            "shared_up_proj": shared.shared_up_proj,
+            "shared_down_proj": shared.shared_down_proj,
+            "routed_gate_proj": routed.routed_gate_proj,
+            "routed_up_proj": routed.routed_up_proj,
+            "routed_down_proj": routed.routed_down_proj,
+        }
     )
 
 
