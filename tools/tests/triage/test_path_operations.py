@@ -24,9 +24,6 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# sys.path setup — mirrors the pattern in test_lw_assert_handling.py
-# ---------------------------------------------------------------------------
 metal_home = Path(__file__).resolve().parents[3]
 triage_home = metal_home / "tools" / "triage"
 if str(triage_home) not in sys.path:
