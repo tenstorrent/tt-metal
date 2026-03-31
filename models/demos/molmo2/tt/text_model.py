@@ -22,6 +22,11 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.molmo2.tt.molmo2_lm_head import (
+    DEFAULT_LM_HEAD_MAX_CHUNK_N,
+    build_lm_head_chunks,
+    forward_split_lm_head,
+)
 from models.demos.molmo2.tt.text_block import TextBlock
 from models.demos.molmo2.tt.text_rmsnorm import TextRMSNorm
 from models.demos.molmo2.tt.text_rotary_emb import TextRotaryEmbedding
@@ -50,6 +55,8 @@ class TextModel(LightweightModule):
         weight_cache_path=None,
         state_dict_prefix: str = "model.transformer",
         dtype=ttnn.bfloat8_b,
+        lm_head_max_chunk_n: int | None = None,
+        lm_head_mesh_column_parallel: bool = False,
     ):
         """
         Initialize TextModel.
@@ -70,6 +77,9 @@ class TextModel(LightweightModule):
             weight_cache_path: Path to cache weights
             state_dict_prefix: Prefix for state dict keys
             dtype: Data type for weights
+            lm_head_max_chunk_n: Max vocab columns per LM-head chunk (default splits ~152k vocab).
+            lm_head_mesh_column_parallel: On a multi-device mesh (T3K), shard each chunk's weights
+                across devices (column-parallel). Default False replicates weights on all chips.
         """
         super().__init__()
 
@@ -78,9 +88,16 @@ class TextModel(LightweightModule):
         self.hidden_dim = hidden_dim
         self.vocab_size = vocab_size
         self.dtype = dtype
+        self.lm_head_max_chunk_n = (
+            lm_head_max_chunk_n if lm_head_max_chunk_n is not None else DEFAULT_LM_HEAD_MAX_CHUNK_N
+        )
 
         is_mesh_device = mesh_device.__class__.__name__ == "MeshDevice"
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh_device else None
+        num_mesh_devices = mesh_device.get_num_devices() if is_mesh_device else 1
+        self.lm_head_mesh_column_parallel = bool(
+            lm_head_mesh_column_parallel and is_mesh_device and num_mesh_devices > 1
+        )
 
         # Cache file naming
         if weight_cache_path is None:
@@ -160,19 +177,21 @@ class TextModel(LightweightModule):
             dtype=dtype,
         )
 
-        # Language model head
+        # Language model head (split vocab; optional mesh column-parallel on T3K)
         # Note: lm_head is at top level, not under model.transformer
         lm_head = state_dict["lm_head.weight"]
-        lm_head_t = torch.transpose(lm_head, -2, -1).unsqueeze(0).unsqueeze(0)
-
-        self.lm_head = ttnn.as_tensor(
-            lm_head_t,
-            dtype=dtype,
-            device=mesh_device,
+        # Match reference F.linear(..., lm_head): row count may be below config vocab (e.g. 151936).
+        # Mesh column-parallel pads vocab for sharding; forward must slice back to this width.
+        self.lm_head_logits_width = min(vocab_size, lm_head.shape[0])
+        self.lm_head_chunks, self.lm_head_split_n_columns = build_lm_head_chunks(
+            lm_head,
+            mesh_device=mesh_device,
             mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=cache_name("lm_head.weight") if weight_cache_path else None,
+            dtype=dtype,
+            vocab_size=vocab_size,
+            cache_name=cache_name,
+            max_chunk_n=self.lm_head_max_chunk_n,
+            mesh_column_parallel=self.lm_head_mesh_column_parallel,
         )
 
         # Compute kernel config for lm_head
@@ -269,11 +288,14 @@ class TextModel(LightweightModule):
             all_hidden_states.append(x)
 
         # Language model head
-        logits = ttnn.linear(
-            x,
-            self.lm_head,
+        logits = forward_split_lm_head(
+            x=x,
+            lm_head_chunks=self.lm_head_chunks,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_device=self.mesh_device,
+            mesh_column_parallel=self.lm_head_mesh_column_parallel,
+            logits_output_width=self.lm_head_logits_width,
         )
 
         return logits, new_kv_caches
@@ -341,11 +363,14 @@ class TextModel(LightweightModule):
         x = self.ln_f(x)
 
         # Language model head
-        logits = ttnn.linear(
-            x,
-            self.lm_head,
+        logits = forward_split_lm_head(
+            x=x,
+            lm_head_chunks=self.lm_head_chunks,
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_device=self.mesh_device,
+            mesh_column_parallel=self.lm_head_mesh_column_parallel,
+            logits_output_width=self.lm_head_logits_width,
         )
 
         return logits
