@@ -192,6 +192,12 @@ struct p_ind
     constexpr static std::uint32_t LD_8bit  = 3;
 };
 
+struct p_mov
+{
+    constexpr static std::uint32_t DEST_NORM    = 0;
+    constexpr static std::uint32_t DEST_32B_LOW = 1;
+};
+
 struct p_mova2d
 {
     constexpr static std::uint32_t MATH_HALO_ROWS = 0x0;
