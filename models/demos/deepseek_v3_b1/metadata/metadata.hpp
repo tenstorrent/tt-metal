@@ -10,8 +10,8 @@
 namespace deepseek_b1_ops {
 
 struct DeepseekMetadata {
-    uint32_t position_id;
     uint32_t slot_id;
+    uint32_t position_id;
 };
 
 }  // namespace deepseek_b1_ops
