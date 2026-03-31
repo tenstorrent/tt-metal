@@ -57,7 +57,7 @@ Similarly, the "successfully migrated" kernels listed below may need to be re-mi
 
 Two prior branches attempted matmul helpers. Their failures are instructive:
 
-1. **`matmul_tile` helper was removed** (PR feedback). It only had one call site (`bmm.cpp`). The reviewer said it wasn't worth a helper — the inline code was clearer and preserved tile-by-tile CB pipelining without increasing L1 usage. **Lesson**: don't create a helper for a pattern with only one call site.
+1. **`matmul_tile` helper was removed** (PR feedback on the original version). The original had 3 unused enum types (WaitMode, InitUninitMode, ReconfigureRegisterDatatypeMode) and the reviewer said it was over-engineered for its single TTNN call site (`bmm.cpp`). **Lesson**: don't add configurability nobody uses. Phase 4 re-introduces `matmul_tile` in minimal form (no enums, flat params only) because the tile-by-tile pattern is the most common across the full codebase (~48 call sites) and is essential for Claude to write new kernels.
 
 2. **Param structs were removed** (PR feedback). The original `matmul_block` used `In0BlockParams`, `In1BlockParams`, `OutSubblockParams` structs. The reviewer said: take only independent params (`block_w`, `in0_num_subblocks`, `in1_num_subblocks`, `out_subblock_h`, `out_subblock_w`) and derive computed values internally. **Lesson**: don't make the caller compute derived quantities.
 
@@ -579,10 +579,130 @@ The phase 2 design (`docs/matmul_api_design.md`) has been reviewed and approved 
 
 ---
 
+## PHASE 4: EXTEND COVERAGE
+
+Instance numbering resets each phase. Phase 4 has 2 instances running in parallel.
+Run AFTER phase 3 is complete and all changes are on the branch.
+
+### Context for Phase 4
+
+Phase 3 delivered `matmul_block` (sub-blocked API) and `add_bias_bcast_rows`. But there is NO helper for the `matmul_tiles` LLK (tile-by-tile API), which is used by ~48 call sites — more than any other matmul pattern. Additionally, the production kernel's in0_transpose path is still a ~170-line inline copy because the helper's K-loop can't accept per-block callbacks.
+
+Phase 4 closes both gaps and migrates additional production kernels.
+
+### INSTANCE 1 — matmul_tile Helper + Migrations
+
+**Output**: New files `ttnn/cpp/ttnn/kernel_lib/matmul_tile_helpers.hpp/inl`, migrated production kernels, test results.
+
+**Task**: Implement a minimal `matmul_tile` helper for the tile-by-tile matmul pattern, then migrate production call sites.
+
+**Steps**:
+1. Read `docs/llk_matmul_orchestration.md` (this file) for context — especially LESSONS FROM PRIOR ATTEMPTS. The original `matmul_tile` was removed because it was over-engineered (WaitMode, InitUninitMode, ReconfigureRegisterDatatypeMode — all unused). This time, keep it minimal.
+2. Read the existing `matmul_block_helpers.hpp/inl` and `bias_add_helpers.hpp/inl` to follow the established patterns.
+3. Read `bmm.cpp` (`ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp`) — this is the primary migration target and the reference for the tile-by-tile pattern.
+4. Read the prior attempt for reference only: `git show origin/wransom/llk3:ttnn/cpp/ttnn/kernel_lib/matmul_tile_helpers.hpp`
+
+**Implement** `ttnn/cpp/ttnn/kernel_lib/matmul_tile_helpers.hpp/inl`:
+
+```cpp
+template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
+          bool transpose = false,
+          typename PostComputeFn = matmul_tile_config::NoPostCompute>
+ALWI void matmul_tile(
+    uint32_t Mt, uint32_t Nt, uint32_t Kt,
+    uint32_t batch = 1,
+    PostComputeFn post_compute = {});
+```
+
+Key design points:
+- Wraps `mm_init` + `matmul_tiles` LLK (NOT `mm_block_init` + `matmul_block`).
+- Caller must call `mm_init` before the helper (consistent with `matmul_block` pattern where caller calls `mm_block_init`).
+- Inner loop order: batch × Mt × Nt × Kt (must match CB production order from reader).
+- Uses 4-phase DST management (consistent with `matmul_block` and all other helpers).
+- `PostComputeFn` fires per output tile after the Kt accumulation loop, before packing.
+- `cb_wait_front` / `cb_pop_front` per tile for in0, per Kt*Nt block for in1 (match `bmm.cpp` pattern).
+- NO WaitMode, NO InitUninitMode, NO ReconfigureRegisterDatatypeMode — keep it minimal. Add modes only if a migration needs them.
+- NO param structs — flat params per constraint 9.
+- Runtime asserts: Mt > 0, Nt > 0, Kt > 0, batch > 0.
+
+5. **Migrate `bmm.cpp`** to use the new helper. This is the primary TTNN tile-by-tile production kernel.
+6. **Migrate `moreh_matmul.cpp`** simple path (non-transpose, non-mask, non-bias) if feasible. Leave complex `#ifdef` paths inline.
+7. Write isolated tests for the new helper following the patterns in `tests/tt_metal/tt_metal/integration/matmul/test_matmul_helper_features.cpp`.
+8. Run existing matmul Python tests + C++ integration tests. Report pass/fail vs baseline.
+
+**Rules**:
+- Do NOT add modes/enums unless a concrete migration in THIS phase needs them.
+- Do NOT migrate programming examples (JIT include path issue — constraint 8).
+- Do NOT use environment variables.
+- Write output summary to `docs/phase4_instance1_results.md`.
+
+---
+
+### INSTANCE 2 — PreKBlockFn Callback + Further Migrations
+
+**Output**: Modified `matmul_block_helpers.hpp/inl`, migrated production kernels, fixed tests, test results.
+
+**Task**: Add a `PreKBlockFn` callback to `matmul_block` to eliminate inline K-loop duplication, fix BH test failures, and migrate additional production kernels.
+
+**Steps**:
+1. Read `docs/llk_matmul_orchestration.md` (this file) for context.
+2. Read the current `matmul_block_helpers.hpp/inl` and `bias_add_helpers.hpp/inl`.
+3. Read `docs/phase3_instance3_results.md` — note the in0_transpose inline path (~170 lines duplicated) and the BH test segfaults.
+4. Read the production kernel: `ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp` — specifically the in0_transpose inline path.
+5. Read the gathered variant: `ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_gathered.cpp`
+6. Read `ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize.cpp` — migration target.
+
+**Part A — Add `PreKBlockFn` to `matmul_block`**:
+
+Add a new template parameter:
+```cpp
+typename PreKBlockFn = matmul_block_config::NoPreKBlock
+```
+
+Called at the start of each K-block iteration, BEFORE `cb_wait_front` for inputs. Receives `(uint32_t block, uint32_t num_k_blocks, bool is_last)`. Default is a no-op struct:
+```cpp
+struct NoPreKBlock {
+    ALWI void operator()(uint32_t, uint32_t, bool) const {}
+};
+```
+
+This enables:
+- in0_transpose: the caller passes a functor that transposes the input block and toggles L1_ACC
+- gathered variant ENABLE_GLOBAL_CB: the caller passes a functor that manipulates CB pointers per K-block
+
+The new param must have a default so ALL existing call sites remain unchanged.
+
+**Part B — Migrate in0_transpose path in production kernel**:
+
+Replace the ~170-line inline K-loop for `in0_transpose_tile=true` with a `matmul_block` call using a `PreKBlockFn` that does the transpose. This should reduce the production kernel by ~150 lines.
+
+**Part C — Migrate `conv_bmm_tilize.cpp`**:
+
+This kernel follows the three-helper pipeline from the design doc (Section F3): `tilize → matmul_block → add_bias_bcast_rows → untilize`. The matmul and bias phases should use the helpers. Tilize/untilize use existing helpers or stay inline.
+
+**Part D — Migrate gathered variant**:
+
+Migrate `bmm_large_block_zm_fused_bias_activation_gathered.cpp` — the matmul core should use the helper. The `ENABLE_GLOBAL_CB` per-K-block CB pointer manipulation goes in a `PreKBlockFn`. Ring sync and per-batch CB management stay caller-managed. Also migrate `ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_gathered.cpp` (same pattern).
+
+**Part E — Fix BH test failures**:
+
+Instance 2's feature tests (12 `TensixMatmulHelper*` tests) segfault on Blackhole during JIT compilation. Debug and fix. These tests were developed on Wormhole B0. Common causes: missing BH-specific defines, different CB config requirements, or architecture-conditional code paths.
+
+**Part F — Run full regression**:
+
+Run all matmul Python tests + C++ integration tests (including the Instance 2 feature tests). Report pass/fail counts and architecture.
+
+**Rules**:
+- The `PreKBlockFn` param must have a default so existing call sites are unchanged.
+- Do NOT use environment variables.
+- Write output summary to `docs/phase4_instance2_results.md`.
+
+---
+
 ## REMINDERS FOR ALL INSTANCES
 
-- **Instance numbering resets each phase.** Phase 1: instances 1-4. Phase 2: instance 1. Phase 3: instances 1-3.
-- **Existing matmul helper is expendable.** The `matmul_block` helper on this branch is a prior attempt that didn't scale. Use it as reference to understand what was tried, but the redesign may replace it entirely. The non-matmul helpers (tilize, untilize, reduce, binary_op) are stable and their patterns should be followed.
+- **Instance numbering resets each phase.** Phase 1: instances 1-4. Phase 2: instance 1. Phase 3: instances 1-3. Phase 4: instances 1-2.
+- **Existing matmul helpers are validated.** Phase 3 delivered `matmul_block` and `add_bias_bcast_rows` with passing tests. Extend and follow their patterns for new helpers. The non-matmul helpers (tilize, untilize, reduce, binary_op) are colleague-owned and stable — follow their patterns too.
 - **Read the LESSONS FROM PRIOR ATTEMPTS section.** The prior branches tried matmul_tile (removed — only 1 call site), param structs (removed — pass flat params instead), unused enums (removed — no call site used them), programming example migrations (reverted — JIT include paths), and a fused_bias helper (device hangs). Don't repeat these mistakes.
 - **Submodules and building — DO THIS FIRST, BEFORE ANY OTHER WORK.** After ANY branch checkout, pull, or reset, you MUST immediately run `git submodule update --init --recursive` before doing anything else. Then build with `./build_metal.sh`. Do not skip this step. Do not defer it. Stale submodules cause cryptic build/link failures that waste significant time. This has been a recurring problem — treat it as step 0.
 - **Wormhole vs Blackhole systems.** Instances may be running on either Wormhole or Blackhole hardware. These have different core grid sizes and slightly different LLK implementations, so test results (pass/fail counts, PCC values) may differ between machines. Run `tt-smi` to identify which system you are on. **Always note the architecture in your output** (e.g., "Tests run on Wormhole" or "Tests run on Blackhole") so results from different instances can be compared correctly. Do not assume a test failure is a bug if you only see it on one architecture — note it as architecture-specific and move on.
