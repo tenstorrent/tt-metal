@@ -34,7 +34,6 @@ inline std::string get_generic_reduction_doc(const char* op_name, const char* qu
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             compute_kernel_config (ttnn.ComputeKernelConfig, optional): Compute kernel configuration for the operation. Defaults to `None`.
             scalar (float, optional): A scaling factor to be applied to the input tensor. Defaults to `1.0`.
-            correction (bool, optional): Applies only to :func:`ttnn.std` and :func:`ttnn.var` - whether to apply Bessel's correction (i.e. N-1). Defaults to `True`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Subcore grids to use for the operation. Defaults to `None`, which will use all cores.
 
         Returns:
@@ -117,36 +116,6 @@ inline void bind_generic_reductions(nb::module_& mod) {
         mod,
         min_doc.c_str(),
         &ttnn::min,
-        nb::arg("input_tensor"),
-        nb::arg("dim") = nb::none(),
-        nb::arg("keepdim") = false,
-        nb::kw_only(),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("scalar") = 1.0f,
-        nb::arg("correction") = true,
-        nb::arg("sub_core_grids") = nb::none());
-
-    const auto std_doc = get_generic_reduction_doc("std", "ttnn.std");
-    ttnn::bind_function<"std">(
-        mod,
-        std_doc.c_str(),
-        &ttnn::std,
-        nb::arg("input_tensor"),
-        nb::arg("dim") = nb::none(),
-        nb::arg("keepdim") = false,
-        nb::kw_only(),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("scalar") = 1.0f,
-        nb::arg("correction") = true,
-        nb::arg("sub_core_grids") = nb::none());
-
-    const auto var_doc = get_generic_reduction_doc("var", "ttnn.var");
-    ttnn::bind_function<"var">(
-        mod,
-        var_doc.c_str(),
-        &ttnn::var,
         nb::arg("input_tensor"),
         nb::arg("dim") = nb::none(),
         nb::arg("keepdim") = false,
