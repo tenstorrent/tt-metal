@@ -664,11 +664,20 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             nb::arg("byte_offset") = 0,
             nb::arg("total_size") = 0)
         .def_rw("fused_tensor", &OverlappedTensorView::fused_tensor)
-        .def_rw("tensor_shape", &OverlappedTensorView::tensor_shape)
-        .def_rw("shard_shape", &OverlappedTensorView::shard_shape)
+        .def_prop_rw(
+            "tensor_shape",
+            [](const OverlappedTensorView& self) { return nb::make_tuple(self.tensor_shape[0], self.tensor_shape[1]); },
+            [](OverlappedTensorView& self, std::array<uint32_t, 2> v) { self.tensor_shape = v; })
+        .def_prop_rw(
+            "shard_shape",
+            [](const OverlappedTensorView& self) { return nb::make_tuple(self.shard_shape[0], self.shard_shape[1]); },
+            [](OverlappedTensorView& self, std::array<uint32_t, 2> v) { self.shard_shape = v; })
         .def_rw("core_range_set", &OverlappedTensorView::core_range_set)
         .def_rw("dtype", &OverlappedTensorView::dtype)
-        .def_rw("tile_shape", &OverlappedTensorView::tile_shape)
+        .def_prop_rw(
+            "tile_shape",
+            [](const OverlappedTensorView& self) { return nb::make_tuple(self.tile_shape[0], self.tile_shape[1]); },
+            [](OverlappedTensorView& self, std::array<uint32_t, 2> v) { self.tile_shape = v; })
         .def_rw("byte_offset", &OverlappedTensorView::byte_offset)
         .def_rw("total_size", &OverlappedTensorView::total_size)
         .def(
