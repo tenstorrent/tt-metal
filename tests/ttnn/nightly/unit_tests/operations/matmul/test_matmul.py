@@ -246,23 +246,6 @@ def test_matmul_2d_interleaved_sharded_dtype_bias_sweep(
     """
     expected_pcc = 0.99
 
-    if has_bias and batch == 1:
-        # Low PCC (in0, in1, bias) dtype combos: ttnn.linear runs but gives very low PCC. See issue #40167.
-        skip_configs = {
-            (ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32),
-            (ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.float32),
-            (ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16),
-            (ttnn.float32, ttnn.bfloat16, ttnn.float32),
-            (ttnn.float32, ttnn.bfloat8_b, ttnn.float32),
-            (ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat16),
-            (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32),
-        }
-        if (in0_dtype, in1_dtype, bias_dtype) in skip_configs:
-            pytest.skip(
-                f"Issue #40167: Low PCC dtype combination for ttnn.Linear "
-                f"(in0={in0_dtype}, in1={in1_dtype}, bias={bias_dtype})"
-            )
-
     _run_matmul_2d_interleaved_in0_sharded_in1(
         device=device,
         batch=batch,
@@ -277,3 +260,152 @@ def test_matmul_2d_interleaved_sharded_dtype_bias_sweep(
         num_dram_banks=num_dram_banks,
         expected_pcc=expected_pcc,
     )
+
+
+@pytest.mark.parametrize("rhs_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.timeout(120)
+def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
+    """
+    Regression test for transpose_a with a lower-precision RHS tensor.
+
+    When transpose_a is True the compute kernel transposes in0 tiles via
+    transpose_wh_init_short, which requires the HW srcA unpacker to be
+    configured for in0's data format (bfloat16).  mm_block_init sets srcA
+    to in1's format instead; when in1 is Bfp8_b the resulting format
+    mismatch caused an LLK assert (issue #35247b).
+
+    The fix adds reconfig_data_format_srca before the transpose init and
+    uses mm_block_init_short_with_dt after it.
+    """
+    torch.manual_seed(0)
+
+    B, K, N = 32, 16, 128
+    a_pt = 0.01 * torch.randn((B, K, 1), dtype=torch.bfloat16)
+    b_pt = torch.randint(0, 2, (B, N), dtype=torch.int32).to(torch.bfloat16)
+
+    a = ttnn.from_torch(a_pt, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(b_pt, dtype=rhs_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    a_perm_ref = ttnn.permute(a, (2, 1, 0))  # [1, K, B]
+    a_perm_cand = ttnn.permute(a, (2, 0, 1))  # [1, B, K]
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    out_ref = ttnn.to_torch(ttnn.matmul(a_perm_ref, b, compute_kernel_config=compute_kernel_config))
+
+    out_candidate = ttnn.to_torch(
+        ttnn.matmul(a_perm_cand, b, transpose_a=True, compute_kernel_config=compute_kernel_config)
+    )
+
+    assert out_ref.shape == out_candidate.shape
+    pcc = 0.97 if rhs_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) else 0.999
+    assert_with_pcc(out_ref, out_candidate, pcc=pcc)
+
+
+@pytest.mark.parametrize(
+    "batch, m, k, n, program_config",
+    [
+        pytest.param(
+            256,
+            32,
+            128,
+            128,
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(8, 4),
+                in0_block_w=1,
+                out_subblock_h=2,
+                out_subblock_w=2,
+                per_core_M=8,
+                per_core_N=4,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=False,
+            ),
+            id="1d_mcast_in1_fuse_batch",
+        ),
+        pytest.param(
+            8,
+            32,
+            128,
+            128,
+            ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=(2, 1),
+                in0_block_w=1,
+                out_subblock_h=2,
+                out_subblock_w=2,
+                per_core_M=8,
+                per_core_N=2,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            ),
+            id="1d_mcast_in0_fuse_batch",
+        ),
+        pytest.param(
+            64,
+            32,
+            128,
+            128,
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=(2, 8),
+                in0_block_w=1,
+                out_subblock_h=2,
+                out_subblock_w=2,
+                per_core_M=8,
+                per_core_N=2,
+                transpose_mcast=False,
+                fuse_batch=True,
+            ),
+            id="2d_mcast_fuse_batch",
+        ),
+    ],
+)
+@pytest.mark.timeout(120)
+def test_matmul_transpose_a_fuse_batch(device, batch, m, k, n, program_config):
+    """
+    Regression test for transpose_a stride calculation with fuse_batch enabled
+    in 1D mcast (both mcast_in0 and mcast_in1) and 2D mcast program configs.
+
+    When batches are fused into M and transpose_a is True, the reader kernel
+    strides must use M_per_batch (not the fused M) to correctly traverse tiles.
+    Program configs are specified explicitly to guard against future changes in
+    automatic config selection.
+    """
+    torch.manual_seed(0)
+
+    torch_a = torch.randn((batch, m, k), dtype=torch.bfloat16)
+    torch_b = torch.randn((1, k, n), dtype=torch.bfloat16)
+    torch_out = torch.matmul(torch_a, torch_b)
+
+    torch_a_phys = torch_a.transpose(-1, -2)
+    torch_b_phys = torch_b.transpose(-1, -2)
+
+    a = ttnn.from_torch(torch_a_phys, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch_b_phys, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    output = ttnn.matmul(
+        a,
+        b,
+        transpose_a=True,
+        transpose_b=True,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+    )
+    output = ttnn.to_torch(output)
+
+    assert output.shape == torch_out.shape
+    assert_with_pcc(torch_out, output, pcc=0.999)

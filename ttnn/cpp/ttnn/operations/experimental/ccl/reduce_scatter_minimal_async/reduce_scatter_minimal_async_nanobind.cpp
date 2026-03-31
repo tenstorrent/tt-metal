@@ -34,7 +34,7 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod) {
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
-            num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
+            num_links (int, optional): Number of links to use for the reduce-scatter operation. Defaults to the maximum available.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
 
@@ -51,7 +51,7 @@ void bind_reduce_scatter_minimal_async(nb::module_& mod) {
         nb::arg("multi_device_global_semaphore"),
         nb::kw_only(),
         nb::arg("barrier_semaphore") = nb::none(),
-        nb::arg("num_links") = 1,
+        nb::arg("num_links") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("intermediate_memory_config") = nb::none(),
         nb::arg("topology") = nb::cast(ttnn::ccl::Topology::Ring),

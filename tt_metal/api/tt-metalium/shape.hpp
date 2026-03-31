@@ -46,9 +46,10 @@ public:
 
     uint32_t get_normalized_index(std::int64_t index) const;
 
-    // Needed for reflect / fmt
-    static constexpr auto attribute_names = std::forward_as_tuple("value");
-    auto attribute_values() const { return std::forward_as_tuple(this->value_); }
+    // Needed for reflect / fmt.
+    // Uses view() to hash/format the original (unpadded) dimensions.
+    static constexpr auto attribute_names = std::forward_as_tuple("shape");
+    auto attribute_values() const { return std::make_tuple(this->view()); }
 
     std::array<uint32_t, 4> to_array_4D() const;
     Shape to_rank(size_t new_rank) const;

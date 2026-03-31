@@ -1,0 +1,132 @@
+# Sweep Manifest
+#
+# This file controls which op configurations get reconstructed from the database
+#
+# There are two sections:
+#
+#   targets   — what to reconstruct (edited by you)
+#   registry  — log of every trace loaded into the DB (auto-appended on load)
+#
+# ── TARGETS ──────────────────────────────────────────────────────────────────
+#
+# Two scope groups (driven by CI): lead_models and model_traced.
+#
+# Each entry lists:
+#   model: [name, ...]   which models to include (must match model_name in the DB)
+#   trace: [N, M, ...]   which trace IDs to pull from (pinned; skips registry lookup)
+#
+# Only configs belonging to the listed models are reconstructed from each trace.
+# If a trace contains 20 models but you list only [whisper], you get whisper only.
+#
+# Omitting trace: causes each model to auto-resolve to its latest active trace
+# from the registry below (useful when you always want the newest data).
+#
+# Reconstruct from the command line:
+#   python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+#       model_tracer/sweep_manifest.yaml \
+#       model_tracer/traced_operations/ttnn_operations_lead_models.json \
+#       lead_models
+#   python tests/sweep_framework/load_ttnn_ops_data_v2.py reconstruct-manifest \
+#       model_tracer/sweep_manifest.yaml \
+#       model_tracer/traced_operations/ttnn_operations_model_traced.json \
+#       model_traced
+#
+# ── REGISTRY ─────────────────────────────────────────────────────────────────
+#
+# One entry per trace loaded into the DB. Auto-appended with status: draft on load.
+# Manually promote to status: active when the trace is ready for CI.
+# Models lists the exact model_name values (from ttnn_ops_v5.ttnn_model) in the trace.
+# See model_tracer/GUIDE.md for full CLI commands for loading
+
+
+targets:
+  lead_models:
+    - model:
+        - deepseek_v3
+      trace: [2]
+
+  model_traced:
+    - model:
+        - deepseek-llm-7b-chat
+        - deepseek-r1-distill-qwen-32b
+        - efficientnetb0
+        - falcon7b
+        - llama-3.2-11b-vision-instruct
+        - llama-3.2-1b-instruct
+        - llama-krikri-8b-instruct
+        - mistral-7b-instruct-v0.3
+        - phi-3-mini-128k-instruct
+        - qwen2.5-coder-32b
+        - qwen2.5-coder-7b-instruct
+        - qwen3-32b
+        - qwen3-32b_2
+        - segmentation
+        - sentence_bert
+        - stable_diffusion_xl_base
+        - vit
+        - vit_2
+        - whisper
+      trace: [1,3,4]
+
+registry:
+  - trace_id: 1
+    status: active
+    models: [whisper]
+    hardware: {board_type: Blackhole, device_series: p150b, card_count: 1}
+    trace_uid: migrated-v5-trace-1-2f0ed61c-b2ae-4c5b-9472-4c924f34e579
+    tt_metal_sha: null
+    config_count: 318
+    loaded_at: '2026-03-30'
+    notes: 'migrated from ttnn_ops_v5 by reconstructing trace 1 from v5 and loading in v6'
+
+
+  - trace_id: 2
+    status: active
+    models: [deepseek_v3]
+    hardware: {board_type: Wormhole, device_series: tt-galaxy-wh, card_count: 32}
+    trace_uid: migrated-v5-trace-35-61aef8ba-9232-47d2-86e2-24279cc72cba
+    tt_metal_sha: null
+    config_count: 323
+    loaded_at: '2026-03-30'
+    notes: 'migrated from ttnn_ops_v5 by reconstructing trace 35 from v5 and loading in v6'
+
+
+  - trace_id: 3
+    status: active
+    models:
+      - deepseek-llm-7b-chat
+      - efficientnetb0
+      - falcon7b
+      - llama-3.2-11b-vision-instruct
+      - llama-3.2-1b-instruct
+      - llama-krikri-8b-instruct
+      - mistral-7b-instruct-v0.3
+      - phi-3-mini-128k-instruct
+      - qwen2.5-coder-7b-instruct
+      - segmentation
+      - sentence_bert
+      - stable_diffusion_xl_base
+      - vit
+      - vit_2
+      - whisper
+    hardware: {board_type: Wormhole, device_series: n300, card_count: 1}
+    trace_uid: migrated-v5-trace-538-079b2e30-eaf2-4f68-804f-144a768a4d2a
+    tt_metal_sha: null
+    config_count: 6199
+    loaded_at: '2026-03-30'
+    notes: 'migrated from ttnn_ops_v5 by reconstructing trace 538 from v5 and loading in v6'
+
+
+  - trace_id: 4
+    status: active
+    models:
+      - deepseek-r1-distill-qwen-32b
+      - qwen2.5-coder-32b
+      - qwen3-32b
+      - qwen3-32b_2
+    hardware: {board_type: Wormhole, device_series: n300, card_count: 4}
+    trace_uid: migrated-v5-trace-548-10ca75b6-0ec7-4beb-ad58-5026556c162d
+    tt_metal_sha: null
+    config_count: 831
+    loaded_at: '2026-03-30'
+    notes: 'migrated from ttnn_ops_v5 by reconstructing trace 548 from v5 and loading in v6'

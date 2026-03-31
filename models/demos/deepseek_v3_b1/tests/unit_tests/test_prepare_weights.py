@@ -23,12 +23,15 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
+from models.demos.deepseek_v3_b1.demo.weight_provider import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.prepare_weights import (
+    _MTP_LAYER_IDX,
     AttentionWeights,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
+    DeepSeekV3MTPWeights,
     DenseRoutedExpertWeights,
     MoERoutedExpertWeights,
     SharedExpertWeights,
@@ -36,17 +39,20 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     load_embedding_weights,
     load_lm_head_weights,
     load_moe_decoder_layer,
+    load_mtp_weights,
     prepare_attention_weights,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
+    prepare_mtp_weights,
     prepare_routed_expert_weights,
     prepare_shared_expert_weights,
     save_attention_weights,
     save_decoder_layer,
     save_embedding_weights,
     save_lm_head_weights,
+    save_mtp_weights,
     save_routed_expert_weights,
     save_shared_expert_weights,
 )
@@ -141,6 +147,16 @@ _PLACEMENTS_SHARD_0_1 = [ttnn.PlacementShard(0), ttnn.PlacementShard(1)]
 _PLACEMENTS_REPLICATE = [ttnn.PlacementReplicate()]
 
 
+# DRAMStreamingMatmul requires gate/up/down expert tensors contiguous per projection (see #40302)
+def _assert_moe_layer_routed_experts_dram_contiguous(layer: DeepSeekV3MoELayerWeights) -> None:
+    """MoE DRAMStreamingMatmul requires gate/up/down expert tensors contiguous per projection (device only)."""
+    MoERoutedExpertWeights(
+        routed_gate_proj=layer.routed_gate_proj,
+        routed_up_proj=layer.routed_up_proj,
+        routed_down_proj=layer.routed_down_proj,
+    ).validate_contiguous_dram()
+
+
 def _assert_layer_on_device_with_topology(
     layer: DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWeights,
 ) -> None:
@@ -192,6 +208,7 @@ def _assert_layer_on_device_with_topology(
             _assert_topology(layer.routed_gate_proj[e], _PLACEMENTS_REPLICATE)
             _assert_topology(layer.routed_up_proj[e], _PLACEMENTS_REPLICATE)
             _assert_topology(layer.routed_down_proj[e], _PLACEMENTS_REPLICATE)
+        _assert_moe_layer_routed_experts_dram_contiguous(layer)
 
 
 # HF state dict shapes (out_features, in_features) for linears; full logical for 4x2 mesh. See DEEPSEEK_PREPARE_WEIGHTS_DESIGN_DOC.md §5.
@@ -201,7 +218,7 @@ HF_KV_B_FULL_LOGICAL = (32768, 512)
 HF_SHARED_GATE_UP_FULL_LOGICAL = (2048, 7168)
 
 # Don't use all the experts in tests to avoid taking too long
-NUM_ROUTED_EXPERTS = 4
+NUM_ROUTED_EXPERTS_FOR_TESTS = 4
 
 
 def _layer_state_dict(
@@ -260,7 +277,7 @@ def _layer_state_dict(
         state[f"model.layers.{layer_idx}.mlp.shared_experts.down_proj.weight"] = torch.randn(
             shared_down_rows, shared_down_cols, generator=g, dtype=torch.bfloat16
         )
-        for e in range(NUM_ROUTED_EXPERTS):
+        for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS):
             state[f"model.layers.{layer_idx}.mlp.experts.{e}.gate_proj.weight"] = torch.randn(
                 2048, 7168, generator=g, dtype=torch.bfloat16
             )
@@ -397,11 +414,19 @@ def test_prepare_routed_expert_weights_moe_4x2(bh_2d_mesh_device):
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=True, seed=43)
     bdw = BlitzDecodeWeights(submesh)
-    routed = prepare_routed_expert_weights(bdw, state, 0, is_moe=True, num_routed_experts=NUM_ROUTED_EXPERTS)
+    routed = prepare_routed_expert_weights(
+        bdw,
+        state,
+        0,
+        is_moe=True,
+        num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS,
+        move_to_device=True,
+    )
     assert isinstance(routed, MoERoutedExpertWeights)
-    assert len(routed.routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(routed.routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(routed.routed_down_proj) == NUM_ROUTED_EXPERTS
+    assert len(routed.routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    assert len(routed.routed_up_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    assert len(routed.routed_down_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    routed.validate_contiguous_dram()
 
 
 @pytest.mark.parametrize(
@@ -474,7 +499,7 @@ def test_incremental_save_load_moe_4x2(bh_2d_mesh_device, tmp_path):
     submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
     state = _layer_state_dict(0, is_moe=True, seed=43)
     bdw = BlitzDecodeWeights(submesh)
-    layer = prepare_moe_layer_weights(bdw, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS)
+    layer = prepare_moe_layer_weights(bdw, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS)
     assert isinstance(layer, DeepSeekV3MoELayerWeights)
     attn = AttentionWeights(
         q_a_proj=layer.q_a_proj,
@@ -515,7 +540,7 @@ def test_incremental_save_load_moe_4x2(bh_2d_mesh_device, tmp_path):
     _assert_overlapped_tensors_match(layer.gate_mm, loaded.gate_mm)
     assert loaded.gate_bias.shape == layer.gate_bias.shape
     _assert_overlapped_tensors_match(layer.shared_gate_proj, loaded.shared_gate_proj)
-    assert len(loaded.routed_gate_proj) == NUM_ROUTED_EXPERTS
+    assert len(loaded.routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
     assert loaded.routed_gate_proj[0].shape == expected_routed_expert_shape
     _assert_layer_on_device_with_topology(loaded)
 
@@ -524,9 +549,9 @@ def _moe_routed_expert_stacked_tensors(seed: int = 43):
     """Build (num_experts, K, N) stacked gate/up and (num_experts, K_down, N_down) down for get_tt_moe_routed_expert_weights."""
     g = torch.Generator().manual_seed(seed)
     # MoE expert shapes: gate/up (K=7168, N=2048), down (2048, 7168)
-    gate_stacked = torch.randn(NUM_ROUTED_EXPERTS, 7168, 2048, generator=g, dtype=torch.bfloat16)
-    up_stacked = torch.randn(NUM_ROUTED_EXPERTS, 7168, 2048, generator=g, dtype=torch.bfloat16)
-    down_stacked = torch.randn(NUM_ROUTED_EXPERTS, 2048, 7168, generator=g, dtype=torch.bfloat16)
+    gate_stacked = torch.randn(NUM_ROUTED_EXPERTS_FOR_TESTS, 7168, 2048, generator=g, dtype=torch.bfloat16)
+    up_stacked = torch.randn(NUM_ROUTED_EXPERTS_FOR_TESTS, 7168, 2048, generator=g, dtype=torch.bfloat16)
+    down_stacked = torch.randn(NUM_ROUTED_EXPERTS_FOR_TESTS, 2048, 7168, generator=g, dtype=torch.bfloat16)
     return gate_stacked, up_stacked, down_stacked
 
 
@@ -548,15 +573,15 @@ def test_dump_load_routed_expert_weights_4x2(bh_2d_mesh_device, tmp_path):
     )
 
     # Capture shapes before dump
-    expected_gate_shapes = [routed_gate_proj[e].shape for e in range(NUM_ROUTED_EXPERTS)]
-    expected_up_shapes = [routed_up_proj[e].shape for e in range(NUM_ROUTED_EXPERTS)]
-    expected_down_shapes = [routed_down_proj[e].shape for e in range(NUM_ROUTED_EXPERTS)]
+    expected_gate_shapes = [routed_gate_proj[e].shape for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS)]
+    expected_up_shapes = [routed_up_proj[e].shape for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS)]
+    expected_down_shapes = [routed_down_proj[e].shape for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS)]
 
     # Dump only routed experts (same layout as save_layer for MoE)
     layer_dir = tmp_path / "layer_000"
     experts_dir = layer_dir / "experts"
     experts_dir.mkdir(parents=True, exist_ok=True)
-    for e in range(NUM_ROUTED_EXPERTS):
+    for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS):
         logger.info("Dumping expert {}...", e)
         expert_dir = experts_dir / f"e_{e:03d}"
         expert_dir.mkdir(parents=True, exist_ok=True)
@@ -571,19 +596,33 @@ def test_dump_load_routed_expert_weights_4x2(bh_2d_mesh_device, tmp_path):
     routed_down_proj = []
     logger.info("Loading routed experts back onto the same submesh...")
     t0 = time.perf_counter()
-    for e in range(NUM_ROUTED_EXPERTS):
+    # Same order as load_moe_routed_experts / get_tt_moe_routed_expert_weights: all gates, then ups, then downs
+    # (DRAMStreamingMatmul indexes experts via base + i * stride per projection).
+    for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS):
         expert_dir = experts_dir / f"e_{e:03d}"
-        logger.info("Loading expert {}...", e)
+        logger.info("Loading gate expert {}...", e)
         routed_gate_proj.append(ttnn.load_tensor(expert_dir / "gate_proj.tensorbin", device=submesh))
+    for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS):
+        expert_dir = experts_dir / f"e_{e:03d}"
+        logger.info("Loading up expert {}...", e)
         routed_up_proj.append(ttnn.load_tensor(expert_dir / "up_proj.tensorbin", device=submesh))
+    for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS):
+        expert_dir = experts_dir / f"e_{e:03d}"
+        logger.info("Loading down expert {}...", e)
         routed_down_proj.append(ttnn.load_tensor(expert_dir / "down_proj.tensorbin", device=submesh))
     elapsed = time.perf_counter() - t0
     logger.info("Loaded routed experts back onto the same submesh in {:.3f}s", elapsed)
 
-    assert len(routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(routed_down_proj) == NUM_ROUTED_EXPERTS
-    for e in range(NUM_ROUTED_EXPERTS):
+    MoERoutedExpertWeights(
+        routed_gate_proj=routed_gate_proj,
+        routed_up_proj=routed_up_proj,
+        routed_down_proj=routed_down_proj,
+    ).validate_contiguous_dram()
+
+    assert len(routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    assert len(routed_up_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    assert len(routed_down_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS):
         assert routed_gate_proj[e].shape == expected_gate_shapes[e]
         assert routed_up_proj[e].shape == expected_up_shapes[e]
         assert routed_down_proj[e].shape == expected_down_shapes[e]
@@ -731,7 +770,7 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     logger.info(f"State dict prepared")
     t0 = time.perf_counter()
     logger.info(f"Preparing weights...")
-    layer = prepare_moe_layer_weights(bdw, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS)
+    layer = prepare_moe_layer_weights(bdw, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS)
     logger.info(f"Weights prepared")
     elapsed = time.perf_counter() - t0
     logger.info("prepare_moe_layer_weights (1 MoE layer, 4x2 mesh): {:.3f} s", elapsed)
@@ -751,9 +790,9 @@ def test_prepare_moe_layer_single_layer_4x2(bh_2d_mesh_device):
     assert layer.shared_gate_proj.tensor_shape == (7168, 256)
     assert layer.shared_up_proj.tensor_shape == (7168, 256)
     assert hasattr(layer, "shared_down_proj")
-    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS
+    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
 
 
 @pytest.mark.parametrize(
@@ -771,7 +810,7 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     state = _layer_state_dict(0, is_moe=True, seed=43)
     bdw = BlitzDecodeWeights(submesh)
     t0 = time.perf_counter()
-    orig = prepare_moe_layer_weights(bdw, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS)
+    orig = prepare_moe_layer_weights(bdw, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS)
     elapsed = time.perf_counter() - t0
     logger.info("prepare_moe_layer_weights (1 MoE layer, 4x2 mesh): {:.3f} s", elapsed)
     assert isinstance(orig, DeepSeekV3MoELayerWeights)
@@ -790,9 +829,9 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     assert orig.shared_gate_proj.tensor_shape == (7168, 256)
     assert orig.shared_up_proj.tensor_shape == (7168, 256)
     assert hasattr(orig, "shared_down_proj")
-    assert len(orig.routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(orig.routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(orig.routed_down_proj) == NUM_ROUTED_EXPERTS
+    assert len(orig.routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    assert len(orig.routed_up_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    assert len(orig.routed_down_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
     # Early access to q_ab_kv_a fused_tensor (same as first tensor touched in save_layer)
     logger.info("Early access: touching q_ab_kv_a fused_tensor (orig.q_a_proj.fused_tensor)...")
     q_ab_kv_a_fused = orig.q_a_proj.fused_tensor
@@ -813,7 +852,7 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     assert (layer_dir / "gate_bias.tensorbin").exists()
     assert (layer_dir / "shared_down_proj.tensorbin").exists()
     experts_dir = layer_dir / "experts"
-    for e in range(NUM_ROUTED_EXPERTS):
+    for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS):
         expert_dir = experts_dir / f"e_{e:03d}"
         assert (expert_dir / "gate_proj.tensorbin").exists()
         assert (expert_dir / "up_proj.tensorbin").exists()
@@ -841,10 +880,10 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     _assert_overlapped_tensors_match(orig.shared_gate_proj, layer.shared_gate_proj)
     _assert_overlapped_tensors_match(orig.shared_up_proj, layer.shared_up_proj)
     assert layer.shared_down_proj.shape == orig.shared_down_proj.shape
-    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS
-    for e in range(NUM_ROUTED_EXPERTS):
+    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS):
         assert layer.routed_gate_proj[e].shape == orig.routed_gate_proj[e].shape
         assert layer.routed_up_proj[e].shape == orig.routed_up_proj[e].shape
         assert layer.routed_down_proj[e].shape == orig.routed_down_proj[e].shape
@@ -867,7 +906,7 @@ def test_load_moe_decoder_layer_4x2(bh_2d_mesh_device, tmp_path):
 
     state = _layer_state_dict(0, is_moe=True, seed=43)
     bdw = BlitzDecodeWeights(submesh)
-    orig = prepare_moe_layer_weights(bdw, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS)
+    orig = prepare_moe_layer_weights(bdw, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS_FOR_TESTS)
     assert isinstance(orig, DeepSeekV3MoELayerWeights)
     save_decoder_layer(
         orig,
@@ -890,10 +929,10 @@ def test_load_moe_decoder_layer_4x2(bh_2d_mesh_device, tmp_path):
     assert layer.attn_norm.tensor_shape == (1, 7168)
     assert layer.shared_gate_proj.tensor_shape == (7168, 256)
     assert layer.shared_up_proj.tensor_shape == (7168, 256)
-    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS
-    for e in range(NUM_ROUTED_EXPERTS):
+    assert len(layer.routed_gate_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    assert len(layer.routed_up_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    assert len(layer.routed_down_proj) == NUM_ROUTED_EXPERTS_FOR_TESTS
+    for e in range(NUM_ROUTED_EXPERTS_FOR_TESTS):
         _assert_on_device(layer.routed_gate_proj[e])
         _assert_on_device(layer.routed_up_proj[e])
         _assert_on_device(layer.routed_down_proj[e])
@@ -987,85 +1026,81 @@ def test_save_load_embedding_and_lm_head_weights_4x2(bh_2d_mesh_device, tmp_path
     _assert_on_device(loaded_lm_head.final_norm)
 
 
-@pytest.mark.skip(reason="Too slow for CI; use for manual multi-submesh validation")
+def _mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX, seed: int = 44) -> dict[str, torch.Tensor]:
+    """Build a synthetic state dict with only the lightweight MTP projection/norm tensors."""
+    g = torch.Generator().manual_seed(seed + 1000)
+    dtype = torch.bfloat16
+    H = LogicalModelDimensions.HIDDEN_SIZE
+    return {
+        f"model.layers.{mtp_layer_idx}.hnorm.weight": torch.randn(H, generator=g, dtype=dtype),
+        f"model.layers.{mtp_layer_idx}.enorm.weight": torch.randn(H, generator=g, dtype=dtype),
+        f"model.layers.{mtp_layer_idx}.eh_proj.weight": torch.randn(H, 2 * H, generator=g, dtype=dtype),
+    }
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
 )
-def test_load_4_layers_across_4_submeshes_4x2(bh_2d_mesh_device, tmp_path):
-    """Prepare each of 4 layers on a different 4x2 submesh, save them, then load each on the same submesh.
+def test_prepare_mtp_weights_4x2(bh_2d_mesh_device):
+    """Prepare MTP weights on 4x2 mesh; verify type and shapes."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    state = _mtp_state_dict()
+    t0 = time.perf_counter()
+    weights = prepare_mtp_weights(state, submesh)
+    elapsed = time.perf_counter() - t0
+    logger.info("prepare_mtp_weights (4x2 mesh): {:.3f} s", elapsed)
+    H = LogicalModelDimensions.HIDDEN_SIZE
+    assert isinstance(weights, DeepSeekV3MTPWeights)
+    assert weights.h_gamma.shape == (1, H)
+    assert weights.e_gamma.shape == (1, H)
+    assert weights.eh_projection.shape == (2 * H, H)
 
-    Uses create_submeshes to get 4 disjoint (4x2) submeshes; requires 32 devices.
-    Each layer is prepared on its own submesh to avoid OOM. Layers 0,1,2 are dense, layer 3 is MoE.
-    """
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    indirect=True,
+)
+def test_save_load_mtp_weights_4x2(bh_2d_mesh_device, tmp_path):
+    """Save MTP weights to disk, load back, verify shapes match and tensors are on device."""
+    _skip_unless_4x2_mesh(bh_2d_mesh_device)
     if not is_slow_dispatch():
-        pytest.skip("load_dense_decoder_layer/load_moe_decoder_layer require slow dispatch")
-    num_submeshes = 4
-    devices_per_submesh = 4 * 2
-    num_devices_required = num_submeshes * devices_per_submesh  # 32
-    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices_required:
-        pytest.skip(
-            f"Test requires {num_devices_required} devices (4 submeshes x 4x2), "
-            f"mesh has {bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1]}"
-        )
-    submeshes = bh_2d_mesh_device.create_submeshes(ttnn.MeshShape((4, 2)))
-    assert len(submeshes) >= num_submeshes, f"Expected at least {num_submeshes} submeshes"
+        pytest.skip("load_mtp_weights requires slow dispatch")
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((4, 2)))
+    state = _mtp_state_dict()
+    weights = prepare_mtp_weights(state, submesh)
+    expected_shapes = {
+        "h_gamma": weights.h_gamma.shape,
+        "e_gamma": weights.e_gamma.shape,
+        "eh_projection": weights.eh_projection.shape,
+    }
 
-    num_layers = 4
-    first_k_dense_replace = 3  # layers 0,1,2 dense; layer 3 MoE
-    for layer_idx in range(num_layers):
-        is_moe = layer_idx >= first_k_dense_replace
-        submesh = submeshes[layer_idx]
-        bdw = BlitzDecodeWeights(submesh)
-        # State for "layer 0" (prepare_*_layer_weights take layer_idx for key lookup)
-        state = _layer_state_dict(0, is_moe=is_moe, seed=42 + layer_idx)
-        t0 = time.perf_counter()
-        if is_moe:
-            layer = prepare_moe_layer_weights(bdw, state, 0, num_routed_experts=NUM_ROUTED_EXPERTS)
-        else:
-            layer = prepare_dense_layer_weights(bdw, state, 0)
-        elapsed = time.perf_counter() - t0
-        logger.info(
-            "prepare (layer %d, %s, on submesh %d): {:.3f} s",
-            layer_idx,
-            "moe" if is_moe else "dense",
-            layer_idx,
-            elapsed,
-        )
-        save_decoder_layer(
-            layer,
-            tmp_path,
-            layer_idx,
-            hf_model_name="test-4layer-model",
-            hf_state_dict_name="test-4layer-state-dict.safetensors",
-            device_mesh_shape=(4, 2),
-        )
-        _deallocate_layer(layer)
+    save_mtp_weights(
+        weights,
+        tmp_path,
+        hf_model_name="test-mtp-model-4x2",
+        hf_state_dict_name="test-mtp.safetensors",
+        device_mesh_shape=(4, 2),
+    )
 
-    loaded = []
-    t0 = time.time()
-    for layer_idx in range(num_layers):
-        submesh = submeshes[layer_idx]
-        if layer_idx >= first_k_dense_replace:
-            layer = load_moe_decoder_layer(tmp_path, submesh, layer_idx)
-        else:
-            layer = load_dense_decoder_layer(tmp_path, submesh, layer_idx)
-        loaded.append(layer)
-    elapsed = time.time() - t0
-    logger.info("load_decoder_layer (4 layers, 4x2 submesh): %s s", elapsed)
+    mtp_dir = tmp_path / "mtp"
+    assert (mtp_dir / "manifest.json").exists()
+    assert (mtp_dir / "mtp_h_gamma.tensorbin").exists()
+    assert (mtp_dir / "mtp_e_gamma.tensorbin").exists()
+    assert (mtp_dir / "mtp_eh_projection.tensorbin").exists()
 
-    assert isinstance(loaded[0], DeepSeekV3DenseLayerWeights)
-    assert isinstance(loaded[1], DeepSeekV3DenseLayerWeights)
-    assert isinstance(loaded[2], DeepSeekV3DenseLayerWeights)
-    assert isinstance(loaded[3], DeepSeekV3MoELayerWeights)
-    for i in range(3):
-        assert hasattr(loaded[i], "shared_gate_proj") and loaded[i].shared_gate_proj is not None
-        assert hasattr(loaded[i], "routed_gate_proj") and loaded[i].routed_gate_proj is not None
-        assert loaded[i].routed_gate_proj.shape is not None
-    assert len(loaded[3].routed_gate_proj) == NUM_ROUTED_EXPERTS
-    assert len(loaded[3].routed_up_proj) == NUM_ROUTED_EXPERTS
-    assert len(loaded[3].routed_down_proj) == NUM_ROUTED_EXPERTS
-    assert loaded[3].shared_down_proj is not None
-    for i in range(num_layers):
-        _assert_layer_on_device_with_topology(loaded[i])
+    ttnn.deallocate(weights.h_gamma, force=True)
+    ttnn.deallocate(weights.e_gamma, force=True)
+    ttnn.deallocate(weights.eh_projection, force=True)
+
+    loaded = load_mtp_weights(tmp_path, submesh)
+    assert isinstance(loaded, DeepSeekV3MTPWeights)
+    assert loaded.h_gamma.shape == expected_shapes["h_gamma"]
+    assert loaded.e_gamma.shape == expected_shapes["e_gamma"]
+    assert loaded.eh_projection.shape == expected_shapes["eh_projection"]
+    _assert_on_device(loaded.h_gamma)
+    _assert_on_device(loaded.e_gamma)
+    _assert_on_device(loaded.eh_projection)

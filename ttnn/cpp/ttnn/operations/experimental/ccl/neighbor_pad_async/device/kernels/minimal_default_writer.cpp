@@ -177,8 +177,9 @@ void kernel_main() {
             }
         } else {
             // W barrier: 1-hop unicast to immediate W neighbor only.
-            // neighbor_sem_noc0_x/y and barrier_sem_noc0_x/y are pre-computed
-            // using the NEIGHBOR device's worker_core_from_logical_core().
+            // neighbor_sem_noc0_x/y and barrier_sem_noc0_x/y are NOC coords of the local
+            // device's worker cores. Since NOC coords are not chip-dependent, these are
+            // valid targets on the neighbor device as well.
             if (!is_last_chip) {
                 auto pkt_hdr_barrier_sem_inc = PacketHeaderPool::allocate_header();
 

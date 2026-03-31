@@ -32,6 +32,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
+  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob  # ~150s under TTSim, hits 320s timeout with xdist contention
 
   # Eltwise - data format limitations (INT32/UINT32/FLOAT32/UINT16)
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py
@@ -41,14 +42,11 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_uint32.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binaryng_fp32.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_binary_comp_init.py
   - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_ternary_sharding.py
   - tests/ttnn/unit_tests/operations/eltwise/test_pow.py
   - tests/ttnn/unit_tests/operations/eltwise/test_relational.py
   - tests/ttnn/unit_tests/operations/eltwise/test_where.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_experimental_where.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_ops_ttnn.py
   - tests/ttnn/unit_tests/operations/eltwise/test_unary_int32.py
@@ -65,10 +63,8 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_activation.py
   - tests/ttnn/unit_tests/operations/eltwise/test_composite.py
   - tests/ttnn/unit_tests/operations/eltwise/test_divide.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_math.py
   - tests/ttnn/unit_tests/operations/eltwise/test_tanh_accuracy.py
   - tests/ttnn/unit_tests/operations/eltwise/test_typecast_int.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_sampling.py
   - tests/ttnn/unit_tests/operations/eltwise/test_fill.py
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
   - tests/ttnn/unit_tests/operations/eltwise/test_gcd.py
@@ -77,10 +73,8 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_exp_21f.py
   - tests/ttnn/unit_tests/operations/eltwise/test_mul.py
   - tests/ttnn/unit_tests/operations/eltwise/test_remainder.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_nextafter.py
   - tests/ttnn/unit_tests/operations/eltwise/test_fmod.py
   - tests/ttnn/unit_tests/operations/eltwise/test_expm1.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_elt_binary.py
 
   # Pool tests
   - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py
@@ -99,8 +93,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/matmul/test_addmm.py
   - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
   - tests/ttnn/unit_tests/operations/matmul/test_linear.py
-  - tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py
-  - tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py
 
   # Fused tests
   - tests/ttnn/unit_tests/operations/fused/test_batch_norm.py
@@ -112,8 +104,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/fused/test_eltwise_softmax_in_place.py
   - tests/ttnn/unit_tests/operations/fused/parallel_sequential/
 
-  # Transformers tests
-  - tests/ttnn/unit_tests/operations/transformers/test_transformer.py
 
   # Reduce tests
   - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
@@ -124,6 +114,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py
+  - tests/ttnn/unit_tests/operations/reduce/test_sum.py
 
 blackhole:
   # Multi-chip/CCL tests - require multi-device support
@@ -149,6 +140,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
+  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob  # ~150s under TTSim, hits 320s timeout with xdist contention
 
   # Eltwise - data format limitations (INT32/UINT32/FLOAT32/UINT16)
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py
@@ -212,3 +204,4 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py
+  - tests/ttnn/unit_tests/operations/reduce/test_sum.py

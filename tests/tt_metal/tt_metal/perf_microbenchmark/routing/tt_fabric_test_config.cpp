@@ -132,6 +132,13 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const 
     if (pattern_yaml["mcast_start_hops"]) {
         config.mcast_start_hops = parse_scalar<uint32_t>(pattern_yaml["mcast_start_hops"]);
     }
+    if (pattern_yaml["vc_id"]) {
+        config.vc_id = parse_scalar<uint8_t>(pattern_yaml["vc_id"]);
+        TT_FATAL(
+            config.vc_id.value() == 0 || config.vc_id.value() == 2,
+            "vc_id must be 0 or 2, got {}",
+            config.vc_id.value());
+    }
 
     return config;
 }
@@ -155,6 +162,13 @@ ParsedSenderConfig YamlConfigParser::parse_sender_config(
     }
     if (sender_yaml["link_id"]) {
         config.link_id = parse_scalar<uint32_t>(sender_yaml["link_id"]);
+    }
+    if (sender_yaml["vc_id"]) {
+        config.vc_id = parse_scalar<uint8_t>(sender_yaml["vc_id"]);
+        TT_FATAL(
+            config.vc_id.value() == 0 || config.vc_id.value() == 2,
+            "vc_id must be 0 or 2, got {}",
+            config.vc_id.value());
     }
 
     const auto& patterns_yaml = sender_yaml["patterns"];
@@ -430,6 +444,10 @@ TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fabric_se
 
     if (fabric_setup_yaml["enable_channel_trimming"]) {
         fabric_setup.enable_channel_trimming = parse_scalar<bool>(fabric_setup_yaml["enable_channel_trimming"]);
+    }
+
+    if (fabric_setup_yaml["use_vc2"]) {
+        fabric_setup.use_vc2 = parse_scalar<bool>(fabric_setup_yaml["use_vc2"]);
     }
 
     return fabric_setup;
@@ -1043,6 +1061,7 @@ SenderConfig TestConfigBuilder::resolve_sender_config(const ParsedSenderConfig& 
     resolved_sender.device = resolve_device_identifier(parsed_sender.device, device_info_provider_);
     resolved_sender.noc_id = parsed_sender.noc_id;
     resolved_sender.link_id = parsed_sender.link_id.value_or(0);
+    resolved_sender.vc_id = parsed_sender.vc_id;
 
     resolve_core_config(parsed_sender, resolved_sender);
 
@@ -2027,7 +2046,8 @@ void TestConfigBuilder::add_senders_from_pairs(
 
     test.senders.reserve(test.senders.size() + generated_senders.size());
     for (const auto& [src_node, patterns] : generated_senders) {
-        test.senders.emplace_back(ParsedSenderConfig{.device = src_node, .patterns = patterns});
+        test.senders.emplace_back(
+            ParsedSenderConfig{.device = src_node, .patterns = patterns, .vc_id = base_pattern.vc_id});
     }
 }
 
@@ -2126,6 +2146,7 @@ void TestConfigBuilder::split_senders_by_direction_for_benchmark(ParsedTestConfi
                 split_sender.core = sender.core;
                 split_sender.noc_id = sender.noc_id;
                 split_sender.link_id = sender.link_id;
+                split_sender.vc_id = sender.vc_id;
                 split_sender.patterns = std::move(patterns);
                 new_senders.push_back(std::move(split_sender));
             }
@@ -2136,18 +2157,19 @@ void TestConfigBuilder::split_senders_by_direction_for_benchmark(ParsedTestConfi
 }
 
 bool TestConfigBuilder::expand_link_duplicates(ParsedTestConfig& test) {
-    // If num_links is 1, no duplication needed
-    if (test.fabric_setup.num_links <= 1) {
-        return true;  // Success - no expansion needed
-    }
-
     uint32_t num_links = test.fabric_setup.num_links;
-    log_debug(LogTest, "Expanding link duplicates for test '{}' with {} links", test.name, num_links);
-
     // Validate that num_links doesn't exceed available routing planes for any device
     if (!route_manager_.validate_num_links_supported(num_links)) {
         return false;  // Indicate test should be skipped
     }
+
+    // If num_links is 1, no duplication needed
+    if (num_links <= 1) {
+        return true;  // Success - no expansion needed
+    }
+
+    log_debug(LogTest, "Expanding link duplicates for test '{}' with {} links", test.name, num_links);
+
 
     std::vector<ParsedSenderConfig> new_senders;
     new_senders.reserve(test.senders.size() * num_links);
@@ -2391,6 +2413,10 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const SenderConfig& c
     out << YAML::Key << "link_id";
     out << YAML::Value << config.link_id;
 
+    if (config.vc_id.has_value() && config.vc_id.value() != 0) {
+        out << YAML::Key << "vc_id" << YAML::Value << static_cast<int>(config.vc_id.value());
+    }
+
     out << YAML::Key << "patterns";
     out << YAML::Value;
     out << YAML::BeginSeq;
@@ -2520,6 +2546,9 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const TestFabricSetup
     out << YAML::Value << config.num_links;
     if (config.enable_channel_trimming) {
         out << YAML::Key << "enable_channel_trimming" << YAML::Value << true;
+    }
+    if (config.use_vc2) {
+        out << YAML::Key << "use_vc2" << YAML::Value << true;
     }
     out << YAML::EndMap;
 }

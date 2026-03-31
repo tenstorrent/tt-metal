@@ -30,13 +30,14 @@ import math
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.ccl_broadcast.op import DeepseekMinimalBroadcast
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     PerCoreRuntimeArgsDescriptor,
     UnifiedCompileTimeCoreDescriptor,
     UnifiedKernelDescriptor,
 )
-from models.demos.deepseek_v3_b1.utils import float_to_uint32
+from models.demos.deepseek_v3_b1.utils import float_to_uint32, merge_kernel_defines
 
 
 def _round_up(value: int, alignment: int) -> int:
@@ -125,10 +126,8 @@ class LMHeadSampling:
         global_semaphore=None,
         global_stage2_semaphore=None,
         fabric_scratch_tensor=None,
-        semaphores=None,
-        cluster_axis=0,
-        secondary_cluster_axis=None,
-        num_links=1,
+        bcast_semaphores=None,
+        bcast_num_links=1,
         fp32_dest_acc_en=False,
         epsilon=1e-6,
         rsqrt_fast_approx=False,
@@ -138,6 +137,9 @@ class LMHeadSampling:
         persistent_mode=False,
         termination_semaphore=None,
         persistent_next_iter_semaphore=None,
+        *,
+        fabric_config=None,
+        broadcast_topology_override=None,
     ):
         """
         Execute LM head sampling CCL broadcast + mcast + matmul operation using generic_op.
@@ -157,10 +159,9 @@ class LMHeadSampling:
             output_index_tensor: Optional pre-allocated [1, 1] uint32 tensor for fused argmax output
             argmax_final_core_coord: Optional final core for fused argmax reduction (defaults to first matmul core)
             sender_coord: Tuple (row, col) of sender device in mesh
-            semaphores: List of global semaphores [out_ready, barrier, secondary_sync] for CCL
-            cluster_axis: Primary axis for CCL broadcast (0=row, 1=col)
-            secondary_cluster_axis: Secondary axis for CCL broadcast (optional)
-            num_links: Number of fabric links for CCL
+            bcast_semaphores: Per-link global semaphores for neighbor-exchange CCL broadcast.
+                Must contain exactly `bcast_num_links` entries in CCL mode.
+            bcast_num_links: Number of fabric links for CCL broadcast
             fp32_dest_acc_en: Whether to enable FP32 accumulation
             skip_ccl: Whether to skip CCL broadcast. If None, defaults to True for single-device meshes.
             socket_input: Optional socket input endpoint. Supports ttnn.MeshSocket receiver endpoint (D2D input).
@@ -215,6 +216,8 @@ class LMHeadSampling:
         mesh_shape = mesh_device.shape
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
+        sender_row = int(sender_coord[0])
+        sender_col = int(sender_coord[1])
         if skip_ccl is None:
             skip_ccl = mesh_rows * mesh_cols == 1
         if enable_socket_input:
@@ -230,12 +233,6 @@ class LMHeadSampling:
             if len(active_socket_cores) != 1:
                 raise ValueError("socket output for lm_head_sampling must have exactly one active core")
             socket_core = active_socket_cores[0]
-        # In multi-column meshes, enable secondary-axis relay by default so broadcast reaches
-        # all clusters. Callers can still override explicitly if needed.
-        if not skip_ccl and mesh_cols > 1 and secondary_cluster_axis is None:
-            secondary_cluster_axis = 1
-        sender_row = sender_coord[0]
-        sender_col = sender_coord[1]
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor_mesh)
@@ -258,22 +255,17 @@ class LMHeadSampling:
                 )
             if argmax_final_mesh_coord is None:
                 raise ValueError("argmax_final_mesh_coord is required for mesh argmax")
+        if bcast_semaphores is None:
+            bcast_semaphores = []
+        else:
+            bcast_semaphores = list(bcast_semaphores)
+        if not skip_ccl and len(bcast_semaphores) != bcast_num_links:
+            raise ValueError(f"Expected exactly {bcast_num_links} broadcast semaphore(s), got {len(bcast_semaphores)}")
         if persistent_mode and persistent_next_iter_semaphore is None:
             raise ValueError(
                 "persistent_next_iter_semaphore is required when persistent_mode=True "
                 "(must be a global semaphore on the full device grid)"
             )
-        # Semaphore addresses (only needed for CCL mode)
-        out_ready_sem_addr = 0
-        barrier_sem_addr = 0
-        secondary_sync_sem_addr = 0
-        if not skip_ccl and semaphores is not None:
-            out_ready_semaphore = semaphores[0]
-            barrier_semaphore = semaphores[1]
-            secondary_sync_semaphore = semaphores[2]
-            out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
-            barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
-            secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
         global_sem_addr = (
             int(ttnn.get_global_semaphore_address(global_semaphore)) if (enable_argmax and not skip_ccl) else 0
         )
@@ -283,23 +275,15 @@ class LMHeadSampling:
         persistent_next_iter_global_sem_addr = (
             int(ttnn.get_global_semaphore_address(persistent_next_iter_semaphore)) if persistent_mode else 0
         )
-        # Calculate packet size and page info for CCL broadcast
-        packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
 
         # Get tile info from input tensor (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
         in0_tile = input_tensor_sample.get_tile()
         input_shape = input_tensor_sample.shape
         data_format = input_tensor_sample.dtype
-        element_size = 2
-        tile_id_start = 0
         numel = int(input_shape[0]) * int(input_shape[1])
         scalar_packed = float_to_uint32(1.0 / math.sqrt(float(numel)))
         epsilon_packed = float_to_uint32(epsilon)
-        # CCL broadcast page info
-        bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
-        bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
-        num_pages_per_packet = packet_size_bytes // bcast_page_size_bytes
 
         # Matmul shape info from input and vocab tensors
         num_tiles_k = input_shape[1] // in0_tile.tile_shape[1]
@@ -346,23 +330,28 @@ class LMHeadSampling:
         mcast_data_receiver_semaphore_id = 1
         argmax_receiver_semaphore_id = 2
         argmax_local_ready_semaphore_id = 3
+        fabric_gate_bcast_turn_semaphore_id = 4
+        fabric_gate_argmax_turn_semaphore_id = 5
+        bcast_config = DeepseekMinimalBroadcast.configure(
+            mesh_device=mesh_device,
+            input_tensor_mesh=input_tensor_mesh,
+            output_tensor=intermediate_tensor_mesh,
+            sender_coord=sender_coord,
+            semaphores=bcast_semaphores,
+            socket=socket_input,
+            skip_ccl=skip_ccl,
+            chunk_size_bytes=None,
+            bcast_cb_id=bcast_pkt_cb,
+            num_links=bcast_num_links,
+            fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
+        )
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for row in range(mesh_rows):
             for col in range(mesh_cols):
                 coord = ttnn.MeshCoordinate(row, col)
                 device_idx = row * mesh_cols + col
-
-                # Sender identity is fixed by sender_coord even when skip_ccl=True.
-                is_sender = (row == sender_row) and (col == sender_col)
-                if skip_ccl:
-                    is_secondary_sender = False
-                    is_receiver = False
-                else:
-                    is_secondary_sender = (
-                        secondary_cluster_axis is not None and (row == sender_row) and (col != sender_col)
-                    )
-                    is_receiver = not is_sender and not is_secondary_sender
 
                 # Get per-device tensors
                 input_tensor_device = input_tensors_per_device[device_idx]
@@ -376,35 +365,9 @@ class LMHeadSampling:
                 # Get device handle
                 device = input_tensor_device.device()
 
-                # ================================================================
-                # CCL broadcast: physical core and routing info
-                # ================================================================
-                # Worker core from input tensor shard grid (single core)
-                input_shard_grid = input_tensor_device.memory_config().shard_spec.grid
-                shard_grid_start = input_shard_grid.bounding_box().start
-                worker_core = ttnn.CoreCoord(shard_grid_start.x, shard_grid_start.y)
-
-                # Get physical core for NOC addressing
-                data_core_physical = device.worker_core_from_logical_core(worker_core)
-                core_noc_x = data_core_physical.x
-                core_noc_y = data_core_physical.y
-
-                # Calculate ring index and targets for primary axis (column)
-                ring_size = mesh_rows
-                ring_index = row
-
-                # For Linear topology, calculate forward and backward targets
-                num_targets_forward = ring_size - ring_index - 1
-                num_targets_backward = ring_index
-
-                # Determine if this device has secondary axis connections
-                has_secondary_target = is_sender and (mesh_cols > 1) and (secondary_cluster_axis is not None)
-
-                # Calculate mcast distances
-                start_distance_forward = 1 if num_targets_forward > 0 else 0
-                range_hops_forward = num_targets_forward
-                start_distance_backward = 1 if num_targets_backward > 0 else 0
-                range_hops_backward = num_targets_backward
+                # Broadcast worker core from config (root/non-root consistent).
+                worker_core = bcast_config.get_worker_core(coord)
+                bcast_worker_core_phys = device.worker_core_from_logical_core(worker_core)
 
                 # ================================================================
                 # Core grid configuration (per-device)
@@ -598,6 +561,7 @@ class LMHeadSampling:
                             )
 
                     argmax_socket_mode = socket_mode_selected if emit_socket_on_this_device else socket_mode_none
+                    final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
 
                 # Determine if sender is part of the mcast rectangle
                 is_part_of_receiver_grid = mcast_grid.contains(mcast_sender_core)
@@ -610,26 +574,9 @@ class LMHeadSampling:
                 persistent_target_node = mesh_device.get_fabric_node_id(persistent_target_mesh_coord)
                 persistent_enable = int(persistent_mode and emit_socket_on_this_device)
 
-                # broadcast_rms-style BRISC source selection:
-                # - CCL path: packet CB
-                # - skip_ccl + socket path: rmsnorm input CB
-                # - otherwise BRISC broadcast path is idle
-
-                if not skip_ccl:
-                    brisc_bcast_cb = bcast_pkt_cb
-                    brisc_bcast_num_pages_to_read = bcast_num_pages
-                elif recv_socket_on_this_device:
-                    brisc_bcast_cb = rmsnorm_input_cb
-                    brisc_bcast_num_pages_to_read = rms_num_tiles
-                else:
-                    brisc_bcast_cb = 0
-                    brisc_bcast_num_pages_to_read = 0
-                brisc_is_active = (not skip_ccl) or recv_socket_on_this_device
-
                 # Get NOC coordinates for mcast destination
                 mcast_dest_noc_start = device.worker_core_from_logical_core(mcast_grid.start)
                 mcast_dest_noc_end = device.worker_core_from_logical_core(mcast_grid.end)
-                bcast_num_pages_to_read = bcast_num_pages
 
                 # ================================================================
                 # NCRISC compile-time args
@@ -637,20 +584,6 @@ class LMHeadSampling:
                 ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("enable_argmax", 1),
-                    ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
-                    ("bcast_num_pages_to_read", bcast_num_pages_to_read if not skip_ccl else 0),
-                    ("bcast_tensor0_page_size", bcast_page_size_bytes if not skip_ccl else 0),
-                    ("bcast_num_targets_forward_direction", num_targets_forward if not skip_ccl else 0),
-                    ("bcast_num_targets_backward_direction", num_targets_backward if not skip_ccl else 0),
-                    ("bcast_is_sender", int(is_sender) if not skip_ccl else 0),
-                    ("bcast_core_noc_x", core_noc_x if not skip_ccl else 0),
-                    ("bcast_core_noc_y", core_noc_y if not skip_ccl else 0),
-                    ("bcast_is_secondary_sender", int(is_secondary_sender) if not skip_ccl else 0),
-                    ("bcast_has_secondary_target", int(has_secondary_target) if not skip_ccl else 0),
-                    ("bcast_start_distance_in_hops_forward", start_distance_forward if not skip_ccl else 0),
-                    ("bcast_range_hops_forward", range_hops_forward if not skip_ccl else 0),
-                    ("bcast_start_distance_in_hops_backward", start_distance_backward if not skip_ccl else 0),
-                    ("bcast_range_hops_backward", range_hops_backward if not skip_ccl else 0),
                     ("input_socket_mode", input_socket_mode),
                     # Mcast source (for setup_sharded_buffer on sender core)
                     ("mcast_src_cb", mcast_src_cb),
@@ -695,9 +628,16 @@ class LMHeadSampling:
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
+                    ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
+                    ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
+                    ("fabric_gate_bcast_noc_y", int(bcast_worker_core_phys.y)),
+                    ("fabric_gate_argmax_noc_x", int(final_core_phys.x)),
+                    ("fabric_gate_argmax_noc_y", int(final_core_phys.y)),
                     ("mesh_row", row),
                     ("mesh_col", col),
                 ]
+                ncrisc_named_compile_time_args.extend(bcast_config.get_ncrisc_named_ct_args(coord))
 
                 # ================================================================
                 # BRISC compile-time args
@@ -705,9 +645,6 @@ class LMHeadSampling:
                 brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("enable_argmax", 1),
-                    ("bcast_cb0_id", brisc_bcast_cb),
-                    ("bcast_num_pages_to_read", brisc_bcast_num_pages_to_read),
-                    ("bcast_is_sender", int(is_sender) if brisc_is_active else 0),
                     ("input_socket_mode", input_socket_mode),
                     # Mcast sender
                     ("mcast_dest_noc_start_x", mcast_dest_noc_start.x),
@@ -730,9 +667,16 @@ class LMHeadSampling:
                     ("argmax_socket_cb", argmax_socket_cb if enable_socket_output else 0),
                     ("argmax_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
+                    ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
+                    ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
+                    ("fabric_gate_bcast_noc_y", int(bcast_worker_core_phys.y)),
+                    ("fabric_gate_argmax_noc_x", int(final_core_phys.x)),
+                    ("fabric_gate_argmax_noc_y", int(final_core_phys.y)),
                     ("mesh_row", row),
                     ("mesh_col", col),
                 ]
+                brisc_named_compile_time_args.extend(bcast_config.get_brisc_named_ct_args(coord))
 
                 # ================================================================
                 # TRISC compile-time args
@@ -753,6 +697,12 @@ class LMHeadSampling:
                     ("matmul_k_num_tiles", num_tiles_k),
                     ("matmul_out_w", out_w_per_core),
                     ("persistent_mode", 1 if persistent_mode else 0),
+                    ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
+                    ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
+                    ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
+                    ("fabric_gate_bcast_noc_y", int(bcast_worker_core_phys.y)),
+                    ("fabric_gate_argmax_noc_x", int(final_core_phys.x)),
+                    ("fabric_gate_argmax_noc_y", int(final_core_phys.y)),
                     ("mesh_row", row),
                     ("mesh_col", col),
                 ]
@@ -760,100 +710,30 @@ class LMHeadSampling:
                 # ================================================================
                 # CCL Broadcast common runtime args
                 # ================================================================
-                if skip_ccl:
-                    final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
-                    ncrisc_bcast_common_args = [
-                        int(indices_tensor_device.buffer_address()),
-                        int(output_index_tensor_device.buffer_address()),
-                        int(final_core_phys.x),
-                        int(final_core_phys.y),
-                        0,
-                        0,
-                        0,
-                    ]
-                    brisc_bcast_common_args = [
-                        int(final_core_phys.x),
-                        int(final_core_phys.y),
-                        0,
-                        int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
-                        int(socket_input.get_config_buffer_address()) if recv_socket_on_this_device else 0,
-                        packet_size_bytes if recv_socket_on_this_device else 0,
-                        1 if recv_socket_on_this_device else 0,
-                        persistent_enable,
-                        int(persistent_target_input_core_phys.x),
-                        int(persistent_target_input_core_phys.y),
-                        int(persistent_target_node.mesh_id),
-                        int(persistent_target_node.chip_id),
-                        persistent_next_iter_global_sem_addr,
-                    ]
-                    dst_nodes = []
-                    fabric_node_id = None
-                else:
-                    wait_output_semaphore = is_secondary_sender or is_receiver
-                    reset_global_semaphore = is_secondary_sender or is_receiver
-                    out_ready_sem_wait_value = 1 * num_links
-
-                    # Build dst_nodes to compute num_connections = len(dst_nodes)
-                    fabric_node_id = mesh_device.get_fabric_node_id(coord)
-                    dst_nodes = []
-
-                    # Primary axis connections (forward and backward in column)
-                    if num_targets_forward > 0:
-                        forward_coord = ttnn.MeshCoordinate(row + 1, col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(forward_coord))
-
-                    if num_targets_backward > 0:
-                        backward_coord = ttnn.MeshCoordinate(row - 1, col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(backward_coord))
-
-                    # Secondary axis connection (for sender to secondary sender)
-                    if has_secondary_target:
-                        secondary_coord = ttnn.MeshCoordinate(row, 1 - col)
-                        dst_nodes.append(mesh_device.get_fabric_node_id(secondary_coord))
-
-                    num_connections = len(dst_nodes)
-
-                    ncrisc_bcast_common_args = [
-                        int(intermediate_tensor_device.buffer_address()),  # tensor_address0
-                        int(out_ready_sem_addr),  # out_ready_sem_bank_addr
-                        int(wait_output_semaphore),  # wait_output_semaphore
-                        int(reset_global_semaphore),  # reset_global_semaphore
-                        core_noc_x,  # out_ready_sem_noc0_x
-                        core_noc_y,  # out_ready_sem_noc0_y
-                        out_ready_sem_wait_value,  # out_ready_sem_wait_value
-                        int(barrier_sem_addr),  # barrier_sem
-                        core_noc_x,  # barrier_sem_noc0_x
-                        core_noc_y,  # barrier_sem_noc0_y
-                        ring_index,  # ring_index
-                        int(secondary_sync_sem_addr),  # secondary_sync_sem
-                        num_connections,  # num_connections
-                    ]
-
-                    final_core_phys = device.worker_core_from_logical_core(argmax_final_core)
-                    ncrisc_bcast_common_args = ncrisc_bcast_common_args + [
-                        int(indices_tensor_device.buffer_address()),
-                        int(output_index_tensor_device.buffer_address()),
-                        int(final_core_phys.x),
-                        int(final_core_phys.y),
-                        int(scratch_tensors_per_device[device_idx].buffer_address()),
-                        global_sem_addr,
-                        global_stage2_sem_addr,
-                    ]
-                    brisc_bcast_common_args = [
-                        int(final_core_phys.x),
-                        int(final_core_phys.y),
-                        int(scratch_tensors_per_device[device_idx].buffer_address()),
-                        int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
-                        int(socket_input.get_config_buffer_address()) if recv_socket_on_this_device else 0,
-                        packet_size_bytes if recv_socket_on_this_device else 0,
-                        1 if recv_socket_on_this_device else 0,
-                        persistent_enable,
-                        int(persistent_target_input_core_phys.x),
-                        int(persistent_target_input_core_phys.y),
-                        int(persistent_target_node.mesh_id),
-                        int(persistent_target_node.chip_id),
-                        persistent_next_iter_global_sem_addr,
-                    ]
+                argmax_scratch_addr = (
+                    int(scratch_tensors_per_device[device_idx].buffer_address()) if not skip_ccl else 0
+                )
+                ncrisc_bcast_common_args = bcast_config.get_ncrisc_common_rt_args(coord) + [
+                    int(indices_tensor_device.buffer_address()),
+                    int(output_index_tensor_device.buffer_address()),
+                    int(final_core_phys.x),
+                    int(final_core_phys.y),
+                    argmax_scratch_addr,
+                    global_sem_addr,
+                    global_stage2_sem_addr,
+                ]
+                brisc_bcast_common_args = bcast_config.get_brisc_common_rt_args(coord) + [
+                    int(final_core_phys.x),
+                    int(final_core_phys.y),
+                    argmax_scratch_addr,
+                    int(socket_output.get_config_buffer_address()) if enable_socket_output else 0,
+                    persistent_enable,
+                    int(persistent_target_input_core_phys.x),
+                    int(persistent_target_input_core_phys.y),
+                    int(persistent_target_node.mesh_id),
+                    int(persistent_target_node.chip_id),
+                    persistent_next_iter_global_sem_addr,
+                ]
 
                 # ================================================================
                 # Circular buffer descriptors
@@ -969,9 +849,8 @@ class LMHeadSampling:
                         )
                         cbs_list.append(argmax_socket_cb_descriptor)
 
-                # CB 30: CCL broadcast packet buffer (only in multi-device mode)
-                if not skip_ccl:
-                    bcast_pkt_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(bcast_pkt_cb, input_tensor_device)
+                bcast_pkt_cb_descriptor = bcast_config.get_cb_descriptor(coord)
+                if bcast_pkt_cb_descriptor is not None:
                     cbs_list.append(bcast_pkt_cb_descriptor)
 
                 # ================================================================
@@ -1002,17 +881,34 @@ class LMHeadSampling:
                                 core_ranges=argmax_core_grid,
                                 initial_value=0,
                             ),
+                            ttnn.SemaphoreDescriptor(
+                                id=fabric_gate_bcast_turn_semaphore_id,
+                                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)]),
+                                initial_value=1,
+                            ),
+                            ttnn.SemaphoreDescriptor(
+                                id=fabric_gate_argmax_turn_semaphore_id,
+                                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(argmax_final_core, argmax_final_core)]),
+                                initial_value=0,
+                            ),
                         ]
                     )
                 # ================================================================
                 # Unified kernel descriptor
                 # ================================================================
+                # Broadcast contributes the current define set. If this fused op
+                # adds extra defines later, merge/de-dupe at the op layer.
+                kernel_defines = merge_kernel_defines(
+                    bcast_config.get_kernel_defines(coord),
+                    [("ENABLE_SOCKET_READER", "1")] if enable_socket_input else [],
+                )
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source="models/demos/deepseek_v3_b1/fused_ops/lm_head_sampling/kernels/lm_head_sampling_kernel.cpp",
                     core_ranges=all_cores,
                     ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
                     brisc_named_compile_time_args=brisc_named_compile_time_args,
                     trisc_named_compile_time_args=trisc_named_compile_time_args,
+                    defines=kernel_defines,
                     ncrisc_common_runtime_args=ncrisc_bcast_common_args,
                     brisc_common_runtime_args=brisc_bcast_common_args,
                     noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
@@ -1088,7 +984,6 @@ class LMHeadSampling:
                         ncrisc_args=[(worker_core, [])],
                         brisc_args=[(worker_core, [])] + per_core_brisc_runtime_args,
                     ),
-                    defines=[("ENABLE_SOCKET_READER", "1")] if enable_socket_input else [],
                 )
 
                 # ================================================================
@@ -1158,8 +1053,8 @@ class LMHeadSampling:
                     semaphores=semaphore_descriptors,
                 )
 
-                # Append CCL routing args to the broadcast writer kernel (NCRISC in current broadcast split).
-                if not skip_ccl and num_connections > 0:
+                # Append CCL routing args to the broadcast writer kernel (NCRISC input-core group).
+                if not skip_ccl:
                     ccl_writer_group = None
                     for group in kernel_result.groups:
                         if group.compile_time_arg_values.get("is_input_core", 0) == 1 and group.core_range_set.contains(
@@ -1171,10 +1066,7 @@ class LMHeadSampling:
                         raise RuntimeError("Missing is_input_core kernel group for CCL writer fabric append")
                     writer_kernel_idx = ccl_writer_group.ncrisc_kernel_index
                     writer_rt_args_ref = program.kernels[writer_kernel_idx].runtime_args[worker_core.x][worker_core.y]
-                    fabric_args = ttnn.setup_routing_plane_connection(
-                        fabric_node_id, dst_nodes, [0], program, writer_kernel_idx, worker_core
-                    )
-                    writer_rt_args_ref.extend(fabric_args)
+                    writer_rt_args_ref.extend(bcast_config.get_ncrisc_per_core_rt_args(coord, program, worker_core))
 
                 if not skip_ccl and is_argmax_mesh_sender_core:
                     sender_group = kernel_result.get_group_by_arg("is_argmax_mesh_sender_core", 1)

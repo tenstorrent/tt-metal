@@ -101,7 +101,14 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: amd64
-      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+      # Use the merge commit (github.sha) rather than pr.head.sha.
+      # GHA always resolves workflow *files* from the merge commit; using head.sha for the
+      # working-tree checkout creates a mismatch where the workflow calls scripts that don't
+      # exist on the PR branch yet (e.g. a new .github/scripts/ file lands on main and
+      # immediately breaks unrelated open PRs that haven't rebased).
+      # Consistency: code and workflow definitions are both from the same merge commit,
+      # so "re-run after a main update" failures are explainable as code conflicts rather
+      # than invisible infrastructure drift.
 
   asan-build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
@@ -116,7 +123,7 @@ jobs:
       build-type: ${{ inputs.build-type || 'ASan' }}
       publish-artifact: false
       skip-tt-train: true
-      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+      # Use the merge commit (github.sha) — see build-docker-images job for rationale.
       # Pass pre-built docker images to avoid duplicate builds
       ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
       ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
@@ -137,9 +144,18 @@ jobs:
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
       tt-train-changed: ${{ steps.find-changes.outputs.tt-train-changed }}
       model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
+      llk-engine-changed: ${{ steps.find-changes.outputs.llk-engine-changed }}
+      llk-quasar-changed: ${{ steps.find-changes.outputs.llk-quasar-changed }}
+      llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
+      llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
+      llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: .github
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+        uses: ./.github/actions/find-changed-files
 
   metalium-smoke-tests:
     needs: [ asan-build, find-changed-files ]
@@ -206,7 +222,7 @@ jobs:
       publish-artifact: true
       skip-tt-train: false
       distributed: false
-      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
+      # Use the merge commit (github.sha) — see build-docker-images job for rationale.
       # Pass pre-built docker images to avoid duplicate builds
       ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
       ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
@@ -338,6 +354,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=Debug \
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
           -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
+          -DBUILD_TT_TRAIN=ON \
           -DTT_METAL_BUILD_TESTS=ON \
           -DTTNN_BUILD_TESTS=ON \
           -DTT_UNITY_BUILDS=OFF \
@@ -402,6 +419,63 @@ jobs:
         # NOTE: only resolves when ALL are fixed
         auto_resolve_conversations: true
 
+  # LLK Functional Unit Tests on Wormhole (PR gate - runs when LLK engine, tests, or perf code changed)
+  llk-test-wormhole:
+    needs: [ build-docker-images, find-changed-files ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-engine-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      runs_on: tt-ubuntu-2204-n150-stable
+      test_splits: 2
+      pytest_markers: "not perf and not nightly and not quasar"
+      use_durations: false
+
+  # LLK Functional Unit Tests on Blackhole (PR gate - runs when LLK engine, tests, or perf code changed)
+  llk-test-blackhole:
+    needs: [ build-docker-images, find-changed-files ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-engine-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-tests-changed == 'true' ||
+         needs.find-changed-files.outputs.llk-perf-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-setup-and-test.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      runs_on: tt-ubuntu-2204-p150b-stable
+      test_splits: 2
+      pytest_markers: "not perf and not nightly and not quasar"
+      use_durations: false
+
+  # LLK Quasar Build Check (compile-only, no hardware needed)
+  llk-build-quasar:
+    needs: [ build-docker-images, find-changed-files ]
+    if: ${{
+        github.event.action != 'destroyed' &&
+        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+        (github.ref_name == 'main' ||
+         needs.find-changed-files.outputs.llk-quasar-changed == 'true')
+      }}
+    uses: ./.github/workflows/llk-build-quasar.yaml
+    secrets: inherit
+    with:
+      docker_image: ${{ needs.build-docker-images.outputs.llk-ci-tag }}
+      runs_on: tt-ubuntu-2204-xlarge-stable
+      test_splits: 1
+      pytest_markers: "quasar"
+
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
   workflow-status:
@@ -424,6 +498,9 @@ jobs:
       - clang-tidy-light
       - model-charts-sync
       - build-docs
+      - llk-test-wormhole
+      - llk-test-blackhole
+      - llk-build-quasar
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
@@ -432,6 +509,7 @@ jobs:
           required-jobs: "asan-build, build"
           optional-jobs: >-
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
-            model-charts-sync, build-docs
+            model-charts-sync, build-docs,
+            llk-test-wormhole, llk-test-blackhole, llk-build-quasar
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
