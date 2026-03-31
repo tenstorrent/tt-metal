@@ -22,6 +22,41 @@
 #include "api/compute/eltwise_unary/rpow.h"
 #include "api/compute/eltwise_unary/log1p.h"
 #include "api/compute/eltwise_unary/xielu.h"
+#include "api/compute/eltwise_unary/trigonometry.h"
+#include "api/compute/eltwise_unary/erf_erfc.h"
+#include "api/compute/eltwise_unary/erfinv.h"
+#include "api/compute/eltwise_unary/isinf_isnan.h"
+#include "api/compute/eltwise_unary/logical_not.h"
+#include "api/compute/eltwise_unary/i0.h"
+#include "api/compute/eltwise_unary/i1.h"
+#include "api/compute/eltwise_unary/lgamma.h"
+#include "api/compute/eltwise_unary/comp.h"
+#include "api/compute/eltwise_unary/elu.h"
+#include "api/compute/eltwise_unary/selu.h"
+#include "api/compute/eltwise_unary/clamp.h"
+#include "api/compute/eltwise_unary/threshold.h"
+#include "api/compute/eltwise_unary/prelu.h"
+#include "api/compute/eltwise_unary/rounding.h"
+#include "api/compute/eltwise_unary/typecast.h"
+#include "api/compute/eltwise_unary/identity.h"
+#include "api/compute/eltwise_unary/dropout.h"
+#include "api/compute/eltwise_unary/bitwise_and.h"
+#include "api/compute/eltwise_unary/bitwise_or.h"
+#include "api/compute/eltwise_unary/bitwise_xor.h"
+#include "api/compute/eltwise_unary/bitwise_not.h"
+#include "api/compute/eltwise_unary/left_shift.h"
+#include "api/compute/eltwise_unary/right_shift.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/rsub.h"
+#include "api/compute/eltwise_unary/rdiv.h"
+#include "api/compute/eltwise_unary/fmod.h"
+#include "api/compute/eltwise_unary/remainder.h"
+#include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/eltwise_unary/rand.h"
+#include "api/compute/eltwise_unary/where.h"
+#include "api/compute/eltwise_unary/lerp.h"
+#include "api/compute/eltwise_unary/addcmul.h"
+#include "api/compute/eltwise_unary/addcdiv.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/compute_kernel_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
@@ -162,9 +197,6 @@ enum class Legacy : bool { Off = false, On = true };
 /** @brief Base tag for Load ops — pipeline handles these specially */
 struct LoadTag {};
 
-/** @brief Base tag for compute ops — pipeline calls apply() on these */
-struct ComputeTag {};
-
 /** @brief Compile-time predicate: true if T is a Load op */
 template <typename T>
 constexpr bool is_load_op_v = std::is_base_of_v<LoadTag, T>;
@@ -224,683 +256,1125 @@ struct Load : LoadTag {
 };
 
 // =============================================================================
-// Unary Group A — Simple Math (18 ops)
+// Op Struct Declarations
 // =============================================================================
 
-/**
- * @brief Exponential: DST[Slot] = exp(DST[Slot])
- * @tparam approx Approximation mode (default: Exact)
- * @tparam fast Fast+approximate mode (default: Fast)
- * @tparam Slot DEST slot to operate on
- * LLK: exp_tile_init<approx,fast>() -> exp_tile<approx,fast>(idst)
- */
+// --- Simple Math ---
+
 template <Approx approx = Approx::Exact, Approx fast = Approx::Fast, Dst Slot = Dst::D0>
-struct Exp : ComputeTag {
+struct Exp {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { exp_tile_init<static_cast<bool>(approx), static_cast<bool>(fast)>(); }
-    ALWI void exec() const { exp_tile<static_cast<bool>(approx), static_cast<bool>(fast)>(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Natural logarithm: DST[Slot] = log(DST[Slot])
- * @tparam approx Approximation mode (default: Exact)
- * @tparam Slot DEST slot to operate on
- * LLK: log_tile_init<approx>() -> log_tile<approx>(idst)
- */
 template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
-struct Log : ComputeTag {
+struct Log {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { log_tile_init<static_cast<bool>(approx)>(); }
-    ALWI void exec() const { log_tile<static_cast<bool>(approx)>(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Logarithm with custom base: DST[Slot] = log_base(DST[Slot])
- * @tparam Slot DEST slot to operate on
- * @param base_scale IEEE754 bit-cast of 1/ln(base) (e.g. 0x3fb8aa3b for log2)
- * LLK: log_with_base_tile_init() -> log_with_base_tile(idst, base_scale)
- */
 template <Dst Slot = Dst::D0>
-struct LogWithBase : ComputeTag {
+struct LogWithBase {
     uint32_t base_scale;
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { log_with_base_tile_init(); }
-    ALWI void exec() const { log_with_base_tile(dst_idx, base_scale); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Log(1 + x): DST[Slot] = log1p(DST[Slot])
- * @tparam fast_and_approx Fast approximation mode (default: false)
- * @tparam Slot DEST slot to operate on
- * LLK: log1p_tile_init<fast_and_approx>() -> log1p_tile<fast_and_approx>(idst)
- */
 template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
-struct Log1p : ComputeTag {
+struct Log1p {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { log1p_tile_init<static_cast<bool>(approx)>(); }
-    ALWI void exec() const { log1p_tile<static_cast<bool>(approx)>(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Square root: DST[Slot] = sqrt(DST[Slot])
- * @tparam fast_approx Fast approximation mode (default: false)
- * @tparam Slot DEST slot to operate on
- * LLK: sqrt_tile_init() -> sqrt_tile<fast_approx>(idst)
- */
 template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
-struct Sqrt : ComputeTag {
+struct Sqrt {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { sqrt_tile_init(); }
-    ALWI void exec() const { sqrt_tile<static_cast<bool>(approx)>(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Reciprocal square root: DST[Slot] = 1/sqrt(DST[Slot])
- * @tparam legacy Legacy compatibility mode (default: Off)
- * @tparam approx Fast approximation mode (default: Exact)
- * @tparam Slot DEST slot to operate on
- * LLK: rsqrt_tile_init<legacy>() -> rsqrt_tile<legacy,approx>(idst)
- */
 template <Legacy legacy = Legacy::Off, Approx approx = Approx::Exact, Dst Slot = Dst::D0>
-struct Rsqrt : ComputeTag {
+struct Rsqrt {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { rsqrt_tile_init<static_cast<bool>(legacy)>(); }
-    ALWI void exec() const { rsqrt_tile<static_cast<bool>(legacy), static_cast<bool>(approx)>(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Cube root: DST[Slot] = cbrt(DST[Slot])
- * @tparam Slot DEST slot to operate on
- * LLK: cbrt_tile_init() -> cbrt_tile(idst)
- */
 template <Dst Slot = Dst::D0>
-struct Cbrt : ComputeTag {
+struct Cbrt {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { cbrt_tile_init(); }
-    ALWI void exec() const { cbrt_tile(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Reciprocal: DST[Slot] = 1/DST[Slot]
- * @tparam legacy Legacy compatibility mode (default: On for recip)
- * @tparam Slot DEST slot to operate on
- * LLK: recip_tile_init<legacy>() -> recip_tile<legacy>(idst)
- */
 template <Legacy legacy = Legacy::On, Dst Slot = Dst::D0>
-struct Recip : ComputeTag {
+struct Recip {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { recip_tile_init<static_cast<bool>(legacy)>(); }
-    ALWI void exec() const { recip_tile<static_cast<bool>(legacy)>(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Absolute value: DST[Slot] = |DST[Slot]|
- * @tparam Slot DEST slot to operate on
- * LLK: abs_tile_init() -> abs_tile(idst)
- */
 template <Dst Slot = Dst::D0>
-struct Abs : ComputeTag {
+struct Abs {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { abs_tile_init(); }
-    ALWI void exec() const { abs_tile(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Negation: DST[Slot] = -DST[Slot]
- * @tparam Slot DEST slot to operate on
- * LLK: negative_tile_init() -> negative_tile(idst)
- */
 template <Dst Slot = Dst::D0>
-struct Neg : ComputeTag {
+struct Neg {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { negative_tile_init(); }
-    ALWI void exec() const { negative_tile(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Element-wise square: DST[Slot] = DST[Slot]^2
- * @tparam Slot DEST slot to operate on
- * LLK: square_tile_init() -> square_tile(idst)
- */
 template <Dst Slot = Dst::D0>
-struct Square : ComputeTag {
+struct Square {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { square_tile_init(); }
-    ALWI void exec() const { square_tile(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Sign function: DST[Slot] = sign(DST[Slot])
- * @tparam Slot DEST slot to operate on
- * LLK: sign_tile_init() -> sign_tile(idst)
- */
 template <Dst Slot = Dst::D0>
-struct Sign : ComputeTag {
+struct Sign {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { sign_tile_init(); }
-    ALWI void exec() const { sign_tile(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Sign bit extraction: DST[Slot] = signbit(DST[Slot])
- * @tparam Slot DEST slot to operate on
- * LLK: signbit_tile_init() -> signbit_tile(idst)
- */
 template <Dst Slot = Dst::D0>
-struct Signbit : ComputeTag {
+struct Signbit {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { signbit_tile_init(); }
-    ALWI void exec() const { signbit_tile(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Base-2 exponential: DST[Slot] = 2^DST[Slot]
- * @tparam Slot DEST slot to operate on
- * LLK: exp2_tile_init() -> exp2_tile(idst)
- * Note: Hardcoded APPROX=true internally
- */
 template <Dst Slot = Dst::D0>
-struct Exp2 : ComputeTag {
+struct Exp2 {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { exp2_tile_init(); }
-    ALWI void exec() const { exp2_tile(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Exponential minus one: DST[Slot] = exp(DST[Slot]) - 1
- * @tparam Slot DEST slot to operate on
- * LLK: expm1_tile_init() -> expm1_tile(idst)
- */
 template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
-struct Expm1 : ComputeTag {
+struct Expm1 {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { expm1_tile_init<static_cast<bool>(approx)>(); }
-    ALWI void exec() const { expm1_tile<static_cast<bool>(approx)>(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Power: DST[Slot] = DST[Slot]^exponent
- * @tparam Slot DEST slot to operate on
- * @param exponent IEEE754 bit-cast float exponent value
- * LLK: power_tile_init() -> power_tile(idst, param0)
- */
 template <Dst Slot = Dst::D0>
-struct Power : ComputeTag {
+struct Power {
     uint32_t exponent;
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { power_tile_init(); }
-    ALWI void exec() const { power_tile(dst_idx, exponent); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Iterative power: DST[Slot] = DST[Slot]^int_exponent (integer exponent)
- * @tparam Slot DEST slot to operate on
- * @param int_exponent Integer exponent value (bit-cast as uint32_t)
- * LLK: power_tile_init() -> power_tile(idst, param0)
- * Note: Uses same SfpuType as Power; distinguished by integer exponent
- */
 template <Dst Slot = Dst::D0>
-struct PowerIterative : ComputeTag {
+struct PowerIterative {
     uint32_t int_exponent;
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { power_tile_init(); }
-    ALWI void exec() const { power_tile(dst_idx, int_exponent); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Reverse power: DST[Slot] = base_val ^ DST[Slot]
- * @tparam Slot DEST slot to operate on
- * @param base_val IEEE754 bit-cast float base value
- * LLK: rpow_tile_init() -> rpow_tile(idst, base_val)
- * Semantics: base_val ^ tile[slot] (reversed from Power)
- */
 template <Dst Slot = Dst::D0>
-struct Rpow : ComputeTag {
+struct Rpow {
     uint32_t base_val;
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { rpow_tile_init(); }
-    ALWI void exec() const { rpow_tile(dst_idx, base_val); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-// =============================================================================
-// Unary Group B — Activations (11 ops)
-// =============================================================================
+// --- Activations ---
 
-/**
- * @brief Sigmoid activation: DST[Slot] = 1 / (1 + exp(-DST[Slot]))
- * @tparam Slot DEST slot to operate on
- * LLK: sigmoid_tile_init() -> sigmoid_tile(idst)
- * Note: vec_mode fixed to RC (standard mode)
- */
 template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
-struct Sigmoid : ComputeTag {
+struct Sigmoid {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { sigmoid_tile_init<static_cast<bool>(approx)>(); }
-    ALWI void exec() const { sigmoid_tile<(int)VectorMode::RC, static_cast<bool>(approx)>(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Tanh activation: DST[Slot] = tanh(DST[Slot])
- * @tparam approx Approximation mode (default: Exact)
- * @tparam Slot DEST slot to operate on
- * LLK: tanh_tile_init<approx>() -> tanh_tile<approx>(idst)
- */
 template <Approx approx = Approx::Exact, Dst Slot = Dst::D0>
-struct Tanh : ComputeTag {
+struct Tanh {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { tanh_tile_init<static_cast<bool>(approx)>(); }
-    ALWI void exec() const { tanh_tile<static_cast<bool>(approx)>(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief GELU activation: DST[Slot] = gelu(DST[Slot])
- * @tparam approx Approximation mode (default: Fast — unlike most other ops)
- * @tparam Slot DEST slot to operate on
- * LLK: gelu_tile_init<approx>() -> gelu_tile<approx>(idst)
- */
 template <Approx approx = Approx::Fast, Dst Slot = Dst::D0>
-struct Gelu : ComputeTag {
+struct Gelu {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { gelu_tile_init<static_cast<bool>(approx)>(); }
-    ALWI void exec() const { gelu_tile<static_cast<bool>(approx)>(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief SiLU (Swish) activation: DST[Slot] = DST[Slot] * sigmoid(DST[Slot])
- * @tparam Slot DEST slot to operate on
- * LLK: silu_tile_init() -> silu_tile(idst)
- * Note: Always uses non-approx sigmoid internally
- */
 template <Dst Slot = Dst::D0>
-struct Silu : ComputeTag {
+struct Silu {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { silu_tile_init(); }
-    ALWI void exec() const { silu_tile(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief ReLU activation: DST[Slot] = max(0, DST[Slot])
- * @tparam Slot DEST slot to operate on
- * LLK: relu_tile_init() -> relu_tile(idst)
- */
 template <Dst Slot = Dst::D0>
-struct Relu : ComputeTag {
+struct Relu {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { relu_tile_init(); }
-    ALWI void exec() const { relu_tile(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Hard Mish activation
- * @tparam Slot DEST slot to operate on
- * LLK: hardmish_tile_init() -> hardmish_tile(idst)
- */
 template <Dst Slot = Dst::D0>
-struct Hardmish : ComputeTag {
+struct Hardmish {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { hardmish_tile_init(); }
-    ALWI void exec() const { hardmish_tile(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Hard Sigmoid activation
- * @tparam Slot DEST slot to operate on
- * LLK: hardsigmoid_tile_init() -> hardsigmoid_tile(idst)
- */
 template <Dst Slot = Dst::D0>
-struct Hardsigmoid : ComputeTag {
+struct Hardsigmoid {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { hardsigmoid_tile_init(); }
-    ALWI void exec() const { hardsigmoid_tile(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Hard Tanh activation: clamp(DST[Slot], min, max)
- * @tparam Slot DEST slot to operate on
- * @param param_min IEEE754 bit-cast float minimum
- * @param param_max IEEE754 bit-cast float maximum
- * LLK: hardtanh_tile_init() -> hardtanh_tile(idst, param0, param1)
- */
 template <Dst Slot = Dst::D0>
-struct Hardtanh : ComputeTag {
+struct Hardtanh {
     uint32_t param_min;
     uint32_t param_max;
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { hardtanh_tile_init(); }
-    ALWI void exec() const { hardtanh_tile(dst_idx, param_min, param_max); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Softsign activation: DST[Slot] = DST[Slot] / (1 + |DST[Slot]|)
- * @tparam Slot DEST slot to operate on
- * LLK: softsign_tile_init() -> softsign_tile(idst)
- */
 template <Dst Slot = Dst::D0>
-struct Softsign : ComputeTag {
+struct Softsign {
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { softsign_tile_init(); }
-    ALWI void exec() const { softsign_tile(dst_idx); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief Softplus activation: DST[Slot] = (1/beta) * log(1 + exp(beta * DST[Slot]))
- * @tparam Slot DEST slot to operate on
- * @param beta IEEE754 bit-cast float beta parameter
- * @param beta_recip IEEE754 bit-cast float 1/beta
- * @param threshold IEEE754 bit-cast float threshold for linear fallback
- * LLK: softplus_tile_init() -> softplus_tile(idst, beta, beta_reciprocal, threshold)
- */
 template <Dst Slot = Dst::D0>
-struct Softplus : ComputeTag {
+struct Softplus {
     uint32_t beta;
     uint32_t beta_recip;
     uint32_t threshold;
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { softplus_tile_init(); }
-    ALWI void exec() const { softplus_tile(dst_idx, beta, beta_recip, threshold); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief XIeLU activation (parametric leaky ReLU variant)
- * @tparam Slot DEST slot to operate on
- * @param alpha_p IEEE754 bit-cast float positive slope
- * @param alpha_n IEEE754 bit-cast float negative slope
- * LLK: xielu_tile_init() -> xielu_tile(idst, alpha_p, alpha_n)
- */
 template <Dst Slot = Dst::D0>
-struct Xielu : ComputeTag {
+struct Xielu {
     uint32_t alpha_p;
     uint32_t alpha_n;
     static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
     static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
-    ALWI void init() const { xielu_tile_init(); }
-    ALWI void exec() const { xielu_tile(dst_idx, alpha_p, alpha_n); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-// =============================================================================
-// Binary SFPU Group A — Arithmetic (6 ops)
-// =============================================================================
+// --- Trigonometry ---
 
-/**
- * @brief SFPU binary add: DST[Out] = DST[In0] + DST[In1]
- * @tparam In0 First input DEST slot
- * @tparam In1 Second input DEST slot
- * @tparam Out Output DEST slot
- * LLK: add_binary_tile_init() -> add_binary_tile(idst0, idst1, odst)
- */
+template <Dst Slot = Dst::D0>
+struct Sin {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Cos {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Tan {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Asin {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Acos {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Atan {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Sinh {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Cosh {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Asinh {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Acosh {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Atanh {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+// --- Error / Special Functions ---
+
+template <Approx approx = Approx::Fast, Dst Slot = Dst::D0>
+struct Erf {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Approx approx = Approx::Fast, Dst Slot = Dst::D0>
+struct Erfc {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Erfinv {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct I0 {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct I1 {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Lgamma {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+// --- Predicates & Comparisons ---
+
+template <Dst Slot = Dst::D0>
+struct Isinf {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Isposinf {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Isneginf {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Isnan {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Isfinite {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <DataFormat df = DataFormat::Float16_b, Dst Slot = Dst::D0>
+struct LogicalNot {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Gtz {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Ltz {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Lez {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Gez {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Eqz {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Nez {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct UnaryEq {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct UnaryNe {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct UnaryGt {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct UnaryGe {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct UnaryLt {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct UnaryLe {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+// --- Additional Activations ---
+
+template <Dst Slot = Dst::D0>
+struct Elu {
+    uint32_t alpha;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Selu {
+    uint32_t scale;
+    uint32_t alpha;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Celu {
+    uint32_t alpha;
+    uint32_t alpha_recip;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Softshrink {
+    uint32_t lambda;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Clamp {
+    uint32_t param_min;
+    uint32_t param_max;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Threshold {
+    uint32_t threshold;
+    uint32_t value;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Prelu {
+    uint32_t weight;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+// --- Rounding ---
+
+template <Dst Slot = Dst::D0>
+struct Floor {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Ceil {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Trunc {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Round {
+    int32_t decimals;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Frac {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct StochasticRound {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+// --- Type / Identity / Bitwise ---
+
+template <uint32_t in_dtype, uint32_t out_dtype, Dst Slot = Dst::D0>
+struct Typecast {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Identity {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct BitwiseNot {
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct BitwiseAnd {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct BitwiseOr {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct BitwiseXor {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct LeftShift {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct RightShift {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+// --- Scalar Arithmetic ---
+
+template <Dst Slot = Dst::D0>
+struct AddScalar {
+    uint32_t scalar;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct SubScalar {
+    uint32_t scalar;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct MulScalar {
+    uint32_t scalar;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct DivScalar {
+    uint32_t scalar;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct RsubScalar {
+    uint32_t scalar;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Rsub {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <RoundingMode rounding_mode = RoundingMode::None, Dst Slot = Dst::D0>
+struct Rdiv {
+    uint32_t value;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Fmod {
+    uint32_t param0;
+    uint32_t param1;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Remainder {
+    uint32_t param0;
+    uint32_t param1;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct Dropout {
+    uint32_t probability;
+    uint32_t scale_factor;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+// --- Fill and Random ---
+
+template <Dst Slot = Dst::D0>
+struct FillTile {
+    float fill_val;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct FillTileBitcast {
+    uint32_t param0;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst Slot = Dst::D0>
+struct RandTile {
+    uint32_t from;
+    uint32_t scale;
+    static constexpr uint32_t dst_idx = static_cast<uint32_t>(Slot);
+    static_assert(dst_idx < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+// --- Binary SFPU Ops ---
+
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
-struct SfpuAdd : ComputeTag {
+struct SfpuAdd {
     static constexpr uint32_t in0 = static_cast<uint32_t>(In0);
     static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
     static constexpr uint32_t out = static_cast<uint32_t>(Out);
     static_assert(in0 < 8, "DEST slot In0 exceeds maximum capacity (8)");
     static_assert(in1 < 8, "DEST slot In1 exceeds maximum capacity (8)");
     static_assert(out < 8, "DEST slot Out exceeds maximum capacity (8)");
-    ALWI void init() const { add_binary_tile_init(); }
-    ALWI void exec() const { add_binary_tile(in0, in1, out); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief SFPU binary subtract: DST[Out] = DST[In0] - DST[In1]
- * @tparam In0 First input DEST slot
- * @tparam In1 Second input DEST slot
- * @tparam Out Output DEST slot
- * LLK: sub_binary_tile_init() -> sub_binary_tile(idst0, idst1, odst)
- */
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
-struct SfpuSub : ComputeTag {
+struct SfpuSub {
     static constexpr uint32_t in0 = static_cast<uint32_t>(In0);
     static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
     static constexpr uint32_t out = static_cast<uint32_t>(Out);
     static_assert(in0 < 8, "DEST slot In0 exceeds maximum capacity (8)");
     static_assert(in1 < 8, "DEST slot In1 exceeds maximum capacity (8)");
     static_assert(out < 8, "DEST slot Out exceeds maximum capacity (8)");
-    ALWI void init() const { sub_binary_tile_init(); }
-    ALWI void exec() const { sub_binary_tile(in0, in1, out); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief SFPU binary multiply: DST[Out] = DST[In0] * DST[In1]
- * @tparam In0 First input DEST slot
- * @tparam In1 Second input DEST slot
- * @tparam Out Output DEST slot
- * LLK: mul_binary_tile_init() -> mul_binary_tile(idst0, idst1, odst)
- */
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
-struct SfpuMul : ComputeTag {
+struct SfpuMul {
     static constexpr uint32_t in0 = static_cast<uint32_t>(In0);
     static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
     static constexpr uint32_t out = static_cast<uint32_t>(Out);
     static_assert(in0 < 8, "DEST slot In0 exceeds maximum capacity (8)");
     static_assert(in1 < 8, "DEST slot In1 exceeds maximum capacity (8)");
     static_assert(out < 8, "DEST slot Out exceeds maximum capacity (8)");
-    ALWI void init() const { mul_binary_tile_init(); }
-    ALWI void exec() const { mul_binary_tile(in0, in1, out); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief SFPU binary divide: DST[Out] = DST[In0] / DST[In1]
- * @tparam In0 First input DEST slot (numerator)
- * @tparam In1 Second input DEST slot (denominator)
- * @tparam Out Output DEST slot
- * LLK: div_binary_tile_init() -> div_binary_tile(idst0, idst1, odst)
- */
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
-struct SfpuDiv : ComputeTag {
+struct SfpuDiv {
     static constexpr uint32_t in0 = static_cast<uint32_t>(In0);
     static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
     static constexpr uint32_t out = static_cast<uint32_t>(Out);
     static_assert(in0 < 8, "DEST slot In0 exceeds maximum capacity (8)");
     static_assert(in1 < 8, "DEST slot In1 exceeds maximum capacity (8)");
     static_assert(out < 8, "DEST slot Out exceeds maximum capacity (8)");
-    ALWI void init() const { div_binary_tile_init(); }
-    ALWI void exec() const { div_binary_tile(in0, in1, out); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief SFPU binary reverse subtract: DST[Out] = DST[In1] - DST[In0]
- * @tparam In0 First input DEST slot
- * @tparam In1 Second input DEST slot
- * @tparam Out Output DEST slot
- * LLK: rsub_binary_tile_init() -> rsub_binary_tile(idst0, idst1, odst)
- */
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
-struct SfpuRsub : ComputeTag {
+struct SfpuRsub {
     static constexpr uint32_t in0 = static_cast<uint32_t>(In0);
     static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
     static constexpr uint32_t out = static_cast<uint32_t>(Out);
     static_assert(in0 < 8, "DEST slot In0 exceeds maximum capacity (8)");
     static_assert(in1 < 8, "DEST slot In1 exceeds maximum capacity (8)");
     static_assert(out < 8, "DEST slot Out exceeds maximum capacity (8)");
-    ALWI void init() const { rsub_binary_tile_init(); }
-    ALWI void exec() const { rsub_binary_tile(in0, in1, out); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
-/**
- * @brief SFPU binary power: DST[Out] = DST[In0] ^ DST[In1]
- * @tparam In0 Base DEST slot
- * @tparam In1 Exponent DEST slot
- * @tparam Out Output DEST slot
- * LLK: power_binary_tile_init() -> power_binary_tile(idst0, idst1, odst)
- */
 template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
-struct SfpuPow : ComputeTag {
+struct SfpuPow {
     static constexpr uint32_t in0 = static_cast<uint32_t>(In0);
     static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
     static constexpr uint32_t out = static_cast<uint32_t>(Out);
     static_assert(in0 < 8, "DEST slot In0 exceeds maximum capacity (8)");
     static_assert(in1 < 8, "DEST slot In1 exceeds maximum capacity (8)");
     static_assert(out < 8, "DEST slot Out exceeds maximum capacity (8)");
-    ALWI void init() const { power_binary_tile_init(); }
-    ALWI void exec() const { power_binary_tile(in0, in1, out); }
-    ALWI void apply() const {
-        init();
-        exec();
-    }
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct SfpuEq {
+    static constexpr uint32_t in0 = static_cast<uint32_t>(In0);
+    static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
+    static constexpr uint32_t out = static_cast<uint32_t>(Out);
+    static_assert(in0 < 8, "DEST slot In0 exceeds maximum capacity (8)");
+    static_assert(in1 < 8, "DEST slot In1 exceeds maximum capacity (8)");
+    static_assert(out < 8, "DEST slot Out exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+// --- Ternary SFPU Ops ---
+
+template <
+    DataFormat df = DataFormat::Float16_b,
+    Dst In0 = Dst::D0,
+    Dst In1 = Dst::D1,
+    Dst In2 = Dst::D2,
+    Dst Out = Dst::D0>
+struct Where {
+    static constexpr uint32_t in0 = static_cast<uint32_t>(In0);
+    static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
+    static constexpr uint32_t in2 = static_cast<uint32_t>(In2);
+    static constexpr uint32_t out = static_cast<uint32_t>(Out);
+    static_assert(in0 < 8 && in1 < 8 && in2 < 8 && out < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <
+    DataFormat df = DataFormat::Float16_b,
+    Dst In0 = Dst::D0,
+    Dst In1 = Dst::D1,
+    Dst In2 = Dst::D2,
+    Dst Out = Dst::D0>
+struct Lerp {
+    static constexpr uint32_t in0 = static_cast<uint32_t>(In0);
+    static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
+    static constexpr uint32_t in2 = static_cast<uint32_t>(In2);
+    static constexpr uint32_t out = static_cast<uint32_t>(Out);
+    static_assert(in0 < 8 && in1 < 8 && in2 < 8 && out < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <
+    DataFormat df = DataFormat::Float16_b,
+    Dst In0 = Dst::D0,
+    Dst In1 = Dst::D1,
+    Dst In2 = Dst::D2,
+    Dst Out = Dst::D0>
+struct Addcmul {
+    uint32_t value;
+    static constexpr uint32_t in0 = static_cast<uint32_t>(In0);
+    static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
+    static constexpr uint32_t in2 = static_cast<uint32_t>(In2);
+    static constexpr uint32_t out = static_cast<uint32_t>(Out);
+    static_assert(in0 < 8 && in1 < 8 && in2 < 8 && out < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
+};
+
+template <
+    DataFormat df = DataFormat::Float16_b,
+    Dst In0 = Dst::D0,
+    Dst In1 = Dst::D1,
+    Dst In2 = Dst::D2,
+    Dst Out = Dst::D0>
+struct Addcdiv {
+    uint32_t value;
+    static constexpr uint32_t in0 = static_cast<uint32_t>(In0);
+    static constexpr uint32_t in1 = static_cast<uint32_t>(In1);
+    static constexpr uint32_t in2 = static_cast<uint32_t>(In2);
+    static constexpr uint32_t out = static_cast<uint32_t>(Out);
+    static_assert(in0 < 8 && in1 < 8 && in2 < 8 && out < 8, "DEST slot exceeds maximum capacity (8)");
+    ALWI void init() const;
+    ALWI void exec() const;
+    ALWI void apply() const;
 };
 
 // =============================================================================
@@ -1025,112 +1499,287 @@ template <
 ALWI void sfpu_op(uint32_t ocb, uint32_t num_tiles, Op op);
 
 // =============================================================================
-// Named Convenience Aliases
+// Named Convenience Alias Declarations
 // =============================================================================
 
-/** @brief Exponential on all tiles. See sfpu_op() for policy documentation. */
+// All aliases below have the same template params:
+//   <uint32_t ICB,
+//    SfpuInputPolicy input_policy = WaitAndPopPerTile,
+//    SfpuOutputPolicy output_policy = PerTile,
+//    SfpuDataFormatReconfig reconfig = INPUT_AND_OUTPUT>
+// Signature: ALWI void sfpu_NAME(uint32_t ocb, uint32_t num_tiles);
+
+// --- Math ---
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_exp(uint32_t ocb, uint32_t num_tiles);
-
-/** @brief Natural logarithm on all tiles. */
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_log(uint32_t ocb, uint32_t num_tiles);
-
-/** @brief Log(1+x) on all tiles. */
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_log1p(uint32_t ocb, uint32_t num_tiles);
-
-/** @brief Square root on all tiles. */
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_sqrt(uint32_t ocb, uint32_t num_tiles);
-
-/** @brief Reciprocal square root on all tiles. */
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_rsqrt(uint32_t ocb, uint32_t num_tiles);
-
-/** @brief Reciprocal on all tiles. */
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_recip(uint32_t ocb, uint32_t num_tiles);
-
-/** @brief Absolute value on all tiles. */
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_abs(uint32_t ocb, uint32_t num_tiles);
-
-/** @brief Negation on all tiles. */
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_neg(uint32_t ocb, uint32_t num_tiles);
 
-/** @brief Sigmoid activation on all tiles. */
+// --- Activations ---
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_sigmoid(uint32_t ocb, uint32_t num_tiles);
-
-/** @brief Tanh activation on all tiles. */
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_tanh(uint32_t ocb, uint32_t num_tiles);
-
-/** @brief GELU activation on all tiles. */
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_gelu(uint32_t ocb, uint32_t num_tiles);
-
-/** @brief SiLU (Swish) activation on all tiles. */
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_silu(uint32_t ocb, uint32_t num_tiles);
-
-/** @brief ReLU activation on all tiles. */
 template <
     uint32_t ICB,
-    SfpuInputPolicy input_policy = SfpuInputPolicy::WaitAndPopPerTile,
-    SfpuOutputPolicy output_policy = SfpuOutputPolicy::PerTile,
-    SfpuDataFormatReconfig reconfig = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
 ALWI void sfpu_relu(uint32_t ocb, uint32_t num_tiles);
+
+// --- Trigonometry ---
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_sin(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_cos(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_tan(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_asin(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_acos(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_atan(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_sinh(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_cosh(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_asinh(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_acosh(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_atanh(uint32_t ocb, uint32_t num_tiles);
+
+// --- Error / Special Functions ---
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_erf(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_erfc(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_erfinv(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_i0(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_i1(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_lgamma(uint32_t ocb, uint32_t num_tiles);
+
+// --- Predicates ---
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_isinf(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_isnan(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_isfinite(uint32_t ocb, uint32_t num_tiles);
+
+// --- Comparisons ---
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_gtz(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_ltz(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_lez(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_gez(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_eqz(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_nez(uint32_t ocb, uint32_t num_tiles);
+
+// --- Rounding ---
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_floor(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_ceil(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_trunc(uint32_t ocb, uint32_t num_tiles);
+template <
+    uint32_t ICB,
+    SfpuInputPolicy P = SfpuInputPolicy::WaitAndPopPerTile,
+    SfpuOutputPolicy O = SfpuOutputPolicy::PerTile,
+    SfpuDataFormatReconfig R = SfpuDataFormatReconfig::INPUT_AND_OUTPUT>
+ALWI void sfpu_frac(uint32_t ocb, uint32_t num_tiles);
 
 }  // namespace compute_kernel_lib
 
