@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 """
@@ -11,7 +11,7 @@ Each training type defines its own parameter validation, configuration building,
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Set
+from typing import Callable, Dict, Set, Optional
 import yaml
 from ttml.common.utils import get_tt_metal_runtime_root
 
@@ -273,6 +273,7 @@ def _get_model_to_config_mapping():
         "tinyllama": f"{tt_train_root}/configs/model_configs/tinyllama.yaml",
         "gpt2": f"{tt_train_root}/configs/model_configs/gpt2s.yaml",
         "llama8b": f"{tt_train_root}/configs/model_configs/llama8b.yaml",
+        "qwen3_0_6B": f"{tt_train_root}/configs/model_configs/qwen3_0_6B.yaml",
     }
 
 
@@ -284,7 +285,7 @@ sft_training_config = TrainingTypeConfig(
     name="sft",
     script_path="gsm8k_finetune/gsm8k_finetune.py",
     model_configs=_get_model_to_config_mapping(),
-    supported_models={"tinyllama", "gpt2", "llama8b"},
+    supported_models={"tinyllama", "gpt2", "llama8b", "qwen3_0_6B"},
     param_validator=validate_sft_params,
     config_builder=build_sft_config,
 )
@@ -294,7 +295,7 @@ lora_training_config = TrainingTypeConfig(
     name="lora",
     script_path="gsm8k_finetune/gsm8k_finetune.py",
     model_configs=_get_model_to_config_mapping(),
-    supported_models={"tinyllama", "gpt2", "llama8b"},
+    supported_models={"tinyllama", "gpt2", "llama8b", "qwen3_0_6B"},
     param_validator=validate_lora_params,
     config_builder=build_lora_config,
 )
@@ -336,7 +337,7 @@ def get_supported_trainers() -> Set[str]:
     return set(TRAINING_TYPES.keys())
 
 
-def get_supported_models(trainer_name: str = None) -> Set[str]:
+def get_supported_models(trainer_name: Optional[str] = None) -> Set[str]:
     """Get set of supported models, optionally filtered by trainer type.
 
     Args:

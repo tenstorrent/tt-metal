@@ -263,6 +263,7 @@ components:
             - tinyllama → model_configs/tinyllama.yaml
             - gpt2 → model_configs/gpt2s.yaml
             - llama-3.1-8b → model_configs/llama8b.yaml (if available)
+            - qwen3_0_6B → model_configs/qwen3_0_6B.yaml
             Any other value is passed through; training service does not validate.
           example: tinyllama
         dataset_url:

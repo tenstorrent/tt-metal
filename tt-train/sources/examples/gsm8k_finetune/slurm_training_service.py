@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 """
@@ -798,6 +798,7 @@ def catalog():
         "tinyllama": "TinyLlama 1.1B",
         "gpt2": "GPT-2",
         "llama8b": "Llama 3.1 8B",
+        "qwen3_0_6B": "Qwen3 0.6B",
     }
 
     # Get model configs from registry (they already have proper TT_METAL_RUNTIME_ROOT paths)
@@ -816,7 +817,7 @@ def catalog():
         )
 
         # Mark smaller models as supported by default, larger ones may need more resources
-        is_supported = model_id in {"tinyllama", "gpt2"}
+        is_supported = model_id in {"tinyllama", "gpt2", "qwen3_0_6B"}
 
         models.append(
             {

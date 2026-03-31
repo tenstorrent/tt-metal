@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 """
@@ -82,7 +82,9 @@ def parse_output_file(file_path="output.txt"):
         if not lines:
             return None
 
-        pattern = r"LR:\s*([\d.e+-]+),\s*training_loss:\s*([\d.]+),\s*val_loss:\s*([\d.]+),\s*step:\s*(\d+),\s*epoch:\s*(\d+)"
+        pattern = (
+            r"LR:\s*([\d.e+-]+),\s*training_loss:\s*([\d.]+),\s*val_loss:\s*([\d.]+),\s*step:\s*(\d+),\s*epoch:\s*(\d+)"
+        )
 
         all_data = []
         for line in lines:
@@ -143,9 +145,7 @@ def create_loss_plot(history_df, eval_every=None, title_suffix=""):
     )
 
     if eval_every is not None and eval_every > 0:
-        val_mask = ((history_df["step"] + 1) % eval_every == 0) | (
-            history_df["step"] == 0
-        )
+        val_mask = ((history_df["step"] + 1) % eval_every == 0) | (history_df["step"] == 0)
         val_df = history_df[val_mask]
     else:
         val_df = history_df
@@ -193,9 +193,7 @@ def create_lr_plot(history_df, title_suffix=""):
     )
 
     fig.update_xaxes(title_text="Step")
-    fig.update_yaxes(
-        title_text="Learning Rate", type="log", exponentformat="e", showexponent="all"
-    )
+    fig.update_yaxes(title_text="Learning Rate", type="log", exponentformat="e", showexponent="all")
 
     fig.update_layout(
         title=f"Learning Rate over Steps{title_suffix}",
@@ -304,27 +302,21 @@ def create_training_yaml(
 
     with open(output_path, "w") as f:
         f.write("training_config:\n")
-        training_yaml = yaml.dump(
-            training_config, default_flow_style=False, sort_keys=False
-        )
+        training_yaml = yaml.dump(training_config, default_flow_style=False, sort_keys=False)
         for line in training_yaml.strip().split("\n"):
             f.write(f"  {line}\n")
 
         f.write("\n")
 
         f.write("transformer_config:\n")
-        transformer_yaml = yaml.dump(
-            transformer_config, default_flow_style=False, sort_keys=False
-        )
+        transformer_yaml = yaml.dump(transformer_config, default_flow_style=False, sort_keys=False)
         for line in transformer_yaml.strip().split("\n"):
             f.write(f"  {line}\n")
 
         f.write("\n")
 
         f.write("scheduler_config:\n")
-        scheduler_yaml = yaml.dump(
-            scheduler_config, default_flow_style=False, sort_keys=False
-        )
+        scheduler_yaml = yaml.dump(scheduler_config, default_flow_style=False, sort_keys=False)
         for line in scheduler_yaml.strip().split("\n"):
             f.write(f"  {line}\n")
 
@@ -332,9 +324,7 @@ def create_training_yaml(
 
         f.write("device_config:\n")
         f.write(f"  enable_ddp: {device_config['enable_ddp']}\n")
-        mesh_shape_flow = yaml.dump(
-            device_config["mesh_shape"], default_flow_style=True
-        ).strip()
+        mesh_shape_flow = yaml.dump(device_config["mesh_shape"], default_flow_style=True).strip()
         f.write(f"  mesh_shape: {mesh_shape_flow}\n")
 
     return output_path
@@ -343,9 +333,7 @@ def create_training_yaml(
 def start_local_training(config_dict):
     """Start the training process locally (non-SLURM mode)."""
     try:
-        yaml_output_dir = config_dict.get(
-            "yaml_dir", f"{os.environ.get('TT_METAL_HOME', '.')}/tt-train/configs"
-        )
+        yaml_output_dir = config_dict.get("yaml_dir", f"{os.environ.get('TT_METAL_HOME', '.')}/tt-train/configs")
         os.makedirs(yaml_output_dir, exist_ok=True)
         yaml_output_path = os.path.join(yaml_output_dir, "training_overrides.yaml")
 
@@ -497,12 +485,8 @@ def render_jobs_table():
         if st.session_state.selected_job_id:
             job = st.session_state.job_manager.get_job(st.session_state.selected_job_id)
             if job and job.status in ["PENDING", "RUNNING"]:
-                if st.button(
-                    "Cancel Selected Job", use_container_width=True, type="secondary"
-                ):
-                    success, msg = st.session_state.job_manager.cancel_job(
-                        st.session_state.selected_job_id
-                    )
+                if st.button("Cancel Selected Job", use_container_width=True, type="secondary"):
+                    success, msg = st.session_state.job_manager.cancel_job(st.session_state.selected_job_id)
                     if success:
                         st.success(msg)
                     else:
@@ -597,9 +581,7 @@ def render_job_details(job_info: JobInfo, eval_every: int):
         if max_steps > 0:
             progress = current["step"] / max_steps
             st.progress(min(progress, 1.0))
-            st.caption(
-                f"Progress: {current['step']:,} / {max_steps:,} steps ({progress*100:.1f}%)"
-            )
+            st.caption(f"Progress: {current['step']:,} / {max_steps:,} steps ({progress*100:.1f}%)")
 
         history_df = pd.DataFrame(training_data["all"])
         history_df = history_df.drop_duplicates(subset=["step"], keep="last")
@@ -674,16 +656,12 @@ def render_job_comparison():
                 )
 
         if comparison_data:
-            st.dataframe(
-                pd.DataFrame(comparison_data), use_container_width=True, hide_index=True
-            )
+            st.dataframe(pd.DataFrame(comparison_data), use_container_width=True, hide_index=True)
 
 
 def main():
     st.title("LLM Fine-tuning Dashboard")
-    st.markdown(
-        "Real-time monitoring interface for LLM fine-tuning with SLURM job dispatch"
-    )
+    st.markdown("Real-time monitoring interface for LLM fine-tuning with SLURM job dispatch")
 
     with st.sidebar:
         st.header("Configuration")
@@ -762,6 +740,7 @@ def main():
         model_config_mapping = {
             "TinyLlama 1.1B": '"model_configs/tinyllama.yaml"',
             "GPT-2": '"model_configs/gpt2s.yaml"',
+            "Qwen3 0.6B": '"model_configs/qwen3_0_6B.yaml"',
         }
         model_options = list(model_config_mapping.keys())
         selected_model_display = st.selectbox("Base Model", model_options, index=0)
@@ -804,22 +783,14 @@ def main():
                 help="Training batch size per device",
             )
 
-            max_steps = st.number_input(
-                "Max Steps", min_value=10, max_value=100000, value=60, step=100
-            )
+            max_steps = st.number_input("Max Steps", min_value=10, max_value=100000, value=60, step=100)
 
         with col2:
-            warmup_steps = st.number_input(
-                "Warmup Steps", min_value=0, max_value=1000, value=20, step=10
-            )
+            warmup_steps = st.number_input("Warmup Steps", min_value=0, max_value=1000, value=20, step=10)
 
-            hold_steps = st.number_input(
-                "Hold Steps", min_value=0, max_value=10000, value=40, step=10
-            )
+            hold_steps = st.number_input("Hold Steps", min_value=0, max_value=10000, value=40, step=10)
 
-        eval_every = st.number_input(
-            "Eval Every", min_value=10, max_value=1000, value=20, step=10
-        )
+        eval_every = st.number_input("Eval Every", min_value=10, max_value=1000, value=20, step=10)
         validation_batch_size = st.number_input(
             "Validation Batch Size",
             min_value=1,
@@ -833,19 +804,13 @@ def main():
             "Gradient Accumulation Steps", min_value=1, max_value=128, value=8, step=1
         )
 
-        max_seq_length = st.number_input(
-            "Max Sequence Length", min_value=128, max_value=4096, value=512, step=128
-        )
+        max_seq_length = st.number_input("Max Sequence Length", min_value=128, max_value=4096, value=512, step=128)
 
         # For local mode, show effective batch size here
         if st.session_state.execution_mode != "slurm":
-            effective_batch_size = (
-                batch_size * gradient_accumulation * mesh_shape[0] * mesh_shape[1]
-            )
+            effective_batch_size = batch_size * gradient_accumulation * mesh_shape[0] * mesh_shape[1]
             st.markdown(f"Effective batch size: **{effective_batch_size}**")
-            st.markdown(
-                f"Effective num. tokens per batch: **{effective_batch_size * max_seq_length}**"
-            )
+            st.markdown(f"Effective num. tokens per batch: **{effective_batch_size * max_seq_length}**")
 
         st.divider()
 
@@ -881,21 +846,13 @@ def main():
                 mesh_shape = [32, 1]
 
             # Show effective batch size for SLURM mode after mesh_shape is determined
-            effective_batch_size = (
-                batch_size * gradient_accumulation * mesh_shape[0] * mesh_shape[1]
-            )
+            effective_batch_size = batch_size * gradient_accumulation * mesh_shape[0] * mesh_shape[1]
             st.markdown(f"Effective batch size: **{effective_batch_size}**")
-            st.markdown(
-                f"Effective num. tokens per batch: **{effective_batch_size * max_seq_length}**"
-            )
+            st.markdown(f"Effective num. tokens per batch: **{effective_batch_size * max_seq_length}**")
 
             st.divider()
 
-        st.subheader(
-            "Submit Job"
-            if st.session_state.execution_mode == "slurm"
-            else "Training Control"
-        )
+        st.subheader("Submit Job" if st.session_state.execution_mode == "slurm" else "Training Control")
 
         config = {
             "min_lr": min_lr,
@@ -939,12 +896,8 @@ def main():
             col_start, col_stop = st.columns(2)
 
             with col_start:
-                if st.button(
-                    "Start Training", use_container_width=True, disabled=is_running
-                ):
-                    config[
-                        "yaml_dir"
-                    ] = f"{os.environ.get('TT_METAL_HOME', '.')}/tt-train/configs"
+                if st.button("Start Training", use_container_width=True, disabled=is_running):
+                    config["yaml_dir"] = f"{os.environ.get('TT_METAL_HOME', '.')}/tt-train/configs"
                     success, message = start_local_training(config)
                     if success:
                         st.session_state.data_collection_paused = False
@@ -955,9 +908,7 @@ def main():
                         st.error(message)
 
             with col_stop:
-                if st.button(
-                    "Stop Training", use_container_width=True, disabled=not is_running
-                ):
+                if st.button("Stop Training", use_container_width=True, disabled=not is_running):
                     success, message = stop_local_training()
                     if success:
                         st.warning(message)
@@ -972,27 +923,21 @@ def main():
 
         st.divider()
         auto_refresh = st.checkbox("Auto-refresh", value=True)
-        refresh_interval = st.slider(
-            "Refresh Interval (seconds)", min_value=1, max_value=10, value=5, step=1
-        )
+        refresh_interval = st.slider("Refresh Interval (seconds)", min_value=1, max_value=10, value=5, step=1)
 
         if st.button("Refresh Now", use_container_width=True):
             st.session_state.last_update = 0
             st.rerun()
 
     if st.session_state.execution_mode == "slurm":
-        tab1, tab2, tab3, tab4, tab5 = st.tabs(
-            ["Jobs Overview", "Job Details", "Comparison", "Logs", "About"]
-        )
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["Jobs Overview", "Job Details", "Comparison", "Logs", "About"])
 
         with tab1:
             render_jobs_table()
 
         with tab2:
             if st.session_state.selected_job_id:
-                job = st.session_state.job_manager.get_job(
-                    st.session_state.selected_job_id
-                )
+                job = st.session_state.job_manager.get_job(st.session_state.selected_job_id)
                 render_job_details(job, eval_every)
             else:
                 st.info("Select a job from the Jobs Overview tab to view details.")
@@ -1004,9 +949,7 @@ def main():
             st.header("Job Logs")
 
             if st.session_state.selected_job_id:
-                job = st.session_state.job_manager.get_job(
-                    st.session_state.selected_job_id
-                )
+                job = st.session_state.job_manager.get_job(st.session_state.selected_job_id)
                 if job:
                     job_dir = Path(job.output_dir)
 
@@ -1052,14 +995,10 @@ def main():
             render_about_section()
 
     else:
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["Training Progress", "Validation Output", "Training Logs", "About"]
-        )
+        tab1, tab2, tab3, tab4 = st.tabs(["Training Progress", "Validation Output", "Training Logs", "About"])
 
         with tab1:
-            render_local_training_progress(
-                eval_every, max_steps, batch_size, max_seq_length, gradient_accumulation
-            )
+            render_local_training_progress(eval_every, max_steps, batch_size, max_seq_length, gradient_accumulation)
 
         with tab2:
             render_validation_output("validation.txt")
@@ -1078,14 +1017,10 @@ def main():
             st.rerun()
 
 
-def render_local_training_progress(
-    eval_every, max_steps, batch_size, max_seq_length, gradient_accumulation
-):
+def render_local_training_progress(eval_every, max_steps, batch_size, max_seq_length, gradient_accumulation):
     """Render training progress for local execution mode."""
     if st.session_state.data_collection_paused:
-        st.warning(
-            "Data collection is paused. Click 'Resume Data Collection' to start monitoring again."
-        )
+        st.warning("Data collection is paused. Click 'Resume Data Collection' to start monitoring again.")
         if st.button("Resume Data Collection", type="primary"):
             st.session_state.data_collection_paused = False
             st.rerun()
@@ -1133,9 +1068,7 @@ def render_local_training_progress(
         if max_steps > 0:
             progress = current_data["step"] / max_steps
             st.progress(min(progress, 1.0))
-            st.caption(
-                f"Progress: {current_data['step']:,} / {max_steps:,} steps ({progress*100:.1f}%)"
-            )
+            st.caption(f"Progress: {current_data['step']:,} / {max_steps:,} steps ({progress*100:.1f}%)")
     else:
         for col, label in zip(
             [col1, col2, col3, col4],
@@ -1144,9 +1077,7 @@ def render_local_training_progress(
             with col:
                 st.metric(label, "N/A")
 
-        st.info(
-            "Waiting for training data... Make sure `output.txt` is being generated."
-        )
+        st.info("Waiting for training data... Make sure `output.txt` is being generated.")
 
     st.divider()
 
@@ -1177,15 +1108,11 @@ def render_local_training_progress(
 
         with col4:
             if len(history_df) > 1:
-                time_diff = (
-                    history_df["timestamp"].iloc[-1] - history_df["timestamp"].iloc[0]
-                ).total_seconds()
+                time_diff = (history_df["timestamp"].iloc[-1] - history_df["timestamp"].iloc[0]).total_seconds()
                 step_diff = history_df["step"].iloc[-1] - history_df["step"].iloc[0]
 
                 if time_diff > 0 and step_diff > 0:
-                    tokens_per_step = (
-                        batch_size * max_seq_length * gradient_accumulation
-                    )
+                    tokens_per_step = batch_size * max_seq_length * gradient_accumulation
                     total_tokens = step_diff * tokens_per_step
                     tokens_per_sec = total_tokens / time_diff
 
@@ -1223,13 +1150,8 @@ def render_validation_output(validation_file):
     else:
         validation_content = parse_validation_file(validation_file)
 
-        if (
-            validation_content
-            and validation_content != "No validation data available yet."
-        ):
-            st.text_area(
-                "Validation Results", validation_content, height=500, disabled=True
-            )
+        if validation_content and validation_content != "No validation data available yet.":
+            st.text_area("Validation Results", validation_content, height=500, disabled=True)
 
             st.download_button(
                 label="Download Validation Output",
@@ -1315,9 +1237,7 @@ def render_tt_smi_section():
 
     if refresh_smi:
         try:
-            result = subprocess.run(
-                ["tt-smi", "-s"], capture_output=True, text=True, timeout=10
-            )
+            result = subprocess.run(["tt-smi", "-s"], capture_output=True, text=True, timeout=10)
 
             if result.returncode == 0:
                 smi_output = result.stdout
@@ -1336,22 +1256,16 @@ def render_tt_smi_section():
                             st.session_state.tt_smi_error = None
                         else:
                             st.session_state.tt_smi_data = None
-                            st.session_state.tt_smi_error = (
-                                "No board_info or telemetry data found"
-                            )
+                            st.session_state.tt_smi_error = "No board_info or telemetry data found"
                     except json.JSONDecodeError as e:
                         st.session_state.tt_smi_data = None
-                        st.session_state.tt_smi_error = (
-                            f"Failed to parse tt-smi output: {e}"
-                        )
+                        st.session_state.tt_smi_error = f"Failed to parse tt-smi output: {e}"
                 else:
                     st.session_state.tt_smi_data = None
                     st.session_state.tt_smi_error = "tt-smi produced no output"
             else:
                 st.session_state.tt_smi_data = None
-                st.session_state.tt_smi_error = (
-                    f"tt-smi failed with return code {result.returncode}"
-                )
+                st.session_state.tt_smi_error = f"tt-smi failed with return code {result.returncode}"
         except subprocess.TimeoutExpired:
             st.session_state.tt_smi_data = None
             st.session_state.tt_smi_error = "tt-smi command timed out"
