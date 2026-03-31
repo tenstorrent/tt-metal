@@ -16,6 +16,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -645,6 +647,31 @@ def push_branch_with_token(branch: str, target_pr_repo: str, token: str) -> None
     )
 
 
+def can_token_push_to_repo(token: str, repo_slug: str) -> tuple[bool, str]:
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{repo_slug}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "tt-metal-ci-triage",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return False, f"http_{exc.code}"
+    except Exception as exc:
+        return False, f"request_error:{type(exc).__name__}"
+    perms = payload.get("permissions", {})
+    if not isinstance(perms, dict):
+        return False, "missing_permissions"
+    if perms.get("push") is True:
+        return True, "ok"
+    return False, f"push_denied permissions={perms}"
+
+
 def write_summary(path: Path, data: dict[str, Any]) -> None:
     lines: list[str] = []
     lines.append("# Auto Disable Actions")
@@ -703,6 +730,14 @@ def main() -> int:
             return 2
         if not os.environ.get("CURSOR_API_KEY"):
             print("CURSOR_API_KEY is required", file=sys.stderr)
+            return 2
+        push_token = os.environ.get("TARGET_PR_PUSH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
+        if not push_token:
+            print("TARGET_PR_PUSH_TOKEN or GITHUB_TOKEN is required", file=sys.stderr)
+            return 2
+        can_push, reason = can_token_push_to_repo(push_token, target_pr_repo)
+        if not can_push:
+            print(f"Token cannot push to {target_pr_repo}: {redact_secrets(reason)}", file=sys.stderr)
             return 2
 
     actions_doc = json.loads(Path(args.actions_json).read_text(encoding="utf-8"))
