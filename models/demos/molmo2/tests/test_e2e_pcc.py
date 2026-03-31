@@ -374,6 +374,7 @@ def test_full_model_pcc():
             mesh_device=mesh_device,
             state_dict=state_dict,
             dtype=ttnn.bfloat8_b,
+            lm_head_mesh_column_parallel=True,
         )
 
         logger.info("Running TTNN forward...")
