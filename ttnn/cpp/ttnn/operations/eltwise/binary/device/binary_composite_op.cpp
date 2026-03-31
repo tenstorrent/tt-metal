@@ -25,7 +25,7 @@ namespace ttnn {
 
 using namespace operations;
 
-namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 template <binary::BinaryOpType Op, typename Rhs>
 Tensor invoke_bitwise(
     const Tensor& input_tensor_a,
@@ -71,7 +71,7 @@ Tensor invoke_bitwise(
         sub_core_grids);
 }
 
-}  // namespace
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 // nextafter
 Tensor nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
@@ -1062,7 +1062,7 @@ Tensor bitwise_and(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return invoke_bitwise<binary::BinaryOpType::BITWISE_AND>(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::BITWISE_AND>(
         input_tensor_a,
         input_b,
         memory_config,
@@ -1085,7 +1085,7 @@ Tensor bitwise_or(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return invoke_bitwise<binary::BinaryOpType::BITWISE_OR>(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::BITWISE_OR>(
         input_tensor_a,
         input_tensor_b,
         memory_config,
@@ -1107,7 +1107,7 @@ Tensor bitwise_or(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return invoke_bitwise<binary::BinaryOpType::BITWISE_OR>(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::BITWISE_OR>(
         input_tensor_a,
         input_b,
         memory_config,
@@ -1129,7 +1129,7 @@ Tensor bitwise_xor(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return invoke_bitwise<binary::BinaryOpType::BITWISE_XOR>(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::BITWISE_XOR>(
         input_tensor_a,
         input_tensor_b,
         memory_config,
@@ -1151,7 +1151,7 @@ Tensor bitwise_xor(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return invoke_bitwise<binary::BinaryOpType::BITWISE_XOR>(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::BITWISE_XOR>(
         input_tensor_a,
         input_b,
         memory_config,
@@ -1173,7 +1173,7 @@ Tensor bitwise_left_shift(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return invoke_bitwise<binary::BinaryOpType::LEFT_SHIFT>(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::LEFT_SHIFT>(
         input_tensor_a,
         input_tensor_b,
         memory_config,
@@ -1195,7 +1195,7 @@ Tensor bitwise_left_shift(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return invoke_bitwise<binary::BinaryOpType::LEFT_SHIFT>(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::LEFT_SHIFT>(
         input_tensor_a,
         input_b,
         memory_config,
@@ -1217,7 +1217,7 @@ Tensor bitwise_right_shift(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return invoke_bitwise<binary::BinaryOpType::RIGHT_SHIFT>(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::RIGHT_SHIFT>(
         input_tensor_a,
         input_tensor_b,
         memory_config,
@@ -1239,7 +1239,7 @@ Tensor bitwise_right_shift(
     ttsl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    return invoke_bitwise<binary::BinaryOpType::RIGHT_SHIFT>(
+    return CMAKE_UNIQUE_NAMESPACE::invoke_bitwise<binary::BinaryOpType::RIGHT_SHIFT>(
         input_tensor_a,
         input_b,
         memory_config,
