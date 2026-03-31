@@ -28,6 +28,14 @@ inputs:
     description: "Optional comma-separated early workflows to run after PR create (pr-gate.yaml,merge-gate.yaml)"
     required: false
     default: ""
+  target-pr-repo:
+    description: "Repository where auto-disable draft PRs are created"
+    required: false
+    default: "ebanerjeeTT/tt-metal"
+  target-pr-base:
+    description: "Base branch for auto-disable draft PRs"
+    required: false
+    default: "main"
   output-dir:
     description: "Directory for generated artifacts"
     required: false
@@ -110,6 +118,8 @@ runs:
           --debug-dir "${{ inputs.output-dir }}/debug" \
           --max-attempts-per-item "${{ inputs.max-attempts-per-item }}" \
           --extra-pr-check-workflows "${{ inputs.extra-pr-check-workflows }}" \
+          --target-pr-repo "${{ inputs.target-pr-repo }}" \
+          --target-pr-base "${{ inputs.target-pr-base }}" \
           --model "${{ inputs.model }}" \
           $dry
         echo "[triage] Disable action execution finished."

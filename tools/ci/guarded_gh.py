@@ -18,6 +18,7 @@ from typing import Sequence
 
 ISSUE_REPO_TEST = "tenstorrent/temporary-issue-dump"
 PRIMARY_REPO = "tenstorrent/tt-metal"
+TEST_PR_REPO = "ebanerjeeTT/tt-metal"
 ALLOWED_WORKFLOW_IDS = {
     "triage-ci",
     "triage-ci.yaml",
@@ -33,6 +34,8 @@ ALLOWED_WORKFLOW_IDS = {
     "merge-gate.yml",
 }
 READ_REPOS = {PRIMARY_REPO, ISSUE_REPO_TEST}
+ALLOWED_PR_REPOS = {PRIMARY_REPO, TEST_PR_REPO}
+ALLOWED_WORKFLOW_REPOS = {PRIMARY_REPO, TEST_PR_REPO}
 ALLOWED_PUSH_REMOTE = "origin"
 ALLOWED_PUSH_REFSPECS = {
     "ebanerjee/CI-maintenance",
@@ -189,12 +192,12 @@ def validate(tokens: list[str]) -> Decision:
     # PR read-only commands in primary repo.
     if root == "pr":
         if sub in {"list", "view"}:
-            repo_check = ensure_repo(tokens, {PRIMARY_REPO}, required=True)
+            repo_check = ensure_repo(tokens, ALLOWED_PR_REPOS, required=True)
             if repo_check:
                 return repo_check
             return Decision(True, f"Allowed: gh pr {sub}")
         if sub == "comment":
-            repo_check = ensure_repo(tokens, {PRIMARY_REPO}, required=True)
+            repo_check = ensure_repo(tokens, ALLOWED_PR_REPOS, required=True)
             if repo_check:
                 return repo_check
             if not has_option(tokens, "--body"):
@@ -204,7 +207,7 @@ def validate(tokens: list[str]) -> Decision:
                 return Decision(False, "Denied: gh pr comment requires PR number/url argument.")
             return Decision(True, "Allowed: gh pr comment in primary repo")
         if sub == "create":
-            repo_check = ensure_repo(tokens, {PRIMARY_REPO}, required=True)
+            repo_check = ensure_repo(tokens, ALLOWED_PR_REPOS, required=True)
             if repo_check:
                 return repo_check
             if extract_option(tokens, "--base") != "main":
@@ -232,13 +235,13 @@ def validate(tokens: list[str]) -> Decision:
     # Workflow commands. Dispatch is tightly constrained.
     if root == "workflow":
         if sub in {"list", "view"}:
-            repo_check = ensure_repo(tokens, {PRIMARY_REPO}, required=True)
+            repo_check = ensure_repo(tokens, ALLOWED_WORKFLOW_REPOS, required=True)
             if repo_check:
                 return repo_check
             return Decision(True, f"Allowed: gh workflow {sub}")
 
         if sub == "run":
-            repo_check = ensure_repo(tokens, {PRIMARY_REPO}, required=True)
+            repo_check = ensure_repo(tokens, ALLOWED_WORKFLOW_REPOS, required=True)
             if repo_check:
                 return repo_check
             workflow_id = first_positional_after(tokens, 3)

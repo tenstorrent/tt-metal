@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import Any
 
 
-REPO = "tenstorrent/tt-metal"
+DEFAULT_PR_REPO = "ebanerjeeTT/tt-metal"
+DEFAULT_PR_BASE = "main"
 ISSUE_REPO_TEST = "tenstorrent/temporary-issue-dump"
 GUARDED_GH = [sys.executable, "tools/ci/guarded_gh.py"]
 PROTECTED_AGENT_PATHS = {
@@ -168,26 +169,32 @@ def branch_name(action: dict[str, Any]) -> str:
     return f"ci-disable-test-{issue}-{ts[-8:]}"
 
 
-def branch_exists_remote(branch: str) -> bool:
-    check = run(["git", "ls-remote", "--heads", "origin", f"refs/heads/{branch}"], check=False, capture=True)
+def branch_exists_remote(branch: str, repo_slug: str) -> bool:
+    remote_url = f"https://github.com/{repo_slug}.git"
+    check = run(["git", "ls-remote", "--heads", remote_url, f"refs/heads/{branch}"], check=False, capture=True)
     return bool((check.stdout or "").strip())
 
 
-def choose_branch_name(base: str, source_ts: str, attempt: int) -> str:
-    if not branch_exists_remote(base):
+def choose_branch_name(base: str, source_ts: str, attempt: int, repo_slug: str) -> str:
+    if not branch_exists_remote(base, repo_slug):
         return base
     ts = source_ts.replace(".", "")
     suffix_seed = ts[-6:] if ts else "retry"
     for idx in range(1, 50):
         candidate = f"{base}-r{attempt}-{suffix_seed}-{idx}"
-        if not branch_exists_remote(candidate):
+        if not branch_exists_remote(candidate, repo_slug):
             return candidate
     raise RuntimeError(f"unable to allocate unique branch name from base {base!r}")
 
 
-def ensure_no_duplicate_open_pr(source_ts: str) -> str | None:
+def parse_repo_from_pr_url(pr_url: str) -> str:
+    m = re.search(r"github\.com/([^/]+/[^/]+)/pull/\d+", pr_url)
+    return m.group(1) if m else ""
+
+
+def ensure_no_duplicate_open_pr(source_ts: str, pr_repo: str) -> str | None:
     marker = f"Auto-disable-source-ts: {source_ts}"
-    prs = run_guarded_gh(["gh", "pr", "list", "--repo", REPO, "--state", "open", "--json", "number,url,body"])
+    prs = run_guarded_gh(["gh", "pr", "list", "--repo", pr_repo, "--state", "open", "--json", "number,url,body"])
     items = json.loads(prs.stdout)
     for pr in items:
         if marker in (pr.get("body") or ""):
@@ -195,12 +202,13 @@ def ensure_no_duplicate_open_pr(source_ts: str) -> str | None:
     return None
 
 
-def is_pr_open(pr_url: str) -> bool:
+def is_pr_open(pr_url: str, default_repo: str) -> bool:
     pr_number = parse_pr_number(pr_url)
     if pr_number <= 0:
         return False
+    pr_repo = parse_repo_from_pr_url(pr_url) or default_repo
     viewed = run_guarded_gh(
-        ["gh", "pr", "view", "--repo", REPO, str(pr_number), "--json", "state"],
+        ["gh", "pr", "view", "--repo", pr_repo, str(pr_number), "--json", "state"],
         check=False,
     )
     if viewed.returncode != 0:
@@ -392,11 +400,11 @@ def parse_extra_workflows(raw: str) -> list[str]:
     return workflows
 
 
-def dispatch_required_pr_check_workflows(branch: str, workflows: list[str]) -> dict[str, str]:
+def dispatch_required_pr_check_workflows(branch: str, workflows: list[str], pr_repo: str) -> dict[str, str]:
     runs: dict[str, str] = {}
     for workflow in workflows:
         log(f"dispatch: triggering workflow {workflow} for branch {branch}")
-        dispatched = run_guarded_gh(["gh", "workflow", "run", workflow, "--repo", REPO, "--ref", branch])
+        dispatched = run_guarded_gh(["gh", "workflow", "run", workflow, "--repo", pr_repo, "--ref", branch])
         runs[workflow] = parse_first_url(dispatched.stdout)
         if runs[workflow]:
             log(f"dispatch: workflow {workflow} run URL {runs[workflow]}")
@@ -433,7 +441,7 @@ def parse_pr_number(pr_url: str) -> int:
     return int(m.group(1))
 
 
-def post_triggered_workflows_comment(pr_url: str, runs: dict[str, str]) -> None:
+def post_triggered_workflows_comment(pr_url: str, runs: dict[str, str], pr_repo: str) -> None:
     pr_number = parse_pr_number(pr_url)
     if pr_number <= 0 or not runs:
         return
@@ -453,7 +461,7 @@ def post_triggered_workflows_comment(pr_url: str, runs: dict[str, str]) -> None:
             "pr",
             "comment",
             "--repo",
-            REPO,
+            pr_repo,
             str(pr_number),
             "--body",
             body,
@@ -602,6 +610,8 @@ def main() -> int:
     parser.add_argument("--debug-dir", default="")
     parser.add_argument("--model", default="auto")
     parser.add_argument("--max-attempts-per-item", type=int, default=3)
+    parser.add_argument("--target-pr-repo", default=DEFAULT_PR_REPO)
+    parser.add_argument("--target-pr-base", default=DEFAULT_PR_BASE)
     parser.add_argument(
         "--extra-pr-check-workflows",
         default="",
@@ -609,10 +619,13 @@ def main() -> int:
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    target_pr_repo = args.target_pr_repo.strip() or DEFAULT_PR_REPO
+    target_pr_base = args.target_pr_base.strip() or DEFAULT_PR_BASE
     extra_pr_check_workflows = parse_extra_workflows(args.extra_pr_check_workflows)
     log(
         "execute_disable_actions: start "
-        f"dry_run={args.dry_run} model={args.model} max_attempts_per_item={args.max_attempts_per_item}"
+        f"dry_run={args.dry_run} model={args.model} max_attempts_per_item={args.max_attempts_per_item} "
+        f"target_pr_repo={target_pr_repo}"
     )
 
     if not args.dry_run:
@@ -702,7 +715,23 @@ def main() -> int:
             continue
 
         active_pr_url = state_has_active_pr(item)
-        if active_pr_url and not args.dry_run and not is_pr_open(active_pr_url):
+        if active_pr_url and not args.dry_run:
+            active_pr_repo = parse_repo_from_pr_url(active_pr_url)
+            if active_pr_repo and active_pr_repo != target_pr_repo:
+                log(
+                    f"action: tracked active PR repo mismatch for issue #{issue_number}; "
+                    f"expected {target_pr_repo}, got {active_pr_repo}"
+                )
+                item["disable_pr"] = {"number": 0, "url": "", "branch": "", "head_sha": ""}
+                set_status(
+                    item,
+                    "new",
+                    event="active_pr_repo_mismatch",
+                    details=f"Reset from repo {active_pr_repo} to target {target_pr_repo}",
+                )
+                result["state_updates"] += 1
+                active_pr_url = None
+        if active_pr_url and not args.dry_run and not is_pr_open(active_pr_url, target_pr_repo):
             log(f"action: tracked active PR is no longer open for issue #{issue_number}: {active_pr_url}")
             item["disable_pr"] = {"number": 0, "url": "", "branch": "", "head_sha": ""}
             set_status(
@@ -737,7 +766,7 @@ def main() -> int:
         if f"Auto-disable-source-ts: {source_ts}" not in pr_body:
             pr_body += f"\n\nAuto-disable-source-ts: {source_ts}\n"
 
-        existing = None if args.dry_run else ensure_no_duplicate_open_pr(source_ts)
+        existing = None if args.dry_run else ensure_no_duplicate_open_pr(source_ts, target_pr_repo)
         if existing:
             log(f"action: found matching open PR marker for issue #{issue_number}: {existing}")
             item["disable_pr"]["url"] = existing
@@ -751,7 +780,7 @@ def main() -> int:
 
         branch = branch_name(action)
         if not args.dry_run:
-            branch = choose_branch_name(branch, source_ts, int(item.get("attempts", 0)) + 1)
+            branch = choose_branch_name(branch, source_ts, int(item.get("attempts", 0)) + 1, target_pr_repo)
             if branch != branch_name(action):
                 log(f"action: adjusted branch name for issue #{issue_number} to avoid remote collision: {branch}")
         if args.dry_run:
@@ -853,7 +882,11 @@ def main() -> int:
             log(f"action: committing disable changes for issue #{issue_number}")
             run(["git", "commit", "-m", commit_msg], capture=True)
             log(f"action: pushing branch {branch} for issue #{issue_number}")
-            run(["git", "push", "-u", "origin", branch], capture=True)
+            push_token = os.environ.get("TARGET_PR_PUSH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
+            if not push_token:
+                raise RuntimeError("TARGET_PR_PUSH_TOKEN or GITHUB_TOKEN is required for PR branch push")
+            push_url = f"https://x-access-token:{push_token}@github.com/{target_pr_repo}.git"
+            run(["git", "push", "-u", push_url, f"HEAD:refs/heads/{branch}"], capture=True)
 
             log(f"action: creating draft PR for issue #{issue_number}")
             pr = run_guarded_gh(
@@ -862,10 +895,10 @@ def main() -> int:
                     "pr",
                     "create",
                     "--repo",
-                    REPO,
+                    target_pr_repo,
                     "--draft",
                     "--base",
-                    "main",
+                    target_pr_base,
                     "--head",
                     branch,
                     "--title",
@@ -879,9 +912,9 @@ def main() -> int:
             pr_url = pr.stdout.strip().splitlines()[-1].strip()
             log(f"action: created PR {pr_url} for issue #{issue_number}")
             required_check_runs = dispatch_required_pr_check_workflows(
-                branch, [*DEFAULT_REQUIRED_PR_CHECK_WORKFLOWS, *extra_pr_check_workflows]
+                branch, [*DEFAULT_REQUIRED_PR_CHECK_WORKFLOWS, *extra_pr_check_workflows], target_pr_repo
             )
-            post_triggered_workflows_comment(pr_url, required_check_runs)
+            post_triggered_workflows_comment(pr_url, required_check_runs, target_pr_repo)
             log(f"action: invoking kickoff workflow agent for PR {pr_url}")
             kickoff_tail = invoke_kickoff_agent(pr_url, args.model)
             item["disable_pr"] = {
