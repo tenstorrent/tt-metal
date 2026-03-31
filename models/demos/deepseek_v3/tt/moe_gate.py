@@ -52,6 +52,22 @@ class MoEGate(AbstractModule):
         score_correction_bias = get_dequantized_tensor(
             state_dict, f"{prefix}e_score_correction_bias", dtype=torch.float32
         )
+        grid = mesh_device.compute_with_storage_grid_size()
+        num_device_cores = grid.x * grid.y
+        core_grid = ttnn.num_cores_to_corerangeset(
+            num_device_cores,
+            ttnn.CoreCoord(grid.x, grid.y),
+            row_wise=True,
+        )
+        input_output_shard_shape = (32, 32)
+        input_output_shard_spec = ttnn.ShardSpec(
+            core_grid,
+            input_output_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        input_output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_output_shard_spec
+        )
         return {
             "gate_proj": {
                 "input_tensor_b": shard_and_save(
@@ -67,12 +83,17 @@ class MoEGate(AbstractModule):
             "add_score_correction_bias": {
                 "input_tensor_b": shard_and_save(
                     output_path / f"e_score_correction_bias.input_tensor_b",
-                    score_correction_bias.unsqueeze(0).unsqueeze(0).unsqueeze(0).reshape(1, 16, 16).transpose(1, 2),
+                    score_correction_bias.unsqueeze(0)
+                    .unsqueeze(0)
+                    .unsqueeze(0)
+                    .reshape(1, 16, 16)
+                    .transpose(1, 2)
+                    .repeat(num_device_cores, 1, 1),
                     shard_dims=(None, None),
                     mesh_device=mesh_device,
                     dtype=ttnn.float32,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=input_output_mem_config,
+                    layout=ttnn.TILE_LAYOUT,
                 )
             },
         }
@@ -89,6 +110,23 @@ class MoEGate(AbstractModule):
         Returns:
             ModelState containing input_indices, output_indices and output_tensor for each MoE layer
         """
+        grid = mesh_device.compute_with_storage_grid_size()
+        num_device_cores = grid.x * grid.y
+        core_grid = ttnn.num_cores_to_corerangeset(
+            num_device_cores,
+            ttnn.CoreCoord(grid.x, grid.y),
+            row_wise=True,
+        )
+        input_output_shard_shape = (32, 32)
+        input_output_shard_spec = ttnn.ShardSpec(
+            core_grid,
+            input_output_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        input_output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_output_shard_spec
+        )
+
         ttnn_output_tensor = ttnn.zeros(
             shape=(1, 32, 32),
             dtype=ttnn.bfloat16,
@@ -96,6 +134,9 @@ class MoEGate(AbstractModule):
             device=mesh_device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (num_device_cores, 1, 1))
+        ttnn_output_tensor = ttnn.to_memory_config(ttnn_output_tensor, memory_config=input_output_mem_config)
+
         ttnn_output_indices = ttnn.zeros(
             shape=(1, 32, 32),
             dtype=ttnn.uint16,
@@ -103,6 +144,9 @@ class MoEGate(AbstractModule):
             device=mesh_device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (num_device_cores, 1, 1))
+        ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
+
         ttnn_input_indices = ttnn.arange(
             start=0,
             end=16 * 16,
@@ -117,6 +161,9 @@ class MoEGate(AbstractModule):
         ttnn_input_indices = ttnn.transpose(ttnn_input_indices, dim1=-2, dim2=-1)
         ttnn_input_indices = ttnn.typecast(ttnn_input_indices, dtype=ttnn.uint16)
         ttnn_input_indices = ttnn.to_layout(ttnn_input_indices, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (num_device_cores, 1, 1))
+        ttnn_input_indices = ttnn.to_layout(ttnn_input_indices, ttnn.TILE_LAYOUT, memory_config=input_output_mem_config)
+
         return {
             "gate_routing": {
                 "ttnn_output_tensor": ttnn_output_tensor,
@@ -280,24 +327,17 @@ class MoEGate(AbstractModule):
         )
         # create the bias tensor
         scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-        scores_correction_bias = ttnn.repeat(scores_correction_bias, ttnn.Shape((batch_size_per_iter, 1, 1)))
-        scores_correction_bias = ttnn.to_layout(
-            scores_correction_bias, ttnn.TILE_LAYOUT, memory_config=input_output_mem_config
-        )
+        scores_correction_bias = scores_correction_bias[:batch_size_per_iter, :, :]
 
-        # create the output tensor, input indices and output indices
-        # might run three repeats in parallel (and three mempry_config)
+        # get the output tensor, input indices and output indices
         ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
-        ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (batch_size_per_iter, 1, 1))
-        ttnn_output_tensor = ttnn.to_memory_config(ttnn_output_tensor, memory_config=input_output_mem_config)
+        ttnn_output_tensor = ttnn_output_tensor[:batch_size_per_iter, :, :]
 
         ttnn_input_indices = cfg["gate_routing"]["ttnn_input_indices"]
-        ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (batch_size_per_iter, 1, 1))
-        ttnn_input_indices = ttnn.to_layout(ttnn_input_indices, ttnn.TILE_LAYOUT, memory_config=input_output_mem_config)
+        ttnn_input_indices = ttnn_input_indices[:batch_size_per_iter, :, :]
 
         ttnn_output_indices = cfg["gate_routing"]["ttnn_output_indices"]
-        ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (batch_size_per_iter, 1, 1))
-        ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
+        ttnn_output_indices = ttnn_output_indices[:batch_size_per_iter, :, :]
 
         # we can only have one token per core at a time
         # this while loop is designed to handle the huge batch size (4096)
@@ -327,16 +367,10 @@ class MoEGate(AbstractModule):
             ttnn.deallocate(cur_logits)
 
         ttnn.deallocate(logits)
-        ttnn.deallocate(scores_correction_bias)
-        ttnn.deallocate(ttnn_output_tensor)
-        ttnn.deallocate(ttnn_input_indices)
-        ttnn.deallocate(ttnn_output_indices)
 
         if cfg["mode"] == "prefill":
             topk_experts_weights = ttnn.concat(topk_experts_weights_list, dim=0)
             topk_experts_indices = ttnn.concat(topk_experts_indices_list, dim=0)
-            ttnn.deallocate(topk_experts_weights_list)
-            ttnn.deallocate(topk_experts_indices_list)
         # here we only take the 1x8  out of 32x32
         topk_experts_weights = topk_experts_weights[:total_batch_size, 0, :8]
         topk_experts_indices = topk_experts_indices[:total_batch_size, 0, :8]

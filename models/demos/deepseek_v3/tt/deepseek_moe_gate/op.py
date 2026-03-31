@@ -118,10 +118,20 @@ class DeepseekMoeGateSingleCore:
         # However, the first 8 elements of the output are consistent with the 1x16 tiled layout.
         assert input_shape[-1] * input_shape[-2] == 256, "Input tensor must have 256 elements"
         assert input_indices_shape[-1] * input_indices_shape[-2] == 256, "Input indices tensor must have 256 elements"
-        assert input_shard_spec == bias_tensor.memory_config().shard_spec
-        assert input_shard_spec == input_indices_tensor.memory_config().shard_spec
+
+        # Since we preallocate bias for all cores, we only need to make sure the computing cores has the bias tensor
+        assert input_shard_spec.shape == bias_tensor.memory_config().shard_spec.shape
+        assert input_shard_spec.orientation == bias_tensor.memory_config().shard_spec.orientation
+        assert bias_tensor.memory_config().shard_spec.grid.contains(input_shard_spec.grid)
+
+        # Since we preallocate input indices buffer for all cores, we only need to make sure the computing cores has the input indices buffer
+        assert input_shard_spec.shape == input_indices_tensor.memory_config().shard_spec.shape
+        assert input_shard_spec.orientation == input_indices_tensor.memory_config().shard_spec.orientation
+        assert input_indices_tensor.memory_config().shard_spec.grid.contains(input_shard_spec.grid)
+
         assert output_shard_spec == output_indices_tensor.memory_config().shard_spec
-        assert all_cores == output_shard_spec.grid
+        # Since we preallocate output buffer for all cores, we only need to make sure the computing cores has the output buffer
+        assert output_shard_spec.grid.contains(all_cores)
 
         # Get tile info from input tensor
         input_tile = input_tensor.tile
