@@ -1695,6 +1695,9 @@ def reconstruct_from_manifest(manifest_path=None, output_path=None, scope=None, 
     Returns:
         Merged dict in the tracer's master JSON format.
     """
+    manifest_path = _get_manifest_path(manifest_path)
+    output_path = output_path or JSON_PATH
+
     trace_model_map = _resolve_manifest_with_models(manifest_path, scope=scope)
     if not trace_model_map:
         print("Nothing to reconstruct")
@@ -2303,6 +2306,8 @@ if __name__ == "__main__":
                 manifest = _args[0] if _args else None
                 output = _args[1] if len(_args) > 1 else None
                 _args = _args[2:]
+            manifest = manifest or _DEFAULT_MANIFEST
+            output = output or JSON_PATH
             scope = _args[0] if _args else None
             reconstruct_from_manifest(manifest, output, scope, _schema)
         elif cmd == "resolve-manifest":
