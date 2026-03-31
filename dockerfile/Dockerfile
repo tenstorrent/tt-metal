@@ -123,8 +123,8 @@ RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docke
 # Copy SFPI from pre-built tool image
 RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
     mkdir -p /opt/tenstorrent && \
-    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
-RUN test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }
+    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/ && \
+    test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }
 
 #############################################################
 # CI Build image

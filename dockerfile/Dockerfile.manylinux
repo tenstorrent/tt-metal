@@ -53,8 +53,9 @@ RUN --mount=from=ccache-layer,source=/install,target=/ccache-staging \
     ccache --version
 
 # Copy OpenMPI (ULFM) from pre-built tool image
-COPY --from=openmpi-layer /install/ /opt/
-RUN test -d "${OMPI_PREFIX}/bin" || { echo "ERROR: OpenMPI not found in openmpi-layer" >&2; exit 1; }
+RUN --mount=from=openmpi-layer,source=/install,target=/openmpi-staging \
+    cp -a /openmpi-staging/. /opt/ && \
+    test -d "${OMPI_PREFIX}/bin" || { echo "ERROR: OpenMPI not found in openmpi-layer" >&2; exit 1; }
 
 # Hack for CIv2
 RUN FILES=(/etc/yum.repos.d/*.repo) && \
@@ -81,7 +82,6 @@ RUN dnf install -y \
     mpfr-devel \
     patchutils \
     pmix-devel \
-    slurm-devel \
     texinfo \
     wget \
     zlib-devel \
@@ -98,5 +98,5 @@ RUN chmod +x /tmp/install_dependencies.sh && \
 # Copy SFPI from pre-built tool image
 RUN --mount=from=sfpi-layer,source=/install,target=/sfpi-staging \
     mkdir -p /opt/tenstorrent && \
-    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/
-RUN test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }
+    cp -a /sfpi-staging/opt/tenstorrent/sfpi /opt/tenstorrent/ && \
+    test -d /opt/tenstorrent/sfpi || { echo "ERROR: sfpi not found in sfpi-layer" >&2; exit 1; }
