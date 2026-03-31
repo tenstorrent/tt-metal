@@ -61,7 +61,7 @@ def run_yolov11_inference(
     performant_runner.release()
     inference_time_avg = round((t1 - t0) / 100, 6)
     logger.info(
-        f"Model: ttnn_yolov11 - batch_size: {batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size / inference_time_avg)}"
+        f"Model: ttnn_yolov11s - batch_size: {batch_size}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size / inference_time_avg)}"
     )
 
 

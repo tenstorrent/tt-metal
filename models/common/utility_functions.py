@@ -172,6 +172,21 @@ def disable_memory_reports():
     return ttnn.device.DisableMemoryReports()
 
 
+def enable_persistent_kernel_cache():
+    """
+    No-op on this TTNN build: persistent kernel cache enable/disable was removed/renamed.
+    Demos still call this for symmetry with disable.
+    """
+    return None
+
+
+def disable_persistent_kernel_cache():
+    """
+    Clear kernel cache where persistent-cache toggles are unavailable.
+    """
+    return ttnn.device.ClearKernelCache()
+
+
 ### Tensor conversion ###
 def torch2tt_tensor(
     py_tensor: torch.Tensor,

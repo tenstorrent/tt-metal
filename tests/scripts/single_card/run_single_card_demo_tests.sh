@@ -120,6 +120,13 @@ run_yolov11_func() {
 
 }
 
+run_yolov11s_func() {
+
+ #Yolov11s Demo
+ $PYTEST_CMD models/demos/yolov11s/demo/demo.py
+
+}
+
 run_yolov11m_func() {
 
  #Yolov11m Demo

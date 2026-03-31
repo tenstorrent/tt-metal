@@ -18,12 +18,12 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 )
 @pytest.mark.models_device_performance_bare_metal
 def test_perf_device_bare_metal_yolov11(batch_size, expected_perf):
-    subdir = "ttnn_yolov11"
+    subdir = "ttnn_yolov11s"
     num_iterations = 1
     margin = 0.03
     expected_perf = expected_perf if is_wormhole_b0() else 0
 
-    command = f"pytest models/demos/yolov11/tests/pcc/test_ttnn_yolov11.py::test_yolov11"
+    command = f"pytest models/demos/yolov11/tests/pcc/test_ttnn_yolov11s.py::test_yolov11s"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
@@ -36,7 +36,7 @@ def test_perf_device_bare_metal_yolov11(batch_size, expected_perf):
     logger.info(f"{expected_results}")
 
     prep_device_perf_report(
-        model_name=f"ttnn_yolov11{batch_size}",
+        model_name=f"ttnn_yolov11s{batch_size}",
         batch_size=batch_size,
         post_processed_results=post_processed_results,
         expected_results=expected_results,

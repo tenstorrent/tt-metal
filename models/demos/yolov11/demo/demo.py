@@ -21,7 +21,7 @@ from models.demos.utils.common_demo_utils import (
     save_yolo_predictions_by_model,
 )
 from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE, load_torch_model
-from models.demos.yolov11.reference import yolov11
+from models.demos.yolov11.reference import yolov11s
 from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
 
 
@@ -41,13 +41,15 @@ def init_model_and_runner(
         torch_model = load_torch_model(model_location_generator)
         model = torch_model.eval()
     else:
-        model = yolov11.YoloV11()
+        model = yolov11s.YoloV11()
 
     performant_runner = None
     if model_type == "tt_model":
         performant_runner = YOLOv11PerformantRunner(
             device,
             batch_size_per_device,
+            act_dtype=ttnn.bfloat8_b,
+            weight_dtype=ttnn.bfloat8_b,
             model_location_generator=model_location_generator,
             inputs_mesh_mapper=inputs_mesh_mapper,
             weights_mesh_mapper=weights_mesh_mapper,
@@ -161,7 +163,8 @@ def run_yolov11n_demo_dataset(
     "input_loc, batch_size_per_device ",
     [
         (
-            "models/demos/yolov11/demo/images",
+            # "models/demos/yolov11/demo/images",
+            "models/demos/yolov11/demo/images/cycle_girl.jpg",
             1,
         ),
     ],
@@ -169,7 +172,7 @@ def run_yolov11n_demo_dataset(
 def test_demo(
     device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device, model_location_generator
 ):
-    pytest.skip("Skipping yolov11 demo test: https://github.com/tenstorrent/tt-metal/issues/30568")
+    # pytest.skip("Skipping yolov11 demo test: https://github.com/tenstorrent/tt-metal/issues/30568")
     run_yolov11n_demo(
         device,
         model_type,

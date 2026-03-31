@@ -7,7 +7,7 @@ import torch.nn as nn
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
-from models.demos.yolov11.reference.yolov11 import Conv, YoloV11
+from models.demos.yolov11.reference.yolov11s import Conv, YoloV11
 from models.demos.yolov11.tt.common import get_mesh_mappers
 
 

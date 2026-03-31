@@ -99,6 +99,8 @@
 | [YOLOv11m (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11m)    | 1     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 157     | 400        |             |
 | [YOLOv11n (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11)            | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 234     | 500        |             |
 | [YOLOv11n (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11)     | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 372     | 1000       |             |
+| [YOLOv11s (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11s)           | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 141     | 217        |             |
+| [YOLOv11s (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov11s)      | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 282     | 434        |             |
 | [YOLOv12x (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov12x)           | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 14      | 150        |             |
 | [YOLOv12x (640x640) (DP=2)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov12x)    | 2     | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 28      | 300        |             |
 
