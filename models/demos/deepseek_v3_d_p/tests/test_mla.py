@@ -87,8 +87,8 @@ def random_weights(config_only):
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
-    [(32, 4), (8, 4), (2, 4)],
-    ids=["32x4", "8x4", "2x4"],
+    [(32, 4), (4, 32), (8, 4), (2, 4)],
+    ids=["32x4", "4x32", "8x4", "2x4"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -150,6 +150,12 @@ def test_mla(
     tp_axis = 1
 
     mesh_shape = list(mesh_device.shape)
+
+    # NOTE: We want to keep TP=4
+    if mesh_shape[tp_axis] != 4:
+        sp_axis = 1
+        tp_axis = 0
+
     if scale_down_sl:
         seq_len = (seq_len // production_mesh[sp_axis]) * mesh_shape[sp_axis]
 
@@ -263,13 +269,16 @@ def test_mla(
     if is_balanced:
         tt_input = reorder_tensor_chunks(tt_input, chunk_order, seq_dim=2)
 
+    shard_dims = [None, None]
+    shard_dims[tp_axis] = -1
+    shard_dims[sp_axis] = -2
     tt_hidden_states = ttnn.from_torch(
         tt_input,
         device=mesh_device,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(-2, -1)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
     tt_output = mla_tt.forward(
         hidden_states=tt_hidden_states,
@@ -278,7 +287,8 @@ def test_mla(
 
     if skip_host_comparison == False:
         tt_output_cpu = ttnn.to_torch(
-            tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_device.shape)
+            tt_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
 
         if is_balanced:
@@ -293,9 +303,12 @@ def test_mla(
 
         # Read back KVPE cache from device
         # Cache is replicated across TP, so concat TP replicas on dim 1 (unused) and discard extras
+        kv_shard_dims = [None, None]
+        kv_shard_dims[tp_axis] = 1
+        kv_shard_dims[sp_axis] = 2
         tt_kvpe_cache = ttnn.to_torch(
             mla_tt.kvpe_cache,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=kv_shard_dims, mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
         tt_kvpe_cache = tt_kvpe_cache[:, :1, :, :]
 
