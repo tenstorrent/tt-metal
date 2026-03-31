@@ -100,15 +100,10 @@ DeviceStorage::DeviceStorage(
     CMAKE_UNIQUE_NAMESPACE::validate_mesh_coordinates(coords_, get_device());
 }
 
-Buffer* DeviceStorage::get_buffer() const {
-    if (this->mesh_buffer != nullptr) {
-        return this->mesh_buffer->get_reference_buffer();
-    }
-    TT_THROW("Buffer is not allocated");
-}
+Buffer* DeviceStorage::get_buffer() const { return get_mesh_buffer().get_reference_buffer(); }
 
 const distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() const {
-    TT_FATAL(mesh_buffer != nullptr, "Buffer is not allocated");
+    TT_FATAL(is_allocated(), "Buffer is not allocated");
     return *mesh_buffer;
 }
 
@@ -117,7 +112,7 @@ bool DeviceStorage::is_sole_owner_of_device_memory() const {
 }
 
 std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer_leak_ownership() const {
-    TT_FATAL(mesh_buffer != nullptr, "Buffer is not allocated");
+    TT_FATAL(is_allocated(), "Buffer is not allocated");
     return mesh_buffer;
 }
 
@@ -144,10 +139,10 @@ distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() con
 distributed::MeshDevice& DeviceStorage::get_device() const { return *get_mesh_buffer().device(); }
 
 bool DeviceStorage::is_uniform_storage() const {
-    if (mesh_buffer == nullptr) {
+    if (!is_allocated()) {
         return true;
     }
-    return coords_.size() == mesh_buffer->device()->num_devices();
+    return coords_.size() == get_device().num_devices();
 }
 
 std::span<const distributed::MeshCoordinate> DeviceStorage::get_coords() const {
