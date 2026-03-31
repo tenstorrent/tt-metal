@@ -2177,11 +2177,12 @@ def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
 def test_digamma_arange(device):
     """ULP accuracy test for ttnn.digamma across positive BF16 values.
 
-    The kernel uses the Stirling asymptotic series with upward recurrence to ensure
-    the Stirling argument z_c >= 3 in all evaluation paths:
-      - z <  2: double recurrence  ψ(z) = ψ(z+2) - 1/z - 1/(z+1)
-      - z <  3: single recurrence  ψ(z) = ψ(z+1) - 1/z
-      - z >= 3: direct Stirling
+    The kernel uses the Stirling asymptotic series with upward recurrence:
+      - z <  2: double recurrence  ψ(z) = ψ(z+2) - 1/z - 1/(z+1)  [z_c = z+2]
+      - z <  3: single recurrence  ψ(z) = ψ(z+1) - 1/z             [z_c = z+1 >= 3]
+      - z >= 3: direct Stirling                                      [z_c = z   >= 3]
+
+    For z in (0,1): z_c = z+2 ∈ (2,3); z_c >= 3 only for z >= 1.
 
     ULP thresholds vs float32 reference (BF16 hardware):
       - z in (0.01, 0.5]:  max 1 ULP  — large |ψ(z)|, ULP tolerance is loose
@@ -2201,8 +2202,18 @@ def test_digamma_arange(device):
         (10.0, 100.0, 1, "large (10-100)"),
     ]
 
-    for lo, hi, max_ulp, label in ranges:
-        zs = torch.linspace(lo, hi, 1024, dtype=torch.bfloat16)
+    for i, (lo, hi, max_ulp, label) in enumerate(ranges):
+        # Generate in float32 then convert to bfloat16. Exclude the upper endpoint
+        # (via N+1 points with [:-1]) for all but the last range so that boundary
+        # values (2.0, 3.0, 10.0) appear in exactly one range and are not tested
+        # twice under conflicting ULP thresholds.
+        is_last = i == len(ranges) - 1
+        zs_f32 = (
+            torch.linspace(lo, hi, 1025, dtype=torch.float32)
+            if not is_last
+            else torch.linspace(lo, hi, 1024, dtype=torch.float32)
+        )
+        zs = (zs_f32[:-1] if not is_last else zs_f32).bfloat16()
         ref = torch.special.digamma(zs.to(torch.float32)).to(torch.bfloat16)
 
         tt_in = ttnn.from_torch(

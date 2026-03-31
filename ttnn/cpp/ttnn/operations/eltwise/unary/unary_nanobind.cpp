@@ -2250,7 +2250,7 @@ void py_module(nb::module_& mod) {
         &ttnn::digamma,
         R"doc(Performs digamma (logarithmic derivative of the gamma function) on :attr:`input_tensor`.)doc",
         "[supported for values greater than 0]",
-        R"doc(BFLOAT16, FLOAT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
     bind_unary_composite_2param<"multigammaln", &ttnn::multigammaln>(
         mod,
         R"doc(Performs multigammaln function on :attr:`input_tensor`.)doc",

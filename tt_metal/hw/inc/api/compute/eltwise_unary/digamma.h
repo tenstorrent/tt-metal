@@ -13,7 +13,8 @@ namespace ckernel {
 /**
  * Performs elementwise digamma (logarithmic derivative of the gamma function) on each
  * element of a tile in DST register at index tile_index. Uses a Stirling asymptotic
- * series with upward recurrence for values in [1, 2) for improved accuracy.
+ * series with upward recurrence: double recurrence for z < 2 (ψ(z) = ψ(z+2) − 1/z − 1/(z+1))
+ * and single recurrence for z < 3 (ψ(z) = ψ(z+1) − 1/z) for improved accuracy.
  *
  * Valid for inputs > 0. The DST register buffer must be in acquired state via *acquire_dst*
  * call. This call is blocking and is only available on the compute engine.

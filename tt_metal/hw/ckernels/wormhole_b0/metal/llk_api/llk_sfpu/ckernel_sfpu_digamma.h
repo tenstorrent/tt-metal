@@ -25,9 +25,10 @@ namespace ckernel::sfpu {
 //   z < 3:  single recurrence  digamma(z) = digamma(z+1) - 1/z              [z_c = z+1 >= 3]
 //   z >= 3: direct Stirling                                                  [z_c = z   >= 3]
 //
-// Using both thresholds keeps z_c >= 3 for all evaluation paths (except for
-// the extreme z -> 0 limit where z_c -> 2+, which is good enough in practice
-// because the large-magnitude output has loose ULP tolerance in BF16).
+// For z >= 1 both thresholds guarantee z_c >= 3.  For z in (0,1) the double
+// recurrence yields z_c = z+2 ∈ (2,3); the 7-term Stirling series is still
+// within 1 BF16 ULP at these values (verified empirically: max ULP = 1 over
+// z ∈ (0.01, 0.5)).
 //
 // Bernoulli coefficients (Horner evaluation on r2 = (1/z)^2), from innermost:
 //   c7 = +1/12          = +0.083333333f
