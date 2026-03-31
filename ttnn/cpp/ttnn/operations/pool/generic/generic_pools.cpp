@@ -1008,19 +1008,19 @@ static std::vector<Tensor> pool2d(
         uint32_t hw = input_h * input_w;
         float scalar = divisor_override.has_value() ? 1.0f / float(divisor_override.value()) : 1.0f / float(hw);
 
-        // TILE inputs (e.g. BFLOAT8_B) need ROW_MAJOR for reshape compatibility.
-        if (input_tensor_4d.layout() != Layout::ROW_MAJOR) {
-            input_tensor_4d = ttnn::to_layout(input_tensor_4d, Layout::ROW_MAJOR);
-        }
-        auto in_shape = input_tensor_4d.padded_shape();
-
         if (batch_size == 1) {
             // Fast path: input is already (1, 1, H*W, C). Just reduce dim 2.
+            // pool_sum handles ROW_MAJOR and TILE bfloat16 directly. Block float types
+            // (BFLOAT8_B, BFLOAT4_B) need conversion since the reduce kernel can't produce
+            // block float output.
+            Tensor input = input_tensor_4d;
+            if (input.dtype() == DataType::BFLOAT8_B || input.dtype() == DataType::BFLOAT4_B) {
+                input = ttnn::to_layout(input, Layout::ROW_MAJOR);
+            }
             // Note: pool_sum is deprecated but applies the scalar divisor inside the reduction
             // kernel (1 device op). ttnn::sum lacks a scalar param (would need sum + multiply = 2 ops),
             // and ttnn::mean can't handle divisor_override. Replace when ttnn::sum gains scalar support.
-            Tensor output =
-                ttnn::operations::reduction::pool_sum(input_tensor_4d, 2, mem_config, compute_kernel_config, scalar);
+            Tensor output = ttnn::operations::reduction::pool_sum(input, 2, mem_config, compute_kernel_config, scalar);
 
             // Fix logical channel count (zero-copy view)
             auto op = output.padded_shape();
@@ -1030,7 +1030,13 @@ static std::vector<Tensor> pool2d(
             return {output};
         }
 
-        // Multi-batch: reshape (1,1,N*H*W,C) → (N,H,W,C) → view (N,1,H*W,C) → reduce → reshape
+        // Multi-batch: reshape requires ROW_MAJOR, convert TILE inputs (e.g. BFLOAT8_B).
+        if (input_tensor_4d.layout() != Layout::ROW_MAJOR) {
+            input_tensor_4d = ttnn::to_layout(input_tensor_4d, Layout::ROW_MAJOR);
+        }
+        auto in_shape = input_tensor_4d.padded_shape();
+
+        // reshape (1,1,N*H*W,C) → (N,H,W,C) → view (N,1,H*W,C) → reduce → reshape
         ttnn::Shape nhwc_logical({batch_size, input_h, input_w, channels});
         ttnn::Shape nhwc_padded({batch_size, input_h, input_w, in_shape[3]});
         Tensor nhwc_input = ttnn::reshape(input_tensor_4d, nhwc_logical, nhwc_padded);
