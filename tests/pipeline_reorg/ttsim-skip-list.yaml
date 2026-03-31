@@ -32,6 +32,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
+  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob  # ~150s under TTSim, hits 320s timeout with xdist contention
 
   # Eltwise - data format limitations (INT32/UINT32/FLOAT32/UINT16)
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_int32.py
@@ -113,6 +114,7 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py
+  - tests/ttnn/unit_tests/operations/reduce/test_sum.py
 
 blackhole:
   # Multi-chip/CCL tests - require multi-device support
@@ -138,6 +140,7 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_topk.py
   - tests/ttnn/unit_tests/operations/reduce/test_argmax.py
   - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
+  - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob  # ~150s under TTSim, hits 320s timeout with xdist contention
 
   # Eltwise - data format limitations (INT32/UINT32/FLOAT32/UINT16)
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_fp32.py
@@ -201,3 +204,4 @@ blackhole:
   - tests/ttnn/unit_tests/operations/reduce/test_moe.py
   - tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py
   - tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py
+  - tests/ttnn/unit_tests/operations/reduce/test_sum.py
