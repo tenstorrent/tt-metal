@@ -215,43 +215,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
 
         # Configure sampling
-        # sampling values of all users are assumed to be the same default values if not provided in constructor.
-        self.sample_on_device = sample_on_device
-        self.sampling_params = (
-            sampling_params
-            if sampling_params is not None
-            else SamplingParams(
-                temperature=[DEFAULT_SAMPLING_TEMPERATURE] * self.batch_size,
-                top_p=[DEFAULT_SAMPLING_TOP_P] * self.batch_size,
-                top_k=[DEFAULT_SAMPLING_TOP_K] * self.batch_size,
-            )
-        )
-        if self._get_sampling_value(self.sampling_params.top_k, 0) == 0 and self.sample_on_device:
-            raise SystemExit(
-                "top-k=0 is not supported when sampling on device. Sampling on host instead. See https://github.com/tenstorrent/tt-metal/issues/40236"
-            )
-        if self.sample_on_device:
-            enable_internal_trace_sampling = enable_trace and self.sample_on_device
-            self.sampling_args = make_deepseek_sampling_args(mesh_device, self.hf_config.vocab_size)
-            self.sampling_generator = SamplingGenerator(
-                args=self.sampling_args,
-                mesh_device=self.mesh_device,
-                tt_ccl=self.ccl,
-                enable_internal_trace=enable_internal_trace_sampling,
-            )
-
-            self._reset_sampling_state(self.sampling_params, self.batch_size, self.batch_size_per_row)
-
-        logger.info(f"Sampling mode: {'device' if self.sample_on_device else 'host'}")
-        logger.info(
-            f"Sampling parameters for first user (other users may have different values): "
-            + f"temperature={self._get_sampling_value(self.sampling_params.temperature, 0)}, "
-            + f"top_p={self._get_sampling_value(self.sampling_params.top_p, 0)}, "
-            + f"top_k={self._get_sampling_value(self.sampling_params.top_k, 0)}"
-        )
-
-        if enable_mtp and sample_on_device:
-            raise SystemExit("MTP with sampling on device is not supported. Disable MTP or sample on host.")
+        self._validate_and_initialize_sampling(sampling_params, sample_on_device, enable_trace, enable_mtp)
 
         # Weight cache to avoid loading weights multiple times
         self._weight_ttnn_cache: dict[str, ttnn.Tensor] = {}
@@ -311,6 +275,108 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         self._prepare_weight_configs(cache_dir)
         self._assert_mtp_available()
+
+    def _validate_and_initialize_sampling(
+        self,
+        sampling_params: SamplingParams | None,
+        sample_on_device: bool,
+        enable_trace: bool = False,
+        enable_mtp: bool = False,
+    ) -> None:
+        if enable_mtp and sample_on_device:
+            raise SystemExit("MTP with sampling on device is not supported. Disable MTP or sample on host.")
+
+        current_sampling_params = getattr(self, "sampling_params", None)
+        params_same = (
+            sampling_params is not None
+            and current_sampling_params is not None
+            and self._are_sampling_params_same(sampling_params, current_sampling_params)
+        )
+        if not params_same:
+            self.sampling_generator = None
+            self.sampling_params = None
+
+        if not sample_on_device:
+            self.sampling_generator = None
+
+        if getattr(self, "sampling_generator", None) is not None:
+            return
+
+        self.sample_on_device = sample_on_device
+        # sampling params of all users are assumed to be the same default values if not provided.
+        self.sampling_params = (
+            self._to_local_sampling_params(sampling_params)
+            if sampling_params is not None
+            else SamplingParams(
+                temperature=[DEFAULT_SAMPLING_TEMPERATURE] * self.batch_size,
+                top_p=[DEFAULT_SAMPLING_TOP_P] * self.batch_size,
+                top_k=[DEFAULT_SAMPLING_TOP_K] * self.batch_size,
+            )
+        )
+        if self._get_sampling_value(self.sampling_params.top_k, 0) == 0 and sample_on_device:
+            raise SystemExit(
+                "top-k=0 is not supported when sampling on device. Sampling on host instead. See https://github.com/tenstorrent/tt-metal/issues/40236"
+            )
+        if sample_on_device:
+            enable_internal_trace_sampling = enable_trace and self.sample_on_device
+            self.sampling_args = make_deepseek_sampling_args(self.mesh_device, self.hf_config.vocab_size)
+            self.sampling_generator = SamplingGenerator(
+                args=self.sampling_args,
+                mesh_device=self.mesh_device,
+                tt_ccl=self.ccl,
+                enable_internal_trace=enable_internal_trace_sampling,
+            )
+
+            self._reset_sampling_state(self.sampling_params, self.batch_size, self.batch_size_per_row)
+
+        logger.info(f"Sampling mode: {'device' if sample_on_device else 'host'}")
+        logger.info(
+            f"Sampling parameters for first user (other users may have different values): "
+            + f"temperature={self._get_sampling_value(self.sampling_params.temperature, 0)}, "
+            + f"top_p={self._get_sampling_value(self.sampling_params.top_p, 0)}, "
+            + f"top_k={self._get_sampling_value(self.sampling_params.top_k, 0)}"
+        )
+
+    def _to_local_sampling_params(self, params_obj) -> SamplingParams:
+        """Project duck-typed sampling params to local SamplingParams fields."""
+        return SamplingParams(
+            temperature=getattr(params_obj, "temperature"),
+            top_k=getattr(params_obj, "top_k"),
+            top_p=getattr(params_obj, "top_p"),
+            presence_penalty=getattr(params_obj, "presence_penalty", 0.0),
+            frequency_penalty=getattr(params_obj, "frequency_penalty", 0.0),
+            repetition_penalty=getattr(params_obj, "repetition_penalty", 1.0),
+            seed=getattr(params_obj, "seed", None),
+            enable_log_probs=getattr(params_obj, "enable_log_probs", False),
+        )
+
+    def _are_sampling_params_same(self, new_sampling_params, current_sampling_params) -> bool:
+        """Return True when both sampling params are equivalent after formatting.
+
+        Inputs may be local ``SamplingParams`` or vLLM duck-typed sampling params.
+        We first project each object to the local ``SamplingParams`` fields and then
+        normalize with ``format_sampling_params`` for an apples-to-apples comparison.
+        """
+        normalized_new = format_sampling_params(
+            self._to_local_sampling_params(new_sampling_params), max_batch_size=self.batch_size
+        )
+        normalized_current = format_sampling_params(
+            self._to_local_sampling_params(current_sampling_params), max_batch_size=self.batch_size
+        )
+        return normalized_new == normalized_current
+
+    @staticmethod
+    def _shape_or_type(value):
+        if value is None:
+            return "None"
+        if hasattr(value, "shape"):
+            try:
+                return tuple(value.shape)
+            except Exception:
+                return f"{type(value).__name__}(shape-unavailable)"
+        if isinstance(value, (list, tuple)):
+            return f"{type(value).__name__}(len={len(value)})"
+        return type(value).__name__
 
     def _dump_meminfo(self, header: str) -> None:
         if self.enable_mem_profile:
@@ -511,7 +577,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         # Clean up sampling trace state
         try:
             if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
-                ttnn.synchronize_device(self.mesh_device)
                 self.sampling_generator.reset_trace()
         except Exception as e:
             logger.warning(f"Failed to reset sampling trace state: {e}")
@@ -674,6 +739,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
 
     def _reset_sampling_state(self, sampling_params: SamplingParams, batch_size: int, batch_size_per_row: int) -> None:
+        # TODO(vllm): Thread prompt/output token state into sampling resets for penalty correctness.
         sampling_params = format_sampling_params(sampling_params, max_batch_size=batch_size)
         self.sampling_generator.reset_sampling_params(sampling_params)
         seed = getattr(sampling_params, "seed", None)
@@ -691,6 +757,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         if isinstance(tt_out, tuple):
             tt_tokens, tt_log_probs = tt_out
+            # TODO: tt_log_probs support not yet implemented.
             if tt_log_probs is not None:
                 ttnn.deallocate(tt_log_probs)
             tt_out = tt_tokens
@@ -1680,7 +1747,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                 if self.enable_trace and batch_idx > 0:
                     # Previous batch deallocates trace-owned sampling output tensors.
                     # Reset trace so the next batch captures fresh outputs.
-                    ttnn.synchronize_device(self.mesh_device)
                     self.sampling_generator.reset_trace()
                 self._reset_sampling_state(
                     self.sampling_params,
@@ -2288,6 +2354,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             ttnn.deallocate(logits_tt)
         if return_last_hidden:
             return logits, last_hidden
+
         return logits
 
     def _slice_last_token_logits(
@@ -2625,8 +2692,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         enable_trace: bool = False,
         page_table: torch.Tensor | None = None,
         kv_cache: None = None,
-        read_from_device: bool = None,
-        sampling_params: SamplingParams = None,
         sample_on_device: bool = False,
     ) -> ttnn.Tensor | torch.Tensor:
         # vLLM does not pass enable_trace param while initializing the model.

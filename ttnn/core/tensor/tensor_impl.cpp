@@ -8,6 +8,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include "tt-metalium/experimental/tensor/host_tensor.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -471,12 +472,12 @@ std::string to_string_impl(const Tensor& tensor) {
 
     const auto& storage = tensor.device_storage();
     auto cpu_tensor = tensor.cpu();
-    if (storage.mesh_buffer == nullptr) {
+    if (!storage.is_allocated()) {
         // Use owned buffer path above.
         return to_string_impl<T>(cpu_tensor);
     }
 
-    auto* mesh_device = storage.mesh_buffer->device();
+    auto* mesh_device = storage.get_device();
     // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
     // if (mesh_device->num_devices() == 1) {
     //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
@@ -538,7 +539,7 @@ HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec) {
 Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::QueueId> cq_id) {
     TT_FATAL(tensor.is_allocated(), "Buffer must be allocated on device!");
     const auto& storage = tensor.device_storage();
-    const auto& mesh_buffer = storage.mesh_buffer;
+    const auto& mesh_buffer = storage.get_mesh_buffer_leak_ownership();
     distributed::MeshDevice* device = mesh_buffer->device();
 
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
@@ -554,8 +555,8 @@ Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::
 
     mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
-    HostStorage host_storage(std::move(distributed_host_buffer));
-    return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.tensor_topology());
+    HostTensor host_tensor(std::move(distributed_host_buffer), tensor.tensor_spec(), tensor.tensor_topology());
+    return Tensor(std::move(host_tensor));
 }
 
 // ======================================================================================
@@ -671,7 +672,7 @@ void copy_to_host(
         "Host tensor has different page config");
 
     const auto& device_storage = device_tensor.device_storage();
-    const auto& mesh_buffer = device_storage.mesh_buffer;
+    const auto& mesh_buffer = device_storage.get_mesh_buffer_leak_ownership();
     distributed::MeshDevice* device = mesh_buffer->device();
 
     auto cq_id_int = tt::tt_metal::raw_optional(cq_id);
@@ -708,10 +709,8 @@ void copy_to_host(
 
     mesh_cq.enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
-    host_tensor = Tensor(
-        HostStorage(std::move(dst_distributed_host_buffer)),
-        device_tensor.tensor_spec(),
-        device_tensor.tensor_topology());
+    host_tensor = Tensor(HostTensor(
+        std::move(dst_distributed_host_buffer), device_tensor.tensor_spec(), device_tensor.tensor_topology()));
 }
 
 void copy_to_host(
@@ -726,7 +725,8 @@ void copy_to_host(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
             .region(region)};
-    queue.enqueue_read_shards(shard_data_transfers, device_tensor.mesh_buffer(), blocking);
+    queue.enqueue_read_shards(
+        shard_data_transfers, device_tensor.device_storage().get_mesh_buffer_leak_ownership(), blocking);
 }
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<tt::tt_metal::QueueId> cq_id) {
@@ -740,7 +740,7 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
         host_tensor.tensor_spec().page_config() == device_tensor.tensor_spec().page_config(),
         "Host tensor has different page config");
 
-    auto mesh_buffer = device_tensor.device_storage().mesh_buffer;
+    auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
 
     auto [mesh_storage, topology] = to_device_mesh_buffer(
         host_tensor.host_storage(), mesh_buffer, device_tensor.tensor_spec(), host_tensor.tensor_topology(), cq_id);
@@ -759,7 +759,8 @@ void copy_to_device(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(const_cast<std::byte*>(src))
             .region(region)};
-    queue.enqueue_write_shards(device_tensor.mesh_buffer(), shard_data_transfers, false);
+    queue.enqueue_write_shards(
+        device_tensor.device_storage().get_mesh_buffer_leak_ownership(), shard_data_transfers, false);
 }
 
 // ======================================================================================
@@ -1362,8 +1363,8 @@ struct bfloat4_tag {};
 struct bfloat8_tag {};
 
 // Preprocess the storage to unpack the bfloat8/4 tiles into float32.
-tt::tt_metal::HostStorage preprocess_storage(
-    const tt::tt_metal::HostStorage& input_storage, const DataType input_dtype) {
+tt::tt_metal::DistributedHostBuffer preprocess_buffers(
+    const tt::tt_metal::DistributedHostBuffer& input_storage, const DataType input_dtype) {
     constexpr bool row_major_output = false;
     constexpr bool is_exp_a = false;
 
@@ -1385,10 +1386,10 @@ tt::tt_metal::HostStorage preprocess_storage(
 }
 
 template <typename SrcType, typename DstType>
-tt::tt_metal::HostStorage transform_storage(
-    const tt::tt_metal::TensorSpec& input_tensor_spec, const tt::tt_metal::HostStorage& input_storage) {
+tt::tt_metal::DistributedHostBuffer transform_buffers(
+    const tt::tt_metal::TensorSpec& input_tensor_spec, const tt::tt_metal::DistributedHostBuffer& input_buffer) {
     if constexpr (std::is_same_v<SrcType, DstType>) {
-        return input_storage;
+        return input_buffer;
     } else if constexpr (std::is_same_v<DstType, bfloat4_tag> || std::is_same_v<DstType, bfloat8_tag>) {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             ttsl::Span<const SrcType> data = buffer.view_as<const SrcType>();
@@ -1413,7 +1414,7 @@ tt::tt_metal::HostStorage transform_storage(
             return tt::tt_metal::HostBuffer(std::move(float_packed_data));
         };
 
-        return input_storage.transform(transform_fn);
+        return input_buffer.transform(transform_fn);
     } else {
         auto transform_fn = [&](const tt::tt_metal::HostBuffer& buffer) {
             auto data = buffer.view_as<const SrcType>();
@@ -1424,7 +1425,7 @@ tt::tt_metal::HostStorage transform_storage(
             return tt::tt_metal::HostBuffer(std::move(output_vector));
         };
 
-        return input_storage.transform(transform_fn);
+        return input_buffer.transform(transform_fn);
     }
 }
 
@@ -1437,11 +1438,11 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
     }
     TT_FATAL(is_cpu_tensor(input_tensor), "to_dtype(...) function only supports host tensors!");
 
-    auto input_storage = detail::preprocess_storage(input_tensor.host_storage(), src_type);
+    auto input_buffer = detail::preprocess_buffers(input_tensor.host_tensor().buffer(), src_type);
 
-    auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_storage]() {
+    auto output_storage = [src_type, dst_type = dtype, &input_tensor, &input_buffer]() {
         auto with_src_and_dst = [&]<typename SrcType, typename DstType>() {
-            return detail::transform_storage<SrcType, DstType>(input_tensor.tensor_spec(), input_storage);
+            return detail::transform_buffers<SrcType, DstType>(input_tensor.tensor_spec(), input_buffer);
         };
 
         auto with_src = [dst_type, &with_src_and_dst]<typename SrcType>() {
@@ -1485,7 +1486,7 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));
 
-    return Tensor(tt::tt_metal::HostStorage(std::move(output_storage)), output_spec, input_tensor.tensor_topology());
+    return Tensor(HostTensor(std::move(output_storage), output_spec, input_tensor.tensor_topology()));
 }
 
 }  // namespace tt::tt_metal::tensor_impl

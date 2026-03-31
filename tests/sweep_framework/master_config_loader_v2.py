@@ -14,7 +14,6 @@ import json
 import os
 import sys
 import ttnn
-import logging
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +26,7 @@ if _repo_root not in sys.path:
     sys.path.insert(0, _repo_root)
 
 from tests.sweep_framework.framework.constants import LEAD_MODELS
+from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
 
 # Inline lead_models_filter state (avoids dependency on untracked/separate module)
@@ -42,10 +42,6 @@ class lead_models_filter:
     def get_lead_models_filter(cls) -> bool:
         return cls._lead_models_only
 
-
-# Set up logger
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 # Get the base directory dynamically - import from model_tracer
 try:
@@ -101,6 +97,8 @@ except ImportError:
 
 
 BASE_DIR = get_base_dir()
+
+TTNN_OPERATIONS_MASTER_JSON = os.path.join(BASE_DIR, "model_tracer", "traced_operations", "ttnn_operations_master.json")
 
 
 @dataclass
@@ -821,8 +819,8 @@ class MasterConfigLoader:
         Args:
             master_file_path: Explicit path to JSON file. If None, resolves in order:
                 1. Class-level override set via set_master_file_path()
-                2. ttnn_operations_master_v2_reconstructed.json (DB-reconstructed)
-                3. ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json (fresh trace)
+                2. TTNN_MASTER_JSON_PATH env var (optional explicit path)
+                3. TTNN_OPERATIONS_MASTER_JSON (canonical: ttnn_operations_master.json)
                 4. None (degraded mode — empty configs)
         """
         if master_file_path is None and MasterConfigLoader._master_file_override is not None:
@@ -836,18 +834,13 @@ class MasterConfigLoader:
                 MasterConfigLoader._master_file_override = None
 
         if master_file_path is None and MasterConfigLoader._master_file_override is None:
-            traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
-            reconstructed_v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")
-            default_trace_path = os.path.join(traced_dir, "ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json")
-
-            if os.path.exists(reconstructed_v2_path):
-                logger.info(f"✅ Using V2 reconstructed JSON from database: {reconstructed_v2_path}")
-                master_file_path = reconstructed_v2_path
-            elif os.path.exists(default_trace_path):
-                logger.info(f"✅ Using fresh trace JSON: {default_trace_path}")
-                master_file_path = default_trace_path
-            else:
-                master_file_path = None
+            env_path = os.environ.get("TTNN_MASTER_JSON_PATH")
+            if env_path and os.path.exists(env_path):
+                logger.info(f"✅ Using master JSON from TTNN_MASTER_JSON_PATH: {env_path}")
+                master_file_path = env_path
+            elif os.path.exists(TTNN_OPERATIONS_MASTER_JSON):
+                logger.info(f"✅ Using canonical master JSON: {TTNN_OPERATIONS_MASTER_JSON}")
+                master_file_path = TTNN_OPERATIONS_MASTER_JSON
 
         self.master_file_path = master_file_path
         self.master_data = None
@@ -952,7 +945,7 @@ class MasterConfigLoader:
                     configs = self.master_data["operations"][transformer_base].get("configurations", [])
                     return self._normalize_configs(configs)
 
-        logger.warning(f"⚠️ No configurations found for operation: {operation_name}")
+        logger.warning(f"⚠️ Master trace lookup failed for operation '{operation_name}'. ")
         return []
 
     def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str, Any, str]]:
@@ -1479,7 +1472,12 @@ class MasterConfigLoader:
             configs = self.get_operation_configs(operation_name)
 
             if not configs:
-                logger.warning(f"⚠️ No traced configurations found for {operation_name}")
+                logger.warning(
+                    f"⚠️ No usable configurations are available for '{operation_name}'. "
+                    f"Possible causes: the operation entry has no "
+                    f"configurations, or all configurations were filtered out "
+                    f"(TTNN_LEAD_MODELS_ONLY={os.environ.get('TTNN_LEAD_MODELS_ONLY', 'unset')})."
+                )
                 # Return empty lists - sweep tests will handle defaults
                 return {
                     "input_shape": [[1, 32, 32]],
@@ -1699,7 +1697,6 @@ def get_global_loader(instance: MasterConfigLoader = None) -> MasterConfigLoader
 
 if __name__ == "__main__":
     # Example usage
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     loader = MasterConfigLoader()
 
     # Test with add operation

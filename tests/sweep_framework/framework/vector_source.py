@@ -105,22 +105,27 @@ class VectorExportSource(VectorSource):
             self.export_dir = export_dir
 
     def _find_module_files(self, module_name: str) -> list[pathlib.Path]:
-        """Find all JSON files for a given module (including mesh variants)"""
+        """Find all JSON files for a given module (including grouped variants)."""
         all_files = []
 
-        # First try exact match (backward compatibility)
+        # First try exact match
         exact_match = list(self.export_dir.glob(f"{module_name}.json"))
         if exact_match:
             all_files.extend(exact_match)
 
-        # Also look for mesh-suffixed variants (e.g., module__mesh_2x4.json)
-        mesh_variants = list(self.export_dir.glob(f"{module_name}__mesh_*.json"))
+        # Also look for grouped variants using the dotted suffix format.
+        mesh_variants = list(self.export_dir.glob(f"{module_name}.mesh_*.json"))
         if mesh_variants:
             logger.info(f"Found {len(mesh_variants)} mesh variant file(s) for module '{module_name}'")
             all_files.extend(sorted(mesh_variants))  # Sort for consistent ordering
 
+        hardware_variants = list(self.export_dir.glob(f"{module_name}.hw_*.json"))
+        if hardware_variants:
+            logger.info(f"Found {len(hardware_variants)} hardware variant file(s) for module '{module_name}'")
+            all_files.extend(sorted(hardware_variants))
+
         if all_files:
-            return all_files
+            return sorted(set(all_files))
 
         logger.warning(f"No vector file found for module '{module_name}' in {self.export_dir}")
         try:
@@ -158,6 +163,39 @@ class VectorExportSource(VectorSource):
                 logger.warning("get_machine_info() returned None - tt-smi might have failed")
                 return None
 
+            # Validate that board_type is a recognized arch name (e.g. "Wormhole",
+            # "Blackhole"). Reject PCI addresses and device paths — an invalid
+            # board type would cause lead-model strict matching to filter out
+            # every vector.
+            board = machine_info.get("board_type", "")
+            if not board or ":" in board or "/" in board:
+                logger.warning(
+                    f"get_machine_info() returned suspicious board_type='{board}' "
+                    f"— ignoring machine info to avoid incorrect hardware filtering."
+                )
+                return None
+
+            # Validate that card_count is present and usable. Downstream filtering
+            # assumes this is known; if it is missing or invalid, disable
+            # machine-based filtering by returning None.
+            card_count = machine_info.get("card_count")
+            if not isinstance(card_count, int) or card_count <= 0:
+                logger.warning(
+                    f"get_machine_info() returned invalid card_count='{card_count}' "
+                    f"— ignoring machine info to avoid incorrect hardware filtering."
+                )
+                return None
+
+            # Optionally sanity-check device_count if provided: if present but
+            # invalid, treat machine info as unusable.
+            if "device_count" in machine_info:
+                device_count = machine_info.get("device_count")
+                if not isinstance(device_count, int) or device_count <= 0:
+                    logger.warning(
+                        f"get_machine_info() returned invalid device_count='{device_count}' "
+                        f"— ignoring machine info to avoid incorrect hardware filtering."
+                    )
+                    return None
             logger.debug(f"Successfully retrieved machine info: {machine_info}")
             return machine_info
         except Exception as e:
@@ -167,7 +205,7 @@ class VectorExportSource(VectorSource):
             return None
 
     def load_vectors(self, module_name: str, suite_name: str | None = None, vector_id: str | None = None) -> list[dict]:
-        """Load test vectors from vectors_export directory (including mesh variants)
+        """Load test vectors from vectors_export directory (including grouped variants)
 
         If MESH_DEVICE_SHAPE environment variable is set, filters vectors to only load
         those matching the current machine's configuration.
@@ -289,67 +327,53 @@ class VectorExportSource(VectorSource):
                                             pass
                                 return None
 
-                            # Filter vectors based on hardware compatibility.
-                            # Lead models use strict 4-field matching (board_type, device_series,
-                            # card_count, device_count) since they are routed to correct hardware.
-                            # Non-lead runs only skip multi-card vectors since CI only has N150.
+                            # Filter vectors based on hardware compatibility for all model_traced runs.
+                            # CI now routes model_traced work by traced hardware, so vectors should
+                            # only load when their traced machine metadata matches the current runner.
                             skip_for_resources = False
                             if current_machine_info and traced_machine_entries:
-                                if is_lead_models:
-                                    current_board = current_machine_info.get("board_type", "").lower()
-                                    current_series = current_machine_info.get("device_series", "").lower()
-                                    current_card_count = current_machine_info.get("card_count")
-                                    current_device_count = current_machine_info.get("device_count")
+                                current_board = current_machine_info.get("board_type", "").lower()
+                                current_series = current_machine_info.get("device_series", "").lower()
+                                current_card_count = current_machine_info.get("card_count")
+                                current_device_count = current_machine_info.get("device_count")
 
-                                    has_matching_hardware = False
-                                    for entry in traced_machine_entries:
-                                        traced_board = entry.get("board_type", "").lower()
-                                        traced_series = entry.get("device_series", "").lower()
-                                        traced_card_count = entry.get("card_count")
-                                        traced_device_count = entry.get("device_count")
+                                has_matching_hardware = False
+                                for entry in traced_machine_entries:
+                                    traced_board = entry.get("board_type", "").lower()
+                                    traced_series = entry.get("device_series", "").lower()
+                                    traced_card_count = entry.get("card_count")
+                                    traced_device_count = entry.get("device_count")
 
-                                        board_match = (
-                                            not traced_board
-                                            or not current_board
-                                            or traced_board == current_board
-                                            or ("wormhole" in traced_board and "wormhole" in current_board)
-                                        )
-                                        series_match = (
-                                            not traced_series or not current_series or traced_series == current_series
-                                        )
-                                        card_match = (
-                                            traced_card_count is None or traced_card_count == current_card_count
-                                        )
+                                    board_match = (
+                                        not traced_board
+                                        or not current_board
+                                        or traced_board == current_board
+                                        or ("wormhole" in traced_board and "wormhole" in current_board)
+                                    )
+                                    series_match = (
+                                        not traced_series or not current_series or traced_series == current_series
+                                    )
+                                    card_match = traced_card_count is None or traced_card_count == current_card_count
+                                    device_match = True
+                                    if is_lead_models:
                                         device_match = (
                                             traced_device_count is None or traced_device_count == current_device_count
                                         )
 
-                                        if board_match and series_match and card_match and device_match:
-                                            has_matching_hardware = True
-                                            break
+                                    if board_match and series_match and card_match and device_match:
+                                        has_matching_hardware = True
+                                        break
 
-                                    if not has_matching_hardware:
-                                        logger.debug(
-                                            f"Skipping vector - traced hardware does not match current machine "
-                                            f"(current: board_type={current_machine_info.get('board_type')}, "
-                                            f"device_series={current_machine_info.get('device_series')}, "
-                                            f"card_count={current_machine_info.get('card_count')}, "
-                                            f"device_count={current_machine_info.get('device_count')})"
-                                        )
-                                        machine_mismatch_count += 1
-                                        skip_for_resources = True
-                                else:
-                                    # TODO: Tighten this once CI runners cover more hardware variants.
-                                    has_single_card = any(
-                                        entry.get("card_count") == 1 or entry.get("card_count") is None
-                                        for entry in traced_machine_entries
+                                if not has_matching_hardware:
+                                    logger.debug(
+                                        f"Skipping vector - traced hardware does not match current machine "
+                                        f"(current: board_type={current_machine_info.get('board_type')}, "
+                                        f"device_series={current_machine_info.get('device_series')}, "
+                                        f"card_count={current_machine_info.get('card_count')}, "
+                                        f"device_count={current_machine_info.get('device_count')})"
                                     )
-                                    if not has_single_card:
-                                        logger.debug(
-                                            "Skipping vector - no single-card entry found and " "not a lead models run"
-                                        )
-                                        machine_mismatch_count += 1
-                                        skip_for_resources = True
+                                    machine_mismatch_count += 1
+                                    skip_for_resources = True
 
                             if skip_for_resources:
                                 continue
@@ -416,12 +440,12 @@ class VectorExportSource(VectorSource):
         return all_vectors
 
     def get_available_suites(self, module_name: str) -> list[str]:
-        """Get list of available suites for a module from vectors_export directory (including mesh variants)"""
+        """Get list of available suites for a module from vectors_export directory (including grouped variants)."""
         module_files = self._find_module_files(module_name)
         if not module_files:
             return []
 
-        # Collect unique suite names across all mesh variant files
+        # Collect unique suite names across all grouped variant files
         all_suites = set()
         for module_file in module_files:
             try:

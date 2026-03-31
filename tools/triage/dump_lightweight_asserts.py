@@ -71,7 +71,14 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
             start_index = -1
             while True:
                 new_index = code_line.find("ASSERT(", start_index + 1)
-                if new_index == -1 or (column is not None and new_index >= column):
+                if new_index == -1:
+                    break
+                # Walk backward to find the actual start of the macro name
+                # (e.g. "LLK_ASSERT(" -> position of 'L', not 'A')
+                macro_start = new_index
+                while macro_start > 0 and (code_line[macro_start - 1].isalnum() or code_line[macro_start - 1] == "_"):
+                    macro_start -= 1
+                if column is not None and macro_start >= column:
                     break
                 start_index = new_index
             if start_index == -1:
@@ -93,7 +100,31 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                         break
                 i += 1
             if paren_count != 0:
-                return "ASSERT() is multi line. Check the first code line in the stack trace."
+                current_line_idx = line
+                while paren_count > 0 and current_line_idx < len(lines):
+                    next_line = lines[current_line_idx]
+                    code_line += " " + next_line.strip()
+                    for ch in next_line:
+                        if ch == "(":
+                            paren_count += 1
+                        elif ch == ")":
+                            paren_count -= 1
+                            if paren_count == 0:
+                                break
+                    current_line_idx += 1
+                if paren_count != 0:
+                    return "ASSERT() closing paren not found. Check the first code line in the stack trace."
+                # Re-scan the assembled string to find the closing paren position
+                i = open_paren_index + 1
+                scan_count = 1
+                while i < len(code_line):
+                    if code_line[i] == "(":
+                        scan_count += 1
+                    elif code_line[i] == ")":
+                        scan_count -= 1
+                        if scan_count == 0:
+                            break
+                    i += 1
             return code_line[start_index : i + 1].strip()
     except Exception:
         return "?"
@@ -170,20 +201,23 @@ def dump_lightweight_asserts(
                 callstack_data.kernel_callstack_with_message.callstack[0].column,
             )
             arguments_and_locals = ""
-            if len(callstack_data.kernel_callstack_with_message.callstack[0].arguments) > 0:
-                arguments_and_locals += "\nArguments:\n"
-                arguments_and_locals += serialize_variables(
-                    callstack_data.kernel_callstack_with_message.callstack[0].arguments, assert_code
-                )
-                for var in callstack_data.kernel_callstack_with_message.callstack[0].arguments:
+            top_frame = callstack_data.kernel_callstack_with_message.callstack[0]
+            if len(top_frame.template_parameters) > 0:
+                arguments_and_locals += "\nTemplate parameters:\n"
+                arguments_and_locals += serialize_variables(top_frame.template_parameters, assert_code)
+                for var in top_frame.template_parameters:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
-            if len(callstack_data.kernel_callstack_with_message.callstack[0].locals) > 0:
+            if len(top_frame.arguments) > 0:
+                arguments_and_locals += "\nRuntime arguments:\n"
+                arguments_and_locals += serialize_variables(top_frame.arguments, assert_code)
+                for var in top_frame.arguments:
+                    if var.name is not None:
+                        assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
+            if len(top_frame.locals) > 0:
                 arguments_and_locals += "\nLocals:\n"
-                arguments_and_locals += serialize_variables(
-                    callstack_data.kernel_callstack_with_message.callstack[0].locals, assert_code
-                )
-                for var in callstack_data.kernel_callstack_with_message.callstack[0].locals:
+                arguments_and_locals += serialize_variables(top_frame.locals, assert_code)
+                for var in top_frame.locals:
                     if var.name is not None:
                         assert_code = assert_code.replace(var.name, f"[info]{var.name}[/]")
         return LightweightAssertInfo(
