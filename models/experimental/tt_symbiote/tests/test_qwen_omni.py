@@ -684,13 +684,11 @@ def test_qwen_omni(mesh_device):
 
     # Inference: Generation of the output text and audio
     # Use deterministic talker decoding to make waveform quality reproducible.
-    talker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_MAX_NEW_TOKENS", "128"))
-    thinker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_THINKER_MAX_NEW_TOKENS", "32"))
+    talker_max_new_tokens = int(os.environ.get("TT_SYMBIOTE_QWEN_OMNI_TALKER_MAX_NEW_TOKENS", "1024"))
     text_ids, audio = model.generate(
         **inputs,
         speaker="Ethan",
         thinker_return_dict_in_generate=True,
-        max_new_tokens=thinker_max_new_tokens,
         use_audio_in_video=USE_AUDIO_IN_VIDEO,
         talker_do_sample=False,
         talker_max_new_tokens=talker_max_new_tokens,
