@@ -24,7 +24,8 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import build_br
 
 # Global constants used by multiple stage kinds (and exported to pipeline/cli)
 TOKEN_PAGE_SIZE_BYTES = 64
-TOKEN_FIFO_SIZE = 1024
+TOKEN_FIFO_NUM_PAGES = 64
+TOKEN_FIFO_SIZE = TOKEN_PAGE_SIZE_BYTES * TOKEN_FIFO_NUM_PAGES
 ACTIVATION_DIM = 7168
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
 ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 1
