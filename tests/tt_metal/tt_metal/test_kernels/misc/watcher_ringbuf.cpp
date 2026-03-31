@@ -25,7 +25,7 @@ void kernel_main() {
 
 #if defined(COMPILE_FOR_DM)
     uint32_t thread_idx = internal_::get_hw_thread_idx();
-#if !defined(MULTI_DM_TEST)
+#if !defined(MULTI_THREADED_TEST)
     // Single-DM test: only specified DM runs
     constexpr uint32_t dm_id = get_compile_time_arg_val(1);
     if (dm_id != thread_idx) {
@@ -35,23 +35,35 @@ void kernel_main() {
     for (uint32_t seq = 0; seq < num_pushes; seq++) {
         WATCHER_RING_BUFFER_PUSH((thread_idx << 16) | seq);
     }
-    return;
 #endif
 
-#if (defined(UCK_CHLKC_UNPACK) && defined(TRISC0)) || \
-      (defined(UCK_CHLKC_MATH) && defined(TRISC1)) || \
-      (defined(UCK_CHLKC_PACK) && defined(TRISC2))
-#if defined(ARCH_QUASAR)
-    // Quasar: use HAL thread_idx for MPSC verification
+#if defined(COMPILE_FOR_TRISC)
+#if defined(MULTI_THREADED_TEST)
+    // Multi-threaded test: all TRISCs run
     uint32_t thread_idx = internal_::get_hw_thread_idx();
     for (uint32_t seq = 0; seq < num_pushes; seq++) {
         WATCHER_RING_BUFFER_PUSH((thread_idx << 16) | seq);
     }
+#elif defined(ARCH_QUASAR)
+    // Quasar single-TRISC: filter by TRISCx define
+#if (defined(UCK_CHLKC_UNPACK) && defined(TRISC0)) || \
+    (defined(UCK_CHLKC_MATH) && defined(TRISC1)) || \
+    (defined(UCK_CHLKC_PACK) && defined(TRISC2)) || \
+    (defined(UCK_CHLKC_UNPACK) && defined(TRISC3))
+    uint32_t thread_idx = internal_::get_hw_thread_idx();
+    for (uint32_t seq = 0; seq < num_pushes; seq++) {
+        WATCHER_RING_BUFFER_PUSH((thread_idx << 16) | seq);
+    }
+#endif
 #else
-    // WH/BH SPSC: use idx pattern, compile-time filter ensures only matching TRISC runs
+    // WH/BH SPSC: use idx pattern
+#if (defined(UCK_CHLKC_UNPACK) && defined(TRISC0)) || \
+    (defined(UCK_CHLKC_MATH) && defined(TRISC1)) || \
+    (defined(UCK_CHLKC_PACK) && defined(TRISC2))
     for (uint32_t idx = 0; idx < num_pushes; idx++) {
         WATCHER_RING_BUFFER_PUSH((idx + 1) + (idx << 16));
     }
+#endif
 #endif
 #endif
 

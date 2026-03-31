@@ -29,6 +29,7 @@
 #include "tt_memory.h"
 #include "hal/generated/dev_msgs.hpp"          // IWYU pragma: export
 #include "hal/generated/fabric_telemetry.hpp"  // IWYU pragma: export
+#include "hostdev/debug_ring_buffer_common.h"
 
 #include <tt_stl/overloaded.hpp>
 #include <umd/device/types/core_coordinates.hpp>
@@ -373,6 +374,11 @@ public:
         bool enable_blackhole_dram_programmable_cores = false);
 
     tt::ARCH get_arch() const { return arch_; }
+
+    // Returns ring buffer capacity based on architecture (MPSC for Quasar, SPSC for others)
+    uint32_t get_ring_buffer_capacity() const {
+        return (arch_ == tt::ARCH::QUASAR) ? DEBUG_RING_BUFFER_MPSC_ELEMENTS : DEBUG_RING_BUFFER_SPSC_ELEMENTS;
+    }
 
     // Returns the NoC topology type (MESH or TORUS)
     NoCTopologyType get_noc_topology() const { return noc_topology_; }

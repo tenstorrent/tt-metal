@@ -888,6 +888,7 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
     }
 }
 
+// TODO: add some TT_FATALs to check metadata corruption
 void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
     // Quasar MPSC ring buffer
     const auto& hal = reader_.env.get_hal();
@@ -899,7 +900,6 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
     const auto* raw_ptr = reinterpret_cast<const uint8_t*>(l1_read_buf_.data());
     const auto* rb = reinterpret_cast<const debug_mpsc_ring_buf_msg_t*>(raw_ptr + ring_buf_offset);
 
-    const uint32_t head = rb->head;
     constexpr uint32_t capacity = DEBUG_RING_BUFFER_MPSC_ELEMENTS;
     constexpr uint32_t mask = DEBUG_RING_BUFFER_MPSC_MASK;
 
@@ -907,17 +907,14 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
     uint32_t& last_pos = reader_.mpsc_last_consumed_pos_[virtual_coord_];
     auto& entries = reader_.mpsc_ring_buf_entries_[virtual_coord_];
 
-    // If buffer overflowed, advance to oldest valid position
-    if (head > last_pos + capacity) {
-        last_pos = head - capacity;
-    }
-
     // Collect new valid entries (oldest to newest)
     std::vector<MpscRingBufEntry> new_entries;
-    for (uint32_t pos = last_pos; pos < head; pos++) {
+    for (uint32_t pos = last_pos; pos < last_pos + capacity; pos++) {
         const auto& slot = rb->slots[pos & mask];
+
+        // Detected empty slot/in-flight write. Break and fetch remaining entries next poll
         if (!debug_ring_buffer_is_slot_valid(slot.write_id, pos)) {
-            break;  // Hole - in-flight write, resume next poll
+            break;
         }
         new_entries.push_back({slot.data, debug_ring_buffer_get_thread_idx(slot.write_id)});
         last_pos = pos + 1;

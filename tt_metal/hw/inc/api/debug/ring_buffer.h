@@ -17,42 +17,36 @@
 #if defined(ARCH_QUASAR)
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
 #include "internal/hw_thread.h"
+#include "risc_common.h"
 
-inline __attribute__((always_inline)) void flush_l2_cache_line(uintptr_t addr) {
-    asm volatile("fence" ::: "memory");
-    volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
-    *flush_reg = static_cast<uint64_t>(addr);
-    asm volatile("fence" ::: "memory");
-}
-
-// Must be inline - DM stack is only 1KB, can't afford function call overhead
+// MPSC ring buffer for Quasar watcher debug
+// Strategy: Use cached memory for atomic slot reservation (atomics on RISC-V require cache),
+// but write data to uncached memory for immediate host visibility without flush overhead
+// Uncached writes are much faster than cache + flush per entry
 inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     auto* wrapper = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
     auto* buf = reinterpret_cast<debug_mpsc_ring_buf_msg_t*>(wrapper->data);
-
-    // Remap to cached for atomics
     uintptr_t addr = reinterpret_cast<uintptr_t>(buf);
-    if (addr >= MEM_L1_UNCACHED_BASE) {
-        buf = reinterpret_cast<debug_mpsc_ring_buf_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
-    }
+
+    // Cached for atomics (required by hardware), uncached for data (host visibility)
+    auto* cached_buf = (addr >= MEM_L1_UNCACHED_BASE)
+                           ? reinterpret_cast<debug_mpsc_ring_buf_msg_t*>(addr - MEM_L1_UNCACHED_BASE)
+                           : buf;
+    auto* uncached_buf =
+        (addr < MEM_L1_UNCACHED_BASE) ? reinterpret_cast<debug_mpsc_ring_buf_msg_t*>(addr + MEM_L1_UNCACHED_BASE) : buf;
 
     // Atomically claim a slot
-    uint32_t pos = __atomic_fetch_add(&buf->head, 1, __ATOMIC_RELAXED);
-    uint32_t idx = pos & DEBUG_RING_BUFFER_MASK;
+    uint32_t pos = __atomic_fetch_add(&cached_buf->head, 1, __ATOMIC_RELAXED);
+    uint32_t idx = pos & DEBUG_RING_BUFFER_MPSC_MASK;
 
-    // Write data
-    buf->slots[idx].data = val;
+    // Write to uncached: immediately visible to host, no flush needed
+    uncached_buf->slots[idx].data = val;
 
-    // Publish with thread ID + position (for host validation & hole detection)
+    // Publish write_id (host uses this to detect valid vs in-flight entries)
     uint32_t thread_idx = internal_::get_hw_thread_idx();
-    uint32_t write_id = (thread_idx << DEBUG_RING_BUFFER_THREAD_ID_SHIFT) | ((pos + 1) & DEBUG_RING_BUFFER_POS_MASK);
-    __atomic_store_n(&buf->slots[idx].write_id, write_id, __ATOMIC_RELEASE);
-
-    // Flush cache line for host visibility
-    // TODO: can this be optimized by flushing only after N amount of heads
-    flush_l2_cache_line(reinterpret_cast<uintptr_t>(&buf->slots[idx]));
-    // Head needs to be flushed separately since it lies on a different cache line
-    flush_l2_cache_line(reinterpret_cast<uintptr_t>(&buf->head));
+    uint32_t write_id =
+        (thread_idx << DEBUG_RING_BUFFER_MPSC_THREAD_ID_SHIFT) | ((pos + 1) & DEBUG_RING_BUFFER_MPSC_POS_MASK);
+    uncached_buf->slots[idx].write_id = write_id;
 }
 
 #else  // WH/BH: SPSC ring buffer
@@ -65,7 +59,7 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     uint32_t* data = buf->data;
 
     // Bounds check, set to -1 to wrap since we increment before using
-    if (*curr_ptr >= DEBUG_RING_BUFFER_ELEMENTS - 1) {
+    if (*curr_ptr >= static_cast<int16_t>(DEBUG_RING_BUFFER_ELEMENTS - 1)) {
         *curr_ptr = DEBUG_RING_BUFFER_STARTING_INDEX;
         *wrapped = 1;
     }
