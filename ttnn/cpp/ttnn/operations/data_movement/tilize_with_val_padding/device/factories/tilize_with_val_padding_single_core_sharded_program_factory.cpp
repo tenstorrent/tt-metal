@@ -8,7 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
-#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/tilize_with_val_padding/device/factories/tilize_with_val_padding_factory_helper.hpp"
 
 using namespace tt::constants;
@@ -72,19 +72,16 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
         tiles_per_row * 2,  // Double buffer
         output_cb_data_format);
 
-    // Prepare compile-time arguments for reader with ShardedAddrGen
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
+
+    // Prepare compile-time arguments for reader
     std::vector<uint32_t> reader_ct_args = {
         static_cast<uint32_t>(src0_cb_index),
         static_cast<uint32_t>(input.element_size()),
         static_cast<uint32_t>(TILE_HEIGHT),
         static_cast<uint32_t>(TILE_WIDTH)};
-
-    // Add ShardedAddrGen compile-time args
-    shard_builder::extend_sharding_compile_time_args(input, reader_ct_args);
-
-    // Define for sharded path
-    std::map<std::string, std::string> reader_defines;
-    reader_defines["SHARDED"] = "1";
+    TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
 
     // Create reader kernel
     KernelHandle reader_kernel_id = CreateKernel(
@@ -92,23 +89,18 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
         "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
         "reader_unary_pad_height_sharded.cpp",
         core_range,
-        ReaderDataMovementConfig(reader_ct_args, reader_defines));
+        ReaderDataMovementConfig(reader_ct_args));
 
-    // Create writer kernel with ShardedAddrGen support
+    // Create writer kernel
     std::vector<uint32_t> writer_ct_args = {output_cb_index};
-
-    // Add ShardedAddrGen compile-time args for writer
-    shard_builder::extend_sharding_compile_time_args(output, writer_ct_args);
-
-    std::map<std::string, std::string> writer_defines;
-    writer_defines["SHARDED"] = "1";
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
         "writer_tilize_sharded.cpp",
         core_range,
-        WriterDataMovementConfig(writer_ct_args, writer_defines));
+        WriterDataMovementConfig(writer_ct_args));
 
     uint32_t num_tiles_per_block = tiles_per_row;
     uint32_t num_blocks = total_tiles / num_tiles_per_block;
@@ -126,32 +118,22 @@ TilizeWithValPaddingSingleCoreShardedFactory::cached_program_t TilizeWithValPadd
 
     // Set runtime arguments for reader
     uint32_t packed_pad_value = detail::get_packed_value(input, pad_value);
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_rt_args = {
-        src_buffer->address(),  // Base address for ShardedAddrGen
-        input_width,            // logical_width
-        output_width,           // padded_width
-        input_height,           // logical_height
-        output_height,          // padded_height
+        src_buffer->address(),
+        input_width,    // logical_width
+        output_width,   // padded_width
+        input_height,   // logical_height
+        output_height,  // padded_height
         tiles_per_row,
         tile_rows,
         num_batches,
         packed_pad_value};
 
-    // Add ShardedAddrGen runtime args (mapping table)
-    shard_builder::extend_sharding_run_time_args(input, reader_rt_args);
-
     SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
     // Set runtime arguments for writer
-    std::vector<uint32_t> writer_rt_args = {
-        dst_buffer->address(),  // Base address for ShardedAddrGen
-        total_tiles};
-
-    // Add ShardedAddrGen runtime args (mapping table) for writer
-    shard_builder::extend_sharding_run_time_args(output, writer_rt_args);
+    std::vector<uint32_t> writer_rt_args = {dst_buffer->address(), total_tiles};
 
     SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
 

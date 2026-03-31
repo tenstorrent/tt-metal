@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
     // Compile-time args
@@ -25,21 +23,8 @@ void kernel_main() {
     uint32_t num_batches = get_arg_val<uint32_t>(rt_arg_ind++);
     uint32_t packed_pad_value = get_arg_val<uint32_t>(rt_arg_ind++);
 
-#ifdef SHARDED
-    // ShardedAddrGen setup
-    using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(4),    // Memory layout
-        get_compile_time_arg_val(5),    // Number of sharding cores
-        get_compile_time_arg_val(6),    // Page size
-        get_compile_time_arg_val(7),    // Pages per shard row
-        get_compile_time_arg_val(8),    // Contiguous pages flag
-        get_compile_time_arg_val(9),    // pages_per_shard_x
-        get_compile_time_arg_val(10)>;  // pages_per_shard_y
-
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_ind));
-    experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = src_addr, .shard_array = mapping_table};
-#endif
+    constexpr auto src_args = TensorAccessorArgs<4>();
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     uint32_t row_bytes = logical_width * element_size;
     uint32_t padded_row_bytes = padded_width * element_size;
@@ -60,7 +45,7 @@ void kernel_main() {
 
                 if (global_row < base_row + logical_height) {
                     // Read actual data row
-                    uint64_t src_row_addr = get_noc_addr(global_row, s0);
+                    uint64_t src_row_addr = s0.get_noc_addr(global_row);
                     noc_async_read(src_row_addr, l1_write_addr, row_bytes);
                     noc_async_read_barrier();  // Barrier per row to make sure data arrives before padding
                     l1_write_addr += row_bytes;
