@@ -85,7 +85,7 @@ jobs:
     steps:
       - name: Verify private issue repo API access
         env:
-          ISSUE_REPO_GITHUB_TOKEN: ${{ secrets.ISSUE_REPO_GITHUB_TOKEN }}
+          ISSUE_REPO_GITHUB_TOKEN: ${{ secrets.ISSUE_REPO_GITHUB_TOKEN || secrets.EVAN_PAT }}
         run: |
           set -euo pipefail
           if [ -z "${ISSUE_REPO_GITHUB_TOKEN:-}" ]; then
@@ -156,7 +156,7 @@ jobs:
       - name: Enrich export with GitHub issue closure booleans
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ISSUE_REPO_GITHUB_TOKEN: ${{ secrets.ISSUE_REPO_GITHUB_TOKEN }}
+          ISSUE_REPO_GITHUB_TOKEN: ${{ secrets.ISSUE_REPO_GITHUB_TOKEN || secrets.EVAN_PAT }}
         run: |
           set -euo pipefail
           python tools/ci/enrich_slack_with_issue_status.py \
