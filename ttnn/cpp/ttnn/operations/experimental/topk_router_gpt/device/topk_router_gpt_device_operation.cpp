@@ -6,8 +6,6 @@
 
 #include <tt-metalium/math.hpp>
 
-#include "ttnn/device_operation.hpp"
-
 namespace ttnn::operations::experimental::topk_router_gpt {
 
 void TopkRouterGptDeviceOperation::validate_on_program_cache_hit(
@@ -122,15 +120,16 @@ tensor_return_value_t TopkRouterGptDeviceOperation::create_output_tensors(
     return {idx_tensor, wgt_tensor};
 }
 
-tensor_return_value_t topk_router_gpt(
+std::tuple<TopkRouterGptDeviceOperation::operation_attributes_t, TopkRouterGptDeviceOperation::tensor_args_t>
+TopkRouterGptDeviceOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
     const Tensor& bias_tensor,
     uint32_t k,
     uint32_t num_experts) {
-    return ttnn::device_operation::launch<TopkRouterGptDeviceOperation>(
+    return {
         operation_attributes_t{.k = k, .num_experts = num_experts},
-        tensor_args_t{.input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor});
+        tensor_args_t{.input_tensor = input_tensor, .weight_tensor = weight_tensor, .bias_tensor = bias_tensor}};
 }
 
 }  // namespace ttnn::operations::experimental::topk_router_gpt

@@ -32,19 +32,21 @@ struct TopkRouterGptDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args);
-};
 
-tensor_return_value_t topk_router_gpt(
-    const Tensor& input_tensor,
-    const Tensor& weight_tensor,
-    const Tensor& bias_tensor,
-    uint32_t k,
-    uint32_t num_experts);
+    static std::tuple<operation_attributes_t, tensor_args_t> invoke(
+        const Tensor& input_tensor,
+        const Tensor& weight_tensor,
+        const Tensor& bias_tensor,
+        uint32_t k,
+        uint32_t num_experts);
+};
 
 }  // namespace ttnn::operations::experimental::topk_router_gpt
 
 namespace ttnn::experimental {
 
-using ttnn::operations::experimental::topk_router_gpt::topk_router_gpt;
+constexpr auto topk_router_gpt = ttnn::register_operation<
+    "ttnn::experimental::topk_router_gpt",
+    ttnn::operations::experimental::topk_router_gpt::TopkRouterGptDeviceOperation>();
 
 }  // namespace ttnn::experimental
