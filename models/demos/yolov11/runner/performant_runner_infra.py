@@ -9,7 +9,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import divup, is_wormhole_b0
 from models.demos.yolov11.common import load_torch_model
-from models.demos.yolov11.tt import ttnn_yolov11
+from models.demos.yolov11.tt import ttnn_yolov11s
 from models.demos.yolov11.tt.model_preprocessing import create_yolov11_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -55,7 +55,7 @@ class YOLOv11PerformanceRunnerInfra:
         self.torch_input_params = torch.randn((batch_size, 3, 640, 640), dtype=torch.float32)
         self.parameters = create_yolov11_model_parameters(self.torch_model, self.torch_input_params, device=self.device)
 
-        self.ttnn_yolov11_model = ttnn_yolov11.TtnnYoloV11(self.device, self.parameters)
+        self.ttnn_yolov11s_model = ttnn_yolov11s.TtnnYoloV11(self.device, self.parameters)
 
         self.torch_output_tensor = self.torch_model(self.torch_input_tensor)
 
@@ -107,7 +107,7 @@ class YOLOv11PerformanceRunnerInfra:
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 
     def run(self):
-        self.output_tensor = self.ttnn_yolov11_model(self.input_tensor)
+        self.output_tensor = self.ttnn_yolov11s_model(self.input_tensor)
 
     def validate(self, output_tensor=None, torch_output_tensor=None):
         ttnn_output_tensor = self.output_tensor if output_tensor is None else output_tensor

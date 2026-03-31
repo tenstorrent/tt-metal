@@ -13,7 +13,7 @@
 ## How to Run
 Use the following command to run the model:
 ```
-pytest --disable-warnings models/demos/yolov11/tests/pcc/test_ttnn_yolov11.py::test_yolov11
+pytest --disable-warnings models/demos/yolov11/tests/pcc/test_ttnn_yolov11s.py::test_yolov11s
 ```
 
 ### Model performant running with Trace+2CQ
@@ -28,7 +28,7 @@ pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py
 #### Multi Device (DP=2, N300):
 - For `640x640`, end-2-end perf is `372` FPS :
   ```
-  pytest --disable-warnings models/demos/yolov11/tests/test_e2e_performant.py::test_e2e_performant_dp
+  pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
   ```
 
 ### Demo with Trace+2CQ
@@ -68,12 +68,12 @@ Note: Output images will be saved in the `models/demos/yolov11/demo/runs` folder
 
 Use the following command to run the performant evaluation with Trace+2CQs:
 ```
-pytest models/demos/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-tt_model]
+pytest models/demos/yolo_eval/evaluate.py::test_yolov11s[res0-device_params0-tt_model]
 ```
 Note: The model is evaluated with 500 samples.
 
 ## Details
-- The entry point to the `yolov11` is located at : `models/demos/yolov11/tt/ttnn_yolov11.py`
+- The entry point to the TTNN model is located at: `models/demos/yolov11/tt/ttnn_yolov11s.py`
 - Batch Size : `1` (Single Device), `2` (Multi Device).
 - Supported Input Resolution : `(640, 640)` - (Height, Width).
 - Dataset used for evaluation : **COCO-2017**

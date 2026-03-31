@@ -418,6 +418,7 @@ models/experimental/swin_s @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorr
 models/demos/yolov7 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/classification_eval @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/yolov11 @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/demos/yolov11s @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/segmentation_evaluation @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/yolov6l @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/yolov12x @ssinghalTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass

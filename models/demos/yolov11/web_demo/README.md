@@ -16,7 +16,7 @@
 
 - From the server run:
   ```
-  source models/demos/yolov8x/web_demo/server/run_uvicorn.sh
+  source models/demos/yolov11/web_demo/server/run_uvicorn.sh
   ```
 
 ### Client side:
@@ -32,6 +32,6 @@
   ```
 - on the client side run:
   ```
-  source run_on_client_YOLOv11_Metal --api-url http://IP.ADDRESS:7000
+  source run_on_client_YOLOv11s_Metal --api-url http://IP.ADDRESS:7000
   ```
 - a browser should automatically open and you will see the live object detection demo using your local camera.
