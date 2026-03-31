@@ -3936,7 +3936,13 @@ class TTNNQwenAudioAttention(TTNNModule):
         if len(hidden_states.shape) == 3:
             hidden_states = ttnn.unsqueeze(hidden_states, 1)
 
-        qkv = self.qkv_proj(hidden_states).ttnn_tensor
+        qkv_out = self.qkv_proj(hidden_states)
+        if hasattr(qkv_out, "to_ttnn"):
+            qkv = qkv_out.to_ttnn
+        elif getattr(qkv_out, "ttnn_tensor", None) is not None:
+            qkv = qkv_out.ttnn_tensor
+        else:
+            qkv = qkv_out
 
         qkv = ttnn.to_memory_config(qkv, ttnn.L1_MEMORY_CONFIG)
 

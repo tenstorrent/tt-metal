@@ -15,6 +15,7 @@ from models.experimental.tt_symbiote.core.module import (
     DeviceArch,
 )
 from models.experimental.tt_symbiote.core.run_config import trace_enabled, trace_disabled
+from models.experimental.tt_symbiote.core.utils import tree_map
 
 
 @trace_enabled
@@ -436,6 +437,28 @@ class TTNNViTIntermediate(TTNNLinearGelu):
         return new_intermediate
 
 
+def _normalize_qwen_omni_vision_act(torch_mlp) -> str:
+    """Match HF `ACT2FN[config.hidden_act]` (vision default is often gelu_pytorch_tanh -> GELUTanh).
+
+    `getattr(act_fn, "__name__")` is wrong for `nn.Module` activations and previously forced SiLU.
+    """
+    act_fn = getattr(torch_mlp, "act_fn", None)
+    if act_fn is None:
+        return "silu"
+    if isinstance(act_fn, nn.Module):
+        cn = act_fn.__class__.__name__.lower()
+        if "gelu" in cn:
+            return "gelu"
+        if "silu" in cn or "swish" in cn:
+            return "silu"
+    name = (getattr(act_fn, "__name__", None) or type(act_fn).__name__ or "").lower()
+    if "gelu" in name:
+        return "gelu"
+    if "silu" in name or "swish" in name:
+        return "silu"
+    return "silu"
+
+
 class TTNNQwen3OmniVisionMLP(TTNNModule):
     """TTNN implementation of Qwen3OmniMoeVisionMLP (fc1 -> act -> fc2)."""
 
@@ -447,7 +470,7 @@ class TTNNQwen3OmniVisionMLP(TTNNModule):
         self.linear_fc1 = None
         self.linear_fc2 = None
 
-        # Store activation name as lower-case string (e.g. "silu", "gelu").
+        # Normalized: "gelu" | "silu" (see _normalize_qwen_omni_vision_act).
         self.act_fn = None
 
     @classmethod
@@ -464,9 +487,7 @@ class TTNNQwen3OmniVisionMLP(TTNNModule):
         module.linear_fc1 = TTNNLinearIReplicatedWColSharded.from_torch(torch_mlp.linear_fc1)
         module.linear_fc2 = TTNNLinearIColShardedWAllReduced.from_torch(torch_mlp.linear_fc2)
 
-        act_fn = getattr(torch_mlp, "act_fn", None)
-        act_name = getattr(act_fn, "__name__", None) or str(act_fn)
-        module.act_fn = act_name.lower()
+        module.act_fn = _normalize_qwen_omni_vision_act(torch_mlp)
 
         return module
 
@@ -481,6 +502,37 @@ class TTNNQwen3OmniVisionMLP(TTNNModule):
     def deallocate_weights_impl(self):
         self.linear_fc1.deallocate_weights()
         self.linear_fc2.deallocate_weights()
+
+    def set_output_tensors_config_impl(self, output_tensors):
+        """After FC2 all_reduce, default mesh layout uses dim=-1 concat → 8× hidden (9216) at torch.add.
+
+        Materialize one logical [N, hidden] CPU tensor on elem and drop ttnn so unwrap matches
+        residual width — without editing run_config.py (see post_process_ttnn_module_output).
+        """
+        if self.device_state is None or self.device is None or self.device.get_num_devices() <= 1:
+            return super().set_output_tensors_config_impl(output_tensors)
+
+        def _materialize_one_replica(e):
+            from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+            if not isinstance(e, TorchTTNNTensor) or e.ttnn_tensor is None:
+                return e
+            t = e.ttnn_tensor
+            n = int(t.shape[0])
+            h = int(self.hidden_size)
+            # Replicated per device: concat on batch dim, then take first replica (MoE-style).
+            pt = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))
+            if pt.shape[0] > n:
+                pt = pt[:n]
+            if pt.shape[-1] > h:
+                pt = pt[..., :h]
+            e.elem = pt.contiguous()
+            e.ttnn_tensor = None
+            if getattr(e, "_distributed_tensor_config", None) is not None:
+                e._distributed_tensor_config = None
+            return e
+
+        return tree_map(_materialize_one_replica, output_tensors)
 
     @run_on_devices(DeviceArch.T3K)
     def forward(self, hidden_states):
@@ -514,32 +566,21 @@ class TTNNQwen3OmniVisionMLP(TTNNModule):
 
         hidden_states = self.linear_fc1(hidden_states)
 
-        # HF Qwen3OmniMoeVisionMLP uses ACT2FN[config.hidden_act] (typically "silu" or "gelu").
-        if self.act_fn in {"silu", "swish"}:
-            hidden_states = ttnn.silu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        elif self.act_fn in {"gelu", "gelu_new"}:
+        # HF Qwen3OmniMoeVisionMLP: ACT2FN[config.hidden_act]; vision config defaults to gelu_pytorch_tanh (GELUTanh).
+        if self.act_fn == "gelu":
             hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         else:
-            # Default to silu to avoid hard failure if an unexpected activation is encountered.
             hidden_states = ttnn.silu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         hidden_states = self.linear_fc2(hidden_states)
 
-        # Some distributed paths may return concatenated width shards after FC2.
-        # Keep only the logical hidden width expected by the residual add.
+        # If FC2 still reports a width larger than hidden (e.g. concat semantics), slice to hidden size.
         out_width = int(hidden_states.shape[-1])
-        if out_width != int(self.hidden_size) and out_width > int(self.hidden_size):
+        if out_width > int(self.hidden_size):
             rank = len(hidden_states.shape)
             starts = [0] * rank
             ends = [int(s) for s in hidden_states.shape]
             ends[-1] = int(self.hidden_size)
             hidden_states = ttnn.slice(hidden_states, starts, ends)
-
-        # Match MoE/attention patterns: when distributed tensors surface with a
-        # widened logical width at Torch boundary, compose + clamp before residual add.
-        if self.device is not None and self.device.get_num_devices() > 1:
-            composed = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=-1))
-            if int(composed.shape[-1]) != int(self.hidden_size):
-                return composed[..., : int(self.hidden_size)]
 
         return hidden_states
