@@ -1,0 +1,141 @@
+# This file defines the test matrix for the SP Demo Release pipeline.
+# This pipeline includes tests for:
+#   - Galaxy DeepSeek Prefill
+#   - Wan 2.2 (across Galaxy and T3K)
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run (env vars must be inlined).
+#   skus: A mapping of SKU names to their configuration (each SKU has timeout in minutes).
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   model: Model identifier for filtering tests.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+# ============================================================================
+# Galaxy DeepSeek Prefill Tests
+# ============================================================================
+
+- name: "(Galaxy) DeepSeek Prefill module tests"
+  cmd: export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI MESH_DEVICE=TG && uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt && pytest models/demos/deepseek_v3_d_p/tests/pcc/test_moe_gate_prefill2d.py -k "mesh-8x4"
+  model: deepseek_prefill
+  skus:
+    bh_galaxy:
+      timeout: 30
+  owner_id: U08RL15T4N8
+  team: models
+
+- name: "t3k_DeepSeek_PREFILL"
+  cmd: |
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv --tb=short -k "random and (linear-8-1link or mesh-4x2 or mesh-2x4)"
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv  --tb=short -k "random and (linear-8-1link or mesh-4x2 or mesh-2x4)"
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv --tb=short -k "2048 and (linear-4x1 or mesh-4x2 or mesh-2x4)"
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv --tb=short -k "random and (linear-8-1link or mesh-4x2 or mesh-2x4)"
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py -vvv --tb=short -k "mesh-4x2"
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2 and single_run' -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc" -vvv --tb=short
+  model: deepseek_prefill
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+  owner_id: U08E1JCMAJF
+  team: models
+
+- name: bh_lb_DeepSeek_PREFILL
+  cmd: |
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc"
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2' -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_rope_prefill.py -k '4x2' -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc" -vvv --tb=short
+  model: deepseek_prefill
+  skus:
+    bh_loudbox:
+      timeout: 45
+  owner_id: U08E1JCMAJF
+  team: models
+
+- name: bh_qb_DeepSeek_PREFILL
+  cmd: |
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc"
+    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2' -vvv --tb=short
+  model: deepseek_prefill
+  skus:
+    bh_llmbox:
+      timeout: 40
+  owner_id: U08E1JCMAJF
+  team: models
+
+# ============================================================================
+# Wan 2.2 Tests (Galaxy)
+# ============================================================================
+
+- name: Galaxy Wan2.2 demo tests
+  cmd: |
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -k "wh_4x8sp1tp0 and resolution_720p" --timeout 1500
+  model: wan22
+  skus:
+    wh_galaxy_perf:
+      timeout: 20
+  owner_id: U03FJB5TM5Y
+  team: models
+
+- name: Galaxy DiT Wan2.2 model perf tests
+  cmd: |
+    export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+    pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "wh_4x8sp1tp0 and resolution_720p and t2v" --timeout=1200
+  model: wan22
+  skus:
+    wh_galaxy_perf:
+      timeout: 25
+  owner_id: U03FJB5TM5Y
+  team: models
+  arch: wormhole_b0
+  save-perf-data: true
+  model-type: Wan2.2
+
+- name: Galaxy Wan2.2 integration tests
+  cmd: ./tests/scripts/tg/run_tg_frequent_tests.sh --model wan22
+  model: wan22
+  skus:
+    wh_galaxy_perf:
+      timeout: 40
+  owner_id: U03FJB5TM5Y
+  team: models
+
+# ============================================================================
+# Wan 2.2 Tests (T3K)
+# ============================================================================
+
+- name: t3k_wan2.2_tests_demo
+  cmd: run_t3000_wan22_tests
+  model: wan22
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+  owner_id: U03FJB5TM5Y
+  team: models
+  model-name: wan22
+
+- name: t3k_DiT_Wan2.2_model_perf_tests
+  cmd: run_t3000_wan22_tests
+  model: wan22
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+  owner_id: U03FJB5TM5Y
+  team: models
+  model-name: wan22
+  model-type: DiT
+  save-perf-data: true
+
+- name: t3k_wan2.2_tests_integration
+  cmd: run_t3000_wan22_tests
+  model: wan22
+  skus:
+    wh_llmbox_perf:
+      timeout: 45
+  owner_id: U03FJB5TM5Y
+  team: models
+  model-name: wan2.2
