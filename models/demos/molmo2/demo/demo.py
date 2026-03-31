@@ -1251,7 +1251,7 @@ class Molmo2Generator:
         Note: embed_tokens is called INSIDE the trace, not here.
         This just prepares input_ids and other tensors for copying to trace tensors.
         """
-        batch_size = 1
+        batch_size = pooled_patches_idx.shape[0]
         seq_len = input_ids.shape[1]
 
         # Prepare vision inputs -- patch embedding on TTNN (no CPU matmul)
