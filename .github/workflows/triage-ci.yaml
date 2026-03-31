@@ -55,7 +55,7 @@ on:
       max-attempts-per-item:
         description: "Maximum attempts per candidate before needs_human"
         required: false
-        default: "3"
+        default: "10"
       extra-pr-check-workflows:
         description: "Optional comma-separated early workflows after PR create (pr-gate.yaml,merge-gate.yaml)"
         required: false
@@ -158,6 +158,16 @@ jobs:
             exit 1
           fi
 
+      - name: Ensure EVAN_PAT is configured for fork push/PR (auto-disable mode)
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_PAT }}
+        run: |
+          if [ -z "$TARGET_PR_PUSH_TOKEN" ]; then
+            echo "Missing secret EVAN_PAT (required for fork push/PR)"
+            exit 1
+          fi
+
       - name: Generate Slack data gathering report with Cursor agent
         if: ${{ inputs['data-gathering-mode'] }}
         env:
@@ -172,14 +182,14 @@ jobs:
         if: ${{ !inputs['data-gathering-mode'] }}
         env:
           CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.EVAN_PAT || secrets.GITHUB_TOKEN }}
-          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_PAT || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.EVAN_PAT }}
+          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_PAT }}
         uses: ./.github/actions/auto-disable-stale-ci
         with:
           input-json-path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
           stale-hours: ${{ github.event.inputs['stale-hours-threshold'] || '32' }}
           max-actions: ${{ github.event.inputs['max-auto-disable-actions'] || '3' }}
-          max-attempts-per-item: ${{ github.event.inputs['max-attempts-per-item'] || '3' }}
+          max-attempts-per-item: ${{ github.event.inputs['max-attempts-per-item'] || '10' }}
           extra-pr-check-workflows: ${{ github.event.inputs['extra-pr-check-workflows'] || '' }}
           target-pr-repo: ${{ github.event.inputs['target-pr-repo'] || 'ebanerjeeTT/tt-metal' }}
           target-pr-base: ${{ github.event.inputs['target-pr-base'] || 'main' }}

@@ -23,7 +23,7 @@ inputs:
   max-attempts-per-item:
     description: "Maximum attempts per candidate before needs_human"
     required: false
-    default: "3"
+    default: "10"
   extra-pr-check-workflows:
     description: "Optional comma-separated early workflows to run after PR create (pr-gate.yaml,merge-gate.yaml)"
     required: false

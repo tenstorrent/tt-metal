@@ -678,7 +678,7 @@ def main() -> int:
     parser.add_argument("--state-json", required=True)
     parser.add_argument("--debug-dir", default="")
     parser.add_argument("--model", default="auto")
-    parser.add_argument("--max-attempts-per-item", type=int, default=3)
+    parser.add_argument("--max-attempts-per-item", type=int, default=10)
     parser.add_argument("--target-pr-repo", default=DEFAULT_PR_REPO)
     parser.add_argument("--target-pr-base", default=DEFAULT_PR_BASE)
     parser.add_argument(
