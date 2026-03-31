@@ -341,6 +341,7 @@ def _build_grpo_run_command() -> str:
     host_config = "4galaxy_pp4"
     ranks_per_host = "1"
     return (
+        f"export TT_TRAIN_OUTPUT_FILE=$(pwd)/output.txt\n"
         f"cd {pp_root}\n"
         f"scontrol show hostnames | python make_rankfile.py -n {ranks_per_host} -o /tmp/rankfile.txt\n"
         f"tt-run --verbose \\\n"
