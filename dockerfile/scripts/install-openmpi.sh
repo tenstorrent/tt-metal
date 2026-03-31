@@ -4,7 +4,7 @@
 # Output is installed under ${OMPI_PREFIX} (default /opt/openmpi-<tag>-ulfm).
 set -euo pipefail
 
-OMPI_TAG="${OMPI_TAG:-v5.0.10}"
+OMPI_TAG="${OMPI_TAG:-v5.0.7}"
 INSTALL_DIR="${INSTALL_DIR:-/opt}"
 OMPI_PREFIX="${INSTALL_DIR}/openmpi-${OMPI_TAG}-ulfm"
 
@@ -42,7 +42,7 @@ echo "Running autogen.pl..."
     --prefix="${OMPI_PREFIX}" \
     --with-ft=ulfm \
     --enable-wrapper-rpath \
-    --enable-prte-prefix-by-default \
+    --enable-mpirun-prefix-by-default \
     --disable-mca-dso \
     --disable-dlopen \
     --enable-static \

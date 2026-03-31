@@ -44,8 +44,8 @@ ARG YQ_SHA256=0c2b24e645b57d8e7c0566d18643a6d4f5580feeea3878127354a46f2a1e4598
 # A mismatch will be caught at build time by a validation step in Dockerfile.
 # OMPI_COMMIT_SHA is the dereferenced commit for the tag, used to verify
 # clone integrity in install-openmpi.sh.
-ARG OMPI_TAG=v5.0.10
-ARG OMPI_COMMIT_SHA=0d48030d410ae8f56790933135b28be1b3920ba1
+ARG OMPI_TAG=v5.0.7
+ARG OMPI_COMMIT_SHA=29341e55efaabf7a6968444b4bb6f1f1fb40d664
 
 # NOTE: SFPI version/hash are NOT defined here as ARGs.
 # The single source of truth for SFPI version information is:
@@ -314,6 +314,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gfortran \
     gawk \
     git \
+    python3 \
     libgmp-dev \
     libhwloc-dev \
     libibverbs-dev \
@@ -321,7 +322,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libmpc-dev \
     libmpfr-dev \
     libmunge-dev \
-    libpmix-dev \
     libzstd-dev \
     libtool \
     make \

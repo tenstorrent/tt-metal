@@ -50,7 +50,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # IMPORTANT: Keep this in sync with OMPI_TAG in Dockerfile.tools
 # OpenMPI configuration - must match Dockerfile.tools OMPI_TAG
 # The openmpi-layer provides /install/openmpi-<tag>-ulfm/ which we copy to /opt/
-ARG OMPI_TAG=v5.0.10
+ARG OMPI_TAG=v5.0.7
 ENV OMPI_PREFIX=/opt/openmpi-${OMPI_TAG}-ulfm
 ENV PATH=${OMPI_PREFIX}/bin:$PATH
 ENV LD_LIBRARY_PATH=${OMPI_PREFIX}/lib
