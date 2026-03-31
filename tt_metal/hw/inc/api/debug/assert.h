@@ -75,16 +75,39 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
     assert_and_hang(line_num, 0, assert_type);
 }
 
-// Overload for ASSERT(condition, "message") — message is developer documentation only; store file:line.
-inline void assert_and_hang(uint32_t line_num, uint16_t file_id, const char*) { assert_and_hang(line_num, file_id); }
+// ASSERT(condition)                — hang with DebugAssertTripped
+// ASSERT(condition, "message")     — hang; message stored in file-only ELF section (zero L1 cost)
+// ASSERT_TYPE(condition, type)     — hang with a specific debug_assert_type_t
+//
+// ASSERT message section entry layout (packed, variable-length):
+//   [uint16_t file_id][uint16_t line_num][char msg[sizeof(literal)]]
 
-// The do...while(0) allows flexible use in if-else without braces.
-// Optional second argument: enum assert type (e.g. DebugAssertRtaOutOfBounds)
-//                        or string message (developer documentation, ignored at runtime).
-#define ASSERT(condition, ...)                                                   \
-    do {                                                                         \
-        if (not(condition))                                                      \
-            assert_and_hang(__LINE__, debug_file_hash(__FILE__), ##__VA_ARGS__); \
+// Implementation detail — do not call directly.
+#define _ASSERT_MSG(condition, msg)                                       \
+    do {                                                                  \
+        if (not(condition)) {                                             \
+            static const struct __attribute__((packed)) {                 \
+                uint16_t file_id;                                         \
+                uint16_t line_num;                                        \
+                char msg_data[sizeof(msg)];                               \
+            } _e __attribute__((used, section(".debug_assert_msgs"))) = { \
+                debug_file_hash(__FILE__), (uint16_t)__LINE__, msg};      \
+            assert_and_hang(__LINE__, debug_file_hash(__FILE__));         \
+        }                                                                 \
+    } while (0)
+#define _ASSERT_PLAIN(condition)                                  \
+    do {                                                          \
+        if (not(condition))                                       \
+            assert_and_hang(__LINE__, debug_file_hash(__FILE__)); \
+    } while (0)
+#define _ASSERT_PICK(_c, _extra, _name, ...) _name
+
+#define ASSERT(condition, ...) \
+    _ASSERT_PICK(condition, ##__VA_ARGS__, _ASSERT_MSG, _ASSERT_PLAIN)(condition, ##__VA_ARGS__)
+#define ASSERT_TYPE(condition, type)                                    \
+    do {                                                                \
+        if (not(condition))                                             \
+            assert_and_hang(__LINE__, debug_file_hash(__FILE__), type); \
     } while (0)
 
 #define ASSERT_ENABLED 1

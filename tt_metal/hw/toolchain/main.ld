@@ -145,6 +145,15 @@ SECTIONS
     . = ALIGN(4);
   }
 
+  /* Assert message table – file-only section, VMA = 0x6600000 */
+  .debug_assert_msgs 0x6600000 :
+  {
+    __debug_assert_msgs_start = .;
+    KEEP(*(.debug_assert_msgs))
+    __debug_assert_msgs_end = .;
+    . = ALIGN(4);
+  }
+
 #if defined(TYPE_FIRMWARE) || (defined(COMPILE_FOR_NCRISC) && defined(ARCH_WORMHOLE))
   .text TEXT_START :
 #else

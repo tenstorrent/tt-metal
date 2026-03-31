@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <elf.h>
 #include <filesystem>
 #include <fstream>
 #include <set>
@@ -186,6 +188,96 @@ inline std::string resolve_file_from_hash(uint16_t file_id, const std::vector<st
     return fmt::format("unknown file (hash=0x{:04x})", file_id);
 }
 
+// Read the assert message for (file_id, line_num) from the .debug_assert_msgs section
+// in the kernel ELF.  Section entries are variable-length and packed:
+//   [uint16_t file_id][uint16_t line_num][char msg... '\0']
+// The string is stored inline — no pointer resolution, no device L1 cost.
+// Returns empty string if the section is absent or no matching entry is found.
+inline std::string resolve_assert_message(
+    uint16_t file_id, uint16_t line_num, const std::vector<std::string>& elf_paths) {
+    for (const auto& elf_path : elf_paths) {
+        std::ifstream f(elf_path, std::ios::binary);
+        if (!f) {
+            continue;
+        }
+
+        unsigned char ident[EI_NIDENT];
+        f.read(reinterpret_cast<char*>(ident), EI_NIDENT);
+        if (f.gcount() != EI_NIDENT || ident[EI_MAG0] != ELFMAG0 || ident[EI_MAG1] != ELFMAG1 ||
+            ident[EI_MAG2] != ELFMAG2 || ident[EI_MAG3] != ELFMAG3 || ident[EI_CLASS] != ELFCLASS32) {
+            continue;
+        }
+
+        f.seekg(0);
+        Elf32_Ehdr ehdr;
+        f.read(reinterpret_cast<char*>(&ehdr), sizeof(ehdr));
+        if (f.fail() || ehdr.e_shnum == 0 || ehdr.e_shstrndx >= ehdr.e_shnum) {
+            continue;
+        }
+
+        std::vector<Elf32_Shdr> shdrs(ehdr.e_shnum);
+        f.seekg(ehdr.e_shoff);
+        f.read(reinterpret_cast<char*>(shdrs.data()), ehdr.e_shnum * sizeof(Elf32_Shdr));
+        if (f.fail()) {
+            continue;
+        }
+
+        const auto& shstrtab_hdr = shdrs[ehdr.e_shstrndx];
+        std::vector<char> shstrtab(shstrtab_hdr.sh_size);
+        f.seekg(shstrtab_hdr.sh_offset);
+        f.read(shstrtab.data(), shstrtab_hdr.sh_size);
+        if (f.fail()) {
+            continue;
+        }
+
+        auto section_name = [&](const Elf32_Shdr& sh) -> const char* {
+            if (sh.sh_name >= shstrtab.size()) {
+                return "";
+            }
+            return shstrtab.data() + sh.sh_name;
+        };
+
+        const Elf32_Shdr* msgs_shdr = nullptr;
+        for (const auto& sh : shdrs) {
+            if (std::strcmp(section_name(sh), ".debug_assert_msgs") == 0) {
+                msgs_shdr = &sh;
+                break;
+            }
+        }
+        if (!msgs_shdr || msgs_shdr->sh_size == 0) {
+            continue;
+        }
+
+        std::vector<char> section(msgs_shdr->sh_size);
+        f.seekg(msgs_shdr->sh_offset);
+        f.read(section.data(), msgs_shdr->sh_size);
+        if (f.fail()) {
+            continue;
+        }
+
+        // Scan variable-length entries: [fid:2][lnum:2][msg...\0]
+        const char* p = section.data();
+        const char* end = p + section.size();
+        while (p + 4 < end) {
+            uint16_t fid, lnum;
+            std::memcpy(&fid, p, 2);
+            std::memcpy(&lnum, p + 2, 2);
+            p += 4;
+            const char* msg_start = p;
+            while (p < end && *p != '\0') {
+                ++p;
+            }
+            if (fid == file_id && lnum == line_num && p > msg_start) {
+                return std::string(msg_start, p);
+            }
+            if (p < end) {
+                ++p;  // skip null terminator
+            }
+        }
+    }
+    return {};
+}
+
 // Returns the assert message portion for a given assert type.
 // Returns empty string for unknown types (callers must handle this).
 inline std::string get_debug_assert_message(
@@ -197,6 +289,10 @@ inline std::string get_debug_assert_message(
     switch (type) {
         case dev_msgs::DebugAssertTripped: {
             std::string file_str = (file_id != 0) ? resolve_file_from_hash(file_id, elf_paths) : "unknown file";
+            std::string msg = resolve_assert_message(file_id, line_num, elf_paths);
+            if (!msg.empty()) {
+                return fmt::format("tripped an assert in {} on line {}: \"{}\".", file_str, line_num, msg);
+            }
             return fmt::format("tripped an assert in {} on line {}.", file_str, line_num);
         }
         case dev_msgs::DebugAssertNCriscNOCReadsFlushedTripped:
