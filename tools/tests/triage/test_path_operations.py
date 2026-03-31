@@ -27,10 +27,10 @@ import pytest
 # ---------------------------------------------------------------------------
 # sys.path setup — mirrors the pattern in test_lw_assert_handling.py
 # ---------------------------------------------------------------------------
-metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-triage_home = os.path.join(metal_home, "tools", "triage")
-if triage_home not in sys.path:
-    sys.path.insert(0, triage_home)
+metal_home = Path(__file__).resolve().parents[3]
+triage_home = metal_home / "tools" / "triage"
+if str(triage_home) not in sys.path:
+    sys.path.insert(0, str(triage_home))
 
 # ---------------------------------------------------------------------------
 # Pre-mock heavy third-party and ttexalens dependencies so that triage modules
