@@ -306,7 +306,6 @@ class TextAttention(LightweightModule):
             q = ttnn.typecast(q, dtype=ttnn.bfloat16)
         if k.dtype != ttnn.bfloat16:
             k = ttnn.typecast(k, dtype=ttnn.bfloat16)
-        print("first Run Demo : ", " : ", os.getenv("First_run"))
         if os.getenv("First_run", "false").lower() == "true" and trace_id is not None:
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
             os.environ["First_run"] = "false"
@@ -522,14 +521,12 @@ class TextAttention(LightweightModule):
                 q,
                 cos,  # cos cache
                 sin,  # sin cache
-                0,  # Position (uses traced current_pos internally)
             )
 
             k = ttnn.experimental.rotary_embedding(
                 k,
                 cos,  # cos cache
                 sin,  # sin cache
-                0,  # Position (uses traced current_pos internally)
             )
 
         logger.debug(f"After RoPE: q.shape={q.shape}, k.shape={k.shape}")
