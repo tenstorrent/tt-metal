@@ -94,6 +94,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Ensure EVAN_PAT is configured
         env:
@@ -124,6 +126,8 @@ jobs:
           chmod 700 "$askpass"
           git config user.name "CI Auto Disable Bot"
           git config user.email "ci-auto-disable-bot@tenstorrent.invalid"
+          # Ensure checkout-injected GITHUB_TOKEN credentials do not override PAT auth.
+          git config --local --unset-all http.https://github.com/.extraheader || true
           git fetch origin "$TARGET_PR_BASE"
           git checkout -B "$probe_branch" "origin/$TARGET_PR_BASE"
           git commit --allow-empty -m "ci: fork push probe ${GITHUB_RUN_ID}"
@@ -142,6 +146,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Ensure SLACK_BOT_TOKEN is configured
         env:
