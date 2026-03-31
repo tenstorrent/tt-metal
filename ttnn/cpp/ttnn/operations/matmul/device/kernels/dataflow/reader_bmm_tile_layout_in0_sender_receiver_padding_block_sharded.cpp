@@ -306,12 +306,12 @@ void kernel_main() {
                         // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                         // same vc even though cmd bufs are different Also, this only works because we are setting VCs
                         // statically (using NOC_CMD_STATIC_VC).
-#ifdef ARCH_BLACKHOLE
-                        // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV latency
-                        // which means data could be changed before
-                        //  write is issued.
+
+                        // Flush is required because the semaphore multicast reads receiver_sem's L1
+                        // address as the source value. Without a flush, the CPU can proceed to the next
+                        // iteration and overwrite receiver_sem to INVALID before the NoC has read the
+                        // VALID value from L1, causing receivers to see INVALID and hang.
                         noc.async_writes_flushed();
-#endif
 
                     } else if constexpr (core_in_in0_receiver_mcast_grid) {
                         // Increment remote sender's semaphore using pre-computed coordinates

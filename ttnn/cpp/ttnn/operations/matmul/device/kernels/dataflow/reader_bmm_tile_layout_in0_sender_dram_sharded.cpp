@@ -182,6 +182,9 @@ void kernel_main() {
                     in0_mcast_dest_noc_end_x,
                     in0_mcast_dest_noc_end_y,
                     in0_mcast_num_cores);
+                // Flush to ensure the NoC has read the VALID value from receiver_sem's L1
+                // address before the next iteration overwrites it with INVALID.
+                noc.async_writes_flushed();
 
                 local_read_addr += in0_block_size_bytes;
 
