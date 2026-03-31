@@ -291,16 +291,6 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
 
-[[deprecated(
-    "tt::tt_metal::CreateSemaphore(Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t "
-    "initial_value, CoreType core_type) is deprecated. Use tt::tt_metal::CreateSemaphore(Program& program, const "
-    "std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t initial_value) instead.")]]
-uint32_t CreateSemaphore(
-    Program& program,
-    const std::variant<CoreRange, CoreRangeSet>& core_spec,
-    uint32_t initial_value,
-    CoreType core_type);
-
 // clang-format off
 /**
  * Initializes semaphore on all cores within core range (inclusive). Each core can have up to eight 4B semaphores aligned to L1_ALIGNMENT.
