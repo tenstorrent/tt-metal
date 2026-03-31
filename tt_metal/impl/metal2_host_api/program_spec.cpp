@@ -793,7 +793,7 @@ std::pair<DMProcessorMaskMap, ComputeEngineMaskMap> SolveKernelToProcessorAssign
         NodeRangeSet nodes = to_node_range_set(k->target_nodes);
         int node_count = static_cast<int>(nodes.num_cores());  // number of target nodes
         int thread_count = k->num_threads;
-        return node_count * 100 + thread_count;  // nodes dominate, threads break ties
+        return (node_count * 100) + thread_count;  // nodes dominate, threads break ties
     };
     std::sort(dm_kernels.begin(), dm_kernels.end(), [&](const KernelSpec* a, const KernelSpec* b) {
         return constraint_score(a) > constraint_score(b);  // descending
@@ -897,9 +897,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     auto get_dfb_risc_mask = [&](const KernelSpec* kernel) -> uint16_t {
         if (kernel->is_dm_kernel()) {
             return kernel_to_dm_processor_mask_map.at(kernel).bits;
-        } else {
-            return kernel_to_compute_processor_mask_map.at(kernel).bits << 8;
         }
+        return kernel_to_compute_processor_mask_map.at(kernel).bits << 8;
     };
     uint16_t producer_risc_mask = get_dfb_risc_mask(producer);
     uint16_t consumer_risc_mask = get_dfb_risc_mask(consumer);
@@ -1068,7 +1067,7 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
         if (mask.is_idx_in_use(engine)) {
             // Add all 4 compute processors for this engine
             for (uint8_t proc = 0; proc < PROCESSORS_PER_ENGINE; ++proc) {
-                uint8_t processor_id = engine * PROCESSORS_PER_ENGINE + proc;
+                uint8_t processor_id = (engine * PROCESSORS_PER_ENGINE) + proc;
                 processors.insert(static_cast<QuasarComputeProcessor>(processor_id));
             }
         }

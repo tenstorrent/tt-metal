@@ -976,13 +976,14 @@ TEST_F(ProgramSpecTestQuasar, BacktrackingSolverFindsAssignment_RegardlessOfOrde
     auto worker_c2 = MakeMinimalWorker("worker_c2", node_c, {"k_c", "k_bc"}, {});
 
     // Helper to create a ProgramSpec with a given id and worker ordering
-    auto make_spec = [&](const std::string& id, std::vector<KernelSpec> kernels, std::vector<WorkerSpec> workers) {
-        ProgramSpec spec;
-        spec.program_id = id;
-        spec.kernels = kernels;
-        spec.workers = workers;
-        return spec;
-    };
+    auto make_spec =
+        [&](const std::string& id, std::vector<KernelSpec> kernels, const std::vector<WorkerSpec>& workers) {
+            ProgramSpec spec;
+            spec.program_id = id;
+            spec.kernels = std::move(kernels);
+            spec.workers = workers;
+            return spec;
+        };
 
     // All 24 possible permutations of k_a, k_ab, k_bc, k_c
     std::vector<std::vector<KernelSpec>> kernel_permutations = {
@@ -1017,14 +1018,14 @@ TEST_F(ProgramSpecTestQuasar, BacktrackingSolverFindsAssignment_RegardlessOfOrde
         {worker_c2, worker_b1, worker_a1}};
 
     // All kernel permutations should succeed with all worker permutations.
-    for (size_t i = 0; i < kernel_permutations.size(); i++) {
-        for (size_t j = 0; j < worker_permutations1.size(); j++) {
-            EXPECT_NO_THROW(MakeProgramFromSpec(make_spec("", kernel_permutations[i], worker_permutations1[j])));
+    for (const auto& kernel_perm : kernel_permutations) {
+        for (const auto& worker_perm : worker_permutations1) {
+            EXPECT_NO_THROW(MakeProgramFromSpec(make_spec("", kernel_perm, worker_perm)));
         }
     }
-    for (size_t i = 0; i < kernel_permutations.size(); i++) {
-        for (size_t j = 0; j < worker_permutations2.size(); j++) {
-            EXPECT_NO_THROW(MakeProgramFromSpec(make_spec("", kernel_permutations[i], worker_permutations2[j])));
+    for (const auto& kernel_perm : kernel_permutations) {
+        for (const auto& worker_perm : worker_permutations2) {
+            EXPECT_NO_THROW(MakeProgramFromSpec(make_spec("", kernel_perm, worker_perm)));
         }
     }
 }
