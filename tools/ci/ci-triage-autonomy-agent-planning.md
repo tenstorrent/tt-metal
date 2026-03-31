@@ -12,7 +12,7 @@ Primary outcomes:
 - Successful completion triggers one terminal Slack notification
 - Bug-escape attribution is tracked post-facto by mapping issue -> fix commit/PR
 - New failures are continuously ingested from aggregate workflow data
-- Ticket lifecycle is fully automated (create/update/close/reopen as needed)
+- Ticket lifecycle is fully automated (create/update/close with recurrence creating a new issue)
 - Assignment/follow-up/escalation loops continue even after temporary disables
 - Small-scope fix PR drafting is attempted when confidence is high
 
@@ -319,32 +319,74 @@ Rollback:
 
 - lock candidate to `needs_human` and halt auto-extension
 
-## M4 - Terminal Completion + Notify
+## M4 - Failure Ingestion + Correlation + New-Issue Slack Notify
 
 Inputs:
 
-- PR with successful workflows
+- aggregate workflow data snapshots
+- existing state entries with Slack/issue linkage
 
 Actions:
 
-1. mark state `completed`
-2. send one terminal Slack message to `{{SLACK_NOTIFY_CHANNEL_ID_TEST}}`
-3. set `terminal_notified=true`
+1. ingest new failures from aggregate workflow data
+2. compute deterministic `failure_fingerprint`
+3. correlate fingerprint to existing issue/PR/Slack state items
+4. create new issues for unmatched high-confidence fingerprints in `{{ISSUE_TRACKING_REPO_TEST}}`
+5. send initial Slack lifecycle notification/thread anchor for each newly created issue
+6. create or refresh state entries for unmatched fingerprints (fail closed on low confidence)
 
 Evidence:
 
-- one Slack message
-- no further actions on rerun
+- new fingerprints appear in state/action artifacts with source links
+- each newly created issue has a corresponding initial Slack lifecycle notification
+- replay run does not duplicate previously seen fingerprints
+- low-confidence fingerprints are suppressed/escalated without writes
 
 Go/No-Go:
 
-- rerun must produce no write actions for completed key
+- Must pass one controlled ingestion scenario with deterministic replay
+- Must prove issue-create + Slack-initial-notify occurs exactly once per new fingerprint
 
 Rollback:
 
-- disable notify while keeping completed state updates
+- disable ingestion issue/slack writes; keep read-only ingest report artifacts
 
-## M5 - Bug Escape Attribution
+## M5 - Ticket Lifecycle + Terminal Notify
+
+Inputs:
+
+- correlated fingerprints from M4
+- issue/PR state for `{{ISSUE_TRACKING_REPO_TEST}}`
+- Slack thread replies + latest owner responses for each active fingerprint
+
+Actions:
+
+1. run action selector for each active fingerprint (`draft_fix_pr`, `draft_disable_pr`, `refresh_validation`, `observe_only`)
+2. create/update issues for active fingerprints (enforce `CI auto triage` label)
+3. close solved issues when objective pass window is met
+4. create a new issue when a previously closed fingerprint recurs
+5. post/update Slack thread lifecycle messages for existing incidents
+6. consume thread replies as control signals; if owner confirms imminent fix, prefer `observe_only`/defer and suppress disable PR creation
+7. on completion, mark state `completed`, send one terminal Slack message, set `terminal_notified=true`
+
+Evidence:
+
+- issue create/update/close events recorded in history
+- closed-then-recurred fingerprint creates a new issue linked as recurrence
+- controlled scenario shows `draft_fix_pr` chosen for high-confidence small fix
+- controlled scenario shows `draft_disable_pr` chosen after SLA breach
+- controlled scenario shows owner-confirmed thread reply switches action to defer/`observe_only` with no new disable PR
+- one terminal Slack message per completed key
+
+Go/No-Go:
+
+- Must pass end-to-end lifecycle scenarios for fix path, disable path, and owner-confirmed defer path
+
+Rollback:
+
+- stop issue write actions and Slack terminal notifications; keep state reconciliation only
+
+## M6 - Bug Escape Attribution
 
 Inputs:
 
@@ -397,13 +439,19 @@ Rollback:
 | A5 | first live candidate | live test | one draft PR + kickoff runs |
 | A6 | unchanged replay | live test | zero new PRs |
 | A7 | new failure on existing PR | live test | same PR updated |
-| A8 | successful terminal run | live test | completed + one Slack notify |
-| A9 | data-gathering regression check | live test | report behavior unchanged |
-| A10 | bug escape attribution | live test | issue->fix mapping recorded |
+| A8 | aggregate failure ingestion replay | live test | deterministic fingerprint intake with no duplicate inserts |
+| A9 | new fingerprint issue+Slack bootstrap | live test | new issue created and initial Slack lifecycle message posted exactly once |
+| A10 | ticket lifecycle update/close | live test | issue lifecycle transitions recorded and label policy enforced |
+| A11 | recurrence new-issue check | live test | previously closed fingerprint creates a new linked issue |
+| A12 | action selector fix-vs-disable | live test | selector chooses fix for high-confidence small change and disable for SLA breach |
+| A13 | owner-confirmed defer path | live test | thread reply drives `observe_only`/defer and blocks disable PR |
+| A14 | successful terminal run | live test | completed + one Slack notify |
+| A15 | bug escape attribution | live test | issue->fix mapping recorded |
+| A16 | data-gathering regression check | live test | report behavior unchanged |
 
 Minimum promotion threshold:
 
-- A1-A9 pass
+- A1-A16 pass
 - A6 passes 3 consecutive runs
 - no invariant violations
 
@@ -418,6 +466,8 @@ Use this schedule for overnight or low-touch execution:
 - T+90m: first live PR and kickoff validation
 - T+3h: replay/no-duplicate validation
 - T+6h: resume-existing-PR validation
+- T+6h: failure-ingestion and correlation validation
+- T+8h: ticket lifecycle (create/update/close + recurrence new-issue) validation
 - T+end: completed-state + notify + bug-escape evidence
 
 At any failed checkpoint:
@@ -447,7 +497,7 @@ tools/ci/ci-triage-autonomy-agent-planning.md
 Rules:
 1) Enforce all non-negotiable invariants in the spec.
 2) Run preflight contract first. If any hard gate fails, stop and report only.
-3) Execute milestones in order M0 -> M5.
+3) Execute milestones in order M0 -> M6.
 4) Do not skip Go/No-Go gates.
 5) Fail closed on malformed LLM output or schema mismatches.
 6) Use placeholders from the spec and map to repo values via Appendix A.
@@ -652,7 +702,7 @@ Ticket states:
 
 Issue repository routing rule:
 
-- test/staging: create/update/close/reopen issues only in `{{ISSUE_TRACKING_REPO_TEST}}`
+- test/staging: create/update/close issues only in `{{ISSUE_TRACKING_REPO_TEST}}`; recurrence creates a new issue
 - production: use `{{ISSUE_TRACKING_REPO_PROD}}` only after explicit promotion gate
 - pre-promotion writes to production issue repo are forbidden
 
@@ -708,9 +758,9 @@ Labeling requirement on close/update:
 - if an issue lacks `CI auto triage`, add it before automated close/update actions
 - never auto-close or auto-update issues that are only labeled `glean CI maintenance` and not `CI auto triage`
 
-### 19.4 Reopen
+### 19.4 Recurrence After Close
 
-Reopen if same fingerprint recurs after close beyond hysteresis threshold.
+If the same fingerprint recurs after close beyond hysteresis threshold, create a new issue instead of reopening the closed issue.
 
 ---
 
@@ -962,7 +1012,7 @@ flowchart TD
 A fresh agent must explicitly confirm all "yes" before claiming completion:
 
 - Aggregate failure ingestion implemented and tested
-- Ticket create/update/close/reopen implemented and tested
+- Ticket create/update/close and recurrence-new-issue behavior implemented and tested
 - Ticket label policy enforced (`CI auto triage` only; no overlap with `glean CI maintenance`)
 - Slack read/post/update thread lifecycle implemented and tested in test channels
 - Disable and small-fix selection logic implemented and tested

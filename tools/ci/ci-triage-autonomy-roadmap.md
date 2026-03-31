@@ -16,19 +16,23 @@ This document lays out an implementation and testing plan to safely reach the en
 3. Resume/update prior disable PRs when new failures appear
 4. Terminal completion notification
 5. Post-facto bug-escape tracking tied to fixing commits
+6. Full ticket + Slack lifecycle automation with human approval boundary only at PR review/merge
 
 ---
 
 ## End-State Goals
 
-### A) Autonomous Disable Lifecycle
+### A) Autonomous CI Maintenance Loop
 
 When triage runs repeatedly:
 
-- It should not create duplicate disable PRs for the same Slack/issue signal.
+- It should ingest deterministic failures from aggregate workflow data.
+- It should create/update/close tracking issues automatically in test repo pre-promotion, and create a new issue on recurrence.
+- It should post/update Slack lifecycle messages (and thread replies) without human intervention.
+- It should not create duplicate disable PRs for the same failure fingerprint.
 - It should continue working on an existing disable PR branch if checks fail due to additional failures.
-- It should re-kickoff pruned workflows after each incremental disable.
-- It should stop when success criteria are met and record terminal completion.
+- It should re-kickoff targeted workflows after each incremental disable/fix action.
+- It should stop only at configured terminal states and emit one terminal notification.
 
 ### B) Persistent Cross-Run Memory
 
@@ -38,8 +42,20 @@ Each run should read prior run state and write updated state:
 - PR links and branch names
 - workflow run outcomes
 - terminal status (`completed`, `needs_followup`, `paused`, etc.)
+- owner follow-up/escalation metadata
+- issue lifecycle metadata (open/updated/closed + recurrence-linked new issue)
+- Slack lifecycle metadata (anchor message/thread update keys)
 
-### C) Bug-Escape Attribution Store
+### C) Human Approval Boundary
+
+Human involvement should be limited to review/merge boundaries:
+
+- automation drafts PRs and runs validations
+- automation keeps iterating while confidence below threshold
+- automation requests review only when PR readiness threshold is met
+- humans approve/merge or request changes; all other loop steps remain autonomous
+
+### D) Bug-Escape Attribution Store
 
 After resolution, capture:
 
@@ -55,6 +71,22 @@ This tracking is analytical/post-facto and should not block disable automation.
 
 ## Architecture Plan
 
+## 0) Trigger + Ingestion Layer
+
+Cycle starts from schedule/event triggers:
+
+- cron tick
+- workflow completion event
+- optional Slack/issue comment events
+
+Data ingestion pulls:
+
+- aggregate workflow failure clusters (`extract_failing_jobs.py`-style fingerprints)
+- latest Slack channel/thread context exports
+- current issue/PR state snapshots
+
+Hard rule: all downstream actions must reference deterministic failure fingerprint + evidence links.
+
 ## 1) State Model (Single Source Of Truth)
 
 Create `build_ci/triage_state/ci_triage_state.json` artifact schema:
@@ -65,10 +97,21 @@ Create `build_ci/triage_state/ci_triage_state.json` artifact schema:
   "updated_at_utc": "2026-03-26T00:00:00Z",
   "items": [
     {
-      "key": "slack_ts:1773931010.433769",
+      "key": "fingerprint:<deterministic-id>",
       "slack_ts": "1773931010.433769",
+      "failure_fingerprint": "workflow/job/test/signal hash",
       "issue_numbers": [40111],
       "status": "pr_open",
+      "ticket": {
+        "repo": "ebanerjeeTT/issue_dump",
+        "number": 0,
+        "url": ""
+      },
+      "slack": {
+        "channel_id": "C0APK6215B5",
+        "anchor_ts": "",
+        "last_thread_update_ts": ""
+      },
       "disable_pr": {
         "number": 0,
         "url": "",
@@ -77,6 +120,7 @@ Create `build_ci/triage_state/ci_triage_state.json` artifact schema:
       },
       "attempts": 1,
       "last_kickoff_runs": [],
+      "owner_state": "unassigned|assigned|responding|unresponsive",
       "terminal_reason": "",
       "history": []
     }
@@ -101,18 +145,28 @@ Why this matters: state should drive decisions, not ad hoc scraping.
 
 ## 2) Controller Loop Behavior Per Run
 
-For each stale unresolved candidate:
+For each candidate/fingerprint:
 
-1. Load state entry (or create new)
-2. If `completed`/`paused`, skip
-3. If `pr_open`:
+1. Load/reconcile state entry (or create new)
+2. Ensure ticket lifecycle state is current (create/update/close, and open a new issue on recurrence)
+3. Ensure Slack lifecycle state is current (anchor + threaded updates)
+4. Run action selector:
+   - small fix path
+   - disable path (SLA breach / blocker)
+   - stale validation refresh path
+   - observe-only path
+5. If `pr_open`:
    - inspect latest workflow outcomes for that PR branch
-   - if passed: mark `completed`, notify Slack
-   - if failed with new target: update same branch + force-push/commit + rerun kickoff
-4. If no PR exists:
-   - create disable PR
-   - kickoff pruned workflows
+   - if passed: mark `completed`, send terminal notify
+   - if failed with new target: update same branch + commit + rerun kickoff
+6. If no PR exists and action is disable/fix:
+   - create draft PR
+   - kickoff targeted workflows
    - set status to `kickoff_running`
+7. If readiness threshold met:
+   - request human review/approval
+8. After merge/decision:
+   - post-decision cleanup (ticket/slack updates, re-enable follow-up, reassignment/escalation)
 
 Apply hard limits:
 
@@ -131,6 +185,8 @@ Use two artifacts per run:
   - planned actions
   - execution results
   - summary markdown
+  - action-selector trace (why fix vs disable vs refresh)
+  - ticket/slack lifecycle mutations
 
 At start of each run:
 
@@ -148,7 +204,7 @@ At end of each run:
 
 Use multiple keys to avoid repeated PR creation:
 
-- primary idempotency key: Slack `ts`
+- primary idempotency key: failure fingerprint
 - secondary linkage: issue number set + channel id
 - PR body marker: `Auto-disable-source-ts: <ts>`
 
@@ -162,7 +218,38 @@ If any active PR exists, resume that PR instead of opening another.
 
 ---
 
-## 5) Resume-And-Extend Existing PR Branch
+## 5) Ticket Lifecycle Automation
+
+For each stable failure fingerprint:
+
+1. create issue if none exists
+2. update issue with fresh evidence and state transitions every triage cycle
+3. close when objective pass window met (or obsolete with rationale)
+4. create a new linked issue on recurrence beyond hysteresis threshold
+5. enforce label policy: `CI auto triage`
+
+Pre-promotion routing:
+
+- issue create/update/close only in `ebanerjeeTT/issue_dump`; recurrence creates a new issue in the same repo
+
+## 6) Slack Lifecycle Automation
+
+For each active fingerprint lifecycle:
+
+1. create one anchor lifecycle message
+2. post state transitions in thread
+3. include issue/PR/workflow links and owner info
+4. suppress spam with keying (`fingerprint + phase + day`)
+5. send terminal-only summary notification on completion/escalation
+
+Thread replies become state input:
+
+- owner acknowledged
+- owner requested defer/changes
+- disputed signal / false positive hint
+- escalation required
+
+## 7) Resume-And-Extend Existing PR Branch
 
 When workflows fail after an existing disable change:
 
@@ -180,7 +267,23 @@ This is the core capability needed for "keep running until CI is stabilized."
 
 ---
 
-## 6) Slack Notification Policy
+## 8) Action Selector (Fix vs Disable vs Refresh vs Observe)
+
+Action selector inputs:
+
+- failure persistence + blast radius
+- owner responsiveness and SLA age
+- fix confidence and scope estimate
+- previous attempts / disable debt
+
+Paths:
+
+- Path A: Auto Solve Ticket (small high-confidence fix)
+- Path B: Auto Disable After SLA breach
+- Path C: Refresh stale validation and rerun targeted checks
+- Observe-only when signal is too noisy/ambiguous
+
+## 9) Slack Notification Policy
 
 Channel target (for now): `C09EC0QNSB0`
 
@@ -200,7 +303,7 @@ Do not spam on intermediate loop iterations unless a run transitions state.
 
 ---
 
-## 7) Bug Escape Tracking (Post-Facto Analytics)
+## 10) Bug Escape Tracking (Post-Facto Analytics)
 
 This should run as a separate, non-blocking stage after completion signals are observed.
 
@@ -287,7 +390,50 @@ Exit criteria:
 
 - rerun after completion does not trigger new disable actions
 
-## Phase 4: Bug Escape Tracking
+## Phase 4: Failure Ingestion + Fingerprint Correlation + New-Issue Slack Bootstrap
+
+- ingest aggregate workflow failures
+- correlate with existing ticket/PR/Slack state
+- create new issue for unmatched high-confidence fingerprints
+- send initial Slack lifecycle notification/thread anchor for each newly created issue
+- fail closed on low-confidence signals
+
+Exit criteria:
+
+- deterministic fingerprint generation and replay stability
+- exactly-once issue-create + initial Slack notification per new fingerprint
+
+## Phase 5: Ticket Lifecycle Automation
+
+- update/close issues automatically in test repo and create a new issue on recurrence
+- enforce `CI auto triage` label policy
+- continue threaded Slack lifecycle updates for existing incidents
+
+Exit criteria:
+
+- full ticket lifecycle runs on controlled scenarios without manual edits
+
+## Phase 6: Slack Lifecycle + Reply-Aware Control
+
+- post anchor + threaded lifecycle updates automatically
+- consume thread replies as control signals
+- if owner confirms imminent fix, switch to defer/observe path and suppress disable PR creation for that cycle
+
+Exit criteria:
+
+- state transitions adapt correctly when humans reply in thread
+
+## Phase 7: Action Selector + SLA Paths
+
+- implement fix/disable/refresh/observe selector
+- enforce approval boundary and confidence thresholds
+- explicitly validate fix-vs-disable-vs-defer transitions from Slack thread input
+
+Exit criteria:
+
+- controlled fixtures cover Path A/B/C decisions deterministically
+
+## Phase 8: Bug Escape Tracking
 
 - capture fix commit mappings and escape classification
 - produce artifact + summary table
@@ -337,6 +483,8 @@ Run on one known stale issue:
 2. rerun with same input: verify no duplicate PR
 3. force scenario with additional failing target: verify same PR is extended
 4. success scenario: verify completion mark + Slack notification
+5. thread reply scenario: verify owner response changes selector behavior
+6. ticket lifecycle scenario: auto create + update + close + recurrence-new-issue
 
 ## D) Regression Tests
 
@@ -360,12 +508,14 @@ Ensure `data-gathering-mode=true` path remains unchanged:
 
 ## Suggested Next Work Items (In Order)
 
-1. Add state artifact load/save helpers
-2. Add state reconciliation against open PRs
-3. Implement resume-existing-PR execution branch
-4. Add terminal success detector + Slack notifier
-5. Add bug-escape event capture + rollup artifact
-6. Add integration tests and one controlled live validation run
+1. Add aggregate failure fingerprint ingestion + correlation
+2. Add ticket lifecycle create/update/close controller plus recurrence-new-issue policy
+3. Add Slack lifecycle sender + thread-reply parser
+4. Extend action selector (fix/disable/refresh/observe)
+5. Keep M0-M3 invariants while integrating expanded loop
+6. Add approval-boundary readiness checks before review requests
+7. Add bug-escape event capture + rollup artifact
+8. Add synthetic fixture suite and controlled live validations
 
 ---
 
@@ -376,5 +526,10 @@ System is done when all are true:
 - repeated triage runs do not create duplicate disable PRs
 - existing disable PRs are iteratively extended when new failures emerge
 - successful stabilization marks terminal completion and emits one Slack notification
+- aggregate failure ingestion continuously feeds new deterministic fingerprints
+- issues are auto-created/updated/closed with correct labels and evidence, and recurrence creates a new linked issue
+- Slack lifecycle is autonomous and thread replies influence decisions
+- action selector can choose fix vs disable vs refresh vs observe with auditable rationale
+- human involvement is limited to PR review/merge boundary
 - bug escape records map issue -> fixing commit/PR with classification
 - dashboards/artifacts can show "what escaped and where to shift left"
