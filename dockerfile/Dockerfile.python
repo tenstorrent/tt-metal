@@ -147,6 +147,7 @@ RUN export MAKEFLAGS="-j$(nproc)" && \
     uv pip install --index-strategy unsafe-best-match --no-build-isolation -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
     uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
     uv pip install --index-strategy unsafe-best-match -r ${TT_METAL_INFRA_DIR}/tools/triage/requirements.txt && \
+    uv pip check && \
     uv clean --force
 
 # Export as scratch image with only the venv
