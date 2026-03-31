@@ -164,7 +164,18 @@ def model_path():
 def hf_config(model_path):
     """Load DeepSeek config for testing"""
     # model_path is already resolved in the fixture
-    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    try:
+        config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    except OSError:
+        # Some CI hosts (e.g. Galaxy TG) have the model weights at model_path but no
+        # config.json (e.g. a dequantized-weights-only directory). Fall back to the
+        # bundled reference config which is always present in the repo.
+        local_ref = Path(__file__).parent / "reference"
+        logger.warning(
+            f"Could not load HF config from '{model_path}' (no config.json). "
+            f"Falling back to bundled reference config at '{local_ref}'."
+        )
+        config = AutoConfig.from_pretrained(local_ref.resolve(), trust_remote_code=True)
     return config
 
 
