@@ -325,6 +325,7 @@ Inputs:
 
 - aggregate workflow data snapshots
 - existing state entries with Slack/issue linkage
+- `extract_failing_jobs.py` output for jobs failing 3 runs in a row
 
 Actions:
 
@@ -656,6 +657,13 @@ All domains must integrate into one state machine with shared keys and audit his
 Primary intake source:
 
 - aggregate workflow data runs (latest successful and recent failed runs)
+- `extract_failing_jobs.py` output used to identify jobs failing 3 times consecutively
+
+Deterministic failure definition (hard):
+
+- a failure is deterministic only when the same job fails 3 runs in a row
+- the failure signature/message across those 3 runs is semantically identical
+- for `.github/workflows/triage-ci.yaml`, signature equivalence is determined by Cursor CLI agent analysis (not simple string matching only)
 
 Intake requirements:
 
@@ -685,6 +693,8 @@ Hard rules:
 - no ticket creation without a stable fingerprint
 - no action if fingerprint confidence is low and no corroborating evidence exists
 - every downstream action must reference fingerprint + source links
+- do not treat "3 failures in a row" as deterministic unless Cursor agent confirms equivalent failure signature
+- when Cursor signature-equivalence result is uncertain, classify as low confidence and do not write
 
 ---
 
