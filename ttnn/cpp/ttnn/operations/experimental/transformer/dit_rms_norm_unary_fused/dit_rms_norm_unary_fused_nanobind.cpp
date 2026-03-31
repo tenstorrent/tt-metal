@@ -9,6 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/variant.h>
 
 #include "dit_rms_norm_unary_fused.hpp"
 #include "ttnn-nanobind/bind_function.hpp"

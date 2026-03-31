@@ -4,9 +4,8 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params, prepare_linear_params
-from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_GN_shape
+from models.demos.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_slice_config, get_DRAM_GN_shape
 
 
 class TtResnetBlock2D(LightweightModule):
@@ -109,9 +108,9 @@ class TtResnetBlock2D(LightweightModule):
             conv_bias_1,
             self.conv1_config.weights_dtype,
         )
-        self.conv1_slice_config = None  # auto slicing
-        self.conv_output_dtype = model_config.get_conv_output_dtype()
+        self.conv1_slice_config = get_DRAM_conv_slice_config(f"{module_path}.conv1")
 
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.compute2_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv2")
         self.conv2_config = model_config.get_conv_config(conv_path=f"{module_path}.conv2")
         (
@@ -123,7 +122,7 @@ class TtResnetBlock2D(LightweightModule):
             conv_bias_2,
             self.conv2_config.weights_dtype,
         )
-        self.conv2_slice_config = None  # auto slicing
+        self.conv2_slice_config = get_DRAM_conv_slice_config(f"{module_path}.conv2")
 
         if conv_shortcut:
             self.tt_conv3_weights, self.tt_conv3_bias = prepare_linear_params(
@@ -155,8 +154,8 @@ class TtResnetBlock2D(LightweightModule):
             reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_1, sharded_mem_config)
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        # On Blackhole, disable Welford algorithm due to precision issues
-        use_welford = reciprocals_tensor is not None and not is_blackhole()
+        # NOTE: On Blackhole, using welford causes PCC drop in unit tests
+        use_welford = reciprocals_tensor is not None
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -226,8 +225,8 @@ class TtResnetBlock2D(LightweightModule):
             reciprocals_tensor = ttnn.to_memory_config(self.reciprocals_tensor_2, sharded_mem_config)
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-        # On Blackhole, disable Welford algorithm due to precision issues
-        use_welford = reciprocals_tensor is not None and not is_blackhole()
+        # NOTE: On Blackhole, using welford causes PCC drop in unit tests
+        use_welford = reciprocals_tensor is not None
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,

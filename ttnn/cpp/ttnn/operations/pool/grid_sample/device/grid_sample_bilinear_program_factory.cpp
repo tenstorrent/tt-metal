@@ -57,7 +57,7 @@ GridSampleBilinearProgramFactory::cached_program_t GridSampleBilinearProgramFact
         grid_nsticks_per_core = grid_shard_spec.shape[0];
         output_nsticks_per_core = output_tensor.shard_spec().value().shape[0];
 
-        num_cores = (total_grid_nsticks + grid_nsticks_per_core - 1) / grid_nsticks_per_core;
+        num_cores = grid_shard_spec.num_cores();
         all_cores = grid_shard_spec.grid;
         logical_cores = corerange_to_cores(
             all_cores, num_cores, grid_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);

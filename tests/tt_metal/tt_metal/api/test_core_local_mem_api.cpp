@@ -126,7 +126,7 @@ void RunTest(tt::tt_metal::distributed::MeshDevice* mesh_device) {
 
 namespace tt::tt_metal {
 
-TEST_F(UnitMeshCQSingleCardProgramFixture, TestSimpleL1Read) {
+TEST_F(UnitMeshCQSingleCardSharedFixture, TestSimpleL1Read) {
     for (auto& mesh_device : devices_) {
         RunTest(mesh_device.get());
     }
