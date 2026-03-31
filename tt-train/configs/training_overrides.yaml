@@ -1,7 +1,7 @@
 training_config:
   model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_1_7B.yaml"
-  batch_size: 1
-  max_steps: 10
+  batch_size: 2
+  max_steps: 100
   eval_every: 0
   model_save_interval: 0
 
@@ -11,4 +11,4 @@ device_config:
   mesh_shape: [2, 2]
 
 transformer_config:
-  max_sequence_length: 256
+  max_sequence_length: 2048
