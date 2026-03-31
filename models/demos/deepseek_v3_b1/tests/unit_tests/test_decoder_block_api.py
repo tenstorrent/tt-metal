@@ -181,8 +181,18 @@ class DecoderBlockStage(StageKind):
 
         recv_socket = pipeline_block.get_downstream_socket()
 
+        grid_size = mesh_device.compute_with_storage_grid_size()
+        total_cores = grid_size.x * grid_size.y
+        zero_position_ids_host = ttnn.from_torch(
+            torch.zeros((total_cores, 1), dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
         self._state = {
             "d": d,
+            "zero_position_ids_host": zero_position_ids_host,
             "attn_semaphores": attn_semaphores,
             "moe_semaphores": moe_semaphores,
             "reduce_semaphores": reduce_semaphores,
@@ -195,6 +205,9 @@ class DecoderBlockStage(StageKind):
             self._state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
 
         logger.info(f"[rank={my_mesh_id}] DecoderBlockStage setup complete")
+
+    def reset_position_ids(self) -> None:
+        ttnn.copy_host_to_device_tensor(self._state["zero_position_ids_host"], self._state["d"]["ttnn_position_ids"])
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         d = self._state["d"]
@@ -372,8 +385,18 @@ class DenseBlockStage(StageKind):
 
         recv_socket = pipeline_block.get_downstream_socket()
 
+        grid_size = mesh_device.compute_with_storage_grid_size()
+        total_cores = grid_size.x * grid_size.y
+        zero_position_ids_host = ttnn.from_torch(
+            torch.zeros((total_cores, 1), dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
         self._state = {
             "d": d,
+            "zero_position_ids_host": zero_position_ids_host,
             "attn_semaphores": attn_semaphores,
             "moe_semaphores": moe_semaphores,
             "reduce_semaphores": reduce_semaphores,
@@ -386,6 +409,9 @@ class DenseBlockStage(StageKind):
             self._state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
 
         logger.info(f"[rank={my_mesh_id}] DenseBlockStage setup complete")
+
+    def reset_position_ids(self) -> None:
+        ttnn.copy_host_to_device_tensor(self._state["zero_position_ids_host"], self._state["d"]["ttnn_position_ids"])
 
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         d = self._state["d"]
