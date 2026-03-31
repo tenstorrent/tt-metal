@@ -74,26 +74,35 @@ inline void assert_and_hang(uint32_t line_num, uint16_t file_id, debug_assert_ty
 inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugAssertTripped) {
     assert_and_hang(line_num, 0, assert_type);
 }
+// Overload so the discarded else-branch of _ASSERT_EXTRA type-checks in template bodies
+// (GCC -Wtemplate-body checks both branches even when if constexpr discards one).
+inline void assert_and_hang(uint32_t line_num, uint16_t file_id, const char*) { assert_and_hang(line_num, file_id); }
 
 // ASSERT(condition)                — hang with DebugAssertTripped
 // ASSERT(condition, "message")     — hang; message stored in file-only ELF section (zero L1 cost)
-// ASSERT_TYPE(condition, type)     — hang with a specific debug_assert_type_t
+// ASSERT(condition, type)          — hang with a specific debug_assert_type_t
 //
 // ASSERT message section entry layout (packed, variable-length):
 //   [uint16_t file_id][uint16_t line_num][char msg[sizeof(literal)]]
 
 // Implementation detail — do not call directly.
-#define _ASSERT_MSG(condition, msg)                                       \
-    do {                                                                  \
-        if (not(condition)) {                                             \
-            static const struct __attribute__((packed)) {                 \
-                uint16_t file_id;                                         \
-                uint16_t line_num;                                        \
-                char msg_data[sizeof(msg)];                               \
-            } _e __attribute__((used, section(".debug_assert_msgs"))) = { \
-                debug_file_hash(__FILE__), (uint16_t)__LINE__, msg};      \
-            assert_and_hang(__LINE__, debug_file_hash(__FILE__));         \
-        }                                                                 \
+// Single extra arg: string literal → embed in ELF section and hang;
+//                   enum type      → hang with that specific assert type.
+#define _ASSERT_EXTRA(condition, extra)                                              \
+    do {                                                                             \
+        if (not(condition)) {                                                        \
+            if constexpr (__is_same(__typeof__(extra), const char[sizeof(extra)])) { \
+                static const struct __attribute__((packed)) {                        \
+                    uint16_t file_id;                                                \
+                    uint16_t line_num;                                               \
+                    char msg_data[sizeof(extra)];                                    \
+                } _e __attribute__((used, section(".debug_assert_msgs"))) = {        \
+                    debug_file_hash(__FILE__), (uint16_t)__LINE__, extra};           \
+                assert_and_hang(__LINE__, debug_file_hash(__FILE__));                \
+            } else {                                                                 \
+                assert_and_hang(__LINE__, debug_file_hash(__FILE__), extra);         \
+            }                                                                        \
+        }                                                                            \
     } while (0)
 #define _ASSERT_PLAIN(condition)                                  \
     do {                                                          \
@@ -103,12 +112,7 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
 #define _ASSERT_PICK(_c, _extra, _name, ...) _name
 
 #define ASSERT(condition, ...) \
-    _ASSERT_PICK(condition, ##__VA_ARGS__, _ASSERT_MSG, _ASSERT_PLAIN)(condition, ##__VA_ARGS__)
-#define ASSERT_TYPE(condition, type)                                    \
-    do {                                                                \
-        if (not(condition))                                             \
-            assert_and_hang(__LINE__, debug_file_hash(__FILE__), type); \
-    } while (0)
+    _ASSERT_PICK(condition, ##__VA_ARGS__, _ASSERT_EXTRA, _ASSERT_PLAIN)(condition, ##__VA_ARGS__)
 
 #define ASSERT_ENABLED 1
 #define WATCHER_ASSERT_ENABLED 1

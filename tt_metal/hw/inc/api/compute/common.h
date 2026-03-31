@@ -46,7 +46,7 @@ extern uint32_t crta_count;
 // clang-format on
 static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) {
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
-    ASSERT_TYPE(arg_idx >= 0 && (uint32_t)arg_idx < rta_count, DebugAssertRtaOutOfBounds);
+    ASSERT(arg_idx >= 0 && (uint32_t)arg_idx < rta_count, DebugAssertRtaOutOfBounds);
 #endif
     return (uint32_t)&rta_l1_base[arg_idx];
 }
@@ -65,7 +65,7 @@ static FORCE_INLINE uint32_t get_arg_addr(int arg_idx) {
 // clang-format on
 static FORCE_INLINE uint32_t get_common_arg_addr(int arg_idx) {
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_ASSERT)
-    ASSERT_TYPE(arg_idx >= 0 && (uint32_t)arg_idx < crta_count, DebugAssertCrtaOutOfBounds);
+    ASSERT(arg_idx >= 0 && (uint32_t)arg_idx < crta_count, DebugAssertCrtaOutOfBounds);
 #endif
     return (uint32_t)&crta_l1_base[arg_idx];
 }

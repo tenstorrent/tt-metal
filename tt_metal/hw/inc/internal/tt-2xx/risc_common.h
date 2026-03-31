@@ -364,7 +364,7 @@ inline __attribute__((interrupt, hot)) void handle_interrupt() {
     uint64_t mcause;
     asm volatile("csrr %0, mcause" : "=r"(mcause));
     if ((mcause & 0x8000000000000000) == 0) {  // this is HW exception
-        ASSERT_TYPE(0 == 1, debug_assert_type_t::DebugAssertHwFault);
+        ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
 #if !defined(WATCHER_ENABLED)  // hang anyway
         while (1) {
             ;
