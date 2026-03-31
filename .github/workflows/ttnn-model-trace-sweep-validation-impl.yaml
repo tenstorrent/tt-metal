@@ -102,7 +102,7 @@ jobs:
         run: |
           python3 model_tracer/config_hash_preflight.py \
             model_tracer/traced_operations/ttnn_operations_master.json \
-            ${{ inputs.allow-partial-hash-changes == 'true' && '--allow-partial' || '' }} \
+            ${{ inputs.allow-partial-hash-changes && '--allow-partial' || '' }} \
             --report validation_artifacts/config_hash_preflight.txt
 
       - name: Upload master JSON artifact
