@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.4.5"
+        default: "v1.5.0"
       job-timeout:
         required: false
         type: number
@@ -38,7 +38,7 @@ on:
 jobs:
   ttsim-integration:
     if: ${{ inputs.run-ttsim-integration-tests }}
-    runs-on: tt-ubuntu-2204-small-stable
+    runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim Integration - ${{ matrix.arch }}"
     strategy:
@@ -54,7 +54,7 @@ jobs:
     permissions:
       contents: read
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.basic-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.basic-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:
@@ -297,7 +297,7 @@ jobs:
 
   ttsim-cpp-unit-tests:
     if: ${{ inputs.run-metal-cpp-unit-tests }}
-    runs-on: tt-ubuntu-2204-small-stable
+    runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout }}
     name: "TTSim C++ tests - ${{ matrix.arch }}"
     strategy:
@@ -311,7 +311,7 @@ jobs:
             build_suffix: release_bh
             soc_desc: blackhole_140_arch.yaml
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:
@@ -399,7 +399,7 @@ jobs:
             cluster_desc: tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_6u_cluster_desc.yaml
             soc_desc: blackhole_140_arch.yaml
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.test-docker-image || 'docker-image-unresolved!'}}
       volumes:
         - ${{ github.workspace }}:/work
     defaults:

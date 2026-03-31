@@ -9,43 +9,85 @@ This module contains constants that are used across multiple modules
 in the sweep framework to ensure consistency and avoid duplication.
 """
 
+import logging
 import re
+import os
 from typing import Tuple, Optional
+
+logger = logging.getLogger(__name__)
 
 # Lead models are models that are prioritized for sweep testing.
 # These patterns are matched against the source path in traced operations
 # to identify which vectors belong to lead model workloads.
 #
+# Source of truth: model_tracer/sweep_manifest.yaml (targets with scope: lead_models)
+# This list is derived from the manifest at import time.
+# Fallback to hardcoded list if manifest is unavailable (e.g., in CI without checkout).
+#
 # Used by:
 #   - sweeps_parameter_generator.py: To filter vector generation for lead models only
-#   - master_config_loader.py: To filter configurations when loading from master JSON
-#
-# To add a new lead model, add the model directory name pattern here.
-# Example: "llama3" would match source paths containing "llama3"
-LEAD_MODELS = [
-    "deepseek_v3",
-]
+#   - master_config_loader_v2.py: To filter configurations when loading from master JSON
+
+
+def _load_lead_models_from_manifest():
+    """Derive LEAD_MODELS patterns from sweep_manifest.yaml lead_models targets."""
+    try:
+        import yaml
+
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        manifest_path = os.path.join(repo_root, "model_tracer", "sweep_manifest.yaml")
+        if os.path.exists(manifest_path):
+            with open(manifest_path) as f:
+                data = yaml.safe_load(f) or {}
+            lead_entries = data.get("targets", {}).get("lead_models", [])
+            patterns = []
+            for t in lead_entries:
+                m = t.get("model")
+                if isinstance(m, list):
+                    patterns.extend(m)
+                elif m:
+                    patterns.append(m)
+            if patterns:
+                return patterns
+    except Exception as e:
+        logger.debug("Could not load LEAD_MODELS from manifest: %s", e)
+    return ["deepseek_v3"]
+
+
+LEAD_MODELS = _load_lead_models_from_manifest()
 
 
 # =============================================================================
-# Mesh Shape Utilities
+# Vector Grouping Suffix Utilities
 # =============================================================================
 #
-# These utilities handle mesh shape suffixes in module names and vector files.
-# The suffix format is: __mesh_<rows>x<cols>
+# These utilities handle grouping suffixes in module names and vector files.
+# Supported suffixes:
+#   - Mesh:     .mesh_<rows>x<cols>
+#   - Hardware: .hw_<board_type>_<device_series>_<card_count>c
 #
 # Examples:
-#   - model_traced.gelu__mesh_2x4.json
-#   - model_traced.matmul__mesh_1x1.json
+#   - model_traced.gelu.mesh_2x4.json
+#   - model_traced.matmul.mesh_1x1.json
+#   - model_traced.add.hw_wormhole_n300_1c.json
 #
 # Used by:
-#   - sweeps_parameter_generator.py: To format mesh suffix for exported files
-#   - compute_sweep_matrix.py: To parse mesh suffix from filenames and assign runners
-#   - vector_source.py: To find mesh-variant files for a module
+#   - sweeps_parameter_generator.py: To format suffixes for exported files
+#   - compute_sweep_matrix.py: To parse suffixes from filenames and assign runners
+#   - vector_source.py: To find grouped variant files for a module
 
-# Regex pattern to match mesh suffix at end of module name
-# Captures the shape (e.g., "2x4") for extraction
-MESH_SUFFIX_PATTERN = re.compile(r"__mesh_(\d+)x(\d+)$")
+MESH_SUFFIX_PATTERN = re.compile(r"\.mesh_(\d+)x(\d+)$")
+# Board type is expected to be a single sanitized token (e.g. wormhole, blackhole).
+# Device series may itself contain underscores, so parse from both ends.
+HARDWARE_SUFFIX_PATTERN = re.compile(r"\.hw_([^_]+)_(.+)_([0-9]+)c$")
+
+
+def _sanitize_suffix_token(value) -> str:
+    """Normalize free-form values for use in filename suffixes."""
+    text = "" if value is None else str(value).strip().lower()
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text or "unknown"
 
 
 def format_mesh_suffix(mesh_shape: Tuple[int, int]) -> str:
@@ -55,15 +97,15 @@ def format_mesh_suffix(mesh_shape: Tuple[int, int]) -> str:
         mesh_shape: Tuple of (rows, cols), e.g., (2, 4)
 
     Returns:
-        str: Formatted suffix like '__mesh_2x4'
+        str: Formatted suffix like '.mesh_2x4'
 
     Examples:
         >>> format_mesh_suffix((2, 4))
-        '__mesh_2x4'
+        '.mesh_2x4'
         >>> format_mesh_suffix((1, 1))
-        '__mesh_1x1'
+        '.mesh_1x1'
     """
-    return f"__mesh_{mesh_shape[0]}x{mesh_shape[1]}"
+    return f".mesh_{mesh_shape[0]}x{mesh_shape[1]}"
 
 
 def parse_mesh_suffix(module_name: str) -> Optional[Tuple[int, int]]:
@@ -76,18 +118,34 @@ def parse_mesh_suffix(module_name: str) -> Optional[Tuple[int, int]]:
         Tuple of (rows, cols) if valid suffix found, None otherwise.
 
     Examples:
-        >>> parse_mesh_suffix('op__mesh_2x4')
+        >>> parse_mesh_suffix('op.mesh_2x4')
         (2, 4)
-        >>> parse_mesh_suffix('op__mesh_1x1')
+        >>> parse_mesh_suffix('op.mesh_1x1')
         (1, 1)
         >>> parse_mesh_suffix('op')
         None
-        >>> parse_mesh_suffix('op__mesh_invalid')
+        >>> parse_mesh_suffix('op.mesh_invalid')
         None
     """
     match = MESH_SUFFIX_PATTERN.search(module_name)
     if match:
         return (int(match.group(1)), int(match.group(2)))
+    return None
+
+
+def format_hardware_suffix(board_type, device_series, card_count) -> str:
+    """Format hardware metadata as a filename suffix."""
+    board = _sanitize_suffix_token(board_type)
+    series = _sanitize_suffix_token(device_series)
+    cards = 0 if card_count is None else int(card_count)
+    return f".hw_{board}_{series}_{cards}c"
+
+
+def parse_hardware_suffix(module_name: str) -> Optional[Tuple[str, str, int]]:
+    """Extract normalized hardware metadata from a module name suffix."""
+    match = HARDWARE_SUFFIX_PATTERN.search(module_name)
+    if match:
+        return (match.group(1), match.group(2), int(match.group(3)))
     return None
 
 
@@ -101,7 +159,7 @@ def get_mesh_shape_string(module_name: str) -> Optional[str]:
         Mesh shape string (e.g., '2x4') or None if no valid suffix.
 
     Examples:
-        >>> get_mesh_shape_string('op__mesh_2x4')
+        >>> get_mesh_shape_string('op.mesh_2x4')
         '2x4'
         >>> get_mesh_shape_string('op')
         None
@@ -122,11 +180,17 @@ def strip_mesh_suffix(module_name: str) -> str:
         Module name with mesh suffix removed.
 
     Examples:
-        >>> strip_mesh_suffix('op__mesh_2x4')
+        >>> strip_mesh_suffix('op.mesh_2x4')
         'op'
         >>> strip_mesh_suffix('op')
         'op'
-        >>> strip_mesh_suffix('op__mesh_invalid')
-        'op__mesh_invalid'
+        >>> strip_mesh_suffix('op.mesh_invalid')
+        'op.mesh_invalid'
     """
     return MESH_SUFFIX_PATTERN.sub("", module_name)
+
+
+def strip_grouping_suffix(module_name: str) -> str:
+    """Remove any supported grouping suffix from a module name."""
+    without_mesh = strip_mesh_suffix(module_name)
+    return HARDWARE_SUFFIX_PATTERN.sub("", without_mesh)

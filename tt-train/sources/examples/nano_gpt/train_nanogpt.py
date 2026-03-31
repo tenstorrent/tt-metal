@@ -31,6 +31,9 @@ import ml_dtypes
 
 import ttnn
 import ttml
+import ttml.common.muon_optimizer
+
+ttml.common.muon_optimizer.register()
 from ttml.models.nanogpt import (
     NanoGPT,
     NanoGPTConfig,
@@ -1067,6 +1070,7 @@ def main():
     except FileNotFoundError as e:
         print(f"Warning: Config file not found: {e}")
         print("Using default configs")
+        yaml_config = {}
         training_config = TrainingConfig()
         model_config = ModelConfig()
 

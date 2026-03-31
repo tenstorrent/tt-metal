@@ -42,6 +42,7 @@ inline void _llk_unpack_AB_sdpa_custom_mm_(
 
     if (mask_chunk) {
         cfg[THCON_SEC1_REG3_Base_cntx1_address_ADDR32] = base_address_mask;
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
         TTI_UNPACR_COMMON_EXPLICIT_CONTEXT(SrcB, 0b00000000, 1, 1);
     }
 
