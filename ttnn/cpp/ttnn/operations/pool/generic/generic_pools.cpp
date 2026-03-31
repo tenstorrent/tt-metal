@@ -1016,6 +1016,9 @@ static std::vector<Tensor> pool2d(
 
         if (batch_size == 1) {
             // Fast path: input is already (1, 1, H*W, C). Just reduce dim 2.
+            // Note: pool_sum is deprecated but applies the scalar divisor inside the reduction
+            // kernel (1 device op). ttnn::sum lacks a scalar param (would need sum + multiply = 2 ops),
+            // and ttnn::mean can't handle divisor_override. Replace when ttnn::sum gains scalar support.
             Tensor output =
                 ttnn::operations::reduction::pool_sum(input_tensor_4d, 2, mem_config, compute_kernel_config, scalar);
 
