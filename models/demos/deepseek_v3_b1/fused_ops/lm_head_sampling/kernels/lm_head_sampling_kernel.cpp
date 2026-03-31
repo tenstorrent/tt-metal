@@ -698,6 +698,7 @@ void kernel_main() {
     // ====================================================================
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_argmax_final_core) {
+            DPRINT << ">mtp token write" << ENDL();
             uint64_t dst = get_noc_addr(mtp_input_core_noc_x, mtp_input_core_noc_y, mtp_token_addr);
             noc_async_write(mtp_argmax_output_addr, dst, 4);
             noc_async_write_barrier();
@@ -707,15 +708,18 @@ void kernel_main() {
                 get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
             noc_semaphore_inc(sem_addr, 1);
             noc_async_atomic_barrier();
+            DPRINT << ">mtp token write done" << ENDL();
         }
 #endif
 
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_input_core) {
+            DPRINT << ">mtp token read" << ENDL();
             volatile tt_l1_ptr uint32_t* mtp_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(get_named_compile_time_arg_val("mtp_ready_semaphore_id")));
             noc_semaphore_wait(mtp_ready_sem, 1);
             noc_semaphore_set(mtp_ready_sem, 0);
+            DPRINT << ">mtp token read done" << ENDL();
         }
 #endif
 
@@ -755,6 +759,7 @@ void kernel_main() {
             {
                 deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, Core::is_rmsnorm_core, true> h_rmsnorm;
                 DeviceZoneScopedN("MTP_H_RMSNORM");
+                DPRINT << ">mtp h_rmsnorm start" << ENDL();
                 PACK(({
                     uint32_t mcast_eh_src_cb = get_named_compile_time_arg_val("rmsnorm_h_output_cb");
                     auto& iface = get_local_cb_interface(mcast_eh_src_cb);
@@ -763,11 +768,14 @@ void kernel_main() {
                         mcast_eh_src_cb, eh_src_base + 14336);  // 14k bytes offset for h_norm
                 }));
                 h_rmsnorm(rmsnorm_args);
+                DPRINT << ">mtp h_rmsnorm done" << ENDL();
             }
             {
+                DPRINT << ">mtp e_rmsnorm start" << ENDL();
                 DeviceZoneScopedN("MTP_E_RMSNORM");
                 deepseek_b1_ops::RMSNorm::Op<ERMSNormCTArgs, Core::is_rmsnorm_core, true> e_rmsnorm;
                 e_rmsnorm(rmsnorm_args);
+                DPRINT << ">mtp e_rmsnorm done" << ENDL();
             }
         }
 #endif
@@ -903,6 +911,7 @@ void kernel_main() {
             Core::persistent_mode) {
             if constexpr (Core::is_base_stage) {
                 if constexpr (Core::enable_mtp) {
+                    DPRINT << ">mtp socket send" << ENDL();
                     constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
                     constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages") + 1;
                     constexpr uint32_t eh_gather_total_bytes =
@@ -910,20 +919,25 @@ void kernel_main() {
 
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                         sampling_args.socket_config_addr, eh_gather_dst_cb, eh_gather_num_pages, eh_gather_total_bytes);
+                    DPRINT << ">mtp socket send done" << ENDL();
                 } else {
+                    DPRINT << ">mtp socket send done" << ENDL();
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                         sampling_args.socket_config_addr,
                         ArgmaxCTArgs::socket_cb_id,
                         1,
                         ArgmaxCTArgs::socket_page_size_bytes);
+                    DPRINT << ">mtp socket send done" << ENDL();
                 }
 
             } else if constexpr (Core::is_spec_stage) {
+                DPRINT << ">mtp socket send" << ENDL();
                 unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                     sampling_args.socket_config_addr,
                     ArgmaxCTArgs::socket_cb_id,
                     1,
                     ArgmaxCTArgs::socket_page_size_bytes);
+                DPRINT << ">mtp socket send done" << ENDL();
             }
             size_t fabric_arg_idx = sampling_op.persistent_fabric_arg_idx;
             sampling_op.send_persistent_next_iter_inc_via_fabric_brisc(sampling_args, fabric_arg_idx);

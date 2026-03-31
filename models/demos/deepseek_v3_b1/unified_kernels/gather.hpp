@@ -117,7 +117,7 @@ struct Gather {
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + offset);
                 uint64_t dst_semaphore_noc_addr = dst_noc_coord | (uint64_t)args.receiver_semaphore_addr;
 
-                // DPRINT << ">gather 0" << ENDL();
+                DPRINT << ">gather 0" << ENDL();
                 // Wait for source CB data to be ready
                 cb_wait_front(args.src_cb, args.src_num_pages);
 
@@ -134,7 +134,7 @@ struct Gather {
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
                 noc_async_atomic_barrier();
-                // DPRINT << ">gather 1" << ENDL();
+                DPRINT << ">gather 1" << ENDL();
             }
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
@@ -145,7 +145,7 @@ struct Gather {
                     (volatile tt_l1_ptr uint32_t*)args.noc0_receiver_semaphore_addr;
                 // Reserve space in destination CB
                 cb_reserve_back(args.dst_cb, args.dst_num_pages);
-                // DPRINT << ">gather 3" << ENDL();
+                DPRINT << ">gather 3" << ENDL();
                 noc_semaphore_wait(noc0_receiver_semaphore_addr_ptr, args.noc0_num_senders);
                 noc_semaphore_set(noc0_receiver_semaphore_addr_ptr, 0);
                 if (args.noc1_num_senders > 0) {
@@ -157,6 +157,7 @@ struct Gather {
 
                 // Push to destination CB after data arrived
                 cb_push_back(args.dst_cb, args.dst_num_pages);
+                DPRINT << ">gather 4" << ENDL();
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

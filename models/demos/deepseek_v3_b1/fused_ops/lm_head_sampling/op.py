@@ -472,7 +472,7 @@ class LMHeadSampling:
             # eh_concat_rms_tiles: packed (32x32) tile count for concat/mcast source CB
             # eh_num_tiles_k: standard tile count for the matmul K dimension (must match weight tile-rows)
             eh_concat_rms_tiles = rms_num_tiles * 2
-            eh_num_tiles_k = (int(input_shape[1]) + embedding_dim) // in0_tile.tile_shape[1]
+            eh_num_tiles_k = (2 * embedding_dim) // in0_tile.tile_shape[1]
             eh_mcast_data_size_bytes = eh_concat_rms_tiles * rms_tile_size
 
             # EH matmul DRAM streaming parameters
