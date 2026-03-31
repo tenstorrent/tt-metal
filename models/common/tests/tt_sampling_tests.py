@@ -340,7 +340,7 @@ def run_sampling_generator(
                 )
             user_ids = list(range(len(seed_values)))
             sg.seed_manager.reset_seed(seed_values, user_ids)
-        
+
         if state_setup is not None:
             state_setup(sg)
 
@@ -359,7 +359,7 @@ def run_sampling_generator(
 
             tt_tokens, tt_log_probs = sg.sample(tt_input, enable_trace=False)
             outputs.append(extract_tokens(tt_tokens, effective_batch_size, device_idx=device_idx))
-        
+
         return outputs
     finally:
         if tt_log_probs is not None:
@@ -381,9 +381,9 @@ def run_sampling_generator(
 
 
 def assert_tokens_in_vocab(tokens: list[int], vocab_size: int = VOCAB_SIZE):
-    assert all(0 <= tok < vocab_size for tok in tokens), (
-        f"Found out-of-range token(s) for vocab_size={vocab_size}: {tokens}"
-    )
+    assert all(
+        0 <= tok < vocab_size for tok in tokens
+    ), f"Found out-of-range token(s) for vocab_size={vocab_size}: {tokens}"
 
 
 def flatten_steps(outputs: list[list[int]]) -> list[int]:
@@ -391,6 +391,7 @@ def flatten_steps(outputs: list[list[int]]) -> list[int]:
 
 
 # --- Test: prefill parameter behavior ---
+
 
 class TestPrefillWithDifferentParams:
     @pytest.mark.parametrize("mesh_device", MULTI_DEVICE_MESHES, indirect=True)
@@ -434,7 +435,7 @@ class TestPrefillWithDifferentParams:
         logits = build_hot_logits(args, hot_tokens=[140, 141, 142, 143, 144, 145, 146, 147])
 
         half = BATCH_SIZE // 2
-        temperature = [0.0] * half + [1.5] * (BATCH_SIZE - half) # First half is greedy; second half is stochastic.
+        temperature = [0.0] * half + [1.5] * (BATCH_SIZE - half)  # First half is greedy; second half is stochastic.
         top_k = [32] * half + [8] * (BATCH_SIZE - half)
         top_p = [1.0] * BATCH_SIZE
         params = SamplingParams(temperature=temperature, top_k=top_k, top_p=top_p)
@@ -479,7 +480,9 @@ class TestPrefillWithDifferentParams:
     def test_prefill_topk_1_is_greedy(self, mesh_device):
         args = make_sampling_args(mesh_device)
         logits = build_hot_logits(args, hot_tokens=[180, 181, 182, 183])
-        greedy_tokens = run_ttsampling_once(mesh_device, args, logits, top_k=1, top_p=1.0, temperature=1.0) # Use top_p=1.0 (disabled) to keep this test portable across top-p conventions.
+        greedy_tokens = run_ttsampling_once(
+            mesh_device, args, logits, top_k=1, top_p=1.0, temperature=1.0
+        )  # Use top_p=1.0 (disabled) to keep this test portable across top-p conventions.
         topk1_tokens = run_ttsampling_once(mesh_device, args, logits, top_k=1, top_p=1.0, temperature=5.0)
         assert greedy_tokens == topk1_tokens, "top_k=1 should match greedy behavior"
 
@@ -602,6 +605,7 @@ class TestPrefillWithDifferentParams:
 
 # --- Test: per-request penalties ---
 
+
 @pytest.mark.parametrize("mesh_device", MULTI_DEVICE_MESHES, indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -616,8 +620,12 @@ class TestRepetitionPenaltyPerRequest:
         penalties = ([1.0, 1.0, 1.2, 1.5, 2.0, 3.0, 4.0, 5.0] * 4)[:BATCH_SIZE]
         params = self._get_sampling_params(penalties)
 
-        tokens = run_sampling_generator(mesh_device, args, logits, params, state_setup=lambda sg: self._state_setup(sg, target_token))[0]
-        low_penalty = [tok for i, tok in enumerate(tokens) if penalties[i] <= 1.0] # Keep boundary-sensitive values (e.g. 1.2) out of strict assertions.
+        tokens = run_sampling_generator(
+            mesh_device, args, logits, params, state_setup=lambda sg: self._state_setup(sg, target_token)
+        )[0]
+        low_penalty = [
+            tok for i, tok in enumerate(tokens) if penalties[i] <= 1.0
+        ]  # Keep boundary-sensitive values (e.g. 1.2) out of strict assertions.
         high_penalty = [tok for i, tok in enumerate(tokens) if penalties[i] >= 1.5]
         assert all(tok == target_token for tok in low_penalty), "Low repetition penalty should keep target token"
         assert any(tok != target_token for tok in high_penalty), "High repetition penalties should alter output"
@@ -629,7 +637,9 @@ class TestRepetitionPenaltyPerRequest:
         penalties = [1.0 if i % 2 == 0 else 2.5 for i in range(BATCH_SIZE)]
         params = self._get_sampling_params(penalties)
 
-        tokens = run_sampling_generator(mesh_device, args, logits, params, state_setup=lambda sg: self._state_setup(sg, target_token))[0]
+        tokens = run_sampling_generator(
+            mesh_device, args, logits, params, state_setup=lambda sg: self._state_setup(sg, target_token)
+        )[0]
         no_penalty = [tokens[i] for i in range(0, BATCH_SIZE, 2)]
         with_penalty = [tokens[i] for i in range(1, BATCH_SIZE, 2)]
         assert all(tok == target_token for tok in no_penalty), "No-penalty lanes should keep target"
@@ -692,7 +702,9 @@ class TestPresencePenaltyPerRequest:
         penalties = ([0.0, 0.5, 1.0, 2.0, 3.0, -0.5, -1.0, 4.0] * 4)[:BATCH_SIZE]
         params = self._get_sampling_params(penalties)
 
-        tokens = run_sampling_generator(mesh_device, args, logits, params, state_setup=lambda sg: self._state_setup(sg, target_token))[0]
+        tokens = run_sampling_generator(
+            mesh_device, args, logits, params, state_setup=lambda sg: self._state_setup(sg, target_token)
+        )[0]
         assert any(tok == target_token for tok in tokens), "Some lanes should retain target token"
         assert any(tok != target_token for tok in tokens), "Some lanes should shift off target with higher penalties"
 
@@ -703,7 +715,9 @@ class TestPresencePenaltyPerRequest:
         penalties = [0.0 if i % 2 == 0 else 2.0 for i in range(BATCH_SIZE)]
         params = self._get_sampling_params(penalties)
 
-        tokens = run_sampling_generator(mesh_device, args, logits, params, state_setup=lambda sg: self._state_setup(sg, target_token))[0]
+        tokens = run_sampling_generator(
+            mesh_device, args, logits, params, state_setup=lambda sg: self._state_setup(sg, target_token)
+        )[0]
         no_penalty = [tokens[i] for i in range(0, BATCH_SIZE, 2)]
         with_penalty = [tokens[i] for i in range(1, BATCH_SIZE, 2)]
         assert all(tok == target_token for tok in no_penalty), "No presence-penalty lanes should keep target"
@@ -738,10 +752,10 @@ class TestPresencePenaltyPerRequest:
         assert all(outputs[2][i] == target_token for i in even_idxs), "Even lanes should keep target at step 2"
 
     def _state_setup(self, sg, target_token: int):
-            seen = torch.full((BATCH_SIZE, 1), target_token, dtype=torch.int64)
-            sg.reset_prompt_tokens(seen)
-            sg.reset_output_state(tokens=seen)
-    
+        seen = torch.full((BATCH_SIZE, 1), target_token, dtype=torch.int64)
+        sg.reset_prompt_tokens(seen)
+        sg.reset_output_state(tokens=seen)
+
     def _get_sampling_params(self, penalties):
         return SamplingParams(
             temperature=[0.0] * BATCH_SIZE,
@@ -765,7 +779,9 @@ class TestFrequencyPenaltyPerRequest:
         penalties = ([0.0, 0.5, 1.0, 2.0, 3.0, -0.5, -1.0, 4.0] * 4)[:BATCH_SIZE]
         params = self._get_sampling_params(penalties)
 
-        tokens = run_sampling_generator(mesh_device, args, logits, params, state_setup=lambda sg: self._state_setup(sg, target_token))[0]
+        tokens = run_sampling_generator(
+            mesh_device, args, logits, params, state_setup=lambda sg: self._state_setup(sg, target_token)
+        )[0]
         assert any(tok == target_token for tok in tokens), "Some lanes should retain target token"
         assert any(tok != target_token for tok in tokens), "Some lanes should shift off target with higher penalties"
 
@@ -776,7 +792,9 @@ class TestFrequencyPenaltyPerRequest:
         penalties = [0.0 if i % 2 == 0 else 2.0 for i in range(BATCH_SIZE)]
         params = self._get_sampling_params(penalties)
 
-        tokens = run_sampling_generator(mesh_device, args, logits, params, state_setup=lambda sg: self._state_setup(sg, target_token))[0]
+        tokens = run_sampling_generator(
+            mesh_device, args, logits, params, state_setup=lambda sg: self._state_setup(sg, target_token)
+        )[0]
         no_penalty = [tokens[i] for i in range(0, BATCH_SIZE, 2)]
         with_penalty = [tokens[i] for i in range(1, BATCH_SIZE, 2)]
         assert all(tok == target_token for tok in no_penalty), "No frequency-penalty lanes should keep target"
@@ -899,8 +917,7 @@ class TestSeededSamplingPerRequest:
             assert_tokens_in_vocab(outputs, args.vocab_size)
             unexpected = [tok for tok in outputs if tok not in hot_token_set]
             assert not unexpected, (
-                f"Sampled tokens outside expected hot set {sorted(hot_token_set)}: {unexpected}. "
-                f"outputs={outputs}"
+                f"Sampled tokens outside expected hot set {sorted(hot_token_set)}: {unexpected}. " f"outputs={outputs}"
             )
 
     @pytest.mark.parametrize("mesh_device", MULTI_DEVICE_MESHES, indirect=True)
@@ -1042,6 +1059,7 @@ class TestSeededSamplingPerRequest:
 
 # --- Test: batch isolation ---
 
+
 @pytest.mark.parametrize("mesh_device", MULTI_DEVICE_MESHES, indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -1078,10 +1096,24 @@ class TestBatchIsolation:
         )
 
         out1 = run_sampling_generator(
-            mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds, state_setup=self._state_setup
+            mesh_device,
+            args,
+            logits,
+            params,
+            num_steps=1,
+            advance_seeds=True,
+            seed_values=seeds,
+            state_setup=self._state_setup,
         )[0]
         out2 = run_sampling_generator(
-            mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds, state_setup=self._state_setup
+            mesh_device,
+            args,
+            logits,
+            params,
+            num_steps=1,
+            advance_seeds=True,
+            seed_values=seeds,
+            state_setup=self._state_setup,
         )[0]
         assert out1 == out2, "Deterministic lanes (and seeded lanes) should replay identically across runs"
         assert len(set(out1)) >= 2, "Mixed batch should not collapse to a single token"
@@ -1105,7 +1137,9 @@ class TestBatchIsolation:
             mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds
         )[0]
         for i, tok in enumerate(tokens):
-            assert tok in expected_sets[i], f"User {i} token leaked across users: tok={tok}, expected={expected_sets[i]}"
+            assert (
+                tok in expected_sets[i]
+            ), f"User {i} token leaked across users: tok={tok}, expected={expected_sets[i]}"
 
         for device_idx in representative_device_indices(mesh_device)[1:]:
             device_tokens = run_sampling_generator(
@@ -1120,12 +1154,71 @@ class TestBatchIsolation:
             )[0]
             assert device_tokens == tokens, f"Device view mismatch for device_idx={device_idx} in batch isolation test"
 
+    def test_same_prompt_users_get_identical_logits(self, mesh_device, device_params):
+        args = make_sampling_args(mesh_device)
+        # All users share the exact same hot-token distribution.
+        hot_tokens = [2500, 2501, 2502, 2503, 2504, 2505, 2506, 2507]
+        logits = build_hot_logits(args, hot_tokens=hot_tokens)
+
+        # --- Greedy: every user should pick the top-logit token. ---
+        greedy_params = SamplingParams(
+            temperature=[0.0] * BATCH_SIZE,
+            top_k=[32] * BATCH_SIZE,
+            top_p=[1.0] * BATCH_SIZE,
+        )
+        greedy_tokens = run_sampling_generator(
+            mesh_device, args, logits, greedy_params, num_steps=1, advance_seeds=False
+        )[0]
+        assert (
+            len(set(greedy_tokens)) == 1
+        ), f"All users with the same prompt under greedy should pick the same token, got {greedy_tokens}"
+        assert (
+            greedy_tokens[0] == hot_tokens[0]
+        ), f"Greedy should pick the highest-logit token {hot_tokens[0]}, got {greedy_tokens[0]}"
+
+        # --- Stochastic with uniform seed: all users should agree. ---
+        uniform_seed = [7777] * BATCH_SIZE
+        stochastic_params = SamplingParams(temperature=1.5, top_k=8, top_p=1.0)
+        out_uniform = run_sampling_generator(
+            mesh_device,
+            args,
+            logits,
+            stochastic_params,
+            num_steps=1,
+            advance_seeds=True,
+            seed_values=uniform_seed,
+        )[0]
+        assert (
+            len(set(out_uniform)) == 1
+        ), f"All users with same prompt and same seed should sample the same token, got {out_uniform}"
+
+        # --- Stochastic with different seeds: should see variation. ---
+        diverse_seeds = [5000 + i for i in range(BATCH_SIZE)]
+        out_diverse = run_sampling_generator(
+            mesh_device,
+            args,
+            logits,
+            stochastic_params,
+            num_steps=FAST_NUM_TRIES,
+            advance_seeds=True,
+            seed_values=diverse_seeds,
+        )
+        all_tokens = flatten_steps(out_diverse)
+        assert (
+            len(set(all_tokens)) >= 2
+        ), f"Different seeds on the same prompt should produce variation, got {set(all_tokens)}"
+        assert_tokens_in_vocab(all_tokens, args.vocab_size)
+        unexpected = [tok for tok in all_tokens if tok not in set(hot_tokens)]
+        assert not unexpected, f"Sampled tokens outside expected hot set: {unexpected}"
+
     def _state_setup(self, sg):
         seen = torch.full((BATCH_SIZE, 1), 2000, dtype=torch.int64)
         sg.reset_prompt_tokens(seen)
         sg.reset_output_state(tokens=seen)
 
+
 # --- Test: batch size variations ---
+
 
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 class TestBatchSizeVariations:
@@ -1183,6 +1276,7 @@ class TestBatchSizeVariations:
 
 # --- Test: mixed-parameter batches ---
 
+
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 class TestMixedParameterBatches:
     def test_all_parameter_types_in_batch(self, mesh_device):
@@ -1219,10 +1313,24 @@ class TestMixedParameterBatches:
         )
 
         out1 = run_sampling_generator(
-            mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds, state_setup=_state_setup
+            mesh_device,
+            args,
+            logits,
+            params,
+            num_steps=1,
+            advance_seeds=True,
+            seed_values=seeds,
+            state_setup=_state_setup,
         )[0]
         out2 = run_sampling_generator(
-            mesh_device, args, logits, params, num_steps=1, advance_seeds=True, seed_values=seeds, state_setup=_state_setup
+            mesh_device,
+            args,
+            logits,
+            params,
+            num_steps=1,
+            advance_seeds=True,
+            seed_values=seeds,
+            state_setup=_state_setup,
         )[0]
         assert out1 == out2, "Mixed parameter batch should replay deterministically with fixed seeds"
         assert_tokens_in_vocab(out1, args.vocab_size)
