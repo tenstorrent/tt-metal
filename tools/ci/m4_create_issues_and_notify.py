@@ -317,7 +317,12 @@ def slack_list_members(token: str) -> list[dict[str, Any]]:
 def slack_lookup_by_username(token: str, username: str, members_cache: list[dict[str, Any]] | None) -> str | None:
     if members_cache is None:
         return None
-    target = username.lower()
+    target = username.strip().lower()
+    if not target:
+        return None
+    targets = {target}
+    if target.endswith("tt") and len(target) > 2:
+        targets.add(target[:-2])
     for member in members_cache:
         if member.get("deleted") or member.get("is_bot"):
             continue
@@ -327,10 +332,57 @@ def slack_lookup_by_username(token: str, username: str, members_cache: list[dict
             str(profile.get("display_name", "")),
             str(profile.get("real_name", "")),
         ]
-        if any(target == c.strip().lower() for c in candidates if c.strip()):
+        if any(c.strip().lower() in targets for c in candidates if c.strip()):
             uid = str(member.get("id", "")).strip()
             if uid:
                 return uid
+    return None
+
+
+def slack_lookup_by_full_name(full_name: str, members_cache: list[dict[str, Any]] | None) -> str | None:
+    if members_cache is None:
+        return None
+    name = full_name.strip()
+    if not name:
+        return None
+    name_l = name.lower()
+    candidate_rows: list[tuple[str, str, str, str]] = []
+    for member in members_cache:
+        if member.get("deleted") or member.get("is_bot"):
+            continue
+        uid = str(member.get("id", "")).strip()
+        if not uid:
+            continue
+        profile = member.get("profile", {}) if isinstance(member.get("profile"), dict) else {}
+        row = (
+            uid,
+            str(member.get("name", "")).strip(),
+            str(profile.get("display_name", "")).strip(),
+            str(profile.get("real_name", "")).strip(),
+        )
+        candidate_rows.append(row)
+
+    # Exact match by full name first.
+    for uid, name_field, display_name, real_name in candidate_rows:
+        values = [name_field, display_name, real_name]
+        if any(v and v.lower() == name_l for v in values):
+            return uid
+
+    # Fuzzy fallback from working GH->Slack mapping pattern:
+    # if a >=3-char name token uniquely matches one Slack member, use it.
+    words = [w.lower() for w in re.split(r"\s+", name) if len(w) >= 3]
+    seen_words: set[str] = set()
+    for word in words:
+        if word in seen_words:
+            continue
+        seen_words.add(word)
+        matches: set[str] = set()
+        for uid, name_field, display_name, real_name in candidate_rows:
+            values_l = [name_field.lower(), display_name.lower(), real_name.lower()]
+            if any(word in v for v in values_l if v):
+                matches.add(uid)
+        if len(matches) == 1:
+            return next(iter(matches))
     return None
 
 
@@ -369,11 +421,20 @@ def render_owner_mentions(
     unresolved_handles: list[str] = []
 
     for username in sorted(gh_usernames):
+        # CODEOWNERS teams (org/team) are not direct users and cannot map
+        # to a single Slack user id.
+        if "/" in username:
+            unresolved_handles.append(username)
+            continue
         info = github_user_info(issue_token, username)
         email = str(info.get("email", "")).strip()
+        gh_name = str(info.get("name", "")).strip()
+        gh_login = str(info.get("login", username)).strip()
         user_id = slack_lookup_by_email(slack_token, email) if email else None
         if not user_id:
-            user_id = slack_lookup_by_username(slack_token, username, members_cache)
+            user_id = slack_lookup_by_username(slack_token, gh_login, members_cache)
+        if not user_id and gh_name:
+            user_id = slack_lookup_by_full_name(gh_name, members_cache)
         if user_id:
             resolved_ids.add(user_id)
         else:

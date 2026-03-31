@@ -66,3 +66,33 @@ def test_find_existing_issue_for_title_matches_case_insensitive_exact():
         "[ci] galaxy qwen3-32b long context demo: trace buffer size exceeds allocated region",
     )
     assert existing == "https://github.com/ebanerjeeTT/issue_dump/issues/854"
+
+
+def test_slack_lookup_by_full_name_exact_and_unique_word_match():
+    mod = _load_m4_module()
+    members = [
+        {
+            "id": "U1",
+            "name": "utku",
+            "profile": {"display_name": "Utku Aydonat", "real_name": "Utku Aydonat"},
+        },
+        {
+            "id": "U2",
+            "name": "other",
+            "profile": {"display_name": "Ali User", "real_name": "Ali User"},
+        },
+    ]
+    assert mod.slack_lookup_by_full_name("Utku Aydonat", members) == "U1"
+    assert mod.slack_lookup_by_full_name("Utku", members) == "U1"
+
+
+def test_slack_lookup_by_username_accepts_tt_suffix_variants():
+    mod = _load_m4_module()
+    members = [
+        {
+            "id": "U1",
+            "name": "aliu",
+            "profile": {"display_name": "Aliu", "real_name": "Ali User"},
+        }
+    ]
+    assert mod.slack_lookup_by_username("", "aliuTT", members) == "U1"
