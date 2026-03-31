@@ -45,7 +45,10 @@ def create_tt_model(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
-    # Note: num_layers parameter is intentionally not used to preserve full model architecture
+    # Override num_layers if provided (useful for quick testing with fewer layers)
+    if num_layers is not None:
+        gpt_oss_model_args.hf_config.num_hidden_layers = num_layers
+        gpt_oss_model_args.n_layers = num_layers
 
     # Avoid loading state_dict for every DP model
     if not state_dict:
