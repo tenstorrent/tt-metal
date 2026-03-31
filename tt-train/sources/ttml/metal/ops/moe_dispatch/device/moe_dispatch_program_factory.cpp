@@ -126,7 +126,6 @@ MoeDispatchMeshWorkloadFactory::create_at(
     CoreRange receiver_range{receiver_core, receiver_core};
 
     auto receiver_phys = target_device->worker_core_from_logical_core(receiver_core);
-    auto sender_phys = target_device->worker_core_from_logical_core(sender_core);
 
     // ---- CBs ----
     CreateCircularBuffer(
@@ -188,6 +187,20 @@ MoeDispatchMeshWorkloadFactory::create_at(
         sender_range,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0, .compile_args = sender_ct});
 
+    auto forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        sorted_hidden, mesh_coord, 1, ttnn::ccl::Topology::Linear, attrs.cluster_axis);
+    auto backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        sorted_hidden, mesh_coord, -1, ttnn::ccl::Topology::Linear, attrs.cluster_axis);
+
+    // next_sender_noc_x/y = sender core on the next EP device (forward neighbor)
+    uint32_t next_sender_x = 0, next_sender_y = 0;
+    if (!is_last && forward_coord.has_value()) {
+        IDevice* next_device = mesh_device->get_device(forward_coord.value());
+        auto next_sender_phys = next_device->worker_core_from_logical_core(sender_core);
+        next_sender_x = next_sender_phys.x;
+        next_sender_y = next_sender_phys.y;
+    }
+
     std::vector<uint32_t> sender_rt = {
         sorted_hidden.buffer()->address(),
         dispatch_buf.buffer()->address(),
@@ -195,18 +208,13 @@ MoeDispatchMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(receiver_phys.y),
         tiles_ready_sem_id,
         go_sem_id,
-        static_cast<uint32_t>(sender_phys.x),
-        static_cast<uint32_t>(sender_phys.y),
+        next_sender_x,
+        next_sender_y,
         is_last ? 1u : 0u,
     };
     for (auto c : local_counts) sender_rt.push_back(c / TILE_H);
     for (auto o : local_offsets) sender_rt.push_back(o / TILE_H);
     for (uint32_t ge = 0; ge < E; ge++) sender_rt.push_back(sender_dst_row[ge]);
-
-    auto forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        sorted_hidden, mesh_coord, 1, ttnn::ccl::Topology::Linear, attrs.cluster_axis);
-    auto backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-        sorted_hidden, mesh_coord, -1, ttnn::ccl::Topology::Linear, attrs.cluster_axis);
 
     sender_rt.push_back(forward_coord.has_value() ? 1 : 0);
     if (forward_coord.has_value()) {

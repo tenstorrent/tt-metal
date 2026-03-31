@@ -60,11 +60,12 @@ void kernel_main() {
     cb_push_back(pkt_hdr_cb_id, 1);
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(pkt_hdr_l1);
 
+    volatile tt_l1_ptr uint32_t* go_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_sem_addr);
+
     DPRINT << "SENDER[" << my_device_index << "]: opening fabric" << ENDL();
     fabric_connection.open_finish();
-    DPRINT << "SENDER[" << my_device_index << "]: fabric open, go_sem wait" << ENDL();
-
-    volatile tt_l1_ptr uint32_t* go_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_sem_addr);
+    DPRINT << "SENDER[" << my_device_index << "]: fabric open, go_sem=" << *go_sem_ptr
+           << " is_last=" << is_last_ep_device << ENDL();
 
     const uint32_t row_bytes = D_t * tile_bytes;
     uint32_t turn = 0;
@@ -140,7 +141,10 @@ void kernel_main() {
         // Signal next EP device
         if (!is_last_ep_device) {
             uint64_t next_go = get_noc_addr(next_sender_noc_x, next_sender_noc_y, go_sem_addr);
-            if (fabric_connection.has_forward_connection()) {
+            bool has_fwd = fabric_connection.has_forward_connection();
+            DPRINT << "SENDER[" << my_device_index << "]: e=" << e << " signaling go_sem, has_fwd=" << (uint32_t)has_fwd
+                   << ENDL();
+            if (has_fwd) {
                 pkt_hdr->to_chip_unicast(1);
                 pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{next_go, 1, false});
                 fabric_connection.get_forward_connection().wait_for_empty_write_slot();
