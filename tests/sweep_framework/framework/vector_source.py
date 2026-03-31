@@ -327,79 +327,53 @@ class VectorExportSource(VectorSource):
                                             pass
                                 return None
 
-                            # Filter vectors based on hardware compatibility.
-                            # Lead models use strict 4-field matching (board_type, device_series,
-                            # card_count, device_count) since they are routed to correct hardware.
-                            # Non-lead runs skip vectors whose traced card_count exceeds the current
-                            # machine's card_count (e.g. galaxy vectors are skipped on N150 but run
-                            # on galaxy machines).
+                            # Filter vectors based on hardware compatibility for all model_traced runs.
+                            # CI now routes model_traced work by traced hardware, so vectors should
+                            # only load when their traced machine metadata matches the current runner.
                             skip_for_resources = False
                             if current_machine_info and traced_machine_entries:
-                                if is_lead_models:
-                                    current_board = current_machine_info.get("board_type", "").lower()
-                                    current_series = current_machine_info.get("device_series", "").lower()
-                                    current_card_count = current_machine_info.get("card_count")
-                                    current_device_count = current_machine_info.get("device_count")
+                                current_board = current_machine_info.get("board_type", "").lower()
+                                current_series = current_machine_info.get("device_series", "").lower()
+                                current_card_count = current_machine_info.get("card_count")
+                                current_device_count = current_machine_info.get("device_count")
 
-                                    has_matching_hardware = False
-                                    for entry in traced_machine_entries:
-                                        traced_board = entry.get("board_type", "").lower()
-                                        traced_series = entry.get("device_series", "").lower()
-                                        traced_card_count = entry.get("card_count")
-                                        traced_device_count = entry.get("device_count")
+                                has_matching_hardware = False
+                                for entry in traced_machine_entries:
+                                    traced_board = entry.get("board_type", "").lower()
+                                    traced_series = entry.get("device_series", "").lower()
+                                    traced_card_count = entry.get("card_count")
+                                    traced_device_count = entry.get("device_count")
 
-                                        board_match = (
-                                            not traced_board
-                                            or not current_board
-                                            or traced_board == current_board
-                                            or ("wormhole" in traced_board and "wormhole" in current_board)
-                                        )
-                                        series_match = (
-                                            not traced_series or not current_series or traced_series == current_series
-                                        )
-                                        card_match = (
-                                            traced_card_count is None or traced_card_count == current_card_count
-                                        )
+                                    board_match = (
+                                        not traced_board
+                                        or not current_board
+                                        or traced_board == current_board
+                                        or ("wormhole" in traced_board and "wormhole" in current_board)
+                                    )
+                                    series_match = (
+                                        not traced_series or not current_series or traced_series == current_series
+                                    )
+                                    card_match = traced_card_count is None or traced_card_count == current_card_count
+                                    device_match = True
+                                    if is_lead_models:
                                         device_match = (
                                             traced_device_count is None or traced_device_count == current_device_count
                                         )
 
-                                        if board_match and series_match and card_match and device_match:
-                                            has_matching_hardware = True
-                                            break
+                                    if board_match and series_match and card_match and device_match:
+                                        has_matching_hardware = True
+                                        break
 
-                                    if not has_matching_hardware:
-                                        logger.debug(
-                                            f"Skipping vector - traced hardware does not match current machine "
-                                            f"(current: board_type={current_machine_info.get('board_type')}, "
-                                            f"device_series={current_machine_info.get('device_series')}, "
-                                            f"card_count={current_machine_info.get('card_count')}, "
-                                            f"device_count={current_machine_info.get('device_count')})"
-                                        )
-                                        machine_mismatch_count += 1
-                                        skip_for_resources = True
-                                else:
-                                    # For non-lead runs: skip vectors that require more hardware than the
-                                    # current machine provides. Compare traced card_count against
-                                    # current_machine_info.card_count so that galaxy vectors run on
-                                    # galaxy machines and are skipped only on machines with fewer cards
-                                    # (e.g. N150).  If the current card_count is unknown (None),
-                                    # skip this filter entirely to avoid incorrectly rejecting
-                                    # multi-card vectors on capable machines.
-                                    current_card_count = current_machine_info.get("card_count")
-                                    if current_card_count is not None:
-                                        has_compatible_card_count = any(
-                                            entry.get("card_count") is None
-                                            or entry.get("card_count", 1) <= current_card_count
-                                            for entry in traced_machine_entries
-                                        )
-                                        if not has_compatible_card_count:
-                                            logger.debug(
-                                                f"Skipping vector - traced card_count exceeds current machine "
-                                                f"card_count={current_card_count}"
-                                            )
-                                            machine_mismatch_count += 1
-                                            skip_for_resources = True
+                                if not has_matching_hardware:
+                                    logger.debug(
+                                        f"Skipping vector - traced hardware does not match current machine "
+                                        f"(current: board_type={current_machine_info.get('board_type')}, "
+                                        f"device_series={current_machine_info.get('device_series')}, "
+                                        f"card_count={current_machine_info.get('card_count')}, "
+                                        f"device_count={current_machine_info.get('device_count')})"
+                                    )
+                                    machine_mismatch_count += 1
+                                    skip_for_resources = True
 
                             if skip_for_resources:
                                 continue
