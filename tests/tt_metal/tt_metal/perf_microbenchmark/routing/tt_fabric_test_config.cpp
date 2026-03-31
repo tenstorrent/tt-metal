@@ -2157,18 +2157,19 @@ void TestConfigBuilder::split_senders_by_direction_for_benchmark(ParsedTestConfi
 }
 
 bool TestConfigBuilder::expand_link_duplicates(ParsedTestConfig& test) {
-    // If num_links is 1, no duplication needed
-    if (test.fabric_setup.num_links <= 1) {
-        return true;  // Success - no expansion needed
-    }
-
     uint32_t num_links = test.fabric_setup.num_links;
-    log_debug(LogTest, "Expanding link duplicates for test '{}' with {} links", test.name, num_links);
-
     // Validate that num_links doesn't exceed available routing planes for any device
     if (!route_manager_.validate_num_links_supported(num_links)) {
         return false;  // Indicate test should be skipped
     }
+
+    // If num_links is 1, no duplication needed
+    if (num_links <= 1) {
+        return true;  // Success - no expansion needed
+    }
+
+    log_debug(LogTest, "Expanding link duplicates for test '{}' with {} links", test.name, num_links);
+
 
     std::vector<ParsedSenderConfig> new_senders;
     new_senders.reserve(test.senders.size() * num_links);

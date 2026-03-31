@@ -462,6 +462,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         (std::uint32_t)use_streaming_compute,
         args.is_causal,
         args.is_balanced,
+        (std::uint32_t)out_out_subblock_h,
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
@@ -690,6 +691,13 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
                                    .set_page_size(tt::CBIndex::c_11, stats_tile_size);
         CreateCircularBuffer(program, core_grid, c_sum_in_config);
+
+        // Signal CB (c_12): compute signals writer when last K-chunk starts.
+        // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
+        constexpr uint32_t signal_page_size = 16;
+        auto c_signal_config = CircularBufferConfig(signal_page_size, {{tt::CBIndex::c_12, tt::DataFormat::UInt16}})
+                                   .set_page_size(tt::CBIndex::c_12, signal_page_size);
+        CreateCircularBuffer(program, core_grid, c_signal_config);
     }
 
     uint32_t q_addr = input_tensor_q.buffer()->address();

@@ -106,7 +106,7 @@ def log_expert_dispatch_table(
         num_routed_experts=num_routed_experts,
         title=title,
     )
-    logger.info(f"\n{table_str}")
+    logger.debug(f"\n{table_str}")
 
 
 def _extract_chip_status(result: ValidationResult) -> Tuple[Set[Tuple[int, int]], Set[Tuple[int, int]]]:
@@ -233,4 +233,4 @@ def log_validation_results(
         dispatch_group_size=dispatch_group_size,
         title=title,
     )
-    logger.info(f"\n{table_str}")
+    logger.debug(f"\n{table_str}")

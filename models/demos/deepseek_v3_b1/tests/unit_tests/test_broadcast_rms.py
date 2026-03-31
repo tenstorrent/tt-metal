@@ -11,12 +11,10 @@ from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSN
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
-
-
-def create_fabric_router_config(max_payload_size):
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
+    build_broadcast_test_inputs,
+    create_fabric_router_config,
+)
 
 
 @pytest.mark.parametrize(
@@ -35,9 +33,8 @@ def create_fabric_router_config(max_payload_size):
 )
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("cluster_axis", [0])
-@pytest.mark.parametrize("secondary_cluster_axis", [1])
 @pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize("num_links", [1, 2])
 @pytest.mark.parametrize("use_socket", [True, False])
 @pytest.mark.parametrize(
     "device_params",
@@ -61,10 +58,10 @@ def test_broadcast_rms_fused(
     tensor_mem_layout,
     layout,
     input_dtype,
-    cluster_axis,
-    secondary_cluster_axis,
     num_iters,
+    num_links,
     use_socket,
+    device_params,
 ):
     num_devices = mesh_rows * mesh_cols
 
@@ -104,37 +101,23 @@ def test_broadcast_rms_fused(
     sender_tensor = torch.rand(output_shape, dtype=torch.bfloat16)
 
     sender_coord = ttnn.MeshCoordinate(sender_row, sender_col)
-    # Create mesh tensor with sender's tensor at sender_coord, zeros elsewhere (one slice per row)
-    device_tensors = []
-    intermediate_tensors = []
-    for row in range(mesh_rows):
-        if row == sender_row:
-            device_tensors.append(sender_tensor)
-        else:
-            device_tensors.append(torch.zeros_like(sender_tensor))
-        intermediate_tensors.append(torch.zeros_like(sender_tensor))
-
-    mesh_tensor_torch = torch.cat(device_tensors, dim=0)
-    intermediate_mesh_tensor_torch = torch.cat(intermediate_tensors, dim=0)
-    mesh_mapper_config = ttnn.MeshMapperConfig([ttnn.PlacementShard(0), ttnn.PlacementReplicate()], submesh.shape)
-    input_tensor_mesh = ttnn.from_torch(
-        mesh_tensor_torch,
-        device=submesh,
+    bcast_inputs = build_broadcast_test_inputs(
+        mesh_device=submesh,
+        mesh_rows=mesh_rows,
+        mesh_cols=mesh_cols,
+        sender_coord=sender_coord,
+        output_shape=output_shape,
+        input_shard_shape=input_shard_shape,
+        tensor_mem_layout=tensor_mem_layout,
         layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
+        input_dtype=input_dtype,
+        bcast_core=bcast_core,
+        num_links=num_links,
+        input_tensor_torch=sender_tensor,
     )
-    intermediate_tensor_mesh = ttnn.from_torch(
-        intermediate_mesh_tensor_torch,
-        device=submesh,
-        layout=layout,
-        tile=ttnn.Tile((1, 32)),
-        dtype=input_dtype,
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.create_mesh_mapper(submesh, mesh_mapper_config),
-    )
+    input_tensor_mesh = bcast_inputs.input_tensor_mesh
+    intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
+    semaphores = bcast_inputs.semaphores
 
     # Create gamma tensor - replicate same gamma across the mesh
     torch_gamma = torch.randn(tuple(output_shape), dtype=torch.bfloat16)
@@ -158,15 +141,6 @@ def test_broadcast_rms_fused(
         memory_config=output_mem_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
     )
-
-    # Semaphores
-    num_cores = compute_grid_size.x * compute_grid_size.y
-    available_cores = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True)
-
-    out_ready_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    barrier_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    secondary_sync_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 0)
-    semaphores = [out_ready_semaphore, barrier_semaphore, secondary_sync_semaphore]
 
     host_io = None
     recv_socket = None
@@ -241,9 +215,9 @@ def test_broadcast_rms_fused(
         sender_coord,
         output_tensor,
         semaphores,
-        cluster_axis=cluster_axis,
-        secondary_cluster_axis=secondary_cluster_axis,
+        num_links=num_links,
         socket=recv_socket if use_socket else None,
+        fabric_config=device_params["fabric_config"],
     )
 
     if use_socket:

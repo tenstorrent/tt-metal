@@ -53,7 +53,12 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
 
     // Circular buffers
     const auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    // Use Float16_b for intermediates when not accumulating in fp32, matching the AttentionOptimized path.
+    // This avoids using Bfp8_b for intermediate computations where it lacks precision (issue #32934).
+    const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // Reader generates mask/scaler with uint16_t (1024 elements = 2048 bytes). Use Float16_b for these CBs when
+    // input is Bfp8_b so tile size matches; Bfp8_b tile layout is smaller and would be overflowed (issue #32934).
+    const auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
     operations::CreateCircularBuffer(
         program,
@@ -61,8 +66,8 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
         data_format,
         {
             {tt::CBIndex::c_0, Wt},                         // input
-            {tt::CBIndex::c_1, 1},                          // mask
-            {tt::CBIndex::c_2, 1},                          // scaler
+            {tt::CBIndex::c_1, 1, mask_scaler_format},      // mask
+            {tt::CBIndex::c_2, 1, mask_scaler_format},      // scaler
             {tt::CBIndex::c_16, Wt},                        // output
             {tt::CBIndex::c_24, Wt, intermed_data_format},  // exp(x)
             {tt::CBIndex::c_25, 1, intermed_data_format},   // reduce
@@ -94,7 +99,9 @@ SoftmaxProgramFactoryGeneralWSmall::cached_program_t SoftmaxProgramFactoryGenera
     // Kernel constants
     std::map<std::string, std::string> compute_defines;
     compute_defines["SOFTMAX"] = "1";
-    if (fp32_dest_acc_en) {
+    // Enable FP32_DEST_ACC_EN for format reconfiguration in moreh compute helpers when using mixed
+    // data formats (Bfp8_b input with Float16_b intermediates/mask/scaler) (issue #32934).
+    if (fp32_dest_acc_en || data_format == tt::DataFormat::Bfp8_b) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 

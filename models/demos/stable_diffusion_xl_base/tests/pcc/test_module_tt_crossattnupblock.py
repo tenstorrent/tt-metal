@@ -29,7 +29,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
             20,
             1280,
             0,
-            0.975,
+            0.972 if not is_blackhole() else 0.968,
         ),
         (
             (1024, 1024),

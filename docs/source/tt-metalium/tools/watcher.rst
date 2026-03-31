@@ -302,3 +302,24 @@ If a violation is detected, the offending RISC V is stopped and an error is repo
     tried to unicast read 112 bytes to local L1[0x17bce0] from Tensix core
     w/ virtual coords (x=7,y=2) L1[addr=0x0017bf40]
     (NOC transaction overflows a circular buffer).
+
+HW Exceptions (Quasar only)
+---------------------------
+When a HW exception occurs, the core will hang. When the watcher is enabled, the core will hang and an error will be reported on host.
+The error message will include a code for the cause of the exception:
+
+- 0: misaligned PC
+- 1: PC address fault
+- 2: Illegal instruction
+- 3: `ebreak` or HW breakpoint
+- 4: misaligned load
+- 5: Load access fault
+- 6: misaligned store
+- 7: Store access fault
+
+The error message will also include the PC value when the exception happened and the faulting address or instruction.
+
+.. code-block::
+
+    Device 0 worker core(x= 0,y= 0) virtual(x= 0,y= 1): DM7 hardware fault occurred at PC 0x9934.
+    Cause: 0x4, faulting address or instruction: 0x00000002

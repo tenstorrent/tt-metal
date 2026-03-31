@@ -30,7 +30,7 @@ class ParameterParser:
     @lru_cache(maxsize=2048)
     def format_multiline(cls, params: str) -> str:
         """Format operation parameters into readable multi-line output."""
-        if not params or params == "N/A":
+        if not params or params == "N/A" or params == "Not captured":
             return params
 
         # Split by tensor pattern: [0]:, [1]:, etc.

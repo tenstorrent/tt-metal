@@ -10,6 +10,7 @@
 #include <tt_stl/assert.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 
 constexpr float DEFAULT_SCALE_VALUE = 1.0f;
 

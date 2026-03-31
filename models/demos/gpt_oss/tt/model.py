@@ -236,8 +236,8 @@ class Model:
             # before prefill forward; tells _forward_layers_and_head to skip TP all-gather
             _orig_reset = self.sampling.reset_sampling_params
 
-            def _reset_with_flag(params, _orig=_orig_reset):
-                _orig(params)
+            def _reset_with_flag(params, _orig=_orig_reset, **kwargs):
+                _orig(params, **kwargs)
                 self._prefill_sampling_active = True
 
             self.sampling.reset_sampling_params = _reset_with_flag
@@ -264,6 +264,7 @@ class Model:
         # sampling_dp: number of independent sampling groups (one per mesh row)
         # Only use row-sharded sampling when users_row_sharded is active
         args.sampling_dp = self.sampling_dp
+        args.use_topk_logprobs = True
         return args
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):
