@@ -231,77 +231,6 @@ def agent_review_and_prepare_outputs(
     return parse_agent_json(proc.stdout or "")
 
 
-def parse_batch_agent_json(text: str) -> list[dict[str, Any]]:
-    idx = text.rfind(MARKER)
-    if idx < 0:
-        raise ValueError(f"marker not found: {MARKER}")
-    payload = text[idx + len(MARKER) :].strip()
-    if payload.startswith("```"):
-        payload = re.sub(r"^```(?:json)?\s*", "", payload)
-        payload = re.sub(r"\s*```$", "", payload)
-        payload = payload.strip()
-    parsed = json.loads(payload)
-    decisions = parsed.get("decisions", []) if isinstance(parsed, dict) else []
-    return decisions if isinstance(decisions, list) else []
-
-
-def agent_review_batch_prepare_outputs(
-    *,
-    jobs: list[dict[str, Any]],
-    open_issue_context: str,
-    recent_slack_context: str,
-    model: str,
-) -> list[dict[str, Any]]:
-    create_ticket_spec = load_command_spec(
-        ".cursor/commands/ci/ci-create-tickets.md",
-        "Create deterministic tickets only when the same terminal failure appears in all 3 logs.",
-    )
-    slack_draft_spec = load_command_spec(
-        ".cursor/commands/ci/ci-draft-slack-ci-issue.md",
-        "Draft concise Slack incident updates with direct links.",
-    )
-    sections: list[str] = []
-    for idx, job in enumerate(jobs, start=1):
-        workflow_name = str(job.get("workflow_name", "")).strip()
-        job_name = str(job.get("job_name", "")).strip()
-        job_urls = job.get("job_urls", [])
-        logs = job.get("logs", [])
-        if not isinstance(job_urls, list) or not isinstance(logs, list):
-            continue
-        run_blobs: list[str] = []
-        for run_idx, (url, text) in enumerate(zip(job_urls, logs, strict=False), start=1):
-            run_blobs.append(
-                f"Run {run_idx} URL: {url}\n--- BEGIN LOG {run_idx} ---\n{text}\n--- END LOG {run_idx} ---"
-            )
-        sections.append((f"[JOB {idx}]\n" f"Workflow: {workflow_name}\n" f"Job: {job_name}\n" + "\n\n".join(run_blobs)))
-    prompt = (
-        "You are the M4 reviewer for deterministic CI failures.\n"
-        "For EACH provided job, manually compare all three logs and determine if terminal failure signatures are the same.\n"
-        "You MUST review existing open issues and recent Slack messages before drafting outputs.\n"
-        "Criteria: deterministic only if the same job failed 3 times in a row with semantically identical terminal failure.\n\n"
-        "Open issues context:\n"
-        f"{open_issue_context}\n\n"
-        "Recent Slack messages context:\n"
-        f"{recent_slack_context}\n\n"
-        "Ticket command guidance:\n"
-        f"{create_ticket_spec}\n\n"
-        "Slack draft guidance:\n"
-        f"{slack_draft_spec}\n\n"
-        "For each job emit one decision object with these fields:\n"
-        '{"workflow_name":"","job_name":"","job_urls":[],"deterministic":false,"confidence":"low|medium|high","signature":"","error_excerpt":"","reason":"","create_issue":false,"draft_slack":false,"issue_title":"","issue_body":"","slack_text":""}\n\n'
-        + "\n\n".join(sections)
-        + "\n\nOutput marker exactly on its own line:\n"
-        + MARKER
-        + "\nThen output compact JSON only:\n"
-        + '{"decisions":[{"workflow_name":"","job_name":"","job_urls":[],"deterministic":false,"confidence":"low|medium|high","signature":"","error_excerpt":"","reason":"","create_issue":false,"draft_slack":false,"issue_title":"","issue_body":"","slack_text":""}]}'
-    )
-    cmd = ["agent", "--trust", "-p", prompt]
-    if model != "auto":
-        cmd[1:1] = ["--model", model]
-    proc = run(cmd)
-    return parse_batch_agent_json(proc.stdout or "")
-
-
 def fingerprint_for(workflow_name: str, job_name: str, signature: str) -> str:
     raw = f"{workflow_name}\n{job_name}\n{signature.strip().lower()}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
@@ -525,60 +454,42 @@ def main() -> int:
         )
 
     if to_review:
-        if len(to_review) == 1:
-            only = to_review[0]
-            log(f"Running agent review for workflow={only['workflow_name']} " f"job={only['job_name']}")
-            decision = agent_review_and_prepare_outputs(
-                workflow_name=only["workflow_name"],
-                job_name=only["job_name"],
-                job_urls=only["job_urls"],
-                logs=only["logs"],
-                open_issue_context=open_issue_context,
-                recent_slack_context=recent_slack_context,
-                model=args.model,
-            )
-            key = decision_key(only["workflow_name"], only["job_name"], only["job_urls"])
-            decisions_by_key[key] = decision
-            fresh_agent_reviews += 1
-            fresh_agent_calls += 1
-        else:
-            log(f"Running batched agent review for {len(to_review)} jobs")
-            batch_decisions = agent_review_batch_prepare_outputs(
-                jobs=to_review,
-                open_issue_context=open_issue_context,
-                recent_slack_context=recent_slack_context,
-                model=args.model,
-            )
-            fresh_agent_calls += 1
-            batch_map: dict[str, dict[str, Any]] = {}
-            for decision in batch_decisions:
-                if not isinstance(decision, dict):
-                    continue
-                workflow_name = str(decision.get("workflow_name", "")).strip()
-                job_name = str(decision.get("job_name", "")).strip()
-                job_urls = decision.get("job_urls", [])
-                if not workflow_name or not job_name or not isinstance(job_urls, list):
-                    continue
-                normalized_urls = [str(u).strip() for u in job_urls if str(u).strip()][:3]
-                batch_map[decision_key(workflow_name, job_name, normalized_urls)] = decision
-            for item in to_review:
-                key = decision_key(item["workflow_name"], item["job_name"], item["job_urls"])
-                decision = batch_map.get(key)
-                if not decision:
+        for review_item in to_review:
+            log(f"Running agent review for workflow={review_item['workflow_name']} " f"job={review_item['job_name']}")
+            try:
+                decision = agent_review_and_prepare_outputs(
+                    workflow_name=review_item["workflow_name"],
+                    job_name=review_item["job_name"],
+                    job_urls=review_item["job_urls"],
+                    logs=review_item["logs"],
+                    open_issue_context=open_issue_context,
+                    recent_slack_context=recent_slack_context,
+                    model=args.model,
+                )
+            except OSError as exc:
+                if exc.errno == 7:
                     decision = {
                         "deterministic": False,
                         "confidence": "low",
                         "signature": "",
                         "error_excerpt": "",
-                        "reason": "Batch review did not return a decision for this job.",
+                        "reason": "Prompt exceeded OS argument length while sending full logs to agent.",
                         "create_issue": False,
                         "draft_slack": False,
                         "issue_title": "",
                         "issue_body": "",
                         "slack_text": "",
                     }
-                decisions_by_key[key] = decision
-                fresh_agent_reviews += 1
+                else:
+                    raise
+            key = decision_key(
+                review_item["workflow_name"],
+                review_item["job_name"],
+                review_item["job_urls"],
+            )
+            decisions_by_key[key] = decision
+            fresh_agent_reviews += 1
+            fresh_agent_calls += 1
 
     for item in prepared:
         if len(created) >= max_new_issues:
