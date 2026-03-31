@@ -50,7 +50,7 @@ echo "Running autogen.pl..."
 ./autogen.pl
 
 # NOTE: OpenMPI configure options for ULFM fault tolerance and HPC environment compatibility.
-# The --with-slurm option enables SLURM process management support for multi-host jobs.
+# The --with-slurm=/opt/slurm option enables SLURM process management support for multi-host jobs.
 # --disable-mca-dso and --disable-dlopen create a static build for portability.
 # These settings were validated for the current manylinux-based environment.
 # If issues arise with different MPI runtimes or cluster configurations, review with the scaleout team.
@@ -63,7 +63,7 @@ echo "Running autogen.pl..."
     --disable-mca-dso \
     --disable-dlopen \
     --enable-static \
-    --with-slurm \
+    --with-slurm=/opt/slurm \
     --with-pic
 
 make -j"$(nproc)"
