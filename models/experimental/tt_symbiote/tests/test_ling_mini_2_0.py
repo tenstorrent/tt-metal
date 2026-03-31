@@ -124,10 +124,10 @@ def test_ling_mini_2_0(mesh_device):
     # Warmup run
     outputs = model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_cache)
 
-    # Reset cache for main run — must also release all traces since they
-    # reference the old cache's device buffers which will be deallocated.
+    paged_cache.reset()
     TracedRun.release_all()
-    paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
+    outputs = model.generate(**inputs, max_new_tokens=4, use_cache=True, past_key_values=paged_cache)
+    paged_cache.reset()
 
     DispatchManager.clear_timings()
     outputs = model.generate(**inputs, max_new_tokens=128, use_cache=True, past_key_values=paged_cache)

@@ -79,6 +79,13 @@ class TTNNModule:
 
     def preprocess_weights(self):
         """Preprocess weights (called once before first use)."""
+        from models.experimental.tt_symbiote.core.run_config import _TRACE_RUNNING
+
+        if _TRACE_RUNNING:
+            assert (
+                self._preprocessed_weight
+            ), f"Weights must be preprocessed for {self.module_name} before running traced execution."
+            return
         if not self._preprocessed_weight:
             self._preprocessed_weight = True
         else:
@@ -87,6 +94,13 @@ class TTNNModule:
 
     def move_weights_to_device(self):
         """Move preprocessed weights to device."""
+        from models.experimental.tt_symbiote.core.run_config import _TRACE_RUNNING
+
+        if _TRACE_RUNNING:
+            assert (
+                self._weights_on_device
+            ), f"Weights must be on device for {self.module_name} before running traced execution."
+            return
         assert (
             self._preprocessed_weight
         ), f"Weights must be preprocessed for {self.module_name} before moving to device."

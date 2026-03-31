@@ -146,11 +146,13 @@ def warmup(model, tokenizer, mesh_device):
 
     paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
     model.generate(**inputs, max_new_tokens=2, use_cache=True, past_key_values=paged_cache)
+    TracedRun.release_all()
     print("Warmup complete.")
 
 
 def chat_loop(model, tokenizer, mesh_device, max_new_tokens=256):
     messages = []
+    paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
     print("\n--- Ling-mini-2.0 Chatbot ---")
     print("Type 'quit' or 'exit' to stop, '/clear' to reset history.\n")
 
@@ -168,7 +170,12 @@ def chat_loop(model, tokenizer, mesh_device, max_new_tokens=256):
             break
         if user_input.lower() == "/clear":
             messages = []
+            paged_cache.reset()
             print("History cleared.\n")
+            continue
+        if user_input.lower() == "/clear_trace":
+            TracedRun.release_all()
+            print("Traces cleared.\n")
             continue
 
         messages.append({"role": "user", "content": user_input})
@@ -183,12 +190,10 @@ def chat_loop(model, tokenizer, mesh_device, max_new_tokens=256):
         if "token_type_ids" in inputs:
             del inputs["token_type_ids"]
 
-        # Each turn needs a fresh KV cache and fresh traces.  Traces
-        # reference the cache's device buffers, so they become invalid
-        # when the cache is recreated.  The prompt length also changes
-        # each turn, which requires new prefill trace captures.
-        TracedRun.release_all()
-        paged_cache = create_paged_kv_cache(model.config, mesh_device, batch_size=1)
+        # Reset KV cache values in-place (preserves device buffer addresses so
+        # decode traces remain valid) and release only prefill traces (different
+        # prompt lengths require new prefill captures each turn).
+        paged_cache.reset()
 
         outputs = model.generate(
             **inputs,

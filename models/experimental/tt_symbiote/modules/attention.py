@@ -267,6 +267,18 @@ class TTNNPagedAttentionKVCache(Cache):
     def get_max_cache_shape(self) -> Optional[int]:
         return self.config.max_seq_length
 
+    def reset(self) -> None:
+        """Reset KV cache tracking for a new generation turn.
+
+        Resets Python-side sequence tracking. Device buffer addresses are
+        preserved so traces that reference them remain valid.  The stale
+        values in the cache are harmless: prefill overwrites positions
+        0..seq_len-1, and paged_sdpa_decode uses cur_pos_tensor to limit
+        attention to valid positions.
+        """
+        self._seq_lengths = [0] * self.num_layers
+        self._seen_tokens = 0
+
 
 class TorchSDPAAttention(torch.nn.Module):
     def forward(

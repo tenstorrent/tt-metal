@@ -1407,10 +1407,12 @@ class TTNNMoE(TTNNModule):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
         )
+        super().preprocess_weights_impl()
 
     def move_weights_to_device_impl(self):
         # No mesh_mapper → replicate to all devices
         self._gate_weight_tt = ttnn.to_device(self._gate_weight_tt, self.device)
+        super().move_weights_to_device_impl()
 
     @run_on_devices(DeviceArch.T3K)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
