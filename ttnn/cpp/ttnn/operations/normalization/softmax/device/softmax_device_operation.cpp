@@ -407,6 +407,16 @@ SoftmaxDeviceOperation::create_op_performance_model(
     return result;
 }
 
+// hw bug (#38306): on Wormhole B0, HiFi4 with fp32 accumulation can produce less accurate
+// results than HiFi3 for some inputs. Use HiFi3 as the safe default when fp32 acc is enabled.
+static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
+    tt::ARCH arch, const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config, bool is_fp32) {
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
+    const auto default_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+    verify_numerical_configuration(arch, compute_kernel_config);
+    return init_device_compute_kernel_config(arch, compute_kernel_config, default_fidelity, true, is_fp32, false);
+}
+
 Tensor softmax(
     const Tensor& input_tensor,
     int8_t dim,
@@ -418,8 +428,10 @@ Tensor softmax(
     TT_FATAL(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+
+    const auto compute_kernel_config_val =
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
+
     const auto rank = input_tensor.logical_shape().size();
     const auto dim_calculated = dim < 0 ? rank + dim : dim;
     if (rank > 4) {
@@ -495,8 +507,8 @@ Tensor scale_mask_softmax(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto compute_kernel_config_val =
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
 
     // Input tensor formatting
     const ttnn::Shape input_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
@@ -579,8 +591,8 @@ Tensor softmax_in_place(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto compute_kernel_config_val =
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
 
     // Operation specific checks
     TT_FATAL(
@@ -618,8 +630,8 @@ Tensor scale_mask_softmax_in_place(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto compute_kernel_config_val =
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
     const auto rank = input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 
@@ -648,8 +660,8 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto compute_kernel_config_val =
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
     const auto rank = input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 

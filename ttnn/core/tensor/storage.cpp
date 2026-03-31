@@ -41,6 +41,7 @@ HostStorage::HostStorage(HostStorage&& other, TensorSpec spec, TensorTopology to
 const DistributedHostBuffer& HostStorage::buffer() const { return tensor.buffer(); }
 
 const HostTensor& HostStorage::host_tensor() const { return tensor; }
+HostTensor& HostStorage::host_tensor() { return tensor; }
 
 HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
     return HostStorage(tensor.transform(callable));

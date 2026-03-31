@@ -181,9 +181,9 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores(num_links=1):
-        # 15 from pre/post-SDPA pipeline internals (includes ccl_sync),
+        # 16 from pre/post-SDPA pipeline internals (includes ccl_sync),
         # plus broadcast semaphores.
-        non_bcast_num_semaphores = 15
+        non_bcast_num_semaphores = 16
         bcast_num_semaphores = DeepseekMinimalBroadcast.get_num_semaphores(num_links=num_links)
         return non_bcast_num_semaphores + bcast_num_semaphores
 
@@ -770,7 +770,8 @@ class AttentionBlock:
         # Phase 1: QNOPE first halves, Phase 2: QNOPE second halves, Phase 3: QROPE
         nope_phase1_semaphore_addr = gather_noc0_receiver_semaphore_addr  # ID 2
         nope_phase2_semaphore_addr = gather_noc1_receiver_semaphore_addr  # ID 3
-        rope_semaphore_addr = mcast_data_sender_semaphore_addr  # ID 0 (mcast completed before CreateQHeads)
+        rope_semaphore_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
+        semaphore_index += 1
 
         # Semaphore IDs for MLA
         mla_reducer_semaphore_addr = ttnn.get_global_semaphore_address(attention_block_semaphores[semaphore_index])
@@ -2625,13 +2626,14 @@ class AttentionBlock:
         )
         matmul4_in0_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             matmul4_in0_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset_post_sdpa,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=matmul4_k_num_tiles * tile_1x32_size,
             core_ranges=full_device_grid,
         )
         matmul4_in0_cb_descriptor.format_descriptors = [matmul4_in0_cb_format]
-        sdpa_kv_cache_running_offset_post_sdpa += matmul4_in0_cb_descriptor.total_size
+        input_running_offset += matmul4_in0_cb_descriptor.total_size
+        scatter_dest_l1_addr = ttnn.get_cb_address(matmul4_in0_cb_descriptor)
 
         # CB 2: Matmul4 output (4 tiles of 1x32 per core, kv_b2 grid)
         # When kv_cache buffer is available, overlap into it. Otherwise standalone.
@@ -2643,15 +2645,17 @@ class AttentionBlock:
             tile=matmul4_out_tile_descriptor,
         )
 
+        # Overlapping matmul4 output with input tensor, but it's likely safe to have this overlap with kv cache buffer
+        # Only matmul4 input is unsafe to overlap with kv cache buffer
         matmul4_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             matmul4_out_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset_post_sdpa,
+            ref_input_tensor,
+            address_offset=input_running_offset,
             total_size=matmul4_out_w_per_core * tile_1x32_size,
             core_ranges=full_device_grid,
         )
         matmul4_out_cb_descriptor.format_descriptors = [matmul4_out_cb_format]
-        sdpa_kv_cache_running_offset_post_sdpa += matmul4_out_cb_descriptor.total_size
+        input_running_offset += matmul4_out_cb_descriptor.total_size
 
         # CB 3: Gather2 output = Mcast3 source (from sharded tensor, gather core)
         gather2_dst_cb_format = ttnn.CBFormatDescriptor(
@@ -3296,7 +3300,6 @@ class AttentionBlock:
         # ========================================================================
         # Pre-compute device-invariant SDPA addresses
         # ========================================================================
-        scatter_dest_l1_addr = ref_sdpa_kv_cache_buffer.buffer_address() + matmul4_in0_cb_descriptor.address_offset
         forwarder_buffer_base = ref_sdpa_forwarder_scratch.buffer_address()
         ncrisc_buffer_offset = sdpa_fwd_slots_per_round * sdpa_fwd_slot_size * 2  # After BRISC R1+R2
         r1_recv_buffer_addr = ref_sdpa_intermediate_recv.buffer_address()

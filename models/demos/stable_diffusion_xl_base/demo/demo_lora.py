@@ -19,7 +19,6 @@ from models.demos.stable_diffusion_xl_base.tests.test_common import (
     MAX_SEQUENCE_LENGTH,
     SDXL_FABRIC_CONFIG,
     SDXL_L1_SMALL_SIZE,
-    SDXL_TRACE_REGION_SIZE,
     TEXT_ENCODER_2_PROJECTION_DIM,
     determinate_min_batch_size,
     prepare_device,
@@ -239,7 +238,6 @@ def run_demo_inference(
         (
             {
                 "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
             True,
@@ -247,7 +245,6 @@ def run_demo_inference(
         (
             {
                 "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_TRACE_REGION_SIZE,
             },
             False,
         ),

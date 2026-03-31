@@ -119,4 +119,44 @@ void apply_override_runtime_arguments(
     }
 }
 
+/**
+ * Update output tensor topologies with either custom topologies or imputed defaults.
+ *
+ * @param tensor_return_value The output tensor(s) to update (mutated in place).
+ * @param input_tensors Pre-extracted input tensors for computing default topology.
+ * @param custom_topologies Optional custom topologies from the operation (empty if none provided).
+ */
+template <typename TensorReturnValue>
+void update_output_tensor_topologies(
+    TensorReturnValue& tensor_return_value,
+    const std::vector<std::reference_wrapper<const Tensor>>& input_tensors,
+    std::vector<tt::tt_metal::TensorTopology> custom_topologies) {
+    std::vector<std::reference_wrapper<Tensor>> output_tensors;
+    tt::stl::reflection::update_object_of_type<Tensor>(
+        [&output_tensors](Tensor& t) { output_tensors.push_back(std::ref(t)); }, tensor_return_value);
+
+    if (!custom_topologies.empty()) {
+        TT_FATAL(
+            custom_topologies.size() == output_tensors.size(),
+            "Number of custom topologies ({}) does not match number of output tensors ({})",
+            custom_topologies.size(),
+            output_tensors.size());
+
+        for (auto i = 0ul; i < custom_topologies.size(); i++) {
+            output_tensors[i].get().update_tensor_topology(custom_topologies[i]);
+        }
+    } else {
+        auto output_topology_result =
+            ttnn::device_operation::detail::compute_output_placements_and_shape(input_tensors);
+
+        for (auto& tensor : output_tensors) {
+            auto topology = tt::tt_metal::TensorTopology(
+                output_topology_result.second,
+                output_topology_result.first,
+                tensor.get().tensor_topology().mesh_coords());
+            tensor.get().update_tensor_topology(topology);
+        }
+    }
+}
+
 }  // namespace ttnn::device_operation::mesh_device_operation_utils

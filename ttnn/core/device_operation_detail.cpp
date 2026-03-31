@@ -47,12 +47,13 @@ std::pair<
     ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
 compute_output_placements_and_shape(
-    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors,
-    const tt::tt_metal::Tensor& first_tensor) {
+    const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors) {
     using Tensor = tt::tt_metal::Tensor;
     using Placement = tt::tt_metal::distributed::MeshMapperConfig::Placement;
     using Shard = tt::tt_metal::distributed::MeshMapperConfig::Shard;
     using Replicate = tt::tt_metal::distributed::MeshMapperConfig::Replicate;
+
+    TT_FATAL(!tensors.empty(), "Cannot compute output placements and shape with no tensors");
 
     std::vector<std::reference_wrapper<const Tensor>> sharded_tensors;
     for (const auto& tensor_ref : tensors) {
@@ -70,6 +71,7 @@ compute_output_placements_and_shape(
                 std::max(max_distribution_rank, tensor_ref.get().tensor_topology().distribution_shape().dims());
         }
     } else {
+        const auto &first_tensor = tensors.front().get();
         max_distribution_rank = first_tensor.tensor_topology().distribution_shape().dims();
     }
 

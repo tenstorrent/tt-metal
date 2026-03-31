@@ -16,8 +16,8 @@ from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, tt_dtype
 @pytest.mark.parametrize(
     "input_shape, dim, start, length, memory_config, layout",
     [
-        ((32, 32, 17, 32), 0, 12, 16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM), ttnn.TILE_LAYOUT),
-        ((1, 32, 12, 16), 1, 5, 8, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM), ttnn.ROW_MAJOR_LAYOUT),
+        ((64, 32, 17, 32), 0, 24, 16, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM), ttnn.TILE_LAYOUT),
+        ((1, 32, 24, 16), 1, 5, 8, ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM), ttnn.ROW_MAJOR_LAYOUT),
         (
             (1, 8, 64, 128),
             1,
