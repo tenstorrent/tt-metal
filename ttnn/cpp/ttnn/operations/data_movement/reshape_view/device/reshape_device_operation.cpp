@@ -27,6 +27,11 @@ void ReshapeViewDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.dtype() == DataType::FLOAT32 or input_tensor_a.dtype() == DataType::INT32 or
             input_tensor_a.dtype() == DataType::UINT8 or input_tensor_a.dtype() == DataType::UINT16,
         "Can only work with bfloat16/float32, int32/uint32, or uint8/uint16 tensors");
+    if (input_tensor_a.dtype() == DataType::UINT8 or input_tensor_a.dtype() == DataType::UINT16) {
+        TT_FATAL(
+            input_tensor_a.layout() == Layout::ROW_MAJOR,
+            "UINT8 and UINT16 reshape only supported for row-major layout");
+    }
 }
 
 ReshapeViewDeviceOperation::spec_return_value_t ReshapeViewDeviceOperation::compute_output_specs(

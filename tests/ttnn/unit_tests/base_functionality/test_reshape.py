@@ -729,12 +729,13 @@ def test_bf8_support(input_shape, output_shape, device):
     ],
 )
 def test_uint8_rm_reshape(input_shape, output_shape, device):
-    torch_input_tensor = torch.randint(0, 255, input_shape, dtype=torch.uint8)
+    torch_input_tensor = torch.randint(0, 256, input_shape, dtype=torch.uint8)
     torch_result = torch_input_tensor.reshape(output_shape)
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.uint8,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
