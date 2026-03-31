@@ -69,6 +69,10 @@ echo "###" read dram
 bw_test "-m 1"
 latency_test "-m 1"
 
+echo "###" read dram all worker cores
+bw_test "-m 1 -rx 0 -ry 0 -rex $max_x -rey $max_y"
+latency_test "-m 1 -rx 0 -ry 0 -rex $max_x -rey $max_y"
+
 echo "###" read drams
 bw_test "-m 3"
 latency_test "-m 3"
@@ -84,6 +88,14 @@ latency_test "-m 2 -rx 0 -ry 0 -sx $hx -sy $hy"
 echo "###" read local
 bw_test "-m 2 -rx 0"
 latency_test "-m 2 -rx 0"
+
+echo "###" write dram
+bw_test "-m 1 -wr"
+latency_test "-m 1 -wr"
+
+echo "###" write dram all worker cores
+bw_test "-m 1 -wr -rx 0 -ry 0 -rex $max_x -rey $max_y"
+latency_test "-m 1 -wr -rx 0 -ry 0 -rex $max_x -rey $max_y"
 
 echo "###" write l1 far halfway away
 bw_test "-m 2 -rx 0 -ry 0 -sx $hx -sy $hy -wr"
