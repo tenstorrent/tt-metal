@@ -33,7 +33,8 @@ echo "==> Configuring (headers + libs only)..."
     --disable-sview \
     --disable-slurmrestd \
     --without-rpath \
-    --without-readline
+    --without-readline \
+    --without-munge
 
 echo "==> Building libslurm..."
 # Build only the API library — we don't need daemons, plugins, or CLI tools.
@@ -49,6 +50,15 @@ cp -a slurm "${SLURM_PREFIX}/include/"
 # Install libraries
 cp -a src/api/.libs/libslurm.so* "${SLURM_PREFIX}/lib/"
 cp -a src/api/.libs/libslurm.a   "${SLURM_PREFIX}/lib/" 2>/dev/null || true
+
+# Guard: ensure libslurm.so has no munge runtime dependency.
+# munge is only needed for Slurm daemon auth — the API library must be clean
+# so that runtime containers without munge can load binaries built against it.
+if ldd "${SLURM_PREFIX}/lib/libslurm.so" 2>/dev/null | grep -q munge; then
+    echo "[ERROR] libslurm.so links against libmunge — runtime containers will fail to load." >&2
+    exit 1
+fi
+echo "==> Verified: libslurm.so has no munge runtime dependency"
 
 # Create pkgconfig for discoverability
 mkdir -p "${SLURM_PREFIX}/lib/pkgconfig"
