@@ -209,6 +209,8 @@ def test_pipeline_performance(
         dynamic_load=dynamic_load,
         topology=topology,
         is_fsdp=is_fsdp,
+        target_height=height,
+        target_width=width,
     )
 
     # Warmup run (not timed)

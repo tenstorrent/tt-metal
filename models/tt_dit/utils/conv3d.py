@@ -23,58 +23,60 @@ def _ntuple(x, n):
     return tuple(repeat(x, n))
 
 
-# Mesh-specific blocking table: (h_factor, w_factor, C_in, C_out, kernel) -> blocking
-# Blockings swept on BH p150b (130 cores, 13x10 grid).
-# WH 4x8 shares (4, 8) entries with BH — needs re-sweep on actual WH hardware.
-# See models/tt_dit/tests/models/wan2_2/sweep_results.md for full results.
-_MESH_BLOCKINGS = {
-    # --- BH Galaxy / WH Galaxy 4x8 (h_factor=4, w_factor=8) — v2: 12x10 grid, correct uncached T ---
-    (4, 8, 32, 384, (3, 3, 3)): (32, 128, 1, 16, 16),
-    (4, 8, 384, 384, (3, 3, 3)): (128, 128, 1, 4, 4),
-    (4, 8, 192, 384, (3, 3, 3)): (96, 128, 1, 8, 4),
-    (4, 8, 192, 192, (3, 3, 3)): (96, 96, 1, 4, 16),
-    (4, 8, 96, 96, (3, 3, 3)): (96, 96, 1, 8, 8),
-    (4, 8, 96, 3, (3, 3, 3)): (96, 32, 1, 8, 16),
-    (4, 8, 384, 192, (1, 3, 3)): (96, 96, 1, 16, 16),
-    (4, 8, 192, 96, (1, 3, 3)): (192, 96, 1, 4, 32),
-    (4, 8, 384, 768, (3, 1, 1)): (192, 256, 1, 4, 4),
-    # --- BH Loud Box 2x4 (h_factor=2, w_factor=4) — v2: correct uncached T ---
-    (2, 4, 32, 384, (3, 3, 3)): (32, 128, 1, 16, 16),
-    (2, 4, 384, 384, (3, 3, 3)): (128, 128, 1, 8, 2),
-    (2, 4, 192, 384, (3, 3, 3)): (96, 128, 1, 4, 8),
-    (2, 4, 192, 192, (3, 3, 3)): (96, 96, 1, 8, 8),
-    (2, 4, 96, 96, (3, 3, 3)): (96, 96, 1, 8, 8),
-    (2, 4, 96, 3, (3, 3, 3)): (96, 32, 1, 16, 8),
-    (2, 4, 384, 192, (1, 3, 3)): (128, 96, 1, 16, 16),
-    (2, 4, 192, 96, (1, 3, 3)): (192, 96, 1, 16, 8),
-    (2, 4, 384, 768, (3, 1, 1)): (128, 384, 1, 8, 2),
-    # --- BH Galaxy 6U 4x32 (h_factor=4, w_factor=32) — v3: sliding window + fused tilize+matmul ---
-    # Blockings chosen by brute-force sweep across C_in, C_out, H, W combinations.
-    (4, 32, 32, 384, (3, 3, 3)): (32, 128, 1, 16, 2),  # conv_in: 1.61x vs original
-    (4, 32, 384, 384, (3, 3, 3)): (96, 128, 1, 16, 2),  # up1 resblocks: best for up1 (46x10)
-    (4, 32, 192, 384, (3, 3, 3)): (96, 128, 1, 16, 2),  # up1 res0: 23% faster (2647 us vs 3453 us baseline)
-    (4, 32, 192, 192, (3, 3, 3)): (96, 96, 1, 32, 2),  # up2: 37% faster (4735 us vs 7629 us baseline)
-    (4, 32, 96, 96, (3, 3, 3)): (96, 96, 1, 16, 4),  # up3: 36% faster (5232 us vs 8135 us baseline)
-    (4, 32, 96, 3, (3, 3, 3)): (96, 32, 1, 32, 2),  # conv_out: 13% faster (4716 us vs 5428 us)
-    (4, 32, 384, 192, (1, 3, 3)): (192, 96, 1, 32, 4),  # up0+up1 spatial: original is best weighted
-    (4, 32, 192, 96, (1, 3, 3)): (192, 96, 1, 4, 8),  # up2 spatial: original is best
-    (4, 32, 384, 768, (3, 1, 1)): (192, 384, 1, 16, 2),  # up0+up1 time_conv: 14x vs original default
-}
-
-# Spatial-specific overrides: (h_factor, w_factor, C_in, C_out, kernel, H_out, W_out) -> blocking
-# Used when two layers share the same channel/kernel key but have different spatial dims
-# and benefit from different blockings.
-_MESH_SPATIAL_BLOCKINGS = {
-    # lat_res (384->384 k333): H_out=23, W_out=5 — small spatial, compute-bound
-    # (96,96,1,32,1) = 654 us vs shared (96,128,1,16,2) = 817 us = 20% faster
+# Blocking table: (h_factor, w_factor, C_in, C_out, kernel, H_out, W_out) -> blocking
+# Each production (mesh, resolution, layer) combination gets its own entry.
+# Blockings are (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block).
+# See models/tt_dit/tests/models/wan2_2/sweep_results.md for sweep methodology.
+_BLOCKINGS = {
+    # --- BH Galaxy 6U 4x32, 720p — v3: sliding window + fused tilize+matmul ---
+    # conv_in: 32→384 k333, (23,25,7) -> H_out=23, W_out=5
+    (4, 32, 32, 384, (3, 3, 3), 23, 5): (32, 128, 1, 16, 2),
+    # lat_res + mid_res: 384→384 k333, (23,25,7) -> H_out=23, W_out=5
     (4, 32, 384, 384, (3, 3, 3), 23, 5): (96, 96, 1, 32, 1),
-    # up0_tconv (384->768 k311): H_out=23, W_out=5 — 276 us vs shared 319 us = 13% faster
-    (4, 32, 384, 768, (3, 1, 1), 23, 5): (96, 256, 1, 32, 2),
-    # up0_spatial (384->192 k133): H_out=46, W_out=10 — 650 us vs shared 846 us = 23% faster
+    # up0_tconv: 384→768 k311, (22,23,5) -> H_out=20, W_out=5
+    (4, 32, 384, 768, (3, 1, 1), 20, 5): (96, 256, 1, 32, 2),
+    # up0_spatial: 384→192 k133, (41,48,12) -> H_out=46, W_out=10
     (4, 32, 384, 192, (1, 3, 3), 46, 10): (96, 96, 1, 16, 4),
+    # up1_res0: 192→384 k333, (43,48,12) -> H_out=46, W_out=10
+    (4, 32, 192, 384, (3, 3, 3), 46, 10): (96, 128, 1, 16, 2),
+    # up1_res: 384→384 k333, (43,48,12) -> H_out=46, W_out=10
+    (4, 32, 384, 384, (3, 3, 3), 46, 10): (96, 128, 1, 16, 2),
+    # up1_tconv: 384→768 k311, (42,46,10) -> H_out=40, W_out=10
+    (4, 32, 384, 768, (3, 1, 1), 40, 10): (192, 384, 1, 16, 2),
+    # up1_spatial: 384→192 k133, (81,94,22) -> H_out=92, W_out=20
+    (4, 32, 384, 192, (1, 3, 3), 92, 20): (192, 96, 1, 32, 4),
+    # up2_res: 192→192 k333, (83,94,22) -> H_out=92, W_out=20
+    (4, 32, 192, 192, (3, 3, 3), 92, 20): (96, 96, 1, 32, 2),
+    # up2_spatial: 192→96 k133, (81,186,42) -> H_out=184, W_out=40
+    (4, 32, 192, 96, (1, 3, 3), 184, 40): (192, 96, 1, 4, 8),
+    # up3_res: 96→96 k333, (83,186,42) -> H_out=184, W_out=40
+    (4, 32, 96, 96, (3, 3, 3), 184, 40): (96, 96, 1, 16, 4),
+    # conv_out: 96→3 k333, (83,186,42) -> H_out=184, W_out=40
+    (4, 32, 96, 3, (3, 3, 3), 184, 40): (96, 32, 1, 32, 2),
+    # --- BH Galaxy / WH Galaxy 4x8, 720p — v2 ---
+    (4, 8, 32, 384, (3, 3, 3), 23, 18): (32, 128, 1, 16, 16),
+    (4, 8, 384, 384, (3, 3, 3), 23, 18): (128, 128, 1, 4, 4),
+    (4, 8, 192, 384, (3, 3, 3), 46, 38): (96, 128, 1, 8, 4),
+    (4, 8, 192, 192, (3, 3, 3), 92, 78): (96, 96, 1, 4, 16),
+    (4, 8, 96, 96, (3, 3, 3), 184, 158): (96, 96, 1, 8, 8),
+    (4, 8, 96, 3, (3, 3, 3), 184, 158): (96, 32, 1, 8, 16),
+    (4, 8, 384, 192, (1, 3, 3), 92, 78): (96, 96, 1, 16, 16),
+    (4, 8, 192, 96, (1, 3, 3), 184, 158): (192, 96, 1, 4, 32),
+    (4, 8, 384, 768, (3, 1, 1), 40, 40): (192, 256, 1, 4, 4),
+    # --- BH Loud Box 2x4, 480p — v2 ---
+    (2, 4, 32, 384, (3, 3, 3), 33, 23): (32, 128, 1, 16, 16),
+    (2, 4, 384, 384, (3, 3, 3), 33, 23): (128, 128, 1, 8, 2),
+    (2, 4, 192, 384, (3, 3, 3), 68, 48): (96, 128, 1, 4, 8),
+    (2, 4, 192, 192, (3, 3, 3), 138, 98): (96, 96, 1, 8, 8),
+    (2, 4, 96, 96, (3, 3, 3), 278, 198): (96, 96, 1, 8, 8),
+    (2, 4, 96, 3, (3, 3, 3), 278, 198): (96, 32, 1, 16, 8),
+    (2, 4, 384, 192, (1, 3, 3), 138, 98): (128, 96, 1, 16, 16),
+    (2, 4, 192, 96, (1, 3, 3), 278, 198): (192, 96, 1, 16, 8),
+    (2, 4, 384, 768, (3, 1, 1), 60, 60): (128, 384, 1, 8, 2),
 }
 
-# Fallback table when no mesh-specific entry exists (bh_4x8 defaults).
+# Fallback table: (C_in, C_out, kernel) -> blocking.
+# Used when no exact (mesh, spatial) match exists.
 _DEFAULT_BLOCKINGS = {
     (32, 384, (3, 3, 3)): (32, 64, 1, 4, 16),
     (384, 384, (3, 3, 3)): (128, 64, 1, 4, 8),
@@ -95,17 +97,14 @@ _DEFAULT_BLOCKINGS = {
 
 
 def get_conv3d_config(
-    in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, H_out=None, W_out=None
+    in_channels, out_channels, kernel_size, weights_dtype, grid_size, *, h_factor=1, w_factor=1, H_out=0, W_out=0
 ):
     """
     Get optimized Conv3dConfig for a conv3d layer.
 
-    Blockings are mesh-aware: different (h_factor, w_factor) use different spatial tiling
-    since per-device tensor shapes depend on how H and W are fractured across devices.
-
-    When H_out and W_out are provided, a spatial-specific blocking override is tried first.
-    This allows layers with the same (C_in, C_out, kernel) but different spatial dims to
-    use independently optimized blockings.
+    Lookup chain: exact (mesh, spatial) match → fallback (channel, kernel) match → default.
+    Pass h_factor, w_factor, H_out, W_out for best results. When these are not available
+    the fallback table is used.
     """
     if weights_dtype == ttnn.float32:
         return ttnn.Conv3dConfig(
@@ -119,15 +118,9 @@ def get_conv3d_config(
             compute_with_storage_grid_size=grid_size,
         )
 
-    blocking = None
-    if H_out is not None and W_out is not None:
-        spatial_key = (h_factor, w_factor, in_channels, out_channels, kernel_size, H_out, W_out)
-        blocking = _MESH_SPATIAL_BLOCKINGS.get(spatial_key)
-
-    if blocking is None:
-        mesh_key = (h_factor, w_factor, in_channels, out_channels, kernel_size)
-        shape_key = (in_channels, out_channels, kernel_size)
-        blocking = _MESH_BLOCKINGS.get(mesh_key) or _DEFAULT_BLOCKINGS.get(shape_key)
+    key = (h_factor, w_factor, in_channels, out_channels, kernel_size, H_out, W_out)
+    shape_key = (in_channels, out_channels, kernel_size)
+    blocking = _BLOCKINGS.get(key) or _DEFAULT_BLOCKINGS.get(shape_key)
 
     if blocking is None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
