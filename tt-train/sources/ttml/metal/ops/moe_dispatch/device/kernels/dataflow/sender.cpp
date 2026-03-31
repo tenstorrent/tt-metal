@@ -18,6 +18,7 @@
 #include "api/debug/dprint.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 constexpr uint32_t sender_cb_id = get_compile_time_arg_val(0);
 constexpr uint32_t pkt_hdr_cb_id = get_compile_time_arg_val(1);
@@ -45,6 +46,9 @@ void kernel_main() {
     uint32_t first_sender_noc_y = get_arg_val<uint32_t>(ra++);
     uint32_t is_first_ep_device = get_arg_val<uint32_t>(ra++);
     uint32_t is_last_ep_device = get_arg_val<uint32_t>(ra++);
+    uint32_t my_mesh_id = get_arg_val<uint32_t>(ra++);
+    uint32_t next_device_id = get_arg_val<uint32_t>(ra++);
+    uint32_t first_device_id = get_arg_val<uint32_t>(ra++);
 
     uint32_t expert_n_rows[num_experts];
     uint32_t expert_start_row[num_experts];
@@ -52,6 +56,8 @@ void kernel_main() {
     for (uint32_t e = 0; e < num_experts; e++) expert_start_row[e] = get_arg_val<uint32_t>(ra++);
     uint32_t expert_dst_row[num_experts];
     for (uint32_t e = 0; e < num_experts; e++) expert_dst_row[e] = get_arg_val<uint32_t>(ra++);
+    uint32_t expert_owner_device_id[num_experts];
+    for (uint32_t e = 0; e < num_experts; e++) expert_owner_device_id[e] = get_arg_val<uint32_t>(ra++);
 
     auto fabric_connection =
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(ra);
@@ -66,12 +72,24 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* go_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_sem_addr);
 
+    // Pre-compute the forward direction so we can select the right connection at runtime.
+    // This is only valid when !is_last_ep_device (we have a forward neighbor).
+    uint32_t fwd_direction = 0;
+    if (!is_last_ep_device) {
+        fwd_direction = static_cast<uint32_t>(tt::tt_fabric::get_next_hop_router_direction(my_mesh_id, next_device_id));
+    }
+
     DPRINT << "SENDER[" << my_device_index << "]: next=(" << next_sender_noc_x << "," << next_sender_noc_y
            << ") first=(" << first_sender_noc_x << "," << first_sender_noc_y << ") opening fabric" << ENDL();
+    DPRINT << "SENDER[" << my_device_index << "]: go_sem_addr=0x" << HEX() << go_sem_addr << " tiles_ready_sem_addr=0x"
+           << tiles_ready_sem_addr << DEC() << " receiver=(" << receiver_noc_x << "," << receiver_noc_y << ")"
+           << " has_fwd=" << fabric_connection.has_forward_connection()
+           << " has_bwd=" << fabric_connection.has_backward_connection() << ENDL();
     fabric_connection.open_finish();
     DPRINT << "SENDER[" << my_device_index << "]: fabric open, go_sem=" << *go_sem_ptr
            << " is_first=" << is_first_ep_device << " is_last=" << is_last_ep_device << ENDL();
-    DPRINT << "SENDER[" << my_device_index << "]: entering loop" << ENDL();
+    DPRINT << "SENDER[" << my_device_index << "]: entering loop, my_mesh_id=" << my_mesh_id
+           << " next_dev=" << next_device_id << " first_dev=" << first_device_id << ENDL();
 
     const uint32_t row_bytes = D_t * tile_bytes;
     uint32_t turn = 0;
@@ -93,6 +111,7 @@ void kernel_main() {
             uint32_t n_rows = expert_n_rows[e];
             uint32_t src_start = expert_start_row[e];
             uint32_t dst_start = expert_dst_row[e];
+            uint32_t owner_dev_id = expert_owner_device_id[e];
             bool is_local = (owner == my_device_index);
 
             DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " i=" << i << " e=" << e
@@ -120,24 +139,23 @@ void kernel_main() {
                         noc_async_write_barrier();
                         noc_semaphore_inc(owner_sem_noc, 1);
                     } else {
-                        bool use_forward = (owner > my_device_index);
-                        uint8_t num_hops =
-                            use_forward ? (uint8_t)(owner - my_device_index) : (uint8_t)(my_device_index - owner);
-
                         uint64_t dest_noc = dispatch_acc.get_noc_addr(dst_tile_idx);
 
-                        pkt_hdr->to_chip_unicast(num_hops);
                         pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
                             tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dest_noc, owner_sem_noc, 1, false},
                             row_bytes);
+                        tt::tt_fabric::fabric_set_unicast_route(
+                            (volatile tt::tt_fabric::HybridMeshPacketHeader*)pkt_hdr, owner_dev_id, my_mesh_id);
 
-                        if (use_forward && fabric_connection.has_forward_connection()) {
+                        uint32_t route = static_cast<uint32_t>(
+                            tt::tt_fabric::get_next_hop_router_direction(my_mesh_id, owner_dev_id));
+                        if (route == fwd_direction) {
                             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                             fabric_connection.get_forward_connection()
                                 .send_payload_without_header_non_blocking_from_address(l1, row_bytes);
                             fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
                                 (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
-                        } else if (!use_forward && fabric_connection.has_backward_connection()) {
+                        } else {
                             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
                             fabric_connection.get_backward_connection()
                                 .send_payload_without_header_non_blocking_from_address(l1, row_bytes);
@@ -156,21 +174,26 @@ void kernel_main() {
 
         if (!is_last_ep_device) {
             uint64_t next_go = get_noc_addr(next_sender_noc_x, next_sender_noc_y, go_sem_addr);
-            pkt_hdr->to_chip_unicast(1);
             pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{next_go, 1, false});
-            DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " signaling next (+1 hop fwd)" << ENDL();
+            tt::tt_fabric::fabric_set_unicast_route(
+                (volatile tt::tt_fabric::HybridMeshPacketHeader*)pkt_hdr, next_device_id, my_mesh_id);
+            DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " signaling next dev=" << next_device_id
+                   << " noc=0x" << HEX() << next_go << DEC() << ENDL();
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
             fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
                 (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+            DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " fwd signal sent" << ENDL();
         } else {
             uint64_t first_go = get_noc_addr(first_sender_noc_x, first_sender_noc_y, go_sem_addr);
-            pkt_hdr->to_chip_unicast((uint8_t)(num_devices - 2));
             pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{first_go, 1, false});
-            DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " signaling first (" << (num_devices - 2)
-                   << " hops bwd)" << ENDL();
+            tt::tt_fabric::fabric_set_unicast_route(
+                (volatile tt::tt_fabric::HybridMeshPacketHeader*)pkt_hdr, first_device_id, my_mesh_id);
+            DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " signaling first dev=" << first_device_id
+                   << " noc=0x" << HEX() << first_go << DEC() << ENDL();
             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
             fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
                 (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+            DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " bwd signal sent" << ENDL();
         }
     }
 

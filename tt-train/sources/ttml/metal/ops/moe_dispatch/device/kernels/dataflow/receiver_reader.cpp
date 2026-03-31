@@ -57,6 +57,7 @@ void kernel_main() {
     uint32_t dispatch_tile_row = 0;
     uint32_t tiles_consumed = 0;
 
+    DPRINT << "RECV: starting, E_local=" << E_local << " num_devices=" << num_devices << ENDL();
     for (uint32_t e = 0; e < E_local; e++) {
         uint32_t w_base = (my_first_expert + e) * w_tiles_per_expert;
 
@@ -66,6 +67,8 @@ void kernel_main() {
             for (uint32_t r = 0; r < n_rows; r++) {
                 // Wait for sender to write this tile-row to dispatch_buf
                 tiles_consumed++;
+                DPRINT << "RECV: waiting e=" << e << " d=" << d << " r=" << r << " sem_need=" << tiles_consumed
+                       << " cur=" << *sem_ptr << ENDL();
                 noc_semaphore_wait_min(sem_ptr, tiles_consumed);
 
                 // Read tile-row from dispatch_buf DRAM into cb_in

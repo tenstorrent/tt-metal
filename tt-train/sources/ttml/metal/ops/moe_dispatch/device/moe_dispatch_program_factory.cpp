@@ -198,7 +198,7 @@ MoeDispatchMeshWorkloadFactory::create_at(
     log_info(
         tt::LogOp,
         "MoE dispatch chain: chip_id={} mesh_coord=({},{}) ep_col={} is_first={} is_last={} fwd={} bwd={} "
-        "sender_phys=({},{})",
+        "sender_phys=({},{}) receiver_phys=({},{})",
         target_device->id(),
         mesh_coord[0],
         mesh_coord[1],
@@ -209,33 +209,60 @@ MoeDispatchMeshWorkloadFactory::create_at(
         backward_coord.has_value() ? fmt::format("({},{})", backward_coord.value()[0], backward_coord.value()[1])
                                    : "none",
         sender_phys.x,
-        sender_phys.y);
+        sender_phys.y,
+        receiver_phys.x,
+        receiver_phys.y);
 
     // next_sender_noc_x/y = sender core on the next EP device (forward neighbor)
     uint32_t next_sender_x = 0, next_sender_y = 0;
+    uint32_t next_device_chip_id = 0;
     if (!is_last && forward_coord.has_value()) {
         IDevice* next_device = mesh_device->get_device(forward_coord.value());
         auto next_sender_phys = next_device->worker_core_from_logical_core(sender_core);
         next_sender_x = next_sender_phys.x;
         next_sender_y = next_sender_phys.y;
+        next_device_chip_id = mesh_device->get_fabric_node_id(forward_coord.value()).chip_id;
+    }
+
+    // Walk backward to find ep_col=0's mesh coord and all EP device coords in order.
+    // We need chip_ids for: first device (for last-device backward signal) and all expert owners.
+    auto ep_col0_coord = mesh_coord;
+    for (uint32_t h = 0; h < dispatch_axis_index; h++) {
+        auto c = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            sorted_hidden, ep_col0_coord, -1, ttnn::ccl::Topology::Linear, attrs.cluster_axis);
+        TT_FATAL(c.has_value(), "Could not walk backward to ep_col=0");
+        ep_col0_coord = c.value();
+    }
+
+    // Build ordered list of mesh coords for all EP devices (ep_col 0..num_devices-1)
+    std::vector<ttnn::MeshCoordinate> ep_coords;
+    ep_coords.reserve(num_devices);
+    ep_coords.push_back(ep_col0_coord);
+    for (uint32_t d = 1; d < num_devices; d++) {
+        auto c = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+            sorted_hidden, ep_coords[d - 1], 1, ttnn::ccl::Topology::Linear, attrs.cluster_axis);
+        TT_FATAL(c.has_value(), "Could not walk forward to ep_col={}", d);
+        ep_coords.push_back(c.value());
     }
 
     // first_sender_noc_x/y = sender core on device 0 (used by last device for multi-hop signal)
     uint32_t first_sender_x = 0, first_sender_y = 0;
+    uint32_t first_device_chip_id = mesh_device->get_fabric_node_id(ep_col0_coord).chip_id;
     if (is_last) {
-        // walk backward num_devices-1 hops to find device 0's mesh coord
-        auto first_coord = mesh_coord;
-        for (uint32_t h = 0; h < num_devices - 1; h++) {
-            auto c = ttnn::ccl::get_physical_neighbor_from_physical_coord(
-                sorted_hidden, first_coord, -1, ttnn::ccl::Topology::Linear, attrs.cluster_axis);
-            TT_FATAL(c.has_value(), "Could not walk backward to device 0");
-            first_coord = c.value();
-        }
-        IDevice* first_device = mesh_device->get_device(first_coord);
+        IDevice* first_device = mesh_device->get_device(ep_col0_coord);
         auto first_sender_phys = first_device->worker_core_from_logical_core(sender_core);
         first_sender_x = first_sender_phys.x;
         first_sender_y = first_sender_phys.y;
     }
+
+    // Per-expert owner chip_id: expert ge is owned by ep_col = ge / E_local
+    std::vector<uint32_t> expert_owner_chip_ids(E);
+    for (uint32_t ge = 0; ge < E; ge++) {
+        uint32_t owner_ep_col = ge / E_local;
+        expert_owner_chip_ids[ge] = mesh_device->get_fabric_node_id(ep_coords[owner_ep_col]).chip_id;
+    }
+
+    uint32_t my_mesh_id = static_cast<uint32_t>(*mesh_device->get_fabric_node_id(mesh_coord).mesh_id);
 
     std::vector<uint32_t> sender_rt = {
         sorted_hidden.buffer()->address(),
@@ -250,10 +277,14 @@ MoeDispatchMeshWorkloadFactory::create_at(
         first_sender_y,
         is_first ? 1u : 0u,
         is_last ? 1u : 0u,
+        my_mesh_id,
+        next_device_chip_id,
+        first_device_chip_id,
     };
     for (auto c : local_counts) sender_rt.push_back(c / TILE_H);
     for (auto o : local_offsets) sender_rt.push_back(o / TILE_H);
     for (uint32_t ge = 0; ge < E; ge++) sender_rt.push_back(sender_dst_row[ge]);
+    for (uint32_t ge = 0; ge < E; ge++) sender_rt.push_back(expert_owner_chip_ids[ge]);
 
     sender_rt.push_back(forward_coord.has_value() ? 1 : 0);
     if (forward_coord.has_value()) {
