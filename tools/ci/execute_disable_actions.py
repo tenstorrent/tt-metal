@@ -20,7 +20,7 @@ from typing import Any
 
 
 REPO = "tenstorrent/tt-metal"
-ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
+ISSUE_REPO_TEST = "tenstorrent/temporary-issue-dump"
 GUARDED_GH = [sys.executable, "tools/ci/guarded_gh.py"]
 PROTECTED_AGENT_PATHS = {
     "tools/ci/guarded_gh.py",
@@ -247,7 +247,7 @@ def load_disable_command_spec() -> str:
 Apply the smallest safe CI-only disable for a failing signal, but do not perform git/gh operations.
 
 ## Input
-- Required: one GitHub issue URL/number in ebanerjeeTT/issue_dump during testing, or in tenstorrent/tt-metal after production promotion.
+- Required: one GitHub issue URL/number in tenstorrent/temporary-issue-dump during testing, or in tenstorrent/tt-metal after production promotion.
 - Optional: one or more job URLs for stronger evidence.
 
 ## Hard Constraints

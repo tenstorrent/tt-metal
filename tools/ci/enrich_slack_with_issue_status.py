@@ -14,7 +14,7 @@ from typing import Any
 
 
 ISSUE_URL_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s]+)/issues/(\d+)")
-SUPPORTED_ISSUE_REPOS = {"tenstorrent/tt-metal", "ebanerjeeTT/issue_dump"}
+SUPPORTED_ISSUE_REPOS = {"tenstorrent/tt-metal", "tenstorrent/temporary-issue-dump"}
 
 
 def fetch_issue(repo_slug: str, issue_number: int, github_token: str | None) -> dict[str, Any]:
