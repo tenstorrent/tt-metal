@@ -33,7 +33,8 @@ Tensor reduce(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool use_welford = true);
 
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
 // Need to get slice parameters based on the minimum of the two shapes.
@@ -270,7 +271,8 @@ static Tensor std_var_impl(
     float scalar,
     const ttnn::SmallVector<int>& non_height_width_dims,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool use_welford) {
     auto input_shape = input_tensor_arg.logical_shape();
     auto rank = input_shape.size();
     auto memory_config = memory_config_arg.value_or(input_tensor_arg.memory_config());
@@ -309,6 +311,40 @@ static Tensor std_var_impl(
     int divisor = correction ? (reduced_volume - 1) : reduced_volume;
     TT_FATAL(divisor > 0, "Reduction is performed on too few elements, yielding divisor of {}", divisor);
 
+    if (!use_welford) {
+        // Classical two-pass method: Var(X) = E[X^2] - (E[X])^2, scaled by 1/divisor.
+        float two_pass_scalar = scalar / divisor;
+
+        auto mean_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
+            input_tensor_arg,
+            dim,
+            keepdim,
+            memory_config_arg,
+            compute_kernel_config,
+            two_pass_scalar,
+            non_height_width_dims,
+            sub_core_grids);
+
+        auto mean_square_tensor = reduce_impl<reduction_common::ReduceType::Sum>(
+            ttnn::pow(input_tensor_arg, 2.0f, memory_config),
+            dim,
+            keepdim,
+            memory_config_arg,
+            compute_kernel_config,
+            two_pass_scalar,
+            non_height_width_dims,
+            sub_core_grids);
+
+        Tensor output_tensor = ttnn::subtract(
+            mean_square_tensor, ttnn::pow(mean_tensor, 2.0f, memory_config), std::nullopt, memory_config);
+
+        if constexpr (reduce_type == reduction_common::ReduceType::Std) {
+            output_tensor = ttnn::sqrt(output_tensor, false, memory_config);
+        }
+        return output_tensor;
+    }
+
+    // Welford single-pass algorithm
     bool single_h = (dim.size() == 1 && dim[0] == rank - 2);
     bool single_w = (dim.size() == 1 && dim[0] == rank - 1);
 
@@ -432,7 +468,8 @@ Tensor reduce(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool use_welford) {
     ttnn::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type);
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
@@ -449,7 +486,8 @@ Tensor reduce(
             scalar,
             non_height_width_dims,
             correction,
-            sub_core_grids);
+            sub_core_grids,
+            use_welford);
     }
 
     bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
@@ -606,7 +644,8 @@ Tensor std(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool use_welford) {
     return operations::reduction::reduce<reduction_common::ReduceType::Std>(
         input_tensor_arg,
         dim_arg,
@@ -615,7 +654,8 @@ Tensor std(
         compute_kernel_config,
         scalar,
         correction,
-        sub_core_grids);
+        sub_core_grids,
+        use_welford);
 }
 
 Tensor var(
@@ -626,7 +666,8 @@ Tensor var(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     float scalar,
     bool correction,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    bool use_welford) {
     return operations::reduction::reduce<reduction_common::ReduceType::Var>(
         input_tensor_arg,
         dim_arg,
@@ -635,7 +676,8 @@ Tensor var(
         compute_kernel_config,
         scalar,
         correction,
-        sub_core_grids);
+        sub_core_grids,
+        use_welford);
 }
 
 }  // namespace ttnn
