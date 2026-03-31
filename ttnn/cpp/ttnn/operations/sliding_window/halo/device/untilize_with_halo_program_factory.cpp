@@ -87,58 +87,126 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
 
     uint32_t num_cores_x = input_tensor.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
 
-    auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
-        tensor_metadata,
-        shard_boundaries,
-        is_block_sharded,
-        transpose_mcast,
-        remote_read,
-        device,
-        num_cores_x,
-        is_in_tiled,
-        UNTILIZE_BLOCK_SIZE);
+    const bool halo_config_is_32bit = sliding_window::needs_uint32_halo_config(shard_boundaries);
 
-    const auto& pad_config0 = kernel_config.pad_config0;
-    const auto& pad_config1 = kernel_config.pad_config1;
-    const auto& gather_config0 = kernel_config.gather_config0;
-    const auto& gather_config1 = kernel_config.gather_config1;
+    Tensor pad_config_device_tensor0, pad_config_device_tensor1;
+    Tensor gather_config_device_tensor0, gather_config_device_tensor1;
+    std::vector<uint16_t> number_of_blocks_per_core_raw;
 
-    const auto pad_config_tensor0 = sliding_window::construct_on_host_config_tensor(
-        pad_config0, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
-    const auto pad_config_tensor1 = sliding_window::construct_on_host_config_tensor(
-        pad_config1, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
-    const auto gather_config_tensor0 = sliding_window::construct_on_host_config_tensor(
-        gather_config0, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
-    const auto gather_config_tensor1 = sliding_window::construct_on_host_config_tensor(
-        gather_config1, operation_attributes.parallel_config, operation_attributes.config_tensors_in_dram);
+    if (halo_config_is_32bit) {
+        auto kernel_config = sliding_window::generate_halo_kernel_config_tensors<uint32_t>(
+            tensor_metadata,
+            shard_boundaries,
+            is_block_sharded,
+            transpose_mcast,
+            remote_read,
+            device,
+            num_cores_x,
+            is_in_tiled,
+            UNTILIZE_BLOCK_SIZE);
 
-    auto pad_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
-        pad_config_tensor0,
-        operation_attributes.parallel_config,
-        is_block_sharded,
-        device,
-        operation_attributes.config_tensors_in_dram);
-    auto pad_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
-        pad_config_tensor1,
-        operation_attributes.parallel_config,
-        is_block_sharded,
-        device,
-        operation_attributes.config_tensors_in_dram);
-    auto gather_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
-        gather_config_tensor0,
-        operation_attributes.parallel_config,
-        is_block_sharded,
-        device,
-        operation_attributes.config_tensors_in_dram);
-    auto gather_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
-        gather_config_tensor1,
-        operation_attributes.parallel_config,
-        is_block_sharded,
-        device,
-        operation_attributes.config_tensors_in_dram);
+        const auto pad_config_tensor0 = sliding_window::construct_on_host_config_tensor<uint32_t>(
+            kernel_config.pad_config0,
+            operation_attributes.parallel_config,
+            operation_attributes.config_tensors_in_dram);
+        const auto pad_config_tensor1 = sliding_window::construct_on_host_config_tensor<uint32_t>(
+            kernel_config.pad_config1,
+            operation_attributes.parallel_config,
+            operation_attributes.config_tensors_in_dram);
+        const auto gather_config_tensor0 = sliding_window::construct_on_host_config_tensor<uint32_t>(
+            kernel_config.gather_config0,
+            operation_attributes.parallel_config,
+            operation_attributes.config_tensors_in_dram);
+        const auto gather_config_tensor1 = sliding_window::construct_on_host_config_tensor<uint32_t>(
+            kernel_config.gather_config1,
+            operation_attributes.parallel_config,
+            operation_attributes.config_tensors_in_dram);
+
+        pad_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
+            pad_config_tensor0,
+            operation_attributes.parallel_config,
+            is_block_sharded,
+            device,
+            operation_attributes.config_tensors_in_dram);
+        pad_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
+            pad_config_tensor1,
+            operation_attributes.parallel_config,
+            is_block_sharded,
+            device,
+            operation_attributes.config_tensors_in_dram);
+        gather_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
+            gather_config_tensor0,
+            operation_attributes.parallel_config,
+            is_block_sharded,
+            device,
+            operation_attributes.config_tensors_in_dram);
+        gather_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
+            gather_config_tensor1,
+            operation_attributes.parallel_config,
+            is_block_sharded,
+            device,
+            operation_attributes.config_tensors_in_dram);
+
+        number_of_blocks_per_core_raw = kernel_config.number_of_blocks_per_core;
+    } else {
+        auto kernel_config = sliding_window::generate_halo_kernel_config_tensors(
+            tensor_metadata,
+            shard_boundaries,
+            is_block_sharded,
+            transpose_mcast,
+            remote_read,
+            device,
+            num_cores_x,
+            is_in_tiled,
+            UNTILIZE_BLOCK_SIZE);
+
+        const auto pad_config_tensor0 = sliding_window::construct_on_host_config_tensor(
+            kernel_config.pad_config0,
+            operation_attributes.parallel_config,
+            operation_attributes.config_tensors_in_dram);
+        const auto pad_config_tensor1 = sliding_window::construct_on_host_config_tensor(
+            kernel_config.pad_config1,
+            operation_attributes.parallel_config,
+            operation_attributes.config_tensors_in_dram);
+        const auto gather_config_tensor0 = sliding_window::construct_on_host_config_tensor(
+            kernel_config.gather_config0,
+            operation_attributes.parallel_config,
+            operation_attributes.config_tensors_in_dram);
+        const auto gather_config_tensor1 = sliding_window::construct_on_host_config_tensor(
+            kernel_config.gather_config1,
+            operation_attributes.parallel_config,
+            operation_attributes.config_tensors_in_dram);
+
+        pad_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
+            pad_config_tensor0,
+            operation_attributes.parallel_config,
+            is_block_sharded,
+            device,
+            operation_attributes.config_tensors_in_dram);
+        pad_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
+            pad_config_tensor1,
+            operation_attributes.parallel_config,
+            is_block_sharded,
+            device,
+            operation_attributes.config_tensors_in_dram);
+        gather_config_device_tensor0 = sliding_window::move_config_tensor_to_device(
+            gather_config_tensor0,
+            operation_attributes.parallel_config,
+            is_block_sharded,
+            device,
+            operation_attributes.config_tensors_in_dram);
+        gather_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
+            gather_config_tensor1,
+            operation_attributes.parallel_config,
+            is_block_sharded,
+            device,
+            operation_attributes.config_tensors_in_dram);
+
+        number_of_blocks_per_core_raw = kernel_config.number_of_blocks_per_core;
+    }
 
     const auto number_of_blocks_per_core = sliding_window::remap_nhw_scalar_argument_across_full_grid(
-        kernel_config.number_of_blocks_per_core, operation_attributes.parallel_config);
+        number_of_blocks_per_core_raw, operation_attributes.parallel_config);
 
     Program program = CreateProgram();
 
@@ -216,7 +284,7 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
     cb_indices.pad_cb_id1 = cb_indices.get_next_cb_id();
     create_circular_buffer(program, all_cores, cb_indices.pad_cb_id1, out_df, pad_cb_npages, pad_cb_pagesize);
 
-    tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
+    tt::DataFormat kernel_config_df = halo_config_is_32bit ? tt::DataFormat::RawUInt32 : tt::DataFormat::RawUInt16;
 
     uint32_t input_to_writer_cb_id0 = cb_indices.src_cb_id;
     uint32_t input_to_writer_cb_id1 = cb_indices.src_cb_id;
@@ -253,10 +321,11 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
         }
     }
 
-    TT_ASSERT(pad_config_device_tensor0.dtype() == DataType::UINT16);
-    TT_ASSERT(pad_config_device_tensor1.dtype() == DataType::UINT16);
-    TT_ASSERT(gather_config_device_tensor0.dtype() == DataType::UINT16);
-    TT_ASSERT(gather_config_device_tensor1.dtype() == DataType::UINT16);
+    const DataType expected_config_dtype = halo_config_is_32bit ? DataType::UINT32 : DataType::UINT16;
+    TT_ASSERT(pad_config_device_tensor0.dtype() == expected_config_dtype);
+    TT_ASSERT(pad_config_device_tensor1.dtype() == expected_config_dtype);
+    TT_ASSERT(gather_config_device_tensor0.dtype() == expected_config_dtype);
+    TT_ASSERT(gather_config_device_tensor1.dtype() == expected_config_dtype);
 
     const auto& padding_config_storage0 = pad_config_device_tensor0.device_storage();
     auto* padding_config_buffer0 = padding_config_storage0.get_buffer();
@@ -356,6 +425,18 @@ UntilizeWithHaloProgramFactory::cached_program_t UntilizeWithHaloProgramFactory:
         tt::tt_metal::TensorAccessorArgs(padding_config_storage1.get_buffer()).append_to(core_1_reader_ct_args);
         tt::tt_metal::TensorAccessorArgs(gather_config_storage1.get_buffer()).append_to(core_1_reader_ct_args);
     }
+    // In DRAM mode the kernel hash already differs (CONFIG_TENSOR_IN_DRAM define), so always append.
+    // In non-DRAM mode, only append when true to preserve the default kernel hash for conv/pool perf.
+    if (config_tensors_in_dram || halo_config_is_32bit) {
+        core_0_reader_ct_args.push_back((uint32_t)halo_config_is_32bit);
+        core_1_reader_ct_args.push_back((uint32_t)halo_config_is_32bit);
+    }
+    log_debug(
+        tt::LogOp,
+        "halo_gather: core_0 ct_args size={}, core_1 ct_args size={}, config_tensors_in_dram={}",
+        core_0_reader_ct_args.size(),
+        core_1_reader_ct_args.size(),
+        config_tensors_in_dram);
     const uint32_t EMPTY_PADDING_CONFIG_BUFFER_SIZE = 4;
     const bool enable_padding = config_tensors_in_dram ||
                                 padding_config_buffer0->page_size() != EMPTY_PADDING_CONFIG_BUFFER_SIZE ||

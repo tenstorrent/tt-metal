@@ -134,15 +134,22 @@ uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& sha
 uint32_t calculate_precise_halo_output_elems(
     const SlidingWindowConfig& config, const std::array<uint32_t, 2>& shard_shape);
 
+template <typename T = uint16_t>
 struct HaloGatherKernelConfig {
-    std::vector<std::vector<uint16_t>> pad_config0;
-    std::vector<std::vector<uint16_t>> pad_config1;
-    std::vector<std::vector<uint16_t>> gather_config0;
-    std::vector<std::vector<uint16_t>> gather_config1;
-    std::vector<uint16_t> number_of_blocks_per_core;
+    std::vector<std::vector<T>> pad_config0;
+    std::vector<std::vector<T>> pad_config1;
+    std::vector<std::vector<T>> gather_config0;
+    std::vector<std::vector<T>> gather_config1;
+    std::vector<uint16_t> number_of_blocks_per_core;  // always uint16 - these are small block counts
 };
 
-HaloGatherKernelConfig generate_halo_kernel_config_tensors(
+// Runtime checks: determine if uint32 config is needed based on index ranges
+bool needs_uint32_sliding_window_config(
+    const std::vector<ShardBoundary>& shard_boundaries, const std::vector<uint32_t>& op_trace_metadata);
+bool needs_uint32_halo_config(const std::vector<ShardBoundary>& shard_boundaries);
+
+template <typename T = uint16_t>
+HaloGatherKernelConfig<T> generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
@@ -153,9 +160,11 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     bool is_in_tiled,
     int block_size);
 
-void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config);
+template <typename T = uint16_t>
+void visualize_sliding_window_op_config(const std::vector<std::vector<T>>& config);
 
-std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
+template <typename T = uint16_t>
+std::vector<std::vector<T>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     uint32_t stride_w,
@@ -165,17 +174,20 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     uint32_t reader1_datums = 0,
     bool pad_cores = true);
 
-std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes = 0);
+template <typename T = uint16_t>
+std::vector<T> flatten(const std::vector<std::vector<T>>& input, uint32_t extend_with_zeroes = 0);
 
 uint32_t get_repeat_factor_for_replicating_nhw_config_across_grid(const ParallelConfig& p_config);
 
-std::vector<uint16_t> replicate_config(const std::vector<uint16_t>& config_vector, int factor);
+template <typename T = uint16_t>
+std::vector<T> replicate_config(const std::vector<T>& config_vector, int factor);
 
 std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
     const std::vector<uint16_t>& config, const ParallelConfig& parallel_config);
 
+template <typename T = uint16_t>
 Tensor construct_on_host_config_tensor(
-    const std::vector<std::vector<uint16_t>>& config, const ParallelConfig& p_config, bool store_in_dram = false);
+    const std::vector<std::vector<T>>& config, const ParallelConfig& p_config, bool store_in_dram = false);
 
 Tensor move_config_tensor_to_device(
     const Tensor& config_tensor,

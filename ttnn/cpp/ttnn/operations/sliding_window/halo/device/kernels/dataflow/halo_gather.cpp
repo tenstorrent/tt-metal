@@ -16,6 +16,16 @@
 
 constexpr uint16_t TILE_SIZE = 32;
 
+// Type selector: when ConfigIs32Bit is true, config entries are uint32_t; otherwise uint16_t.
+template <bool ConfigIs32Bit>
+struct ConfigType {
+    using type = uint16_t;
+};
+template <>
+struct ConfigType<true> {
+    using type = uint32_t;
+};
+
 template <uint32_t N, uint16_t PaddingValue>
 FORCE_INLINE void fill_with_val(uint32_t begin_addr) {
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(begin_addr);
@@ -88,17 +98,19 @@ FORCE_INLINE void copy_padding_large_sticks(uint64_t padding_l1_addr, uint64_t d
     }
 }
 
-template <uint32_t PaddingConfigCBId, uint32_t OutCBId, uint32_t StickNBytes, uint32_t MaxChunkSize>
+template <uint32_t PaddingConfigCBId, uint32_t OutCBId, uint32_t StickNBytes, uint32_t MaxChunkSize, bool ConfigIs32Bit>
 FORCE_INLINE void copy_padding(uint64_t padding_l1_addr) {
+    using config_t = typename ConfigType<ConfigIs32Bit>::type;
+
     const uint32_t padding_config_l1_addr = get_read_ptr(PaddingConfigCBId);
-    volatile tt_l1_ptr uint16_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
+    volatile tt_l1_ptr config_t* config_data = reinterpret_cast<volatile tt_l1_ptr config_t*>(padding_config_l1_addr);
 
     const uint64_t dst_base_addr = get_write_ptr(OutCBId);
 
-    uint16_t nsticks = 1;
+    uint32_t nsticks = 1;
     constexpr uint32_t stick_stride = StickNBytes;
-    for (uint16_t j = 0; nsticks != 0; j += 2) {
-        uint16_t dst_local_idx = config_data[j + 0];
+    for (uint32_t j = 0; nsticks != 0; j += 2) {
+        uint32_t dst_local_idx = config_data[j + 0];
         nsticks = config_data[j + 1];
 
         const uint64_t dst_addr = dst_base_addr + (static_cast<uint64_t>(dst_local_idx) * stick_stride);
@@ -137,9 +149,9 @@ template <uint32_t StickSizeBytes, bool EnableBlocking, uint32_t BlockHeightStic
 static inline void write_stick_async(
     uint32_t in_base_l1_addr,
     uint64_t out_base_l1_addr,
-    uint16_t src_offset_id,
-    uint16_t dst_offset_id,
-    uint16_t transfer_size) {
+    uint32_t src_offset_id,
+    uint32_t dst_offset_id,
+    uint32_t transfer_size) {
     if constexpr (EnableBlocking) {
         const uint32_t src_offset = (src_offset_id % BlockHeightSticks) *
                                     StickSizeBytes;  // Convert from global stick offset to local block stick offset
@@ -169,15 +181,19 @@ template <
     bool EnableBlocking,
     bool IsBlockSharded,
     bool IsWidthSharded,
-    bool IsColumnMajor>
-static inline void run_halo_gather(const tt_l1_ptr uint16_t* config, uint32_t my_noc_x, uint32_t my_noc_y) {
+    bool IsColumnMajor,
+    bool ConfigIs32Bit>
+static inline void run_halo_gather(const void* config_raw, uint32_t my_noc_x, uint32_t my_noc_y) {
+    using config_t = typename ConfigType<ConfigIs32Bit>::type;
+    const tt_l1_ptr config_t* config = reinterpret_cast<const tt_l1_ptr config_t*>(config_raw);
+
     static_assert(BlockStride >= 1, "Blocks stride must be at least 1");
 
     constexpr uint32_t block_size_height_tiles = BlockSizeHeight / TILE_SIZE;
     constexpr uint32_t total_tiles_in_single_block = block_size_height_tiles * BlockSizeWidthTiles;
 
-    uint16_t current_config_index = 0;
-    uint16_t number_of_segments_remaining = config[current_config_index++];
+    uint32_t current_config_index = 0;
+    uint32_t number_of_segments_remaining = config[current_config_index++];
 
     if (number_of_segments_remaining == 0) {
         return;
@@ -192,22 +208,22 @@ static inline void run_halo_gather(const tt_l1_ptr uint16_t* config, uint32_t my
     }
 
     uint64_t out_l1_addr = 0;
-    uint16_t block_id = BlockStartOffset;
-    uint16_t block_boundary_offset = BlockSizeHeight + (BlockSizeHeight * BlockStartOffset);
+    uint32_t block_id = BlockStartOffset;
+    uint32_t block_boundary_offset = BlockSizeHeight + (BlockSizeHeight * BlockStartOffset);
     while (number_of_segments_remaining) {
         //  Read header for to get destination for this route
-        const uint16_t destination_noc_x = config[current_config_index++];
-        const uint16_t destination_noc_y = config[current_config_index++];
-        uint16_t transfers_remaining = config[current_config_index++];
+        const uint32_t destination_noc_x = config[current_config_index++];
+        const uint32_t destination_noc_y = config[current_config_index++];
+        uint32_t transfers_remaining = config[current_config_index++];
 
         out_l1_addr = get_remote_core_l1_noc_addr<IsBlockSharded, IsWidthSharded, IsColumnMajor>(
             destination_noc_x, destination_noc_y, my_noc_x, my_noc_y, out_base_l1_addr);
 
         // Perform all transfers in this route
         while (transfers_remaining > 0) {
-            const uint16_t src_offset = config[current_config_index++];
-            const uint16_t dst_offset = config[current_config_index++];
-            const uint16_t transfer_size = config[current_config_index++];
+            const uint32_t src_offset = config[current_config_index++];
+            const uint32_t dst_offset = config[current_config_index++];
+            const uint32_t transfer_size = config[current_config_index++];
             if constexpr (EnableBlocking) {
                 // Pop blocks until we have the right one - this works because transfers are globally ordered by
                 // ascending block IDs
@@ -269,6 +285,9 @@ void kernel_main() {
     constexpr auto padding_config_tensor_args = TensorAccessorArgs<22>();
     constexpr auto gather_config_tensor_args =
         TensorAccessorArgs<padding_config_tensor_args.next_compile_time_args_offset()>();
+    // config_is_32bit always appended in DRAM mode
+    constexpr bool config_is_32bit =
+        get_compile_time_arg_val(gather_config_tensor_args.next_compile_time_args_offset()) == 1;
 
     const auto padding_config_accessor =
         TensorAccessor(padding_config_tensor_args, padding_config_dram_addr, padding_config_page_size);
@@ -283,6 +302,15 @@ void kernel_main() {
     noc_async_read(padding_src_noc_addr, get_write_ptr(padding_config_cb_id), padding_config_page_size);
     noc_async_read(gather_src_noc_addr, get_write_ptr(gather_config_cb_id), gather_config_page_size);
     noc_async_read_barrier();
+#else
+    // Non-DRAM: config_is_32bit is only appended when true; detect via arg count
+    constexpr bool config_is_32bit = []() constexpr {
+        if constexpr (kernel_compile_time_args.size() > 18) {
+            return get_ct_arg<18>() == 1;
+        } else {
+            return false;
+        }
+    }();
 #endif
 
     const uint16_t my_noc_x = NOC_X(my_x[noc_index]);
@@ -299,7 +327,8 @@ void kernel_main() {
             // Use MEM_ZEROS_BASE if we are zero padded
             const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, MEM_ZEROS_BASE);
             constexpr uint32_t padding_region_size = MEM_ZEROS_SIZE;
-            copy_padding<padding_config_cb_id, out_cb_id, aligned_stick_nbytes, padding_region_size>(padding_l1_addr);
+            copy_padding<padding_config_cb_id, out_cb_id, aligned_stick_nbytes, padding_region_size, config_is_32bit>(
+                padding_l1_addr);
         } else {
             constexpr uint16_t pad_val = static_cast<uint16_t>(pad_val_u32);
             constexpr uint32_t num_elements_to_fill = aligned_stick_nbytes / elem_nbytes;
@@ -308,7 +337,8 @@ void kernel_main() {
             const uint64_t padding_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(pad_cb_id));
             // MaxChunkSize must be in bytes and >= StickNBytes to avoid misaligned NOC transactions
             constexpr uint32_t padding_region_size = aligned_stick_nbytes;
-            copy_padding<padding_config_cb_id, out_cb_id, aligned_stick_nbytes, padding_region_size>(padding_l1_addr);
+            copy_padding<padding_config_cb_id, out_cb_id, aligned_stick_nbytes, padding_region_size, config_is_32bit>(
+                padding_l1_addr);
         }
     }
 
@@ -317,7 +347,7 @@ void kernel_main() {
     }
 
     const uint32_t config_data_l1_addr = get_read_ptr(gather_config_cb_id);
-    const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
+    const void* config_data = reinterpret_cast<const void*>(config_data_l1_addr);
     run_halo_gather<
         in_cb_id,
         out_cb_id,
@@ -329,7 +359,8 @@ void kernel_main() {
         enable_blocking,
         is_block_sharded,
         is_width_sharded,
-        is_col_major>(config_data, my_noc_x, my_noc_y);
+        is_col_major,
+        config_is_32bit>(config_data, my_noc_x, my_noc_y);
 
     noc_async_read_barrier();
     noc_async_write_barrier();

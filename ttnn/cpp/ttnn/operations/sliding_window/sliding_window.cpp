@@ -461,11 +461,50 @@ std::vector<PixelMetadata> generate_tensor_metadata(
     return tensor_metadata;
 }
 
-const uint16_t PAD_LOCAL_SENTINAL = 0xFFFF;
+const uint32_t PAD_LOCAL_SENTINAL = 0xFFFF;
 
 using uint32_triplet_t = std::tuple<uint32_t, uint32_t, uint32_t>;
 using GatherStep = uint32_triplet_t;
 using PerCoreGatherData = std::map<std::pair<uint32_t, uint32_t>, std::vector<GatherStep>>;
+
+bool needs_uint32_sliding_window_config(
+    const std::vector<ShardBoundary>& shard_boundaries, const std::vector<uint32_t>& op_trace_metadata) {
+    uint32_t global_max_relative_index = 0;
+    for (const auto& item : shard_boundaries) {
+        const auto& [output_shard_start, output_shard_end] = item.output_range;
+        if (output_shard_start >= op_trace_metadata.size()) {
+            continue;
+        }
+        uint32_t max_relative_index =
+            op_trace_metadata[std::min(output_shard_end, static_cast<uint32_t>(op_trace_metadata.size()) - 1)] -
+            op_trace_metadata[output_shard_start];
+        global_max_relative_index = std::max(global_max_relative_index, max_relative_index);
+    }
+    bool result = global_max_relative_index > std::numeric_limits<uint16_t>::max();
+    log_debug(
+        tt::LogOp,
+        "needs_uint32_sliding_window_config: max_relative_index={}, uint16_max={}, needs_uint32={}",
+        global_max_relative_index,
+        std::numeric_limits<uint16_t>::max(),
+        result);
+    return result;
+}
+
+bool needs_uint32_halo_config(const std::vector<ShardBoundary>& shard_boundaries) {
+    uint32_t global_max_halo_size = 0;
+    for (const auto& [output_range, input_range] : shard_boundaries) {
+        uint32_t halo_size = input_range.end - input_range.start;
+        global_max_halo_size = std::max(global_max_halo_size, halo_size);
+    }
+    bool result = global_max_halo_size > std::numeric_limits<uint16_t>::max();
+    log_debug(
+        tt::LogOp,
+        "needs_uint32_halo_config: max_halo_size={}, uint16_max={}, needs_uint32={}",
+        global_max_halo_size,
+        std::numeric_limits<uint16_t>::max(),
+        result);
+    return result;
+}
 
 uint32_t generate_max_out_nsticks_per_core(const std::vector<ShardBoundary>& shard_boundaries) {
     uint32_t max_out_nsticks_per_core = 0;
@@ -488,15 +527,15 @@ uint32_t calculate_precise_halo_output_elems(
 }
 
 struct GatherHeader {
-    uint16_t noc_x;
-    uint16_t noc_y;
-    uint16_t num_transfers;
+    uint32_t noc_x;
+    uint32_t noc_y;
+    uint32_t num_transfers;
 };
 
 struct GatherTransfer {
-    uint16_t src_id;
-    uint16_t dst_id;
-    uint16_t size;
+    uint32_t src_id;
+    uint32_t dst_id;
+    uint32_t size;
 };
 
 struct GatherRoute {
@@ -509,21 +548,24 @@ struct GatherConfig {
 };
 
 // transfer = noc_x noc_y num_transfers
-static void serialize_gather_header(const GatherHeader& header, std::vector<uint16_t>& output) {
-    output.push_back(header.noc_x);
-    output.push_back(header.noc_y);
-    output.push_back(header.num_transfers);
+template <typename T>
+static void serialize_gather_header(const GatherHeader& header, std::vector<T>& output) {
+    output.push_back(static_cast<T>(header.noc_x));
+    output.push_back(static_cast<T>(header.noc_y));
+    output.push_back(static_cast<T>(header.num_transfers));
 }
 
 // transfer = src_id dst_id size
-static void serialize_gather_transfer(const GatherTransfer& transfer, std::vector<uint16_t>& output) {
-    output.push_back(transfer.src_id);
-    output.push_back(transfer.dst_id);
-    output.push_back(transfer.size);
+template <typename T>
+static void serialize_gather_transfer(const GatherTransfer& transfer, std::vector<T>& output) {
+    output.push_back(static_cast<T>(transfer.src_id));
+    output.push_back(static_cast<T>(transfer.dst_id));
+    output.push_back(static_cast<T>(transfer.size));
 }
 
 // route = header [tranfer0 transfer1 ... ]
-static void serialize_gather_route(const GatherRoute& route, std::vector<uint16_t>& output) {
+template <typename T>
+static void serialize_gather_route(const GatherRoute& route, std::vector<T>& output) {
     serialize_gather_header(route.header, output);
     TT_FATAL(route.header.num_transfers == route.transfers.size(), "Number of transfers in route must match header");
     for (const auto& transfer : route.transfers) {
@@ -532,9 +574,10 @@ static void serialize_gather_route(const GatherRoute& route, std::vector<uint16_
 }
 
 // config = len [route0 route1 ...]
-static std::vector<uint16_t> serialize_gather_config(const GatherConfig& config) {
-    std::vector<uint16_t> output;
-    output.push_back(config.routes.size());
+template <typename T>
+static std::vector<T> serialize_gather_config(const GatherConfig& config) {
+    std::vector<T> output;
+    output.push_back(static_cast<T>(config.routes.size()));
     for (const auto& route : config.routes) {
         TT_FATAL(!route.transfers.empty(), "Expected all routes to have at least one transfer");
         serialize_gather_route(route, output);
@@ -543,18 +586,19 @@ static std::vector<uint16_t> serialize_gather_config(const GatherConfig& config)
 }
 
 // Flatten a list of configs and ensure they are uniform lengths by padding
-static std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::vector<GatherConfig>& configs) {
-    std::vector<std::vector<uint16_t>> serialized_configs;
+template <typename T>
+static std::vector<std::vector<T>> serialize_gather_configs(const std::vector<GatherConfig>& configs) {
+    std::vector<std::vector<T>> serialized_configs;
     serialized_configs.reserve(configs.size());
     for (const auto& config : configs) {
-        serialized_configs.push_back(serialize_gather_config(config));
+        serialized_configs.push_back(serialize_gather_config<T>(config));
     }
     // Pad each core's config to the same length so we can shard it
     size_t max_size = 0;
     for (const auto& config : serialized_configs) {
         max_size = std::max(max_size, config.size());
     }
-    for (std::vector<uint16_t>& config : serialized_configs) {
+    for (std::vector<T>& config : serialized_configs) {
         TT_ASSERT(config.size() <= max_size);
         config.resize(max_size, 0);
     }
@@ -562,11 +606,11 @@ static std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::ve
 }
 
 struct DestinationTransferPair {
-    uint16_t noc_x;
-    uint16_t noc_y;
-    uint16_t src_id;
-    uint16_t dst_id;
-    uint16_t size;
+    uint32_t noc_x;
+    uint32_t noc_y;
+    uint32_t src_id;
+    uint32_t dst_id;
+    uint32_t size;
 };
 
 static std::vector<DestinationTransferPair> flatten_gather_config(const GatherConfig& input) {
@@ -593,7 +637,7 @@ static GatherConfig reduce_flattened_transfers(const std::vector<DestinationTran
     for (const auto& xfer : transfers) {
         bool same_core = (xfer.noc_x == current_route.header.noc_x) && (xfer.noc_y == current_route.header.noc_y);
         if (!same_core) {
-            current_route.header.num_transfers = static_cast<uint16_t>(current_route.transfers.size());
+            current_route.header.num_transfers = static_cast<uint32_t>(current_route.transfers.size());
             TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
             output.routes.push_back(current_route);
 
@@ -608,7 +652,7 @@ static GatherConfig reduce_flattened_transfers(const std::vector<DestinationTran
         transfer.size = xfer.size;
         current_route.transfers.push_back(transfer);
     }
-    current_route.header.num_transfers = static_cast<uint16_t>(current_route.transfers.size());
+    current_route.header.num_transfers = static_cast<uint32_t>(current_route.transfers.size());
     TT_FATAL(current_route.header.num_transfers > 0, "Route cannot have zero transfers");
     output.routes.push_back(current_route);
 
@@ -691,7 +735,8 @@ static std::pair<GatherConfig, GatherConfig> divide_transfers_between_cores(cons
     return std::make_pair(reduce_flattened_transfers(first), reduce_flattened_transfers(second));
 }
 
-HaloGatherKernelConfig generate_halo_kernel_config_tensors(
+template <typename T>
+HaloGatherKernelConfig<T> generate_halo_kernel_config_tensors(
     const std::vector<PixelMetadata>& tensor_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     bool is_block_sharded,
@@ -778,12 +823,12 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         const auto& [src_core_id, dst_core_id, num_copies] = config.first;
         std::vector<GatherTransfer> transfers;
         for (const auto& transfer : config.second) {
-            const uint16_t src_offset_id = std::get<0>(transfer);
-            const uint16_t dst_offset_id = std::get<1>(transfer);
-            const uint16_t size = std::get<2>(transfer);
+            const uint32_t src_offset_id = std::get<0>(transfer);
+            const uint32_t dst_offset_id = std::get<1>(transfer);
+            const uint32_t size = std::get<2>(transfer);
             transfers.emplace_back(src_offset_id, dst_offset_id, size);
         }
-        GatherHeader header{src_core_id, dst_core_id, transfers.size()};
+        GatherHeader header{src_core_id, dst_core_id, static_cast<uint32_t>(transfers.size())};
         gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
     }
 
@@ -792,12 +837,12 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
             const auto& [src_core_id, dst_core_id, num_copies] = destination.first;
             std::vector<GatherTransfer> transfers;
             for (const auto& transfer : destination.second) {
-                const uint16_t src_offset_id = std::get<0>(transfer);
-                const uint16_t dst_offset_id = std::get<1>(transfer);
-                const uint16_t size = std::get<2>(transfer);
+                const uint32_t src_offset_id = std::get<0>(transfer);
+                const uint32_t dst_offset_id = std::get<1>(transfer);
+                const uint32_t size = std::get<2>(transfer);
                 transfers.emplace_back(src_offset_id, dst_offset_id, size);
             }
-            GatherHeader header{src_core_id, dst_core_id, transfers.size()};
+            GatherHeader header{src_core_id, dst_core_id, static_cast<uint32_t>(transfers.size())};
             gather_configs[core_id].routes.push_back(GatherRoute{header, transfers});
         }
     }
@@ -821,24 +866,24 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         }
     }
 
-    const auto serialized_gather_configs0 = serialize_gather_configs(ordered_gather_configs0);
-    const auto serialized_gather_configs1 = serialize_gather_configs(ordered_gather_configs1);
+    const auto serialized_gather_configs0 = serialize_gather_configs<T>(ordered_gather_configs0);
+    const auto serialized_gather_configs1 = serialize_gather_configs<T>(ordered_gather_configs1);
 
     // Flatten and uniformize the lengths of each config list
-    auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<uint16_t>> {
+    auto flatten_pad_config = [](auto& config) -> std::vector<std::vector<T>> {
         // find max length
         size_t max_len = 0;
         for (auto& data : config) {
             max_len = std::max(max_len, 2 * data.size());  // each data is 2 * data.size()
         }
-        std::vector<std::vector<uint16_t>> flattened_config;
+        std::vector<std::vector<T>> flattened_config;
         for (auto& data : config) {
-            std::vector<uint16_t> flat_data(max_len, 0);
+            std::vector<T> flat_data(max_len, 0);
             uint32_t idx = 0;
             for (auto data_elem : data) {
                 auto [dst_start, length] = data_elem;
-                flat_data[idx++] = dst_start;
-                flat_data[idx++] = length;
+                flat_data[idx++] = static_cast<T>(dst_start);
+                flat_data[idx++] = static_cast<T>(length);
             }
             // null plug
             flat_data.emplace_back(0);
@@ -860,7 +905,7 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     auto flattened_pad_config0 = flatten_pad_config(pad_config0);
     auto flattened_pad_config1 = flatten_pad_config(pad_config1);
 
-    auto align_config = [](auto& config, size_t align_granularity = 1, uint16_t align_value = 0) {
+    auto align_config = [](auto& config, size_t align_granularity = 1, T align_value = 0) {
         size_t max_len = 0;
         for (auto& core_config : config) {
             max_len = std::max(max_len, core_config.size());
@@ -872,16 +917,18 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         for (auto& core_config : config) {
             size_t extend_amount = max_len - core_config.size();
             if (extend_amount > 0) {
-                std::vector<uint16_t> extend_v(extend_amount, align_value);
+                std::vector<T> extend_v(extend_amount, align_value);
                 core_config.insert(core_config.end(), extend_v.begin(), extend_v.end());
             }
         }
     };
 
-    align_config(flattened_pad_config0, 2);
-    align_config(flattened_pad_config1, 2);
+    // For uint16, align to 2 elements (4 bytes). For uint32, each element is already 4 bytes.
+    constexpr size_t pad_align = std::is_same_v<T, uint16_t> ? 2 : 1;
+    align_config(flattened_pad_config0, pad_align);
+    align_config(flattened_pad_config1, pad_align);
 
-    return HaloGatherKernelConfig{
+    return HaloGatherKernelConfig<T>{
         flattened_pad_config0,
         flattened_pad_config1,
         serialized_gather_configs0,
@@ -889,7 +936,29 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         number_of_blocks_per_core};
 }
 
-void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config) {
+template HaloGatherKernelConfig<uint16_t> generate_halo_kernel_config_tensors<uint16_t>(
+    const std::vector<PixelMetadata>&,
+    const std::vector<ShardBoundary>&,
+    bool,
+    bool,
+    bool,
+    IDevice*,
+    uint32_t,
+    bool,
+    int);
+template HaloGatherKernelConfig<uint32_t> generate_halo_kernel_config_tensors<uint32_t>(
+    const std::vector<PixelMetadata>&,
+    const std::vector<ShardBoundary>&,
+    bool,
+    bool,
+    bool,
+    IDevice*,
+    uint32_t,
+    bool,
+    int);
+
+template <typename T>
+void visualize_sliding_window_op_config(const std::vector<std::vector<T>>& config) {
     log_info(tt::LogOp, "========================================");
     log_info(tt::LogOp, "  Sliding Window Op Config Visualization");
     log_info(tt::LogOp, "========================================");
@@ -948,7 +1017,7 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
             while (segment_count < num_segments && idx + 1 < core_config.size()) {
                 uint16_t start_idx = core_config[idx];
                 uint16_t end_idx = core_config[idx + 1];
-                uint16_t range_size = (end_idx >= start_idx) ? (end_idx - start_idx + 1) : 0;
+                T range_size = (end_idx >= start_idx) ? (end_idx - start_idx + 1) : 0;
 
                 log_info(
                     tt::LogOp,
@@ -982,7 +1051,11 @@ void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>
     log_info(tt::LogOp, "========================================");
 }
 
-std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
+template void visualize_sliding_window_op_config<uint16_t>(const std::vector<std::vector<uint16_t>>&);
+template void visualize_sliding_window_op_config<uint32_t>(const std::vector<std::vector<uint32_t>>&);
+
+template <typename T>
+std::vector<std::vector<T>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<ShardBoundary>& shard_boundaries,
     uint32_t stride_w,
@@ -990,11 +1063,11 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     uint32_t reader0_datums,
     uint32_t reader1_datums,
     bool pad_cores) {
-    std::vector<std::vector<uint16_t>> sharded_input_top_left_indices;
+    std::vector<std::vector<T>> sharded_input_top_left_indices;
     for (const auto& item : shard_boundaries) {
         const auto& [output_shard_start, output_shard_end] = item.output_range;
         const auto& [input_shard_start, input_shard_end] = item.input_range;
-        std::vector<uint16_t> local_top_left_indices;
+        std::vector<T> local_top_left_indices;
         // sanity check
         if (output_shard_start >= op_trace_metadata.size()) {
             // this core has no output
@@ -1056,7 +1129,7 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
         for (uint32_t core_idx = 0; core_idx < shard_boundaries.size(); core_idx++) {
             // Pad indices for this core if not equal to other cores
             if (sharded_input_top_left_indices.size() == core_idx) {
-                sharded_input_top_left_indices.push_back(std::vector<uint16_t>());
+                sharded_input_top_left_indices.push_back(std::vector<T>());
             }
             TT_FATAL(
                 core_idx < sharded_input_top_left_indices.size(),
@@ -1064,7 +1137,7 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
                 core_idx);
             uint32_t indices_length_this_core = sharded_input_top_left_indices[core_idx].size();
             if (indices_length_per_core - indices_length_this_core > 0) {
-                std::vector<uint16_t> extend_v(indices_length_per_core - indices_length_this_core, 0);
+                std::vector<T> extend_v(indices_length_per_core - indices_length_this_core, 0);
                 sharded_input_top_left_indices[core_idx].insert(
                     sharded_input_top_left_indices[core_idx].end(), extend_v.begin(), extend_v.end());
             }
@@ -1073,18 +1146,27 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     return sharded_input_top_left_indices;
 }
 
-std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes) {
-    std::vector<uint16_t> flattened_vector;
+template std::vector<std::vector<uint16_t>> generate_sliding_window_op_config<uint16_t>(
+    const std::vector<uint32_t>&, const std::vector<ShardBoundary>&, uint32_t, bool, uint32_t, uint32_t, bool);
+template std::vector<std::vector<uint32_t>> generate_sliding_window_op_config<uint32_t>(
+    const std::vector<uint32_t>&, const std::vector<ShardBoundary>&, uint32_t, bool, uint32_t, uint32_t, bool);
+
+template <typename T>
+std::vector<T> flatten(const std::vector<std::vector<T>>& input, uint32_t extend_with_zeroes) {
+    std::vector<T> flattened_vector;
     for (auto sub_vec : input) {
         flattened_vector.insert(flattened_vector.end(), sub_vec.begin(), sub_vec.end());
         if (extend_with_zeroes > 0) {
-            std::vector<uint16_t> extend_v(extend_with_zeroes, 0);
+            std::vector<T> extend_v(extend_with_zeroes, 0);
             flattened_vector.insert(flattened_vector.end(), extend_v.begin(), extend_v.end());
         }
     }
     log_debug(tt::LogOp, "flattened_vector size: {}", flattened_vector.size());
     return flattened_vector;
 }
+
+template std::vector<uint16_t> flatten<uint16_t>(const std::vector<std::vector<uint16_t>>&, uint32_t);
+template std::vector<uint32_t> flatten<uint32_t>(const std::vector<std::vector<uint32_t>>&, uint32_t);
 
 uint32_t get_repeat_factor_for_replicating_nhw_config_across_grid(const ParallelConfig& p_config) {
     switch (p_config.shard_scheme) {
@@ -1106,13 +1188,17 @@ uint32_t get_repeat_factor_for_replicating_nhw_config_across_grid(const Parallel
     }
 }
 
-std::vector<uint16_t> replicate_config(const std::vector<uint16_t>& config_vector, int factor) {
-    std::vector<uint16_t> repeat_config;
+template <typename T>
+std::vector<T> replicate_config(const std::vector<T>& config_vector, int factor) {
+    std::vector<T> repeat_config;
     for (uint32_t i = 0; i < factor; ++i) {
         repeat_config.insert(repeat_config.end(), config_vector.begin(), config_vector.end());
     }
     return repeat_config;
 }
+
+template std::vector<uint16_t> replicate_config<uint16_t>(const std::vector<uint16_t>&, int);
+template std::vector<uint32_t> replicate_config<uint32_t>(const std::vector<uint32_t>&, int);
 
 std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
     const std::vector<uint16_t>& config, const ParallelConfig& parallel_config) {
@@ -1131,26 +1217,36 @@ std::vector<uint16_t> remap_nhw_scalar_argument_across_full_grid(
         };
         return broadcast_config_per_row(config, factor);
     }
-    return sliding_window::replicate_config(config, factor);
+    return sliding_window::replicate_config<uint16_t>(config, factor);
 }
 
+template <typename T>
 Tensor construct_on_host_config_tensor(
-    const std::vector<std::vector<uint16_t>>& config, const ParallelConfig& p_config, bool store_in_dram) {
-    // We need the last dim of tensors to be multiple of 2, pad if needed
-    uint32_t extend_with_zeroes = config[0].size() % 2;
-    extend_with_zeroes = extend_with_zeroes > 0 ? 2 - extend_with_zeroes : 0;
+    const std::vector<std::vector<T>>& config, const ParallelConfig& p_config, bool store_in_dram) {
+    // For uint16: last dim must be multiple of 2 (4-byte alignment). For uint32: already 4-byte aligned.
+    uint32_t extend_with_zeroes = 0;
+    if constexpr (std::is_same_v<T, uint16_t>) {
+        extend_with_zeroes = config[0].size() % 2;
+        extend_with_zeroes = extend_with_zeroes > 0 ? 2 - extend_with_zeroes : 0;
+    }
 
     ttnn::Shape config_shape(
         {static_cast<uint32_t>(config.size()), static_cast<uint32_t>(config[0].size()) + extend_with_zeroes});
-    std::vector<uint16_t> config_vector = flatten(config, extend_with_zeroes);
+    std::vector<T> config_vector = flatten<T>(config, extend_with_zeroes);
 
     const uint32_t factor = store_in_dram ? 1 : get_repeat_factor_for_replicating_nhw_config_across_grid(p_config);
-    auto repeat_config = replicate_config(config_vector, factor);
+    auto repeat_config = replicate_config<T>(config_vector, factor);
 
     auto config_buffer = tt::tt_metal::HostBuffer(std::move(repeat_config));
     config_shape = ttnn::Shape({config_shape[0] * factor, config_shape[1]});
-    return Tensor(std::move(config_buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
+    constexpr DataType dtype = std::is_same_v<T, uint16_t> ? DataType::UINT16 : DataType::UINT32;
+    return Tensor(std::move(config_buffer), config_shape, dtype, Layout::ROW_MAJOR);
 }
+
+template Tensor construct_on_host_config_tensor<uint16_t>(
+    const std::vector<std::vector<uint16_t>>&, const ParallelConfig&, bool);
+template Tensor construct_on_host_config_tensor<uint32_t>(
+    const std::vector<std::vector<uint32_t>>&, const ParallelConfig&, bool);
 
 Tensor move_config_tensor_to_device(
     const Tensor& config_tensor,

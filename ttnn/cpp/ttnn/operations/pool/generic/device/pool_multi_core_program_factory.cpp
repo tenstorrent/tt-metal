@@ -301,12 +301,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
     const uint32_t rectangular_x = is_block_sharded ? all_cores.ranges()[0].end_coord.x + 1 : num_cores_x;
     const uint32_t max_out_nhw_per_core = outputs[0].shard_spec()->shape[0];
-    const uint32_t max_in_nhw_per_core = input.shard_spec()->shape[0];
-    TT_FATAL(
-        max_in_nhw_per_core <= std::numeric_limits<uint16_t>::max(),
-        "Input nhw per core {} exceeds uint16_t limit, this will cause overflow because the reader indices are stored "
-        "as uint16_t",
-        max_in_nhw_per_core);
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
@@ -391,21 +385,25 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         tt::round_up(reader_indices_size, 4);  // pagesize needs to be multiple of 4
     constexpr uint32_t in_reader_indices_cb_npages = 1;
 
+    const bool reader_indices_is_32bit = reader_indices.dtype() == DataType::UINT32;
+    const uint32_t reader_index_elem_size = reader_indices_is_32bit ? sizeof(uint32_t) : sizeof(uint16_t);
     const uint32_t max_reader_indices_size =
-        (max_out_nhw_per_core * 3 * sizeof(uint16_t)) + 2;  // worst case of 3 indices per output element
+        (max_out_nhw_per_core * 3 * reader_index_elem_size) +
+        reader_index_elem_size;  // worst case of 3 indices per output element + header
     TT_FATAL(
         reader_indices_storage.get_buffer()->page_size() <= max_reader_indices_size,
         "Reader indices buffer page size {} exceeds max expected size {}",
         reader_indices_storage.get_buffer()->page_size(),
         max_reader_indices_size);
 
+    const tt::DataFormat reader_indices_df = reader_indices_is_32bit ? tt::DataFormat::UInt32 : tt::DataFormat::UInt16;
     tt::tt_metal::create_cb(
         in_reader_indices_cb_id,
         program,
         all_cores,
         config_tensor_in_dram ? max_reader_indices_size : in_reader_indices_cb_pagesize,
         in_reader_indices_cb_npages,
-        tt::DataFormat::UInt16,
+        reader_indices_df,
         config_tensor_in_dram ? nullptr : reader_indices_storage.get_buffer());
 
     log_debug(
@@ -746,6 +744,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     if (!one_scalar_per_core) {
         tt::tt_metal::TensorAccessorArgs(config_tensor.device_storage().get_buffer()).append_to(reader0_ct_args);
     }
+    // Place reader_indices_is_32bit after all TensorAccessorArgs so we don't shift their indices
+    reader0_ct_args.push_back((uint32_t)reader_indices_is_32bit);
+
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -1041,8 +1042,30 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
     std::vector<sliding_window::ShardBoundary> shard_boundaries =
         ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config);
-    std::vector<std::vector<uint16_t>> top_left_indices =
-        sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, stride_w);
+
+    const bool config_is_32bit =
+        sliding_window::needs_uint32_sliding_window_config(shard_boundaries, op_trace_metadata);
+
+    Tensor reader_indices_on_device;
+    uint32_t reader_indices_element_count;
+    if (config_is_32bit) {
+        auto top_left_indices =
+            sliding_window::generate_sliding_window_op_config<uint32_t>(op_trace_metadata, shard_boundaries, stride_w);
+        reader_indices_element_count = top_left_indices[0].size();
+        Tensor reader_indices = sliding_window::construct_on_host_config_tensor<uint32_t>(
+            top_left_indices, parallel_config, op_attr.config_tensor_in_dram);
+        reader_indices_on_device = sliding_window::move_config_tensor_to_device(
+            reader_indices, parallel_config, is_block_sharded, input.device(), op_attr.config_tensor_in_dram);
+    } else {
+        auto top_left_indices =
+            sliding_window::generate_sliding_window_op_config<uint16_t>(op_trace_metadata, shard_boundaries, stride_w);
+        reader_indices_element_count = top_left_indices[0].size();
+        Tensor reader_indices = sliding_window::construct_on_host_config_tensor<uint16_t>(
+            top_left_indices, parallel_config, op_attr.config_tensor_in_dram);
+        reader_indices_on_device = sliding_window::move_config_tensor_to_device(
+            reader_indices, parallel_config, is_block_sharded, input.device(), op_attr.config_tensor_in_dram);
+    }
+
     std::vector<uint32_t> core_starting_indices;
     if (return_indices) {
         const uint32_t num_cores_x = input.memory_config().shard_spec()->grid.bounding_box().grid_size().x;
@@ -1052,16 +1075,11 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
             generate_core_starting_indices(op_trace_metadata, shard_boundaries, shard_scheme, num_cores_x, ncores);
     }
 
-    Tensor reader_indices = sliding_window::construct_on_host_config_tensor(
-        top_left_indices, parallel_config, op_attr.config_tensor_in_dram);
-    Tensor reader_indices_on_device = sliding_window::move_config_tensor_to_device(
-        reader_indices, parallel_config, is_block_sharded, input.device(), op_attr.config_tensor_in_dram);
-
     return pool2d_multi_core_sharded_with_halo_v2_impl_new(
         program,
         tensor_args.input_tensor_,
         reader_indices_on_device,
-        top_left_indices[0].size(),
+        reader_indices_element_count,
         output_tensors,
         pool_type,
         in_n,

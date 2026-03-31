@@ -394,6 +394,13 @@ void kernel_main() {
     constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(53);
     constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(54);
     constexpr uint32_t reader_tensor_args_index = 55;
+    // reader_indices_is_32bit placed after all TensorAccessorArgs
+    constexpr uint32_t reader_indices_is_32bit_index =
+        one_scalar_per_core
+            ? TensorAccessorArgs<reader_tensor_args_index>().next_compile_time_args_offset()
+            : TensorAccessorArgs<TensorAccessorArgs<reader_tensor_args_index>().next_compile_time_args_offset()>()
+                  .next_compile_time_args_offset();
+    constexpr uint32_t reader_indices_is_32bit = get_compile_time_arg_val(reader_indices_is_32bit_index);
 
     constexpr uint32_t eff_kernel_w = (kernel_w - 1) * dilation_w + 1;
 
@@ -467,18 +474,30 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_l1_addr);
 
-    uint32_t segments_counter = 1;
+    uint32_t segments_counter = reader_indices_is_32bit ? 2 : 1;
     constexpr uint32_t total_elems_to_reduce = kernel_h * kernel_w;
 
-    uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
+    uint32_t num_segments;
+    if constexpr (reader_indices_is_32bit) {
+        num_segments = reader_indices_ptr[0];
+    } else {
+        num_segments = reader_indices_ptr[0] & 0xffff;
+    }
 
     while (num_segments--) {
-        uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
-        uint16_t start = start_end_segment & 0xffff;
-        uint16_t end = start_end_segment >> 16;
+        uint32_t start;
+        uint32_t end;
+        if constexpr (reader_indices_is_32bit) {
+            start = reader_indices_ptr[segments_counter++];
+            end = reader_indices_ptr[segments_counter++];
+        } else {
+            uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
+            start = start_end_segment & 0xffff;
+            end = start_end_segment >> 16;
+        }
 
         constexpr uint32_t stride_multiple = 1;
-        for (uint16_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
+        for (uint32_t ind = start; ind <= end; ind += stride_multiple * stride_w) {
             read_kernel_with_top_left_index<
                 in_nblocks_c,
                 in_cb_id,
