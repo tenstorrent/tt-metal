@@ -81,6 +81,28 @@ def vae_hw_parallel_config_for_mesh(mesh_device: ttnn.MeshDevice) -> VaeHWParall
     )
 
 
+def vae_bthwc_to_torch(
+    tt_BTHWC: ttnn.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    parallel_config: VaeHWParallelConfig,
+    ccl_manager: CCLManager,
+) -> torch.Tensor:
+    """Host readback for ``[B,T,H,W,C]`` VAE activations; all-gathers H/W when spatially sharded on mesh."""
+    if mesh_num_devices(mesh_device) <= 1:
+        return ttnn.to_torch(tt_BTHWC)
+    x = ttnn.to_layout(tt_BTHWC, ttnn.TILE_LAYOUT)
+    if parallel_config.height_parallel.factor > 1:
+        x = ccl_manager.all_gather_persistent_buffer(
+            x, dim=2, mesh_axis=parallel_config.height_parallel.mesh_axis, use_hyperparams=True
+        )
+    if parallel_config.width_parallel.factor > 1:
+        x = ccl_manager.all_gather_persistent_buffer(
+            x, dim=3, mesh_axis=parallel_config.width_parallel.mesh_axis, use_hyperparams=True
+        )
+    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.to_torch(ttnn.get_device_tensors(x)[0])
+
+
 def encoder_parallel_config_for_mesh(mesh_device: ttnn.MeshDevice) -> EncoderParallelConfig:
     cols = tuple(mesh_device.shape)[1]
     return EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=cols, mesh_axis=1))
