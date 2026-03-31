@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "dispatch_s.hpp"
 
-#include <host_api.hpp>
 #include <tt_metal.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include <map>
 #include <string>
 #include <variant>

@@ -9,6 +9,7 @@ import os
 from glob import glob
 from pathlib import Path
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -470,6 +471,8 @@ def run_demo(
     fabric_config = get_fabric_config()
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
     ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
+    dispatch_core_config = ttnn.DispatchCoreConfig(type=ttnn.DispatchCoreType.WORKER, axis=ttnn.DispatchCoreAxis.COL)
+    logger.info("Setting dispatch core axis to ttnn.DispatchCoreAxis.COL")
 
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
@@ -489,9 +492,18 @@ def run_demo(
         if enable_mtp:
             trace_region_size = max(trace_region_size, 134_217_728)
         logger.info(f"Trace region size set to {trace_region_size}")
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=mesh_shape, trace_region_size=trace_region_size, dispatch_core_config=dispatch_core_config
+        )
     else:
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, dispatch_core_config=dispatch_core_config)
+
+    # MPI_Init_thread (triggered by open_mesh_device in multi-host configs) sets OpenMP threads to 1,
+    # torch inherits this setting, which makes CPU-side computations extremely slow.
+    if requested_system_name.upper() in ("DUAL", "QUAD"):
+        num_torch_threads = max(1, os.cpu_count())
+        logger.info(f"Restoring torch num_threads to {num_torch_threads}")
+        torch.set_num_threads(num_torch_threads)
 
     # Load tokenizer only for full-model mode; in random-weights mode we synthesize token ids
     tokenizer = None

@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+from typing import NamedTuple
 
 from loguru import logger
 
@@ -102,6 +103,33 @@ grid_12_10_configs = {
     (9472, 3456, 5120): (8, 4, 8, (1, 2)),
 }
 
+grid_11_10_configs = {
+    (512, 5120, 2560): (2, 5, 8, (1, 4)),
+    (2368, 5120, 3840): (4, 8, 12, (1, 4)),
+    (2368, 5120, 1280): (8, 4, 4, (1, 4)),
+    (2368, 5120, 3456): (8, 2, 12, (2, 2)),
+    (2368, 3456, 5120): (4, 4, 8, (1, 4)),
+    (9472, 5120, 3840): (16, 4, 4, (1, 4)),
+    (9472, 5120, 1280): (16, 8, 4, (1, 4)),
+    (9472, 5120, 3456): (16, 8, 4, (1, 4)),
+    (9472, 3456, 5120): (16, 3, 4, (1, 4)),
+}
+
+
+_BH_GALAXY_MIN_DEVICES = 32
+_BH_GALAXY_MAX_CORE_GRID = (11, 10)
+
+
+def get_matmul_core_grid(mesh_device):
+    """Return the compute core grid, clamped to 11x10 on Blackhole Galaxy (power constraint)."""
+    core_grid = mesh_device.compute_with_storage_grid_size()
+    if ttnn.device.is_blackhole() and mesh_device.get_num_devices() >= _BH_GALAXY_MIN_DEVICES:
+        core_grid = ttnn.CoreCoord(
+            min(core_grid.x, _BH_GALAXY_MAX_CORE_GRID[0]),
+            min(core_grid.y, _BH_GALAXY_MAX_CORE_GRID[1]),
+        )
+    return core_grid
+
 
 def get_matmul_config(M, K, N, core_grid, default_block_size=None):
     # Default to 8x8x8 with subblock 2x2 when unknown
@@ -125,6 +153,11 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
             config_tuple = config_tuple[:3]
     elif getattr(core_grid, "x", None) == 12 and getattr(core_grid, "y", None) == 10:
         config_tuple = grid_12_10_configs.get((M, K, N))
+        if config_tuple is not None:
+            subblock_h, subblock_w = config_tuple[3]
+            config_tuple = config_tuple[:3]
+    elif getattr(core_grid, "x", None) == 11 and getattr(core_grid, "y", None) == 10:
+        config_tuple = grid_11_10_configs.get((M, K, N))
         if config_tuple is not None:
             subblock_h, subblock_w = config_tuple[3]
             config_tuple = config_tuple[:3]
@@ -159,3 +192,54 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
         subblock_w=subblock_w,
         compute_with_storage_grid_size=core_grid,
     )
+
+
+class FusedMMRSConfig(NamedTuple):
+    compute_with_storage_grid_size: ttnn.CoreCoord
+    M_block_size: int
+    K_block_size: int
+    N_block_size: int
+    subblock_h: int
+    subblock_w: int
+    num_buffers_per_channel: int | None
+    chunk_width_in_mm_blocks: int
+
+    def get_params(self, core_grid, num_links):
+        rs_zone_capacity = (core_grid.y - self.compute_with_storage_grid_size.y) * core_grid.x
+        num_workers_per_link = rs_zone_capacity // (2 * num_links) - 1
+        config_dict = self._asdict()
+        num_buffers_per_channel = config_dict.pop("num_buffers_per_channel")
+        chunk_width_in_mm_blocks = config_dict.pop("chunk_width_in_mm_blocks")
+
+        # Order is important. Guaranteed for python 3.7+
+        return {
+            "reduce_scatter_core_grid_offset": ttnn.CoreCoord(0, self.compute_with_storage_grid_size.y),
+            "num_links": num_links,
+            "config": ttnn.MinimalMatmulConfig(**config_dict),
+            "num_buffers_per_channel": num_buffers_per_channel,
+            "chunk_width_in_mm_blocks": chunk_width_in_mm_blocks,
+            "num_workers_per_link": num_workers_per_link,
+        }
+
+
+default_fused_mmrs_config = FusedMMRSConfig(ttnn.CoreCoord(8, 7), 2, 8, 8, 1, 1, None, 1)
+# core_grid: {MKN: mm_core_grid, M, K, N, sub_h, sub_w, num_w_p_link, num_buffers_per_channel, chunk_width_in_mm_blocks}
+fused_mmrs_configs = {
+    ttnn.CoreCoord(8, 9): {
+        (9472, 5120, 1280): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 8, 8, 2, 2, None, 1),
+    },
+    ttnn.CoreCoord(12, 10): {
+        (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
+        (9472 // 4, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),
+    },
+}
+
+
+def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):
+    config = fused_mmrs_configs.get(device_core_grid, {})
+    if len(config) == 0:
+        logger.warning(
+            f"No known best MM/RS blocking for (M, K, N) = ({M}, {K}, {N}) on {device_core_grid} core grid; using default"
+        )
+    config = config.get((M, K, N), default_fused_mmrs_config)
+    return config.get_params(device_core_grid, num_links)

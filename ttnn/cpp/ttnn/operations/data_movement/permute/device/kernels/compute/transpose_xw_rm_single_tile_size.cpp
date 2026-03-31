@@ -25,6 +25,7 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_2;
 
     unary_op_init_common(cb_in, cb_out);
+    transpose_wh_init(cb_tilize, cb_out);
 
     for (uint32_t n = 0; n < num_blocks; n++) {
         // Tilize input via unpack and then pack (asymmetric: x_block_size rows → 1 tile)
