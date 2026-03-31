@@ -131,6 +131,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/profiler_no_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/profiler_no_op/device/profiler_no_op_program_factory.cpp
+    # MoE Counting Sort
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_counting_sort/moe_counting_sort.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_counting_sort/device/moe_counting_sort_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_counting_sort/device/moe_counting_sort_program_factory.cpp
+    # MoE Streaming Dispatch
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_dispatch/moe_dispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_dispatch/device/moe_dispatch_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_dispatch/device/moe_dispatch_program_factory.cpp
     # SiLU Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/silu_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
