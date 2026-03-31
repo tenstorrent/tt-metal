@@ -1200,19 +1200,9 @@ def ttnn_graph_report(request):
                 try:
                     import_report(json_path, report_path)
                 finally:
-                    try:
-                        json_path.unlink(missing_ok=True)
-                    except OSError as e:
-                        logger.warning("Could not remove graph capture file %s: %s", json_path, e)
+                    json_path.unlink(missing_ok=True)
                     python_io_sidecar = json_path.with_suffix(".python_io.json")
-                    try:
-                        python_io_sidecar.unlink(missing_ok=True)
-                    except OSError as e:
-                        logger.warning(
-                            "Could not remove graph capture python_io sidecar %s: %s",
-                            python_io_sidecar,
-                            e,
-                        )
+                    python_io_sidecar.unlink(missing_ok=True)
 
             config_path = report_path / "config.json"
             ttnn.save_config_to_json_file(config_path)
