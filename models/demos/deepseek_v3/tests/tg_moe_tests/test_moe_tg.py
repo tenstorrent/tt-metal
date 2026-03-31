@@ -442,8 +442,8 @@ def test_optimized_moe_decode_block_tg(
     # initial setup
     ############################################
 
-    torch.manual_seed(2005)
-    random.seed(2005)
+    torch.manual_seed(2003)
+    random.seed(2003)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis]

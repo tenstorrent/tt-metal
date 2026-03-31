@@ -409,7 +409,7 @@ def run_moe_compute_test(
 
     logger.info(f"\nTG MoE Compute Test: {'PASSED' if all_passed else 'FAILED'}")
     assert all_passed, "TG MoE Compute test failed!"
-    logger.info("✓ TG MoE Compute test passed!")
+    logger.info("TG MoE Compute test passed!")
 
 
 @pytest.mark.requires_device("TG")

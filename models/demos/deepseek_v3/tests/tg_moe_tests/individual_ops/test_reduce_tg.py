@@ -51,7 +51,7 @@ def run_reduce_test(
     3. Runs ttnn.reduce_scatter to reduce across tensor parallel dimension
     4. Validates outputs against golden references
     """
-    torch.manual_seed(2005)
+    torch.manual_seed(2003)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis]
@@ -160,7 +160,7 @@ def run_reduce_test(
         tt_sum_torch_device0 = ttnn.to_torch(tt_sum_device_tensors[0])
 
         sum_pcc_passed, sum_pcc = comp_pcc(tt_sum_torch_device0, torch_sum_goldens[i], pcc=PCC_THRESHOLD)
-        logger.info(f"  Sum PCC: {sum_pcc:.6f} {'✓' if sum_pcc_passed else '✗'}")
+        logger.info(f"  Sum PCC: {sum_pcc:.6f}")
 
         if not sum_pcc_passed:
             logger.warning(f"FAILED sum validation at iteration {i}: PCC {sum_pcc}")
@@ -173,7 +173,7 @@ def run_reduce_test(
         tt_rs_torch_device0 = ttnn.to_torch(tt_rs_device_tensors[0])
 
         rs_pcc_passed, rs_pcc = comp_pcc(tt_rs_torch_device0, torch_reduce_scatter_goldens[i], pcc=PCC_THRESHOLD)
-        logger.info(f"  Reduce-scatter PCC: {rs_pcc:.6f} {'✓' if rs_pcc_passed else '✗'}")
+        logger.info(f"  Reduce-scatter PCC: {rs_pcc:.6f}")
 
         if not rs_pcc_passed:
             logger.warning(f"FAILED reduce_scatter validation at iteration {i}: PCC {rs_pcc}")
@@ -181,7 +181,7 @@ def run_reduce_test(
 
     logger.info(f"\nTG MoE Reduce Test: {'PASSED' if all_passed else 'FAILED'}")
     assert all_passed, "TG MoE Reduce test failed!"
-    logger.info("✓ TG MoE Reduce test passed!")
+    logger.info("TG MoE Reduce test passed!")
 
 
 @pytest.mark.requires_device("TG")

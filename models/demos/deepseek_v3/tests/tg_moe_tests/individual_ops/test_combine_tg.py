@@ -63,29 +63,29 @@ def run_combine_test(
     3. Runs selective_reduce_combine to gather expert outputs
     4. Verifies outputs against golden references
     """
-    torch.manual_seed(42)
-    random.seed(42)
+    torch.manual_seed(2003)
+    random.seed(2003)
 
     num_devices = mesh_shape[0] * mesh_shape[1]
     num_dispatch_devices = mesh_shape[cluster_axis]
     num_replicated_devices = num_devices // num_dispatch_devices
     experts = experts_per_device * num_devices
 
-    # NOTE: gen_tensors expects batch to be per-replicated-group, not total batch
-    # For cluster_axis=0 with 4x8 mesh, we have 8 replicated groups
-    # If we want 64 total tokens, we pass 64/8 = 8 tokens per group
-    batch_per_group = batch // num_replicated_devices
+    # For cluster_axis=0: batch represents tokens per cluster (distributed across num_dispatch_devices)
+    # Total output tokens = batch * num_replicated_devices (one batch from each replicated cluster)
+    total_output_tokens = batch * num_replicated_devices
 
     logger.info("=" * 80)
     logger.info(f"TG MoE Combine Test Configuration:")
     logger.info(f"  Mesh shape: {mesh_shape} ({num_devices} devices)")
     logger.info(f"  Cluster axis: {cluster_axis}")
-    logger.info(f"  Batch: {batch} total ({batch_per_group} per replicated group)")
+    logger.info(f"  Batch per cluster: {batch} (distributed across {num_dispatch_devices} devices)")
+    logger.info(f"  Num replicated clusters: {num_replicated_devices}")
+    logger.info(f"  Total output tokens: {total_output_tokens}")
     logger.info(f"  Seq: {seq}")
     logger.info(f"  Experts: {experts} ({experts_per_device} per device)")
     logger.info(f"  Selected experts K: {select_experts_k}")
     logger.info(f"  Hidden size: {hidden_size}")
-    logger.info(f"  Num replicated devices: {num_replicated_devices}")
     logger.info("=" * 80)
 
     # Create core ranges
@@ -98,7 +98,7 @@ def run_combine_test(
     )
 
     # Generate test tensors and golden references
-    # Pass batch_per_group since gen_tensors expects per-replicated-group batch
+    # batch represents tokens per cluster (will be distributed across num_dispatch_devices)
     (
         dense_metadata_tensor,
         dense_token_maps,
@@ -107,7 +107,7 @@ def run_combine_test(
         output_ref,
         output_data_map,
     ) = gen_tensors(
-        batch_per_group,
+        batch,
         experts,
         select_experts_k,
         hidden_size,
@@ -141,7 +141,8 @@ def run_combine_test(
     )
 
     # Create output tensor
-    output_tensor = torch.zeros([select_experts_k, batch * seq, hidden_size], dtype=torch.bfloat16)
+    # Size accounts for replication: each of num_replicated_devices clusters outputs batch*seq tokens
+    output_tensor = torch.zeros([select_experts_k, total_output_tokens * seq, hidden_size], dtype=torch.bfloat16)
     tt_output_tensor = ttnn.from_torch(
         output_tensor,
         device=mesh_device,
@@ -226,11 +227,6 @@ def run_combine_test(
 
 
 @pytest.mark.requires_device("TG")
-@pytest.mark.skip(
-    reason="Metadata tensor format incompatibility with cluster_axis=0. "
-    "The gen_tensors helper from 1x8/1x16 tests generates metadata in a format "
-    "incompatible with 4x8 mesh (cluster_axis=0). Combine is still tested in E2E test."
-)
 @pytest.mark.skipif(
     (os.getenv("USE_TORUS_MODE") is None),
     reason="Requires ring fabric",

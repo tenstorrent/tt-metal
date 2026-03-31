@@ -115,8 +115,8 @@ def run_all_to_all_dispatch_metadata_test(
     shard_dim=0,
 ):
     """Run dispatch test on TG mesh."""
-    torch.manual_seed(2005)
-    random.seed(2005)
+    torch.manual_seed(2003)
+    random.seed(2003)
     mesh_device.enable_program_cache()
     devices = mesh_shape[0] * mesh_shape[1]
 
@@ -358,7 +358,7 @@ def run_all_to_all_dispatch_metadata_test(
 
     logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
     assert passed, "TG Dispatch test failed!"
-    logger.info("✓ TG Dispatch test passed!")
+    logger.info("TG Dispatch test passed!")
 
 
 @pytest.mark.requires_device("TG")  # Only run on single galaxy
@@ -390,70 +390,6 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, experts_per_device):
     hidden_size = 7168
     seq_len = 1
     num_iters = 10
-    num_links = 4
-    dtype = ttnn.bfloat16
-    scheme = "random_sequential_experts"
-
-    dispatch_devices = mesh_shape[cluster_axis]
-    batch = batches_per_device * dispatch_devices
-    trace_mode = True
-
-    run_all_to_all_dispatch_metadata_test(
-        mesh_device,
-        mesh_shape,
-        batch,
-        experts,
-        select_experts_k,
-        hidden_size,
-        seq_len,
-        num_iters,
-        trace_mode,
-        num_links=num_links,
-        scheme=scheme,
-        dtype=dtype,
-        cluster_axis=cluster_axis,
-    )
-
-
-@pytest.mark.requires_device("TG")
-@pytest.mark.skip(reason="Performance test - enable manually for perf validation")
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 500000,
-        },
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device, cluster_axis",
-    [
-        pytest.param((4, 8), (4, 8), 0, id="4x8_tg"),
-    ],
-    indirect=["mesh_device"],
-)
-@pytest.mark.parametrize("batches_per_device", [32])
-@pytest.mark.parametrize("experts_per_device", [2])
-@pytest.mark.parametrize("select_experts_k", [8, 4, 2])
-@pytest.mark.parametrize("hidden_size", [7168])
-@pytest.mark.parametrize("num_iters", [40])
-def test_decode_perf(
-    mesh_device,
-    mesh_shape,
-    cluster_axis,
-    batches_per_device,
-    experts_per_device,
-    select_experts_k,
-    hidden_size,
-    num_iters,
-):
-    """Performance test for TG dispatch."""
-    num_devices = mesh_shape[0] * mesh_shape[1]  # Total devices = 32 for 4x8
-    experts = experts_per_device * num_devices  # 2 * 32 = 64 experts
-    seq_len = 1
     num_links = 4
     dtype = ttnn.bfloat16
     scheme = "random_sequential_experts"
