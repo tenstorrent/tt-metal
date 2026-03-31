@@ -1006,32 +1006,41 @@ static std::vector<Tensor> pool2d(
     if (is_global_pool && pool_type == Pool2DType::AVG_POOL2D) {
         auto mem_config = memory_config.value_or(input_tensor_4d.memory_config());
         uint32_t hw = input_h * input_w;
+        float scalar = divisor_override.has_value() ? 1.0f / float(divisor_override.value()) : 1.0f / float(hw);
 
-        // Reshape requires ROW_MAJOR. Convert TILE inputs (e.g. BFLOAT8_B)
-        // which also handles any necessary dtype conversion (BFLOAT8_B → BFLOAT16).
+        // TILE inputs (e.g. BFLOAT8_B) need ROW_MAJOR for reshape compatibility.
         if (input_tensor_4d.layout() != Layout::ROW_MAJOR) {
             input_tensor_4d = ttnn::to_layout(input_tensor_4d, Layout::ROW_MAJOR);
         }
         auto in_shape = input_tensor_4d.padded_shape();
 
-        // Input is (1, 1, N*H*W, C). Reshape to (N, H, W, C) to establish
-        // proper batch structure, then flatten spatial dims to (N, 1, H*W, C).
+        if (batch_size == 1) {
+            // Fast path: input is (1, 1, H*W, C). View + reduce + view (views are zero-copy).
+            ttnn::Shape flat({in_shape[0], 1, in_shape[1] * in_shape[2], in_shape[3]});
+            Tensor flat_input = ttnn::experimental::view(input_tensor_4d, flat);
+
+            Tensor output = ttnn::operations::reduction::pool_sum(
+                flat_input, int(flat.rank() - 2), mem_config, compute_kernel_config, scalar);
+
+            auto op = output.padded_shape();
+            ttnn::Shape out_logical({1, 1, 1, channels});
+            ttnn::Shape out_padded({op[0], 1, 1, op[3]});
+            output = ttnn::experimental::view(output, out_logical, out_padded);
+            return {output};
+        }
+
+        // Multi-batch: reshape (1,1,N*H*W,C) → (N,H,W,C) → view (N,1,H*W,C) → reduce → reshape
         ttnn::Shape nhwc_logical({batch_size, input_h, input_w, channels});
         ttnn::Shape nhwc_padded({batch_size, input_h, input_w, in_shape[3]});
         Tensor nhwc_input = ttnn::reshape(input_tensor_4d, nhwc_logical, nhwc_padded);
 
-        // Flatten spatial dims: (N, H, W, C) -> (N, 1, H*W, C)
         auto ns = nhwc_input.padded_shape();
         ttnn::Shape flat_shape({ns[0], 1, ns[1] * ns[2], ns[3]});
         Tensor flat_input = ttnn::experimental::view(nhwc_input, flat_shape);
 
-        float scalar = divisor_override.has_value() ? 1.0f / float(divisor_override.value()) : 1.0f / float(hw);
-
         Tensor output = ttnn::operations::reduction::pool_sum(
             flat_input, int(flat_shape.rank() - 2), mem_config, compute_kernel_config, scalar);
 
-        // Fix output shape: pool_sum returns (N, 1, 1, padded_C).
-        // Reshape to (1, 1, N, C) for pool2d output format.
         auto output_padded = output.padded_shape();
         ttnn::Shape correct_logical({1, 1, batch_size, channels});
         ttnn::Shape correct_padded({1, 1, output_padded[0], output_padded[3]});
