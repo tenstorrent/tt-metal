@@ -52,3 +52,10 @@ runs:
         submodules: ${{ inputs.submodules }}
         token: ${{ inputs.token }}
         path: ${{ inputs.path }}
+
+    - name: Initialize private tt_ops_code_gen submodule
+      if: inputs.submodules != 'false' && inputs.private-submodule-token != ''
+      shell: bash
+      working-directory: ${{ inputs.path != '' && inputs.path || '.' }}
+      run: |
+        git submodule update --init tt_metal/third_party/tt_ops_code_gen
