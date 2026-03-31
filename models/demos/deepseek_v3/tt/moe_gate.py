@@ -362,6 +362,8 @@ class MoEGate(AbstractModule):
             topk_experts_weights = ttnn.to_memory_config(topk_experts_weights, memory_config=ttnn.L1_MEMORY_CONFIG)
             topk_experts_indices = ttnn.to_memory_config(topk_experts_indices, memory_config=ttnn.L1_MEMORY_CONFIG)
             if cfg["mode"] == "prefill":
+                topk_experts_indices = ttnn.to_layout(topk_experts_indices, ttnn.TILE_LAYOUT)
+                topk_experts_weights = ttnn.to_layout(topk_experts_weights, ttnn.TILE_LAYOUT)
                 topk_experts_weights_list.append(topk_experts_weights)
                 topk_experts_indices_list.append(topk_experts_indices)
             ttnn.deallocate(cur_logits)
@@ -371,6 +373,7 @@ class MoEGate(AbstractModule):
         if cfg["mode"] == "prefill":
             topk_experts_weights = ttnn.concat(topk_experts_weights_list, dim=0)
             topk_experts_indices = ttnn.concat(topk_experts_indices_list, dim=0)
+            topk_experts_weights = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
         # here we only take the 1x8  out of 32x32
         topk_experts_weights = topk_experts_weights[:total_batch_size, 0, :8]
         topk_experts_indices = topk_experts_indices[:total_batch_size, 0, :8]
