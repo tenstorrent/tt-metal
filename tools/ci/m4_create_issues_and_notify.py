@@ -21,7 +21,7 @@ PRIMARY_REPO = "tenstorrent/tt-metal"
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 SLACK_CHANNEL_TEST = "C0APK6215B5"
 MAX_LOG_CHARS_PER_RUN = 12000
-MARKER = "===FINAL_DETERMINISTIC_FAILURE_DECISION==="
+MARKER = "===FINAL_M4_REVIEW_DECISION==="
 
 
 def log(message: str) -> None:
@@ -91,30 +91,102 @@ def parse_agent_json(text: str) -> dict[str, Any]:
     return json.loads(payload)
 
 
-def decide_deterministic_failure(
+def load_command_spec(path: str, fallback: str) -> str:
+    p = Path(path)
+    if not p.exists():
+        return fallback
+    return p.read_text(encoding="utf-8")
+
+
+def fetch_recent_slack_messages(*, slack_token: str, channel_id: str, limit: int = 20) -> list[dict[str, Any]]:
+    query = urllib.parse.urlencode({"channel": channel_id, "limit": str(limit)})
+    req = urllib.request.Request(
+        f"https://slack.com/api/conversations.history?{query}",
+        headers={"Authorization": f"Bearer {slack_token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Slack history fetch failed: http_{exc.code}") from exc
+    if not payload.get("ok", False):
+        raise RuntimeError(f"Slack history fetch failed: {payload.get('error', 'unknown_error')}")
+    messages = payload.get("messages", [])
+    return messages if isinstance(messages, list) else []
+
+
+def build_open_issue_context(open_issues: list[dict[str, Any]], cap: int = 20) -> str:
+    lines: list[str] = []
+    for issue in open_issues[:cap]:
+        number = issue.get("number")
+        title = str(issue.get("title", "")).strip()
+        url = str(issue.get("url", "")).strip()
+        body = str(issue.get("body", "")).strip()
+        marker_match = re.search(r"Auto-triage-fingerprint:\s*([A-Za-z0-9_-]+)", body)
+        fp = marker_match.group(1) if marker_match else ""
+        lines.append(f"- #{number} {title} ({url}) fingerprint={fp}")
+    return "\n".join(lines) if lines else "(none)"
+
+
+def build_recent_slack_context(messages: list[dict[str, Any]], cap: int = 10) -> str:
+    lines: list[str] = []
+    for msg in messages[:cap]:
+        ts = str(msg.get("ts", "")).strip()
+        user = str(msg.get("user", "") or msg.get("bot_id", "")).strip()
+        text = str(msg.get("text", "")).strip().replace("\n", " ")
+        if len(text) > 220:
+            text = text[:220] + "..."
+        lines.append(f"- ts={ts} user={user} text={text}")
+    return "\n".join(lines) if lines else "(none)"
+
+
+def agent_review_and_prepare_outputs(
     *,
     workflow_name: str,
     job_name: str,
     job_urls: list[str],
     logs: list[str],
+    open_issue_context: str,
+    recent_slack_context: str,
     model: str,
 ) -> dict[str, Any]:
+    create_ticket_spec = load_command_spec(
+        ".cursor/commands/ci/ci-create-tickets.md",
+        "Create deterministic tickets only when the same terminal failure appears in all 3 logs.",
+    )
+    slack_draft_spec = load_command_spec(
+        ".cursor/commands/ci/ci-draft-slack-ci-issue.md",
+        "Draft concise Slack incident updates with direct links.",
+    )
     log_sections: list[str] = []
     for idx, (url, text) in enumerate(zip(job_urls, logs, strict=False), start=1):
         log_sections.append(f"Run {idx} URL: {url}\n--- BEGIN LOG {idx} ---\n{text}\n--- END LOG {idx} ---")
     prompt = (
-        "You are validating deterministic CI failure signatures.\n"
+        "You are the M4 reviewer for deterministic CI failures.\n"
+        "You MUST manually compare all three logs and determine if terminal failure signatures are the same.\n"
+        "You MUST also review existing open issues and recent Slack messages before drafting outputs.\n"
         "Criteria: deterministic only if the same job failed 3 times in a row with semantically identical terminal failure.\n\n"
         f"Workflow: {workflow_name}\n"
         f"Job: {job_name}\n"
+        "Open issues context:\n"
+        f"{open_issue_context}\n\n"
+        "Recent Slack messages context:\n"
+        f"{recent_slack_context}\n\n"
+        "Ticket command guidance:\n"
+        f"{create_ticket_spec}\n\n"
+        "Slack draft guidance:\n"
+        f"{slack_draft_spec}\n\n"
         "Decide if all three runs share one identical terminal failure signature.\n"
-        "If yes, extract a short normalized signature string and one concrete error excerpt.\n"
-        "If uncertain, return deterministic=false and confidence=low.\n\n"
+        "If yes, draft issue title/body and draft initial Slack message text.\n"
+        "If uncertain, set create_issue=false and draft_slack=false.\n\n"
         + "\n\n".join(log_sections)
         + "\n\nOutput marker exactly on its own line:\n"
         + MARKER
         + "\nThen output compact JSON only:\n"
-        + '{"deterministic":false,"confidence":"low|medium|high","signature":"","error_excerpt":"","reason":""}'
+        + (
+            '{"deterministic":false,"confidence":"low|medium|high","signature":"","error_excerpt":"","reason":"",'
+            '"create_issue":false,"draft_slack":false,"issue_title":"","issue_body":"","slack_text":""}'
+        )
     )
     cmd = ["agent", "--trust", "-p", prompt]
     if model != "auto":
@@ -250,6 +322,11 @@ def main() -> int:
         return 0
 
     open_issues = list_open_issue_bodies(issue_token=issue_token)
+    recent_slack_messages = fetch_recent_slack_messages(
+        slack_token=slack_token, channel_id=SLACK_CHANNEL_TEST, limit=20
+    )
+    open_issue_context = build_open_issue_context(open_issues)
+    recent_slack_context = build_recent_slack_context(recent_slack_messages)
     created: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
 
@@ -263,13 +340,15 @@ def main() -> int:
         if len(job_urls) < 3:
             skipped.append({"job_name": job_name, "reason": "requires_3_failing_runs"})
             continue
-        log(f"Validating deterministic signature for workflow={workflow_name} job={job_name}")
+        log(f"Running agent review for workflow={workflow_name} job={job_name}")
         logs = [fetch_job_logs(url, read_token=read_token) for url in job_urls]
-        decision = decide_deterministic_failure(
+        decision = agent_review_and_prepare_outputs(
             workflow_name=workflow_name,
             job_name=job_name,
             job_urls=job_urls,
             logs=logs,
+            open_issue_context=open_issue_context,
+            recent_slack_context=recent_slack_context,
             model=args.model,
         )
         deterministic = bool(decision.get("deterministic", False))
@@ -277,12 +356,17 @@ def main() -> int:
         signature = str(decision.get("signature", "")).strip()
         excerpt = str(decision.get("error_excerpt", "")).strip()
         reason = str(decision.get("reason", "")).strip()
-        if not deterministic or confidence != "high" or not signature:
+        create_issue_flag = bool(decision.get("create_issue", False))
+        draft_slack_flag = bool(decision.get("draft_slack", False))
+        issue_title = str(decision.get("issue_title", "")).strip()
+        issue_body_from_agent = str(decision.get("issue_body", "")).strip()
+        slack_text = str(decision.get("slack_text", "")).strip()
+        if not deterministic or confidence != "high" or not signature or not create_issue_flag:
             skipped.append(
                 {
                     "job_name": job_name,
                     "workflow_name": workflow_name,
-                    "reason": "not_deterministic_or_low_confidence",
+                    "reason": "agent_rejected_or_low_confidence",
                     "decision": decision,
                 }
             )
@@ -301,28 +385,47 @@ def main() -> int:
             )
             continue
 
-        issue_title = f"CI auto triage: deterministic failure in {job_name}"
-        issue_body = (
-            f"Workflow: `{workflow_name}`\n"
-            f"Job: `{job_name}`\n\n"
-            f"Failure signature: `{signature}`\n\n"
-            f"Error excerpt:\n"
-            f"```\n{excerpt or reason or 'No excerpt captured'}\n```\n\n"
-            f"Failing job URLs (last 3):\n"
-            + "\n".join(f"- {url}" for url in job_urls)
-            + "\n\n"
-            + issue_marker(fp)
-            + "\n"
-        )
+        if not issue_title:
+            issue_title = f"CI auto triage: deterministic failure in {job_name}"
+        if not issue_body_from_agent:
+            issue_body_from_agent = (
+                f"Workflow: `{workflow_name}`\n"
+                f"Job: `{job_name}`\n\n"
+                f"Failure signature: `{signature}`\n\n"
+                f"Error excerpt:\n"
+                f"```\n{excerpt or reason or 'No excerpt captured'}\n```\n\n"
+                f"Failing job URLs (last 3):\n" + "\n".join(f"- {url}" for url in job_urls)
+            )
+        marker = issue_marker(fp)
+        issue_body = issue_body_from_agent
+        if marker not in issue_body:
+            issue_body = issue_body.rstrip() + "\n\n" + marker + "\n"
+        if not draft_slack_flag:
+            skipped.append(
+                {
+                    "job_name": job_name,
+                    "workflow_name": workflow_name,
+                    "reason": "agent_declined_slack_draft",
+                    "fingerprint": fp,
+                    "decision": decision,
+                }
+            )
+            continue
         issue_url = create_issue(issue_token=issue_token, title=issue_title, body=issue_body)
         open_issues.append({"url": issue_url, "body": issue_body})
-        slack_text = (
-            f"CI auto triage detected a deterministic failure (3x in a row) for `{job_name}` in `{workflow_name}`.\n"
-            f"Issue: {issue_url}\n"
-            f"Fingerprint: `{fp}`\n"
-            f"Latest run: {job_urls[0]}"
-        )
+        if not slack_text:
+            slack_text = (
+                f"CI auto triage detected a deterministic failure (3x in a row) for `{job_name}` in `{workflow_name}`.\n"
+                f"Issue: {issue_url}\n"
+                f"Fingerprint: `{fp}`\n"
+                f"Latest run: {job_urls[0]}"
+            )
+        if issue_url not in slack_text:
+            slack_text = slack_text.rstrip() + f"\nIssue: {issue_url}"
         slack_ts = post_slack_message(slack_token=slack_token, channel_id=SLACK_CHANNEL_TEST, text=slack_text)
+        recent_slack_messages.insert(0, {"ts": slack_ts, "user": "m4-auto-triage", "text": slack_text})
+        recent_slack_context = build_recent_slack_context(recent_slack_messages)
+        open_issue_context = build_open_issue_context(open_issues)
         created.append(
             {
                 "workflow_name": workflow_name,
@@ -332,6 +435,7 @@ def main() -> int:
                 "slack_channel": SLACK_CHANNEL_TEST,
                 "slack_ts": slack_ts,
                 "job_urls": job_urls,
+                "agent_decision": decision,
             }
         )
         log(f"Created issue and posted Slack bootstrap: {issue_url} (ts={slack_ts})")
