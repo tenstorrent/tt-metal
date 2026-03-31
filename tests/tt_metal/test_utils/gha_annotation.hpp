@@ -28,7 +28,7 @@ namespace ttsl::gha {
 //   ttsl::gha::emit_annotation_at(
 //       ttsl::gha::annotation_level::error, "Validation failed");
 
-inline constexpr std::string_view github_actions_env_var = "GITHUB_ACTIONS";
+inline constexpr const char github_actions_env_var[] = "GITHUB_ACTIONS";
 
 enum class annotation_level {
     notice,
@@ -40,13 +40,13 @@ enum class annotation_level {
 // The caller must ensure the referenced strings outlive the annotation object.
 struct annotation {
     annotation_level level{annotation_level::notice};
-    std::string_view message{};
-    std::string_view file{};
-    std::optional<std::uint_least32_t> line{};
-    std::optional<std::uint_least32_t> end_line{};
-    std::optional<std::uint_least32_t> column{};
-    std::optional<std::uint_least32_t> end_column{};
-    std::string_view title{};
+    std::string_view message;
+    std::string_view file;
+    std::optional<std::uint_least32_t> line;
+    std::optional<std::uint_least32_t> end_line;
+    std::optional<std::uint_least32_t> column;
+    std::optional<std::uint_least32_t> end_column;
+    std::string_view title;
 };
 
 [[nodiscard]] constexpr std::string_view to_string(annotation_level level) noexcept {
@@ -75,7 +75,7 @@ namespace detail {
             return env_var_is_truthy(value);
         }
     }
-    return env_var_is_truthy(std::getenv(github_actions_env_var.data()));
+    return env_var_is_truthy(std::getenv(github_actions_env_var));
 }
 
 // Fills unset location fields from loc. Call-site capture must use a wrapper that defaults
