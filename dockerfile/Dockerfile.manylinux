@@ -34,6 +34,7 @@ RUN dnf install -y \
     gawk \
     libevent-devel \
     libibverbs-devel \
+    libtool \
     libmpc-devel \
     libzstd-devel \
     mpfr-devel \
