@@ -85,7 +85,7 @@ RUN git clone --branch ${OMPI_TAG} --depth 1 https://github.com/open-mpi/ompi.gi
     cd ompi-src && \
     git submodule update --init --recursive && \
     ./autogen.pl && \
-    ./configure \
+    CFLAGS="-std=gnu17" ./configure \
         --prefix=${OMPI_PREFIX} \
         --with-ft=ulfm \
         --enable-wrapper-rpath \
