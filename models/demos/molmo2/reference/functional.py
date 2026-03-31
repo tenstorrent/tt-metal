@@ -403,7 +403,7 @@ def text_mlp_forward(
     """
     SwiGLU MLP for Molmo2 text model.
 
-    ff_proj is fused [gate; up] → split → silu(gate) * up → ff_out.
+    ff_proj is fused [up; gate] (first half up, second half gate) → silu(gate) * up → ff_out.
     No bias.
 
     Args:
@@ -417,7 +417,7 @@ def text_mlp_forward(
     p = f"{prefix}.{layer_num}.mlp"
     ff_proj = F.linear(x, state_dict[f"{p}.ff_proj.weight"])
     intermediate = ff_proj.shape[-1] // 2
-    gate, up = ff_proj.split(intermediate, dim=-1)
+    up, gate = ff_proj.split(intermediate, dim=-1)
     hidden = F.silu(gate) * up
     return F.linear(hidden, state_dict[f"{p}.ff_out.weight"])
 
