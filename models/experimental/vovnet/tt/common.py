@@ -153,9 +153,12 @@ class Conv:
             output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
             output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
 
+            # VoVNet PCC: LoFi failed once BN honored compute_kernel_config; device sweep found HiFi2 as
+            # the lowest passing fidelity (HiFi2+True first; HiFi2+False also passed, earlier BN default
+            # was HiFi4+False).
             bn_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
-                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=True,
                 fp32_dest_acc_en=False,
                 packer_l1_acc=False,
