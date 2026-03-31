@@ -2744,9 +2744,9 @@ void write_program_command_sequence(
     LOG_TRACE_LAZY(tt::LogDispatch, "");
 }
 
-TraceNode create_trace_node(ProgramImpl& program, IDevice* device, uint32_t num_workers) {
+TraceNode create_trace_node(ProgramImpl& program, IDevice* device, uint32_t num_workers, bool use_prefetcher_cache) {
     std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(device)};
-    program.generate_trace_dispatch_commands(device, false);
+    program.generate_trace_dispatch_commands(device, use_prefetcher_cache);
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
     // By using the traced command sequence, we know the RTA data source-of-truth isn't this command sequence (it's in a
