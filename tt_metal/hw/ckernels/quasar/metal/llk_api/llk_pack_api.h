@@ -14,6 +14,7 @@
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_pack_untilize.h"
 #include "experimental/dataflow_buffer.h"
 
 /*************************************************************************
@@ -197,6 +198,34 @@ TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_confi
     _llk_pack_relu_config_<p_pacr::PACK0, false>(relu_config);
 }
 
+/**
+ * @brief Restores the packer buffer descriptor to the default tile dimensions from the CB configuration.
+ * Should be called after pack untilize to restore the packer state before calling pack_untilize_init again.
+ *
+ * @param new_output The output circular buffer to restore.
+ */
+inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
+    const std::uint32_t output_id = get_output_id(new_output);
+
+    // Restore buffer descriptor to default tile dimensions from the CB configuration
+    buffer_descriptor_u bd_val = {0};
+    bd_val.f.l1_addr_16B = g_dfb_interface[output_id].tc_slots[0].base_addr;
+    bd_val.f.format = static_cast<std::uint8_t>(pack_dst_format[output_id]);
+    bd_val.f.x_dim = pack_tile_face_r_dim[output_id];
+    bd_val.f.y_dim = ckernel::trisc::FACE_C_DIM;
+    bd_val.f.z_dim = pack_tile_num_faces[output_id];
+    ckernel::trisc::_configure_buf_desc_table_(output_id, bd_val);
+}
+
+/**
+ * @brief Initializes packer dst register offset to 0 and resets dest bank id to 0.
+ * Should be called at the beginning of a packing loop to ensure offsets are correct before packing out the first tile.
+ */
+inline void llk_init_packer_dest_offset_registers() {
+    _reset_dest_bank_id_();
+    _set_packer_dest_registers_<p_pacr::PACK0, DST_SYNC_MODE>();
+}
+
 /*************************************************************************
  * LLK PACK REDUCE MASK CONFIGURATION
  *************************************************************************/
@@ -228,3 +257,5 @@ inline void llk_pack_reduce_mask_config() {
  *
  **/
 inline void llk_pack_reduce_mask_clear() { _llk_pack_reduce_mask_clear_(); }
+
+#include "llk_pack_untilize_api.h"
