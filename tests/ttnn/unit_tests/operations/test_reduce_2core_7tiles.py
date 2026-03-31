@@ -18,16 +18,16 @@ import ttnn
 from loguru import logger
 
 
-def create_simple_tile_data(num_tokens, num_experts, emb_dim):
+def create_simple_tile_data(num_tokens, num_experts, emb_dim, tile_start=1.0, tile_increment=1.0):
     """
     Create data where each tile has a constant value.
 
     Pattern:
-    - Token 0, Expert 0, Tile 0: all values = 1.0
-    - Token 0, Expert 0, Tile 1: all values = 2.0
+    - Token 0, Expert 0, Tile 0: all values = tile_start
+    - Token 0, Expert 0, Tile 1: all values = tile_start + tile_increment
     - ...
-    - Token 0, Expert 0, Tile 6: all values = 7.0
-    - Token 0, Expert 1, Tile 0: all values = 8.0
+    - Token 0, Expert 0, Tile 6: all values = tile_start + 6*tile_increment
+    - Token 0, Expert 1, Tile 0: all values = tile_start + 7*tile_increment
     - ...
 
     Returns tensor of shape [1, num_tokens, num_experts, emb_dim]
@@ -37,14 +37,14 @@ def create_simple_tile_data(num_tokens, num_experts, emb_dim):
 
     data = torch.zeros(1, num_tokens, num_experts, emb_dim, dtype=torch.bfloat16)
 
-    tile_value = 1.0
+    tile_value = tile_start
     for token_idx in range(num_tokens):
         for expert_idx in range(num_experts):
             for tile_idx in range(num_tiles):
                 start = tile_idx * 1024
                 end = start + 1024
                 data[0, token_idx, expert_idx, start:end] = tile_value
-                tile_value += 1.0
+                tile_value += tile_increment
 
     return data
 
@@ -80,6 +80,55 @@ def compute_expected_output(combine_output, weights):
     result = weighted.sum(dim=2)
 
     return result
+
+
+def verify_with_pcc(result, expected, pcc_threshold=0.9999, max_rel_error_threshold=1.0):
+    """
+    Verify result using PCC (Pearson Correlation Coefficient) metric.
+
+    Returns True if verification passes, False otherwise.
+    Also prints diagnostic information.
+    """
+    import numpy as np
+
+    # Flatten and convert to numpy
+    expected_flat = expected.flatten().float().numpy()
+    result_flat = result.flatten().float().numpy()
+
+    # Check for NaN/Inf
+    has_nan = np.isnan(result_flat).any()
+    has_inf = np.isinf(result_flat).any()
+
+    if has_nan or has_inf:
+        print(f"❌ Result contains NaN: {has_nan}, Inf: {has_inf}")
+        return False
+
+    # Compute PCC
+    mean_exp = np.mean(expected_flat)
+    mean_res = np.mean(result_flat)
+    numerator = np.sum((expected_flat - mean_exp) * (result_flat - mean_res))
+    denominator = np.sqrt(np.sum((expected_flat - mean_exp) ** 2) * np.sum((result_flat - mean_res) ** 2))
+    pcc = numerator / denominator if denominator > 0 else 0.0
+
+    # Compute relative error
+    relative_errors = np.abs(expected_flat - result_flat) / (np.abs(expected_flat) + 1e-5)
+    mean_rel_error = np.mean(relative_errors) * 100
+    max_rel_error = np.max(relative_errors) * 100
+
+    print(f"PCC: {pcc:.6f} (threshold: {pcc_threshold})")
+    print(f"Mean relative error: {mean_rel_error:.3f}% (threshold: {max_rel_error_threshold}%)")
+    print(f"Max relative error: {max_rel_error:.3f}%")
+
+    # Check thresholds
+    pcc_pass = pcc > pcc_threshold
+    error_pass = mean_rel_error < max_rel_error_threshold
+
+    if pcc_pass and error_pass:
+        print("✅ Verification PASSED")
+        return True
+    else:
+        print(f"❌ Verification FAILED: PCC={pcc_pass}, Error={error_pass}")
+        return False
 
 
 def test_reduce_2core_7tiles_simple(device):
@@ -150,7 +199,6 @@ def test_reduce_2core_7tiles_simple(device):
 
     logger.info(f"  combine_output: {combine_output_tt.shape}, {combine_output_tt.layout}")
     logger.info(f"  weights: {weights_tt.shape}, {weights_tt.layout}")
-    logger.info(f"  weights buffer page_size: {weights_tt.buffer().page_size()}")
 
     # Run the operation
     logger.info("\nRunning ttnn.experimental.deepseek_moe_post_combine_reduce...")
@@ -174,41 +222,11 @@ def test_reduce_2core_7tiles_simple(device):
         logger.info("VERIFICATION:")
         logger.info("=" * 80)
 
-        # Check each token
-        all_correct = True
-        print("_______________actual output______________")
-        print(result[0, 0, 0:10])
-        print(result[0, 0, 1023:1034])
-        print(result[0, 0, 2047:2058])
-        print("__________________________________________")
-        for token_idx in range(num_tokens):
-            logger.info(f"\nToken {token_idx}:")
+        # Verify using PCC
+        passed = verify_with_pcc(result, expected, pcc_threshold=0.9999, max_rel_error_threshold=2.0)
 
-            for tile_idx in range(num_tiles):
-                start = tile_idx * 1024
-
-                expected_val = expected[0, token_idx, start].item()
-                actual_val = result[0, token_idx, start].item()
-
-                diff = abs(expected_val - actual_val)
-                match = diff < 1.0  # Allow small floating point error
-                status = "✅" if match else "❌"
-
-                # logger.info(f"  {status} Tile {tile_idx}: expected={expected_val:.1f}, actual={actual_val:.1f}, diff={diff:.1f}")
-
-                if not match:
-                    all_correct = False
-                    # Print more details for failed tile
-                    logger.error(f"      First 10 elements expected: {expected[0, token_idx, start:start+10]}")
-                    logger.error(f"      First 10 elements actual:   {result[0, token_idx, start:start+10]}")
-
-        logger.info("\n" + "=" * 80)
-        if all_correct:
-            logger.info("✅✅✅ TEST PASSED! All values match expected output.")
-        else:
-            logger.error("❌❌❌ TEST FAILED! Some values don't match.")
-            pytest.fail("Output doesn't match expected values")
-        logger.info("=" * 80)
+        if not passed:
+            pytest.fail("Verification failed - see output above")
 
     except Exception as e:
         logger.error(f"\n❌ Operation failed with error:")
@@ -257,20 +275,12 @@ def test_reduce_single_token_single_expert(device):
 
     result = ttnn.to_torch(result_tt)
 
-    # Verify
+    # Verify using PCC
     logger.info("\nVerification:")
-    for tile_idx in range(7):
-        start = tile_idx * 1024
-        expected_val = expected[0, 0, start].item()
-        actual_val = result[0, 0, start].item()
-        match = abs(expected_val - actual_val) < 0.1
-        status = "✅" if match else "❌"
-        logger.info(f"{status} Tile {tile_idx}: expected={expected_val:.0f}, actual={actual_val:.0f}")
+    passed = verify_with_pcc(result, expected, pcc_threshold=0.9999, max_rel_error_threshold=2.0)
 
-        if not match:
-            pytest.fail(f"Tile {tile_idx} doesn't match")
-
-    logger.info("✅ Simple test passed!")
+    if not passed:
+        pytest.fail("Verification failed - see output above")
 
 
 def test_reduce_2experts_2tiles(device):
@@ -354,31 +364,12 @@ def test_reduce_2experts_2tiles(device):
 
     result = ttnn.to_torch(result_tt)
 
-    # Verify
+    # Verify using PCC
     logger.info("\nVerification:")
-    all_match = True
-    for token_idx in range(num_tokens):
-        logger.info(f"\nToken {token_idx}:")
-        for tile_idx in range(num_tiles):
-            start = tile_idx * 1024
-            expected_val = expected[0, token_idx, start].item()
-            actual_val = result[0, token_idx, start].item()
-            diff = abs(expected_val - actual_val)
-            match = diff < 0.1
-            status = "✅" if match else "❌"
-            logger.info(
-                f"  {status} Tile {tile_idx}: expected={expected_val:.0f}, actual={actual_val:.0f}, diff={diff:.1f}"
-            )
+    passed = verify_with_pcc(result, expected, pcc_threshold=0.9999, max_rel_error_threshold=2.0)
 
-            if not match:
-                all_match = False
-                logger.error(f"    First 10 elements expected: {expected[0, token_idx, start:start+10]}")
-                logger.error(f"    First 10 elements actual:   {result[0, token_idx, start:start+10]}")
-
-    if not all_match:
-        pytest.fail("Output doesn't match expected values")
-
-    logger.info("\n✅ 2-expert 2-tile 2-token test passed!")
+    if not passed:
+        pytest.fail("Verification failed - see output above")
 
 
 def test_reduce_3experts_3tiles_3tokens(device):
@@ -488,29 +479,12 @@ def test_reduce_3experts_3tiles_3tokens(device):
 
     result = ttnn.to_torch(result_tt)
 
-    # Verify
-    # logger.info("\nVerification:")
-    all_match = True
-    for token_idx in range(num_tokens):
-        # logger.info(f"\nToken {token_idx}:")
-        for tile_idx in range(num_tiles):
-            start = tile_idx * 1024
-            expected_val = expected[0, token_idx, start].item()
-            actual_val = result[0, token_idx, start].item()
-            diff = abs(expected_val - actual_val)
-            match = diff < 0.1
-            status = "✅" if match else "❌"
-            # logger.info(
-            #     f"  {status} Tile {tile_idx}: expected={expected_val:.0f}, actual={actual_val:.0f}, diff={diff:.1f}"
-            # )
+    # Verify using PCC
+    logger.info("\nVerification:")
+    passed = verify_with_pcc(result, expected, pcc_threshold=0.9999, max_rel_error_threshold=2.0)
 
-            if not match:
-                all_match = False
-                # logger.error(f"    First 10 elements expected: {expected[0, token_idx, start:start+10]}")
-                # logger.error(f"    First 10 elements actual:   {result[0, token_idx, start:start+10]}")
-
-    if not all_match:
-        pytest.fail("Output doesn't match expected values")
+    if not passed:
+        pytest.fail("Verification failed - see output above")
 
 
 def test_reduce_4experts_4tiles_4tokens(device):
@@ -554,24 +528,150 @@ def test_reduce_4experts_4tiles_4tokens(device):
 
     result = ttnn.to_torch(result_tt)
 
-    # Verify
-    all_match = True
-    for token_idx in range(num_tokens):
-        # logger.info(f"\nToken {token_idx}:")
-        for tile_idx in range(num_tiles):
-            start = tile_idx * 1024
-            expected_val = expected[0, token_idx, start].item()
-            actual_val = result[0, token_idx, start].item()
-            diff = abs(expected_val - actual_val)
-            match = diff < 0.1
-            status = "✅" if match else "❌"
-            # logger.info(f"  {status} Tile {tile_idx}: expected={expected_val:.0f}, actual={actual_val:.0f}, diff={diff:.1f}")
+    # Verify using PCC
+    logger.info("\nVerification:")
+    passed = verify_with_pcc(result, expected, pcc_threshold=0.9999, max_rel_error_threshold=2.0)
 
-            if not match:
-                all_match = False
+    if not passed:
+        pytest.fail("Verification failed - see output above")
 
-    # if not all_match:
-    #     pytest.fail("Output doesn't match expected values")
+
+def test_reduce_full_scale_3200tokens(device):
+    """
+    Test with full-scale realistic dimensions:
+    - 3200 tokens
+    - 8 experts
+    - 7 tiles (7168 embedding)
+
+    Uses PCC metric instead of exact matching.
+    Verifies token distribution across cores.
+    """
+    num_tokens = 3200
+    num_experts = 8
+    emb_dim = 7168
+    num_tiles = emb_dim // 1024
+
+    logger.info("=" * 80)
+    logger.info(f"Test: Full Scale - {num_tokens} tokens, {num_experts} experts, {num_tiles} tiles")
+    logger.info(f"Shape: [1, {num_tokens}, {num_experts}, {emb_dim}]")
+    logger.info("Using smaller values to avoid overflow: tile_start=0.1, tile_increment=0.1")
+    logger.info("=" * 80)
+
+    # Create inputs with simple tile pattern using smaller values to avoid overflow
+    combine_output = create_simple_tile_data(num_tokens, num_experts, emb_dim, tile_start=0.1, tile_increment=0.1)
+    weights = create_simple_weights(num_tokens, num_experts)
+
+    # Compute expected output
+    expected = compute_expected_output(combine_output, weights)
+
+    logger.info("\nConverting to TTNN tensors...")
+    combine_output_tt = ttnn.from_torch(
+        combine_output,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    weights_tt = ttnn.from_torch(
+        weights,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    logger.info(f"  combine_output: {combine_output_tt.shape}")
+    logger.info(f"  weights: {weights_tt.shape}")
+
+    # Run the operation
+    logger.info("\nRunning operation...")
+    result_tt = ttnn.experimental.deepseek_moe_post_combine_reduce(
+        combine_output_tt, weights_tt, expert_dim=2, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    result = ttnn.to_torch(result_tt)
+
+    # Check for NaN/Inf and identify which tokens are affected
+    nan_mask = torch.isnan(result[0, :, 0])
+    inf_mask = torch.isinf(result[0, :, 0])
+    nan_tokens = torch.where(nan_mask)[0]
+    inf_tokens = torch.where(inf_mask)[0]
+
+    # Calculate core distribution
+    num_cores = 88  # Blackhole has 88 cores
+    tokens_per_core = num_tokens // num_cores
+    extra_tokens = num_tokens % num_cores
+
+    print(f"\n{'='*80}")
+    print(f"CORE DISTRIBUTION:")
+    print(f"  Total cores available: 88 (11x8 grid)")
+    print(f"  Total tokens: {num_tokens}")
+    print(f"  Tokens per core: {tokens_per_core}")
+    print(f"  Extra tokens (first N cores): {extra_tokens}")
+    print(f"  First {extra_tokens} cores get {tokens_per_core + 1} tokens")
+    print(f"  Remaining {88 - extra_tokens} cores get {tokens_per_core} tokens")
+    print(f"{'='*80}")
+
+    if len(nan_tokens) > 0 or len(inf_tokens) > 0:
+        print(f"\n❌ NaN/Inf detected:")
+        print(f"  Tokens with NaN (total {len(nan_tokens)}): {nan_tokens.tolist()}")
+        print(f"  Tokens with Inf (total {len(inf_tokens)}): {inf_tokens.tolist()}")
+
+        for token_idx in nan_tokens[:10].tolist():
+            # Find which core handles this token
+            tokens_before = 0
+            for core_idx in range(num_cores):
+                tokens_for_core = tokens_per_core + (1 if core_idx < extra_tokens else 0)
+                if tokens_before <= token_idx < tokens_before + tokens_for_core:
+                    print(
+                        f"  Token {token_idx} -> Core {core_idx} (handles tokens {tokens_before}-{tokens_before + tokens_for_core - 1})"
+                    )
+                    break
+                tokens_before += tokens_for_core
+
+        # Check PCC for non-NaN tokens
+        print(f"\n✓ Checking PCC for non-NaN tokens:")
+        good_mask = ~nan_mask & ~inf_mask
+        if good_mask.any():
+            good_result = result[0, good_mask, :]
+            good_expected = expected[0, good_mask, :]
+
+            import numpy as np
+
+            result_flat = good_result.flatten().float().numpy()
+            expected_flat = good_expected.flatten().float().numpy()
+
+            mean_exp = np.mean(expected_flat)
+            mean_res = np.mean(result_flat)
+            numerator = np.sum((expected_flat - mean_exp) * (result_flat - mean_res))
+            denominator = np.sqrt(np.sum((expected_flat - mean_exp) ** 2) * np.sum((result_flat - mean_res) ** 2))
+            pcc = numerator / denominator if denominator > 0 else 0.0
+
+            relative_errors = np.abs(expected_flat - result_flat) / (np.abs(expected_flat) + 1e-5)
+            mean_rel_error = np.mean(relative_errors) * 100
+
+            print(f"  Non-NaN tokens: {good_mask.sum().item()} / {num_tokens}")
+            print(f"  PCC (non-NaN only): {pcc:.6f}")
+            print(f"  Mean relative error (non-NaN only): {mean_rel_error:.3f}%")
+
+            # Sample some values from non-NaN tokens
+            print(f"\n  Sample values from non-NaN tokens:")
+            sample_tokens = [0, 10, 100, 200, 300, 400, 495, 504, 1000, 2000, 3000, 3199]
+            for token_idx in sample_tokens:
+                if token_idx >= num_tokens:
+                    continue
+                exp_val = expected[0, token_idx, 0].item()
+                act_val = result[0, token_idx, 0].item()
+                is_nan = torch.isnan(result[0, token_idx, 0]).item()
+                status = "NaN" if is_nan else f"expected={exp_val:.4f}, actual={act_val:.4f}"
+                print(f"    Token {token_idx}: {status}")
+    else:
+        print(f"\n✓ No NaN/Inf detected")
+
+    logger.info("\nVerification:")
+    passed = verify_with_pcc(result, expected, pcc_threshold=0.9999, max_rel_error_threshold=2.0)
+
+    if not passed:
+        pytest.fail("Verification failed - see output above")
 
 
 if __name__ == "__main__":

@@ -20,23 +20,19 @@ void kernel_main() {
 
     constexpr uint32_t output_page_size = emb_dim_tiles * tile_size;
 
-    const InterleavedAddrGenFast<output_is_dram> output_addrg = {
-        .bank_base_address = output_addr, .page_size = output_page_size, .data_format = DataFormat::Float16_b};
-
-    // DPRINT_DATA1(DPRINT << "tokens_per_core == " << tokens_per_core << ENDL());
-    // DPRINT_DATA1(DPRINT << "token_start_idx == " << token_start_idx << ENDL());
+    const InterleavedAddrGen<output_is_dram> output_addrg = {
+        .bank_base_address = output_addr, .page_size = output_page_size};
 
     for (uint32_t token_idx = 0; token_idx < tokens_per_core; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
 
         cb_wait_front(cb_output, emb_dim_tiles);
 
-        // SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
-        // DPRINT_DATA1(DPRINT << "writing data to DRAM -- " << "\n" << ENDL());
-        // for (uint32_t j = 0; j < emb_dim_tiles; j++) {
-        //     DPRINT_DATA1(DPRINT << "tile " << j << " values = " << TileSlice(cb_output, j, sr, true, false) <<
-        //     ENDL());
-        // }
+        SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
+        DPRINT_DATA1(DPRINT << "writing data to DRAM -- " << "\n" << ENDL());
+        for (uint32_t j = 0; j < emb_dim_tiles; j++) {
+            DPRINT_DATA1(DPRINT << "tile " << j << " values = " << TileSlice(cb_output, j, sr, true, false) << ENDL());
+        }
         uint32_t output_read_addr = get_read_ptr(cb_output);
 
         uint32_t output_page_idx = global_token_idx;

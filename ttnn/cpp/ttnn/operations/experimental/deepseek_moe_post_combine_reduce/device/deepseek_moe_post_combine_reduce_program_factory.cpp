@@ -52,19 +52,20 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     TT_FATAL(
         emb_dim_tiles <= 8, "Embedding dimension tiles {} must fit in 8 DST registers for batching", emb_dim_tiles);
 
-    uint32_t num_cores = num_tokens;
-
     // Use row-major ordering: cores go (0,0), (1,0), (2,0), ... then (0,1), (1,1), ...
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-    CoreCoord start_core = {0, 0};
-    CoreCoord end_core = {num_cores - 1, 0};  // Cores in a row: (0,0), (1,0), ...
-    auto all_cores = CoreRange(start_core, end_core);
-    auto core_range_set = CoreRangeSet({all_cores});
+    // Use minimum of tokens or available cores
+    uint32_t num_cores = std::min(num_tokens, num_cores_total);
 
-    // Get cores in row-major order to match our CoreRange
+    // Create CoreRange covering all available cores
+    CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    auto core_range_set = CoreRangeSet({total_cores});
+
+    // Get cores in row-major order
     constexpr bool row_major = true;
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, row_major);
 
@@ -156,30 +157,6 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     // Create Kernels
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-    std::cout << "READER COMPILE TIME ARGS" << std::endl;
-    std::cout << "combine_is_dram: " << combine_is_dram << std::endl;
-    std::cout << "weight_is_dram: " << weight_is_dram << std::endl;
-    std::cout << "num_tokens: " << num_tokens << std::endl;
-    std::cout << "num_experts: " << num_experts << std::endl;
-    std::cout << "emb_dim: " << emb_dim << std::endl;
-    std::cout << "emb_dim_tiles: " << emb_dim_tiles << std::endl;
-    std::cout << "ACTUAL BUFFER PAGE SIZES:" << std::endl;
-    std::cout << "combine_buffer page_size: " << combine_buffer->page_size() << std::endl;
-    std::cout << "weight_buffer page_size: " << weight_buffer->page_size() << std::endl;
-    std::cout << std::endl;
-
-    std::cout << "COMPUTE COMPILE TIME ARGS" << std::endl;
-    std::cout << "num_tokens: " << num_tokens << std::endl;
-    std::cout << "num_experts: " << num_experts << std::endl;
-    std::cout << "emb_dim_tiles: " << emb_dim_tiles << std::endl;
-    std::cout << std::endl;
-
-    std::cout << "WRITER COMPILE TIME ARGS" << std::endl;
-    std::cout << "output_is_dram: " << output_is_dram << std::endl;
-    std::cout << "num_tokens: " << num_tokens << std::endl;
-    std::cout << "emb_dim_tiles: " << emb_dim_tiles << std::endl;
-    std::cout << std::endl;
-
     // Reader: Loads ROW_MAJOR expert outputs + weight scalars from DRAM
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -212,36 +189,11 @@ DeepseekMoEPostCombineReduceProgramFactory::cached_program_t DeepseekMoEPostComb
     uint32_t tokens_per_core = num_tokens / num_cores;
     uint32_t extra_tokens = num_tokens % num_cores;
 
-    // std::cout << "Total tokens: " << num_tokens << std::endl;
-    // std::cout << "Tokens per core: " << tokens_per_core << std::endl;
-    // std::cout << "Extra tokens (for first few cores): " << extra_tokens << std::endl;
-
     uint32_t token_start = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const CoreCoord& core = cores[i];
 
         uint32_t tokens_for_this_core = tokens_per_core + (i < extra_tokens ? 1 : 0);
-
-        std::cout << "CORE " << core.x << ", " << core.y << std::endl;
-        auto core_physical = device->worker_core_from_logical_core(core);
-        std::cout << "CORE PHYSICAL" << core_physical.x << ", " << core_physical.y << std::endl;
-        std::cout << "READER RUN TIME ARGS" << std::endl;
-        std::cout << "combine_buffer: " << combine_buffer->address() << std::endl;
-        std::cout << "weight_buffer: " << weight_buffer->address() << std::endl;
-        std::cout << "tokens_for_this_core: " << tokens_for_this_core << std::endl;
-        std::cout << "token_start: " << token_start << std::endl;
-        std::cout << std::endl;
-
-        std::cout << "COMPUTE RUN TIME ARGS" << std::endl;
-        std::cout << "tokens_for_this_core: " << tokens_for_this_core << std::endl;
-        std::cout << "token_start: " << token_start << std::endl;
-        std::cout << std::endl;
-
-        std::cout << "WRITER RUN TIME ARGS" << std::endl;
-        std::cout << "output_buffer: " << output_buffer->address() << std::endl;
-        std::cout << "tokens_for_this_core: " << tokens_for_this_core << std::endl;
-        std::cout << "token_start: " << token_start << std::endl;
-        std::cout << std::endl;
 
         // Reader runtime args
         std::vector<uint32_t> reader_runtime_args = {

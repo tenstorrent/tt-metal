@@ -25,28 +25,13 @@ void kernel_main() {
     constexpr uint32_t tile_size = 2048;
 
     constexpr uint32_t combine_page_size = emb_dim * 2;
-    constexpr uint32_t weight_page_size = 64;  // DRAM alignment forces 64-byte pages (weight is in first 2 bytes)
+    constexpr uint32_t weight_page_size = 64;
 
     const InterleavedAddrGen<combine_is_dram> combine_addrg = {
-        .bank_base_address = combine_addr,
-        .page_size = combine_page_size};  // InterleavedAddrGen uses page_size for addressing
+        .bank_base_address = combine_addr, .page_size = combine_page_size};
 
     const InterleavedAddrGen<weight_is_dram> weight_addrg = {
-        .bank_base_address = weight_addr,
-        .page_size = weight_page_size};  // InterleavedAddrGen uses page_size for addressing
-
-    // DPRINT_DATA0(DPRINT << "combine_is_dram = " << combine_is_dram << ENDL());
-    // DPRINT_DATA0(DPRINT << "weight_is_dram = " << weight_is_dram << ENDL());
-    // DPRINT_DATA0(DPRINT << "num_tokens = " << num_tokens << ENDL());
-    // DPRINT_DATA0(DPRINT << "num_experts = " << num_experts << ENDL());
-    // DPRINT_DATA0(DPRINT << "emb_dim = " << emb_dim << ENDL());
-    // DPRINT_DATA0(DPRINT << "emb_dim_tiles = " << emb_dim_tiles << ENDL());
-    // DPRINT_DATA0(DPRINT << "combine_addr = " << combine_addr << ENDL());
-    // DPRINT_DATA0(DPRINT << "weight_addr = " << weight_addr << ENDL());
-    // DPRINT_DATA0(DPRINT << "tokens_per_core = " << tokens_per_core << ENDL());
-    // DPRINT_DATA0(DPRINT << "token_start_idx = " << token_start_idx << ENDL());
-
-    SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
+        .bank_base_address = weight_addr, .page_size = weight_page_size};
 
     for (uint32_t token_idx = 0; token_idx < tokens_per_core; ++token_idx) {
         uint32_t global_token_idx = token_start_idx + token_idx;
@@ -61,19 +46,11 @@ void kernel_main() {
             cb_write_addr += combine_page_size;
         }
         noc_async_read_barrier();
-        DPRINT_DATA0(DPRINT << "reader input data -- " << "\n" << ENDL());
-        for (uint32_t j = 0; j < total_expert_tiles; j++) {
-            DPRINT_DATA0(
-                DPRINT << "tile " << j << " values = " << TileSlice(cb_combine_input, j, sr, true, false) << ENDL());
-        }
-        DPRINT_DATA0(DPRINT << ENDL());
         cb_push_back(cb_combine_input, total_expert_tiles);
 
         cb_reserve_back(cb_weights, num_experts);
         uint32_t weight_cb_base = get_write_ptr(cb_weights);
 
-        // Read each expert weight (one page = one bf16 weight)
-        // Write directly to tile positions (first element of each tile)
         for (uint32_t expert_idx = 0; expert_idx < num_experts; ++expert_idx) {
             uint32_t weight_page_idx = global_token_idx * num_experts + expert_idx;
             uint32_t tile_addr = weight_cb_base + expert_idx * tile_size;
@@ -82,11 +59,5 @@ void kernel_main() {
         noc_async_read_barrier();
 
         cb_push_back(cb_weights, num_experts);
-
-        DPRINT_DATA0(DPRINT << "reader weight data (token " << global_token_idx << "):" << ENDL());
-        for (uint32_t j = 0; j < num_experts; j++) {
-            DPRINT_DATA0(DPRINT << "  expert " << j << " = " << TileSlice(cb_weights, j, sr, true, false) << ENDL());
-        }
-        DPRINT_DATA0(DPRINT << ENDL());
     }
 }

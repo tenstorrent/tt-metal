@@ -23,8 +23,6 @@ void kernel_main() {
 
     binary_op_init_common(cb_combine_input, cb_weights, cb_output);
 
-    // SliceRange sr = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
-
     for (uint32_t token_idx = 0; token_idx < tokens_per_core; ++token_idx) {
         uint32_t total_expert_tiles = num_experts * emb_dim_tiles;
         cb_wait_front(cb_combine_input, total_expert_tiles);
@@ -41,14 +39,6 @@ void kernel_main() {
 
             uint32_t tile_offset = expert_idx * emb_dim_tiles;
 
-            // DPRINT_UNPACK(DPRINT << "expert input -- " << "\n" << ENDL());
-            // for (uint32_t j = 0; j < emb_dim_tiles; j++) {
-            //     DPRINT_UNPACK(DPRINT << "tile " << j << " values = " << TileSlice(cb_combine_input, tile_offset + j,
-            //     sr, true, false) << ENDL());
-            // }
-            // DPRINT_UNPACK(DPRINT << "expert weight = " << TileSlice(cb_weights, expert_idx, sr, true, false) <<
-            // ENDL()); DPRINT_UNPACK(DPRINT << ENDL()); DPRINT_UNPACK(DPRINT << ENDL()); DPRINT_UNPACK(DPRINT <<
-            // ENDL());
             tile_regs_acquire();
 
             mul_tiles_bcast_scalar_init_short(cb_combine_input, cb_weights);
@@ -87,15 +77,6 @@ void kernel_main() {
         for (uint32_t j = 0; j < emb_dim_tiles; j++) {
             pack_tile(j, cb_output, j);
         }
-        // DPRINT_PACK(DPRINT << ENDL());
-        // DPRINT_PACK(DPRINT << ENDL());
-        // DPRINT_PACK(DPRINT << ENDL());
-        // DPRINT_PACK(DPRINT << ENDL());
-        // DPRINT_PACK(DPRINT << "final CB outputs -- " << "\n" << ENDL());
-        // for (uint32_t j = 0; j < emb_dim_tiles; j++) {
-        //     DPRINT_PACK(DPRINT << "tile " << j << " values = " << TileSlice(cb_output, j, sr, true, false) <<
-        //     ENDL());
-        // }
 
         tile_regs_release();
 
