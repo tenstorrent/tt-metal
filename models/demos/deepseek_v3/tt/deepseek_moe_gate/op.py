@@ -18,7 +18,7 @@ def float_to_uint32(value):
     return int.from_bytes(struct.pack("f", value), byteorder="little")
 
 
-class DeepseekMoeGateSingleCore:
+class DeepseekMoeGateOp:
     """
     Single-core Deepseek Moe Gate implementation using ttnn.generic_op.
 

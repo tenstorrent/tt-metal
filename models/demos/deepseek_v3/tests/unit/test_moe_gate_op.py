@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tt.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
+from models.demos.deepseek_v3.tt.deepseek_moe_gate.op import DeepseekMoeGateOp
 
 
 @pytest.mark.parametrize("batch_size", [1, 2])
@@ -39,9 +39,7 @@ def test_deepseek_moe_gate_op(device, batch_size, enable_sigmoid, seed):
     scaling_factor = 2.5
 
     # Compute reference output using PyTorch
-    top8_scores, top8_indices = DeepseekMoeGateSingleCore.golden(
-        torch_input, torch_bias, eps, scaling_factor, enable_sigmoid
-    )
+    top8_scores, top8_indices = DeepseekMoeGateOp.golden(torch_input, torch_bias, eps, scaling_factor, enable_sigmoid)
 
     grid = device.compute_with_storage_grid_size()
     core_grid = ttnn.num_cores_to_corerangeset(
@@ -126,7 +124,7 @@ def test_deepseek_moe_gate_op(device, batch_size, enable_sigmoid, seed):
     # Run Deepseek Moe Gate operation
     logger.info("Running Deepseek Moe Gate operation...")
 
-    ttnn_result, ttnn_result_indices = DeepseekMoeGateSingleCore.op(
+    ttnn_result, ttnn_result_indices = DeepseekMoeGateOp.op(
         ttnn_input,
         ttnn_bias,
         ttnn_output,
