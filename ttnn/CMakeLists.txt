@@ -284,6 +284,7 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast_nanobind.cpp
@@ -433,6 +434,8 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/all_to_all_async_generic_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/strided_reduce_scatter_async/strided_reduce_scatter_async_nanobind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/minimal_matmul_strided_reduce_scatter_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/strided_all_gather_minimal_matmul_async_nanobind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp
@@ -679,6 +682,7 @@ target_link_libraries(
         TTNN::Ops::Eltwise::Ternary
         TTNN::Ops::Eltwise::Ternary::Backward
         TTNN::Ops::Eltwise::Unary
+        TTNN::Ops::Eltwise::UnaryNG
         TTNN::Ops::Eltwise::Unary::Backward
         TTNN::Ops::Embedding
         TTNN::Ops::Embedding::Backward
@@ -698,6 +702,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::TopkRouterGpt
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
+        TTNN::Ops::Experimental::MoEGPT
         TTNN::Ops::Experimental::DeepSeekPrefill::Dispatch
         TTNN::Ops::Experimental::DeepSeekPrefill::Combine
         TTNN::Ops::Experimental::DeepSeekPrefill::MaskedBincount
@@ -928,6 +933,7 @@ add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary)
 add_subdirectory(cpp/ttnn/operations/eltwise/ternary_backward)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary)
+add_subdirectory(cpp/ttnn/operations/eltwise/unary_ng)
 add_subdirectory(cpp/ttnn/operations/eltwise/unary_backward)
 add_subdirectory(cpp/ttnn/operations/embedding)
 add_subdirectory(cpp/ttnn/operations/embedding_backward)
@@ -946,6 +952,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm)
 add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
+add_subdirectory(cpp/ttnn/operations/experimental/ccl/moe_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/dispatch)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/combine)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount)
