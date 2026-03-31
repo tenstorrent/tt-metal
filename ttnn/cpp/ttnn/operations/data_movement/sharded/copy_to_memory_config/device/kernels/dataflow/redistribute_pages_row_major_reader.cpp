@@ -35,17 +35,19 @@ void kernel_main() {
 
     // To help understand the logic of this kernel, here is a visualization of what a subblock looks like in the
     // input/output tensor: When the tensor page is not too large (i.e., does not cause a CB OOM error), the subblock
-    // size = the width of the page, and one row of the tensor looks like: | page_1 | page_2 | page_3 | page_4 | ... |
-    // page_n |
+    // size = the width of the page, and one row of the tensor looks like:
+    // | page_1 | page_2 | page_3 | page_4 | ... | page_n |
     //
     // ----------------------------------------------------------------------------------------------------------
     // In cases where we have a tensor with massive rows and massive page sizes, the subblock size will be capped at
-    // 65536 * 4 bytes, which will be smaller than the page size: |         page_1         |       |         page_2 |
-    // ... |subblock_1|subblock_2|subblock_3|subblock_4|subblock_5|subblock_6| ... Note that in the above diagram, we
-    // read in a full page one subblock at a time, and no subblock spans multiple pages. That is, if our page size is
-    // not divisible by our max subblock size of 65536 * 4 bytes, then the last subblock read from that page will
-    // contain less data than the subblock size. (i.e., the overlapping region of subblock_3 and page_1 in the diagram
-    // above). Thus, the start of a page will always align with the start of a subblock. This is required to guarantee
+    // 65536 * 4 bytes, which will be smaller than the page size:
+    // |         page_1         |       |         page_2         | ...
+    // |subblock_1|subblock_2|subblock_3|subblock_4|subblock_5|subblock_6| ...
+    // Note that in the above diagram, we read in a full page one subblock at a time,
+    // and no subblock spans multiple pages. That is, if our page size is not divisible by our max subblock size of
+    // 65536 * 4 bytes, then the last subblock read from that page will contain less data than the subblock size
+    // (i.e., the overlapping region of subblock_3 and page_1 in the diagram above).
+    // Thus, the start of a page will always align with the start of a subblock. This is required to guarantee
     // aligned noc reads/writes.
 
     const uint32_t input_l1_write_addr = get_write_ptr(cb_id_in0);
