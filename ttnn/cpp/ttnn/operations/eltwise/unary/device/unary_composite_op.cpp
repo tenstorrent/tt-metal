@@ -513,11 +513,6 @@ Tensor is_odd(const Tensor& input, const std::optional<MemoryConfig>& output_mem
     return ttnn::ne(result, floor_res, std::nullopt, output_mem_config);
 }
 
-// frac(x) = x - trunc(x), fractional part
-Tensor frac(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::subtract(x, ttnn::trunc(x, output_mem_config), std::nullopt, output_mem_config);
-}
-
 }  // namespace ttnn::operations::unary
 
 namespace ttnn {
