@@ -136,7 +136,6 @@ void kernel_main() {
             transpose_wh_tile(cb_transpose_src, 0, input_dst);
 
             if (wt < (Wt - 1)) {
-                //            welford_update<W>(input_dst, start_N, *p_reciprocals);
                 welford_update<0>(input_dst, start_N, {});
                 tile_regs_commit();
                 tile_regs_wait();
