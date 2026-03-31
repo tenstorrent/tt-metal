@@ -97,6 +97,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::RPOW: return "SFPU_OP_RPOW_INCLUDE";
         case UnaryOpType::HARDMISH: return "SFPU_OP_HARDMISH_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
+        case UnaryOpType::RRELU: return "SFPU_OP_RRELU_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -561,6 +562,19 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(param1))};
         }
+        case UnaryOpType::RRELU: {
+            TT_FATAL(params.size() == 3, "Expected rrelu to take 3 parameters (lower, upper, seed)");
+            float param1 = params[1];
+            uint32_t seed = std::bit_cast<uint32_t>(static_cast<float>(params[2]));
+            return {
+                fmt::format("rrelu_tile_init({:#x}u);", seed),
+                fmt::format(
+                    "rrelu_tile({}, {:#x}u, {:#x}u, {:#x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(param1),
+                    seed)};
+        }
         case UnaryOpType::HARDMISH: {
             return {
                 fmt::format("hardmish_tile_init<{}u>();", (uint32_t)param0),
@@ -883,6 +897,9 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     }
     if (name == "selu") {
         return UnaryWithParam(UnaryOpType::SELU);
+    }
+    if (name == "rrelu") {
+        return UnaryWithParam(UnaryOpType::RRELU, {0.125f, 1.0f / 3.0f, 0.0f});
     }
     if (name == "alt_complex_rotate90") {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);

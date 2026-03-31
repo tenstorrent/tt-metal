@@ -2290,6 +2290,14 @@ void py_module(nb::module_& mod) {
     bind_unary_clamp(mod);
     bind_unary_composite_floats_with_default<"selu", &ttnn::selu>(
         mod, "scale", "Scale value", 1.0507, "alpha", "Alpha value", 1.67326);
+    bind_unary_composite_floats_with_default<"rrelu", &ttnn::rrelu>(
+        mod,
+        "lower",
+        "Lower bound of uniform distribution",
+        0.125f,
+        "upper",
+        "Upper bound of uniform distribution",
+        0.3333333333f);
     bind_unary_composite_floats_with_default<"hardtanh", &ttnn::hardtanh>(
         mod, "min_val", "min value", -1.0f, "max_val", "max value", 1.0f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_threshold<"threshold", &ttnn::threshold>(

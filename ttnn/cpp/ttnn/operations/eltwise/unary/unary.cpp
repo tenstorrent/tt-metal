@@ -371,6 +371,21 @@ Tensor selu(
         input_tensor, {UnaryWithParam{UnaryOpType::SELU, {scale, alpha}}}, memory_config, optional_output_tensor);
 }
 
+Tensor rrelu(
+    const Tensor& input_tensor,
+    float lower,
+    float upper,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    // Evaluation mode (seed=0): deterministic midpoint slope
+    float seed = 0.0f;
+    return ttnn::detail::unary_impl(
+        input_tensor,
+        {UnaryWithParam{UnaryOpType::RRELU, {lower, upper, seed}}},
+        memory_config,
+        optional_output_tensor);
+}
+
 Tensor swish(
     const Tensor& input_tensor,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,

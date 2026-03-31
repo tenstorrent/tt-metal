@@ -100,7 +100,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::SELU:
         case UnaryOpType::LOGIT:
         case UnaryOpType::RPOW:
-        case UnaryOpType::MISH: return true;
+        case UnaryOpType::MISH:
+        case UnaryOpType::RRELU: return true;
         default: return false;
     }
     return false;

@@ -403,6 +403,17 @@ def _golden_function_selu(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.selu, golden_function=_golden_function_selu)
 
 
+def _golden_function_rrelu(input_tensor_a, *args, lower=0.125, upper=1.0 / 3.0, **kwargs):
+    import torch
+
+    # Evaluation mode: use deterministic midpoint slope = (lower + upper) / 2
+    slope = (lower + upper) / 2.0
+    return torch.where(input_tensor_a >= 0, input_tensor_a, input_tensor_a * slope)
+
+
+ttnn.attach_golden_function(ttnn.rrelu, golden_function=_golden_function_rrelu)
+
+
 def _golden_function_tanhshrink(input_tensor_a, *args, **kwargs):
     import torch
 
