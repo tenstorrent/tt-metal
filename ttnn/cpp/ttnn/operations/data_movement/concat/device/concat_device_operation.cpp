@@ -27,6 +27,9 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const bool is_sharded = input_tensors[0].is_sharded();
 
     if (!is_sharded) {
+        if (args.untilize_out && input_tensors[0].layout() == Layout::TILE) {
+            return ConcatUntilizeProgramFactory{};
+        }
         return ConcatProgramFactory{};
     }
 
@@ -150,8 +153,17 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
         shape_out[args.dim] += curr_shape[args.dim];
     }
 
-    return TensorSpec(
-        shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), args.output_mem_config));
+    auto output_layout = ref_in_tensor.layout();
+    auto output_dtype = ref_in_tensor.dtype();
+    if (args.untilize_out && output_layout == Layout::TILE) {
+        output_layout = Layout::ROW_MAJOR;
+        // Untilize promotes BFP8_B to BF16
+        if (output_dtype == DataType::BFLOAT8_B) {
+            output_dtype = DataType::BFLOAT16;
+        }
+    }
+
+    return TensorSpec(shape_out, TensorLayout(output_dtype, PageConfig(output_layout), args.output_mem_config));
 }
 
 Tensor ConcatDeviceOperation::create_output_tensors(
@@ -399,7 +411,8 @@ ttnn::prim::ConcatDeviceOperation::tensor_return_value_t concat(
     std::int64_t dim,
     unsigned int groups,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
+    bool untilize_out) {
     using OperationType = ttnn::prim::ConcatDeviceOperation;
     uint32_t normalized_dim = input_tensors[0].logical_shape().get_normalized_index(dim);
     return ttnn::device_operation::launch<OperationType>(
@@ -408,6 +421,7 @@ ttnn::prim::ConcatDeviceOperation::tensor_return_value_t concat(
             .groups = groups,
             .output_mem_config = output_mem_config,
             .sub_core_grids = sub_core_grids,
+            .untilize_out = untilize_out,
         },
         OperationType::tensor_args_t{.input_tensors = input_tensors});
 }

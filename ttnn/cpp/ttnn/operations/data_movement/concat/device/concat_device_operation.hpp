@@ -8,6 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "concat_program_factory.hpp"
+#include "concat_untilize_program_factory.hpp"
 #include "concat_s2s_tiled_program_factory.hpp"
 #include "concat_s2s_rm_program_factory.hpp"
 #include "concat_s2s_multi_program_factory.hpp"
@@ -26,6 +27,7 @@ struct ConcatDeviceOperation {
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
         ConcatProgramFactory,
+        ConcatUntilizeProgramFactory,
         ConcatS2STiledProgramFactory,
         ConcatS2SRMProgramFactory,
         ConcatS2SMultiProgramFactory,
@@ -54,7 +56,8 @@ ttnn::prim::ConcatDeviceOperation::tensor_return_value_t concat(
     std::int64_t dim,
     unsigned int groups,
     const tt::tt_metal::MemoryConfig& output_mem_config,
-    const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool untilize_out = false);
 }  // namespace ttnn::prim
 
 namespace ttnn::operations::data_movement {

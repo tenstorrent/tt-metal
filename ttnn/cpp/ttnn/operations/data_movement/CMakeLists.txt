@@ -122,6 +122,7 @@ target_sources(
             concat/device/concat_device_operation.hpp
             concat/device/concat_device_operation_types.hpp
             concat/device/concat_program_factory.hpp
+            concat/device/concat_untilize_program_factory.hpp
             concat/device/concat_s2i_program_factory.hpp
             concat/device/concat_s2s_multi_program_factory.hpp
             concat/device/concat_s2s_rm_program_factory.hpp
@@ -362,6 +363,7 @@ target_sources(
         concat/concat.cpp
         concat/device/concat_device_operation.cpp
         concat/device/concat_program_factory.cpp
+        concat/device/concat_untilize_program_factory.cpp
         concat/device/concat_s2s_tiled_program_factory.cpp
         concat/device/concat_s2s_rm_program_factory.cpp
         concat/device/concat_s2s_multi_program_factory.cpp

@@ -17,6 +17,7 @@ ttnn::Tensor concat(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
     unsigned int groups = 1,
-    const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<Layout>& output_layout = std::nullopt);
 
 }  // namespace ttnn

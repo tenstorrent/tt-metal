@@ -47,7 +47,8 @@ void bind_concat(nb::module_& mod) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor").noconvert() = nb::none(),
             nb::arg("groups") = 1,
-            nb::arg("sub_core_grids") = nb::none()));
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("output_layout") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement::detail

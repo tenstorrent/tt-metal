@@ -340,7 +340,7 @@ class TtRoutedExpert(LightweightModule):
 
         # Concatenate along expert dimension
         # Shape: (experts_per_chip, max_tokens, emb_dim)
-        expert_outputs = ttnn.concat(expert_outputs_list, dim=0)
+        expert_outputs = ttnn.concat(expert_outputs_list, dim=0, output_layout=ttnn.ROW_MAJOR_LAYOUT)
         logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
 
         return expert_outputs

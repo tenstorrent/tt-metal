@@ -14,6 +14,7 @@ struct ConcatParams {
     unsigned int groups;
     tt::tt_metal::MemoryConfig output_mem_config;
     std::optional<ttnn::CoreRangeSet> sub_core_grids;
+    bool untilize_out = false;
 };
 
 struct ConcatInputs {

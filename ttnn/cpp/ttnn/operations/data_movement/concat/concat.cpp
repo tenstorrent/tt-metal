@@ -266,12 +266,17 @@ ttnn::Tensor concat(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     unsigned int groups,
-    const std::optional<ttnn::CoreRangeSet>& sub_core_grids) {
+    const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
+    const std::optional<Layout>& output_layout) {
     TT_FATAL(!input_tensors.empty(), "ttnn.concat: expected a non-empty list of Tensors!");
     TT_FATAL(!optional_output_tensor.has_value(), "optional output tensor currently unsupported!");
     const auto mem_config =
         memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);  // should match input tensor memory config when unpopulated
                                                            // but causes CI errors for now
+
+    // Check if we need to fuse untilize into concat
+    bool untilize_out = output_layout.has_value() && output_layout.value() == Layout::ROW_MAJOR &&
+                        !input_tensors.empty() && input_tensors.front().layout() == Layout::TILE;
 
     if (input_tensors.size() == 1) {
         return ttnn::to_memory_config(input_tensors.at(0), mem_config, std::nullopt);
@@ -328,6 +333,11 @@ ttnn::Tensor concat(
     };
 
     ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
+
+    // Fused concat+untilize: use direct path to ConcatUntilizeProgramFactory
+    if (untilize_out && !first_tensor.is_sharded() && (mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED)) {
+        return ttnn::prim::concat(input_tensors, dim, groups, mem_config, sub_core_grids, /*untilize_out=*/true);
+    }
 
     // For interleaved outputs, if sub_core_grids is provided, use direct path to avoid massaged operations
     // which don't currently support sub_core_grids
