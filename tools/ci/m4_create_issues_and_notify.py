@@ -77,17 +77,6 @@ def load_optional_json(path: Path) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def workflow_job_map(jobs: list[dict[str, Any]]) -> dict[str, set[str]]:
-    mapping: dict[str, set[str]] = {}
-    for job in jobs:
-        workflow = str(job.get("workflow_name", "")).strip()
-        name = str(job.get("job_name", "")).strip()
-        if not workflow or not name:
-            continue
-        mapping.setdefault(workflow, set()).add(name)
-    return mapping
-
-
 def fetch_job_logs(job_url: str, *, read_token: str) -> str:
     run_id, job_id = parse_job_url(job_url)
     proc = run_guarded_gh(
@@ -161,15 +150,13 @@ def build_recent_slack_context(messages: list[dict[str, Any]], cap: int = 10) ->
     return "\n".join(lines) if lines else "(none)"
 
 
-def find_best_previous_decision(
+def find_exact_previous_decision(
     review_entries: list[dict[str, Any]],
     *,
     workflow_name: str,
     job_name: str,
     job_urls: list[str],
 ) -> dict[str, Any] | None:
-    exact: dict[str, Any] | None = None
-    fallback: dict[str, Any] | None = None
     for entry in review_entries:
         if not isinstance(entry, dict):
             continue
@@ -182,11 +169,8 @@ def find_best_previous_decision(
             continue
         prev_urls = entry.get("job_urls")
         if isinstance(prev_urls, list) and [str(u).strip() for u in prev_urls] == job_urls:
-            exact = prev_decision
-            break
-        if fallback is None:
-            fallback = prev_decision
-    return exact or fallback
+            return prev_decision
+    return None
 
 
 def agent_review_and_prepare_outputs(
@@ -349,6 +333,12 @@ def main() -> int:
     )
     parser.add_argument("--max-candidates", type=int, default=20)
     parser.add_argument("--max-new-issues", type=int, default=1)
+    parser.add_argument(
+        "--max-agent-reviews",
+        type=int,
+        default=3,
+        help="Maximum number of fresh agent reviews (cache reuses do not count).",
+    )
     parser.add_argument("--model", default="auto")
     args = parser.parse_args()
 
@@ -380,32 +370,15 @@ def main() -> int:
         return 0
 
     previous_dir = Path(args.previous_artifact_dir)
-    prev_jobs_path = previous_dir / "failing_jobs.json"
-    if not prev_jobs_path.exists():
-        matches = list(previous_dir.rglob("failing_jobs.json"))
-        if matches:
-            prev_jobs_path = matches[0]
     prev_review_path = previous_dir / "m4_review_cache.json"
     if not prev_review_path.exists():
         matches = list(previous_dir.rglob("m4_review_cache.json"))
         if matches:
             prev_review_path = matches[0]
-    prev_jobs_payload = load_optional_json(prev_jobs_path) or {}
-    prev_jobs = prev_jobs_payload.get("jobs", [])
-    if not isinstance(prev_jobs, list):
-        prev_jobs = []
     prev_review_payload = load_optional_json(prev_review_path) or {}
     prev_review_entries = prev_review_payload.get("entries", [])
     if not isinstance(prev_review_entries, list):
         prev_review_entries = []
-    current_map = workflow_job_map(candidates)
-    prev_map = workflow_job_map([x for x in prev_jobs if isinstance(x, dict)])
-    workflows_without_new_jobs: set[str] = set()
-    for workflow, current_jobs in current_map.items():
-        previous_jobs = prev_map.get(workflow, set())
-        if current_jobs and current_jobs.issubset(previous_jobs):
-            workflows_without_new_jobs.add(workflow)
-
     open_issues = list_open_issue_bodies(issue_token=issue_token)
     recent_slack_messages = fetch_recent_slack_messages(
         slack_token=slack_token, channel_id=SLACK_CHANNEL_TEST, limit=20
@@ -416,6 +389,8 @@ def main() -> int:
     skipped: list[dict[str, Any]] = []
     review_cache_entries: list[dict[str, Any]] = []
     max_new_issues = max(args.max_new_issues, 0)
+    max_agent_reviews = max(args.max_agent_reviews, 0)
+    fresh_agent_reviews = 0
 
     for candidate in candidates[: max(args.max_candidates, 0)]:
         if len(created) >= max_new_issues:
@@ -432,30 +407,26 @@ def main() -> int:
             continue
         decision: dict[str, Any]
         reused_cache = False
-        if workflow_name in workflows_without_new_jobs:
-            prior = find_best_previous_decision(
-                prev_review_entries,
-                workflow_name=workflow_name,
-                job_name=job_name,
-                job_urls=job_urls,
-            )
-            if prior:
-                decision = prior
-                reused_cache = True
-                log(f"Reused cached review decision for workflow={workflow_name} job={job_name}")
-            else:
-                log(f"Running agent review for workflow={workflow_name} job={job_name}")
-                logs = [fetch_job_logs(url, read_token=read_token) for url in job_urls]
-                decision = agent_review_and_prepare_outputs(
-                    workflow_name=workflow_name,
-                    job_name=job_name,
-                    job_urls=job_urls,
-                    logs=logs,
-                    open_issue_context=open_issue_context,
-                    recent_slack_context=recent_slack_context,
-                    model=args.model,
-                )
+        prior = find_exact_previous_decision(
+            prev_review_entries,
+            workflow_name=workflow_name,
+            job_name=job_name,
+            job_urls=job_urls,
+        )
+        if prior:
+            decision = prior
+            reused_cache = True
+            log(f"Reused cached review decision for workflow={workflow_name} job={job_name}")
         else:
+            if fresh_agent_reviews >= max_agent_reviews:
+                skipped.append(
+                    {
+                        "job_name": job_name,
+                        "workflow_name": workflow_name,
+                        "reason": f"max_agent_reviews_reached:{max_agent_reviews}",
+                    }
+                )
+                break
             log(f"Running agent review for workflow={workflow_name} job={job_name}")
             logs = [fetch_job_logs(url, read_token=read_token) for url in job_urls]
             decision = agent_review_and_prepare_outputs(
@@ -467,6 +438,7 @@ def main() -> int:
                 recent_slack_context=recent_slack_context,
                 model=args.model,
             )
+            fresh_agent_reviews += 1
         review_cache_entries.append(
             {
                 "workflow_name": workflow_name,
@@ -571,7 +543,8 @@ def main() -> int:
         "candidate_count": len(candidates),
         "processed_count": min(len(candidates), max(args.max_candidates, 0)),
         "max_new_issues": max_new_issues,
-        "workflows_without_new_jobs": sorted(workflows_without_new_jobs),
+        "max_agent_reviews": max_agent_reviews,
+        "fresh_agent_reviews": fresh_agent_reviews,
     }
     out_path = Path(args.output_json)
     out_path.parent.mkdir(parents=True, exist_ok=True)

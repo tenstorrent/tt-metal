@@ -23,6 +23,7 @@ Optional env vars:
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -61,7 +62,7 @@ def resolve_token() -> str | None:
     return None
 
 
-def download_workflow_data() -> list:
+def download_workflow_data() -> tuple[list, int]:
     print("Finding latest aggregate-workflow-data run...", file=sys.stderr)
     result = subprocess.run(
         [
@@ -127,7 +128,18 @@ def download_workflow_data() -> list:
             file=sys.stderr,
         )
         with open(json_file, encoding="utf-8") as f:
-            return json.load(f)
+            return json.load(f), int(run_id)
+
+
+def load_cache(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            parsed = json.load(f)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def gh_api_request(url: str, token: str | None, max_retries: int = 3) -> dict:
@@ -191,11 +203,19 @@ def fetch_jobs_for_run(run_id: int, token: str | None) -> list[dict]:
 def extract_failing_jobs(
     workflow_data: list,
     token: str | None,
+    aggregate_run_id: int,
     workflow_filter: str | None = None,
     output_path: Path | None = None,
+    previous_cache: dict | None = None,
+    cache_output_path: Path | None = None,
 ) -> dict:
     results = []
     api_calls = 0
+    cached_reused_workflows = 0
+    previous_cache = previous_cache or {}
+    previous_workflows = previous_cache.get("workflows", {})
+    if not isinstance(previous_workflows, dict):
+        previous_workflows = {}
 
     def write_incremental() -> None:
         if output_path is None:
@@ -209,7 +229,21 @@ def extract_failing_jobs(
             json.dump(payload, f, indent=2)
         print(f"    Wrote {len(results)} jobs to {output_path}", file=sys.stderr)
 
+    def write_cache() -> None:
+        if cache_output_path is None:
+            return
+        cache_output_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "aggregate_run_id": aggregate_run_id,
+            "consecutive_failures": CONSECUTIVE_FAILURES,
+            "workflows": workflow_cache,
+        }
+        with open(cache_output_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+
     write_incremental()
+    workflow_cache: dict[str, dict] = {}
 
     for workflow_name, runs in workflow_data:
         if not runs:
@@ -243,6 +277,38 @@ def extract_failing_jobs(
             continue
 
         run_id_to_failed_jobs: dict[int, dict[str, str]] = {}
+        run_ids_for_cache = [int(r.get("id")) for r in last_n if r.get("id")]
+        if len(run_ids_for_cache) < CONSECUTIVE_FAILURES:
+            continue
+        yaml_path = runs[0].get("path", "")
+        workflow_key = f"{yaml_path}|{workflow_name}"
+        previous_entry = previous_workflows.get(workflow_key)
+        if isinstance(previous_entry, dict):
+            prev_run_ids = previous_entry.get("run_ids", [])
+            prev_jobs = previous_entry.get("jobs", [])
+            if (
+                isinstance(prev_run_ids, list)
+                and isinstance(prev_jobs, list)
+                and [int(x) for x in prev_run_ids] == run_ids_for_cache
+            ):
+                for item in prev_jobs:
+                    if isinstance(item, dict):
+                        results.append(item)
+                workflow_cache[workflow_key] = {
+                    "workflow_name": workflow_name,
+                    "yaml_path": yaml_path,
+                    "run_ids": run_ids_for_cache,
+                    "jobs": [item for item in prev_jobs if isinstance(item, dict)],
+                    "reused": True,
+                }
+                cached_reused_workflows += 1
+                print(
+                    f'  Reusing cached failing jobs for "{workflow_name}" (run ids unchanged).',
+                    file=sys.stderr,
+                )
+                write_incremental()
+                write_cache()
+                continue
 
         print(
             f'  Fetching jobs for "{workflow_name}" ({CONSECUTIVE_FAILURES} runs)...',
@@ -271,41 +337,86 @@ def extract_failing_jobs(
         for run_id in run_ids[1:]:
             jobs_failed_in_all &= set(run_id_to_failed_jobs[run_id].keys())
 
+        workflow_jobs: list[dict] = []
         for job_name in jobs_failed_in_all:
             urls = [
                 run_id_to_failed_jobs[run_id][job_name]
                 for run in last_n
                 if (run_id := run.get("id")) in run_id_to_failed_jobs and job_name in run_id_to_failed_jobs[run_id]
             ]
-            results.append(
-                {
-                    "job_name": job_name,
-                    "workflow_name": workflow_name,
-                    "consecutive_failures": CONSECUTIVE_FAILURES,
-                    "failing_job_urls": urls,
-                    "workflow_run_urls": [run.get("html_url") or run.get("url", "") for run in last_n],
-                }
-            )
+            item = {
+                "job_name": job_name,
+                "workflow_name": workflow_name,
+                "consecutive_failures": CONSECUTIVE_FAILURES,
+                "failing_job_urls": urls,
+                "workflow_run_urls": [run.get("html_url") or run.get("url", "") for run in last_n],
+            }
+            results.append(item)
+            workflow_jobs.append(item)
+        workflow_cache[workflow_key] = {
+            "workflow_name": workflow_name,
+            "yaml_path": yaml_path,
+            "run_ids": run_ids_for_cache,
+            "jobs": workflow_jobs,
+            "reused": False,
+        }
 
         write_incremental()
+        write_cache()
 
     print(
-        f"Done. {api_calls} API calls made, {len(results)} consistently-failing jobs found.",
+        (
+            f"Done. {api_calls} API calls made, {len(results)} consistently-failing jobs found, "
+            f"{cached_reused_workflows} workflows reused from cache."
+        ),
         file=sys.stderr,
     )
-    return {
+    payload = {
         "description": (f"Jobs that failed in all of the last {CONSECUTIVE_FAILURES} workflow runs"),
         "total_jobs_affected": len(results),
         "jobs": results,
+        "aggregate_run_id": aggregate_run_id,
+        "cached_reused_workflows": cached_reused_workflows,
     }
+    write_cache()
+    return payload
 
 
 def main() -> None:
-    workflow_filter = sys.argv[1] if len(sys.argv) > 1 else None
+    parser = argparse.ArgumentParser(description="Extract jobs failing in last N runs.")
+    parser.add_argument("workflow_filter_positional", nargs="?", default=None)
+    parser.add_argument("--workflow-filter", default=None)
+    parser.add_argument(
+        "--output-json",
+        default=None,
+        help="Output path for failing jobs JSON (defaults to build_ci/ci_ticketing/create_tickets/failing_jobs.json)",
+    )
+    parser.add_argument(
+        "--cache-input",
+        default=None,
+        help="Optional previous cache JSON path or directory containing failing_jobs_cache.json",
+    )
+    parser.add_argument(
+        "--cache-output",
+        default=None,
+        help="Cache output path (defaults to build_ci/ci_ticketing/create_tickets/failing_jobs_cache.json)",
+    )
+    args = parser.parse_args()
+    workflow_filter = args.workflow_filter or args.workflow_filter_positional
     project_root = Path(__file__).resolve().parents[2]
     output_dir = project_root / "build_ci" / "ci_ticketing" / "create_tickets"
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "failing_jobs.json"
+    output_path = Path(args.output_json) if args.output_json else (output_dir / "failing_jobs.json")
+    cache_output_path = Path(args.cache_output) if args.cache_output else (output_dir / "failing_jobs_cache.json")
+    cache_input_path: Path | None = None
+    if args.cache_input:
+        candidate = Path(args.cache_input)
+        if candidate.is_dir():
+            found = next(iter(candidate.rglob("failing_jobs_cache.json")), None)
+            if found:
+                cache_input_path = found
+        elif candidate.exists():
+            cache_input_path = candidate
 
     token = resolve_token()
     if not token:
@@ -319,12 +430,16 @@ def main() -> None:
     if workflow_filter:
         print(f"Filtering to workflow: {workflow_filter}", file=sys.stderr)
 
-    workflow_data = download_workflow_data()
+    previous_cache = load_cache(cache_input_path) if cache_input_path else {}
+    workflow_data, aggregate_run_id = download_workflow_data()
     result = extract_failing_jobs(
         workflow_data,
         token,
+        aggregate_run_id,
         workflow_filter,
         output_path=output_path,
+        previous_cache=previous_cache,
+        cache_output_path=cache_output_path,
     )
 
     with open(output_path, "w", encoding="utf-8") as f:
