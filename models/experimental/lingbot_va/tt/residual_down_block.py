@@ -31,6 +31,8 @@ class WanResidualDownBlock(Module):
             out_dim,
             factor_t=2 if temperal_downsample else 1,
             factor_s=2 if down_flag else 1,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
         )
         resnets = []
         for _ in range(num_res_blocks):
