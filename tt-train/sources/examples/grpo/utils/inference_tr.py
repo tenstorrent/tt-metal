@@ -181,3 +181,46 @@ def completion_batched_multiple_prompts_tr(
             break
 
     return all_generated
+
+
+def sync_ttml_to_tt_transformers_on_device(ttml_model, tr_model):
+    params = ttml_model.parameters()
+
+    def _sync(src_tensor, dst_tensor, transpose=False):
+        w = src_tensor.get_value()
+        if transpose:
+            w = ttnn.transpose(w, -2, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        w = ttnn.typecast(w, dst_tensor.dtype)
+        w = ttnn.to_memory_config(w, memory_config=dst_tensor.memory_config())
+        ttnn.copy(w, output_tensor=dst_tensor)
+
+    for i, block in enumerate(tr_model.layers):
+        p = f"Llama/blocks/{i}"
+        attn = block.attention
+        ffn = block.feed_forward
+
+        # wqkv: fuse Q + K + V then sync
+        wq = params[f"{p}/attention/q_linear/weight"].get_value()
+        kv = params[f"{p}/attention/kv_linear/weight"].get_value()
+        half = kv.shape[2] // 2
+        wk = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, half, kv.shape[3]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        wv = ttnn.slice(kv, [0, 0, half, 0], [1, 1, kv.shape[2], kv.shape[3]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        wqkv = ttnn.concat(
+            [
+                ttnn.transpose(wq, -2, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                ttnn.transpose(wk, -2, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+                ttnn.transpose(wv, -2, -1, memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ],
+            dim=-1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        wqkv = ttnn.typecast(wqkv, attn.wqkv.dtype)
+        wqkv = ttnn.to_memory_config(wqkv, memory_config=attn.wqkv.memory_config())
+        ttnn.copy(wqkv, output_tensor=attn.wqkv)
+
+        # wo, w1, w3, w2: transpose then sync
+        _sync(params[f"{p}/attention/out_linear/weight"], attn.wo, transpose=True)
+        _sync(params[f"{p}/mlp/w1/weight"], ffn.w1, transpose=True)
+        _sync(params[f"{p}/mlp/w3/weight"], ffn.w3, transpose=True)
+        _sync(params[f"{p}/mlp/w2/weight"], ffn.w2, transpose=True)
