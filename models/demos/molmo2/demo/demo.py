@@ -240,6 +240,38 @@ class Molmo2Generator:
             ttnn.copy(rot_idxs_ttnn, self.rot_mat_idxs)
             ttnn.deallocate(rot_idxs_ttnn)
 
+    def reset_state(self):
+        """Reset all state between requests to prevent memory leaks.
+
+        Call this between sequential video/image requests to:
+        1. Reset KV cache position to 0
+        2. Reset VisionAttention SDPA counters
+        3. Synchronize device to flush pending operations
+        4. Run garbage collection to free Python objects
+        """
+        import gc
+
+        from models.demos.molmo2.tt.vision_attention import VisionAttention
+
+        # Reset KV cache position
+        self.reset_kv_cache(0)
+
+        # Reset page table if exists
+        if hasattr(self, "page_table") and self.page_table is not None:
+            # Re-initialize page table for next request
+            pass  # Page table will be re-initialized in run_prefill
+
+        # Reset VisionAttention counters to prevent unbounded growth
+        VisionAttention.reset_counters()
+
+        # Synchronize device to ensure all pending operations complete
+        ttnn.synchronize_device(self.mesh_device)
+
+        # Force garbage collection to free Python objects
+        gc.collect()
+
+        logger.debug("State reset complete")
+
     def _prepare_text_inputs(
         self,
         input_ids: torch.Tensor,
@@ -1360,6 +1392,7 @@ class Molmo2Generator:
         """
         if bucket_sizes is None:
             # Cover: text-only (128), image (256-1024), video (1024-4096)
+            # Note: 8k/16k buckets cause OOM during warmup - add when memory optimized
             bucket_sizes = [128, 256, 512, 1024, 2048, 4096]
 
         hidden_dim = 4096
@@ -2392,6 +2425,7 @@ def run_video_demo(
     use_unified_trace: bool = False,
     use_paged_attention: bool = False,
     batch_size: int = 1,
+    num_devices: int = 8,
 ):
     """
     Run the Molmo2 demo with video input.
@@ -2435,7 +2469,7 @@ def run_video_demo(
     state_dict = load_model_weights()
 
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_shape = ttnn.MeshShape(1, 8)
+    mesh_shape = ttnn.MeshShape(1, num_devices)
     logger.info(f"Opening TTNN mesh device with shape {mesh_shape}")
     device = ttnn.open_mesh_device(mesh_shape)
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
@@ -2509,6 +2543,7 @@ def run_demo(
     use_unified_trace: bool = False,
     use_paged_attention: bool = False,
     batch_size: int = 1,
+    num_devices: int = 8,
 ):
     """
     Run the Molmo2 demo.
@@ -2561,7 +2596,7 @@ def run_demo(
     # Open multi-device mesh for T3K (8 devices) to enable bfloat16 weight sharding
     # This prevents numerical overflow during decode by using higher precision weights
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_shape = ttnn.MeshShape(1, 8)
+    mesh_shape = ttnn.MeshShape(1, num_devices)
     logger.info(f"Opening TTNN mesh device with shape {mesh_shape}")
     device = ttnn.open_mesh_device(mesh_shape)
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
@@ -2659,6 +2694,7 @@ def run_batched_demo(
     use_decode_trace: bool = False,
     use_vision_trace: bool = False,
     batch_size: int = 4,
+    num_devices: int = 8,
 ):
     """
     Run batched demo with multiple different prompts processed in parallel.
@@ -2728,7 +2764,7 @@ def run_batched_demo(
 
     # Open device
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
-    mesh_shape = ttnn.MeshShape(1, 8)
+    mesh_shape = ttnn.MeshShape(1, num_devices)
     logger.info(f"Opening TTNN mesh device with shape {mesh_shape}")
     device = ttnn.open_mesh_device(mesh_shape)
     logger.info(f"Opened mesh device with {device.get_num_devices()} devices")
@@ -2877,6 +2913,12 @@ def main():
         default=1,
         help="Batch size for inference (default: 1)",
     )
+    parser.add_argument(
+        "--num-devices",
+        type=int,
+        default=8,
+        help="Number of TT devices to use (default: 8 for T3K)",
+    )
 
     args = parser.parse_args()
 
@@ -2893,6 +2935,7 @@ def main():
             use_decode_trace=args.use_decode_trace,
             use_vision_trace=args.use_vision_trace,
             batch_size=args.batch_size,
+            num_devices=args.num_devices,
         )
     elif args.video is not None:
         prompt = args.prompt if args.prompt is not None else f"{VIDEO_PROMPT} Describe what happens in this video."
@@ -2912,6 +2955,7 @@ def main():
             use_unified_trace=args.use_unified_trace,
             use_paged_attention=args.paged_attention,
             batch_size=args.batch_size,
+            num_devices=args.num_devices,
         )
     else:
         prompt = args.prompt if args.prompt is not None else "<|image|> Describe this image in detail."
@@ -2929,6 +2973,7 @@ def main():
             use_unified_trace=args.use_unified_trace,
             use_paged_attention=args.paged_attention,
             batch_size=args.batch_size,
+            num_devices=args.num_devices,
         )
 
 

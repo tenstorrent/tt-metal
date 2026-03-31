@@ -214,6 +214,17 @@ class VisionAttention(LightweightModule):
     _sdpa_call_count = 0
     _current_request = 0
 
+    @classmethod
+    def reset_counters(cls):
+        """Reset SDPA call counters. Call between requests to prevent memory growth."""
+        cls._sdpa_call_count = 0
+        cls._current_request = 0
+
+    @classmethod
+    def increment_request(cls):
+        """Increment request counter for tracking."""
+        cls._current_request += 1
+
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """
         Forward pass through attention.
