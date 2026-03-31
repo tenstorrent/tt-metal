@@ -12,6 +12,7 @@
 #include <tuple>
 #include <vector>
 
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include "tt-metalium/distributed_host_buffer.hpp"
 #include "tt-metalium/experimental/tensor/host_tensor.hpp"
 #include <ttnn/tensor/tensor_spec.hpp>
@@ -84,12 +85,11 @@ struct DeviceStorage {
     // Constructs a DeviceStorage from a device memory
 
     // Constructs DeviceStorage with coords covering the full mesh device shape.
-    explicit DeviceStorage(const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_);
+    explicit DeviceStorage(MeshTensor mesh_tensor);
 
     // Constructs DeviceStorage that is a view of the mesh_buffer_ at the given coords_.
     // Throws if the coords_ are out of bounds for the mesh_buffer_ device shape.
-    DeviceStorage(
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_);
+    DeviceStorage(MeshTensor mesh_tensor, std::vector<distributed::MeshCoordinate> coords);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Copys an existing DeviceStorage and share it's underlying device memory.
@@ -115,6 +115,8 @@ struct DeviceStorage {
     // Get mesh buffer that represents the device memory
     // Throws if the DeviceStorage is not allocated.
     const distributed::MeshBuffer& get_mesh_buffer() const;
+
+    const MeshTensor& get_mesh_tensor() const;
 
     // Get the device the device memory is allocated on
     // Throws if the DeviceStorage is not allocated.
@@ -177,7 +179,11 @@ struct DeviceStorage {
     // Combines a vector of DeviceStorages that shares the same device storage but spread across difference coordinates
     // into a single DeviceStorage.
     static DeviceStorage combine_device_storages(
-        const std::vector<std::reference_wrapper<const DeviceStorage>>& storages);
+        const std::vector<std::reference_wrapper<const DeviceStorage>>& storages, int shard_dim);
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Update tensor topology
+    void update_tensor_topology(const TensorTopology& tensor_topology);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Serialization
@@ -188,10 +194,11 @@ struct DeviceStorage {
 private:
     // Main internal constructor, performs all validation
     DeviceStorage(
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer,
+        std::shared_ptr<MeshTensor> mesh_tensor,
         std::vector<distributed::MeshCoordinate> coords,
         std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer);
 
+    std::shared_ptr<MeshTensor> mesh_tensor_;
     std::vector<distributed::MeshCoordinate> coords_;
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
 

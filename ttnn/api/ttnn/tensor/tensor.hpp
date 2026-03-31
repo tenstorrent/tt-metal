@@ -12,6 +12,8 @@
 #include <tuple>
 #include <vector>
 
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/tensor/host_tensor.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -57,10 +59,12 @@ public:
     //
     // TODO(#40348): Remove this.
     [[nodiscard]] Tensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
-
     [[nodiscard]] Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
+    [[nodiscard]] explicit Tensor(DeviceStorage storage);
+
     [[nodiscard]] explicit Tensor(HostTensor tensor);
+    [[nodiscard]] explicit Tensor(MeshTensor tensor);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.

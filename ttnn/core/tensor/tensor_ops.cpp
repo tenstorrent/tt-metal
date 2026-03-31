@@ -20,35 +20,6 @@
 #include <tracy/Tracy.hpp>
 #include "ttnn/graph/graph_serialization.hpp"
 
-namespace {
-
-tt::tt_metal::Tensor allocate_tensor_on_device(
-    const tt::tt_metal::TensorSpec& tensor_spec,
-    tt::tt_metal::distributed::MeshDevice* device,
-    std::optional<tt::tt_metal::TensorTopology> topology) {
-    using namespace tt::tt_metal;
-    auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
-    DeviceStorage device_storage(mesh_buffer);
-
-    TensorTopology tensor_topology;
-    if (topology.has_value()) {
-        tensor_topology = std::move(*topology);
-    } else {
-        // Use Replicate as default value for placements in MeshMapperConfig
-        ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
-        for (size_t i = 0; i < device->shape().dims(); i++) {
-            placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
-        }
-        tensor_topology = TensorTopology{
-            device->shape(),
-            placements,
-            std::vector<distributed::MeshCoordinate>(
-                device_storage.get_coords().begin(), device_storage.get_coords().end())};
-    }
-    return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
-}
-}  // namespace
-
 namespace tt::tt_metal {
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
@@ -81,7 +52,30 @@ Tensor create_device_tensor(
 
     Tensor output;
     distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
-    output = allocate_tensor_on_device(tensor_spec, mesh_device, std::move(tensor_topology));
+
+    auto topology = std::invoke([&]() {
+        if (tensor_topology.has_value()) {
+            return std::move(*tensor_topology);
+        }
+        // TODO (#25340): Implement correct logic and add test for this
+        // River: why are we constructing the topology here like this instead of using the
+        // TensorTopology::create_fully_replicated_tensor_topology function?
+        //
+        // Use Replicate as default value for placements in MeshMapperConfig
+        const auto& mesh_shape = mesh_device->shape();
+        ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(
+            mesh_shape.dims(), tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
+
+        std::vector<distributed::MeshCoordinate> coordinates;
+        coordinates.reserve(mesh_shape.mesh_size());
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_shape)) {
+            coordinates.push_back(coord);
+        }
+
+        return TensorTopology{mesh_shape, placements, std::move(coordinates)};
+    });
+
+    output = Tensor(tensor_impl::allocate_mesh_tensor(tensor_spec, *mesh_device, std::move(topology)));
     output = tt::tt_metal::set_tensor_id(output);
 
     GraphTracker::instance().track_function_end(output);

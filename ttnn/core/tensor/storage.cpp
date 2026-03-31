@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <ttnn/tensor/layout/layout.hpp>
+#include <ttnn/distributed/types.hpp>
 #include "tt-metalium/mesh_coord.hpp"
 
 #include "ttnn/tensor/storage.hpp"
@@ -73,27 +74,27 @@ HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuff
     return HostStorage(tensor.transform(callable));
 }
 
-DeviceStorage::DeviceStorage(const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_) :
-    DeviceStorage(mesh_buffer_, CMAKE_UNIQUE_NAMESPACE::get_all_mesh_coordinates(*mesh_buffer_->device())) {}
+DeviceStorage::DeviceStorage(MeshTensor mesh_tensor) :
+    mesh_tensor_(std::make_shared<MeshTensor>(std::move(mesh_tensor))),
+    coords_(CMAKE_UNIQUE_NAMESPACE::get_all_mesh_coordinates(mesh_tensor_->device())) {}
 
-DeviceStorage::DeviceStorage(
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords) :
-    DeviceStorage(std::move(mesh_buffer_), std::move(coords), nullptr) {}
+DeviceStorage::DeviceStorage(MeshTensor mesh_tensor_, std::vector<distributed::MeshCoordinate> coords) :
+    DeviceStorage(std::make_shared<MeshTensor>(std::move(mesh_tensor_)), std::move(coords), nullptr) {}
 
 DeviceStorage::DeviceStorage(const DeviceStorage& other, std::vector<distributed::MeshCoordinate> coords) :
-    DeviceStorage(other.mesh_buffer, std::move(coords), other.root_mesh_buffer) {}
+    DeviceStorage(other.mesh_tensor_, std::move(coords), other.root_mesh_buffer) {}
+
+// TODO: what do we do with this?
+// DeviceStorage::DeviceStorage(
+//     const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer) :
+//     DeviceStorage(std::move(surface_buffer), owning_storage.coords_, owning_storage.get_root_mesh_buffer()) {}
 
 DeviceStorage::DeviceStorage(
-    const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer) :
-    DeviceStorage(std::move(surface_buffer), owning_storage.coords_, owning_storage.get_root_mesh_buffer()) {}
-
-DeviceStorage::DeviceStorage(
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer,
+    std::shared_ptr<MeshTensor> mesh_tensor,
     std::vector<distributed::MeshCoordinate> coords,
     std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer) :
-    coords_(std::move(coords)), mesh_buffer(std::move(mesh_buffer)), root_mesh_buffer(std::move(root_mesh_buffer)) {
+    mesh_tensor_(std::move(mesh_tensor)), coords_(std::move(coords)), root_mesh_buffer(std::move(root_mesh_buffer)) {
     if (!is_allocated()) {
-        this->mesh_buffer = nullptr;
         this->root_mesh_buffer = nullptr;
         return;
     }
@@ -116,14 +117,20 @@ bool DeviceStorage::is_sole_owner_of_device_memory() const {
     return mesh_buffer.use_count() == 1 && get_root_mesh_buffer().use_count() == 1;
 }
 
-std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer_leak_ownership() const {
-    TT_FATAL(mesh_buffer != nullptr, "Buffer is not allocated");
-    return mesh_buffer;
+const MeshTensor& DeviceStorage::get_mesh_tensor() const {
+    TT_FATAL(mesh_tensor_ != nullptr, "MeshTensor is not allocated");
+    return *mesh_tensor_;
 }
 
-const std::shared_ptr<distributed::MeshBuffer>& DeviceStorage::get_root_mesh_buffer() const {
-    return root_mesh_buffer ? root_mesh_buffer : mesh_buffer;
+std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer_leak_ownership() const {
+    TT_FATAL(mesh_tensor_ != nullptr, "MeshTensor is not allocated");
+    return mesh_tensor_->mesh_buffer_invariant_breaking();
 }
+
+// TODO: what do we do with this?
+// const std::shared_ptr<distributed::MeshBuffer>& DeviceStorage::get_root_mesh_buffer() const {
+//     return root_mesh_buffer ? root_mesh_buffer : mesh_buffer;
+// }
 
 void DeviceStorage::deallocate() {
     if (!is_allocated()) {
@@ -157,16 +164,16 @@ std::span<const distributed::MeshCoordinate> DeviceStorage::get_coords() const {
 }
 
 DeviceStorage DeviceStorage::combine_device_storages(
-    const std::vector<std::reference_wrapper<const DeviceStorage>>& storages) {
+    const std::vector<std::reference_wrapper<const DeviceStorage>>& storages, int shard_dim) {
     TT_FATAL(!storages.empty(), "Cannot aggregate empty vector of DeviceStorages");
 
     const auto& model_storage = storages.front().get();
-    TT_FATAL(
-        std::all_of(
-            storages.begin(),
-            storages.end(),
-            [&](const auto& storage) { return storage.get().mesh_buffer == model_storage.mesh_buffer; }),
-        "All DeviceStorages must point to the same device memory");
+    // TT_FATAL(
+    //     std::all_of(
+    //         storages.begin(),
+    //         storages.end(),
+    //         [&](const auto& storage) { return storage.get().mesh_buffer == model_storage.mesh_buffer; }),
+    //     "All DeviceStorages must point to the same device memory");
 
     auto num_coords = std::accumulate(storages.begin(), storages.end(), 0, [](size_t sum, const auto& storage) {
         return sum + storage.get().get_coords().size();
@@ -179,8 +186,13 @@ DeviceStorage DeviceStorage::combine_device_storages(
         joint_coords.insert(other_coords.begin(), other_coords.end());
     }
 
-    return DeviceStorage(
+    TensorTopology topology =
+        TensorTopology::create_sharded_tensor_topology(distributed::MeshShape(joint_coords.size()), shard_dim);
+
+    DeviceStorage res(
         model_storage, std::vector<distributed::MeshCoordinate>(joint_coords.begin(), joint_coords.end()));
+    res.update_tensor_topology(topology);
+    return res;
 }
 
 }  // namespace tt::tt_metal
