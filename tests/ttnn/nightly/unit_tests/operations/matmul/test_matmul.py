@@ -262,6 +262,52 @@ def test_matmul_2d_interleaved_sharded_dtype_bias_sweep(
     )
 
 
+@pytest.mark.parametrize("rhs_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
+@pytest.mark.timeout(120)
+def test_matmul_transpose_a_with_low_precision_rhs(device, rhs_dtype):
+    """
+    Regression test for transpose_a with a lower-precision RHS tensor.
+
+    When transpose_a is True the compute kernel transposes in0 tiles via
+    transpose_wh_init_short, which requires the HW srcA unpacker to be
+    configured for in0's data format (bfloat16).  mm_block_init sets srcA
+    to in1's format instead; when in1 is Bfp8_b the resulting format
+    mismatch caused an LLK assert (issue #35247b).
+
+    The fix adds reconfig_data_format_srca before the transpose init and
+    uses mm_block_init_short_with_dt after it.
+    """
+    torch.manual_seed(0)
+
+    B, K, N = 32, 16, 128
+    a_pt = 0.01 * torch.randn((B, K, 1), dtype=torch.bfloat16)
+    b_pt = torch.randint(0, 2, (B, N), dtype=torch.int32).to(torch.bfloat16)
+
+    a = ttnn.from_torch(a_pt, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(b_pt, dtype=rhs_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    a_perm_ref = ttnn.permute(a, (2, 1, 0))  # [1, K, B]
+    a_perm_cand = ttnn.permute(a, (2, 0, 1))  # [1, B, K]
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    out_ref = ttnn.to_torch(ttnn.matmul(a_perm_ref, b, compute_kernel_config=compute_kernel_config))
+
+    out_candidate = ttnn.to_torch(
+        ttnn.matmul(a_perm_cand, b, transpose_a=True, compute_kernel_config=compute_kernel_config)
+    )
+
+    assert out_ref.shape == out_candidate.shape
+    pcc = 0.97 if rhs_dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b) else 0.999
+    assert_with_pcc(out_ref, out_candidate, pcc=pcc)
+
+
 @pytest.mark.parametrize(
     "batch, m, k, n, program_config",
     [

@@ -375,7 +375,10 @@ Captured metrics:
 | `peak_l1_memory_device_bytes`    | Actual observed peak across device                                 |
 
 
-If `aggregate ≈ device`, cores peak together (parallel execution). If `aggregate >> device`, execution is sequential (only a few cores active at a time).
+1. **Vector Generation:** The parameter generator reads `mesh_device_shape` from `traced_machine_info.tensor_placements` in the master JSON
+2. **File Routing:** By default, vectors are grouped by mesh shape and written to separate files (e.g., `op.mesh_4x8.json`). You can also generate hardware-grouped files with `--group-by hw`.
+3. **Matrix Computation:** `framework/compute_sweep_matrix.py` creates a GitHub Actions matrix that maps mesh shapes to runners
+4. **Execution:** CI spawns parallel jobs on appropriate hardware based on the matrix
 
 ## CI Execution
 

@@ -349,6 +349,35 @@ def test_acos(device, h, w, layout):
     run_unary_test(device, h, w, ttnn.acos, layout=layout, pcc=0.999)
 
 
+def run_unary_inverse_trig_bf16_test(device, h, w, ttnn_function, ulp_threshold, layout=ttnn.TILE_LAYOUT):
+    """Explicit bfloat16 I/O and dense samples in [-1, 1] for asin/acos domain coverage."""
+    torch.manual_seed(0)
+    torch_input_tensor = torch.linspace(-1.0, 1.0, steps=h * w, dtype=torch.bfloat16).reshape(h, w)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=layout, device=device)
+    output_tensor = ttnn_function(input_tensor)
+    assert output_tensor.layout == layout, f"Output layout {output_tensor.layout} should match input layout {layout}"
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold)
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_asin_bf16(device, h, w, layout):
+    run_unary_inverse_trig_bf16_test(device, h, w, ttnn.asin, 3, layout=layout)
+
+
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_acos_bf16(device, h, w, layout):
+    run_unary_inverse_trig_bf16_test(device, h, w, ttnn.acos, 3, layout=layout)
+
+
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
