@@ -22,8 +22,9 @@ Optional:
     --factory-descriptor-path <path>        Path to pregenerated factory system descriptor (FSD) file (.textproto)
                                             (if provided, cabling and deployment descriptors are ignored)
     --output <directory>                    Output directory for log files (default: validation_output)
-    --volume <host-path>                    Extra volume mount for Docker containers (can be repeated)
-                                            The host path is mounted at the same path inside the container
+    --volume <host-path>                    Additional volume mount for Docker containers (can be repeated)
+                                            /data/scaleout_configs is mounted by default; each host path
+                                            is mounted at the same path inside the container
     --rerun-on-retrain                      Rerun validation when Ethernet links are retrained
     --help                                  Display this help message and exit
 
