@@ -37,6 +37,7 @@ class SamplingParams:
     repetition_penalty: float | list[float] = 1.0
     seed: int | list[int] | None = None
     enable_log_probs: bool | list[bool] = False
+    num_logprobs: int | list[int] = 0
 
 
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
@@ -106,10 +107,16 @@ class SamplingGenerator:
         Drop any cached trace metadata for both penalties/no-penalties and log-probs/no-log-probs paths.
         """
         for key, slot in self._trace_states.items():
-            if slot["id"] is not None:
-                logger.debug(
-                    f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
-                )
+            if slot["id"] is None:
+                continue
+            logger.debug(
+                f"Resetting sampling trace (penalties={key.penalties_on}, log_probs={key.log_probs_on}, force_argmax={key.force_argmax}, trace_id={slot['id']})"
+            )
+            try:
+                ttnn.release_trace(self.mesh_device, slot["id"])
+            except Exception as e:
+                logger.warning(f"Failed to release trace {slot['id']} : {e}")
+                continue
         self._trace_states.clear()
 
     def reset_prompt_tokens(self, prompt_tokens):
@@ -136,7 +143,7 @@ class SamplingGenerator:
 
         Resets params, seeds, prompt tokens, and output state in the correct order.
         """
-        self.reset_sampling_params(sampling_params)
+        self.reset_sampling_params(sampling_params, empty_slots=empty_slots)
         seed = getattr(sampling_params, "seed", None)
         # assert on condition that seed is not None
         assert seed is not None, "sampling_params must be formatted (seed should be a list, not None)"
@@ -195,13 +202,16 @@ class SamplingGenerator:
     # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------
-    def reset_sampling_params(self, sampling_params):
+    def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
         old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
+        num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
             p=sampling_params.top_p,
             temp=sampling_params.temperature,
             enable_log_probs=sampling_params.enable_log_probs,
+            num_logprobs=num_logprobs,
+            empty_slots=empty_slots,
         )
         if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
             self.reset_trace()
@@ -381,6 +391,8 @@ def format_sampling_params(sampling_params, max_batch_size):
         "frequency_penalty": 0.0,
         "repetition_penalty": 1.0,
         "seed": None,
+        "num_logprobs": 0,
+        "enable_log_probs": False,
     }
 
     def _pad(lst, name):
@@ -389,12 +401,28 @@ def format_sampling_params(sampling_params, max_batch_size):
             return list(lst)
         return list(lst) + [defaults[name]] * (target_len - len(lst))
 
-    # Pad core sampling fields
+    # Pad core sampling fields (scalar→list already done above)
     temperature = _pad(sampling_params.temperature, "temperature")
     top_p = _pad(sampling_params.top_p, "top_p")
     top_k = _pad(sampling_params.top_k, "top_k")
 
-    # Normalise and pad penalty / seed fields
+    # enable_log_probs / num_logprobs: scalar → broadcast to all users.
+    # Multi-element list → pad with default (False/0) for inactive slots.
+    # Single-element list (from scalar→list conversion) → broadcast to all.
+    def _broadcast_pad(lst, name):
+        if not isinstance(lst, list):
+            return [lst] * target_len
+        if len(lst) == 1:
+            return lst * target_len
+        return _pad(lst, name)
+
+    enable_log_probs = _broadcast_pad(sampling_params.enable_log_probs, "enable_log_probs")
+    if getattr(sampling_params, "num_logprobs", None) is not None:
+        num_logprobs = _broadcast_pad(sampling_params.num_logprobs, "num_logprobs")
+    else:
+        num_logprobs = None
+
+    # Normalise and pad penalty / seed fields (may still be None/scalar)
     def _normalise_and_pad(name):
         value = getattr(sampling_params, name, None)
         if value is None:
@@ -442,6 +470,8 @@ def format_sampling_params(sampling_params, max_batch_size):
         frequency_penalty=frequency_penalty,
         repetition_penalty=repetition_penalty,
         seed=seed,
+        num_logprobs=num_logprobs,
+        enable_log_probs=enable_log_probs,
     )
 
 

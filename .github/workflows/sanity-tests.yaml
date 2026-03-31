@@ -53,6 +53,11 @@ on:
         type: boolean
         default: true
         description: "Run ops unit tests"
+      run-ttsim-integration-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TTSim integration tests"
       enable-watcher:
         required: false
         type: boolean
@@ -89,6 +94,11 @@ on:
         type: string
         default: ""
         description: "Pre-built wheel artifact name (skips build if provided)"
+      packages-artifact-name:
+        required: false
+        type: string
+        default: ""
+        description: "Pre-built packages artifact name (for ttsim tests)"
   workflow_dispatch:
     inputs:
       with-retries:
@@ -148,6 +158,11 @@ on:
         default: true
         type: boolean
         description: "Run ops unit tests"
+      run-ttsim-integration-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run TTSim integration tests"
       enable-watcher:
         required: false
         default: false
@@ -205,8 +220,11 @@ jobs:
     if: ${{ !cancelled() && (inputs.dev-docker-image != '' || needs.build-artifact.result == 'success') }}
     outputs:
       dev-docker-image: ${{ steps.resolve.outputs.dev-docker-image }}
+      basic-dev-docker-image: ${{ steps.resolve.outputs.basic-dev-docker-image }}
+      ci-test-docker-image: ${{ steps.resolve.outputs.ci-test-docker-image }}
       build-artifact-name: ${{ steps.resolve.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ steps.resolve.outputs.wheel-artifact-name }}
+      packages-artifact-name: ${{ steps.resolve.outputs.packages-artifact-name }}
     steps:
       - id: resolve
         run: |
@@ -224,12 +242,18 @@ jobs:
           # Use provided artifacts if available, otherwise use built artifacts
           if [[ -n "${{ inputs.dev-docker-image }}" ]]; then
             echo "dev-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "basic-dev-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "ci-test-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "build-artifact-name=${{ inputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
             echo "wheel-artifact-name=${{ inputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+            echo "packages-artifact-name=${{ inputs.packages-artifact-name }}" >> "$GITHUB_OUTPUT"
           else
             echo "dev-docker-image=${{ needs.build-artifact.outputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "basic-dev-docker-image=${{ needs.build-artifact.outputs.basic-dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "ci-test-docker-image=${{ needs.build-artifact.outputs.ci-test-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "build-artifact-name=${{ needs.build-artifact.outputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
             echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+            echo "packages-artifact-name=${{ needs.build-artifact.outputs.packages-artifact-name }}" >> "$GITHUB_OUTPUT"
           fi
 
   tests-to-run:
@@ -243,6 +267,7 @@ jobs:
       run-profiler-regression: ${{ steps.set-run-profiler-regression.outputs.should-run }}
       t3000-apc-fast-tests: ${{ steps.set-t3000-apc-fast-tests.outputs.should-run }}
       ops-unit-tests: ${{ steps.set-ops-unit-tests.outputs.should-run }}
+      ttsim-integration-tests: ${{ steps.set-ttsim-integration-tests.outputs.should-run }}
     steps:
       - id: set-ttnn-unit-tests
         run: |
@@ -262,6 +287,9 @@ jobs:
       - id: set-ops-unit-tests
         run: |
           echo "should-run=${{ github.event_name == 'push' || inputs.run-ops-unit-tests }}" >> "$GITHUB_OUTPUT"
+      - id: set-ttsim-integration-tests
+        run: |
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttsim-integration-tests }}" >> "$GITHUB_OUTPUT"
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
@@ -382,3 +410,18 @@ jobs:
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
+
+  ttsim-integration-tests:
+    needs: [resolve-artifacts, tests-to-run]
+    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ttsim-integration-tests == 'true' }}
+    strategy:
+      fail-fast: false
+    uses: ./.github/workflows/ttsim.yaml
+    secrets: inherit
+    with:
+      basic-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
+      test-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
+      package-artifact-name: ${{ needs.resolve-artifacts.outputs.packages-artifact-name }}
+      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
+      run-ttsim-integration-tests: true
+      run-metal-cpp-unit-tests: false

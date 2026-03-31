@@ -149,7 +149,7 @@ int main(int argc, char **argv) {
     CLI::App app{"Mnist Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_mnist_mlp.yaml";
+    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_configs/mnist.yaml";
     bool is_eval = false;
     bool enable_tp = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);

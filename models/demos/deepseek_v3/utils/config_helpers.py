@@ -23,6 +23,20 @@ USERS_PER_ROW = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 MAX_TOP_K = 32
+# Default sampling parameters, huggingface recommended values
+DEFAULT_SAMPLING_TEMPERATURE = 0.6
+DEFAULT_SAMPLING_TOP_P = 0.95
+# huggingface recommended value for top-k sampling is zero for DeepSeek-V3 model, but TTNN Op
+# does not support top-k=0. see https://github.com/tenstorrent/tt-metal/issues/40236
+# So, using 32 as default value for top-k when sampling on device. If top-k = 0 is needed, then
+# do sampling on host.
+DEFAULT_SAMPLING_TOP_K = 32
+
+
+def get_fabric_config():
+    return (
+        ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+    )
 
 
 def make_deepseek_sampling_args(
@@ -776,6 +790,16 @@ def shard_and_save(
                 not remove_dim or tensor.shape[shard_dim] == mesh_dim
             ), f"The removed dim {shard_dim} must be fully sharded"
 
+    cache_path = (
+        path if path.name.endswith(TENSOR_CACHE_EXTENSION) else path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+    )
+    if cache_path.exists():
+        logger.info(f"Cache file already exists, skipping shard_and_save: {cache_path}")
+        relative_cache_path = _get_relative_cache_path(cache_path)
+        if relative_cache_path is None:
+            raise ValueError(f"Expected path under a 'mesh_<rows>x<cols>' cache directory: {cache_path}")
+        return SavedWeight(Path(relative_cache_path), memory_config)
+
     if _torch_impl:
         ttnn_tensor = _shard_torch_impl(
             path=path,
@@ -805,8 +829,6 @@ def shard_and_save(
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if path.exists():
-        logger.warning(f"Overwriting existing cache file: {path}")
     record = {
         "event": "deepseek_v3.cache_tensor_spec",
         "pid": os.getpid(),

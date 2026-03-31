@@ -8,19 +8,32 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.master_config_loader import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    get_mesh_shape,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
+)
 
-TIMEOUT = 60
+# Import V2 master config loader for traced model configurations
+from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
+TIMEOUT = 300
+
+# Load traced configurations from real model tests (V2 format)
 loader = MasterConfigLoader()
-model_traced_params = loader.get_suite_parameters("fill_cache", all_cases=False)
+model_traced_params = loader.get_suite_parameters("fill_cache")
 
 parameters = {
     "model_traced_sample": {
-        "input_shape": [(1, 1, 32, 64)],
+        "input_a_shape": [(1, 1, 32, 64)],
         "input_a_dtype": [ttnn.bfloat16],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+        "input_b_dtype": [ttnn.bfloat16],
+        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_b_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
         "storage_type": ["StorageType::DEVICE"],
     },
@@ -31,37 +44,64 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    """Custom device fixture for fill_cache with DispatchCoreConfig to free up more compute cores"""
-    device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.device.DispatchCoreConfig())
-    device_name = ttnn.get_arch_name()
+    """
+    Override default device fixture.
+    Creates mesh device if MESH_DEVICE_SHAPE is set, otherwise single device.
+    """
+    mesh_shape = get_mesh_shape()
 
-    yield (device, device_name)
-
-    ttnn.close_device(device)
-    del device
+    if mesh_shape:
+        # Create mesh device based on env var
+        try:
+            device = create_mesh_device(mesh_shape)
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_mesh_device(device)
+        except Exception as e:
+            print(f"Failed to create mesh device {mesh_shape}: {e}, falling back to single device")
+            device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+            device_name = ttnn.get_arch_name()
+            yield (device, device_name)
+            ttnn.close_device(device)
+    else:
+        # Single device (default)
+        device = ttnn.open_device(device_id=0, dispatch_core_config=ttnn.DispatchCoreConfig())
+        device_name = ttnn.get_arch_name()
+        yield (device, device_name)
+        ttnn.close_device(device)
+        del device
 
 
 def run(
-    input_shape,
+    input_a_shape,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
+    input_b_shape=None,
     input_b_dtype=None,
     input_b_layout=None,
     input_b_memory_config=None,
+    storage_type="StorageType::DEVICE",
     *,
     device,
     **kwargs,  # Accept any extra parameters the loader might pass
 ) -> list:
     torch.manual_seed(0)
 
-    # Handle both sample suite (tuple/list) and model_traced suite (dict with 'self'/'other')
-    if isinstance(input_shape, dict):
-        cache_shape = tuple(input_shape.get("self", (1, 1, 32, 64)))
-        input_tensor_shape = tuple(input_shape.get("other", (1, 1, 32, 64)))
+    # Extract kwargs
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
+
+    # Check if device is a mesh device (from fixture)
+    is_mesh_device = hasattr(device, "get_num_devices")
+    output_memory_config = kwargs.get("output_memory_config", None)
+    op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+
+    # V2 format provides separate shapes
+    cache_shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
+    if input_b_shape:
+        input_tensor_shape = tuple(input_b_shape) if isinstance(input_b_shape, (list, tuple)) else input_b_shape
     else:
-        # Convert list to tuple if needed
-        cache_shape = tuple(input_shape) if isinstance(input_shape, list) else input_shape
         input_tensor_shape = cache_shape
 
     batch_idx = 0
@@ -70,29 +110,65 @@ def run(
     torch_cache = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype)(
         cache_shape
     )
-    torch_input = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype or input_a_dtype
-    )(input_tensor_shape)
+    torch_input = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype)(
+        input_tensor_shape
+    )
     torch_output = torch_cache.clone()
     if len(torch_cache.shape) >= 4 and len(torch_input.shape) >= 4 and torch_cache.shape[0] > batch_idx:
         seq_len = min(torch_input.shape[2], torch_cache.shape[2])
         torch_output[batch_idx, :, :seq_len, :] = torch_input[0, :, :seq_len, :]
 
-    cache_tensor = ttnn.from_torch(
-        torch_cache, dtype=input_a_dtype, layout=input_a_layout, device=device, memory_config=input_a_memory_config
-    )
-    input_tensor = ttnn.from_torch(
-        torch_input,
-        dtype=input_b_dtype or input_a_dtype,
-        layout=input_b_layout or input_a_layout,
-        device=device,
-        memory_config=input_b_memory_config or input_a_memory_config,
-    )
+    # Check if storage_type is HOST - if so, don't pass device to from_torch
+    is_host = storage_type and "HOST" in str(storage_type)
+
+    if not is_host:
+        if is_mesh_device and input_a_tensor_placement:
+            cache_tensor = create_tensor_on_mesh(
+                torch_cache,
+                device,
+                input_a_dtype,
+                input_a_layout,
+                input_a_memory_config,
+                input_a_tensor_placement,
+            )
+        else:
+            cache_tensor = ttnn.from_torch(
+                torch_cache,
+                dtype=input_a_dtype,
+                layout=input_a_layout,
+                device=device,
+                memory_config=input_a_memory_config,
+            )
+
+        if is_mesh_device and input_b_tensor_placement:
+            input_tensor = create_tensor_on_mesh(
+                torch_input,
+                device,
+                input_b_dtype,
+                input_b_layout,
+                input_b_memory_config,
+                input_b_tensor_placement,
+            )
+        else:
+            input_tensor = ttnn.from_torch(
+                torch_input,
+                dtype=input_b_dtype,
+                layout=input_b_layout,
+                device=device,
+                memory_config=input_b_memory_config,
+            )
+    else:
+        cache_tensor = ttnn.from_torch(torch_cache, dtype=input_a_dtype, layout=input_a_layout)
+        input_tensor = ttnn.from_torch(
+            torch_input,
+            dtype=input_b_dtype,
+            layout=input_b_layout,
+        )
 
     # Op call
     start_time = start_measuring_time()
-    output_tensor = ttnn.fill_cache(cache_tensor, input_tensor, batch_idx)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.fill_cache(cache_tensor, input_tensor, batch_idx, **op_kwargs)
+    output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
 
     # Comparison

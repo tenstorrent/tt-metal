@@ -5,6 +5,7 @@
 import pytest
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 MARGIN = 0.015
@@ -114,6 +115,7 @@ def test_conv2d_auto_sliced_vae(device):
     )
 
 
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @pytest.mark.models_device_performance_bare_metal
 def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Create a command that runs the specific test
@@ -150,6 +152,7 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± {MARGIN * 100}% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
 
 
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @pytest.mark.models_device_performance_bare_metal
 def test_block_sharded_group_norm_sdxl_performance():
     # Create a command that runs the specific test
@@ -169,7 +172,7 @@ def test_block_sharded_group_norm_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 83180  # Measured: ~83μs for GroupNorm SDXL block sharded
+    expected_duration_ns = 73722  # Measured: ~74μs for GroupNorm SDXL block sharded
 
     # Log the performance result
     print(
@@ -186,6 +189,7 @@ def test_block_sharded_group_norm_sdxl_performance():
     ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± {MARGIN * 100}% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
 
 
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @pytest.mark.models_device_performance_bare_metal
 def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     # Create a command that runs the specific test
@@ -205,7 +209,7 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 600338  # Measured: ~600μs for GroupNorm SDXL negative mask
+    expected_duration_ns = 549179  # Measured: ~549μs for GroupNorm SDXL negative mask
 
     # Log the performance result
     print(
@@ -222,6 +226,7 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± {MARGIN * 100}% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
 
 
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @pytest.mark.models_device_performance_bare_metal
 def test_ff_matmul_with_gelu_sdxl_performance():
     # Create a command that runs the specific test
@@ -258,6 +263,7 @@ def test_ff_matmul_with_gelu_sdxl_performance():
     ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± {MARGIN * 100}% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
 
 
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @pytest.mark.models_device_performance_bare_metal
 def test_conv2d_block_sharded_sdxl_performance():
     # Create a command that runs the specific test
@@ -294,6 +300,7 @@ def test_conv2d_block_sharded_sdxl_performance():
     ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± {MARGIN * 100}% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
 
 
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @pytest.mark.models_device_performance_bare_metal
 def test_conv2d_auto_sliced_vae_performance():
     # Create a command that runs the specific test
@@ -313,7 +320,7 @@ def test_conv2d_auto_sliced_vae_performance():
     # Extract the device kernel duration result
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
-    expected_duration_ns = 3185244  # Measured: 3.19ms for Conv2D VAE auto sliced
+    expected_duration_ns = 3142259  # Measured: 3.14ms for Conv2D VAE auto sliced
 
     # Log the performance result
     print(
