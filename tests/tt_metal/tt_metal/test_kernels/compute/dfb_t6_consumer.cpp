@@ -31,5 +31,6 @@ void kernel_main() {
         dfb.pop_front(1);
         // DPRINT << "pfd" << ENDL();
     }
+    // dfb.finish();
     DPRINT << "CBWD" << ENDL();
 }
