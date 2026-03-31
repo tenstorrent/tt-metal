@@ -34,7 +34,7 @@ ttnn::Tensor concatenate_heads(const Tensor& input_tensor, const std::optional<M
 
     // The sharded program path only supports sharded-to-sharded operation.
     // When input is sharded but output is interleaved, fall back to the interleaved path
-    // by converting the input to DRAM interleaved first.
+    // by converting the input to DRAM/L1 interleaved first.
     const auto& resolved_mem_config = memory_config.value_or(input_tensor.memory_config());
     const auto& actual_input =
         (input_tensor.is_sharded() && !resolved_mem_config.is_sharded())
