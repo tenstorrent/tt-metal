@@ -245,7 +245,9 @@ def main():
             "l1_0": 3,  # PROFILE_PERF_COUNTERS_L1_0   (1 << 3)
             "l1_1": 4,  # PROFILE_PERF_COUNTERS_L1_1   (1 << 4)
             "instrn": 5,  # PROFILE_PERF_COUNTERS_INSTRN (1 << 5)
-            "l1_4": 6,  # PROFILE_PERF_COUNTERS_L1_4   (1 << 6)  BH-only misc ports
+            "l1_2": 6,  # PROFILE_PERF_COUNTERS_L1_2   (1 << 6)  BH-only NOC Ring 2
+            "l1_3": 7,  # PROFILE_PERF_COUNTERS_L1_3   (1 << 7)  BH-only NOC Ring 3
+            "l1_4": 8,  # PROFILE_PERF_COUNTERS_L1_4   (1 << 8)  BH-only misc ports
         }
 
         bitfield = 0
@@ -260,7 +262,7 @@ def main():
             else:
                 logger.warning(
                     f"Unknown counter group '{group}'. "
-                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_4, instrn, all"
+                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_2, l1_3, l1_4, instrn, all"
                 )
 
         # Validate L1 bank mutual exclusion - L1_0, L1_1, L1_4 share hardware registers
@@ -270,6 +272,10 @@ def main():
         if bitfield & (1 << 4):
             l1_banks_enabled.append("l1_1")
         if bitfield & (1 << 6):
+            l1_banks_enabled.append("l1_2")
+        if bitfield & (1 << 7):
+            l1_banks_enabled.append("l1_3")
+        if bitfield & (1 << 8):
             l1_banks_enabled.append("l1_4")
         if len(l1_banks_enabled) > 1:
             raise ValueError(
