@@ -233,17 +233,17 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     v_elseif(x > -13.1875f) {
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
 
-        // Inline Cody-Waite range reduction: exp(t) = 2^k · exp(r)
+        // Inline range reduction: exp(t) = 2^k · exp(r)
+        // Single-step: BF16 precision (~8 bits) doesn't benefit from
+        // the extended-precision LN2_HI/LN2_LO split (~40-bit precision).
         constexpr float INV_LN2 = 1.4426950408889634f;
+        constexpr float NEG_LN2 = -0.6931471805599453f;
         sfpi::vFloat z = t * INV_LN2;
 
         sfpi::vInt k_int;
         sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
-        constexpr float LN2_HI = -0.6931152343750000f;
-        constexpr float LN2_LO = -3.19461832987e-05f;
-        sfpi::vFloat r = k * LN2_HI + t;
-        r = k * LN2_LO + r;
+        sfpi::vFloat r = k * NEG_LN2 + t;
 
         // Degree-4 Taylor for exp(r), |r| < ln(2)/2 ≈ 0.347
         // Max relative error ~2.6e-7, negligible for BF16 output (~8-bit mantissa)
