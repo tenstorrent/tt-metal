@@ -177,6 +177,14 @@ def test_sdpa(device, num_tiles_k, num_tiles_v, chunk_size, num_chunks, scale):
 
     assert passing, f"Output PCC failed: {pcc_message}"
 
+    passing, pcc_message = comp_pcc(torch_max_expected, max_torch, 0.99)
+    logger.info(f"{pcc_message}")
+    assert passing, f"Max PCC failed: {pcc_message}"
+
+    passing, pcc_message = comp_pcc(torch_sum_expected, sum_torch, 0.98)
+    logger.info(f"{pcc_message}")
+    assert passing, f"Sum PCC failed: {pcc_message}"
+
     sum_rtol, sum_atol = 0.02, 6.0
     sum_close = torch.allclose(
         torch_sum_expected,
