@@ -45,6 +45,8 @@ void CopyToMemoryConfigDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             output_tensor.device() == input_tensor.device(),
             "Output tensor needs to be on the same device as the input tensor!");
+        TT_FATAL(
+            output_tensor.layout() == input_tensor.layout(), "Output tensor layout must match input tensor layout");
     }
 
     if (input_tensor.dtype() != output_dtype) {

@@ -51,8 +51,9 @@ Tensor to_memory_config(
                  tensor.layout() == Layout::ROW_MAJOR);
             if (!use_reshard_workaround) {
                 if (dtype.has_value()) {
-                    throw std::runtime_error(
-                        "dtype cannot be specified when converting sharded tensor to sharded tensor");
+                    // throw std::runtime_error(
+                    //     "dtype cannot be specified when converting sharded tensor to sharded tensor");
+                    return ttnn::copy_to_memory_config(tensor, memory_config, dtype, output_tensor);
                 }
                 return ttnn::reshard(tensor, memory_config, output_tensor);
             }  // for row-major tensors where shard-spec[1] is different for input shard and output shard
