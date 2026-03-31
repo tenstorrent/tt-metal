@@ -27,7 +27,7 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
       volumes:
-        - /work
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: --device /dev/tenstorrent
     defaults:
@@ -35,20 +35,14 @@ jobs:
         shell: bash
         working-directory: /work
     steps:
-      - name: Checkout actions
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/actions/download-artifact-with-retry
-          sparse-checkout-cone-mode: false
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
-          path: /work
+          path: docker-job
 
-      - uses: ./.github/actions/download-artifact-with-retry
+      - uses: ./docker-job/.github/actions/download-artifact-with-retry
         timeout-minutes: 15
         with:
           name: ${{ inputs.wheel-artifact-name || 'wheel artifact unresolved!' }}
