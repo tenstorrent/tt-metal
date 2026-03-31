@@ -329,6 +329,7 @@ class VisionAttention(LightweightModule):
             num_heads=heads,
             num_kv_heads=heads,
             transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         ttnn.deallocate(qkv)
@@ -346,7 +347,6 @@ class VisionAttention(LightweightModule):
             is_causal=False,
             scale=self.scale,
             compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self._sdpa_program_config(seq_len),
         )
 
         ttnn.deallocate(q)
@@ -359,7 +359,7 @@ class VisionAttention(LightweightModule):
         # Concatenate heads
         attn_output = ttnn.experimental.nlp_concat_heads(
             attn_output,
-            memory_config=matmul_output_memory_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
         # Output projection (reshape only when divisible for memory optimization)
@@ -370,7 +370,6 @@ class VisionAttention(LightweightModule):
         output = ttnn.linear(
             attn_output,
             self.wo,
-            bias=self.bo,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             memory_config=self.l1_width_sharded,
             program_config=pc_wo,
