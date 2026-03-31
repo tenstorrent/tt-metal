@@ -442,7 +442,8 @@ Tensor non_height_width_reduce(
     const ttnn::Tensor& input_tensor,
     ttnn::SmallVector<int> dims,
     const std::optional<MemoryConfig>& memory_config_arg,
-    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
     const auto& input_shape = input_tensor.logical_shape();
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
@@ -452,7 +453,7 @@ Tensor non_height_width_reduce(
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
     Tensor output_tensor = ttnn::experimental::reduction::fast_reduce_nc(
-        input_tensor, dims, /*output=*/std::nullopt, memory_config, config);
+        input_tensor, dims, /*output=*/std::nullopt, memory_config, config, sub_core_grids);
     auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());
     output_tensor = ttnn::slice(output_tensor, start, end, step);
     return output_tensor;
@@ -514,8 +515,8 @@ Tensor reduce(
                 return reduction_common::zero_volume_reduce<reduce_type>(input_tensor_arg, dim, keepdim, memory_config);
             }
 
-            input_tensor =
-                non_height_width_reduce(input_tensor, non_height_width_dims, memory_config_arg, compute_kernel_config);
+            input_tensor = non_height_width_reduce(
+                input_tensor, non_height_width_dims, memory_config_arg, compute_kernel_config, sub_core_grids);
 
             if (height_width_dims.empty()) {
                 return adjust_shape(

@@ -45,14 +45,21 @@ Tensor reduce_min(
     tt::tt_metal::ReduceOpDim reduce_dim,
     float scaler = 1.0f,
     const tt::tt_metal::MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt) {
     Tensor input = input_tensor;
     if (input.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
         input.storage_type() == tt::tt_metal::StorageType::DEVICE) {
         // Changing layout to TILE with +inf padding
         auto pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input.padded_shape());
-        input =
-            ttnn::tilize_with_val_padding(input, pad_shape, std::numeric_limits<float>::infinity(), output_mem_config);
+        input = ttnn::tilize_with_val_padding(
+            input,
+            pad_shape,
+            std::numeric_limits<float>::infinity(),
+            output_mem_config,
+            std::nullopt,
+            true,
+            sub_core_grids);
     }
     return detail::reduce(
         input,
@@ -62,7 +69,7 @@ Tensor reduce_min(
         output_mem_config,
         std::nullopt,
         compute_kernel_config,
-        std::nullopt,
+        sub_core_grids,
         true);
 }
 
@@ -77,7 +84,7 @@ Tensor reduce(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     bool negate) {
     if (reduce_math == tt::tt_metal::ReduceOpMath::MIN) {
-        return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config);
+        return reduce_min(input_tensor, reduce_dim, scaler, output_mem_config, compute_kernel_config, sub_core_grids);
     }
 
     auto parallelization_strategy = ttnn::prim::get_parallelization_strategy(input_tensor, reduce_dim);
@@ -98,8 +105,8 @@ Tensor reduce(
 
     // Reduce only works with tile layout, so we need to tilize the input tensor if necessary
     auto padded_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
-    auto tilized_input =
-        ttnn::tilize_with_val_padding(input_tensor, padded_shape, pad_value, input_tensor.memory_config());
+    auto tilized_input = ttnn::tilize_with_val_padding(
+        input_tensor, padded_shape, pad_value, input_tensor.memory_config(), std::nullopt, true, sub_core_grids);
 
     // The single-core HW path uses REDUCE_SCALAR mode, which applies the
     // scaler twice internally (once per dimension).  The host compensates with
