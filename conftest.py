@@ -910,6 +910,13 @@ def pytest_addoption(parser):
         default=False,
         help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). By default, only tensor metadata is saved. To include tensor values, call ttnn.operation_tracer.enable_tensor_value_serialization(True). See tech_reports/ttnn/operation-tracing.md for details.",
     )
+    parser.addoption(
+        "--dummy_weights",
+        action="store",
+        default=False,
+        type=bool,
+        help="Use dummy/random weights instead of loading checkpoints in demos that support it.",
+    )
 
 
 def pytest_configure(config):

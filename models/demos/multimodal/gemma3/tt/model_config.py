@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import gc
 import os
 
 import torch
@@ -66,6 +67,11 @@ class ModelArgs(TTModelArgs):
             optimizations=optimizations,
             cache_hf=cache_hf,
         )
+
+        # For Gemma3 we still need a real tokenizer even when using dummy_weights,
+        # because prompt encoding relies on HF chat templates, not on checkpoint weights.
+        if dummy_weights and self.tokenizer is None:
+            self.tokenizer = self.create_tokenizer()
 
         self.use_qk_fused = False  # For Gemma 3, we do not use qk fused ops (rotary embedding + paged cache update)
         self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = ttnn.DRAM_MEMORY_CONFIG
@@ -191,10 +197,9 @@ class ModelArgs(TTModelArgs):
 
         from transformers import AutoConfig
 
-        if self.dummy_weights:
-            raise NotImplementedError("Dummy weights not supported for gemma models for now.")
-        else:
-            self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
+        # For dummy_weights we still load only the small HF config,
+        # but we avoid loading checkpoint weights.
+        self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
 
         if "text_config" in self.hf_config or "vision_config" in self.hf_config:
             self._set_params_from_dict(self.hf_config)
@@ -230,21 +235,76 @@ class ModelArgs(TTModelArgs):
 
         return text_prefix + layer_prefix + module_map[module_name]
 
+    def _gemma_dummy_hf_model(self):
+        """Build Gemma3 from HF config only (random init), matching tt_transformers ModelArgs dummy_weights flow.
+
+        Uses from_config + layer truncation + bfloat16 to avoid fp32 OOM on host when allocating the full model.
+        """
+        from transformers import AutoConfig, Gemma3ForConditionalGeneration
+
+        logger.info("Gemma3 ModelArgs: building HF dummy model from config (dummy_weights=True)")
+
+        config = AutoConfig.from_pretrained(self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf)
+        if hasattr(config, "text_config") and config.text_config is not None:
+            config.text_config.num_layers = self.n_layers
+            config.text_config.num_hidden_layers = self.n_layers
+        else:
+            if hasattr(config, "num_layers"):
+                config.num_layers = self.n_layers
+            if hasattr(config, "num_hidden_layers"):
+                config.num_hidden_layers = self.n_layers
+
+        model_cls = Gemma3ForConditionalGeneration
+        from_config_exc = None
+        try:
+            try:
+                model = model_cls.from_config(
+                    config, torch_dtype=torch.bfloat16, trust_remote_code=self.trust_remote_code_hf
+                )
+            except TypeError:
+                try:
+                    model = model_cls.from_config(config, torch_dtype=torch.bfloat16)
+                except TypeError:
+                    try:
+                        model = model_cls.from_config(config, trust_remote_code=self.trust_remote_code_hf)
+                    except TypeError:
+                        model = model_cls.from_config(config)
+        except Exception as exc:
+            from_config_exc = exc
+            logger.info("Error loading dummy Gemma3 using .from_config. Error: {}", exc)
+            if hasattr(model_cls, "_from_config"):
+                try:
+                    try:
+                        model = model_cls._from_config(
+                            config, torch_dtype=torch.bfloat16, trust_remote_code=self.trust_remote_code_hf
+                        )
+                    except TypeError:
+                        model = model_cls._from_config(config, torch_dtype=torch.bfloat16)
+                except Exception as fallback_exc:
+                    logger.info("Error loading dummy Gemma3 using ._from_config. Error: {}", fallback_exc)
+                    if from_config_exc is not None:
+                        raise fallback_exc from from_config_exc
+                    raise
+            else:
+                raise
+
+        gc.collect()
+        return model
+
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
+        from transformers import Gemma3ForConditionalGeneration
+
         if self.dummy_weights:
-            from transformers import AutoModelForCausalLM
-
-            raise NotImplementedError("Dummy weights not supported for gemma models for now.")
+            logger.info("Gemma3 ModelArgs: using dummy_weights path; NOT loading checkpoints from HF_MODEL")
+            model = self._gemma_dummy_hf_model()
+            state_dict = model.state_dict()
+            del model
+            gc.collect()
         else:
-            from transformers import AutoModelForCausalLM
-
-            model = AutoModelForCausalLM.from_pretrained(
+            model = Gemma3ForConditionalGeneration.from_pretrained(
                 self.CKPT_DIR,
-                torch_dtype="auto"
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
+                torch_dtype="auto",
             )
             if self.cache_hf_flag:
                 self.cached_hf_model = model
@@ -351,13 +411,11 @@ class ModelArgs(TTModelArgs):
         return layer
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
-        pass
+        from transformers import Gemma3ForConditionalGeneration
 
         if self.dummy_weights and not load_checkpoint:
-            raise NotImplementedError("Dummy weights not supported for gemma models for now.")
+            model = self._gemma_dummy_hf_model()
         else:
-            from transformers import Gemma3ForConditionalGeneration
-
             model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
         if wrap:
             wrapper = HfModelWrapper(model, self.head_dim)
