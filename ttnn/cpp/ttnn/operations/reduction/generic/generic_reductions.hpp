@@ -75,7 +75,8 @@ Tensor std(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool use_welford = true);
 
 Tensor var(
     const Tensor& input_tensor_arg,
@@ -85,6 +86,7 @@ Tensor var(
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     float scalar = 1.0f,
     bool correction = true,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    bool use_welford = true);
 
 }  // namespace ttnn
