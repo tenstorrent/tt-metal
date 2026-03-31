@@ -8,7 +8,9 @@ This script orchestrates the training of transformer models (GPT-2, Llama)
 using configurations specified in YAML files.
 """
 
+import logging
 import sys
+
 import ttml
 from ttml.common.config import (
     load_config,
@@ -27,6 +29,28 @@ import socket
 import ttnn
 from loguru import logger
 import numpy as np
+
+# Route DEBUG/INFO/WARNING to stdout; ERROR/CRITICAL stay on stderr.
+# This applies to both loguru (used directly) and the standard logging module
+# (used by the datasets / transformers libraries for messages like
+# "Using custom data configuration", "Found cached dataset", etc.).
+
+# --- loguru ---
+logger.remove()  # drop the default stderr sink
+logger.add(sys.stdout, level="DEBUG", filter=lambda r: r["level"].no < 40)
+logger.add(sys.stderr, level="ERROR")
+
+# --- standard logging (datasets, transformers, etc.) ---
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.DEBUG)
+_root_logger.handlers.clear()
+_stdout_handler = logging.StreamHandler(sys.stdout)
+_stdout_handler.setLevel(logging.DEBUG)
+_stdout_handler.addFilter(lambda r: r.levelno < logging.ERROR)
+_stderr_handler = logging.StreamHandler(sys.stderr)
+_stderr_handler.setLevel(logging.ERROR)
+_root_logger.addHandler(_stdout_handler)
+_root_logger.addHandler(_stderr_handler)
 
 
 @click.command()
