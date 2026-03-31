@@ -981,78 +981,78 @@ std::string_view DevicePrintParser::format_message(
                 TT_ASSERT(placeholder.enum_base_type_id != 0, "Unsupported long type in format placeholder");
                 // Currently only '/e' (enum) and /E (flag enum) are supported
                 // Get the integer value from the argument (using the base type)
-                int64_t int_val = 0;
                 auto& arg = buffer.argument_values[placeholder.arg_id];
                 std::visit(
-                    [&int_val](auto&& v) {
-                        using V = std::decay_t<decltype(v)>;
-                        if constexpr (std::is_integral_v<V>) {
-                            int_val = static_cast<int64_t>(v);
+                    [&placeholder, &buffer](auto&& v) {
+                        using int_type = std::decay_t<decltype(v)>;
+                        if constexpr (std::is_integral_v<int_type>) {
+                            int_type int_val = static_cast<int_type>(v);
+
+                            // Build the enum string representation, then format it with the user's format spec.
+                            fmt::memory_buffer enum_str;
+                            const auto* ei = placeholder.enum_info;
+
+                            // Append "TypeName::" prefix when full name is requested
+                            auto append_type_prefix = [&]() {
+                                if (placeholder.enum_use_full_name) {
+                                    enum_str.append(placeholder.enum_type_name);
+                                    enum_str.append("::"sv);
+                                }
+                            };
+
+                            // Format an unrecognized value as (TypeName)integer
+                            auto append_raw_value = [&](int_type val) {
+                                fmt::format_to(std::back_inserter(enum_str), "({}){}", placeholder.enum_type_name, val);
+                            };
+
+                            if (!ei || ei->enumerators.empty()) {
+                                // No DWARF info available
+                                append_raw_value(int_val);
+                            } else if (placeholder.enum_is_flag && int_val != 0) {
+                                // Print bitfield: Flag1 | Flag3 or BitEnum::Flag1 | BitEnum::Flag3
+                                bool first = true;
+                                int_type remaining = int_val;
+                                for (const auto& [eval, ename] : ei->enumerators) {
+                                    if (eval != 0 && (remaining & eval) == eval) {
+                                        if (!first) {
+                                            enum_str.append(" | "sv);
+                                        }
+                                        append_type_prefix();
+                                        enum_str.append(std::string_view(ename));
+                                        remaining &= ~eval;
+                                        first = false;
+                                    }
+                                }
+                                if (remaining != 0) {
+                                    if (!first) {
+                                        enum_str.append(" | "sv);
+                                    }
+                                    append_raw_value(remaining);
+                                }
+                            } else {
+                                // Non-bitfield: find exact match
+                                const std::string* found_name = nullptr;
+                                for (const auto& [eval, ename] : ei->enumerators) {
+                                    if (eval == int_val) {
+                                        found_name = &ename;
+                                        break;  // Use first match
+                                    }
+                                }
+                                if (found_name) {
+                                    append_type_prefix();
+                                    enum_str.append(std::string_view(*found_name));
+                                } else {
+                                    append_raw_value(int_val);
+                                }
+                            }
+
+                            // Apply user's format spec (alignment, width, fill, etc.)
+                            auto enum_sv = std::string_view(enum_str.data(), enum_str.size());
+                            fmt::format_to(
+                                std::back_inserter(buffer.buffer), fmt::runtime(placeholder.fmt_format), enum_sv);
                         }
                     },
                     arg);
-
-                // Build the enum string representation, then format it with the user's format spec.
-                fmt::memory_buffer enum_str;
-                const auto* ei = placeholder.enum_info;
-
-                // Append "TypeName::" prefix when full name is requested
-                auto append_type_prefix = [&]() {
-                    if (placeholder.enum_use_full_name) {
-                        enum_str.append(placeholder.enum_type_name);
-                        enum_str.append("::"sv);
-                    }
-                };
-
-                // Format an unrecognized value as (TypeName)integer
-                auto append_raw_value = [&](int64_t val) {
-                    fmt::format_to(std::back_inserter(enum_str), "({}){}", placeholder.enum_type_name, val);
-                };
-
-                if (!ei || ei->enumerators.empty()) {
-                    // No DWARF info available
-                    append_raw_value(int_val);
-                } else if (placeholder.enum_is_flag && int_val != 0) {
-                    // Print bitfield: Flag1 | Flag3 or BitEnum::Flag1 | BitEnum::Flag3
-                    bool first = true;
-                    int64_t remaining = int_val;
-                    for (const auto& [eval, ename] : ei->enumerators) {
-                        if (eval != 0 && (remaining & eval) == eval) {
-                            if (!first) {
-                                enum_str.append(" | "sv);
-                            }
-                            append_type_prefix();
-                            enum_str.append(std::string_view(ename));
-                            remaining &= ~eval;
-                            first = false;
-                        }
-                    }
-                    if (remaining != 0) {
-                        if (!first) {
-                            enum_str.append(" | "sv);
-                        }
-                        append_raw_value(remaining);
-                    }
-                } else {
-                    // Non-bitfield: find exact match
-                    const std::string* found_name = nullptr;
-                    for (const auto& [eval, ename] : ei->enumerators) {
-                        if (eval == int_val) {
-                            found_name = &ename;
-                            break;  // Use first match
-                        }
-                    }
-                    if (found_name) {
-                        append_type_prefix();
-                        enum_str.append(std::string_view(*found_name));
-                    } else {
-                        append_raw_value(int_val);
-                    }
-                }
-
-                // Apply user's format spec (alignment, width, fill, etc.)
-                auto enum_sv = std::string_view(enum_str.data(), enum_str.size());
-                fmt::format_to(std::back_inserter(buffer.buffer), fmt::runtime(placeholder.fmt_format), enum_sv);
                 break;
             }
             default: TT_THROW("Unsupported type_id in format placeholder (format_message): {}", placeholder.type_id);
