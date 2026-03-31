@@ -283,7 +283,7 @@
       timeout: 10
       tier: 1
     wh_n300:
-      timeout: 10
+      timeout: 7
       tier: 1
   owner_id: U05RWH3QUPM # Salar Hosseini
   team: models
