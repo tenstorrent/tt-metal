@@ -159,9 +159,11 @@ void run_single_core_tilize_program(
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = num_tiles;
-    // For 8-bit formats, output format should remain as-is even with fp32_dest_acc_en
-    bool is_8bit = test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8;
-    tt::DataFormat output_cb_format = (test_config.fp32_dest_acc_en && !is_8bit) ? tt::DataFormat::Float32 : test_config.output_fmt;
+    // For 8-bit int formats, output format should remain as-is even with fp32_dest_acc_en
+    bool is_8bit_int =
+        test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8;
+    tt::DataFormat output_cb_format =
+        (test_config.fp32_dest_acc_en && !is_8bit_int) ? tt::DataFormat::Float32 : test_config.output_fmt;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(
             num_output_tiles * test_config.output_single_tile_size,
@@ -314,9 +316,10 @@ void run_single_core_tilize_program(
         },
         test_config.golden_function);
 
-    // For 8-bit formats, output remains as-is even with fp32_dest_acc_en
-    bool is_8bit_golden = test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8;
-    if (test_config.fp32_dest_acc_en && !is_8bit_golden) {
+    // For 8-bit int formats, output remains as-is even with fp32_dest_acc_en
+    bool is_8bit_int_golden =
+        test_config.output_fmt == tt::DataFormat::Int8 || test_config.output_fmt == tt::DataFormat::UInt8;
+    if (test_config.fp32_dest_acc_en && !is_8bit_int_golden) {
         vector<bfloat16> golden_unpacked = unpack_vector<bfloat16, uint32_t>(golden);
         // Increasing the size since from BFP16 two times, since storing is in FP32
         golden.resize(golden.size() * 2);
