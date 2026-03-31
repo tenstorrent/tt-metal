@@ -15,14 +15,14 @@
 * @brief Initialize unpacker for matrix multiply
 
 * @tparam TRANSPOSE_EN: Enables transpose of a tile
-* @param operandA: The input0 operand circular buffer
-* @param operandB: The input1 operand circular buffer
+* @param operandA: The input0 operand logical dataflow buffer id
+* @param operandB: The input1 operand logical dataflow buffer id
 * @param ct_dim: number of tiles in the column dimension for input1 of matrix multiply
 * @param rt_dim: number of tiles in the row dimension for input0 of matrix multiply
 * @param kt_dim: number of tiles in the common dimension between input0 & input1 of matrix multiply
 *
-* This function initializes the unpacker to unpack operand 0 from the input0 operand circular buffer into SrcB
-* and operand 1 from the input1 operand circular buffer into SrcA. Matrix multiply FPU operation does SrcB * SrcA.
+* This function initializes the unpacker to unpack operand 0 from the input0 operand dataflow buffer into SrcB
+* and operand 1 from the input1 operand dataflow buffer into SrcA. Matrix multiply FPU operation does SrcB * SrcA.
 */
 template <bool TRANSPOSE_EN = false>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
@@ -43,15 +43,15 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
  *
  * @brief Performs unpack operation for matrix multiply such that:
  *
- * @param operandA: The input0 operand circular buffer
- * @param operandB: The input1 operand circular buffer
- * @param tile_index_a: The index into the input0 CB (UNPACKER1 -> SRCB)
- * @param tile_index_b: The index into the input1 CB (UNPACKER0 -> SRCA)
+ * @param operandA: The input0 operand logical dataflow buffer id
+ * @param operandB: The input1 operand logical dataflow buffer id
+ * @param tile_index_a: The index into the input0 dataflow buffer (UNPACKER1 -> SRCB)
+ * @param tile_index_b: The index into the input1 dataflow buffer (UNPACKER0 -> SRCA)
  * @param ct_dim: number of tiles in the column dimension for input1 of matrix multiply
  * @param rt_dim: number of tiles in the row dimension for input0 of matrix multiply
  * @param kt_dim: number of tiles in the common dimension between input0 & input1 of matrix multiply
  *
- * This function unpacks input0 and input1 operands from the input circular buffers to the src registers such that:
+ * This function unpacks input0 and input1 operands from the input dataflow buffers to the src registers such that:
  * Input 0 -> unpack to SrcB
  * Input 1 -> unpack to SrcA
  * The matrix multiply has the following dimensions:

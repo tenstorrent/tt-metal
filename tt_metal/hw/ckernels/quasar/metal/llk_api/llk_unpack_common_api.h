@@ -22,8 +22,8 @@
 /**
  * @brief Programs l1 info & source register format for both UNP_A and UNP_B
  *
- * @param operandA: The input0 operand circular buffer
- * @param operandB: The input1 operand circular buffer
+ * @param operandA: The input0 operand logical dataflow buffer id
+ * @param operandB: The input1 operand logical dataflow buffer id
  */
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
     const std::uint32_t unpA_operand_id = get_operand_id(unpA_operand);
@@ -58,7 +58,7 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
 /**
  * @brief Programs l1 info & source register format for UNP_A
  *
- * @param operandA: The input operand circular buffer
+ * @param operandA: The input operand logical dataflow buffer id
  */
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
     llk_unpack_hw_configure(unpA_operand, unpA_operand);

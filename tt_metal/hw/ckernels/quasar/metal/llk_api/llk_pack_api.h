@@ -23,7 +23,7 @@
 /**
  * @brief Initialize packer to pack out a single tile
  *
- * @param pack_output The output circular buffer
+ * @param pack_output The output logical dataflow buffer id
  *
  * This function initializes packer0 to pack a single tile from the destination register to the output
  * circular buffer.
@@ -42,7 +42,7 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
  * the user in `output_tile_index`, set false for pack to operate sequentially: write to the next tile index
  * starting from index 0, and ignore the `output_tile_index` parameter
  * @tparam untilize: Selects pack or pack untilizem
- * @param output_id The output circular buffer identifier
+ * @param output_id The output logical dataflow buffer id
  * @param output_tile_index: The index in the output CB to write to
  *
  * This function packs tiles from the destination register to the output circular buffer.
@@ -75,7 +75,7 @@ inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t
  * the user in `output_tile_index`, set false for pack to operqate sequentially: write to the next tile index
  * starting from index 0, and ignore the `output_tile_index` parameter
  * @param tile_idx: The tile index into the math destination register from where the packer can start packing from
- * @param pack_output The output circular buffer
+ * @param pack_output The output logical dataflow buffer id
  * @param output_tile_index: The index in the output CB to write to
  *
  * This function packs tiles from the destination register to the output circular buffer, packer0 is used.
@@ -93,7 +93,7 @@ inline void llk_pack(
  * @brief Packs a block of destination tiles into the specified output buffer
  *
  * @param start_tile_index Starting destination register tile index to pack out from
- * @param pack_output Logical output dataflow buffer id
+ * @param pack_output The output logical dataflow buffer id
  * @param ntiles Number of consecutive tiles to pack
  *
  * Packs ntiles tiles starting at start_tile_index from the destination register into the L1
@@ -118,7 +118,7 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_ou
 /**
  * @brief Programs packer0 l1 info & math destination register format
  *
- * @param pack_output The output circular buffer
+ * @param pack_output The output logical dataflow buffer id
  */
 inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
@@ -153,11 +153,11 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
  * and zeroes out the dest bank(s) used by packer 0
  *
  * @tparam DST: Destination register buffering mode, values = [DstSync::SyncHalf, DstSync::SyncFull]
- * @tparam IS_FP32_MATH_DEST_EN: flag to show if math destination register is set to float32 mode
+ * @tparam EN_32BIT_DEST: flag to show if math destination register is set to float32 mode
  **/
-template <DstSync DST, bool IS_FP32_MATH_DEST_EN>
+template <DstSync DST, bool EN_32BIT_DEST>
 inline void llk_pack_dest_dvalid_section_done() {
-    _llk_pack_dest_dvalid_section_done_<DST, IS_FP32_MATH_DEST_EN>();
+    _llk_pack_dest_dvalid_section_done_<DST, EN_32BIT_DEST>();
 }
 
 /**
@@ -178,11 +178,11 @@ inline void llk_packer_wait_for_math_done() { _llk_packer_wait_for_math_done_();
  * @brief Signals that the packer has finished consuming the current Destination Register section.
  * Posts to the math–pack semaphore and clears/zeros the dest bank(s) used by the packer;
  *
- * @tparam is_fp32_dest_acc_en True if math destination is in 32-bit mode, false for 16-bit mode.
+ * @tparam EN_32BIT_DEST True if math destination is in 32-bit mode, false for 16-bit mode.
  */
-template <bool is_fp32_dest_acc_en>
+template <bool EN_32BIT_DEST>
 inline void llk_pack_dest_section_done() {
-    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    _llk_pack_dest_semaphore_section_done_<p_pacr::PACK0, DST_SYNC_MODE, EN_32BIT_DEST>();
 }
 
 /**

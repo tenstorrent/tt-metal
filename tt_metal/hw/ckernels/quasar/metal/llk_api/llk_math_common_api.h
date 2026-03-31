@@ -41,13 +41,13 @@ inline bool is_src_fmt_int32_dest_compatible(const DataFormat src_reg_fmt) {
  * Sets up ALU formats for math destination register and source registers.
  *
  * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format from SrcA reg format
- * @tparam EN_32BIT_DEST_FORMAT: Set to true to use 32bit math dest in Float32 or Int32 format
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
  * @param srca_operand: The srcA input operand circular buffer, used to infer srcA data_format if not implied math
  * format
  * @param srcb_operand: The srcB input operand circular buffer, used to infer srcB data_format if not implied math
  * format
  */
-template <bool EN_32BIT_DEST_FORMAT>
+template <bool EN_32BIT_DEST>
 inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
     const std::uint32_t srca_operand_id = get_operand_id(srca_operand);
     const std::uint32_t srcb_operand_id = get_operand_id(srcb_operand);
@@ -56,16 +56,15 @@ inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::u
     const DataFormat srcb_format = static_cast<DataFormat>(unpack_dst_format[srcb_operand_id]);
 
     // TODO: AM; introduce dest mode enum, issue #37483
-    // Determine the dest format based on the srcA/B formats and EN_32BIT_DEST_FORMAT
-    if (EN_32BIT_DEST_FORMAT && is_src_fmt_fp32_dest_compatible(srca_format) &&
-        is_src_fmt_fp32_dest_compatible(srcb_format)) {
+    // Determine the dest format based on the srcA/B formats and EN_32BIT_DEST
+    if (EN_32BIT_DEST && is_src_fmt_fp32_dest_compatible(srca_format) && is_src_fmt_fp32_dest_compatible(srcb_format)) {
         // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
         _llk_math_srcAB_hw_configure_<
             false /*EN_IMPLIED_MATH_FORMAT*/,
             true /*EN_FP32_DEST_FORMAT*/,
             false /*EN_INT32_DEST_FORMAT*/>(srca_format, srcb_format);
     } else if (
-        EN_32BIT_DEST_FORMAT && is_src_fmt_int32_dest_compatible(srca_format) &&
+        EN_32BIT_DEST && is_src_fmt_int32_dest_compatible(srca_format) &&
         is_src_fmt_int32_dest_compatible(srcb_format)) {
         // TODO: AM; hardcoding false for EN_IMPLIED_MATH_FORMAT for now, will be fixed in issue #37720
         _llk_math_srcAB_hw_configure_<
@@ -112,9 +111,11 @@ inline void llk_math_wait_for_dest_available() {
 /**
  * @brief Signals that the current destination section is done.
  * After math is done, posts to the MATH_PACK semaphore so the packer can proceed;
+ * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
  */
+template <bool EN_32BIT_DEST>
 inline void llk_math_dest_section_done() {
-    _llk_math_dest_section_done_<DST_SYNC_MODE>();
+    _llk_math_dest_section_done_<DST_SYNC_MODE, EN_32BIT_DEST>();
 }
 
 /**

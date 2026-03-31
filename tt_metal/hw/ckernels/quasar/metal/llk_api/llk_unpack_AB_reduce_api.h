@@ -35,8 +35,8 @@ inline void llk_unpack_AB_reduce_init(const std::uint32_t operandA, const std::u
  *
  * @brief Unpacks binary operands to SrcA & SrcB for reduce kernels
  *
- * @param operandA: The srcA operand circular buffer identifier
- * @param operandB: The srcB operand circular buffer identifier
+ * @param operandA: The srcA operand logical dataflow buffer id
+ * @param operandB: The srcB operand logical dataflow buffer id
  * @param tile_index_a: The L1 index in the input DFB to read from, tile_index_a -> UNPACKER0 -> SRCA
  * @param tile_index_b: The L1 index in the input DFB to read from, tile_index_b -> UNPACKER1 -> SRCB
  *

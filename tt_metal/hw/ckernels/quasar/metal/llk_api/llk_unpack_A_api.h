@@ -16,17 +16,17 @@
  * @brief Initialize selected unpacker to unpack a single tile
  *
  * @tparam TRANSPOSE_EN: Enables transpose of a tile, supported for SrcA and SrcB
- * @tparam IS_32b_DEST_EN: Enable using Math destination Register in 32-bit mode
- * @param operand: The input operand circular buffer
+ * @tparam EN_32BIT_DEST: Enable using Math destination Register in 32-bit mode
+ * @param operand: The input operand logical dataflow buffer id
  *
  * This function initializes unpacker0 to unpack a single tile
- * from the input circular buffer to srcA/dest register.
+ * from the input dataflow buffer to srcA/dest register.
  */
-template <bool TRANSPOSE_EN, bool IS_32b_DEST_EN>
+template <bool TRANSPOSE_EN, bool EN_32BIT_DEST>
 inline void llk_unpack_A_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
 
-    _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, IS_32b_DEST_EN>(operand_id);
+    _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, TRANSPOSE_EN, EN_32BIT_DEST>(operand_id);
 }
 
 /**
@@ -34,9 +34,9 @@ inline void llk_unpack_A_init(const std::uint32_t operand) {
  * @brief Unpacks a single operand, unpacker0 is used
  *
  * @param operand: The logical dataflow buffer id
- * @param tile_index: The index in the input CB to read from
+ * @param tile_index: The index in the input dataflow buffer to read from
  *
- * This function unpacks a single operand from the input circular buffer to srcA/dest register.
+ * This function unpacks a single operand from the input dataflow buffer to srcA/dest register.
  */
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
     const std::uint32_t operand_id = get_operand_id(operand);
