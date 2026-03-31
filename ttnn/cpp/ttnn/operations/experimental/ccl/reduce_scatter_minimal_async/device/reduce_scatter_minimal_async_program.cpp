@@ -739,7 +739,7 @@ ReduceScatterProgramArtifacts build_ring_reduce_scatter_minimal_async_program_ar
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t num_tiles_to_write_per_packet = std::min(max_target_noc_addresses_per_packet, num_pages_per_packet);
     uint32_t tile_granularity = std::min(4 * num_tiles_to_write_per_packet, max_dst_size);
-    uint32_t cb_num_pages = 3 * tile_granularity;  // triple buffering
+    uint32_t cb_num_pages = 2 * tile_granularity;  // double buffering
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     // input_tensor from reader -> compute
