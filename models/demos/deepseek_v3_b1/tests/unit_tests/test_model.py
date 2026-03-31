@@ -18,6 +18,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.runtime import TokenCodec, create_model
+from models.demos.deepseek_v3_b1.model import DeepSeekV3
 
 
 @pytest.mark.parametrize("batch_size", [1])
@@ -61,3 +62,38 @@ def test_prefill_and_decode(
         ), f"Position after decode: expected {prompt_length + num_decode_steps}, got {model.position}"
 
     logger.info("Prefill and decode test passed")
+
+
+def create_event_logging_model(*, pipeline_depth: int) -> tuple[DeepSeekV3, list[str]]:
+    event_log: list[str] = []
+
+    def write_fn(token: object) -> None:
+        del token
+        event_log.append("write")
+
+    def read_fn(output_tensor: ttnn.Tensor) -> None:
+        del output_tensor
+        event_log.append("read")
+
+    model = DeepSeekV3(write_fn=write_fn, read_fn=read_fn, batch_size=1, pipeline_depth=pipeline_depth)
+    return model, event_log
+
+
+def test_prefill_starts_readback_once_pipeline_is_saturated() -> None:
+    model, event_log = create_event_logging_model(pipeline_depth=4)
+
+    _ = model.prefill([object() for _ in range(6)])
+
+    assert event_log[:5] == ["write", "write", "write", "write", "read"]
+    assert event_log.count("write") == 6
+    assert event_log.count("read") == 6
+    assert model.position == 6
+
+
+def test_prefill_drains_tail_when_prompt_shorter_than_pipeline_depth() -> None:
+    model, event_log = create_event_logging_model(pipeline_depth=8)
+
+    _ = model.prefill([object() for _ in range(3)])
+
+    assert event_log == ["write", "write", "write", "read", "read", "read"]
+    assert model.position == 3
