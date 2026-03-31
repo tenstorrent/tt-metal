@@ -22,10 +22,11 @@ FORCE_INLINE void socket_send_from_cb(
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(sender_socket, total_send_bytes);
-
+    DPRINT << ">socket reserve pages" << ENDL();
     socket_reserve_pages(sender_socket, 1);
     DPRINT << ">soc" << ENDL();
     cb_wait_front(cb_id, num_cb_pages);
+    DPRINT << ">socket wait front done" << ENDL();
     const uint32_t read_addr = get_read_ptr(cb_id);
 
     if constexpr (SocketMode == 1) {

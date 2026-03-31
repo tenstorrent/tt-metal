@@ -747,6 +747,7 @@ void kernel_main() {
 #if defined(COMPILE_FOR_TRISC)
         if constexpr (Core::is_rmsnorm_core) {
             {
+                DPRINT << "h_rmsnorm start" << ENDL();
                 deepseek_b1_ops::RMSNorm::Op<HRMSNormCTArgs, Core::is_rmsnorm_core, true> h_rmsnorm;
                 DeviceZoneScopedN("MTP_H_RMSNORM");
                 DPRINT << ">mtp h_rmsnorm start" << ENDL();
@@ -764,6 +765,7 @@ void kernel_main() {
                 DPRINT << ">mtp e_rmsnorm start" << ENDL();
                 DeviceZoneScopedN("MTP_E_RMSNORM");
                 deepseek_b1_ops::RMSNorm::Op<ERMSNormCTArgs, Core::is_rmsnorm_core, true> e_rmsnorm;
+                DPRINT << "e_rmsnorm start" << ENDL();
                 e_rmsnorm(rmsnorm_args);
                 DPRINT << ">mtp e_rmsnorm done" << ENDL();
             }
@@ -831,10 +833,12 @@ void kernel_main() {
 
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
             constexpr uint32_t argmax_socket_cb = get_named_compile_time_arg_val("argmax_socket_cb");
+            DPRINT << ">argmax wait front" << ENDL();
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
             write_token_metadata_to_socket_cb(eh_gather_dst_cb, 1, base_token_id, base_token_type, base_token_pos);
             cb_pop_front(argmax_socket_cb, 1);
+            DPRINT << ">argmax pop token done" << ENDL();
         }
 #endif
     };
@@ -926,7 +930,7 @@ void kernel_main() {
                     constexpr uint32_t eh_gather_num_pages = get_named_compile_time_arg_val("gather_dst_num_pages") + 1;
                     constexpr uint32_t eh_gather_total_bytes =
                         get_named_compile_time_arg_val("gather_send_total_bytes");
-
+                    DPRINT << ">socket send from cb for base stage mtp" << ENDL();
                     unified_kernels::socket_send_from_cb<ArgmaxCTArgs::socket_mode>(
                         sampling_args.socket_config_addr, eh_gather_dst_cb, eh_gather_num_pages, eh_gather_total_bytes);
                     DPRINT << ">mtp socket send done" << ENDL();
@@ -951,6 +955,7 @@ void kernel_main() {
             }
             size_t fabric_arg_idx = sampling_op.persistent_fabric_arg_idx;
             sampling_op.send_persistent_next_iter_inc_via_fabric_brisc(sampling_args, fabric_arg_idx);
+            DPRINT << ">socket send from cb for stage done" << ENDL();
         }
 #endif
 

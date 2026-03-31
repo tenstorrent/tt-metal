@@ -150,6 +150,7 @@ struct Sampling {
             if (args.persistent_enable == 0) {
                 return;
             }
+            DPRINT << ">send persistent next iter via fabric brisc" << ENDL();
             constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             auto route_id = PacketHeaderPool::allocate_header_n(1);
             volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
@@ -169,6 +170,7 @@ struct Sampling {
                 reinterpret_cast<uint32_t>(packet_header), packet_header_size_bytes);
             fabric_sender.close();
             noc_async_full_barrier();
+            DPRINT << ">send persistent next iter via fabric brisc done" << ENDL();
         }
 #endif
 #if defined(COMPILE_FOR_BRISC)
@@ -442,11 +444,14 @@ struct Sampling {
                         auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.output_addr);
                         output_ptr[0] = stage2_best_index;
                         if constexpr (CTArgs::socket_mode != 0) {
+                            DPRINT << ">s2 send to socket cb" << ENDL();
                             cb_reserve_back(CTArgs::socket_cb_id, 1);
+                            DPRINT << ">s2 reserve back" << ENDL();
                             auto d2h_ptr =
                                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
                             d2h_ptr[0] = stage2_best_index;
                             cb_push_back(CTArgs::socket_cb_id, 1);
+                            DPRINT << ">s2 send to socket cb done" << ENDL();
                         }
                     }
                 }

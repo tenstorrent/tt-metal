@@ -168,6 +168,12 @@ def create_single_galaxy_combined_spec_decode_pipeline_configuration(
         )
 
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    def stage_2(device: ttnn.MeshDevice) -> StageKind:
+        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
+
+    def stage_3(device: ttnn.MeshDevice) -> StageKind:
         return BaseLMHeadStage(
             weights=weight_provider.load_lm_head(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
@@ -175,12 +181,6 @@ def create_single_galaxy_combined_spec_decode_pipeline_configuration(
             mtp_weights=weight_provider.load_mtp_weights(device),
             send_mtp_output_downstream=True,
         )
-
-    def stage_2(device: ttnn.MeshDevice) -> StageKind:
-        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
-
-    def stage_3(device: ttnn.MeshDevice) -> StageKind:
-        return PassthroughStage(PassthroughPayload.ACTIVATION_W_TOKEN_META)
 
     return PipelineConfiguration(
         {

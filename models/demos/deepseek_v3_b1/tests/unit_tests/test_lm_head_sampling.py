@@ -4766,88 +4766,6 @@ def test_reference_payload_mtp_accept_rate_ttnn(
         _log_reference_payload_mtp_metrics(metrics, label="TTNN")
         _assert_reference_payload_accept_rate(metrics, label="TTNN")
 
-
-@pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(4, 2)],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
-        }
-    ],
-    indirect=True,
-)
-def test_persistent_mode_mtp_spec(mesh_device, use_fp32):
-    """
-    4-stage 4x2 single-galaxy pipeline with MTP fusion enabled:
-    P1(H2D) -> P2(LMHead+Sampling+MTP) -> P3(forward) -> P4(forward) -> P1(D2H).
-
-    Verifies both the sampled token index (on P1) and the MTP EH projection output (on P2).
-    """
-    if not is_slow_dispatch():
-        pytest.skip("Skipping test in fast dispatch mode")
-
-    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
-    num_procs = int(ttnn.distributed_context_get_size())
-    if num_procs != 4:
-        pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
-
-    iterations = 100
-    config = create_single_galaxy_pipeline_spec_stage_only_configuration(
-        _SyntheticWeightProvider(),
-        fp32_dest_acc_en=use_fp32,
-        persistent_mode=True,
-        enable_mtp=True,
-    )
-    pipeline = config.build_pipeline(mesh_device)
-    try:
-        pipeline.setup_and_run()
-
-        if pipeline.my_mesh_id == 0:
-            for iteration in range(iterations):
-                logger.info(f"[MTP] Writing token for iteration {iteration}")
-                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
-                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-                output_tensor = ttnn.from_torch(
-                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
-                    dtype=ttnn.uint32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-                pipeline.write_token(token_tensor)
-                pipeline.read_output(output_tensor)
-                raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
-                num_tokens = raw[0].item()
-                tok0_id = raw[1].item()
-                tok0_type = raw[2].item()
-                tok0_pos = raw[3].item()
-                tok1_id = raw[4].item()
-                tok1_type = raw[5].item()
-                tok1_pos = raw[6].item()
-                type_name = {0: "BASE", 1: "SPEC"}
-                print(
-                    f"[MTP SPEC] iter {iteration} "
-                    f"ntok={num_tokens} t0={tok0_id}/{type_name.get(tok0_type,'?')} "
-                    f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
-                    flush=True,
-                )
-
-        logger.info(f"[MTP] Barrier for P{pipeline.my_mesh_id}")
-        pipeline.barrier()
-        logger.info(f"[MTP] Barrier completed for P{pipeline.my_mesh_id}")
-
-        pipeline.terminate()
-        pipeline.barrier()
-    finally:
-        pass
-
-
 # @pytest.mark.skipif(not _is_persistent_mode_enabled(), reason="Set RUN_PERSISTENT_MODE=1 to run persistent mode test")
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize(
@@ -5028,7 +4946,6 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 1600000,
             "worker_l1_size": 1499000,
         }
     ],
@@ -5036,8 +4953,16 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
 )
 def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
     """
-    4-stage 4x2 single-galaxy pipeline with SpecLMHead + Embedding fused on P0:
-    P0(SpecLMHead+Embed) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0.
+    4-stage 4x2 single-galaxy pipeline with MTP + verification:
+    P1(Embedding + SpecLMHead) -> P2(BaseLMHead+EH Matmul) -> P3(Passthrough ACTIVATION_W_TOKEN_META) -> P4(Passthrough ACTIVATION_W_TOKEN_META) -> P1(D2H TOKEN_META).
+
+    The verification stage (P1) receives gathered logits + token metadata, runs its
+    own LM head + argmax, then outputs a TOKEN_META page (64 bytes) back to P1.
+
+    TOKEN_META page layout (uint32 words):
+      [0] num_tokens  (0=stale, 1=accept, 2=reject)
+      [1] tok0_id     [2] tok0_type (0=BASE,1=SPEC)  [3] tok0_pos
+      [4] tok1_id     [5] tok1_type                   [6] tok1_pos
     """
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
@@ -5048,10 +4973,7 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
         pytest.skip("This test requires exactly 4 distributed pipeline processes (P1..P4)")
 
     iterations = 100
-
-    # print(f"[TEST] computing golden", flush=True)
-    # golden = _compute_expected_spec_decode_tokens_synthetic(iterations)
-    # print(f"[TEST] golden computed, creating config", flush=True)
+    run_golden = False
 
     config = create_single_galaxy_combined_spec_decode_pipeline_configuration(
         _SyntheticWeightProvider(),
@@ -5068,6 +4990,12 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
         token_meta_words = TOKEN_META_PAGE_SIZE_BYTES // 4
 
         if pipeline.my_mesh_id == 0:
+            if run_golden:
+                print(f"[TEST] computing golden...", flush=True)
+                golden, golden_debug = _compute_expected_spec_decode_tokens_synthetic(iterations)
+                print(f"[TEST] golden computed, creating config", flush=True)
+            else:
+                print(f"[TEST] skipping golden computation", flush=True)
             for iteration in range(iterations):
                 print(f"[TEST P{pid}] iter {iteration} write_token", flush=True)
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
@@ -5092,14 +5020,40 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
                 tok1_type = raw[5].item()
                 tok1_pos = raw[6].item()
 
-                # expected_base, expected_spec = golden[iteration]
+                if run_golden:
+                    dbg = golden_debug[iteration]
+                    chunk_strs = " ".join(f"[{i * 896}]={v:.6f}" for i, v in enumerate(dbg["logit_chunks"]))
+                    spec_rms_chunk_strs = " ".join(
+                        f"[{i * 896}]={v:.6f}" for i, v in enumerate(dbg["spec_rmsnorm_chunks"])
+                    )
+                    expected_base, expected_spec = golden[iteration]
+                else:
+                    expected_base = None
+                    expected_spec = None
+
                 type_name = {0: "BASE", 1: "SPEC"}
                 print(
                     f"[TEST P{pid}] iter {iteration} "
                     f"ntok={num_tokens} t0={tok0_id}/{type_name.get(tok0_type,'?')} "
                     f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
+                    f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
+                    f"golden base token={expected_base} golden spec token={expected_spec}",
                     flush=True,
                 )
+                if run_golden:
+                    print(
+                        f"[TEST P{pid}] iter {iteration} "
+                        f"golden concat[0]={dbg['concat_0']:.6f} concat[7168]={dbg['concat_7168']:.6f} "
+                        f"mtp_logits: {chunk_strs}",
+                        flush=True,
+                    )
+                    print(
+                        f"[TEST P{pid}] iter {iteration} "
+                        f"golden spec_rmsnorm[0]={dbg['spec_rmsnorm_0']:.6f} "
+                        f"[mid]={dbg['spec_rmsnorm_mid']:.6f} [last]={dbg['spec_rmsnorm_last']:.6f} "
+                        f"absmax={dbg['spec_rmsnorm_absmax']:.6f} chunks: {spec_rms_chunk_strs}",
+                        flush=True,
+                    )
         print(f"[TEST P{pid}] all iterations done, barrier", flush=True)
         pipeline.barrier()
         print(f"[TEST P{pid}] barrier done, terminate", flush=True)

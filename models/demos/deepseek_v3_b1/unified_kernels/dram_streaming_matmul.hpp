@@ -142,6 +142,7 @@ struct DRAMStreamingMatmul {
     private:
         void impl() {
 #if defined(COMPILE_FOR_NCRISC)
+            DPRINT << ">dsmm start" << ENDL();
             // ================================================================
             // NCRISC: Stream in1 from DRAM with pipelining (uses NOC_0)
             // ================================================================
@@ -159,7 +160,9 @@ struct DRAMStreamingMatmul {
             uint32_t expert_offset_bytes = 0;
             if constexpr (CTArgs::enable_indexing) {
                 // Wait for index tensor to be ready
+                DPRINT << ">dsmm wait front index" << ENDL();
                 cb_wait_front(CTArgs::cb_index, 1);
+                DPRINT << ">dsmm wait front index done" << ENDL();
 
                 // Read expert index from index tensor at specified offset (uint16)
                 uint32_t expert_idx;
@@ -254,7 +257,9 @@ struct DRAMStreamingMatmul {
             DPRINT << "<dsmm pop" << ENDL();
             // Optionally wait for compute to finish writing output
             if constexpr (WaitForOutput) {
+                DPRINT << ">dsmm wait front output" << ENDL();
                 cb_wait_front(CTArgs::cb_out, CTArgs::out_num_tiles);
+                DPRINT << ">dsmm wait front output done" << ENDL();
             }
 
 #elif defined(COMPILE_FOR_TRISC)

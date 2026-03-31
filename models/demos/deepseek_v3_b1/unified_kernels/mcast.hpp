@@ -377,6 +377,7 @@ struct Mcast {
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
+                DPRINT << ">mcast wait front" << ENDL();
                 cb_wait_front(args.src_cb, args.src_num_pages);
                 DPRINT << ">mcast send 1" << ENDL();
                 mcast_send_with_state<
@@ -400,9 +401,11 @@ struct Mcast {
                     write_reg_cmd_buf>(args.data_sender_semaphore_addr, args.data_receiver_semaphore_addr, 4);
                 DPRINT << ">mcast send 3" << ENDL();
                 noc_async_posted_writes_flushed();
+                DPRINT << ">mcast posted writes flushed" << ENDL();
                 if constexpr (pop_src) {
                     cb_pop_front(args.src_cb, args.src_num_pages);
                 }
+                DPRINT << ">mcast pop front done" << ENDL();
             }
 #elif defined(COMPILE_FOR_NCRISC)
             // ================================================================

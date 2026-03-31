@@ -126,9 +126,7 @@ struct RMSNorm {
             {
                 mul_reduce_scalar_init(CTArgs::input_cb, CTArgs::input_cb);
                 add_rsqrt_tile_init();
-                DPRINT << ">rn_wf cb=" << CTArgs::input_cb << " n=" << num_tiles << ENDL();
                 cb_wait_front(CTArgs::input_cb, num_tiles);
-                DPRINT << "<rn_wf" << ENDL();
                 tile_regs_acquire();
                 mul_reduce_scalar_tile<PoolType::SUM>(CTArgs::input_cb, CTArgs::input_cb, num_tiles, args.scalar);
                 mul_reduce_scalar_uninit();
@@ -146,9 +144,7 @@ struct RMSNorm {
             }
             {
                 // Multiply by the weight
-                DPRINT << ">rn_rb cb=" << CTArgs::output_cb << ENDL();
                 cb_reserve_back(CTArgs::output_cb, num_tiles);
-                DPRINT << "<rn_rb" << ENDL();
                 binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
                 for (uint32_t i = 0; i < num_tiles; i++) {
                     binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb, i, i);
@@ -157,7 +153,6 @@ struct RMSNorm {
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile_block(0, CTArgs::output_cb, num_tiles);
-                DPRINT << "<rn_pb" << ENDL();
 
                 cb_push_back(CTArgs::output_cb, num_tiles);
                 tile_regs_release();

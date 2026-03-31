@@ -116,28 +116,21 @@ struct Broadcast {
                     if constexpr (CTArgs::use_socket) {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
                         SocketReceiverInterface recv = create_receiver_socket_interface(args.socket_config_addr);
-                        DPRINT << "set socket page size" << ENDL();
                         set_receiver_socket_page_size(recv, args.socket_page_size);
                         DPRINT << "wait for pages" << ENDL();
                         socket_wait_for_pages(recv, args.socket_num_pages);
-                        DPRINT << "reserve back" << ENDL();
                         cb_reserve_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         invalidate_l1_cache();
-                        DPRINT << "async read" << ENDL();
                         noc_async_read(
                             get_noc_addr(recv.read_ptr),
                             get_write_ptr(CTArgs::cb0_id),  //
                             args.socket_page_size,
                             1 - noc_index);
-                        DPRINT << "async read barrier" << ENDL();
                         noc_async_read_barrier(1 - noc_index);
-                        DPRINT << "push back" << ENDL();
                         cb_push_back(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                         DPRINT << "pop pages" << ENDL();
                         socket_pop_pages(recv, args.socket_num_pages);
-                        DPRINT << "notify sender" << ENDL();
                         socket_notify_sender(recv, 1 - noc_index);
-                        DPRINT << "update socket config" << ENDL();
                         update_socket_config(recv);
 
                     } else {
@@ -186,7 +179,6 @@ struct Broadcast {
                                       uint32_t src_base_addr,
                                       uint32_t chunk_idx,
                                       uint32_t size) {
-                    DPRINT << "send_chunk " << " src_base_addr=" << src_base_addr << " chunk_idx=" << chunk_idx << " size=" << size << ENDL();
                     uint32_t chunk_offset = chunk_idx * CTArgs::chunk_size_bytes;
                     headers[connection_idx]->to_noc_fused_unicast_write_atomic_inc(
                         tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
@@ -197,7 +189,6 @@ struct Broadcast {
                         src_base_addr + chunk_offset, size);
                     connections[connection_idx].send_payload_flush_non_blocking_from_address(
                         reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
-                    DPRINT << "send_chunk done" << ENDL();
                 };
                 std::array<uint32_t, CTArgs::num_links> link_counters = {};
                 auto forward_chunks = [&](uint32_t src_base_addr, auto&& wait_for_link_chunk) {
