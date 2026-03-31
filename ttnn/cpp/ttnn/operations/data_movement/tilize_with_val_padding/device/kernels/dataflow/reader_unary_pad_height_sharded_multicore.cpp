@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 template <uint32_t val_size>
 FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
@@ -60,23 +58,13 @@ void kernel_main() {
     const uint32_t num_batches  = get_arg_val<uint32_t>(rt++);
     const uint32_t packed_pad_value = get_arg_val<uint32_t>(rt++);
 
-#ifdef SHARDED
-    using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(4),
-        get_compile_time_arg_val(5),
-        get_compile_time_arg_val(6),
-        get_compile_time_arg_val(7),
-        get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10)>;
+    constexpr auto src_args = TensorAccessorArgs<4>();
+    const auto s0 = TensorAccessor(src_args, src_base_addr);
 
-    constexpr uint32_t page_size_jump = get_compile_time_arg_val(6);
-    constexpr uint32_t pages_per_tensor_row = get_compile_time_arg_val(7);
-
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt));
-    experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = src_base_addr, .shard_array = mapping_table};
-#endif
+    const uint32_t page_size_jump = s0.get_aligned_page_size();
+    // ceil(padded_row_bytes / aligned_page_size): = 1 for height-sharded (page == full row);
+    // generalises correctly when a row spans multiple pages (interleaved).
+    const uint32_t pages_per_tensor_row = (padded_width * element_size + page_size_jump - 1) / page_size_jump;
 
     const uint32_t row_bytes = logical_width * element_size;
     const uint32_t padded_row_bytes = padded_width * element_size;
@@ -107,7 +95,7 @@ void kernel_main() {
                     while (remaining > 0) {
                         const uint32_t max_bytes_this_page = page_size_jump - offset_in_page;
                         const uint32_t read_size = remaining < max_bytes_this_page ? remaining : max_bytes_this_page;
-                        const uint64_t src_row_addr = get_noc_addr(page_id, s0, offset_in_page);
+                        const uint64_t src_row_addr = s0.get_noc_addr(page_id, offset_in_page);
                         noc_async_read(src_row_addr, l1, read_size);
                         l1 += read_size;
                         remaining -= read_size;

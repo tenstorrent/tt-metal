@@ -198,36 +198,33 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
     auto [output_cb_index, cb_output] = create_cb(
         tt::CBIndex::c_16, program, all_cores, output_single_tile_size, tiles_per_row * 2, output_cb_data_format);
 
+    auto* src_buffer = input.buffer();
+    auto* dst_buffer = output.buffer();
+
     std::vector<uint32_t> reader_ct_args = {
         static_cast<uint32_t>(src0_cb_index),
         static_cast<uint32_t>(input.element_size()),
         static_cast<uint32_t>(TILE_HEIGHT),
         static_cast<uint32_t>(TILE_WIDTH),
     };
-    shard_builder::extend_sharding_compile_time_args(input, reader_ct_args);
-
-    std::map<std::string, std::string> reader_defines;
-    reader_defines["SHARDED"] = "1";
+    TensorAccessorArgs(*src_buffer).append_to(reader_ct_args);
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
         "reader_unary_pad_height_sharded_multicore.cpp",
         all_cores,
-        ReaderDataMovementConfig(reader_ct_args, reader_defines));
+        ReaderDataMovementConfig(reader_ct_args));
 
     std::vector<uint32_t> writer_ct_args = {static_cast<uint32_t>(output_cb_index)};
-    shard_builder::extend_sharding_compile_time_args(output, writer_ct_args);
-
-    std::map<std::string, std::string> writer_defines;
-    writer_defines["SHARDED"] = "1";
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
         "writer_tilize_sharded_multicore.cpp",
         all_cores,
-        WriterDataMovementConfig(writer_ct_args, writer_defines));
+        WriterDataMovementConfig(writer_ct_args));
 
     const uint32_t num_tiles_per_block = tiles_per_row;
     const uint32_t num_blocks = tile_rows_per_core;
@@ -247,9 +244,6 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
         });
 
     uint32_t packed_pad_value = detail::get_packed_value(input, pad_value);
-
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
 
     const IDevice* device = output.device();
     const auto core_ranges = output.buffer()->shard_spec().grid().ranges();
@@ -314,7 +308,6 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
             flattened_num_batches,         // num_batches
             packed_pad_value               // packed_pad_value
         };
-        shard_builder::extend_sharding_run_time_args(input, reader_rt_args);
         SetRuntimeArgs(program, reader_kernel_id, logical_core, reader_rt_args);
 
         const uint32_t shard_start_tile = output_core_index * total_tiles_per_core;
@@ -324,7 +317,6 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
             total_tiles_per_core,   // num_tiles_core
             shard_start_tile        // shard_start_tile
         };
-        shard_builder::extend_sharding_run_time_args(output, writer_rt_args);
         SetRuntimeArgs(program, writer_kernel_id, logical_core, writer_rt_args);
     }
 
