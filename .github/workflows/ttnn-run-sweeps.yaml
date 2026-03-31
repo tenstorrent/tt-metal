@@ -666,15 +666,7 @@ jobs:
     with:
       # Resolve the sweep name: for schedule triggers, map cron expression to named sweep;
       # for workflow_dispatch, use the selected input directly.
-      sweep-name: >-
-        ${{
-          github.event.inputs.sweep_name ||
-          (github.event.schedule == '30 4 * * 0,1,2,4,5' && 'ALL SWEEPS (Nightly)') ||
-          (github.event.schedule == '0 4 * * 3,6' && 'ALL SWEEPS (Comprehensive)') ||
-          (github.event.schedule == '0 3 * * *' && 'ALL SWEEPS (Model Traced)') ||
-          (github.event.schedule == '0 2 * * *' && 'ALL SWEEPS (Lead Models)') ||
-          'ALL SWEEPS (Nightly)'
-        }}
+      sweep-name: ${{ github.event.inputs.sweep_name || (github.event.schedule == '30 4 * * 0,1,2,4,5' && 'ALL SWEEPS (Nightly)') || (github.event.schedule == '0 4 * * 3,6' && 'ALL SWEEPS (Comprehensive)') || (github.event.schedule == '0 3 * * *' && 'ALL SWEEPS (Model Traced)') || (github.event.schedule == '0 2 * * *' && 'ALL SWEEPS (Lead Models)') || 'ALL SWEEPS (Nightly)' }}
       suite-name: ${{ github.event.inputs.suite_name || '' }}
       # For scheduled runs all flags default to on; for dispatch, use the provided inputs
       skip-on-timeout: ${{ github.event_name == 'schedule' || github.event.inputs.skip_on_timeout == 'true' }}
@@ -691,9 +683,3 @@ jobs:
       enable-lto: ${{ github.event.inputs['enable-lto'] == 'true' }}
       # Build with Tracy when device perf is enabled
       tracy: ${{ github.event_name == 'schedule' || github.event.inputs.measure_device_perf == 'true' }}
-      # Use ops database for Model Traced and Lead Models runs
-      use-database: >-
-        ${{
-          (github.event_name == 'schedule' && (github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *')) ||
-          (github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)' || github.event.inputs.sweep_name == 'ALL SWEEPS (Lead Models)'))
-        }}

@@ -77,11 +77,6 @@ on:
         required: false
         type: boolean
         default: false
-      use-database:
-        description: "Pull sweep vectors from the ops database (true for Model Traced / Lead Models runs)"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -104,7 +99,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
-    if: inputs.use-database
+    if: inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -200,7 +195,7 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: 📥 Download database-generated JSON
-        if: inputs.use-database
+        if: inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)'
         uses: actions/download-artifact@v4
         with:
           name: ttnn-operations-master-json
@@ -381,7 +376,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ inputs.use-database && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
+        TTNN_OPS_DATABASE_URL: ${{ (inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -426,7 +421,7 @@ jobs:
           echo "│ Skip on Timeout:      ${{ inputs.skip-on-timeout }}"
           echo "│ Measure Device Perf:  ${{ inputs.measure-device-perf }}"
           echo "│ Upload Results:       ${{ inputs.upload-results }}"
-          echo "│ Use Database:         ${{ inputs.use-database }}"
+          echo "│ Use Database:         ${{ inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)' }}"
           echo "│ Mesh Shape Filter:    ${{ inputs.mesh-shape || 'none' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
@@ -530,7 +525,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ inputs.use-database && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
+        TTNN_OPS_DATABASE_URL: ${{ (inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
         LEAD_MODELS_RUN: ${{ startsWith(matrix.test_group_name, 'lead-models') && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -572,7 +567,7 @@ jobs:
           echo "│ Measure E2E Perf:     ${{ inputs.measure-e2e-perf }}"
           echo "│ Measure Memory:       ${{ inputs.measure-memory }}"
           echo "│ Upload Results:       ${{ inputs.upload-results }}"
-          echo "│ Use Database:         ${{ inputs.use-database }}"
+          echo "│ Use Database:         ${{ inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)' }}"
           echo "│ Mesh Shape Filter:    ${{ inputs.mesh-shape || 'none' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
