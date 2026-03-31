@@ -266,15 +266,6 @@ jobs:
           dry-run: ${{ github.event.inputs['auto-disable-dry-run'] || 'false' }}
           output-dir: build_ci/auto_disable
 
-      - name: M4 extract deterministic failing jobs from aggregate workflow data
-        if: ${{ !inputs['data-gathering-mode'] }}
-        env:
-          # Use repo-scoped GITHUB_TOKEN for aggregate-workflow-data artifact reads.
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          python tools/ci/extract_failing_jobs.py
-
       - name: M4 restore previous cache artifacts
         if: ${{ !inputs['data-gathering-mode'] }}
         env:
@@ -286,6 +277,56 @@ jobs:
           if [ -n "${prev_run_id:-}" ] && [ "$prev_run_id" != "null" ]; then
             gh run download "$prev_run_id" --repo tenstorrent/tt-metal -n auto-disable-artifacts -D build_ci/m4_cache_prev || true
           fi
+
+      - name: M4 decide whether extraction can be skipped
+        id: m4_extract_gate
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p build_ci/ci_ticketing/create_tickets
+          latest_aggregate_run_id="$(gh run list --workflow aggregate-workflow-data.yaml --repo tenstorrent/tt-metal --status completed --limit 1 --json databaseId --jq '.[0].databaseId' || true)"
+          [ -n "${latest_aggregate_run_id:-}" ] || latest_aggregate_run_id=""
+          [ "${latest_aggregate_run_id}" != "null" ] || latest_aggregate_run_id=""
+          echo "latest_aggregate_run_id=${latest_aggregate_run_id}" >> "$GITHUB_OUTPUT"
+          prev_meta_path="$(python -c "from pathlib import Path; m=next(iter(Path('build_ci/m4_cache_prev').rglob('m4_extract_meta.json')), None); print(m if m else '')")"
+          [ -n "${prev_meta_path:-}" ] || prev_meta_path="build_ci/m4_cache_prev/m4_extract_meta.json"
+          prev_failing_jobs_path="$(python -c "from pathlib import Path; m=next(iter(Path('build_ci/m4_cache_prev').rglob('failing_jobs.json')), None); print(m if m else '')")"
+          [ -n "${prev_failing_jobs_path:-}" ] || prev_failing_jobs_path="build_ci/m4_cache_prev/failing_jobs.json"
+          prev_aggregate_run_id=""
+          if [ -f "$prev_meta_path" ]; then
+            prev_aggregate_run_id="$(python -c "import json,sys; p=json.load(open(sys.argv[1])); print(p.get('aggregate_run_id',''))" "$prev_meta_path" || true)"
+          fi
+          if [ -n "$latest_aggregate_run_id" ] && [ "$latest_aggregate_run_id" = "$prev_aggregate_run_id" ] && [ -f "$prev_failing_jobs_path" ]; then
+            cp "$prev_failing_jobs_path" build_ci/ci_ticketing/create_tickets/failing_jobs.json
+            echo "skip_extract=true" >> "$GITHUB_OUTPUT"
+            echo "Reusing cached failing_jobs.json from prior triage artifacts (aggregate run id unchanged: $latest_aggregate_run_id)."
+          else
+            echo "skip_extract=false" >> "$GITHUB_OUTPUT"
+            echo "Will run extraction; latest aggregate run id=$latest_aggregate_run_id previous=$prev_aggregate_run_id"
+          fi
+
+      - name: M4 extract deterministic failing jobs from aggregate workflow data
+        if: ${{ !inputs['data-gathering-mode'] && steps.m4_extract_gate.outputs.skip_extract != 'true' }}
+        env:
+          # Use repo-scoped GITHUB_TOKEN for aggregate-workflow-data artifact reads.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/extract_failing_jobs.py
+
+      - name: M4 write extraction metadata
+        if: ${{ !inputs['data-gathering-mode'] }}
+        run: |
+          set -euo pipefail
+          mkdir -p build_ci/ci_ticketing/create_tickets
+          cat > build_ci/ci_ticketing/create_tickets/m4_extract_meta.json <<EOF
+          {
+            "aggregate_run_id": "${{ steps.m4_extract_gate.outputs.latest_aggregate_run_id }}",
+            "skip_extract": "${{ steps.m4_extract_gate.outputs.skip_extract }}"
+          }
+          EOF
 
       - name: M4 create issues and post Slack bootstrap messages
         if: ${{ !inputs['data-gathering-mode'] }}
@@ -318,6 +359,7 @@ jobs:
             build_ci/ci_ticketing/create_tickets/failing_jobs.json
             build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json
             build_ci/ci_ticketing/create_tickets/m4_review_cache.json
+            build_ci/ci_ticketing/create_tickets/m4_extract_meta.json
           retention-days: 7
 
       - name: Upload triage state artifact
