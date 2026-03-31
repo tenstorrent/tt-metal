@@ -567,6 +567,13 @@ def state_has_active_pr(item: dict[str, Any]) -> str | None:
     return pr_url or None
 
 
+def tracked_pr_url(item: dict[str, Any]) -> str:
+    disable_pr = item.get("disable_pr")
+    if not isinstance(disable_pr, dict):
+        return ""
+    return str(disable_pr.get("url", "")).strip()
+
+
 def ensure_git_identity() -> None:
     name = run(["git", "config", "--get", "user.name"], check=False, capture=True)
     email = run(["git", "config", "--get", "user.email"], check=False, capture=True)
@@ -697,6 +704,47 @@ def main() -> int:
             append_history(item, "skip_terminal_state", f"Skipped because status is {item['status']}")
             continue
 
+        active_pr_url = tracked_pr_url(item)
+        if active_pr_url and not args.dry_run:
+            active_pr_repo = parse_repo_from_pr_url(active_pr_url)
+            if active_pr_repo and active_pr_repo != target_pr_repo:
+                log(
+                    f"action: tracked PR repo mismatch for issue #{issue_number}; "
+                    f"expected {target_pr_repo}, got {active_pr_repo}; resetting state for retarget"
+                )
+                item["disable_pr"] = {"number": 0, "url": "", "branch": "", "head_sha": ""}
+                item["attempts"] = 0
+                set_status(
+                    item,
+                    "new",
+                    event="tracked_pr_repo_mismatch_reset",
+                    details=f"Reset PR metadata and attempts from repo {active_pr_repo} to target {target_pr_repo}",
+                )
+                result["state_updates"] += 1
+                active_pr_url = ""
+        if active_pr_url and not args.dry_run and not is_pr_open(active_pr_url, target_pr_repo):
+            log(f"action: tracked PR is no longer open for issue #{issue_number}: {active_pr_url}")
+            item["disable_pr"] = {"number": 0, "url": "", "branch": "", "head_sha": ""}
+            set_status(
+                item,
+                "new",
+                event="active_pr_not_open_anymore",
+                details=f"Previously tracked PR is no longer open: {active_pr_url}",
+            )
+            result["state_updates"] += 1
+            active_pr_url = ""
+        if active_pr_url:
+            log(f"action: skipping issue #{issue_number} because tracked open PR exists: {active_pr_url}")
+            result["skipped"].append(
+                {
+                    "source_slack_ts": source_ts,
+                    "issue_number": issue_number,
+                    "reason": f"active_tracked_pr:{active_pr_url}",
+                }
+            )
+            append_history(item, "skip_active_state_pr", f"Skipped action because active PR exists: {active_pr_url}")
+            continue
+
         if int(item.get("attempts", 0)) >= args.max_attempts_per_item:
             set_status(
                 item,
@@ -712,46 +760,6 @@ def main() -> int:
                     "reason": "max_attempts_exceeded",
                 }
             )
-            continue
-
-        active_pr_url = state_has_active_pr(item)
-        if active_pr_url and not args.dry_run:
-            active_pr_repo = parse_repo_from_pr_url(active_pr_url)
-            if active_pr_repo and active_pr_repo != target_pr_repo:
-                log(
-                    f"action: tracked active PR repo mismatch for issue #{issue_number}; "
-                    f"expected {target_pr_repo}, got {active_pr_repo}"
-                )
-                item["disable_pr"] = {"number": 0, "url": "", "branch": "", "head_sha": ""}
-                set_status(
-                    item,
-                    "new",
-                    event="active_pr_repo_mismatch",
-                    details=f"Reset from repo {active_pr_repo} to target {target_pr_repo}",
-                )
-                result["state_updates"] += 1
-                active_pr_url = None
-        if active_pr_url and not args.dry_run and not is_pr_open(active_pr_url, target_pr_repo):
-            log(f"action: tracked active PR is no longer open for issue #{issue_number}: {active_pr_url}")
-            item["disable_pr"] = {"number": 0, "url": "", "branch": "", "head_sha": ""}
-            set_status(
-                item,
-                "new",
-                event="active_pr_not_open_anymore",
-                details=f"Previously tracked PR is no longer open: {active_pr_url}",
-            )
-            result["state_updates"] += 1
-            active_pr_url = None
-        if active_pr_url:
-            log(f"action: skipping issue #{issue_number} because active PR exists: {active_pr_url}")
-            result["skipped"].append(
-                {
-                    "source_slack_ts": source_ts,
-                    "issue_number": issue_number,
-                    "reason": f"active_state_pr:{active_pr_url}",
-                }
-            )
-            append_history(item, "skip_active_state_pr", f"Skipped action because active PR exists: {active_pr_url}")
             continue
 
         pr_title = str(action.get("pr_title", "")).strip() or f"ci: disable failing test for #{issue_number}"
