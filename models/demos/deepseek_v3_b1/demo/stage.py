@@ -408,6 +408,14 @@ class SpecLMHeadStage(StageKind):
         self._state: dict[str, Any] = {}
         print(f"[STAGE] SpecLMHeadStage.__init__ fp32={fp32_dest_acc_en} persistent={persistent_mode}", flush=True)
 
+    def _get_sender_coord(self, ctx: StageContext, pipeline_block):
+        """Return the broadcast sender MeshCoordinate for SpecLMHead."""
+        return ctx.pipeline_config[ctx.my_mesh_id].entry_node_coord
+
+    def _get_exit_coord(self, ctx: StageContext, pipeline_block):
+        """Return the argmax final device MeshCoordinate for SpecLMHead."""
+        return ctx.pipeline_config[ctx.my_mesh_id].exit_node_coord
+
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.create_pipeline_block", flush=True)
         mesh_device = ctx.mesh_device
@@ -436,13 +444,12 @@ class SpecLMHeadStage(StageKind):
         print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.setup start", flush=True)
         mesh_device = ctx.mesh_device
         my_mesh_id = ctx.my_mesh_id
-        pipeline_config = ctx.pipeline_config
 
         # +32 for metadata (32 * 2 bytes = 64 bytes of metadata)
         torch_a = torch.zeros((SpecLMHeadStage.M, SpecLMHeadStage.K + METADATA_NUM_ELEMS), dtype=torch.bfloat16)
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
-        sender_coord = pipeline_config[my_mesh_id].entry_node_coord
+        sender_coord = self._get_sender_coord(ctx, pipeline_block)
         num_devices = mesh_rows * mesh_cols
 
         cls = SpecLMHeadStage
@@ -599,19 +606,17 @@ class SpecLMHeadStage(StageKind):
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadStage.launch_compute calling LMHeadSampling.op", flush=True)
         d = self._state
-        pipeline_config = ctx.pipeline_config
-        my_mesh_id = ctx.my_mesh_id
         LMHeadSampling.op(
             d["input_tensor_mesh"],
             d["intermediate_tensor_mesh"],
             d["ttnn_gamma"],
             d["ttnn_b"],
             d["ttnn_scores"],
-            sender_coord=pipeline_config[my_mesh_id].entry_node_coord,
+            sender_coord=self._get_sender_coord(ctx, pipeline_block),
             indices_tensor=d["ttnn_indices"],
             output_index_tensor=d["ttnn_output_index"],
             argmax_final_core_coord=SpecLMHeadStage.ARGMAX_FINAL_CORE,
-            argmax_final_mesh_coord=pipeline_config[my_mesh_id].exit_node_coord,
+            argmax_final_mesh_coord=self._get_exit_coord(ctx, pipeline_block),
             bcast_semaphores=d["bcast_semaphores"],
             global_semaphore=d["global_semaphore"],
             global_stage2_semaphore=d["global_stage2_semaphore"],
@@ -1001,16 +1006,13 @@ class BaseLMHeadStage(StageKind):
 class _CombinedPipelineBlock:
     """Pipeline block for combined SpecLMHead + Embedding stage.
 
-    Wires four independent socket paths on the same mesh:
+    Wires three independent socket paths on the same mesh:
     - H2D (token from host) -> fused embedding -> exit D2D (activation to P1)
     - Entry D2D (ACTIVATION_W_TOKEN_META from P3) -> SpecLMHead input (LMHEAD_INPUT_CORE)
-    - SpecLMHead output (ARGMAX_FINAL_CORE) -> D2D relay (ARGMAX_RELAY_CORE) -> D2H (TOKEN_META to host)
+    - SpecLMHead output (ARGMAX_FINAL_CORE) -> D2H (TOKEN_META to host)
 
-    The argmax -> D2H path deliberately routes through an intermediate
-    SocketInterface relay so that the argmax kernel always uses the well-tested
-    socket_mode=2 (D2D / NOC write) code path, matching the original pipeline
-    where ARGMAX_FINAL_CORE writes to a d2d_exchange relay on the same exit
-    device.
+    The broadcast sender and argmax final device are co-located with the
+    loopback entry/exit coordinates respectively, avoiding inter-device relays.
 
     Implements the same interface as PipelineBlock (run, terminate, write_token,
     read_output, get_downstream_socket, get_upstream_socket) so that Pipeline
@@ -1036,6 +1038,8 @@ class _CombinedPipelineBlock:
         next_stage_entry_coord = pipeline_config[my_mesh_id + 1].entry_node_coord
         prev_stage_exit_coord = pipeline_config[num_procs - 1].exit_node_coord
 
+        print(f"[COMBINED P{my_mesh_id}] h2d_device_coord={h2d_device_coord} exit_node_coord={exit_node_coord} loopback_entry_coord={loopback_entry_coord} loopback_exit_coord={loopback_exit_coord} next_stage_entry_coord={next_stage_entry_coord} prev_stage_exit_coord={prev_stage_exit_coord}", flush=True)
+
         embedding_size_bytes = embedding_tensor.shape[-1] * 2  # bfloat16
         assert ACTIVATION_PAGE_SIZE_BYTES == embedding_size_bytes
 
@@ -1053,15 +1057,16 @@ class _CombinedPipelineBlock:
             None,
             TOKEN_PAGE_SIZE_BYTES,
             0,
-            core_to_core_socket_buffer_size=ACTIVATION_FIFO_SIZE,
+            core_to_core_socket_buffer_size=ACTIVATION_W_TOKEN_META_FIFO_SIZE,
             h2d_downstream_core=ttnn.MeshCoreCoord(exit_node_coord, PIPELINE_CORE_COORD),
             embedding_tensor=embedding_tensor,
+            downstream_socket_page_size=ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
         )
 
         self.exit_socket_interface = SocketInterface(
-            ACTIVATION_PAGE_SIZE_BYTES,
-            ACTIVATION_FIFO_SIZE,
-            ACTIVATION_PAGE_SIZE_BYTES,
+            ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
+            ACTIVATION_W_TOKEN_META_FIFO_SIZE,
+            ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
             ttnn.MeshCoreCoord(exit_node_coord, PIPELINE_CORE_COORD),
             ttnn.MeshCoreCoord(next_stage_entry_coord, PIPELINE_CORE_COORD),
             upstream_socket=self.h2d_host_io.get_downstream_socket(),
@@ -1070,7 +1075,8 @@ class _CombinedPipelineBlock:
         )
 
         # -- SpecLMHead input path (loopback entry from P3) --
-        spec_root_device_coord = pipeline_config[my_mesh_id].entry_node_coord
+        spec_root_device_coord = loopback_entry_coord
+        self.spec_entry_coord = spec_root_device_coord
         self.entry_socket_interface = SocketInterface(
             ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
             ACTIVATION_W_TOKEN_META_FIFO_SIZE,
@@ -1082,10 +1088,9 @@ class _CombinedPipelineBlock:
             receiver_mesh=MeshWrapper(mesh_device),
         )
 
-        # -- D2H path (verification result via intermediate D2D relay) --
-        spec_exit_device_coord = pipeline_config[my_mesh_id].exit_node_coord
-        relay_send_device = spec_exit_device_coord
-        relay_recv_device = loopback_exit_coord
+        # -- D2H path (argmax output → D2H on same device, no inter-device relay needed) --
+        spec_exit_device_coord = loopback_exit_coord
+        self.spec_exit_coord = spec_exit_device_coord
 
         self.d2h_socket = ttnn.D2HSocket(
             mesh_device,
@@ -1099,26 +1104,13 @@ class _CombinedPipelineBlock:
             0,
             TOKEN_META_PAGE_SIZE_BYTES,
             core_to_core_socket_buffer_size=TOKEN_META_FIFO_SIZE,
-            d2h_upstream_core=ttnn.MeshCoreCoord(relay_recv_device, ARGMAX_RELAY_CORE),
-        )
-
-        self.argmax_relay = SocketInterface(
-            TOKEN_META_PAGE_SIZE_BYTES,
-            TOKEN_META_FIFO_SIZE,
-            TOKEN_META_PAGE_SIZE_BYTES,
-            ttnn.MeshCoreCoord(relay_send_device, ARGMAX_RELAY_CORE),
-            ttnn.MeshCoreCoord(relay_recv_device, ARGMAX_RELAY_CORE),
-            upstream_core_coord=ttnn.MeshCoreCoord(spec_exit_device_coord, argmax_final_core),
-            downstream_socket=self.d2h_host_io.get_upstream_socket(),
-            sender_mesh=MeshWrapper(mesh_device),
-            receiver_mesh=MeshWrapper(mesh_device),
+            d2h_upstream_core=ttnn.MeshCoreCoord(spec_exit_device_coord, argmax_final_core),
         )
 
         print(
             f"[COMBINED P{my_mesh_id}] _CombinedPipelineBlock created: "
             f"h2d_dev={h2d_device_coord} exit_dev={exit_node_coord} "
             f"spec_root={spec_root_device_coord} spec_exit={spec_exit_device_coord} "
-            f"relay_send={relay_send_device} relay_recv={relay_recv_device} "
             f"d2h_dev={loopback_exit_coord}",
             flush=True,
         )
@@ -1126,7 +1118,6 @@ class _CombinedPipelineBlock:
     def run(self) -> None:
         self.h2d_host_io.run()
         self.d2h_host_io.run()
-        self.argmax_relay.run()
         self.exit_socket_interface.run()
         self.entry_socket_interface.run()
 
@@ -1135,7 +1126,6 @@ class _CombinedPipelineBlock:
         self.h2d_host_io.terminate(False)
         self.entry_socket_interface.terminate(False)
         self.exit_socket_interface.terminate(False)
-        self.argmax_relay.terminate(False)
         self.d2h_host_io.terminate(True)
 
     def is_first_pipeline_stage(self) -> bool:
@@ -1152,8 +1142,8 @@ class _CombinedPipelineBlock:
         return self.entry_socket_interface.get_downstream_socket()
 
     def get_upstream_socket(self):
-        """SpecLMHead writes verification result into this D2D socket (to relay, then D2H)."""
-        return self.argmax_relay.get_upstream_socket()
+        """SpecLMHead writes verification result into this socket (directly to D2H)."""
+        return self.d2h_host_io.get_upstream_socket()
 
 
 class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
@@ -1161,7 +1151,7 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
 
     SpecLMHead occupies (0,0)-(10,9).  Embedding I/O uses column 12:
       H2D at EMBEDDING_H2D_CORE_COORD, D2H at EMBEDDING_D2H_CORE_COORD,
-      argmax relay at ARGMAX_RELAY_CORE.  Exit D2D relay uses PIPELINE_CORE_COORD.
+      argmax final at ARGMAX_FINAL_CORE.  Exit D2D relay uses PIPELINE_CORE_COORD.
 
     Pipeline topology:
       P0(this) -> P1(BaseLMHead+MTP) -> P2(Passthrough) -> P3(Passthrough) -> back to P0
@@ -1181,6 +1171,12 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
             f"[STAGE] SpecLMHeadWithEmbeddingStage.__init__ fp32={fp32_dest_acc_en} persistent={persistent_mode}",
             flush=True,
         )
+
+    def _get_sender_coord(self, ctx: StageContext, pipeline_block):
+        return pipeline_block.spec_entry_coord
+
+    def _get_exit_coord(self, ctx: StageContext, pipeline_block):
+        return pipeline_block.spec_exit_coord
 
     def create_pipeline_block(self, ctx: StageContext) -> _CombinedPipelineBlock:
         print(f"[STAGE P{ctx.my_mesh_id}] SpecLMHeadWithEmbeddingStage.create_pipeline_block", flush=True)
