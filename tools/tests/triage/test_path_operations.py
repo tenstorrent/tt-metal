@@ -16,7 +16,6 @@ All tests are mock-based and require no Tenstorrent hardware.
 Written to validate path handling during the pathlib migration.
 """
 
-import os
 import sys
 import tempfile
 from pathlib import Path
