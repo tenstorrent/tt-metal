@@ -25,7 +25,7 @@
   model: llama3.1-8b
   skus:
     wh_n150:
-      timeout: 50
+      timeout: 30
       tier: 1
     wh_llmbox_perf:
       timeout: 12
