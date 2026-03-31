@@ -87,7 +87,7 @@ public:
 
     std::set<ChipId> all_pci_chip_ids() const { return this->driver_->get_target_mmio_device_ids(); }
 
-    umd::ClusterDescriptor* get_cluster_desc() const;
+    umd::ClusterDescriptor* get_cluster_desc() const { return this->driver_->get_cluster_description(); }
 
     const std::unique_ptr<tt::umd::Cluster>& get_driver() const;
 
@@ -97,12 +97,12 @@ public:
     // TODO: UMD will eventually consolidate ethernet coordinates and unique ids, we can remove the ethernet coord
     // getter after that change is in
     const std::unordered_map<ChipId, uint64_t>& get_unique_chip_ids() const {
-        return this->cluster_desc_->get_chip_unique_ids();
+        return this->get_cluster_desc()->get_chip_unique_ids();
     }
 
     // Returns map of logical chip ID to PCIe device ID
     const std::unordered_map<ChipId, ChipId>& get_chips_with_mmio() const {
-        return this->cluster_desc_->get_chips_with_mmio();
+        return this->get_cluster_desc()->get_chips_with_mmio();
     }
 
     std::unordered_map<ChipId, EthCoord> get_all_chip_ethernet_coordinates() const;
@@ -279,18 +279,18 @@ public:
 
     const std::unordered_map<ChipId, std::unordered_map<EthernetChannel, std::tuple<ChipId, EthernetChannel>>>&
     get_ethernet_connections() const {
-        return this->cluster_desc_->get_ethernet_connections();
+        return this->get_cluster_desc()->get_ethernet_connections();
     }
 
     // TODO: unify uint64_t with ChipUID
     const std::unordered_map<ChipId, std::unordered_map<EthernetChannel, std::tuple<uint64_t, EthernetChannel>>>&
     get_ethernet_connections_to_remote_devices() const {
-        return this->cluster_desc_->get_ethernet_connections_to_remote_devices();
+        return this->get_cluster_desc()->get_ethernet_connections_to_remote_devices();
     }
 
     // Returns MMIO device ID (logical) that controls given `device_id`. If `device_id` is MMIO device it is returned.
     ChipId get_associated_mmio_device(ChipId device_id) const {
-        return this->cluster_desc_->get_closest_mmio_capable_chip(device_id);
+        return this->get_cluster_desc()->get_closest_mmio_capable_chip(device_id);
     }
 
     uint16_t get_assigned_channel_for_device(ChipId device_id) const {
@@ -414,11 +414,6 @@ private:
     bool iommu_enabled_ = false;
     // Cached system NOC mapping status to avoid slow queries at MeshDevice construction
     bool noc_mapping_enabled_ = false;
-
-    // Need to hold reference to cluster descriptor to detect total number of devices available in cluster
-    // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
-    // devices
-    umd::ClusterDescriptor* cluster_desc_ = nullptr;
 
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<ChipId, metal_SocDescriptor> sdesc_per_chip_;
