@@ -34,10 +34,12 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Disable sparse checkout from bootstrap
+    - name: Undo bootstrap sparse/partial-clone config
       shell: bash
       run: |
         git sparse-checkout disable 2>/dev/null || true
+        git config --unset remote.origin.partialclonefilter 2>/dev/null || true
+        git config --unset remote.origin.promisor 2>/dev/null || true
 
     - name: Configure credentials for private submodule
       if: inputs.submodules != 'false' && inputs.private-submodule-token != ''
