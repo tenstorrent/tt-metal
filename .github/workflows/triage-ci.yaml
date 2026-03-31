@@ -72,7 +72,7 @@ on:
         description: "If checked, only verify fork branch creation and skip all triage/AI work"
         required: false
         type: boolean
-        default: true
+        default: false
       auto-disable-dry-run:
         description: "If checked, produce plan only and skip push/PR/kickoff execution"
         required: false
