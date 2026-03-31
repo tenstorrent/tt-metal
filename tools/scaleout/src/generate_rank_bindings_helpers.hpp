@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <stdexcept>
@@ -29,10 +30,11 @@ struct RankBindingConfig {
 inline std::string get_actual_hostname(const std::string& hostname) {
     if (hostname == "localhost") {
         char buf[256];
-        if (gethostname(buf, sizeof(buf)) == 0) {
-            return std::string(buf);
+        if (gethostname(buf, sizeof(buf) - 1) != 0) {
+            return "localhost";
         }
-        return "localhost";
+        buf[sizeof(buf) - 1] = '\0';
+        return std::string(buf);
     }
     return hostname;
 }
@@ -77,7 +79,13 @@ inline void write_phase2_mock_mapping_yaml(
     const std::vector<RankBindingConfig>& rank_bindings,
     const std::map<int, std::string>& mpi_rank_to_path,
     const std::string& output_file) {
+    auto remove_output_if_present = [&output_file]() {
+        std::error_code ec;
+        std::filesystem::remove(output_file, ec);
+    };
+
     if (mpi_rank_to_path.empty()) {
+        remove_output_if_present();
         return;
     }
 
@@ -105,6 +113,7 @@ inline void write_phase2_mock_mapping_yaml(
     }
 
     if (rank_to_desc_node.size() == 0) {
+        remove_output_if_present();
         return;
     }
 

@@ -441,66 +441,79 @@ std::vector<RankBindingConfig> extract_rank_bindings(
 /**
  * @brief Gather mock cluster descriptor paths from all MPI ranks to rank 0.
  *
- * When TT_METAL_MOCK_CLUSTER_DESC_PATH is set (mock mode), each rank has its own descriptor.
+ * When TT_METAL_MOCK_CLUSTER_DESC_PATH is set (mock mode), each rank may have its own descriptor.
  * This collects rank -> path for use when writing phase2_mock_mapping.yaml.
  *
+ * For world_size > 1, every rank participates in the exchange and the final barrier even if this
+ * rank's env var is unset (empty path), so rank 0 cannot block on recv while another rank returns early.
+ *
  * @param distributed_context MPI distributed context
- * @param mpi_rank_to_path Output map (populated only on rank 0): MPI rank -> absolute path
+ * @param mpi_rank_to_path Output map (populated only on rank 0): MPI rank -> absolute path (non-empty paths only)
  */
 void gather_mock_cluster_desc_paths(
     const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& distributed_context,
     std::map<int, std::string>& mpi_rank_to_path) {
     using namespace tt::tt_metal::distributed::multihost;
     constexpr int root_rank = 0;
+    constexpr Tag k_mock_path_size_tag{100};
+    constexpr Tag k_mock_path_payload_tag{101};
     auto my_rank = *distributed_context->rank();
     auto world_size = *distributed_context->size();
 
+    std::string my_path;
     const char* my_path_env = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
-    if (!my_path_env || std::strlen(my_path_env) == 0) {
-        return;
-    }
-    std::string my_path(my_path_env);
-    // Resolve to absolute path for consistent usage
-    std::error_code ec;
-    auto resolved = std::filesystem::absolute(std::filesystem::path(my_path), ec);
-    if (!ec) {
-        my_path = resolved.string();
+    if (my_path_env && std::strlen(my_path_env) > 0) {
+        my_path.assign(my_path_env);
+        std::error_code ec;
+        auto resolved = std::filesystem::absolute(std::filesystem::path(my_path), ec);
+        if (!ec) {
+            my_path = resolved.string();
+        }
     }
 
     if (world_size == 1) {
-        mpi_rank_to_path[0] = my_path;
+        if (!my_path.empty()) {
+            mpi_rank_to_path[0] = std::move(my_path);
+        }
         return;
     }
 
     if (my_rank == root_rank) {
-        mpi_rank_to_path[root_rank] = my_path;
+        if (!my_path.empty()) {
+            mpi_rank_to_path[root_rank] = my_path;
+        }
         for (int r = 1; r < static_cast<int>(world_size); ++r) {
             std::size_t path_size = 0;
             distributed_context->recv(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&path_size), sizeof(path_size)),
                 Rank{r},
-                Tag{100});  // Use distinct tag for mock path gather
+                k_mock_path_size_tag);
             std::vector<char> path_buf(path_size);
             if (path_size > 0) {
                 distributed_context->recv(
                     tt::stl::as_writable_bytes(
                         tt::stl::Span<uint8_t>(reinterpret_cast<uint8_t*>(path_buf.data()), path_buf.size())),
                     Rank{r},
-                    Tag{100});
+                    k_mock_path_payload_tag);
             }
-            mpi_rank_to_path[r] = std::string(path_buf.data(), path_buf.size());
+            std::string path(path_buf.begin(), path_buf.end());
+            if (!path.empty()) {
+                mpi_rank_to_path[r] = std::move(path);
+            }
         }
     } else {
         std::size_t path_size = my_path.size();
         distributed_context->send(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&path_size), sizeof(path_size)),
             Rank{root_rank},
-            Tag{100});
-        std::vector<uint8_t> path_bytes(my_path.begin(), my_path.end());
-        distributed_context->send(
-            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(path_bytes.data(), path_bytes.size())),
-            Rank{root_rank},
-            Tag{100});
+            k_mock_path_size_tag);
+        if (path_size > 0) {
+            std::vector<uint8_t> path_bytes(my_path.begin(), my_path.end());
+            distributed_context->send(
+                tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(path_bytes.data(), path_bytes.size())),
+                Rank{root_rank},
+                k_mock_path_payload_tag);
+        }
     }
     distributed_context->barrier();
 }
@@ -518,7 +531,8 @@ ProgramArgs parse_arguments(int argc, char** argv) {
     cxxopts::Options options(
         "generate_rank_bindings",
         "Generate rank bindings YAML file from Physical System Descriptor (PSD) discovery and topology mapping.\n"
-        "This tool must be run with an MPI launcher (e.g., mpirun, srun).\n\n"
+        "Requires a Metal build with Open MPI (USE_MPI) enabled; run under an MPI launcher (e.g. mpirun, srun).\n"
+        "Single-process runs are allowed (e.g. mpirun -np 1) when mapping a single-rank allocation.\n\n"
         "The Mesh Graph Descriptor (MGD) specifies the logical mesh topology.\n"
         "The Physical Grouping Descriptor (PGD) is optional and will be searched using fallback logic if not "
         "provided.");
@@ -573,14 +587,8 @@ int main(int argc, char** argv) {
     // Parse arguments first (before MPI initialization)
     ProgramArgs args = parse_arguments(argc, argv);
 
-    // Check if MPI is initialized (i.e., running under mpirun/srun/etc.)
-    // When mpirun launches the program, MPI is already initialized
-    // Initialize distributed context - this will detect MPI if available
     tt::tt_metal::distributed::multihost::DistributedContext::create(argc, argv);
 
-    // Verify that we have a valid MPI context
-    // Check if context supports fault tolerance (MPI contexts do, SingleHost doesn't)
-    // OR check if we have multiple processes (size > 1)
     const auto& context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     try {

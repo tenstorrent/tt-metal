@@ -129,16 +129,20 @@ If you do **not** pass `--physical-grouping-descriptor`, the tool picks a PGD fi
    - `/data/scaleout_configs/<TT_CLUSTER_NAME>/<TT_CLUSTER_NAME>_physical_grouping_descriptor.textproto`
    - `<TT_METAL_HOME>/tests/tt_metal/tt_fabric/physical_groupings/<TT_CLUSTER_NAME>_physical_grouping_descriptor.textproto`
 
-3. **Architecture / cluster-type file** under the repo tree — the filename is chosen from **MetalContext** (discovered cluster type and architecture):
+3. **Architecture / cluster-type candidate** under the repo tree — **MetalContext** (discovered cluster type and architecture) picks a **first** filename to try at
+   `<TT_METAL_HOME>/tests/tt_metal/tt_fabric/physical_groupings/<filename>`:
    - Galaxy + Wormhole B0 → `wh_galaxy_physical_grouping_descriptor.textproto`
    - Blackhole Galaxy + Blackhole → `bh_galaxy_physical_grouping_descriptor.textproto`
    - T3K + Wormhole B0 → `wh_t3k_physical_grouping_descriptor.textproto`
-   - Any other combination → `default_physical_grouping_descriptor.textproto`
-   Full path: `<TT_METAL_HOME>/tests/tt_metal/tt_fabric/physical_groupings/<that_filename>`.
+   - Any other combination → `default_physical_grouping_descriptor.textproto` (only this path is attempted for step 3; there is no separate “specialized then default” for this case).
 
-If none of these paths exist, the tool fails with an error listing what it searched.
+4. **Generic default fallback** — if step 3 chose one of the **specialized** filenames above (not already `default_physical_grouping_descriptor.textproto`), the tool **also** tries
+   `<TT_METAL_HOME>/tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto`
+   so a missing specialized file does not fail until the default has been checked.
 
-**Typical local default:** with `TT_METAL_HOME` pointing at your checkout and a normal dev cluster/mock, step 3 often resolves to one of the `physical_groupings/*.textproto` files (for example `default_physical_grouping_descriptor.textproto` when the cluster type/arch does not match the specialized cases above).
+The **first path in this combined search order that exists** as a regular file is used. If every attempted path is missing, the tool fails with an error listing what it searched (including the default when step 4 applied).
+
+**Typical local default:** with `TT_METAL_HOME` pointing at your checkout, discovery often selects a specialized PGD when it exists; otherwise step 4 supplies `default_physical_grouping_descriptor.textproto`. If MetalContext maps to “any other combination,” only the default filename from step 3 is tried for repo-relative PGDs.
 
 ---
 

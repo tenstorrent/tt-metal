@@ -4,9 +4,12 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <string>
+
+#include <unistd.h>
 
 #include <yaml-cpp/yaml.h>
 
@@ -15,8 +18,11 @@
 namespace {
 
 std::filesystem::path make_temp_dir(const std::string& test_name) {
-    auto base = std::filesystem::temp_directory_path() / ("grb_test_" + test_name);
-    std::filesystem::remove_all(base);
+    using clock = std::chrono::high_resolution_clock;
+    const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now().time_since_epoch()).count();
+    const std::filesystem::path base =
+        std::filesystem::temp_directory_path() /
+        (std::string{"grb_test_"} + test_name + "_" + std::to_string(getpid()) + "_" + std::to_string(ns));
     std::filesystem::create_directories(base);
     return base;
 }
@@ -114,7 +120,30 @@ TEST(GenerateRankBindingsHelpersTest, WritePhase2MockMapping_EmptyPathMapProduce
     std::vector<RankBindingConfig> bindings = {make_binding(0, 0, 0, "h", 0, 0)};
     std::map<int, std::string> empty;
 
+    {
+        std::ofstream stale(path.string());
+        stale << "rank_to_cluster_mock_cluster_desc:\n  \"0\": /stale.yaml\n";
+    }
+    ASSERT_TRUE(std::filesystem::exists(path));
+
     write_phase2_mock_mapping_yaml(bindings, empty, path.string());
+
+    EXPECT_FALSE(std::filesystem::exists(path));
+}
+
+TEST(GenerateRankBindingsHelpersTest, WritePhase2MockMapping_NoRankEntriesRemovesStaleFile) {
+    const auto dir = make_temp_dir("phase2_skip_all");
+    const auto path = dir / "phase2_mock_mapping.yaml";
+    std::vector<RankBindingConfig> bindings = {make_binding(0, 0, 0, "h", 0, -1)};
+    std::map<int, std::string> mpi_rank_to_path = {{0, "/mock.yaml"}};
+
+    {
+        std::ofstream stale(path.string());
+        stale << "rank_to_cluster_mock_cluster_desc:\n  \"0\": /stale.yaml\n";
+    }
+    ASSERT_TRUE(std::filesystem::exists(path));
+
+    write_phase2_mock_mapping_yaml(bindings, mpi_rank_to_path, path.string());
 
     EXPECT_FALSE(std::filesystem::exists(path));
 }
