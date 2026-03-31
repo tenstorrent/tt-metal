@@ -13,7 +13,7 @@ namespace ttnn {
 ttnn::Tensor broadcast(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& sender_coord,
-    uint32_t num_links = 1,
+    std::optional<uint32_t> num_links = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     std::optional<uint32_t> cluster_axis = std::nullopt,

@@ -30,7 +30,7 @@ void bind_llama_reduce_scatter(nb::module_& mod) {
                 subdevice_id (ttnn.SubDeviceId): the subdevice id.
                 cluster_axis (number): the cluster axis.
                 mesh_device (ttnn.MeshDevice): the mesh device.
-                num_links (number, optional): the number of links. Defaults to `3`.
+                num_links (number, optional): the number of links. Defaults to the maximum available.
 
             Keyword Args:
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
@@ -65,7 +65,7 @@ void bind_llama_reduce_scatter(nb::module_& mod) {
         nb::arg("cluster_axis"),
         nb::arg("mesh_device"),
         nb::kw_only(),
-        nb::arg("num_links") = 1,
+        nb::arg("num_links") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("topology") = tt::tt_fabric::Topology::Linear,
         nb::arg("use_noc1_only") = false);

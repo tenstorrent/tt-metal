@@ -40,6 +40,21 @@ def clear_tt_ccl_cache():
     _tt_ccl_cache.clear()
 
 
+def _get_local_num_devices(mesh_device: Optional[ttnn.MeshDevice]) -> int:
+    """Return the number of devices visible to the current host process."""
+    if mesh_device is None:
+        raise ValueError("mesh_device is required to determine CCL link counts")
+
+    try:
+        local_device_ids = mesh_device.get_device_ids()
+    except Exception as exc:
+        raise ValueError("CCL link detection requires at least one host-local device") from exc
+    if not local_device_ids:
+        raise ValueError("CCL link detection requires at least one host-local device")
+
+    return len(local_device_ids)
+
+
 # =============================================================================
 # TT_CCL class
 # =============================================================================
@@ -139,13 +154,10 @@ def default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
 
 
 def _determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
-    """Determine device name based on number of devices and architecture."""
-    num_devices = mesh_device.get_num_devices() if mesh_device else 0
+    """Determine device name for CCL based on the host-local device count."""
+    num_devices = _get_local_num_devices(mesh_device)
     arch_name = ttnn.get_arch_name()
-    dram_grid_size = mesh_device.dram_grid_size() if mesh_device else None
-
-    if num_devices == 0:
-        return "CPU"
+    dram_grid_size = mesh_device.dram_grid_size()
 
     if "blackhole" in arch_name:
         dict_device_names = {
@@ -168,7 +180,7 @@ def _determine_device_name(mesh_device: ttnn.MeshDevice) -> str:
 
     if num_devices in dict_device_names:
         return dict_device_names[num_devices]
-    raise ValueError(f"Unsupported number of devices: {num_devices} for {arch_name}")
+    raise ValueError(f"Unsupported number of local devices: {num_devices} for {arch_name}")
 
 
 def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None) -> int:
@@ -204,4 +216,4 @@ def get_num_links(mesh_device: ttnn.MeshDevice, cluster_axis: int | None = None)
         return min(device_links)
     if cluster_axis in (0, 1):
         return device_links[cluster_axis]
-    return min(device_links)
+    raise ValueError(f"Unsupported cluster_axis: {cluster_axis}")

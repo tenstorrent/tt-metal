@@ -154,6 +154,11 @@ inline void llk_unpack_reconfig_data_format_srca(
         llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(srca_new_operand);
     } else if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
         llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(srca_new_operand);
+    } else if (
+        get_operand_face_r_dim(old_srca_operand_id) != get_operand_face_r_dim(new_srca_operand_id) ||
+        get_operand_num_faces(old_srca_operand_id) != get_operand_num_faces(new_srca_operand_id)) {
+        llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8, p_dim_stride_target::FACE_ROW_MAJOR>(
+            srca_new_operand);
     }
 }
 
@@ -171,6 +176,11 @@ inline void llk_unpack_reconfig_data_format_srcb(
         llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(srcb_new_operand);
     } else if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
         llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(srcb_new_operand);
+    } else if (
+        get_operand_face_r_dim(old_srcb_operand_id) != get_operand_face_r_dim(new_srcb_operand_id) ||
+        get_operand_num_faces(old_srcb_operand_id) != get_operand_num_faces(new_srcb_operand_id)) {
+        llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8, p_dim_stride_target::FACE_ROW_MAJOR>(
+            srcb_new_operand);
     }
 }
 

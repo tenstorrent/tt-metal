@@ -1083,45 +1083,50 @@ void release_lock();
 
 // Takes lock unconditionally. Prints kernel id message if needed.
 void acquire_lock() {
+    // We need to acquire lock only if we have more than 1 processor, otherwise there is no contention.
+    if constexpr (DevicePrintMemoryLayout::PROCESSOR_COUNT > 1) {
 #if defined(ARCH_WORMHOLE)
-    volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
+        volatile uint32_t* lock_ptr = &(get_device_print_buffer()->aux.lock);
 
-    while (true) {
-    again:
-        // Wait until lock is free (0)
-        while (*lock_ptr != 0) {
+        while (true) {
+        again:
+            // Wait until lock is free (0)
+            while (*lock_ptr != 0) {
+                invalidate_l1_cache();
+#if defined(COMPILE_FOR_ERISC)
+                internal_::risc_context_switch();
+#endif
+            }
+
+            // Write risc_id to lock to attempt to acquire it
+            *lock_ptr = PROCESSOR_INDEX + 1;  // Use 1-based index to avoid writing 0 which is the free state
+
+            for (uint32_t repeat = 0; repeat < DevicePrintMemoryLayout::PROCESSOR_COUNT; ++repeat) {
+                // Make sure the write has propagated and other riscs see the updated value.
+                invalidate_l1_cache();
+                if (*lock_ptr != PROCESSOR_INDEX + 1) {
+                    goto again;
+                }
+            }
+
+            // One last check that we have successfully acquired the lock.
+            invalidate_l1_cache();
+            if (*lock_ptr == PROCESSOR_INDEX + 1) {
+                break;  // Successfully acquired lock
+            }
+        }
+#else
+        auto& lock_atomic = get_device_print_buffer()->aux.lock;
+
+        while (lock_atomic.exchange(1) != 0) {
+            // Failed to acquire lock, wait and try again
             invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
 #endif
         }
-
-        // Write risc_id to lock to attempt to acquire it
-        *lock_ptr = PROCESSOR_INDEX + 1;  // Use 1-based index to avoid writing 0 which is the free state
-
-        // Make sure the write has propagated and other riscs see the updated value.
-        invalidate_l1_cache();
-        if (*lock_ptr != PROCESSOR_INDEX + 1) {
-            goto again;
-        }
-
-        // One last check that we have successfully acquired the lock.
-        invalidate_l1_cache();
-        if (*lock_ptr == PROCESSOR_INDEX + 1) {
-            break;  // Successfully acquired lock
-        }
-    }
-#else
-    auto& lock_atomic = get_device_print_buffer()->aux.lock;
-
-    while (lock_atomic.exchange(1) != 0) {
-        // Failed to acquire lock, wait and try again
-        invalidate_l1_cache();
-#if defined(COMPILE_FOR_ERISC)
-        internal_::risc_context_switch();
 #endif
     }
-#endif
 
     // After acquiring the lock, invalidate our L1 cache to ensure we see the most up-to-date data in the buffer
     invalidate_l1_cache();
