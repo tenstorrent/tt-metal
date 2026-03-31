@@ -148,4 +148,4 @@ If none of these paths exist, the tool fails with an error listing what it searc
 - **No `phase2_mock_mapping.yaml`:** Normal if `TT_METAL_MOCK_CLUSTER_DESC_PATH` was not set (or paths were not gathered).
 - **Wrong device visibility:** Bindings derive `TT_VISIBLE_DEVICES` from the cluster and mapping; verify MGD and PSD match your allocation.
 
-For a higher-level description of what the tool does in the codebase and what landed in a given change, see [`PR_GENERATE_RANK_BINDINGS.md`](PR_GENERATE_RANK_BINDINGS.md).
+For a higher-level description of what the tool does in the codebase and what landed in a given change, see the associated pull request description.
