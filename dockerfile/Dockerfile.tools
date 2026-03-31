@@ -292,7 +292,7 @@ COPY --from=sfpi-builder /install/ /install/
 # which produces /opt/openmpi-<tag>-ulfm/ in the final image.
 #############################################################
 
-FROM ubuntu:22.04 AS openmpi-builder
+FROM ubuntu:24.04 AS openmpi-builder
 ARG OMPI_TAG
 ARG OMPI_COMMIT_SHA
 
@@ -323,6 +323,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libmunge-dev \
     libpmix-dev \
     libzstd-dev \
+    libtool \
     make \
     perl \
     zlib1g-dev \
