@@ -67,22 +67,30 @@ class StageKind(ABC):
 class EmbeddingStage(StageKind):
     """Stage 0: H2D + embedding lookup, forwards activation; loopback receives token."""
 
-    def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights) -> None:
+    def __init__(self, weights: DeepSeekV3EmbeddingLayerWeights, forward_metadata: bool = False) -> None:
         self._weights = weights
+        self._forward_metadata = forward_metadata
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
+
+        activation_fifo_size = ACTIVATION_W_METADATA_FIFO_SIZE if self._forward_metadata else ACTIVATION_FIFO_SIZE
+        activation_page_size = (
+            ACTIVATION_W_METADATA_PAGE_SIZE_BYTES if self._forward_metadata else ACTIVATION_PAGE_SIZE_BYTES
+        )
+
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
             upstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            downstream_d2d_socket_fifo_size=activation_fifo_size,
             upstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            downstream_d2d_socket_page_size=activation_page_size,
             h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
             d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
             d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
             embedding_tensor=self._weights.embedding,
+            forward_metadata=self._forward_metadata,
         )
 
 
