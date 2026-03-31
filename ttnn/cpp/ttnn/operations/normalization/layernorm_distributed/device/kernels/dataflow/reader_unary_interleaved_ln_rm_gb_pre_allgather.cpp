@@ -11,6 +11,9 @@
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "api/debug/assert.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);     // Source address in dram
@@ -31,23 +34,20 @@ void kernel_main() {
 
     const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
 
-    // Generate constant tiles for reduce scalar
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_inp_buf(cb_inp);
+
     uint32_t inp_tile_idx = tile_offset;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // read input tiles
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            uint32_t inp_wr_ptr = get_write_ptr(cb_inp);
             for (uint32_t r = 0; r < blk; r++) {
-                cb_reserve_back(cb_inp, 1);
-                noc_async_read_tile(inp_tile_idx, src_a, inp_wr_ptr);
-                inp_wr_ptr += src0_tile_bytes;
+                cb_inp_buf.reserve_back(1);
+                noc.async_read(src_a, cb_inp_buf, src0_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
                 inp_tile_idx++;
-                noc_async_read_barrier();
-                cb_push_back(cb_inp, 1);
+                noc.async_read_barrier();
+                cb_inp_buf.push_back(1);
             }
-
         }  // wt loop
-
     }  // ncht loop
 }

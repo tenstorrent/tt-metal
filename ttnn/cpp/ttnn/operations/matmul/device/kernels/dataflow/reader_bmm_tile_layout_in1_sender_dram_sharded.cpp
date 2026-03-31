@@ -72,8 +72,9 @@ void kernel_main() {
     uint32_t l1_read_addr_in1 = 0;
     constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
-    uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in1_tensor_addr);
-    noc_async_read_one_packet_set_state<true>(in1_base_addr, in1_page_size, vc);
+    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
+    noc.set_async_read_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, vc);
 
 #ifdef ARCH_GRAYSKULL
     for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -82,7 +83,13 @@ void kernel_main() {
         l1_write_addr_in1 = cb_in1.get_write_ptr();
 
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc_async_read_one_packet_with_state<true, true>(in1_base_addr + l1_read_addr_in1, l1_write_addr_in1, vc);
+            noc.async_read_with_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+                dram_bank,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                in1_page_size,
+                {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
+                {},
+                vc);
             l1_read_addr_in1 += in1_page_size;
             l1_write_addr_in1 += in1_page_size;
         }
@@ -102,17 +109,21 @@ void kernel_main() {
     uint32_t l1_write_addr_in1_start = cb_in1.get_write_ptr();
     l1_write_addr_in1 = l1_write_addr_in1_start;
     for (uint32_t block = 0; block < num_blocks; ++block) {
-        noc_async_read_set_trid(curr_block_trid);
-
         for (uint32_t h = 0; h < in1_num_pages; ++h) {
-            noc_async_read_one_packet_with_state_with_trid(
-                in1_base_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
+            noc.async_read<experimental::Noc::TxnIdMode::ENABLED, NOC_MAX_BURST_SIZE>(
+                dram_bank,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                in1_page_size,
+                {.bank_id = dram_bank_id, .addr = in1_tensor_addr + l1_read_addr_in1},
+                {},
+                vc,
+                curr_block_trid);
             l1_read_addr_in1 += in1_page_size;
             l1_write_addr_in1 += in1_page_size;
         }
 
         if (num_free_blocks_in_buffer == 2) {
-            noc_async_read_barrier_with_trid(block_trid_to_wait);
+            noc.async_read_barrier<experimental::Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
             cb_in1.push_back(in1_block_num_tiles);
             // wait for next block trid
             block_trid_to_wait = block_trid_to_wait == 3 ? 1 : (block_trid_to_wait + 1);
@@ -132,7 +143,7 @@ void kernel_main() {
         l1_write_addr_in1 = l1_write_addr_in1_start + l1_write_addr_in1_offset;
     }
     // last block to wait
-    noc_async_read_barrier_with_trid(block_trid_to_wait);
+    noc.async_read_barrier<experimental::Noc::BarrierMode::TXN_ID>(block_trid_to_wait);
     cb_in1.push_back(in1_block_num_tiles);
 #endif
 
@@ -142,11 +153,17 @@ void kernel_main() {
     uint32_t l1_write_addr_in3 = cb_in3.get_write_ptr();
     uint32_t l1_read_addr_in3 = 0;
 
-    uint64_t in3_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, in3_tensor_addr);
-    noc_async_read_one_packet_set_state<true>(in3_base_addr, in3_page_size, vc);
+    noc.set_async_read_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+        dram_bank, in3_page_size, {.bank_id = dram_bank_id, .addr = in3_tensor_addr}, vc);
 
     for (uint32_t h = 0; h < in3_num_pages; ++h) {
-        noc_async_read_one_packet_with_state<true, true>(in3_base_addr + l1_read_addr_in3, l1_write_addr_in3, vc);
+        noc.async_read_with_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+            dram_bank,
+            experimental::CoreLocalMem<uint32_t>(l1_write_addr_in3),
+            in3_page_size,
+            {.bank_id = dram_bank_id, .addr = in3_tensor_addr + l1_read_addr_in3},
+            {},
+            vc);
         l1_read_addr_in3 += in3_page_size;
         l1_write_addr_in3 += in3_page_size;
     }

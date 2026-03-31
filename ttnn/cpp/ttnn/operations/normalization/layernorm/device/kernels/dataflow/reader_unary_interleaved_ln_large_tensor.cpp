@@ -96,6 +96,7 @@ void kernel_main() {
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     constexpr uint32_t cb_id_in_rm = get_named_compile_time_arg_val("cb_in_rm");
+    experimental::CircularBuffer cb_in_rm(cb_id_in_rm);
 
     const uint32_t src0_page_bytes = W_logical * elem_size_bytes;
 #else
@@ -140,7 +141,7 @@ void kernel_main() {
         // Pass 0: Data for calculating E[X]
 #ifdef TILIZE_IN
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            cb_id_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
+            noc, cb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
 #else
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
@@ -163,7 +164,7 @@ void kernel_main() {
 //   once the buffer is full while compute waits for in1 — circular wait.
 #ifdef TILIZE_IN
         layernorm_dataflow_utils::push_row_major_blocks_to_cb<decltype(src_a), TILE_W, TILE_H>(
-            cb_id_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
+            noc, cb_in_rm, src_a, Wt, block_size, curr_tile_row, elem_size_bytes, rm_row_stride_bytes, H_logical);
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
@@ -203,7 +204,8 @@ void kernel_main() {
             // Pass 2 input for this block
 #ifdef TILIZE_IN
             layernorm_dataflow_utils::read_row_major_block_to_cb<decltype(src_a), decltype(block), TILE_W, TILE_H>(
-                cb_id_in_rm,
+                noc,
+                cb_in_rm,
                 src_a,
                 curr_tile_row,
                 num_valid_rows_pass2,

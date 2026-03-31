@@ -31,6 +31,8 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include <tt-metalium/constants.hpp>
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "layernorm_dataflow_utils.h"
 
@@ -49,6 +51,9 @@ void kernel_main() {
     constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(dst_args.next_compile_time_args_offset());
 
     constexpr uint32_t cb_id_out_rm = get_named_compile_time_arg_val("cb_out_rm");
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_out_rm(cb_id_out_rm);
 
     constexpr uint32_t TILE_H = tt::constants::TILE_HEIGHT;
     constexpr uint32_t TILE_W = tt::constants::TILE_WIDTH;
@@ -78,7 +83,7 @@ void kernel_main() {
 
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::write_row_major_block_from_cb<decltype(dst_a), decltype(block), TILE_W, TILE_H>(
-                cb_id_out_rm, dst_a, abs_row_base, num_valid_rows, tile_width_bytes, block_row_stride_bytes, block);
+                noc, cb_out_rm, dst_a, abs_row_base, num_valid_rows, tile_width_bytes, block_row_stride_bytes, block);
         }
     }
 }
