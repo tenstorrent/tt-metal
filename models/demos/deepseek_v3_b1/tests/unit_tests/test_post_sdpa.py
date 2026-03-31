@@ -17,7 +17,7 @@ Post-SDPA phases:
 - Gather1: Collect to [1, 8192] on gather core (12, 9)
 - Mcast: Broadcast [1, 8192] to 130 cores (13x10 rectangular grid)
 - Matmul2: [1, 8192] x [8192, 64] -> [1, 64] per core on 112 active cores
-- Gather2: Collect to [1, 7168] on gather core (12, 9)
+- Gather2: Collect to [1, 7168] on sender core (11, 9)
 - TP All-Reduce: Exchange [1, 7168] between devices, reduce (local + remote + residual)
 
 The mcast grid (13x10=130 cores) includes 18 inactive cores that receive mcast data
@@ -26,7 +26,7 @@ but skip matmul2 via is_matmul2_core=false.
 Core Layout:
 - SDPA Workers: FlashMLADecode.output_cores(0, SDPA_INPUT_NUM_CORES)
 - SDPA Forwarders: (6,9), (7,9) = 2 cores
-- TP All-Reduce core = Gather core (12, 9)
+- TP All-Reduce: sender core (11, 9) + receiver core (12, 9)
 
 Full operation: [1, 512] @ [512, 8192] @ [8192, 7168] -> [1, 7168] per device,
 then all-reduce across devices with optional residual add.
@@ -202,6 +202,9 @@ def test_post_sdpa(
     gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
+    sender_core = ttnn.CoreCoord(11, 9)
+    sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
+
     # ========================================================================
     # Create PyTorch tensors (per-device)
     # ========================================================================
@@ -347,12 +350,12 @@ def test_post_sdpa(
     logger.info(f"Created gather1 output tensor: {gather1_output_shard_shape} on gather core")
 
     # ========================================================================
-    # Create gather2 output tensor (intermediate [1, 7168] on gather core, per device)
-    # This tensor backs CB7 and holds gather2 output for CCL to read
+    # Create gather2 output tensor (intermediate [1, 7168] on sender core, per device)
+    # This tensor backs the CCL local data CB on sender core (11, 9)
     # ========================================================================
     gather2_output_shard_shape = (M, output_size)  # [1, 7168]
     gather2_output_shard_spec = ttnn.ShardSpec(
-        gather_core_grid,
+        sender_core_grid,
         gather2_output_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
@@ -371,7 +374,7 @@ def test_post_sdpa(
         memory_config=gather2_output_mem_config,
         mesh_mapper=mesh_mapper,
     )
-    logger.info(f"Created gather2 output tensor: {gather2_output_shard_shape} on gather core per device")
+    logger.info(f"Created gather2 output tensor: {gather2_output_shard_shape} on sender core per device")
 
     # ========================================================================
     # Create CCL tensors and semaphores (only when CCL is enabled)
@@ -654,6 +657,9 @@ def test_post_sdpa_with_sdpa_phase(
     gather_core = ttnn.CoreCoord(12, 9)
     gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
 
+    sender_core = ttnn.CoreCoord(11, 9)
+    sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
+
     sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
     sdpa_worker_grid = ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in sdpa_output_cores]
@@ -871,7 +877,7 @@ def test_post_sdpa_with_sdpa_phase(
 
     gather2_output_shard_shape = (M, output_size)
     gather2_output_shard_spec = ttnn.ShardSpec(
-        gather_core_grid, gather2_output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
+        sender_core_grid, gather2_output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR
     )
     gather2_output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gather2_output_shard_spec

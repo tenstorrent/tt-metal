@@ -10,27 +10,30 @@ This implements Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce 
 - Gather2: Collect results from all 64 cores to [1, 8192] on gather core (12, 9)
 - Mcast3: Broadcast [1, 8192] to 130 cores (13x10 grid, rectangular for efficient mcast3)
 - Matmul5: [1, 8192] x [8192, 64] -> [1, 64] on 112 active cores (o_proj grid: 12x8 + 8x2)
-- Gather3: Collect results from all 112 active cores to [1, 7168] on gather core (12, 9)
+- Gather3: Collect results from all 112 active cores to [1, 7168] on sender core (11, 9)
 - CCL All-Reduce: Exchange [1, 7168] between devices and reduce (local + remote + residual)
 
 The 13x10 mcast3 grid contains 130 cores, but only 112 are active for matmul5.
 The 18 inactive cores receive mcast3 data but skip matmul via is_matmul5_core=false.
 
-CCL All-Reduce uses a single gather/all-reduce core (12, 9).
+CCL All-Reduce uses two cores:
+- Sender core (11, 9): gather3 receiver + dual fabric writers (NCRISC link 1, BRISC link 0)
+- Receiver core (12, 9): fabric reader (BRISC) + reduction compute (TRISC)
+Note: sender core (11, 9) is also a matmul4/mcast3 core; gather3 now delivers there directly.
 
 CB Layout:
-- CB 0: matmul4_in0 (kv_b2 grid: 5x8 + 12x2)
-- CB 1: matmul4_in1 (kv_b2 grid: 5x8 + 12x2)
-- CB 2: matmul4_out (kv_b2 grid: 5x8 + 12x2)
-- CB 3: gather2_dst = mcast3_src (gather core)
-- CB 4: mcast3_dst = matmul5_in0 (13x10 grid)
-- CB 5: matmul5_in1 (112 active matmul5 cores)
-- CB 6: matmul5_out (112 active matmul5 cores)
-- CB 7: gather3_dst = ccl_local_data (gather core)
-- CB 52: ccl_sync (single-tile NCRISC->TRISC sync token)
-- CB 53: ccl_remote_data (gather/all-reduce core - intermediate tensor)
-- CB 54: ccl_residual (gather/all-reduce core - optional)
-- CB 56: ccl_output (gather/all-reduce core - final output)
+- CB 44: matmul4_in0 (kv_b2 grid: 5x8 + 12x2)
+- CB 45: matmul4_in1 (kv_b2 grid: 5x8 + 12x2)
+- CB 46: matmul4_out (kv_b2 grid: 5x8 + 12x2)
+- CB 47: gather2_dst = mcast3_src (gather core 12,9)
+- CB 48: mcast3_dst = matmul5_in0 (13x10 grid)
+- CB 49: matmul5_in1 (112 active matmul5 cores)
+- CB 50: matmul5_out (112 active matmul5 cores)
+- CB 51: gather3_dst = ccl_local_data (sender core 11,9)
+- CB 52: ccl_recv_local_data (receiver core 12,9 - NOC-read copy of local data)
+- CB 53: ccl_remote_data (receiver core 12,9 - intermediate tensor)
+- CB 54: ccl_residual (receiver core 12,9 - optional)
+- CB 55: ccl_output (receiver core 12,9 - final output)
 """
 
 
@@ -204,9 +207,7 @@ class PostSDPA:
 
         # Tile definitions
         TILE_1x32 = ttnn.Tile((1, 32))
-        TILE_32x32 = ttnn.Tile((32, 32))
         tile_1x32_size = TILE_1x32.get_tile_size(data_format)
-        tile_32x32_size = TILE_32x32.get_tile_size(data_format)
 
         # ========================================================================
         # Core grid configuration — derived from production weight overlap specs
@@ -221,9 +222,13 @@ class PostSDPA:
         matmul4_cores = ttnn.corerange_to_cores(matmul4_core_grid, row_wise=True)
         gather2_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul4_cores)]
 
-        # Gather/CCL receiver core: (12, 9)
+        # Gather2/mcast3/CCL receiver core: (12, 9)
         gather_core = ttnn.CoreCoord(12, 9)
         gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(gather_core, gather_core)])
+
+        # Gather3 receiver / CCL sender core: (11, 9)
+        sender_core = ttnn.CoreCoord(11, 9)
+        sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(sender_core, sender_core)])
 
         # Mcast3 grid: 13x10 = 130 cores (full rectangular for efficient mcast3)
         MCAST_GRID_START_X = 0
@@ -249,7 +254,10 @@ class PostSDPA:
         gather3_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul5_cores)]
 
         # Full grid (union of all cores for semaphore allocation)
-        full_grid = matmul4_core_grid.merge(gather_core_grid).merge(mcast3_core_grid)
+        full_grid = matmul4_core_grid
+        full_grid = full_grid.merge(gather_core_grid)
+        full_grid = full_grid.merge(mcast3_core_grid)
+        full_grid = full_grid.merge(sender_core_grid)
 
         # ========================================================================
         # SDPA Reduce-to-All configuration (optional)
@@ -392,12 +400,11 @@ class PostSDPA:
         matmul5_in0_cb = 48  # Mcast3 dst = Matmul5 input (13x10 mcast3 grid)
         matmul5_in1_cb = 49  # Matmul5 weights (112 active cores)
         matmul5_out_cb = 50  # Matmul5 output (112 active cores)
-        gather3_dst_cb = 51  # Gather3 output = CCL local data (gather core)
-        ccl_sync_cb = 52  # NCRISC->TRISC sync token on gather core
-        ccl_remote_data_cb = 53  # CCL received remote data (gather/allreduce core)
-        ccl_residual_cb = 54  # CCL residual (gather/allreduce core)
-        ccl_temp_cb = 55  # CCL temp scratch (gather/allreduce core)
-        ccl_output_cb = 56  # CCL output (gather/allreduce core)
+        gather3_dst_cb = 51  # Gather3 output = CCL local data (sender core 11,9)
+        ccl_recv_local_data_cb = 52  # CCL receiver-side local data (receiver core 12,9)
+        ccl_remote_data_cb = 53  # CCL received remote data (receiver core 12,9)
+        ccl_residual_cb = 54  # CCL residual (receiver core 12,9)
+        ccl_output_cb = 55  # CCL output (receiver core 12,9)
 
         # ========================================================================
         # Gather2 parameters: 64 cores -> [1, 8192]
@@ -450,12 +457,11 @@ class PostSDPA:
             num_links=ccl_num_links,
             chunk_num_tiles=None,
             local_data_cb_id=gather3_dst_cb,
+            recv_local_data_cb_id=ccl_recv_local_data_cb,
             remote_data_cb_id=ccl_remote_data_cb,
             output_cb_id=ccl_output_cb,
-            sync_cb_id=ccl_sync_cb,
             residual_tensor_mesh=residual_tensor_mesh,
             residual_cb_id=ccl_residual_cb,
-            temp_cb_id=ccl_temp_cb,
             skip_local_push=True,
             skip_ccl=not ccl_enabled,
         )
@@ -483,6 +489,7 @@ class PostSDPA:
 
                 # Get NOC coordinates for this device
                 gather_dest_noc_core = device.worker_core_from_logical_core(gather_core)
+                sender_dest_noc_core = device.worker_core_from_logical_core(sender_core)
                 mcast3_dest_noc_start_core = device.worker_core_from_logical_core(mcast3_grid.start)
                 mcast3_dest_noc_end_core = device.worker_core_from_logical_core(mcast3_grid.end)
 
@@ -526,9 +533,9 @@ class PostSDPA:
                     ("matmul5_out", matmul5_out_cb),
                     ("matmul5_k_num_tiles", matmul5_k_num_tiles),
                     ("matmul5_out_w_per_core", matmul5_out_w_per_core),
-                    # Gather3 sender
-                    ("gather3_dest_noc_x", gather_dest_noc_core.x),
-                    ("gather3_dest_noc_y", gather_dest_noc_core.y),
+                    # Gather3 sender (destination = sender core 11,9)
+                    ("gather3_dest_noc_x", sender_dest_noc_core.x),
+                    ("gather3_dest_noc_y", sender_dest_noc_core.y),
                     ("gather3_data_size_bytes", gather3_data_size_bytes),
                     ("gather3_receiver_semaphore_id", gather3_noc0_receiver_semaphore_id),
                     ("gather3_src_cb", matmul5_out_cb),
@@ -676,9 +683,9 @@ class PostSDPA:
                         ]
                     )
 
-                ncrisc_named_compile_time_args.extend(allreduce_config.get_ncrisc_ct_args(coord))
-                brisc_named_compile_time_args.extend(allreduce_config.get_brisc_ct_args(coord))
-                trisc_named_compile_time_args.extend(allreduce_config.get_trisc_ct_args(coord))
+                ncrisc_named_compile_time_args.extend(allreduce_config.get_ncrisc_named_ct_args(coord))
+                brisc_named_compile_time_args.extend(allreduce_config.get_brisc_named_ct_args(coord))
+                trisc_named_compile_time_args.extend(allreduce_config.get_trisc_named_ct_args(coord))
 
                 # ========================================================================
                 # Circular buffer descriptors
@@ -775,19 +782,6 @@ class PostSDPA:
                         format_descriptors=[matmul5_out_cb_format],
                     )
 
-                # CB 7: Gather3 output = CCL local data (backed by tensor on gather/allreduce core)
-                gather3_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                    gather3_dst_cb, gather3_output_tensor_device
-                )
-                gather3_dst_cb_descriptor.format_descriptors = [
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=gather3_dst_cb,
-                        data_format=data_format,
-                        page_size=tile_32x32_size,
-                        tile=ttnn.TileDescriptor(TILE_32x32),
-                    )
-                ]
-
                 cb_list = [
                     matmul4_in0_cb_descriptor,
                     matmul4_in1_cb_descriptor,
@@ -796,7 +790,6 @@ class PostSDPA:
                     matmul5_in0_cb_descriptor,
                     matmul5_in1_cb_descriptor,
                     matmul5_out_cb_descriptor,
-                    gather3_dst_cb_descriptor,
                 ]
 
                 # CCL CBs: only when CCL is enabled
@@ -991,7 +984,13 @@ class PostSDPA:
                         other_value=0,
                     ),
                     UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_allreduce_core",
+                        named_compile_time_arg="is_allreduce_sender_core",
+                        core_range=sender_core_grid,
+                        value=1 if ccl_enabled else 0,
+                        other_value=0,
+                    ),
+                    UnifiedCompileTimeCoreDescriptor(
+                        named_compile_time_arg="is_allreduce_receiver_core",
                         core_range=gather_core_grid,
                         value=1 if ccl_enabled else 0,
                         other_value=0,
@@ -1042,9 +1041,11 @@ class PostSDPA:
                 # ========================================================================
                 ccl_ctx = {
                     "allreduce_config": allreduce_config,
-                    "allreduce_core": gather_core,
-                    "ncrisc_common_rt_args": allreduce_config.get_ncrisc_common_rt_args(coord),
-                    "brisc_common_rt_args": allreduce_config.get_brisc_common_rt_args(coord),
+                    "sender_core": sender_core,
+                    "receiver_core": gather_core,
+                    "sender_ncrisc_common_rt_args": allreduce_config.get_sender_ncrisc_common_rt_args(coord),
+                    "sender_brisc_common_rt_args": allreduce_config.get_sender_brisc_common_rt_args(coord),
+                    "receiver_brisc_common_rt_args": allreduce_config.get_receiver_brisc_common_rt_args(coord),
                 }
 
                 # ========================================================================
@@ -1419,18 +1420,33 @@ class PostSDPA:
             # CCL runtime args and fabric connection setup
             # ==================================================================
             ccl = ctx["ccl"]
-            allreduce_core = ccl["allreduce_core"]
-            allreduce_group = kernel_result.get_group_by_arg("is_allreduce_core", 1)
+            ccl_sender_core = ccl["sender_core"]
+            sender_group = kernel_result.get_group_by_arg("is_allreduce_sender_core", 1)
+            receiver_group = kernel_result.get_group_by_arg("is_allreduce_receiver_core", 1)
 
-            if allreduce_group is not None:
-                allreduce_ncrisc_rt_args = ttnn.RuntimeArgs()
-                allreduce_ncrisc_rt_args[allreduce_core.x][allreduce_core.y] = ccl[
+            if sender_group is not None:
+                sender_ncrisc_rt_args = ttnn.RuntimeArgs()
+                sender_ncrisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = ccl[
                     "allreduce_config"
-                ].get_ncrisc_per_core_rt_args(coord, program, allreduce_core)
+                ].get_ncrisc_per_core_rt_args(coord, program, ccl_sender_core)
+                program.kernels[sender_group.ncrisc_kernel_index].runtime_args = sender_ncrisc_rt_args
+                program.kernels[sender_group.ncrisc_kernel_index].common_runtime_args = ccl[
+                    "sender_ncrisc_common_rt_args"
+                ]
 
-                program.kernels[allreduce_group.ncrisc_kernel_index].runtime_args = allreduce_ncrisc_rt_args
-                program.kernels[allreduce_group.ncrisc_kernel_index].common_runtime_args = ccl["ncrisc_common_rt_args"]
-                program.kernels[allreduce_group.brisc_kernel_index].common_runtime_args = ccl["brisc_common_rt_args"]
+                sender_brisc_rt_args = ttnn.RuntimeArgs()
+                sender_brisc_rt_args[ccl_sender_core.x][ccl_sender_core.y] = ccl[
+                    "allreduce_config"
+                ].get_brisc_per_core_rt_args(coord, program, ccl_sender_core)
+                program.kernels[sender_group.brisc_kernel_index].runtime_args = sender_brisc_rt_args
+                program.kernels[sender_group.brisc_kernel_index].common_runtime_args = ccl[
+                    "sender_brisc_common_rt_args"
+                ]
+
+            if receiver_group is not None:
+                program.kernels[receiver_group.brisc_kernel_index].common_runtime_args = ccl[
+                    "receiver_brisc_common_rt_args"
+                ]
 
             # ==================================================================
             # SDPA runtime args and fabric connection setup

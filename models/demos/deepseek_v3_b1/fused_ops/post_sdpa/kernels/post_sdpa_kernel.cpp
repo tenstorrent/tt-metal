@@ -28,7 +28,8 @@
 // Note: Some SDPA cores overlap with matmul5 grid - they run SDPA first, then matmul5
 //
 // CCL Core Layout:
-// - Single all-reduce core = Gather core (12, 9)
+// - CCL sender core (11, 9): gather3 receiver + dual fabric writers (NCRISC link 1, BRISC link 0)
+// - CCL receiver core (12, 9): fabric reader (BRISC) + reduction compute (TRISC)
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
@@ -62,13 +63,17 @@ struct Core {
     // Post-SDPA cores
     // First matmul on kv_b2 grid (5x8 + 12x2 = 64 cores) - receives scatter data from SDPA workers
     static constexpr bool is_matmul4_core = get_named_compile_time_arg_val("is_matmul4_core") == 1;
-    // Gather core (12, 9) - receives gather2, sends mcast3, receives gather3, runs all-reduce
+    // Gather core (12, 9) - receives gather2, sends mcast3
     static constexpr bool is_gather_receiver_core = get_named_compile_time_arg_val("is_gather_receiver_core") == 1;
     // Mcast3 receiver grid (13x10 = 130 cores) - receives mcast3 data
     static constexpr bool is_mcast3_receiver_core = get_named_compile_time_arg_val("is_mcast3_receiver_core") == 1;
     // Active matmul5 cores (112 cores: o_proj grid 12x8 + 8x2)
     static constexpr bool is_matmul5_core = get_named_compile_time_arg_val("is_matmul5_core") == 1;
-    static constexpr bool is_allreduce_core = get_named_compile_time_arg_val("is_allreduce_core") == 1;
+    // CCL sender core (11, 9) - receives gather3, sends via fabric
+    static constexpr bool is_allreduce_sender_core = get_named_compile_time_arg_val("is_allreduce_sender_core") == 1;
+    // CCL receiver core (12, 9) - receives remote data via fabric, runs reduction
+    static constexpr bool is_allreduce_receiver_core =
+        get_named_compile_time_arg_val("is_allreduce_receiver_core") == 1;
 };
 
 void kernel_main() {
@@ -83,7 +88,7 @@ void kernel_main() {
 // - Mcast3 receiver (13x10 grid = 130 cores): receive mcast3 data
 // - Matmul5 reader (112 active cores): setup weights buffer
 // - Gather3 sender (112 active cores): send matmul5 output to gather core
-// - CCL all-reduce core (12, 9): NCRISC writer path
+// - CCL sender core (11, 9): NCRISC writer (fabric link 1)
 // ============================================================================
 #if defined(COMPILE_FOR_NCRISC)
     // Matmul4 CTArgs
@@ -138,22 +143,25 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather3_sender_idx"),
     };
 #ifndef SKIP_CCL
-    using AllReduceWriterCTArgs = deepseek_b1_ops::AllReduce::WriterCTArgs<
+    using AllReduceWriterCTArgs = deepseek_b1_ops::AllReduce::WriterLinkCTArgs<
         get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
-        get_named_compile_time_arg_val("allreduce_sync_cb_id"),
         get_named_compile_time_arg_val("allreduce_input_num_tiles"),
         get_named_compile_time_arg_val("allreduce_page_size_bytes"),
         get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
         get_named_compile_time_arg_val("allreduce_last_chunk_tiles"),
         get_named_compile_time_arg_val("allreduce_num_chunks"),
-        get_named_compile_time_arg_val("allreduce_num_links")>;
+        get_named_compile_time_arg_val("allreduce_num_links"),
+        get_named_compile_time_arg_val("allreduce_writer_link_index"),
+        get_named_compile_time_arg_val("allreduce_writer_signal_local_ready"),
+        get_named_compile_time_arg_val("allreduce_skip_local_push")>;
 #endif
 // ============================================================================
 // BRISC (Writer)
 // - Gather2 receiver (gather core): receive from kv_b2 grid
 // - Mcast3 sender (gather core): broadcast to 13x10 grid (130 cores)
-// - Gather3 receiver (gather core): receive from 112 active matmul5 cores
-// - CCL all-reduce core (12, 9): BRISC reader path
+// - Gather3 receiver (sender core 11,9): receive from 112 active matmul5 cores
+// - CCL sender core (11, 9): BRISC writer (fabric link 0)
+// - CCL receiver core (12, 9): BRISC reader
 // ============================================================================
 #elif defined(COMPILE_FOR_BRISC)
     // Matmul4/2 CTArgs (BRISC is no-op for matmul)
@@ -205,13 +213,27 @@ void kernel_main() {
     };
 
 #ifndef SKIP_CCL
-    using AllReduceReaderCTArgs = deepseek_b1_ops::AllReduce::ReaderCTArgs<
+    // BRISC has dual role: WriterSingleLink on sender core + Reader on receiver core.
+    // Both CT arg sets are available; if constexpr guards execution.
+    using AllReduceBriscWriterCTArgs = deepseek_b1_ops::AllReduce::WriterLinkCTArgs<
         get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
+        get_named_compile_time_arg_val("allreduce_input_num_tiles"),
+        get_named_compile_time_arg_val("allreduce_page_size_bytes"),
+        get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
+        get_named_compile_time_arg_val("allreduce_last_chunk_tiles"),
+        get_named_compile_time_arg_val("allreduce_num_chunks"),
+        get_named_compile_time_arg_val("allreduce_num_links"),
+        get_named_compile_time_arg_val("allreduce_writer_link_index"),
+        get_named_compile_time_arg_val("allreduce_writer_signal_local_ready"),
+        get_named_compile_time_arg_val("allreduce_skip_local_push")>;
+
+    using AllReduceReaderCTArgs = deepseek_b1_ops::AllReduce::ReaderCTArgs<
+        get_named_compile_time_arg_val("allreduce_recv_local_data_cb_id"),
         get_named_compile_time_arg_val("allreduce_remote_data_cb_id"),
         get_named_compile_time_arg_val("allreduce_residual_cb_id"),
         get_named_compile_time_arg_val("allreduce_has_residual"),
-        get_named_compile_time_arg_val("allreduce_skip_local_push"),
         get_named_compile_time_arg_val("allreduce_total_num_tiles"),
+        get_named_compile_time_arg_val("allreduce_page_size_bytes"),
         get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
         get_named_compile_time_arg_val("allreduce_last_chunk_tiles"),
         get_named_compile_time_arg_val("allreduce_num_chunks"),
@@ -221,7 +243,7 @@ void kernel_main() {
 // TRISC (Compute)
 // - Matmul4 compute (kv_b2 grid)
 // - Matmul5 compute (112 active cores)
-// - CCL all-reduce core (gather core): TRISC reduction (local + remote + residual)
+// - CCL receiver core (12, 9): TRISC reduction (local + remote + residual)
 // ============================================================================
 #elif defined(COMPILE_FOR_TRISC)
     // Matmul4 CTArgs
@@ -259,14 +281,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("allreduce_cb_remote"),
         get_named_compile_time_arg_val("allreduce_cb_local"),
         get_named_compile_time_arg_val("allreduce_cb_out"),
-        get_named_compile_time_arg_val("allreduce_sync_cb_id"),
         get_named_compile_time_arg_val("allreduce_cb_residual"),
-        get_named_compile_time_arg_val("allreduce_cb_temp"),
         get_named_compile_time_arg_val("allreduce_has_residual"),
-        get_named_compile_time_arg_val("allreduce_num_tiles"),
-        get_named_compile_time_arg_val("allreduce_num_chunks"),
-        get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
-        get_named_compile_time_arg_val("allreduce_last_chunk_tiles")>;
+        get_named_compile_time_arg_val("allreduce_num_tiles")>;
 #endif
     deepseek_compute_kernel_init();
 #endif
@@ -521,50 +538,63 @@ void kernel_main() {
     }
 
     // ========================================================================
-    // Gather3: 112 active matmul5 cores -> gather core (12, 9)
+    // Gather3: 112 active matmul5 cores -> sender core (11, 9)
     // Collects [1, 64] * 112 = [1, 7168]
     // ========================================================================
     {
         DeviceZoneScopedN("GATHER3");
-        deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
+        deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_allreduce_sender_core, true, true> gather3;
         gather3(gather3_args);
     }
 
 #ifndef SKIP_CCL
     // ========================================================================
     // CCL All-Reduce: Exchange [1, 7168] between devices
-    // Single gather/all-reduce core runs NCRISC writer, BRISC reader, TRISC compute.
+    // Sender core (11,9): NCRISC writer (link 1) + BRISC writer (link 0)
+    // Receiver core (12,9): BRISC reader + TRISC compute
     // ========================================================================
 #if defined(COMPILE_FOR_NCRISC)
-    if constexpr (Core::is_allreduce_core) {
-        DeviceZoneScopedN("CCL_WRITER");
-        deepseek_b1_ops::AllReduce::RTArgs allreduce_writer_args{};
-        allreduce_writer_args.intermediate_buffer_address = get_common_arg_val<uint32_t>(0);
-        allreduce_writer_args.my_noc_x = get_common_arg_val<uint32_t>(1);
-        allreduce_writer_args.my_noc_y = get_common_arg_val<uint32_t>(2);
-        allreduce_writer_args.sem_bank_addr_0 = get_common_arg_val<uint32_t>(3);
-        allreduce_writer_args.sem_bank_addr_1 = get_common_arg_val<uint32_t>(4);
-        allreduce_writer_args.fabric_args_start_index = 0;
-        deepseek_b1_ops::AllReduce::Writer<AllReduceWriterCTArgs> allreduce_writer;
-        allreduce_writer(allreduce_writer_args);
+    if constexpr (Core::is_allreduce_sender_core) {
+        DeviceZoneScopedN("CCL_SENDER_WRITER");
+        deepseek_b1_ops::AllReduce::SenderFabricArgs args{};
+        args.intermediate_buffer_address = get_common_arg_val<uint32_t>(0);
+        args.dest_noc_x = get_common_arg_val<uint32_t>(1);
+        args.dest_noc_y = get_common_arg_val<uint32_t>(2);
+        args.per_core_rta_start_idx = 0;
+        deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceWriterCTArgs> writer;
+        writer(args);
     }
 
 #elif defined(COMPILE_FOR_BRISC)
-    if constexpr (Core::is_allreduce_core) {
+    if constexpr (Core::is_allreduce_sender_core) {
+        DeviceZoneScopedN("CCL_SENDER_WRITER");
+        deepseek_b1_ops::AllReduce::SenderFabricArgs args{};
+        args.intermediate_buffer_address = get_common_arg_val<uint32_t>(0);
+        args.dest_noc_x = get_common_arg_val<uint32_t>(1);
+        args.dest_noc_y = get_common_arg_val<uint32_t>(2);
+        args.per_core_rta_start_idx = 0;
+        deepseek_b1_ops::AllReduce::WriterSingleLink<AllReduceBriscWriterCTArgs> writer;
+        writer(args);
+    }
+    if constexpr (Core::is_allreduce_receiver_core) {
         DeviceZoneScopedN("CCL_READER");
-        deepseek_b1_ops::AllReduce::RTArgs allreduce_reader_args{};
-        allreduce_reader_args.sem_bank_addr_0 = get_common_arg_val<uint32_t>(0);
-        allreduce_reader_args.sem_bank_addr_1 = get_common_arg_val<uint32_t>(1);
-        deepseek_b1_ops::AllReduce::Reader<AllReduceReaderCTArgs> allreduce_reader;
-        allreduce_reader(allreduce_reader_args);
+        deepseek_b1_ops::AllReduce::ReceiverArgs args{};
+        args.sem_bank_addr_0 = get_common_arg_val<uint32_t>(0);
+        args.sem_bank_addr_1 = get_common_arg_val<uint32_t>(1);
+        args.sender_noc_x = get_common_arg_val<uint32_t>(2);
+        args.sender_noc_y = get_common_arg_val<uint32_t>(3);
+        args.sender_local_data_l1_addr = get_common_arg_val<uint32_t>(4);
+        args.local_ready_sem_bank_addr = get_common_arg_val<uint32_t>(5);
+        deepseek_b1_ops::AllReduce::Reader<AllReduceReaderCTArgs> reader;
+        reader(args);
     }
 
 #elif defined(COMPILE_FOR_TRISC)
-    if constexpr (Core::is_allreduce_core) {
+    if constexpr (Core::is_allreduce_receiver_core) {
         DeviceZoneScopedN("CCL_COMPUTE");
-        deepseek_b1_ops::AllReduce::RTArgs allreduce_compute_args{};
-        deepseek_b1_ops::AllReduce::Compute<AllReduceComputeCTArgs> allreduce_compute;
-        allreduce_compute(allreduce_compute_args);
+        deepseek_b1_ops::AllReduce::ComputeArgs args{};
+        deepseek_b1_ops::AllReduce::Compute<AllReduceComputeCTArgs> compute;
+        compute(args);
     }
 #endif
 #endif  // SKIP_CCL
