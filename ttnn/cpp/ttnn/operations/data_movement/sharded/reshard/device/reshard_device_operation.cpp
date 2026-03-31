@@ -178,14 +178,10 @@ TensorSpec ReshardDeviceOperation::compute_output_specs(
     }
 
     const auto& input_tensor = tensor_args.input;
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        TensorLayout::fromPaddedShape(
-            input_tensor.dtype(),
-            input_tensor.layout(),
-            args.output_mem_config,
-            input_tensor.logical_shape(),
-            input_tensor.padded_shape()));
+        tt::tt_metal::TensorLayout(
+            input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
 }
 
 Tensor ReshardDeviceOperation::create_output_tensors(

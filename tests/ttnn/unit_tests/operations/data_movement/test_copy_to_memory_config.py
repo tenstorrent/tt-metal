@@ -185,12 +185,11 @@ def test_copy_to_memory_config_rm_interleaved_to_nd_sharded_dram(
         ),
     ],
 )
-def test_copy_to_memory_config_rm_interleaved_avg_pool2d_output_to_nd_sharded_with_input_row_major_interleaved_larger_padded_width(
+def test_copy_to_memory_config_rm_interleaved_avg_pool2d_output_to_nd_sharded_with_input_row_major_interleaved(
     device, hw, kernel, stride, pad, shard_shape, grid
 ):
     """
-    Runs avg_pool2d to produce a row-major interleaved tensor whose padded_shape width
-    is larger than its logical_shape width, then converts to ND sharded via copy_to_memory_config.
+    Runs avg_pool2d to produce a row-major interleaved tensor, then converts to ND sharded via copy_to_memory_config.
     Validates that the sharded output data matches the avg_pool2d result.
     """
     h, w = hw
@@ -232,10 +231,6 @@ def test_copy_to_memory_config_rm_interleaved_avg_pool2d_output_to_nd_sharded_wi
         reallocate_halo_output=False,
         config_tensor_in_dram=True,
     )
-
-    assert (
-        y.padded_shape[-1] > y.shape[-1]
-    ), "Precondition failed: avg_pool2d output should have padded width > logical width"
 
     y_torch = ttnn.to_torch(y)
 
