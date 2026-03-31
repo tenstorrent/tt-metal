@@ -875,8 +875,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         SetRuntimeArgs(program, compute_kernel, core, args);
     }
 
-    // Validate local and global CB sizes separately to prevent two errors from cancelling out (#23133).
-    // Local CBs are non-globally-allocated (computed by the program); global CBs are tensor-backed.
+    // Validate local and global CB sizes separately to prevent two errors from cancelling out
+    // Note local CBs are non-globally-allocated (computed by the program); global CBs are tensor-backed.
     auto actual_local_cb_size = calculate_total_cb_size(program);
 
     uint32_t post_allocate_size =

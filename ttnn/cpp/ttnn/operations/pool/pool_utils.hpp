@@ -114,7 +114,7 @@ PoolCBSizes calculate_pool_cb_sizes(
     bool config_tensor_in_dram);
 
 // Separate L1 usage for local CBs vs globally-allocated tensor buffers.
-// Tracking these separately prevents two errors from cancelling out in validation (see #23133).
+// Tracking these separately prevents two errors from cancelling out in validation
 struct pool_op_l1_usage {
     uint32_t local_cb_size{};
     uint32_t global_cb_size{};

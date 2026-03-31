@@ -200,9 +200,7 @@ uint32_t PoolCBSizes::local_cb_total() const {
         total += in_cb_pagesize * in_cb_npages;
     }
     total += mpwi_total_size;
-    if (has_pre_tilize) {
-        total += pre_tilize_cb_pagesize * pre_tilize_cb_npages;
-    }
+    total += pre_tilize_cb_pagesize * pre_tilize_cb_npages;
     total += config_tensor_l1_size;
     return total;
 }
