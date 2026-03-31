@@ -201,8 +201,19 @@ def run_combine_test(
     else:
         tt_out_agg = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
 
-    # Check shapes match
+    # ============================================================
+    # EXPLICIT SHAPE VALIDATION - Catches axis/dimension bugs
+    # ============================================================
+    expected_shape = (select_experts_k, total_output_tokens, hidden_size)
+    assert tt_out_agg.shape == expected_shape, (
+        f"Combine output shape mismatch: got {tt_out_agg.shape}, expected {expected_shape}. "
+        f"cluster_axis={cluster_axis}, batch={batch}, num_replicated_devices={num_replicated_devices}, "
+        f"total_output_tokens should be batch * num_replicated_devices = {batch} * {num_replicated_devices} = {total_output_tokens}. "
+        f"If this fails, check cluster_axis logic in selective_reduce_combine_device_operation.cpp line 61!"
+    )
     assert tt_out_agg.shape == output_ref.shape, f"Shape mismatch: tt_out {tt_out_agg.shape} != ref {output_ref.shape}"
+
+    logger.info(f"✓ Shape validation passed: {tt_out_agg.shape} == {expected_shape}")
 
     # Verify each element where data is valid
     all_passed = True

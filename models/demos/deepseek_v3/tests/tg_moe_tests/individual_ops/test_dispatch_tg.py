@@ -299,6 +299,46 @@ def run_all_to_all_dispatch_metadata_test(
         total_tokens_out = tt_metadata_tensor.shape[1]
         selected_experts_k = tt_metadata_tensor.shape[2]
 
+        # ============================================================
+        # EXPLICIT SHAPE VALIDATION - Catches axis/dimension bugs
+        # ============================================================
+        expected_devices = devices  # All devices output, even replicated ones
+        expected_batch = batch
+        expected_k = select_experts_k
+
+        # Critical check: batch dimension depends on dispatch_devices from cluster_axis
+        # With cluster_axis=0 and 4x8 mesh: dispatch_devices=4, so batch should be batches_per_device * 4
+        # If axis logic is wrong: dispatch_devices=8, so batch would be batches_per_device * 8 (WRONG!)
+        expected_dispatch_devices = mesh_shape[cluster_axis]
+        calculated_batch_from_shape = tt_metadata_tensor.shape[1]
+
+        assert tt_torch_tensor.shape[0] == expected_devices, (
+            f"Output tokens shape[0] mismatch: got {tt_torch_tensor.shape[0]}, expected {expected_devices}. "
+            f"All {expected_devices} devices should output tensors!"
+        )
+        assert tt_metadata_tensor.shape == (expected_devices, expected_batch, expected_k), (
+            f"Metadata shape mismatch: got {tt_metadata_tensor.shape}, expected ({expected_devices}, {expected_batch}, {expected_k}). "
+            f"All {expected_devices} devices should output metadata (cluster_axis={cluster_axis}, "
+            f"batch={batch} tokens total). If this fails, check all_to_all_dispatch_device_operation.cpp!"
+        )
+
+        # This check catches cluster_axis bugs: batch dimension MUST match expected_dispatch_devices * batches_per_device
+        # If the C++ code swaps num_rows/num_cols, this will fail
+        assert calculated_batch_from_shape == expected_batch, (
+            f"CRITICAL: Batch dimension {calculated_batch_from_shape} doesn't match expected {expected_batch}! "
+            f"This suggests cluster_axis logic is wrong. With cluster_axis={cluster_axis}, "
+            f"dispatch_devices should be mesh_shape[{cluster_axis}]={expected_dispatch_devices}, "
+            f"and batch should be {expected_batch}. If you swapped num_rows/num_cols in "
+            f"all_to_all_dispatch_device_operation.cpp line 104, this is the bug!"
+        )
+
+        if tensor_index == 0:
+            logger.info(f"✓ Shape validation passed:")
+            logger.info(
+                f"  Metadata shape: {tt_metadata_tensor.shape} == ({expected_devices}, {expected_batch}, {expected_k})"
+            )
+            logger.info(f"  cluster_axis={cluster_axis}, total_devices={expected_devices}, batch={batch}")
+
         # Verify metadata
         metadata_all_close = torch.allclose(
             tt_metadata_tensor, output_metadata_goldens_list[tensor_index].to(torch.uint16)
