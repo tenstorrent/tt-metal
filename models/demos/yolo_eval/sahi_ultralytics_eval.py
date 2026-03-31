@@ -29,8 +29,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        default="yolo11n.pt",
-        help="Ultralytics model path/name (e.g. yolo11n.pt, yolov8s.pt).",
+        default="yolov8s.pt",
+        help="Ultralytics model path/name (e.g. yolov8s.pt, yolov8x.pt). Default matches YOLOv8s (640 native imgsz).",
     )
     parser.add_argument(
         "--backend",
@@ -40,8 +40,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--tt-model",
-        default="yolov8x",
-        help="TT model name. Currently supported: yolov8x.",
+        default="yolov8s",
+        choices=["yolov8s", "yolov8x"],
+        help="TT model variant. Both use 640x640 internal letterbox (see models/demos/yolov8s|yolov8x).",
     )
     parser.add_argument(
         "--tt-device-id",
@@ -53,13 +54,13 @@ def parse_args() -> argparse.Namespace:
         "--tt-l1-small-size",
         type=int,
         default=24576,
-        help="TT device l1_small_size for YOLOv8x runner.",
+        help="TT device l1_small_size (YOLOv8s/YOLOv8x demos default 24576).",
     )
     parser.add_argument(
         "--tt-trace-region-size",
         type=int,
         default=6434816,
-        help="TT device trace_region_size for YOLOv8x runner.",
+        help="TT device trace_region_size (YOLOv8s demo uses 6434816; override if your device requires it).",
     )
     parser.add_argument(
         "--confidence-threshold",
@@ -186,21 +187,29 @@ def run_prediction(detection_model, image_path: str):
 
 
 class TTYoloBackend:
-    def __init__(self, args):
-        if args.tt_model != "yolov8x":
-            raise ValueError("Only --tt-model yolov8x is currently supported.")
+    """Tenstorrent YOLO runner. Ultralytics YOLOv8s/YOLOv8x are trained for 640 imgsz; TT demos match that."""
 
+    _TT_INPUT_RES = (640, 640)
+
+    def __init__(self, args):
         import ttnn
+        from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
         from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
 
         self.ttnn = ttnn
+        self.tt_model_name = args.tt_model
         self.device = ttnn.open_device(
             device_id=args.tt_device_id,
             l1_small_size=args.tt_l1_small_size,
             trace_region_size=args.tt_trace_region_size,
             num_command_queues=2,
         )
-        self.runner = YOLOv8xPerformantRunner(self.device, device_batch_size=1)
+        if args.tt_model == "yolov8s":
+            self.runner = YOLOv8sPerformantRunner(self.device, device_batch_size=1)
+        elif args.tt_model == "yolov8x":
+            self.runner = YOLOv8xPerformantRunner(self.device, device_batch_size=1)
+        else:
+            raise ValueError(f"Unsupported --tt-model: {args.tt_model}")
         self.names = load_coco_class_names()
         self.confidence_threshold = args.confidence_threshold
 
@@ -211,8 +220,11 @@ class TTYoloBackend:
             self.ttnn.close_device(self.device)
 
     def infer_bgr_image(self, image_bgr, image_id: str):
-        im_tensor = preprocess([image_bgr], res=(640, 640))
+        im_tensor = preprocess([image_bgr], res=self._TT_INPUT_RES)
         preds = self.runner.run(im_tensor)
+        # YOLOv8x performant runner returns a single tensor; YOLOv8s returns a list (use primary head).
+        if isinstance(preds, (list, tuple)):
+            preds = preds[0]
         preds = self.ttnn.to_torch(preds, dtype=torch.float32)
         results = postprocess(preds, im_tensor, [image_bgr], ([image_id],), self.names)
         return results[0]
@@ -435,10 +447,11 @@ def main():
             tt_backend = TTYoloBackend(args)
         except Exception as e:
             raise RuntimeError(
-                "Failed to initialize TT backend for YOLOv8x. "
-                "This is often due to an API/runtime mismatch between current tt-metal and the YOLOv8x demo runner. "
-                "Please verify the standard TT YOLOv8x demo command works first: "
-                "`pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_yolov8x_640`"
+                "Failed to initialize TT YOLO backend. "
+                "This is often due to an API/runtime mismatch between current tt-metal and the demo runner. "
+                "Verify the matching PCC test first, e.g. "
+                "`pytest --disable-warnings models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640` "
+                "or `pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_yolov8x_640`."
             ) from e
 
     processing_images = images
