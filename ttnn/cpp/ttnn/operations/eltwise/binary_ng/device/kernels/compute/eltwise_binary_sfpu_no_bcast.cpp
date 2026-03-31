@@ -27,7 +27,7 @@
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
-inline void process_sfpu_tiles(
+FORCE_INLINE void process_sfpu_tiles(
     uint32_t n, uint32_t cb_pre_lhs, uint32_t cb_post_lhs, uint32_t cb_pre_rhs, uint32_t cb_post_rhs, uint32_t cb_out) {
     PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
     cb_wait_front(cb_post_lhs, n);

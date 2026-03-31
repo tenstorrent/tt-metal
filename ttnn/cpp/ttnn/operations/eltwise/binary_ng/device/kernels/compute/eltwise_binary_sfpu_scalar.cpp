@@ -23,7 +23,7 @@
 #include "eltwise_utils_sfpu.hpp"
 
 // Process n LHS tiles against a scalar tile at index 0 in cb_post_rhs
-inline void process_sfpu_scalar_tiles(
+FORCE_INLINE void process_sfpu_scalar_tiles(
     uint32_t n, uint32_t cb_pre_lhs, uint32_t cb_post_lhs, uint32_t cb_post_rhs, uint32_t cb_out) {
     PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
     cb_wait_front(cb_post_lhs, n);
