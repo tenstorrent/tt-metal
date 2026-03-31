@@ -96,10 +96,20 @@ inline void calculate_digamma() {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void digamma_init() {
-    // Initialise Newton-Raphson reciprocal constants in vConstFloatPrgm0/1/2.
-    // Must use _init_reciprocal_ (not log_init) so that _sfpu_reciprocal_<2>
-    // reads the correct Newton-Raphson seed values during calculate_digamma.
-    _init_reciprocal_<APPROXIMATION_MODE, is_fp32_dest_acc_en, false>();
+    // Must use _init_sfpu_reciprocal_ (not _init_reciprocal_) because
+    // calculate_digamma calls _sfpu_reciprocal_<2> as an inline helper function.
+    //
+    // On WH: _sfpu_reciprocal_<2> reads vConstFloatPrgm0/1/2 for its quadratic
+    //        initial estimate — set by _init_sfpu_reciprocal_.
+    // On BH: _sfpu_reciprocal_<2> reads vConstFloatPrgm0 as the NR constant 2.0f
+    //        — also set by _init_sfpu_reciprocal_.
+    //
+    // _init_reciprocal_ (used by the dedicated reciprocal op kernel) sets up
+    // SFPLOADMACRO instruction templates on BH for bulk _calculate_reciprocal_
+    // iterations.  It does NOT set vConstFloatPrgm0 = 2.0f, so using it here
+    // leaves vConstFloatPrgm0 uninitialised and corrupts the NR reciprocal,
+    // producing garbage output on BH.
+    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
 }
 
 }  // namespace ckernel::sfpu
