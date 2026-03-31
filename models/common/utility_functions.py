@@ -1051,6 +1051,18 @@ def is_slow_dispatch():
     return os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1"
 
 
+def disable_persistent_kernel_cache() -> None:
+    """Compatibility hook for demos/tests.
+
+    Some tt-metal versions toggled a persistent kernel/program cache here.
+    If the API is unavailable, this is a no-op so imports and tests keep working.
+    """
+
+
+def enable_persistent_kernel_cache() -> None:
+    """Pairing hook for :func:`disable_persistent_kernel_cache`."""
+
+
 def ti_skip(condition, reason="Invalid test parameters"):
     return pytest.mark.skipif(condition, reason="Skipping unsupported case: " + reason)
 
