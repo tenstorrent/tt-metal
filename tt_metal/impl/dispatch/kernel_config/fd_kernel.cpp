@@ -5,6 +5,7 @@
 #include "fd_kernel.hpp"
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include <host_api.hpp>
 #include <utility>
 #include <variant>
@@ -269,19 +270,15 @@ KernelHandle FDKernel::configure_kernel_variant(
     const std::string& path,
     const std::vector<uint32_t>& compile_args,
     std::map<std::string, std::string> defines_in,
-    bool is_active_eth_core,
-    bool send_to_brisc,
-    bool force_watcher_no_inline,
     KernelBuildOptLevel opt_level) {
-    uint32_t programmable_core_type_index =
-        get_programmable_core_type_index(descriptor_, GetCoreType(), is_active_eth_core);
+    uint32_t programmable_core_type_index = get_programmable_core_type_index(descriptor_, GetCoreType());
 
     std::map<std::string, std::string> defines = {
         {"DISPATCH_KERNEL", "1"},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
-    if (force_watcher_no_inline) {
-        defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline)});
+    if (force_watcher_no_inline_) {
+        defines.insert({"WATCHER_NOINLINE", std::to_string(force_watcher_no_inline_)});
     }
     const auto& rt_options = descriptor_.rtoptions();
     if (rt_options.watcher_dispatch_disabled()) {
@@ -298,24 +295,36 @@ KernelHandle FDKernel::configure_kernel_variant(
     }
 
     if (GetCoreType() == CoreType::WORKER) {
-        kernel_handle_ = tt::tt_metal::CreateKernel(
-            *program_,
-            path,
-            logical_core_,
-            tt::tt_metal::DataMovementConfig{
-                .processor = send_to_brisc ? tt::tt_metal::DataMovementProcessor::RISCV_0
-                                           : tt::tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = noc_selection_.non_dispatch_noc,
-                .compile_args = compile_args,
-                .defines = defines,
-                .opt_level = opt_level});
+        if (device_->arch() == tt::ARCH::QUASAR) {
+            kernel_handle_ = experimental::quasar::CreateKernel(
+                *program_,
+                path,
+                logical_core_,
+                experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1,
+                    .compile_args = compile_args,
+                    .defines = defines,
+                    .opt_level = opt_level});
+        } else {
+            kernel_handle_ = tt::tt_metal::CreateKernel(
+                *program_,
+                path,
+                logical_core_,
+                tt::tt_metal::DataMovementConfig{
+                    .processor = send_to_brisc_ ? tt::tt_metal::DataMovementProcessor::RISCV_0
+                                                : tt::tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = noc_selection_.non_dispatch_noc,
+                    .compile_args = compile_args,
+                    .defines = defines,
+                    .opt_level = opt_level});
+        }
     } else {
         kernel_handle_ = tt::tt_metal::CreateKernel(
             *program_,
             path,
             logical_core_,
             tt::tt_metal::EthernetConfig{
-                .eth_mode = is_active_eth_core ? Eth::SENDER : Eth::IDLE,
+                .eth_mode = Eth::IDLE,
                 .noc = noc_selection_.non_dispatch_noc,
                 .compile_args = compile_args,
                 .defines = defines,
