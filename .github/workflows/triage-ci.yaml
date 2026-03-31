@@ -116,6 +116,7 @@ jobs:
       - name: Enrich export with GitHub issue closure booleans
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_REPO_GITHUB_TOKEN: ${{ secrets.TEMPORARY_ISSUE_DUMP_TOKEN }}
         run: |
           set -euo pipefail
           python tools/ci/enrich_slack_with_issue_status.py \

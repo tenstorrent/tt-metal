@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    github_token = os.environ.get("GITHUB_TOKEN")
+    github_token = os.environ.get("ISSUE_REPO_GITHUB_TOKEN") or os.environ.get("GITHUB_TOKEN")
 
     with open(args.input, encoding="utf-8") as f:
         payload = json.load(f)
