@@ -45,6 +45,7 @@ from models.demos.deepseek_v3_b1.blitz_decode_weights import (
     BlitzDecodeWeights,
 )
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata, create_metadata_tensor
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll
 
@@ -1061,21 +1062,12 @@ def test_post_sdpa_with_sdpa_phase(
     sdpa_semaphores = [sdpa_semaphore1, sdpa_semaphore2]
 
     # ========================================================================
-    # Create position_id tensor mesh for SDPA position validity
-    # HEIGHT_SHARDED int32 [1,1] per SDPA worker core, replicated across mesh
+    # Create metadata tensor mesh for SDPA position validity
+    # HEIGHT_SHARDED uint32 [num_cores, 2] per SDPA worker core, replicated across mesh
     # ========================================================================
-    position_data = torch.full((NUM_SDPA_WORKERS, 1), position_id, dtype=torch.int32)
-    pos_shard_spec = ttnn.ShardSpec(sdpa_worker_grid, (1, 1), ttnn.ShardOrientation.ROW_MAJOR)
-    pos_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, pos_shard_spec)
-    position_id_tensor_mesh = ttnn.from_torch(
-        position_data,
-        device=submesh,
-        dtype=ttnn.int32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=pos_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(submesh),
-    )
-    logger.info(f"Created position_id tensor: position_id={position_id}, per_device_chunk_size={per_device_chunk_size}")
+    metadata = DeepseekMetadata(position_id=position_id)
+    metadata_tensor_mesh = create_metadata_tensor(submesh, sdpa_worker_grid, metadata)
+    logger.info(f"Created metadata tensor: position_id={position_id}, per_device_chunk_size={per_device_chunk_size}")
 
     # ========================================================================
     # Run fused operation with SDPA
@@ -1103,7 +1095,7 @@ def test_post_sdpa_with_sdpa_phase(
         sdpa_semaphores=sdpa_semaphores,
         sdpa_scale_fp32=1.0,
         sdpa_cluster_axis=0,  # SDPA reduces on axis 0 (rows), TP reduces on axis 1 (cols)
-        sdpa_position_id_tensor_mesh=position_id_tensor_mesh,
+        sdpa_position_id_tensor_mesh=metadata_tensor_mesh,
         sdpa_per_device_chunk_size=per_device_chunk_size,
     )
     ttnn.synchronize_device(submesh)

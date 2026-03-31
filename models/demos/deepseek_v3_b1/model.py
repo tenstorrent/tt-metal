@@ -29,18 +29,86 @@ Interface vs real decoder:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable
 
 import torch
-from loguru import logger
 
-import ttnn
-
-# Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
-TOKEN_ID_BYTES: int = 4
-
-# Socket page_size must be PCIe-aligned (see h2d_socket.cpp). Must match demo stage TOKEN_PAGE_SIZE_BYTES (64).
 PCIE_PAGE_ALIGNMENT_BYTES: int = 64
+
+
+# ---------------------------------------------------------------------------
+# Speculative-decode page layout (64 bytes = 16 uint32 words)
+# ---------------------------------------------------------------------------
+
+
+class OutputField:
+    """uint32 indices within the 16-word output page."""
+
+    TOKEN_0 = 0
+    TOKEN_0_TYPE = 1
+    TOKEN_0_POS = 2
+    NUM_TOKENS = 3
+    TOKEN_1 = 4
+    TOKEN_1_TYPE = 5
+    TOKEN_1_POS = 6
+
+
+class InputField:
+    """uint32 indices within the 16-word input page."""
+
+    TOKEN_ID = 0
+    USER_ID = 1
+    POSITION_ID = 2
+
+
+class TokenType:
+    BASE = 0
+    SPEC = 1
+
+
+class NumTokens:
+    STALE = 0  # SPEC arrived, BASE was rejected — discard
+    ACCEPT = 1  # BASE matched speculation — emit accepted token
+    REJECT_OR_CONTINUE = 2  # REJECT or CONTINUE — two tokens present
+
+
+@dataclass
+class DecodeResult:
+    """Parsed output page from the pipeline."""
+
+    token_0: int
+    token_0_type: int
+    token_0_pos: int
+    num_tokens: int
+    token_1: int | None = None
+    token_1_type: int | None = None
+    token_1_pos: int | None = None
+
+
+def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
+    """Parse a 16-word output page into a structured DecodeResult."""
+    raw = ttnn.to_torch(output_buffer).to(torch.int32).flatten()
+    num_tokens = int(raw[OutputField.NUM_TOKENS].item())
+    has_second = num_tokens == NumTokens.REJECT_OR_CONTINUE
+    return DecodeResult(
+        token_0=int(raw[OutputField.TOKEN_0].item()),
+        token_0_type=int(raw[OutputField.TOKEN_0_TYPE].item()),
+        token_0_pos=int(raw[OutputField.TOKEN_0_POS].item()),
+        num_tokens=num_tokens,
+        token_1=int(raw[OutputField.TOKEN_1].item()) if has_second else None,
+        token_1_type=int(raw[OutputField.TOKEN_1_TYPE].item()) if has_second else None,
+        token_1_pos=int(raw[OutputField.TOKEN_1_POS].item()) if has_second else None,
+    )
+
+
+def to_spec_input(token_id: int, user_id: int, position_id: int, page_size_datums: int) -> ttnn.Tensor:
+    """Build a PCIe-aligned input page carrying (token_id, user_id, position_id)."""
+    torch_padded = torch.zeros(1, page_size_datums, dtype=torch.int32)
+    torch_padded[0, InputField.TOKEN_ID] = token_id
+    torch_padded[0, InputField.USER_ID] = user_id
+    torch_padded[0, InputField.POSITION_ID] = position_id
+    return ttnn.from_torch(torch_padded, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
 def align_up(value: int, alignment: int) -> int:
@@ -149,7 +217,6 @@ class DeepSeekV3:
             input_tensor.shape[0] == self.batch_size
         ), f"Input tensor batch size must be {self.batch_size}, got {input_tensor.shape[0]}"
 
-        padded_input = to_padded_input(input_tensor, self.batch_size, self._page_size_datums)
         self._write_fn(padded_input)
         self._read_fn(self._output_buffer)
         self._position += 1

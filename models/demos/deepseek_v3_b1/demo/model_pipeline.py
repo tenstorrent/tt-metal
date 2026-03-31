@@ -20,7 +20,7 @@ from models.demos.deepseek_v3_b1.demo.weight_provider import (
     SyntheticWeightProvider,
     WeightProvider,
 )
-from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_size_bytes, to_padded_input
+from models.demos.deepseek_v3_b1.model import TOKEN_ID_BYTES, DeepSeekV3, page_size_bytes
 
 
 class ModelPipeline:
@@ -101,13 +101,12 @@ class ModelPipeline:
         assert self.model is not None
         logger.debug(f"Prefilling with {len(tokens)} tokens...")
         prompt_token_tensors = [
-            to_padded_input(
-                torch.tensor([[tid]], dtype=torch.int32),
-                batch_size=1,
-                page_size_datums=self._page_size_datums,
-            )
-            for tid in tokens
+            to_spec_input(tid, user_id=0, position_id=i, page_size_datums=self._page_size_datums)
+            for i, tid in enumerate(tokens)
         ]
+
+        self.position_id = len(tokens)
+
         last_output = self.model.prefill(prompt_token_tensors)
         next_token_id = int(ttnn.to_torch(last_output).to(torch.int32)[0, 0].item())
         logger.debug(f"Done prefilling with {len(tokens)} tokens.")
@@ -119,9 +118,12 @@ class ModelPipeline:
         if self.pipeline.my_mesh_id != 0:
             raise RuntimeError("decode_forward() should only be called on mesh id 0")
         assert self.model is not None
+
         output = self.model.decode_step(
-            torch.tensor([[input_token]], dtype=torch.int32),
+            to_spec_input(input_token, user_id=0, position_id=self.position_id, page_size_datums=self._page_size_datums)
         )
+        self.position_id += 1
+
         next_token_id = int(ttnn.to_torch(output).to(torch.int32)[0, 0].item())
         return next_token_id
 

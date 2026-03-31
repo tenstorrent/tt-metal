@@ -230,7 +230,8 @@ struct Broadcast {
                 if constexpr (CTArgs::is_root) {
                     cb_wait_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
                     const uint32_t src = get_read_ptr(CTArgs::cb0_id);
-                    constexpr uint32_t tensor_size_bytes = CTArgs::tensor0_page_size * CTArgs::num_pages_to_read;
+                    constexpr uint32_t tensor_size_bytes =
+                        (CTArgs::num_chunks - 1) * CTArgs::chunk_size_bytes + CTArgs::last_chunk_size_bytes;
                     noc_async_write(src, dst_noc_base, tensor_size_bytes);
                     auto no_wait = [&](uint32_t, uint32_t) {};
                     forward_chunks(src, no_wait);

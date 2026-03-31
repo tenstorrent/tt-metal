@@ -84,7 +84,8 @@ struct ReduceToOneB1 {
         uint32_t totalNumWorkers = 0,
         uint32_t aggOutputSizeBytes = 0,
         uint32_t persistentFabricRtArgBase = 0,
-        uint32_t persistentFabricSignalEnable = 0>
+        uint32_t persistentFabricSignalEnable = 0,
+        uint32_t forwardMetadataSizeBytes = 0>
     struct WriterCTArgs {
         static constexpr uint32_t device_role = deviceRole;
         static constexpr uint32_t num_tiles = numTiles;
@@ -106,6 +107,7 @@ struct ReduceToOneB1 {
         static constexpr bool enable_downstream_socket = totalNumWorkers > 0;
         static constexpr uint32_t persistent_fabric_rt_arg_base = persistentFabricRtArgBase;
         static constexpr uint32_t persistent_fabric_signal_enable = persistentFabricSignalEnable;
+        static constexpr uint32_t forward_metadata_size_bytes = forwardMetadataSizeBytes;
     };
 
     // Compute (TRISC) compile-time args
@@ -149,6 +151,7 @@ struct ReduceToOneB1 {
         uint32_t output_base_addr;
         uint32_t shard_idx;
         uint32_t socket_config_addr;  // Per-worker downstream socket config address
+        uint32_t metadata_addr;       // L1 address of metadata (only used by last worker when forward_metadata > 0)
         uint32_t agg_sem_l1_addr;     // Persistent-signal sync semaphore L1 address (global sem)
         uint32_t agg_core_noc_x;      // Persistent-signal core physical NOC x
         uint32_t agg_core_noc_y;      // Persistent-signal core physical NOC y
@@ -346,9 +349,15 @@ struct ReduceToOneB1 {
 
                 if constexpr (CTArgs::enable_downstream_socket) {
                     constexpr uint32_t useful_per_shard = CTArgs::agg_output_size_bytes / CTArgs::total_num_workers;
+                    constexpr bool is_last_worker_metadata_forwarder = CTArgs::forward_metadata_size_bytes > 0;
                     if (args.socket_config_addr != 0) {
+                        const bool is_last_worker = args.shard_idx == CTArgs::total_num_workers - 1;
+                        const uint32_t socket_page_size = (is_last_worker_metadata_forwarder && is_last_worker)
+                                                              ? useful_per_shard + CTArgs::forward_metadata_size_bytes
+                                                              : useful_per_shard;
+
                         SocketSenderInterface sender_socket = create_sender_socket_interface(args.socket_config_addr);
-                        set_sender_socket_page_size(sender_socket, useful_per_shard);
+                        set_sender_socket_page_size(sender_socket, socket_page_size);
                         socket_reserve_pages(sender_socket, 1);
                         sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
@@ -357,6 +366,15 @@ struct ReduceToOneB1 {
                             downstream_enc.d2d.downstream_noc_y,
                             sender_socket.write_ptr + sender_socket.downstream_fifo_addr);
                         noc_async_write(src_addr, fifo_dst, useful_per_shard);
+
+                        if constexpr (is_last_worker_metadata_forwarder) {
+                            if (is_last_worker) {
+                                noc_async_write(
+                                    args.metadata_addr,
+                                    fifo_dst + useful_per_shard,
+                                    CTArgs::forward_metadata_size_bytes);
+                            }
+                        }
                         noc_async_writes_flushed();
 
                         socket_push_pages(sender_socket, 1);

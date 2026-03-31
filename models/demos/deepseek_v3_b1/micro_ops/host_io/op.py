@@ -50,6 +50,7 @@ class HostInterface:
         loopback_mode=False,
         embedding_cb_index=None,
         fabric_packet_header_cb_index=None,
+        metadata_size_bytes=0,
     ):
         assert h2d_socket is not None or d2h_socket is not None, "Either h2d_socket or d2h_socket must be provided"
 
@@ -71,6 +72,7 @@ class HostInterface:
         self.embedding_tensor = embedding_tensor
         self.h2d_downstream_core = h2d_downstream_core
         self.d2h_upstream_core = d2h_upstream_core
+        self.metadata_size_bytes = metadata_size_bytes
 
         if self.h2d_socket:
             if len(self.h2d_socket.get_active_cores()) != 1:
@@ -178,10 +180,9 @@ class HostInterface:
 
         if use_fabric:
             fabric_max_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
-            if self.has_embedding:
-                page_size_per_link = self.embedding_page_size // self.num_fwd_links
-            else:
-                page_size_per_link = self.h2d_page_size // self.num_fwd_links
+            base_data_transfer_size = self.embedding_page_size if self.has_embedding else self.h2d_page_size
+            total_data_transfer_size = base_data_transfer_size + self.metadata_size_bytes
+            page_size_per_link = total_data_transfer_size // self.num_fwd_links
             num_whole_fabric_packets_per_link = page_size_per_link // fabric_max_payload_size
             partial_packet_size_per_link = page_size_per_link % fabric_max_payload_size
 
@@ -202,6 +203,7 @@ class HostInterface:
             num_whole_fabric_packets_per_link,
             partial_packet_size_per_link,
             use_fabric,
+            self.metadata_size_bytes,
         ]
         # Add CTAs for fused embedding op if needed
         if self.has_embedding:
@@ -275,13 +277,13 @@ class HostInterface:
         # CB for embedding DRAM reads
         if self.has_embedding:
             embedding_cb_desc = ttnn.CBDescriptor(
-                total_size=self.embedding_page_size,
+                total_size=self.embedding_page_size + self.metadata_size_bytes,
                 core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(mesh_core_coord.core_coord, mesh_core_coord.core_coord)]),
                 format_descriptors=[
                     ttnn.CBFormatDescriptor(
                         buffer_index=self.embedding_cb_index,
                         data_format=ttnn.bfloat16,
-                        page_size=self.embedding_page_size,
+                        page_size=self.embedding_page_size + self.metadata_size_bytes,
                     )
                 ],
             )

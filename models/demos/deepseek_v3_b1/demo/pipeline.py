@@ -42,7 +42,7 @@ def create_single_galaxy_pipeline_configuration(
     """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return EmbeddingStage(weight_provider.load_embedding(device))
+        return EmbeddingStage(weight_provider.load_embedding(device), True)
 
     def stage_1(device: ttnn.MeshDevice) -> StageKind:
         return LMHeadStage(
@@ -76,7 +76,7 @@ def create_single_pod_pipeline_configuration(
     """
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return EmbeddingStage(weight_provider.load_embedding(device))
+        return EmbeddingStage(weight_provider.load_embedding(device), True)
 
     def stage_14(device: ttnn.MeshDevice) -> StageKind:
         return LMHeadStage(
@@ -128,7 +128,7 @@ def create_sp4_pipeline_configuration(
     """
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
-        return EmbeddingStage(weight_provider.load_embedding(device))
+        return EmbeddingStage(weight_provider.load_embedding(device), True)
 
     def stage_62(device: ttnn.MeshDevice) -> StageKind:
         return LMHeadStage(

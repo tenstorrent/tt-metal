@@ -15,6 +15,8 @@ import ttnn
 from models.demos.deepseek_v3_b1.demo.stage import (
     ACTIVATION_FIFO_SIZE,
     ACTIVATION_PAGE_SIZE_BYTES,
+    ACTIVATION_W_METADATA_FIFO_SIZE,
+    ACTIVATION_W_METADATA_PAGE_SIZE_BYTES,
     PIPELINE_CORE_COORD,
     StageContext,
     StageKind,
@@ -22,6 +24,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3DenseLayerWeights, DeepSeekV3MoELayerWeights
 
@@ -41,14 +44,16 @@ class DecoderStage(StageKind):
         *,
         weights: DeepSeekV3MoELayerWeights | DeepSeekV3DenseLayerWeights | None,
         layer_idx: int,
-        position_id: int,
+        metadata: DeepseekMetadata,
         max_seq_len: int,
+        num_slots: int,
         persistent_mode: bool,
         is_torus: bool,
         is_moe: bool,
         num_routed_experts: int,
         use_hardcoded_expert_index: bool,
         enable_routing: bool,
+        forward_metadata: bool = False,
     ) -> None:
         if state_dict is None and weights is None:
             raise ValueError("Either state_dict or weights must be provided")
@@ -57,14 +62,16 @@ class DecoderStage(StageKind):
         self._state_dict = state_dict
         self._weights = weights
         self._layer_idx = layer_idx
-        self._position_id = position_id
+        self._metadata = metadata
         self._max_seq_len = max_seq_len
+        self._num_slots = num_slots
         self._persistent_mode = persistent_mode
         self._is_torus = is_torus
         self._is_moe = is_moe
         self._num_routed_experts = num_routed_experts
         self._use_hardcoded_expert_index = use_hardcoded_expert_index
         self._enable_routing = enable_routing
+        self._forward_metadata = forward_metadata
         self._state: dict[str, Any] = {}
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
@@ -81,17 +88,30 @@ class DecoderStage(StageKind):
         reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
 
         exit_upstream_cores = [ttnn.MeshCoreCoord(reduce_root_coord, c) for c in shard_cores_list]
+        assert (
+            ACTIVATION_PAGE_SIZE_BYTES % len(shard_cores_list) == 0
+        ), "ACTIVATION_PAGE_SIZE_BYTES must be divisible by len(shard_cores_list)"
+
+        exit_upstream_page_size = ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list)
+
+        if self._forward_metadata:
+            fifo_size = ACTIVATION_W_METADATA_FIFO_SIZE
+            page_size = ACTIVATION_W_METADATA_PAGE_SIZE_BYTES
+        else:
+            fifo_size = ACTIVATION_FIFO_SIZE
+            page_size = ACTIVATION_PAGE_SIZE_BYTES
 
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
-            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
-            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            upstream_d2d_socket_fifo_size=fifo_size,
+            downstream_d2d_socket_fifo_size=fifo_size,
+            upstream_d2d_socket_page_size=page_size,
+            downstream_d2d_socket_page_size=page_size,
             entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, self.MOE_SENDER_CORE),
             exit_node_upstream=exit_upstream_cores,
-            exit_upstream_page_size=ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list),
+            exit_upstream_page_size=exit_upstream_page_size,
+            forward_metadata=self._forward_metadata,
         )
 
     def _build_decoder_program_context(self) -> tuple[Any, Any, Any]:
@@ -129,7 +149,7 @@ class DecoderStage(StageKind):
             d["dkv_matmul_weights_overlapped"],
             d["dkv_rmsnorm_gamma_overlapped"],
             d["ttnn_kv_cache"],
-            d["ttnn_position_ids"],
+            d["ttnn_metadata_tensor"],
             d["scale"],
             d["sdpa_kv_cache_buffer"],
             d["sdpa_out_interm_buffer"],
@@ -176,6 +196,7 @@ class DecoderStage(StageKind):
             persistent_next_iter_semaphore=self._state.get("persistent_next_iter_semaphore"),
             persistent_mode=self._persistent_mode,
             is_torus=self._is_torus,
+            forward_metadata=self._forward_metadata,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -205,13 +226,15 @@ class DecoderStage(StageKind):
                 mesh_device.shape[1],
                 sender_coord[0],
                 sender_coord[1],
-                self._position_id,
                 self._state_dict,
                 self._layer_idx,
-                self._max_seq_len,
                 reduce_root_coord=reduce_root_coord,
                 num_routed_experts=self._num_routed_experts,
                 preloaded_weights=self._weights,
+                metadata=self._metadata,
+                max_seq_len=self._max_seq_len,
+                num_slots=self._num_slots,
+                forward_metadata=self._forward_metadata,
             )
         else:
             d = create_decoder_block_tensors(
@@ -220,13 +243,15 @@ class DecoderStage(StageKind):
                 mesh_device.shape[1],
                 sender_coord[0],
                 sender_coord[1],
-                self._position_id,
                 self._state_dict,
                 self._layer_idx,
-                self._max_seq_len,
                 reduce_root_coord=reduce_root_coord,
                 is_moe=False,
                 preloaded_weights=self._weights,
+                metadata=self._metadata,
+                max_seq_len=self._max_seq_len,
+                num_slots=self._num_slots,
+                forward_metadata=self._forward_metadata,
             )
         ttnn.synchronize_device(mesh_device)
 
@@ -271,25 +296,29 @@ class MoEDecoderStage(DecoderStage):
         weights: DeepSeekV3MoELayerWeights | None = None,
         layer_idx: int = 4,
         num_routed_experts: int = 256,
-        position_id: int = 0,
-        max_seq_len: int = 32 * 1024,
+        metadata: DeepseekMetadata = DeepseekMetadata(),
+        max_seq_len: int = 128 * 1024,
+        num_slots: int = 1,
         persistent_mode: bool = True,
         use_hardcoded_expert_index: bool = False,
         enable_routing: bool = True,
         is_torus: bool = True,
+        forward_metadata: bool = False,
     ) -> None:
         super().__init__(
             state_dict,
             weights=weights,
             layer_idx=layer_idx,
-            position_id=position_id,
+            metadata=metadata,
             max_seq_len=max_seq_len,
+            num_slots=num_slots,
             persistent_mode=persistent_mode,
             is_torus=is_torus,
             is_moe=True,
             num_routed_experts=num_routed_experts,
             use_hardcoded_expert_index=use_hardcoded_expert_index,
             enable_routing=enable_routing,
+            forward_metadata=forward_metadata,
         )
 
 
@@ -308,21 +337,25 @@ class DenseDecoderStage(DecoderStage):
         *,
         weights: DeepSeekV3DenseLayerWeights | None = None,
         layer_idx: int = 0,
-        position_id: int = 0,
-        max_seq_len: int = 32 * 1024,
+        metadata: DeepseekMetadata = DeepseekMetadata(),
+        max_seq_len: int = 128 * 1024,
+        num_slots: int = 1,
         persistent_mode: bool = True,
         is_torus: bool = True,
+        forward_metadata: bool = False,
     ) -> None:
         super().__init__(
             state_dict,
             weights=weights,
             layer_idx=layer_idx,
-            position_id=position_id,
+            metadata=metadata,
             max_seq_len=max_seq_len,
+            num_slots=num_slots,
             persistent_mode=persistent_mode,
             is_torus=is_torus,
             is_moe=False,
             num_routed_experts=0,
             use_hardcoded_expert_index=False,
             enable_routing=False,
+            forward_metadata=forward_metadata,
         )

@@ -83,7 +83,7 @@ class RopeSingleCore:
         cos_tensor,
         sin_tensor,
         trans_mat_tensor,
-        position_ids_tensor,
+        metadata_tensor,
         output_tensor,
         fp32_dest_acc_en=False,
     ):
@@ -198,7 +198,6 @@ class RopeSingleCore:
             ("in_cb", input_cb),
             ("cos_tensor_address", cos_tensor.buffer_address()),
             ("sin_tensor_address", sin_tensor.buffer_address()),
-            ("position_ids_tensor_address", position_ids_tensor.buffer_address()),
             ("cos_sin_cb", cos_sin_cb),
             ("trans_mat_cb", trans_mat_cb),
             ("cos_sin_page_size", tile_size),
@@ -231,6 +230,9 @@ class RopeSingleCore:
             kernel_source="models/demos/deepseek_v3_b1/micro_ops/rope/kernels/rope_kernel.cpp",
             core_ranges=core_grid,
             ncrisc_named_compile_time_args=ncrisc_named_compile_time_args,
+            ncrisc_common_runtime_args=[
+                metadata_tensor.buffer_address(),
+            ],
             brisc_named_compile_time_args=brisc_named_compile_time_args,
             trisc_named_compile_time_args=trisc_named_compile_time_args,
             trisc_compute_config=ttnn.ComputeConfigDescriptor(

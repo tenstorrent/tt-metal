@@ -64,7 +64,7 @@ class AttentionBlock:
         matmul3_weights_tensor,
         sin_tensor,
         cos_tensor,
-        position_ids,
+        metadata,
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
@@ -93,7 +93,7 @@ class AttentionBlock:
             matmul3_weights_tensor: kv_b1_proj weights [num_qnope_heads, qnope_head_dim, nope_dim]
             sin_tensor: RoPE sin table [max_seq_len, qrope_head_dim]
             cos_tensor: RoPE cos table [max_seq_len, qrope_head_dim]
-            position_ids: global decode position [batch]
+            metadata: metadata
             dkv_matmul_weights_tensor: kv_a_proj weights [K, nope_dim + rope_dim]
             dkv_rmsnorm_gamma_tensor: kv_norm gamma [1, nope_dim]
             kv_cache_tensor: KV cache [1, 1, seq_len, nope_dim + rope_dim]
@@ -122,7 +122,8 @@ class AttentionBlock:
             normalized = x * torch.rsqrt(variance + epsilon)
             return normalized * gamma
 
-        position_id = position_ids[0]
+        position_id = metadata.position_id
+        slot_id = metadata.slot_id
         # RMSNorm -> Matmul: [1, K] @ [K, N] -> [1, N]
         input_layernorm = rmsnorm(input_tensor, gamma_tensor)
         matmul_result = input_layernorm @ matmul_weights_tensor
@@ -142,6 +143,7 @@ class AttentionBlock:
         # Reshape for RopeSingleCore.golden: [batch, n_heads, seq_len, head_dim] = [1, 64, 1, 64]
         qrope_reshaped_for_rope = qrope_heads.permute(1, 0, 2).unsqueeze(0)  # [1, 64, 1, 64]
         # position_ids_expanded: [batch, seq_len] = [1, 1]
+        position_ids = torch.tensor([position_id])
         position_ids_expanded = position_ids.unsqueeze(1)  # [batch, 1]
         # Apply RoPE
         qrope_output_reshaped = RopeSingleCore.golden(
@@ -162,11 +164,12 @@ class AttentionBlock:
         k_rope = RopeSingleCore.golden(k_rope, cos_tensor, sin_tensor, position_ids).squeeze(0)
 
         # from 0 to position id, the kv cache is valid
-        full_kv = kv_cache_tensor.to(full_q.dtype)
+        # Select the active slot for KV cache operations
+        slot_kv = kv_cache_tensor[slot_id : slot_id + 1].to(full_q.dtype)
         new_kv = torch.cat([kv, k_rope], dim=-1).reshape(1, 1, 1, combined_head_dim).to(full_q.dtype)
-        full_kv[:, :, position_id, :] = new_kv
+        slot_kv[:, :, position_id, :] = new_kv
 
-        sdpa_output = FlashMLADecode.golden(full_q, full_kv, position_ids, nope_dim, scale).squeeze()
+        sdpa_output = FlashMLADecode.golden(full_q, slot_kv, position_ids, nope_dim, scale).squeeze()
 
         from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
 
@@ -181,9 +184,9 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores(num_links=1):
-        # 16 from pre/post-SDPA pipeline internals (includes ccl_sync),
+        # 17 from pre/post-SDPA pipeline internals (includes ccl_sync),
         # plus broadcast semaphores.
-        non_bcast_num_semaphores = 16
+        non_bcast_num_semaphores = 17
         bcast_num_semaphores = DeepseekMinimalBroadcast.get_num_semaphores(num_links=num_links)
         return non_bcast_num_semaphores + bcast_num_semaphores
 
@@ -213,7 +216,7 @@ class AttentionBlock:
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
-        position_ids_tensor,
+        metadata_tensor,
         sdpa_scale,
         output_tensor,
         sdpa_kv_cache_buffer,
@@ -243,6 +246,7 @@ class AttentionBlock:
         upstream_socket=None,
         fabric_config=None,
         broadcast_topology_override=None,
+        forward_metadata=False,
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -257,7 +261,7 @@ class AttentionBlock:
             qrope_sin_tensor: Sin tensor (sharded tensor for QRoPE)
             qrope_cos_tensor: Cos tensor (sharded tensor for QRoPE)
             trans_mat_tensor: Trans_mat tensor (sharded tensor for RoPE)
-            position_ids_tensor: Position IDs tensor (sharded tensor for RoPE)
+            metadata_tensor: Metadata tensor (sharded tensor for RoPE)
             output_tensor: Output tensor for pre-SDPA (sharded on SDPA grid, [8, 576] per core = 8 interleaved heads)
             sender_coord: Tuple (row, col) of sender device in mesh
             semaphores: List of global semaphores for CCL/fused pipeline synchronization
@@ -298,7 +302,7 @@ class AttentionBlock:
         trans_mat_tensors_per_device = ttnn.get_device_tensors(trans_mat_tensor)
         krope_cos_tensors_per_device = ttnn.get_device_tensors(krope_cos_tensor)
         krope_sin_tensors_per_device = ttnn.get_device_tensors(krope_sin_tensor)
-        position_ids_tensors_per_device = ttnn.get_device_tensors(position_ids_tensor)
+        metadata_tensors_per_device = ttnn.get_device_tensors(metadata_tensor)
         kv_cache_tensors_per_device = ttnn.get_device_tensors(kv_cache_tensor)
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
         sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
@@ -340,7 +344,12 @@ class AttentionBlock:
         tile_size = interpreted_tile.get_tile_size(data_format)
 
         # Calculate num_tiles from tensor shape
-        num_tiles = (input_shape[0] * input_shape[1]) // (tile_height * tile_width)
+        original_num_tiles = (input_shape[0] * input_shape[1]) // (tile_height * tile_width)
+        if forward_metadata:
+            assert original_num_tiles == 8, f"original_num_tiles: {original_num_tiles}"
+        else:
+            assert original_num_tiles == 7, f"original_num_tiles: {original_num_tiles}"
+        num_tiles = 7
 
         # Get number of elements for RMS calculation
         numel = input_tensor_sample.logical_volume()
@@ -741,6 +750,11 @@ class AttentionBlock:
             attention_block_semaphores[semaphore_index]
         )
         semaphore_index += 1
+        # TODO: This could potentially be removed and we just use mcast_data_receiver once FlashNorm is implemented
+        mcast_metadata_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
         mcast_data_receiver_semaphore_addr = ttnn.get_global_semaphore_address(
             attention_block_semaphores[semaphore_index]
         )
@@ -1047,6 +1061,18 @@ class AttentionBlock:
             ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
             ("mcast_dst_cb", matmul_input_cb),
             ("mcast_dst_num_pages", mcast_dst_num_pages),
+        ]
+
+        # Mcast metadata sender compile-time args (named args for CRISC)
+        mcast_metadata_sender_named_compile_time_args = [
+            ("rmsnorm_input_cb", input_cb),
+            ("rmsnorm_num_tiles", num_tiles),
+            ("mcast_metadata_receiver_semaphore_addr", mcast_metadata_receiver_semaphore_addr),
+        ]
+
+        # Mcast metadata receiver compile-time args (named args for NCRISC)
+        mcast_metadata_receiver_named_compile_time_args = [
+            ("mcast_metadata_receiver_semaphore_addr", mcast_metadata_receiver_semaphore_addr),
         ]
 
         # Calculate matmul1 K-split parameters
@@ -1455,12 +1481,17 @@ class AttentionBlock:
         ]
 
         # KVCacheUpdate compile-time args split across NCRISC (patch + writeback) and BRISC (DRAM read)
+        kv_tile_h, kv_tile_w = kv_cache_tensor.get_tile().tile_shape
+        kv_cache_pages_per_slot = (kv_cache_tensor.padded_shape[-2] // kv_tile_h) * (
+            kv_cache_tensor.padded_shape[-1] // kv_tile_w
+        )
         kv_cache_ncrisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
             ("krope_output_cb", krope_output_cb),
             ("kv_cache_intermed_cb", kv_cache_intermed_cb),
             ("kv_cache_output_cb", kv_cache_output_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
+            ("kv_cache_pages_per_slot", kv_cache_pages_per_slot),
             ("full_grid_mcast_start_x", mcast_dest_noc_start_core.x),
             ("full_grid_mcast_start_y", mcast_dest_noc_start_core.y),
             ("full_grid_mcast_end_x", mcast_dest_noc_end_core.x),
@@ -1471,6 +1502,7 @@ class AttentionBlock:
         kv_cache_brisc_named_compile_time_args = [
             ("kv_cache_input_cb", kv_cache_input_cb),
             ("kv_cache_grid_start_y", list(krope_grid.ranges())[0].start.y),
+            ("kv_cache_pages_per_slot", kv_cache_pages_per_slot),
         ]
         kv_cache_trisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
@@ -1543,7 +1575,6 @@ class AttentionBlock:
         assert PNHt == 1, f"PNHt must be 1, got {PNHt}"
         assert num_kv_heads == 1, f"num_kv_heads must be 1, got {num_kv_heads}"
         assert num_heads_per_core == 1, f"num_heads_per_core must be 1, got {num_heads_per_core}"
-        assert Bkv == 1, f"Bkv must be 1, got {Bkv}"
 
         if fp32_dest_acc_en:
             mla_dst_size = 8 if fp32_dest_acc_en else 16
@@ -1867,6 +1898,8 @@ class AttentionBlock:
             ("ccl_receiver_cb_residual", ccl_residual_cb),
             ("ccl_receiver_has_residual", has_residual),
             ("ccl_receiver_num_tiles", ccl_num_tiles),
+            # CCL sync semaphore
+            ("ccl_sync_semaphore_addr", ccl_sync_semaphore_addr),
         ]
 
         # Add SDPA TRISC compile-time args when enabled
@@ -1941,30 +1974,32 @@ class AttentionBlock:
 
         # Create circular buffer descriptors
         # CB: Input (created from sharded tensor)
-        if skip_ccl:
-            in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                input_cb, ref_input_tensor, core_ranges=full_device_grid
+        # When forward_metadata is enabled, the socket writes activation + metadata
+        # contiguously. We pad the backing buffer to fit metadata after the activation
+        # data, but the CB format (what RMSNorm reads) remains activation-only.
+        activation_size = num_tiles * cb_page_size
+
+        in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            input_cb, ref_input_tensor, core_ranges=full_device_grid
+        )
+        in_cb_descriptor.format_descriptors = [
+            ttnn.CBFormatDescriptor(
+                buffer_index=input_cb,
+                data_format=data_format,
+                page_size=cb_page_size,
+                tile=tile_descriptor,
             )
-        else:
-            in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                input_cb,
-                ref_sdpa_kv_cache_buffer,
-                address_offset=sdpa_kv_cache_running_offset_mcast_core,
-                total_size=num_tiles * cb_page_size,
-                core_ranges=full_device_grid,
-            )
-            in_cb_descriptor.format_descriptors = [
-                ttnn.CBFormatDescriptor(
-                    buffer_index=input_cb,
-                    data_format=data_format,
-                    page_size=cb_page_size,
-                    tile=tile_descriptor,
-                )
-            ]
-            sdpa_kv_cache_running_offset_mcast_core += in_cb_descriptor.total_size
+        ]
+        in_cb_descriptor.total_size = activation_size
 
         # Keep broadcast writer backing address explicit for this fused path.
-        bcast_config.set_writer_tensor_address_override(ttnn.get_cb_address(in_cb_descriptor))
+        input_cb_l1_addr = ttnn.get_cb_address(in_cb_descriptor)
+        bcast_config.set_writer_tensor_address_override(input_cb_l1_addr)
+
+        # When forwarding metadata, the socket writes activation + metadata contiguously.
+        # The metadata sits right after the activation data in the input CB's backing buffer.
+        forwarded_metadata_l1_addr = input_cb_l1_addr + activation_size if forward_metadata else None
+        print(forward_metadata)
 
         # CB: Gamma (backed by fused overlapped tensor)
         gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(gamma_cb, gamma_tensor, ref_gamma_fused_tensor)
@@ -1982,6 +2017,7 @@ class AttentionBlock:
         # This op builds device-invariant descriptor templates from reference tensors;
         # use sender device metadata as the canonical broadcast descriptor reference.
         bcast_pkt_cb_descriptor = bcast_config.get_cb_descriptor(sender_mesh_coord)
+        bcast_pkt_cb_descriptor.total_size = activation_size
 
         # CB: RMSNorm output buffer
         rmsnorm_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
@@ -2859,6 +2895,10 @@ class AttentionBlock:
         sdpa_out_interm_running_offset_post_sdpa += sdpa_l_out_cb_descriptor.total_size
         post_sdpa_cb_list.append(sdpa_l_out_cb_descriptor)
 
+        assert (
+            input_running_offset <= activation_size
+        ), f"input_running_offset: {input_running_offset}, activation_size: {activation_size}"
+
         # ========================================================================
         # Semaphore descriptors
         # ========================================================================
@@ -3065,6 +3105,7 @@ class AttentionBlock:
         # ========================================================================
         ncrisc_named_compile_time_args_base = (
             rmsnorm_reader_named_compile_time_args
+            + mcast_metadata_receiver_named_compile_time_args
             + mcast_receiver_named_compile_time_args
             + matmul_ncrisc_named_compile_time_args
             + gather_reduce_sender_named_compile_time_args
@@ -3084,7 +3125,8 @@ class AttentionBlock:
         )
 
         brisc_named_compile_time_args_base = (
-            mcast_sender_named_compile_time_args
+            mcast_metadata_sender_named_compile_time_args
+            + mcast_sender_named_compile_time_args
             + matmul_brisc_named_compile_time_args
             + gather_reduce_receiver_named_compile_time_args
             + matmul2_brisc_named_compile_time_args
@@ -3362,7 +3404,7 @@ class AttentionBlock:
                 qrope_sin_tensor_device = qrope_sin_tensors_per_device[device_idx]
                 krope_cos_tensor_device = krope_cos_tensors_per_device[device_idx]
                 krope_sin_tensor_device = krope_sin_tensors_per_device[device_idx]
-                position_ids_tensor_device = position_ids_tensors_per_device[device_idx]
+                metadata_tensor_device = metadata_tensors_per_device[device_idx]
                 kv_cache_tensor_device = kv_cache_tensors_per_device[device_idx]
 
                 # ================================================================
@@ -3396,7 +3438,11 @@ class AttentionBlock:
                 qrope_sin_tensor_address = qrope_sin_tensor_device.buffer_address()
                 krope_cos_tensor_address = krope_cos_tensor_device.buffer_address()
                 krope_sin_tensor_address = krope_sin_tensor_device.buffer_address()
-                position_ids_tensor_addr = position_ids_tensor_device.buffer_address()
+                metadata_addr = (
+                    forwarded_metadata_l1_addr
+                    if forwarded_metadata_l1_addr is not None
+                    else metadata_tensor_device.buffer_address()
+                )
 
                 # Compute address overrides for each matmul's weights within the fused buffer
                 fused_weights_base_addr = ref_fused_weights_tensor.buffer_address()
@@ -3424,7 +3470,7 @@ class AttentionBlock:
                     kv_cache_input_cb,  # idx 4
                     kv_cache_output_cb,  # idx 5
                     kv_cache_intermed_cb,  # idx 6
-                    position_ids_tensor_addr,  # idx 7
+                    metadata_addr,  # idx 7
                     matmul_weights_addr,  # idx 8
                     matmul2_weights_addr,  # idx 9
                     dkv_matmul_weights_addr,  # idx 10
@@ -3440,12 +3486,10 @@ class AttentionBlock:
                 qrope_ncrisc_addr_args = [
                     ("qrope_cos_tensor_address", qrope_cos_tensor_address),
                     ("qrope_sin_tensor_address", qrope_sin_tensor_address),
-                    ("qrope_position_ids_tensor_address", position_ids_tensor_addr),
                 ]
                 krope_ncrisc_addr_args = [
                     ("krope_cos_tensor_address", krope_cos_tensor_address),
                     ("krope_sin_tensor_address", krope_sin_tensor_address),
-                    ("krope_position_ids_tensor_address", position_ids_tensor_addr),
                 ]
 
                 kv_cache_sp_named_compile_time_args = [
@@ -3464,7 +3508,7 @@ class AttentionBlock:
                 )
                 ncrisc_common_runtime_args = ncrisc_bcast_common_args + [
                     kv_cache_tensor_device.buffer_address(),
-                    position_ids_tensor_addr,
+                    metadata_addr,
                     gather2_receiver_data_addr,
                     gather3_receiver_data_addr,
                 ]
@@ -3476,7 +3520,7 @@ class AttentionBlock:
                 )
                 brisc_common_runtime_args = [
                     kv_cache_tensor_device.buffer_address(),
-                    position_ids_tensor_addr,
+                    metadata_addr,
                 ] + list(bcast_config.get_brisc_common_rt_args(mesh_coord))
 
                 trisc_named_compile_time_args = (
@@ -3519,9 +3563,6 @@ class AttentionBlock:
                 sdpa_fwd_ring_idx = fwd_row if sdpa_cluster_axis == 0 else fwd_col
                 sdpa_bwd_ring_idx = bwd_row if sdpa_cluster_axis == 0 else bwd_col
                 sdpa_num_ring_devices = mesh_shape[0] if sdpa_cluster_axis == 0 else mesh_shape[1]
-
-                # Position tensor address (0 if position disabled)
-                sdpa_pos_addr = position_ids_tensor_addr
 
                 # SDPA worker runtime args (per-core)
                 sdpa_worker_ncrisc_rt_args = ttnn.RuntimeArgs()
@@ -3673,7 +3714,6 @@ class AttentionBlock:
 
                     # TRISC args: pos_addr, device_idx, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
                     sdpa_worker_trisc_rt_args[worker_core.x][worker_core.y] = [
-                        sdpa_pos_addr,
                         sdpa_ring_idx,
                         pos_r1_neighbor_idx,
                         pos_r2_neighbor_idx,
@@ -3685,7 +3725,6 @@ class AttentionBlock:
                     # Extend NCRISC args: pos_addr, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
                     sdpa_worker_ncrisc_rt_args[worker_core.x][worker_core.y].extend(
                         [
-                            sdpa_pos_addr,
                             pos_r1_neighbor_idx,
                             pos_r2_neighbor_idx,
                             pos_r2_neighbor_r1_idx,
@@ -3750,7 +3789,7 @@ class AttentionBlock:
                     }
                 )
         attention_block_cbs = [in_cb_descriptor, *cbs_list, attention_block_output_cb_descriptor]
-        return full_device_grid, attention_block_cbs, per_device_contexts
+        return full_device_grid, metadata_addr, attention_block_cbs, per_device_contexts
 
     @staticmethod
     def op(
@@ -3768,7 +3807,7 @@ class AttentionBlock:
         dkv_matmul_weights_tensor,
         dkv_rmsnorm_gamma_tensor,
         kv_cache_tensor,
-        position_ids_tensor,
+        metadata_tensor,
         sdpa_scale,
         output_tensor,
         sdpa_kv_cache_buffer,
@@ -3801,7 +3840,12 @@ class AttentionBlock:
     ):
         cb_id_manager = CircularBufferIdManager()
         cb_id_context = cb_id_manager.create_context()
-        full_device_grid, attention_block_cbs, attention_block_per_device_contexts = AttentionBlock.get_program_context(
+        (
+            full_device_grid,
+            _,
+            attention_block_cbs,
+            attention_block_per_device_contexts,
+        ) = AttentionBlock.get_program_context(
             input_tensor_mesh,
             gamma_tensor,
             matmul_weights_tensor,
@@ -3816,7 +3860,7 @@ class AttentionBlock:
             dkv_matmul_weights_tensor,
             dkv_rmsnorm_gamma_tensor,
             kv_cache_tensor,
-            position_ids_tensor,
+            metadata_tensor,
             sdpa_scale,
             output_tensor,
             sdpa_kv_cache_buffer,
@@ -3869,7 +3913,7 @@ class AttentionBlock:
             qrope_sin_tensor,
             krope_cos_tensor,
             krope_sin_tensor,
-            position_ids_tensor,
+            metadata_tensor,
             kv_cache_tensor,
             sdpa_kv_cache_buffer,
             sdpa_out_interm_buffer,
