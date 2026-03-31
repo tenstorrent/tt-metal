@@ -23,8 +23,8 @@ Usage:
     python model_tracer/config_hash_preflight.py <master.json> --report report.txt
 
 Exit codes:
-    0  All hashes match, or partial changes with --allow-partial
-    1  100% of hashes changed (always fatal), or partial without --allow-partial
+    0  All hashes match, or any hash changes with --allow-partial
+    1  Any hash changes without --allow-partial
 """
 
 import argparse
@@ -76,7 +76,9 @@ def run_preflight(json_path, allow_partial=False):
     changed = len(changed_entries)
     all_changed = total > 0 and changed == total
 
-    if all_changed:
+    if all_changed and allow_partial:
+        decision = "continue_all_changed"
+    elif all_changed:
         decision = "fail_all_changed"
     elif changed > 0 and not allow_partial:
         decision = "fail_partial_changed"
