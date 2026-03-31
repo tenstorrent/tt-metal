@@ -32,7 +32,7 @@ struct ComputeConfiguration {
     // "Unpack to dest" mode must be specified on a per-DFB basis
     // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
     using UnpackToDestModeEntry = std::pair<DFBSpecName, ::UnpackToDestMode>;
-    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode = {};  // empty vector means default mode
+    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
 };
 
 struct DataMovementConfiguration {
@@ -94,8 +94,8 @@ struct KernelSpec {
         using Macros = std::vector<std::string>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
-        IncludePaths include_paths = {};    // -I <path>
-        Defines defines = {};               // -D <name>=<value>
+        IncludePaths include_paths;         // -I <path>
+        Defines defines;                    // -D <name>=<value>
         OptLevel opt_level = OptLevel::O2;  // -O<level>
         // Can add more options here as needed
     };
