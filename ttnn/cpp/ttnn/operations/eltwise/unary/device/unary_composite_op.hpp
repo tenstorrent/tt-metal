@@ -13,7 +13,6 @@
 
 namespace ttnn::operations::unary {
 
-Tensor frac(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor is_odd(const Tensor&, const std::optional<MemoryConfig>&);
 
 }  // namespace ttnn::operations::unary
