@@ -28,7 +28,7 @@ Program MakeProgramFromSpec(const ProgramSpec& spec, bool skip_validation = fals
 //
 // For high-performance inner loops, prefer the in-place power user API below.
 // If stateful behavior of parameters is required, use the power user API.
-void SetProgramRunParameters(Program& program, const ProgramRunParams& parameters);
+void SetProgramRunParameters(Program& program, const ProgramRunParams& params);
 
 // Power-user API for updating the mutable parameters of a Program in-place.
 // ProgramRunParamsView is a non-owning view into the Program's command buffers,
