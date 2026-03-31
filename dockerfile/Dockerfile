@@ -221,7 +221,6 @@ RUN --mount=from=ci-test-venv-layer,source=/install,target=/venv-staging \
     cp -ua /venv-staging/venv/. ${PYTHON_ENV_DIR}/
 
 COPY /scripts/install_debugger.sh ${TT_METAL_INFRA_DIR}/scripts/install_debugger.sh
-COPY /scripts/ttexalens_ref.txt ${TT_METAL_INFRA_DIR}/scripts/ttexalens_ref.txt
 RUN umask 000 && \
     if [ "$UBUNTU_VERSION" = "22.04" ]; then \
     echo "Installing debugger for Ubuntu 22.04..." && \
