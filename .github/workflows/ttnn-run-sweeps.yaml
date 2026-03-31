@@ -660,26 +660,97 @@ on:
     - cron: "0 2 * * *" # This cron schedule runs the workflow at 2:00 AM UTC daily (lead model runs)
 
 jobs:
+  # Pre-compute all inputs so they can be passed to the impl via needs outputs.
+  # GitHub Actions does not support complex expressions (e.g. event_name comparisons)
+  # directly in the `with:` block of a reusable workflow call — values must come
+  # from literal strings/booleans or job outputs.
+  resolve-inputs:
+    name: Resolve workflow inputs
+    runs-on: ubuntu-latest
+    outputs:
+      sweep-name: ${{ steps.resolve.outputs.sweep-name }}
+      suite-name: ${{ steps.resolve.outputs.suite-name }}
+      skip-on-timeout: ${{ steps.resolve.outputs.skip-on-timeout }}
+      upload-results: ${{ steps.resolve.outputs.upload-results }}
+      measure-device-perf: ${{ steps.resolve.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ steps.resolve.outputs.measure-e2e-perf }}
+      measure-memory: ${{ steps.resolve.outputs.measure-memory }}
+      arch: ${{ steps.resolve.outputs.arch }}
+      runner-label: ${{ steps.resolve.outputs.runner-label }}
+      log-level: ${{ steps.resolve.outputs.log-level }}
+      mesh-shape: ${{ steps.resolve.outputs.mesh-shape }}
+      platform: ${{ steps.resolve.outputs.platform }}
+      build-type: ${{ steps.resolve.outputs.build-type }}
+      enable-lto: ${{ steps.resolve.outputs.enable-lto }}
+      tracy: ${{ steps.resolve.outputs.tracy }}
+    steps:
+      - id: resolve
+        run: |
+          IS_SCHEDULED="${{ github.event_name == 'schedule' }}"
+
+          # Resolve sweep name: map schedule cron to friendly name, or use dispatch input
+          if [[ "$IS_SCHEDULED" == "true" ]]; then
+            case "${{ github.event.schedule }}" in
+              "30 4 * * 0,1,2,4,5") SWEEP_NAME="ALL SWEEPS (Nightly)" ;;
+              "0 4 * * 3,6")         SWEEP_NAME="ALL SWEEPS (Comprehensive)" ;;
+              "0 3 * * *")            SWEEP_NAME="ALL SWEEPS (Model Traced)" ;;
+              "0 2 * * *")            SWEEP_NAME="ALL SWEEPS (Lead Models)" ;;
+              *)                      SWEEP_NAME="ALL SWEEPS (Nightly)" ;;
+            esac
+          else
+            SWEEP_NAME="${{ github.event.inputs.sweep_name }}"
+          fi
+
+          # For scheduled runs, all measurement/upload flags default to true
+          if [[ "$IS_SCHEDULED" == "true" ]]; then
+            SKIP_ON_TIMEOUT=true
+            UPLOAD_RESULTS=true
+            MEASURE_DEVICE_PERF=true
+            MEASURE_E2E_PERF=false
+            MEASURE_MEMORY=true
+            TRACY=true
+          else
+            SKIP_ON_TIMEOUT=${{ github.event.inputs.skip_on_timeout || 'true' }}
+            UPLOAD_RESULTS=${{ github.event.inputs.upload_results || 'true' }}
+            MEASURE_DEVICE_PERF=${{ github.event.inputs.measure_device_perf || 'true' }}
+            MEASURE_E2E_PERF=${{ github.event.inputs.measure_e2e_perf || 'false' }}
+            MEASURE_MEMORY=${{ github.event.inputs.measure_memory || 'false' }}
+            TRACY=${{ github.event.inputs.measure_device_perf || 'true' }}
+          fi
+
+          echo "sweep-name=$SWEEP_NAME" >> $GITHUB_OUTPUT
+          echo "suite-name=${{ github.event.inputs.suite_name || '' }}" >> $GITHUB_OUTPUT
+          echo "skip-on-timeout=$SKIP_ON_TIMEOUT" >> $GITHUB_OUTPUT
+          echo "upload-results=$UPLOAD_RESULTS" >> $GITHUB_OUTPUT
+          echo "measure-device-perf=$MEASURE_DEVICE_PERF" >> $GITHUB_OUTPUT
+          echo "measure-e2e-perf=$MEASURE_E2E_PERF" >> $GITHUB_OUTPUT
+          echo "measure-memory=$MEASURE_MEMORY" >> $GITHUB_OUTPUT
+          echo "arch=${{ github.event.inputs.arch || 'wormhole_b0' }}" >> $GITHUB_OUTPUT
+          echo "runner-label=${{ github.event.inputs['runner-label'] || 'N150' }}" >> $GITHUB_OUTPUT
+          echo "log-level=${{ github.event.inputs['log-level'] || 'INFO' }}" >> $GITHUB_OUTPUT
+          echo "mesh-shape=${{ github.event.inputs.mesh_shape || '' }}" >> $GITHUB_OUTPUT
+          echo "platform=${{ github.event.inputs.platform || 'Ubuntu 22.04' }}" >> $GITHUB_OUTPUT
+          echo "build-type=${{ github.event.inputs['build-type'] || 'Release' }}" >> $GITHUB_OUTPUT
+          echo "enable-lto=${{ github.event.inputs['enable-lto'] || 'false' }}" >> $GITHUB_OUTPUT
+          echo "tracy=$TRACY" >> $GITHUB_OUTPUT
+
   call-sweeps-impl:
+    needs: resolve-inputs
     uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
     secrets: inherit
     with:
-      # Resolve the sweep name: for schedule triggers, map cron expression to named sweep;
-      # for workflow_dispatch, use the selected input directly.
-      sweep-name: ${{ github.event.inputs.sweep_name || (github.event.schedule == '30 4 * * 0,1,2,4,5' && 'ALL SWEEPS (Nightly)') || (github.event.schedule == '0 4 * * 3,6' && 'ALL SWEEPS (Comprehensive)') || (github.event.schedule == '0 3 * * *' && 'ALL SWEEPS (Model Traced)') || (github.event.schedule == '0 2 * * *' && 'ALL SWEEPS (Lead Models)') || 'ALL SWEEPS (Nightly)' }}
-      suite-name: ${{ github.event.inputs.suite_name || '' }}
-      # For scheduled runs all flags default to on; for dispatch, use the provided inputs
-      skip-on-timeout: ${{ github.event_name == 'schedule' || github.event.inputs.skip_on_timeout == 'true' }}
-      upload-results: ${{ github.event_name == 'schedule' || github.event.inputs.upload_results == 'true' }}
-      measure-device-perf: ${{ github.event_name == 'schedule' || github.event.inputs.measure_device_perf == 'true' }}
-      measure-e2e-perf: ${{ github.event_name != 'schedule' && github.event.inputs.measure_e2e_perf == 'true' }}
-      measure-memory: ${{ github.event_name == 'schedule' || github.event.inputs.measure_memory == 'true' }}
-      arch: ${{ github.event.inputs.arch || 'wormhole_b0' }}
-      runner-label: ${{ github.event.inputs['runner-label'] || 'N150' }}
-      log-level: ${{ github.event.inputs['log-level'] || 'INFO' }}
-      mesh-shape: ${{ github.event.inputs.mesh_shape || '' }}
-      platform: ${{ github.event.inputs.platform || 'Ubuntu 22.04' }}
-      build-type: ${{ github.event.inputs['build-type'] || 'Release' }}
-      enable-lto: ${{ github.event.inputs['enable-lto'] == 'true' }}
-      # Build with Tracy when device perf is enabled
-      tracy: ${{ github.event_name == 'schedule' || github.event.inputs.measure_device_perf == 'true' }}
+      sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
+      suite-name: ${{ needs.resolve-inputs.outputs.suite-name }}
+      skip-on-timeout: ${{ fromJSON(needs.resolve-inputs.outputs.skip-on-timeout) }}
+      upload-results: ${{ fromJSON(needs.resolve-inputs.outputs.upload-results) }}
+      measure-device-perf: ${{ fromJSON(needs.resolve-inputs.outputs.measure-device-perf) }}
+      measure-e2e-perf: ${{ fromJSON(needs.resolve-inputs.outputs.measure-e2e-perf) }}
+      measure-memory: ${{ fromJSON(needs.resolve-inputs.outputs.measure-memory) }}
+      arch: ${{ needs.resolve-inputs.outputs.arch }}
+      runner-label: ${{ needs.resolve-inputs.outputs.runner-label }}
+      log-level: ${{ needs.resolve-inputs.outputs.log-level }}
+      mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
+      platform: ${{ needs.resolve-inputs.outputs.platform }}
+      build-type: ${{ needs.resolve-inputs.outputs.build-type }}
+      enable-lto: ${{ fromJSON(needs.resolve-inputs.outputs.enable-lto) }}
+      tracy: ${{ fromJSON(needs.resolve-inputs.outputs.tracy) }}
