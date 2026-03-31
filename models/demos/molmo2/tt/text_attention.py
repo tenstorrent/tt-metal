@@ -301,7 +301,6 @@ class TextAttention(LightweightModule):
             q = ttnn.typecast(q, dtype=ttnn.bfloat16)
         if k.dtype != ttnn.bfloat16:
             k = ttnn.typecast(k, dtype=ttnn.bfloat16)
-        print("first Run Demo : ", " : ", os.getenv("First_run"))
         if os.getenv("First_run", "false").lower() == "true" and trace_id is not None:
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
             os.environ["First_run"] = "false"
@@ -461,14 +460,12 @@ class TextAttention(LightweightModule):
             q,
             rot_mats[0],  # cos
             rot_mats[1],  # sin
-            0,  # Position is already embedded in rot_mats
         )
 
         k = ttnn.experimental.rotary_embedding(
             k,
             rot_mats[0],  # cos
             rot_mats[1],  # sin
-            0,  # Position is already embedded in rot_mats
         )
 
         # Reshape to handle padding from rotary_embedding (pads to 32 heads)
