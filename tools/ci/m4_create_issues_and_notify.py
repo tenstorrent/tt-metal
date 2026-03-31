@@ -98,15 +98,58 @@ def write_job_log_file(*, job_url: str, read_token: str, out_path: Path) -> Path
 
 
 def parse_agent_json(text: str) -> dict[str, Any]:
-    idx = text.rfind(MARKER)
-    if idx < 0:
-        raise ValueError(f"marker not found: {MARKER}")
-    payload = text[idx + len(MARKER) :].strip()
-    if payload.startswith("```"):
-        payload = re.sub(r"^```(?:json)?\s*", "", payload)
-        payload = re.sub(r"\s*```$", "", payload)
-        payload = payload.strip()
-    return json.loads(payload)
+    parsed = _parse_agent_json_payload(text, marker=MARKER)
+    if not isinstance(parsed, dict):
+        raise ValueError(f"expected JSON object for single decision payload, got {type(parsed).__name__}")
+    return parsed
+
+
+def _strip_json_fence(payload: str) -> str:
+    stripped = payload.strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
+        stripped = re.sub(r"\s*```$", "", stripped)
+        stripped = stripped.strip()
+    return stripped
+
+
+def _parse_agent_json_payload(text: str, *, marker: str) -> Any:
+    idx = text.rfind(marker)
+    if idx >= 0:
+        payload = _strip_json_fence(text[idx + len(marker) :])
+        return json.loads(payload)
+
+    stripped = text.strip()
+    if not stripped:
+        raise ValueError(f"marker not found: {marker}. output excerpt: <empty>")
+
+    # Fallback 1: raw JSON in stdout without marker.
+    try:
+        return json.loads(_strip_json_fence(stripped))
+    except Exception:
+        pass
+
+    # Fallback 2: parse last fenced block.
+    fenced = re.findall(r"```(?:json)?\s*(.*?)```", stripped, flags=re.IGNORECASE | re.DOTALL)
+    for block in reversed(fenced):
+        candidate = block.strip()
+        if not candidate:
+            continue
+        try:
+            return json.loads(candidate)
+        except Exception:
+            continue
+
+    # Fallback 3: scan for trailing JSON object/array start.
+    for match in re.finditer(r"[\{\[]", stripped):
+        candidate = stripped[match.start() :].strip()
+        try:
+            return json.loads(candidate)
+        except Exception:
+            continue
+
+    excerpt = stripped[-600:].replace("\n", "\\n")
+    raise ValueError(f"marker not found: {marker}. Could not parse fallback JSON. output excerpt: {excerpt}")
 
 
 def load_command_spec(path: str, fallback: str) -> str:
@@ -469,15 +512,7 @@ def agent_review_and_prepare_outputs(
 
 
 def parse_batch_agent_json(text: str) -> list[dict[str, Any]]:
-    idx = text.rfind(MARKER)
-    if idx < 0:
-        raise ValueError(f"marker not found: {MARKER}")
-    payload = text[idx + len(MARKER) :].strip()
-    if payload.startswith("```"):
-        payload = re.sub(r"^```(?:json)?\s*", "", payload)
-        payload = re.sub(r"\s*```$", "", payload)
-        payload = payload.strip()
-    parsed = json.loads(payload)
+    parsed = _parse_agent_json_payload(text, marker=MARKER)
     decisions = parsed.get("decisions", []) if isinstance(parsed, dict) else []
     return decisions if isinstance(decisions, list) else []
 
