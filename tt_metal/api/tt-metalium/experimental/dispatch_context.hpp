@@ -9,6 +9,9 @@
 
 namespace tt::tt_metal {
 
+class IDevice;
+class Program;
+
 namespace distributed {
 class MeshDevice;
 }  // namespace distributed
@@ -52,6 +55,10 @@ private:
     uint32_t num_fd_inits_ = 0;
     static std::unique_ptr<DispatchContext, Deleter> dispatch_context_ptr_;
 };
+
+// Dispatches a pre-compiled program to a device. Requires prior LaunchProgram call on another device
+// to compile and finalize the program. Uses thread-local launch messages for safe concurrent dispatch.
+void DispatchCompiledProgramToDevice(IDevice* device, Program& program);
 
 }  // namespace experimental
 
