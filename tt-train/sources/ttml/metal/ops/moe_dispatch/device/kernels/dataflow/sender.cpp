@@ -4,12 +4,13 @@
 
 // MoE Dispatch — Sender (DRAM dispatch_buf + streaming semaphore)
 //
-// For each expert (EP-serialized via go_sem):
-//   1. Read tile-row from sorted_hidden DRAM
-//   2. Write to dispatch_buf DRAM at remapped offset (local NoC or fabric)
-//   3. Increment tiles_ready_sem on receiver
+// EP serialization via go_sem ring:
+//   - All devices share one go_sem per device
+//   - Device 0: go_sem init=1 (first expert pre-granted); waits go_sem >= turn+1 before each expert
+//   - Middle devices: go_sem init=0; wait go_sem >= turn+1; signal next device (+1 hop forward)
+//   - Last device: waits go_sem >= turn+1; signals device 0's go_sem (num_devices-1 hops backward)
 //
-// Receiver reads from dispatch_buf as tiles become ready (no full barrier).
+// Only one EP device sends bulk tile data at a time.
 
 #include <stdint.h>
 
@@ -40,6 +41,9 @@ void kernel_main() {
     uint32_t go_sem_addr = get_semaphore(get_arg_val<uint32_t>(ra++));
     uint32_t next_sender_noc_x = get_arg_val<uint32_t>(ra++);
     uint32_t next_sender_noc_y = get_arg_val<uint32_t>(ra++);
+    uint32_t first_sender_noc_x = get_arg_val<uint32_t>(ra++);
+    uint32_t first_sender_noc_y = get_arg_val<uint32_t>(ra++);
+    uint32_t is_first_ep_device = get_arg_val<uint32_t>(ra++);
     uint32_t is_last_ep_device = get_arg_val<uint32_t>(ra++);
 
     uint32_t expert_n_rows[num_experts];
@@ -65,7 +69,8 @@ void kernel_main() {
     DPRINT << "SENDER[" << my_device_index << "]: opening fabric" << ENDL();
     fabric_connection.open_finish();
     DPRINT << "SENDER[" << my_device_index << "]: fabric open, go_sem=" << *go_sem_ptr
-           << " is_last=" << is_last_ep_device << ENDL();
+           << " is_first=" << is_first_ep_device << " is_last=" << is_last_ep_device << ENDL();
+    DPRINT << "SENDER[" << my_device_index << "]: entering loop" << ENDL();
 
     const uint32_t row_bytes = D_t * tile_bytes;
     uint32_t turn = 0;
@@ -77,8 +82,11 @@ void kernel_main() {
         uint32_t dst_start = expert_dst_row[e];
         bool is_local = (owner == my_device_index);
 
-        // Wait for EP turn
+        // Wait for our turn (device 0: init=1 so first expert is pre-granted)
+        DPRINT << "SENDER[" << my_device_index << "]: e=" << e << " waiting go_sem turn=" << (turn + 1)
+               << " cur=" << *go_sem_ptr << ENDL();
         noc_semaphore_wait_min(go_sem_ptr, turn + 1);
+        DPRINT << "SENDER[" << my_device_index << "]: e=" << e << " go_sem ok, n_rows=" << n_rows << ENDL();
 
         if (n_rows > 0) {
             uint64_t owner_sem_noc = get_noc_addr(receiver_noc_x, receiver_noc_y, tiles_ready_sem_addr);
@@ -96,15 +104,12 @@ void kernel_main() {
                 noc_async_read_barrier();
 
                 if (is_local) {
-                    // Write to local dispatch_buf DRAM
                     for (uint32_t k = 0; k < D_t; k++) {
                         noc_async_write(l1 + k * tile_bytes, dispatch_acc.get_noc_addr(dst_tile_idx + k), tile_bytes);
                     }
                     noc_async_write_barrier();
-                    // Signal receiver: one more tile-row ready
                     noc_semaphore_inc(owner_sem_noc, 1);
                 } else {
-                    // Fabric: write to remote dispatch_buf + inc sem
                     bool use_forward = (owner > my_device_index);
                     uint8_t num_hops =
                         use_forward ? (uint8_t)(owner - my_device_index) : (uint8_t)(my_device_index - owner);
@@ -138,19 +143,22 @@ void kernel_main() {
 
         turn++;
 
-        // Signal next EP device
         if (!is_last_ep_device) {
+            // Signal next device: its turn for expert e
             uint64_t next_go = get_noc_addr(next_sender_noc_x, next_sender_noc_y, go_sem_addr);
-            bool has_fwd = fabric_connection.has_forward_connection();
-            DPRINT << "SENDER[" << my_device_index << "]: e=" << e << " signaling go_sem, has_fwd=" << (uint32_t)has_fwd
-                   << ENDL();
-            if (has_fwd) {
-                pkt_hdr->to_chip_unicast(1);
-                pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{next_go, 1, false});
-                fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
-            }
+            pkt_hdr->to_chip_unicast(1);
+            pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{next_go, 1, false});
+            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+            fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            // Last device: signal device 0's go_sem (num_devices-1 hops backward)
+            uint64_t first_go = get_noc_addr(first_sender_noc_x, first_sender_noc_y, go_sem_addr);
+            pkt_hdr->to_chip_unicast((uint8_t)(num_devices - 1));
+            pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{first_go, 1, false});
+            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+            fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
         }
     }
 
