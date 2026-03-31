@@ -3,28 +3,28 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Reduce-to-All B1 Operation using ttnn.generic_op
+Reduce-to-All B1 — Ring + Cross-Column (modelled on sdpa_reduce_to_all).
 
-This module implements a multi-device all-reduce operation for a 4x2 mesh
-where all 8 devices end up with the sum of every device's input, using a
-3-round hypercube bidirectional exchange.
+Requires FABRIC_2D_TORUS_X (or TORUS_XY) for 1-hop ring wrap-around.
+
+Phase 1 — Column all-reduce (2-round ring, A/B split, all 1-hop):
+    Type A workers: R1 → FWD (row+1), R2 → BWD (row-1).
+    Type B workers: R1 → BWD (row-1), R2 → FWD (row+1).
+    FC BRISC (conn → FWD neighbor): forwards R1(A) + R2(B).
+    FC NCRISC (conn → BWD neighbor): forwards R1(B) + R2(A).
+    Every packet travels exactly 1 hop (ring/torus topology).
+
+Phase 2 — Cross-column exchange (FC-forwarded):
+    Workers write R3 to FC's R3 buffer area and signal r3_fwd_sem.
+    FC BRISC closes FWD conn, opens cross-column conn, forwards R3.
+
+After both phases every device holds sum(all 8 inputs).
 
 Mesh layout (coord = [row, col]):
     [0,0] a0  |  b0 [0,1]
     [1,0] a1  |  b1 [1,1]
     [2,0] a2  |  b2 [2,1]
     [3,0] a3  |  b3 [3,1]
-
-Hypercube all-reduce (device_index = row * 2 + col):
-    Round 1 (adjacent rows):  (row, col) <-> (row^1, col)
-    Round 2 (2-apart rows):   (row, col) <-> (row^2, col)
-    Round 3 (cross-column):   (row, col) <-> (row, col^1)
-
-After 3 rounds every device holds sum(all 8 inputs).
-
-R1/R2 are forwarded by each fabric core's BRISC via the same-column EDM
-connection. R3 is forwarded by FC1's NCRISC via a separate cross-column
-EDM connection (link_idx=1), avoiding circular deadlock.
 """
 
 import torch
@@ -37,24 +37,8 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 )
 
 
-def get_hypercube_partner(row: int, col: int, round_num: int):
-    """Return (partner_row, partner_col) for the given hypercube round."""
-    if round_num == 1:
-        return (row ^ 1, col)
-    elif round_num == 2:
-        return (row ^ 2, col)
-    elif round_num == 3:
-        return (row, col ^ 1)
-    raise ValueError(f"Invalid round number: {round_num}")
-
-
 class ReduceToAllB1:
-    """
-    Multi-device all-reduce (sum) across a 4x2 mesh.
-
-    Uses 3-round hypercube bidirectional exchange so that every device
-    accumulates the full reduction result.
-    """
+    """Multi-device all-reduce (sum) across a 4x2 mesh."""
 
     @staticmethod
     def golden(input_tensors: list) -> torch.Tensor:
@@ -67,14 +51,17 @@ class ReduceToAllB1:
         intermediate_tensor: ttnn.Tensor,
         output_tensor: ttnn.Tensor,
         semaphores: list,
+        fwd_r1_sem_addr: int,
+        fwd_r2_sem_addr: int,
+        bwd_r1_sem_addr: int,
+        bwd_r2_sem_addr: int,
+        r3_fwd_sem_addr: int,
         num_iterations: int = 1,
     ) -> ttnn.Tensor:
         mesh_device = input_tensor_mesh.device()
         mesh_shape = mesh_device.shape
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
-
-        print(f"[ReduceToAllB1] mesh_shape={mesh_rows}x{mesh_cols}, num_iterations={num_iterations}")
 
         if mesh_rows != 4 or mesh_cols != 2:
             raise ValueError(f"Mesh shape must be 4x2, got {mesh_rows}x{mesh_cols}")
@@ -86,7 +73,6 @@ class ReduceToAllB1:
         sem_round1_addr = ttnn.get_global_semaphore_address(semaphores[0])
         sem_round2_addr = ttnn.get_global_semaphore_address(semaphores[1])
         sem_round3_addr = ttnn.get_global_semaphore_address(semaphores[2])
-        print(f"[ReduceToAllB1] sem addrs: R1={sem_round1_addr:#x} R2={sem_round2_addr:#x} R3={sem_round3_addr:#x}")
 
         # Tensor geometry
         input_sample = input_tensors_per_device[0]
@@ -113,11 +99,6 @@ class ReduceToAllB1:
         packet_header_size_bytes = 96
         slot_size_bytes = packet_header_size_bytes + payload_size_bytes
 
-        print(f"[ReduceToAllB1] shard_shape={shard_shape} num_pages={num_pages} num_compute_tiles={num_compute_tiles}")
-        print(
-            f"[ReduceToAllB1] page_size_bytes={page_size_bytes} payload_size_bytes={payload_size_bytes} slot_size_bytes={slot_size_bytes}"
-        )
-
         # CB indices
         local_cb = 0
         received_cb = 1
@@ -126,35 +107,20 @@ class ReduceToAllB1:
         reload_cb = 4
         scratch_cb = 5
 
-        # Worker-fabric semaphores for BRISC forwarding (R1/R2, reused across rounds)
         shard_grid = input_sample.memory_config().shard_spec.grid
         shard_cores = ttnn.corerange_to_cores(shard_grid, row_wise=True)
 
         sample_columns = {}
         for c in shard_cores:
             sample_columns.setdefault(c.x, []).append(c)
-        num_workers_per_column = len(sample_columns[sorted(sample_columns.keys())[0]])
-        device_grid_size = mesh_device.compute_with_storage_grid_size()
-        worker_fabric_sem_cores = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
-        )
-        worker_fabric_global_sems = [
-            ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0) for _ in range(num_workers_per_column)
-        ]
-        worker_fabric_sem_addrs = [ttnn.get_global_semaphore_address(s) for s in worker_fabric_global_sems]
-
-        # R3 gate semaphore (for column-1 defer)
-        r3_gate_sem = ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0)
-        r3_gate_addr = ttnn.get_global_semaphore_address(r3_gate_sem)
-
-        # R3 NCRISC semaphores: 8 per device (all workers signal FC1 NCRISC)
-        num_total_workers = len(shard_cores)
-        r3_ncrisc_global_sems = [
-            ttnn.create_global_semaphore(mesh_device, worker_fabric_sem_cores, 0) for _ in range(num_total_workers)
-        ]
-        r3_ncrisc_sem_addrs = [ttnn.get_global_semaphore_address(s) for s in r3_ncrisc_global_sems]
+        sorted_column_keys = sorted(sample_columns.keys())
+        num_columns = len(sorted_column_keys)
+        num_workers_per_link = len(shard_cores) // num_columns
 
         kernel_path = "models/demos/deepseek_v3_b1/micro_ops/reduce_to_all_b1/kernels/reduce_to_all_kernel.cpp"
+
+        print(f"[ReduceToAllB1] num_compute_tiles={num_compute_tiles} payload={payload_size_bytes}")
+        print(f"[ReduceToAllB1] num_workers_per_link={num_workers_per_link} total={len(shard_cores)}")
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 
@@ -179,9 +145,6 @@ class ReduceToAllB1:
                 for x in sorted_columns:
                     column_to_cores[x].sort(key=lambda c: c.y)
 
-                num_columns = len(sorted_columns)
-                num_workers_per_column = len(column_to_cores[sorted_columns[0]])
-
                 all_y_coords = set(core.y for core in input_cores_list)
                 is_horizontal_layout = len(all_y_coords) <= 2
 
@@ -190,61 +153,80 @@ class ReduceToAllB1:
                 for x in sorted_columns:
                     bottom_core = max(column_to_cores[x], key=lambda c: c.y)
                     if is_horizontal_layout:
-                        fabric_core = ttnn.CoreCoord(bottom_core.x, bottom_core.y + 1)
+                        fc = ttnn.CoreCoord(bottom_core.x, bottom_core.y + 1)
                     else:
-                        fabric_core = ttnn.CoreCoord(bottom_core.x + 1, bottom_core.y)
-                    fabric_cores.append(fabric_core)
-                    column_to_fabric_core[x] = fabric_core
-
-                core_to_slot_idx = {}
-                for x in sorted_columns:
-                    for slot_idx, core in enumerate(column_to_cores[x]):
-                        core_to_slot_idx[(core.x, core.y)] = slot_idx
-
-                # FC1 is the second fabric core (link_idx=1, cross-column)
-                fc1 = fabric_cores[1]
-                fc1_phys = device.worker_core_from_logical_core(fc1)
+                        fc = ttnn.CoreCoord(bottom_core.x + 1, bottom_core.y)
+                    fabric_cores.append(fc)
+                    column_to_fabric_core[x] = fc
 
                 fabric_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in fabric_cores])
-                fc1_core_set = ttnn.CoreRangeSet([ttnn.CoreRange(fc1, fc1)])
                 all_cores_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in input_cores_list + fabric_cores])
 
-                # Hypercube partners for the 3 rounds
-                intermediate_base = intermediate_device.buffer_address()
-                partners = {}
-                for rnd in (1, 2, 3):
-                    pr, pc = get_hypercube_partner(row, col, rnd)
-                    dest_coord = ttnn.MeshCoordinate(pr, pc)
-                    dest_fabric_node_id = mesh_device.get_fabric_node_id(dest_coord)
-                    page_offset = (rnd - 1) * payload_size_bytes
-                    dst_l1_addr = intermediate_base + page_offset
-                    dst_sem_addr = [sem_round1_addr, sem_round2_addr, sem_round3_addr][rnd - 1]
-                    partners[rnd] = {
-                        "coord": dest_coord,
-                        "fabric_node_id": dest_fabric_node_id,
-                        "dst_l1_addr": dst_l1_addr,
-                        "dst_sem_addr": dst_sem_addr,
-                    }
-                    print(
-                        f"[ReduceToAllB1] dev({row},{col}) R{rnd}: partner=({pr},{pc}) chip_id={dest_fabric_node_id.chip_id} mesh_id={int(dest_fabric_node_id.mesh_id)} dst_l1={dst_l1_addr:#x} dst_sem={dst_sem_addr:#x}"
-                    )
+                # Ring neighbors (1-hop each, ring/torus topology)
+                fwd_row = (row + 1) % mesh_rows
+                bwd_row = (row - 1 + mesh_rows) % mesh_rows
+                r3_col = col ^ 1
+
+                fwd_coord = ttnn.MeshCoordinate(fwd_row, col)
+                bwd_coord = ttnn.MeshCoordinate(bwd_row, col)
+                r3_coord = ttnn.MeshCoordinate(row, r3_col)
 
                 fabric_node_id = mesh_device.get_fabric_node_id(coord)
+                fwd_fabric_node_id = mesh_device.get_fabric_node_id(fwd_coord)
+                bwd_fabric_node_id = mesh_device.get_fabric_node_id(bwd_coord)
+                r3_fabric_node_id = mesh_device.get_fabric_node_id(r3_coord)
+
+                intermediate_base = intermediate_device.buffer_address()
+                r1_recv_l1 = intermediate_base
+                r2_recv_l1 = intermediate_base + payload_size_bytes
+                r3_recv_l1 = intermediate_base + 2 * payload_size_bytes
+
+                # A/B split: half workers per link in each type
+                slots_per_direction = num_workers_per_link // 2
+
+                # FC buffer layout:
+                #   BRISC area [FWD]: [R1: slots_per_dir slots][R2: slots_per_dir slots]
+                #   NCRISC area [BWD]: [R1: slots_per_dir slots][R2: slots_per_dir slots]
+                #   R3 area: [num_workers_per_link slots] (forwarded by FC BRISC after Phase 1)
+                r2_buf_offset = slots_per_direction * slot_size_bytes
+                brisc_buf_size = 2 * slots_per_direction * slot_size_bytes
+                ncrisc_buf_offset = brisc_buf_size
+                r3_buf_offset = 4 * slots_per_direction * slot_size_bytes
+                packet_cb_slots = 4 * slots_per_direction + num_workers_per_link
+
                 print(
-                    f"[ReduceToAllB1] dev({row},{col}) intermediate_base={intermediate_base:#x} fabric_node_id=chip{fabric_node_id.chip_id},mesh{int(fabric_node_id.mesh_id)}"
+                    f"[ReduceToAllB1] dev({row},{col}) fwd=({fwd_row},{col}) bwd=({bwd_row},{col}) r3=({row},{r3_col})"
                 )
+                print(
+                    f"[ReduceToAllB1] dev({row},{col}) slots_per_dir={slots_per_direction} packet_cb_slots={packet_cb_slots}"
+                )
+
+                # Gather per-link info
+                links = []
+                for link_idx, x in enumerate(sorted_columns):
+                    cores_for_link = column_to_cores[x]
+                    fc = column_to_fabric_core[x]
+                    fc_phys = device.worker_core_from_logical_core(fc)
+                    links.append(
+                        {
+                            "link_idx": link_idx,
+                            "cores": cores_for_link,
+                            "fc": fc,
+                            "fc_phys": fc_phys,
+                        }
+                    )
 
                 # === Compile-time args ===
                 reader_ct_args = [
                     ("num_tiles", num_compute_tiles),
                     ("local_cb", local_cb),
                     ("received_cb", received_cb),
-                    ("defer_r3_send", col),
-                    ("num_workers", num_workers_per_column),
+                    ("slots_per_direction", slots_per_direction),
                     ("slot_size_bytes", slot_size_bytes),
                     ("packet_cb", packet_cb),
                     ("payload_size_bytes", payload_size_bytes),
-                    ("num_r3_workers", num_total_workers),
+                    ("r2_buffer_offset", r2_buf_offset),
+                    ("ncrisc_buffer_offset", ncrisc_buf_offset),
                     ("num_loop_iters", num_iterations),
                 ]
 
@@ -254,15 +236,19 @@ class ReduceToAllB1:
                     ("local_cb", local_cb),
                     ("scratch_cb", scratch_cb),
                     ("packet_cb", packet_cb),
-                    ("num_workers", num_workers_per_column),
                     ("slot_size_bytes", slot_size_bytes),
-                    ("r1_dst_chip_id", partners[1]["fabric_node_id"].chip_id),
-                    ("r1_dst_mesh_id", int(partners[1]["fabric_node_id"].mesh_id)),
-                    ("r2_dst_chip_id", partners[2]["fabric_node_id"].chip_id),
-                    ("r2_dst_mesh_id", int(partners[2]["fabric_node_id"].mesh_id)),
-                    ("r3_dst_chip_id", partners[3]["fabric_node_id"].chip_id),
-                    ("r3_dst_mesh_id", int(partners[3]["fabric_node_id"].mesh_id)),
-                    ("defer_r3_send", col),
+                    ("fwd_dst_chip_id", fwd_fabric_node_id.chip_id),
+                    ("fwd_dst_mesh_id", int(fwd_fabric_node_id.mesh_id)),
+                    ("bwd_dst_chip_id", bwd_fabric_node_id.chip_id),
+                    ("bwd_dst_mesh_id", int(bwd_fabric_node_id.mesh_id)),
+                    ("r3_dst_chip_id", r3_fabric_node_id.chip_id),
+                    ("r3_dst_mesh_id", int(r3_fabric_node_id.mesh_id)),
+                    ("reload_cb", reload_cb),
+                    ("compute_tile_size", compute_tile_size_bytes),
+                    ("slots_per_direction", slots_per_direction),
+                    ("r2_buffer_offset", r2_buf_offset),
+                    ("ncrisc_buffer_offset", ncrisc_buf_offset),
+                    ("r3_buffer_offset", r3_buf_offset),
                     ("num_loop_iters", num_iterations),
                 ]
 
@@ -276,49 +262,85 @@ class ReduceToAllB1:
                 ]
 
                 # === Common Runtime Args ===
-                reader_common_rt_args = [sem_round1_addr, sem_round2_addr, sem_round3_addr, r3_gate_addr]
-
-                print(f"[ReduceToAllB1] dev({row},{col}) worker_cores={[(c.x,c.y) for c in input_cores_list]}")
-                print(f"[ReduceToAllB1] dev({row},{col}) fabric_cores={[(c.x,c.y) for c in fabric_cores]}")
-                print(f"[ReduceToAllB1] dev({row},{col}) fc1_phys=({fc1_phys.x},{fc1_phys.y})")
+                reader_common_rt_args = [sem_round1_addr, sem_round2_addr, sem_round3_addr]
 
                 # === Per-Core Runtime Args ===
-                # BRISC: worker cores get per-core args; fabric cores get BRISC sem addrs
                 brisc_per_core_args = []
-                for global_idx, core in enumerate(input_cores_list):
-                    fabric_core = column_to_fabric_core[core.x]
-                    fabric_core_phys = device.worker_core_from_logical_core(fabric_core)
-                    slot_idx = core_to_slot_idx[(core.x, core.y)]
+                ncrisc_per_core_args = []
 
-                    worker_args = [
-                        fabric_core_phys.x,
-                        fabric_core_phys.y,
-                        slot_idx,
-                        worker_fabric_sem_addrs[slot_idx],
-                        partners[1]["dst_l1_addr"],
-                        partners[1]["dst_sem_addr"],
-                        partners[2]["dst_l1_addr"],
-                        partners[2]["dst_sem_addr"],
-                        partners[3]["dst_l1_addr"],
-                        partners[3]["dst_sem_addr"],
-                        output_tensor_device.buffer_address(),
-                        r3_gate_addr,
-                        fc1_phys.x,
-                        fc1_phys.y,
-                        global_idx,
-                        r3_ncrisc_sem_addrs[global_idx],
-                    ]
-                    brisc_per_core_args.append((core, worker_args))
-                    print(
-                        f"[ReduceToAllB1] dev({row},{col}) worker core({core.x},{core.y}) slot={slot_idx} r3_slot={global_idx} fab_phys=({fabric_core_phys.x},{fabric_core_phys.y}) r3_fab=({fc1_phys.x},{fc1_phys.y})"
-                    )
+                for link_info in links:
+                    fc_phys = link_info["fc_phys"]
+                    fc = link_info["fc"]
+                    link_idx = link_info["link_idx"]
 
-                # Fabric core BRISC: worker semaphore addresses for R1/R2
-                for fc in fabric_cores:
-                    brisc_per_core_args.append((fc, list(worker_fabric_sem_addrs)))
+                    # Direction configs — mirrors sdpa_reduce_to_all DirectionConfig
+                    # FWD: buffer starts at packet_cb base (offset 0)
+                    # BWD: buffer starts at ncrisc_buf_offset
+                    class DirCfg:
+                        def __init__(self, r1_sem, r2_sem, buf_base_offset):
+                            self.r1_sem = r1_sem
+                            self.r2_sem = r2_sem
+                            self.buf_base_offset = buf_base_offset
+                            self.r1_count = 0
+                            self.r2_count = 0
 
-                # NCRISC: FC1 gets R3 NCRISC per-core args (sems); FC0 gets nothing
-                ncrisc_per_core_args = [(fc1, list(r3_ncrisc_sem_addrs))]
+                    fwd_cfg = DirCfg(fwd_r1_sem_addr, fwd_r2_sem_addr, 0)
+                    bwd_cfg = DirCfg(bwd_r1_sem_addr, bwd_r2_sem_addr, ncrisc_buf_offset)
+
+                    for worker_idx, core in enumerate(link_info["cores"]):
+                        is_type_a = ((row + worker_idx) % 2) == 0
+
+                        # Type A: R1→FWD, R2→BWD;  Type B: R1→BWD, R2→FWD
+                        r1_cfg = fwd_cfg if is_type_a else bwd_cfg
+                        r2_cfg = bwd_cfg if is_type_a else fwd_cfg
+
+                        r1_slot_idx = r1_cfg.r1_count
+                        r1_cfg.r1_count += 1
+                        r2_slot_idx = r2_cfg.r2_count
+                        r2_cfg.r2_count += 1
+
+                        r1_slot_offset = r1_cfg.buf_base_offset + r1_slot_idx * slot_size_bytes
+                        r1_slot_bit = 1 << r1_slot_idx
+                        r1_sem = r1_cfg.r1_sem
+
+                        r2_slot_offset = r2_cfg.buf_base_offset + r2_buf_offset + r2_slot_idx * slot_size_bytes
+                        r2_slot_bit = 1 << r2_slot_idx
+                        r2_sem = r2_cfg.r2_sem
+
+                        # R3: worker writes to FC's R3 area (after BRISC+NCRISC areas)
+                        r3_slot_off = r3_buf_offset + worker_idx * slot_size_bytes
+                        r3_slot_b = 1 << worker_idx
+
+                        worker_args = [
+                            fc_phys.x,  # 0
+                            fc_phys.y,  # 1
+                            1 if is_type_a else 0,  # 2
+                            r1_slot_offset,  # 3
+                            r1_slot_bit,  # 4
+                            r1_sem,  # 5
+                            r2_slot_offset,  # 6
+                            r2_slot_bit,  # 7
+                            r2_sem,  # 8
+                            r1_recv_l1,  # 9
+                            sem_round1_addr,  # 10
+                            r2_recv_l1,  # 11
+                            sem_round2_addr,  # 12
+                            r3_recv_l1,  # 13
+                            sem_round3_addr,  # 14
+                            output_tensor_device.buffer_address(),  # 15
+                            r3_slot_off,  # 16
+                            r3_slot_b,  # 17
+                            r3_fwd_sem_addr,  # 18
+                        ]
+                        brisc_per_core_args.append((core, worker_args))
+
+                    # FC BRISC: FWD forwarding + R3 cross-column forwarding
+                    # [0] fwd_r1_sem, [1] fwd_r2_sem, [2] r3_fwd_sem,
+                    # then FWD conn args, then cross-column conn args (appended later)
+                    brisc_per_core_args.append((fc, [fwd_r1_sem_addr, fwd_r2_sem_addr, r3_fwd_sem_addr]))
+
+                    # FC NCRISC: BWD forwarding (2 sem addrs + conn appended later)
+                    ncrisc_per_core_args.append((fc, [bwd_r1_sem_addr, bwd_r2_sem_addr]))
 
                 # === CB Descriptors ===
                 compute_tile_desc = ttnn.TileDescriptor(compute_tile_height, compute_tile_width)
@@ -359,8 +381,6 @@ class ReduceToAllB1:
                     )
                 ]
 
-                # packet_cb: 2 rounds × num_workers (BRISC R1/R2) + num_total_workers (NCRISC R3)
-                packet_cb_slots = 2 * num_workers_per_column + num_total_workers
                 cb3_desc = ttnn.CBDescriptor(
                     total_size=packet_cb_slots * slot_size_bytes,
                     core_ranges=all_cores_set,
@@ -369,24 +389,6 @@ class ReduceToAllB1:
                             buffer_index=packet_cb,
                             data_format=dtype,
                             page_size=slot_size_bytes,
-                        )
-                    ],
-                )
-                print(
-                    f"[ReduceToAllB1] dev({row},{col}) packet_cb slots={packet_cb_slots} total={packet_cb_slots * slot_size_bytes}"
-                )
-
-                scratch_num_pages = 4
-                cb_size_bytes = scratch_num_pages * num_compute_tiles * compute_tile_size_bytes
-                cb5_desc = ttnn.CBDescriptor(
-                    total_size=cb_size_bytes,
-                    core_ranges=all_cores_set,
-                    format_descriptors=[
-                        ttnn.CBFormatDescriptor(
-                            buffer_index=scratch_cb,
-                            data_format=dtype,
-                            page_size=compute_tile_size_bytes,
-                            tile=compute_tile_desc,
                         )
                     ],
                 )
@@ -404,24 +406,23 @@ class ReduceToAllB1:
                     ],
                 )
 
+                scratch_num_pages = 4
+                cb5_desc = ttnn.CBDescriptor(
+                    total_size=scratch_num_pages * num_compute_tiles * compute_tile_size_bytes,
+                    core_ranges=all_cores_set,
+                    format_descriptors=[
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=scratch_cb,
+                            data_format=dtype,
+                            page_size=compute_tile_size_bytes,
+                            tile=compute_tile_desc,
+                        )
+                    ],
+                )
+
                 cb_list = [cb0_desc, cb1_desc, cb2_desc, cb3_desc, cb4_desc, cb5_desc]
 
                 # === Unified kernel descriptor ===
-                unified_ct_core_descriptors = [
-                    UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_fabric_core",
-                        core_range=fabric_core_set,
-                        value=1,
-                        other_value=0,
-                    ),
-                    UnifiedCompileTimeCoreDescriptor(
-                        named_compile_time_arg="is_r3_forwarder",
-                        core_range=fc1_core_set,
-                        value=1,
-                        other_value=0,
-                    ),
-                ]
-
                 unified_kernel = UnifiedKernelDescriptor(
                     kernel_source=kernel_path,
                     core_ranges=all_cores_set,
@@ -434,27 +435,25 @@ class ReduceToAllB1:
                         fp32_dest_acc_en=False,
                         math_approx_mode=False,
                     ),
-                    unified_compile_time_core_descriptors=unified_ct_core_descriptors,
+                    unified_compile_time_core_descriptors=[
+                        UnifiedCompileTimeCoreDescriptor(
+                            named_compile_time_arg="is_fabric_core",
+                            core_range=fabric_core_set,
+                            value=1,
+                            other_value=0,
+                        ),
+                    ],
                     per_core_runtime_args_descriptor=PerCoreRuntimeArgsDescriptor(
                         brisc_args=brisc_per_core_args,
                         ncrisc_args=ncrisc_per_core_args,
                     ),
+                    noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
                 )
 
                 kernel_result = unified_kernel.get_kernel_descriptors()
 
-                # With two UnifiedCompileTimeCoreDescriptors we get 3 groups:
-                #   workers:  is_fabric_core=0, is_r3_forwarder=0
-                #   FC0:      is_fabric_core=1, is_r3_forwarder=0
-                #   FC1:      is_fabric_core=1, is_r3_forwarder=1
-                fc0_group = None
-                fc1_group = None
-                for g in kernel_result.groups:
-                    v = g.compile_time_arg_values
-                    if v.get("is_fabric_core") == 1 and v.get("is_r3_forwarder") == 0:
-                        fc0_group = g
-                    elif v.get("is_fabric_core") == 1 and v.get("is_r3_forwarder") == 1:
-                        fc1_group = g
+                fabric_group = kernel_result.get_group_by_arg("is_fabric_core", 1)
+                worker_group = kernel_result.get_group_by_arg("is_fabric_core", 0)
 
                 program = ttnn.ProgramDescriptor(
                     kernels=kernel_result.kernels,
@@ -462,81 +461,45 @@ class ReduceToAllB1:
                     cbs=cb_list,
                 )
 
-                fc0 = fabric_cores[0]
-                # FC0 BRISC: connection 1 — R1 partner (same-column, link_idx=0)
-                print(
-                    f"[ReduceToAllB1] dev({row},{col}) FC0({fc0.x},{fc0.y}) BRISC R1 link_idx=0 -> chip {partners[1]['fabric_node_id'].chip_id}"
-                )
-                conn_args_fc0_r1 = ttnn.setup_fabric_connection(
-                    fabric_node_id,
-                    partners[1]["fabric_node_id"],
-                    0,
-                    program,
-                    fc0,
-                )
-                program.kernels[fc0_group.brisc_kernel_index].runtime_args[fc0.x][fc0.y].extend(conn_args_fc0_r1)
+                # Append FC fabric connections:
+                #   BRISC: FWD conn (Phase 1) + cross-column conn (Phase 2)
+                #   NCRISC: BWD conn (Phase 1)
+                brisc_idx = fabric_group.brisc_kernel_index
+                ncrisc_idx = fabric_group.ncrisc_kernel_index
+                for link_info in links:
+                    fc = link_info["fc"]
+                    link_idx = link_info["link_idx"]
 
-                # FC0 BRISC: connection 2 — R2 partner (same-column, link_idx=0)
-                print(
-                    f"[ReduceToAllB1] dev({row},{col}) FC0({fc0.x},{fc0.y}) BRISC R2 link_idx=0 -> chip {partners[2]['fabric_node_id'].chip_id}"
-                )
-                conn_args_fc0_r2 = ttnn.setup_fabric_connection(
-                    fabric_node_id,
-                    partners[2]["fabric_node_id"],
-                    0,
-                    program,
-                    fc0,
-                )
-                program.kernels[fc0_group.brisc_kernel_index].runtime_args[fc0.x][fc0.y].extend(conn_args_fc0_r2)
+                    fwd_conn_args = ttnn.setup_fabric_connection(
+                        fabric_node_id,
+                        fwd_fabric_node_id,
+                        link_idx,
+                        program,
+                        fc,
+                    )
+                    program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(fwd_conn_args)
 
-                # FC1 BRISC: connection 1 — R1 partner (same-column, link_idx=1)
-                print(
-                    f"[ReduceToAllB1] dev({row},{col}) FC1({fc1.x},{fc1.y}) BRISC R1 link_idx=1 -> chip {partners[1]['fabric_node_id'].chip_id}"
-                )
-                conn_args_fc1_r1 = ttnn.setup_fabric_connection(
-                    fabric_node_id,
-                    partners[1]["fabric_node_id"],
-                    1,
-                    program,
-                    fc1,
-                )
-                program.kernels[fc1_group.brisc_kernel_index].runtime_args[fc1.x][fc1.y].extend(conn_args_fc1_r1)
+                    r3_conn_args = ttnn.setup_fabric_connection(
+                        fabric_node_id,
+                        r3_fabric_node_id,
+                        link_idx,
+                        program,
+                        fc,
+                    )
+                    program.kernels[brisc_idx].runtime_args[fc.x][fc.y].extend(r3_conn_args)
 
-                # FC1 BRISC: connection 2 — R2 partner (same-column, link_idx=1)
-                print(
-                    f"[ReduceToAllB1] dev({row},{col}) FC1({fc1.x},{fc1.y}) BRISC R2 link_idx=1 -> chip {partners[2]['fabric_node_id'].chip_id}"
-                )
-                conn_args_fc1_r2 = ttnn.setup_fabric_connection(
-                    fabric_node_id,
-                    partners[2]["fabric_node_id"],
-                    1,
-                    program,
-                    fc1,
-                )
-                program.kernels[fc1_group.brisc_kernel_index].runtime_args[fc1.x][fc1.y].extend(conn_args_fc1_r2)
-
-                # FC1 NCRISC: connection to R3 partner (cross-column, link_idx=1)
-                r3_conn_args = ttnn.setup_fabric_connection(
-                    fabric_node_id,
-                    partners[3]["fabric_node_id"],
-                    1,
-                    program,
-                    fc1,
-                )
-                program.kernels[fc1_group.ncrisc_kernel_index].runtime_args[fc1.x][fc1.y].extend(r3_conn_args)
-                print(
-                    f"[ReduceToAllB1] dev({row},{col}) FC1({fc1.x},{fc1.y}) NCRISC R3 conn_args count={len(r3_conn_args)}"
-                )
+                    bwd_conn_args = ttnn.setup_fabric_connection(
+                        fabric_node_id,
+                        bwd_fabric_node_id,
+                        link_idx,
+                        program,
+                        fc,
+                    )
+                    program.kernels[ncrisc_idx].runtime_args[fc.x][fc.y].extend(bwd_conn_args)
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
-        input_list = [
-            input_tensor_mesh,
-            output_tensor,
-            intermediate_tensor,
-        ]
-        print(f"[ReduceToAllB1] calling generic_op...")
+        input_list = [input_tensor_mesh, output_tensor, intermediate_tensor]
         ttnn.generic_op(input_list, mesh_program_descriptor)
-        print(f"[ReduceToAllB1] generic_op returned")
 
         return output_tensor
