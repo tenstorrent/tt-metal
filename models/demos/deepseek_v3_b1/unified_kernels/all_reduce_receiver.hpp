@@ -111,43 +111,38 @@ struct AllReduceReceiver {
 #if defined(COMPILE_FOR_TRISC)
         template <bool AcquireRegs>
         static FORCE_INLINE void batched_add(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint32_t num_tiles) {
-            // constexpr uint32_t max_dst_tiles = 4;
-            // uint32_t num_batches = (num_tiles + max_dst_tiles - 1) / max_dst_tiles;
+            constexpr uint32_t max_dst_tiles = 4;
+            uint32_t num_batches = (num_tiles + max_dst_tiles - 1) / max_dst_tiles;
+
+            // For safety
+            MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
 
             cb_wait_front(cb_a, num_tiles);
             cb_wait_front(cb_b, num_tiles);
             cb_reserve_back(cb_out, num_tiles);
 
-            // Original code for reference
-            // TODO: Restore the pack overlap with math for better performance
-            // for (uint32_t batch = 0; batch < num_batches; ++batch) {
-            //     uint32_t start_tile = batch * max_dst_tiles;
-            //     uint32_t batch_size = (start_tile + max_dst_tiles <= num_tiles)
-            //                               ? max_dst_tiles
-            //                               : (num_tiles - start_tile);
-
-            //     tile_regs_acquire();
-            //     for (uint32_t i = 0; i < batch_size; ++i) {
-            //         add_tiles(cb_a, cb_b, start_tile + i, start_tile + i, i);
-            //     }
-            //     tile_regs_commit();
-
-            //     tile_regs_wait();
-            //     for (uint32_t i = 0; i < batch_size; ++i) {
-            //         pack_tile(i, cb_out, start_tile + i);
-            //     }
-            //     tile_regs_release();
-            // }
             if constexpr (AcquireRegs) {
                 tile_regs_acquire();
             }
-            for (uint32_t i = 0; i < num_tiles; i++) {
-                add_tiles(cb_a, cb_b, i, i, i);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < num_tiles; i++) {
-                pack_tile(i, cb_out, i);
+            for (uint32_t batch = 0; batch < num_batches; ++batch) {
+                uint32_t start_tile = batch * max_dst_tiles;
+                uint32_t batch_size =
+                    (start_tile + max_dst_tiles <= num_tiles) ? max_dst_tiles : (num_tiles - start_tile);
+                if (batch == num_batches - 1) {
+                    tile_regs_wait();
+                } else {
+                    PACK(t6_semaphore_wait_on_zero<p_stall::STALL_PACK>(semaphore::FPU_SFPU));
+                }
+                for (uint32_t i = 0; i < batch_size; ++i) {
+                    add_tiles(cb_a, cb_b, start_tile + i, start_tile + i, start_tile + i);
+                    pack_tile(start_tile + i, cb_out);
+                }
+                if (batch == num_batches - 1) {
+                    tile_regs_commit();
+                } else {
+                    PACK(t6_semaphore_get<p_stall::PACK>(semaphore::FPU_SFPU));
+                    MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
+                }
             }
             tile_regs_release();
 

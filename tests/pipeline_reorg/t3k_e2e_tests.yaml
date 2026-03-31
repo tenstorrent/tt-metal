@@ -50,7 +50,8 @@
   team: fabric
 
 - name: t3k_fabric_stability_tests
-  cmd: TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability.yaml
+  # Setting TT_METAL_OPERATION_TIMEOUT_SECONDS=0 to disable test timeouts and let the tests run to completion, as some of the stability tests can take a long time to complete.
+  cmd: TT_METAL_OPERATION_TIMEOUT_SECONDS=0 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability.yaml
   skus:
     wh_llmbox:
       timeout: 120
@@ -61,7 +62,7 @@
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/mlp
   skus:
     wh_llmbox:
-      timeout: 35
+      timeout: 40
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
@@ -85,7 +86,7 @@
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d pytest --tb=short models/common/tests/modules/attention
   skus:
     wh_llmbox:
-      timeout: 60
+      timeout: 65
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
@@ -94,6 +95,14 @@
   skus:
     wh_llmbox:
       timeout: 20
+  owner_id: U07RY6B5FLJ # Gongyu Wang
+  team: models
+
+- name: models_tttv2_sampling_modules_full_set_unit_tests
+  cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface pytest --tb=short models/common/tests/modules/sampling
+  skus:
+    wh_llmbox:
+      timeout: 8
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
@@ -119,6 +128,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv  --tb=short -k "random and (linear-8-1link or mesh-4x2 or mesh-2x4)"
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv --tb=short -k "2048 and (linear-4x1 or mesh-4x2 or mesh-2x4)"
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv --tb=short -k "random and (linear-8-1link or mesh-4x2 or mesh-2x4)"
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py -vvv --tb=short -k "mesh-4x2"
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2 and single_run' -vvv --tb=short
   skus:
     wh_llmbox:

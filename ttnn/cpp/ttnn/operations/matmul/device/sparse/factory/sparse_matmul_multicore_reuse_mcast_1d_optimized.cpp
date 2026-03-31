@@ -289,6 +289,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         // batch args
         (std::uint32_t)Mt * Kt,  // MtKt
         (std::uint32_t)batchA,   // batchA
+        (std::uint32_t)batchA,   // batchA
         // sparsity args
         (std::uint32_t)batchB,                                  // batchB
         (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize

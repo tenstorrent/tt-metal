@@ -32,7 +32,7 @@ from ...models.vae.vae_wan2_1 import WanDecoder
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache
-from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
+from ...utils.conv3d import conv3d_blocking_hash, conv_pad_height, conv_pad_in_channels
 from ...utils.tensor import typed_tensor_2dshard
 
 EXAMPLE_DOC_STRING = """
@@ -136,11 +136,13 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         is_fsdp: bool = True,
         model_type: str = "t2v",
         vae_dtype: ttnn.DataType = ttnn.bfloat16,
+        vae_use_cache: bool = True,
     ):
         super().__init__()
 
         self.checkpoint_name = checkpoint_name
         self.model_type = model_type
+        self.vae_use_cache = vae_use_cache
 
         self.tokenizer = AutoTokenizer.from_pretrained(checkpoint_name, subfolder="tokenizer", trust_remote_code=True)
         self.text_encoder = UMT5EncoderModel.from_pretrained(
@@ -300,6 +302,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         topology=None,
         is_fsdp=None,
         pipeline_class=None,
+        vae_use_cache=None,
     ):
         device_configs = {}
         if ttnn.device.is_blackhole():
@@ -327,6 +330,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "dynamic_load": False,
                 "topology": ttnn.Topology.Ring,
                 "is_fsdp": False,
+                "vae_use_cache": False,
             }
             config = device_configs[tuple(mesh_device.shape)]
         else:
@@ -349,8 +353,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
             config = device_configs[tuple(mesh_device.shape)]
 
-        sp_axis = sp_axis or config["sp_axis"]
-        tp_axis = tp_axis or config["tp_axis"]
+        sp_axis = config["sp_axis"] if sp_axis is None else sp_axis
+        tp_axis = config["tp_axis"] if tp_axis is None else tp_axis
 
         parallel_config = DiTParallelConfig(
             tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tuple(mesh_device.shape)[tp_axis]),
@@ -383,6 +387,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             topology=topology or config["topology"],
             is_fsdp=is_fsdp if is_fsdp is not None else config["is_fsdp"],
             checkpoint_name=checkpoint_name,
+            vae_use_cache=vae_use_cache if vae_use_cache is not None else config.get("vae_use_cache", True),
         )
 
     def _prepare_text_encoder(self):
@@ -418,10 +423,12 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         )
 
     def _prepare_vae(self):
+        blocking_key = conv3d_blocking_hash(self.tt_vae)
+        subfolder = f"vae_{blocking_key}" if blocking_key else "vae"
         cache.load_model(
             self.tt_vae,
             model_name=os.path.basename(self.checkpoint_name),
-            subfolder="vae",
+            subfolder=subfolder,
             parallel_config=self.vae_parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             get_torch_state_dict=lambda: self.vae.state_dict(),
@@ -1002,7 +1009,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 dtype=self.tt_vae.dtype,
             )
             self._prepare_vae()
-            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
+            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h, use_cache=self.vae_use_cache)
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
