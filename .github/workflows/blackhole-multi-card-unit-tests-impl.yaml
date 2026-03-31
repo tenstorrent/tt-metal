@@ -84,7 +84,8 @@ jobs:
           - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
             cmd: |
               pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
-              pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
+              # Disabled due to issue https://github.com/tenstorrent/tt-metal/issues/41040
+              # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
             timeout: 15
             test-type: fast
           - name: fabric and ttnn UDM unit tests
@@ -124,23 +125,19 @@ jobs:
             test-type: slow
           - name: bh_lb_DeepSeek_PREFILL
             cmd: |
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_torch_dispatch_combine.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv --tb=short
-            timeout: 15
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc"
+              pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2' -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_rope_prefill.py -k '4x2' -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla -k "2x4 and random and scaled_sl and check_pcc" -vvv --tb=short
+            timeout: 45
             test-type: loudbox
             owner_id: U08E1JCMAJF # Marko Bezulj
             model-name: deepseek_prefill
           - name: bh_qb_DeepSeek_PREFILL
             cmd: |
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_torch_dispatch_combine.py -vvv --tb=short
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv --tb=short
-            timeout: 15
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc"
+              pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '2x2' -vvv --tb=short
+            timeout: 40
             test-type: qb
             owner_id: U08E1JCMAJF # Marko Bezulj
             model-name: deepseek_prefill
@@ -274,12 +271,6 @@ jobs:
         if: ${{ failure() }}
         run: |
           tt-smi -s
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
-        with:
-          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
-          # Falls back to William Ly (U0883RN6CRE) when test-group.owner_id not set
-          owner: ${{ matrix.test-group.owner_id || 'U0883RN6CRE' }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

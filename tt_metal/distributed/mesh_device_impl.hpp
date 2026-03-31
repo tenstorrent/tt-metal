@@ -94,7 +94,7 @@ private:
             size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config,
             const MeshDeviceConfig& config,
-            ContextId context_id = DEFAULT_CONTEXT_ID);
+            ContextId context_id);
         ScopedDevices(
             const std::vector<MaybeRemote<int>>& all_device_ids,
             const std::vector<MaybeRemote<int>>& active_device_ids,
@@ -103,7 +103,7 @@ private:
             size_t num_command_queues,
             size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config,
-            ContextId context_id = DEFAULT_CONTEXT_ID);
+            ContextId context_id);
 
         // Destructor releases physical resources
         ~ScopedDevices();
@@ -168,6 +168,10 @@ private:
 
     std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
 
+    // Validates that the sub_device_manager_tracker_ is initialized before accessing it.
+    // Throws if the tracker is null (e.g., on remote-only MeshDevices).
+    void validate_sub_device_manager_tracker() const;
+
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
     // Active distributed context used by mesh command queues (split from distributed_context_).
@@ -179,8 +183,8 @@ public:
     MeshDeviceImpl(
         std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
-        std::shared_ptr<MeshDevice> parent_mesh = {},
-        ContextId context_id = DEFAULT_CONTEXT_ID);
+        std::shared_ptr<MeshDevice> parent_mesh,
+        ContextId context_id);
     ~MeshDeviceImpl() override;
 
     MeshDeviceImpl(const MeshDeviceImpl&) = delete;
@@ -275,10 +279,6 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false);
-    void init_command_queue_host() override;
-    void init_command_queue_device() override;
-    bool compile_fabric() override;
-    void configure_fabric() override;
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;
@@ -307,6 +307,10 @@ public:
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
     bool is_mmio_capable() const override;
+    // Returns true if this MeshDevice contains only remote devices (no local devices on this host).
+    // Remote-only MeshDevices cannot perform operations requiring local device access like
+    // allocator(), create_sub_device_manager(), etc. Use this to check before calling such methods.
+    bool is_remote_only() const;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.

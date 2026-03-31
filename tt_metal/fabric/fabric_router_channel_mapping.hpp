@@ -105,6 +105,7 @@ public:
     uint32_t get_num_virtual_channels() const;
 
     uint32_t get_num_sender_channels_for_vc(uint32_t vc) const;
+    uint32_t get_num_receiver_channels_for_vc(uint32_t vc) const;
 
     std::vector<InternalSenderChannelMapping> get_all_sender_mappings() const;
 
@@ -131,6 +132,7 @@ private:
     void initialize_mappings();
     void initialize_vc0_mappings();
     void initialize_vc1_mappings();
+    void initialize_vc2_mappings();
 };
 
 }  // namespace tt::tt_fabric

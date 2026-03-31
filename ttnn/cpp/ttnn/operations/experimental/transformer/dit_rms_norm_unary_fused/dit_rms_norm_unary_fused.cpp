@@ -5,11 +5,12 @@
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/device.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
+ttnn::Tensor dit_rms_norm_unary_fused(
     const ttnn::Tensor& input_tensor,
     float epsilon,
     const std::optional<const ttnn::Tensor>& weight,
@@ -28,12 +29,19 @@ ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
                                                                    : ttnn::GetDefaultDevice()->arch();
     const bool approx_mode = true;
     const bool fp32_acc = false;
+    const bool is_fp32_input = input_tensor.dtype() == DataType::FLOAT32;
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en can sometime produce incorrect results on Wormhole.
+    // fp32_dest_acc_en will be True for FLOAT32 inputs (set below), so use HiFi3 as default on Wormhole B0.
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
+    const auto default_fidelity = (is_wormhole && is_fp32_input) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
     auto kernel_config_val = compute_kernel_config.value_or(
-        init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc));
+        init_device_compute_kernel_config(arch, std::nullopt, default_fidelity, approx_mode, fp32_acc));
 
     if (!compute_kernel_config.has_value()) {
         kernel_config_val.fp32_dest_acc_en = (input_tensor.dtype() == DataType::FLOAT32);
     }
+
+    ttnn::verify_numerical_configuration(arch, compute_kernel_config);
 
     return ttnn::prim::layer_norm(
         input_tensor,
@@ -52,4 +60,4 @@ ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
         activation);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

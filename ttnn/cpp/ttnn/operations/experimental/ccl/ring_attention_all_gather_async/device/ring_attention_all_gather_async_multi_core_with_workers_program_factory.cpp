@@ -28,6 +28,12 @@
 
 namespace ttnn::experimental::prim {
 
+// Runtime-arg indices for worker sender semaphore addresses.
+// Keeping these as named constants avoids desynchronization with the
+// runtime-arg layout used when constructing the command streams.
+constexpr std::size_t kWorkerReaderSemaphoreRtArgIndex = 2;
+constexpr std::size_t kWorkerWriterSemaphoreRtArgIndex = 4;
+
 RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::cached_program_shared_variable_t
 RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory::create_at(
     const operation_attributes_t& operation_attributes,
@@ -211,7 +217,9 @@ ring_attention_all_gather_async_multi_core_with_workers_helper(
     const uint32_t max_scatter_write_pages = 2;
     const uint32_t num_pages_per_packet =
         std::min((uint32_t)(packet_size_bytes / l1_scratch_cb_page_size_bytes), max_scatter_write_pages);
-    const uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
+    // Must be >= 2 * PREFETCH_PACKETS(=4) * num_pages_per_packet for deadlock-free double-buffering
+    // (see PREFETCH_PACKETS in ring_attention_all_gather_reader.cpp).
+    const uint32_t cb_num_pages = 8 * num_pages_per_packet;
     const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
@@ -602,10 +610,10 @@ void ring_attention_all_gather_async_multicore_with_workers_override_runtime_arg
             worker_writer_sender_backward_runtime_args_by_core[sender_worker_cores[0 + (link * 2)].x]
                                                               [sender_worker_cores[0 + (link * 2)].y];
 
-        worker_reader_sender_forward_runtime_args[9] = semaphore.at(1).address();
-        worker_reader_sender_backward_runtime_args[9] = semaphore.at(0).address();
-        worker_writer_sender_forward_runtime_args[11] = semaphore.at(1).address();
-        worker_writer_sender_backward_runtime_args[11] = semaphore.at(0).address();
+        worker_reader_sender_forward_runtime_args[experimental::prim::kWorkerReaderSemaphoreRtArgIndex] = semaphore.at(1).address();
+        worker_reader_sender_backward_runtime_args[experimental::prim::kWorkerReaderSemaphoreRtArgIndex] = semaphore.at(0).address();
+        worker_writer_sender_forward_runtime_args[experimental::prim::kWorkerWriterSemaphoreRtArgIndex] = semaphore.at(1).address();
+        worker_writer_sender_backward_runtime_args[experimental::prim::kWorkerWriterSemaphoreRtArgIndex] = semaphore.at(0).address();
         for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
             // sender reader
             worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + input_idx] =

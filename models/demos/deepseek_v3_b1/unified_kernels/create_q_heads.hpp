@@ -12,6 +12,7 @@
 
 #if defined(COMPILE_FOR_TRISC)
 #include "api/compute/tilize.h"
+#include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_tilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -116,14 +117,20 @@ struct CreateQHeads {
     //   setup_sharded_input: whether to setup the sharded input CB
     //   pop_src: whether to pop the source CB after sending
     // ========================================================================
-    template <typename CTArgs, bool IsSenderCore, bool IsReceiverCore, bool setup_sharded_input, bool pop_src>
+    template <
+        typename CTArgs,
+        bool IsSenderCore,
+        bool IsReceiverCore,
+        bool shared_dm_risc,
+        bool setup_sharded_input,
+        bool pop_src>
     class Op {
     public:
         // Overload for sender args
         void operator()([[maybe_unused]] const SenderArgs& args) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
             if constexpr (IsSenderCore) {
-                sender_impl(args);
+                sender_impl<shared_dm_risc && IsReceiverCore>(args);
             }
 #endif
         }
@@ -132,7 +139,7 @@ struct CreateQHeads {
         void operator()([[maybe_unused]] const ReceiverArgs& args) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
             if constexpr (IsReceiverCore) {
-                receiver_impl(args);
+                receiver_impl<shared_dm_risc && IsSenderCore>(args);
             }
 #endif
         }
@@ -148,7 +155,14 @@ struct CreateQHeads {
 
     private:
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+        static constexpr uint8_t WRITE_NOC = 0;
+
+        template <bool is_receiver_same_risc>
         FORCE_INLINE void sender_impl(const SenderArgs& args) {
+            static_assert(
+                WRITE_NOC == noc_index || noc_mode == DM_DYNAMIC_NOC,
+                "WRITE_NOC differs from noc_index; must be in dynamic NOC mode");
+
             // Compute my row and column indices within the sender grid
             uint32_t my_col = my_logical_x_ - args.sender_grid_start_x;
             uint32_t my_row = my_logical_y_ - args.sender_grid_start_y;
@@ -158,6 +172,14 @@ struct CreateQHeads {
 
             // Select the appropriate CB
             uint32_t src_cb = is_qnope_core ? args.qnope_cb : args.qrope_cb;
+
+            // Get target NOC coordinates based on row (unpacked from uint32)
+            uint32_t packed_coords = args.target_noc_coords[my_row];
+            uint32_t target_noc_x = packed_coords & 0xFFFF;          // Lower 16 bits
+            uint32_t target_noc_y = (packed_coords >> 16) & 0xFFFF;  // Upper 16 bits
+
+            const uint64_t dst_noc_coord = get_noc_addr(target_noc_x, target_noc_y, 0, WRITE_NOC);
+            constexpr uint32_t half_qnope_data_size_bytes = CTArgs::qnope_data_size_bytes / 2;
 
             // Setup sharded input buffer if needed (standalone op)
             if constexpr (setup_sharded_input) {
@@ -169,14 +191,6 @@ struct CreateQHeads {
 
             // Get source address from CB
             uint32_t src_addr = get_read_ptr(src_cb);
-
-            // Get target NOC coordinates based on row (unpacked from uint32)
-            uint32_t packed_coords = args.target_noc_coords[my_row];
-            uint32_t target_noc_x = packed_coords & 0xFFFF;          // Lower 16 bits
-            uint32_t target_noc_y = (packed_coords >> 16) & 0xFFFF;  // Upper 16 bits
-
-            const uint64_t dst_noc_coord = get_noc_addr(target_noc_x, target_noc_y, 0);
-            constexpr uint32_t half_qnope_data_size_bytes = CTArgs::qnope_data_size_bytes / 2;
 
             if (is_qnope_core) {
                 // QNOPE core: Split 512 elements into two 256-element halves for tilization
@@ -191,16 +205,15 @@ struct CreateQHeads {
                 uint32_t dst_offset_0 = my_col * half_qnope_data_size_bytes;
                 uint64_t dst_data_noc_addr_0 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset_0);
                 noc_async_write<half_qnope_data_size_bytes, true, /*posted=*/true>(
-                    src_addr, dst_data_noc_addr_0, half_qnope_data_size_bytes);
-                noc_semaphore_inc(phase1_semaphore_noc_addr, 1);
+                    src_addr, dst_data_noc_addr_0, half_qnope_data_size_bytes, WRITE_NOC);
+                noc_semaphore_inc(phase1_semaphore_noc_addr, 1, WRITE_NOC);
 
                 // Second half: continues after first block
                 uint32_t dst_offset_1 = (args.qnope_cols * half_qnope_data_size_bytes) + dst_offset_0;
                 uint64_t dst_data_noc_addr_1 = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset_1);
                 noc_async_write<half_qnope_data_size_bytes, true, /*posted=*/true>(
-                    src_addr + half_qnope_data_size_bytes, dst_data_noc_addr_1, half_qnope_data_size_bytes);
-                noc_semaphore_inc(phase2_semaphore_noc_addr, 1);
-                noc_async_atomic_barrier();
+                    src_addr + half_qnope_data_size_bytes, dst_data_noc_addr_1, half_qnope_data_size_bytes, WRITE_NOC);
+                noc_semaphore_inc(phase2_semaphore_noc_addr, 1, WRITE_NOC);
             } else {
                 // QROPE core: Write 2 heads × 64 elements = 128 elements
                 // Memory layout: after all QNOPE data, QROPE is packed row-major [8, 64]
@@ -212,17 +225,23 @@ struct CreateQHeads {
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(args.receiver_data_addr + dst_offset);
                 constexpr uint32_t double_qrope_head_size_bytes = CTArgs::qrope_head_size_bytes * 2;
                 noc_async_write<double_qrope_head_size_bytes, true, /*posted=*/true>(
-                    src_addr, dst_data_noc_addr, double_qrope_head_size_bytes);
-                noc_semaphore_inc(rope_semaphore_noc_addr, 1);
-                noc_async_atomic_barrier();
+                    src_addr, dst_data_noc_addr, double_qrope_head_size_bytes, WRITE_NOC);
+                noc_semaphore_inc(rope_semaphore_noc_addr, 1, WRITE_NOC);
             }
 
+            if constexpr (!is_receiver_same_risc) {
+                noc_async_atomic_barrier(WRITE_NOC);
+            }
             // Pop source CB after sending
             if constexpr (pop_src) {
+                if constexpr (is_receiver_same_risc) {
+                    noc_async_writes_flushed(WRITE_NOC);
+                }
                 cb_pop_front(src_cb, args.src_num_pages);
             }
         }
 
+        template <bool is_sender_same_risc>
         FORCE_INLINE void receiver_impl(const ReceiverArgs& args) {
             // Multi-phase receiver for tilization with 3 separate semaphores
             // Each phase has its own semaphore to prevent race conditions
@@ -256,6 +275,12 @@ struct CreateQHeads {
                 cb_reserve_back(args.receiver_in_cb, args.rope_tiles);
                 cb_push_back(args.receiver_in_cb, args.rope_tiles);
             }
+            if constexpr (is_sender_same_risc) {
+                static_assert(
+                    WRITE_NOC == noc_index || noc_mode == DM_DYNAMIC_NOC,
+                    "WRITE_NOC differs from noc_index; must be in dynamic NOC mode");
+                noc_async_atomic_barrier(WRITE_NOC);
+            }
         }
 
 #endif
@@ -270,33 +295,35 @@ struct CreateQHeads {
             //
             // Each phase does: wait→reserve→tilize→push→pop
             // This ensures proper hardware state between tilize_block calls.
-
+            constexpr uint32_t nope_num_chunks = 2;
+            uint32_t nope_chunk = args.nope_tiles / nope_num_chunks;
             reconfig_data_format_srca<false, true>(args.receiver_in_cb);
             pack_reconfig_data_format<true>(args.out_cb);
             tilize_init(args.receiver_in_cb, args.nope_tiles, args.out_cb);
+            // For safety
+            MATH((t6_semaphore_wait_on_max<p_stall::STALL_MATH>(semaphore::FPU_SFPU)));
 
             // Phase 1: Tilize first NOPE block [8, 256] → 8 tiles
             cb_wait_front(args.receiver_in_cb, args.nope_tiles);
             cb_reserve_back(args.out_cb, args.nope_tiles);
-            tilize_block(args.receiver_in_cb, args.nope_tiles, args.out_cb);
+            tilize_block_custom(args.receiver_in_cb, nope_num_chunks, nope_chunk, args.out_cb);
             cb_push_back(args.out_cb, args.nope_tiles);
             cb_pop_front(args.receiver_in_cb, args.nope_tiles);
 
             // Phase 2: Tilize second NOPE block [8, 256] → 8 tiles
             cb_wait_front(args.receiver_in_cb, args.nope_tiles);
             cb_reserve_back(args.out_cb, args.nope_tiles);
-            tilize_block(args.receiver_in_cb, args.nope_tiles, args.out_cb);
+            tilize_block_custom(args.receiver_in_cb, nope_num_chunks, nope_chunk, args.out_cb);
             cb_push_back(args.out_cb, args.nope_tiles);
             cb_pop_front(args.receiver_in_cb, args.nope_tiles);
 
             // Phase 3: Tilize ROPE block [8, 64] → 2 tiles
             // Must re-init tilize for different block width (2 tiles vs 8 tiles)
-            tilize_uninit(args.receiver_in_cb, args.out_cb);
-            tilize_init(args.receiver_in_cb, args.rope_tiles, args.out_cb);
+            tilize_init_unpack(args.receiver_in_cb, args.rope_tiles);
 
             cb_wait_front(args.receiver_in_cb, args.rope_tiles);
             cb_reserve_back(args.out_cb, args.rope_tiles);
-            tilize_block(args.receiver_in_cb, args.rope_tiles, args.out_cb);
+            tilize_block_custom(args.receiver_in_cb, args.rope_tiles, 1, args.out_cb);
             cb_push_back(args.out_cb, args.rope_tiles);
             cb_pop_front(args.receiver_in_cb, args.rope_tiles);
 

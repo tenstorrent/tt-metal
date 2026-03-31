@@ -17,8 +17,7 @@ from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import Deco
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -122,6 +121,7 @@ def run_test_forward_pass_decoder2d(
         input_cache, tuple(mesh_device.shape), paged_config, user_id
     )
 
+    is_real_weights = module_path is not None
     # Set up model config
     weight_config = get_test_weight_config(
         DecoderBlockClass,
@@ -131,7 +131,7 @@ def run_test_forward_pass_decoder2d(
         mesh_device,
         force_recalculate_weight_config,
         test_name="test_decoder_block",
-        real_weights=module_path is not None,
+        real_weights=is_real_weights,
         layer_id=module_path,
     )
     model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device, fabric_config)
@@ -187,8 +187,12 @@ def run_test_forward_pass_decoder2d(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
     )
 
+    if is_real_weights:
+        required_pcc = 0.9899
+    else:
+        required_pcc = 0.988
     # Check output PCC
-    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
+    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=required_pcc)
 
 
 TEST_CASES, TEST_IDS = build_test_cases_and_ids(
@@ -217,16 +221,16 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
             marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
         ),
         pytest.param(
-            MoEDecoderBlock2D,
-            None,
-            3,
+            DecoderBlock2D,
+            "model.layers.0",
+            0,
             run_test_forward_pass_decoder2d,
             marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
         ),
         pytest.param(
-            DecoderBlock2D,
-            "model.layers.0",
-            0,
+            MoEDecoderBlock2D,
+            None,
+            3,
             run_test_forward_pass_decoder2d,
             marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
         ),

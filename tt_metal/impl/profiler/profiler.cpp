@@ -244,7 +244,23 @@ void populateZoneSrcLocations(
         std::getline(ss, source_file, ',');
         std::getline(ss, line_num_str, ',');
 
-        tracy::MarkerDetails details(zone_name, source_file, std::stoull(line_num_str));
+        if (line_num_str.empty()) {
+            log_warning(tt::LogMetal, "Skipping malformed zone source location entry: {}", zone_src_location);
+            continue;
+        }
+        uint64_t line_num = 0;
+        try {
+            line_num = std::stoull(line_num_str);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "Skipping zone source location entry '{}' with invalid line number '{}': {}",
+                zone_src_location,
+                line_num_str,
+                e.what());
+            continue;
+        }
+        tracy::MarkerDetails details(zone_name, source_file, line_num);
 
         auto ret = hash_to_zone_src_locations.emplace(hash_16bit, details);
         if (ret.second && push_new) {
@@ -2065,7 +2081,8 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
                 // If this is a performance counter, extract fields from data and store in marker meta_data
                 if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
-                    marker.meta_data["counter type"] = enchantum::to_string(PerfCounter(marker.data).counter_type);
+                    marker.meta_data["counter type"] =
+                        enchantum::to_string(static_cast<PerfCounterType>(PerfCounter(marker.data).counter_type));
                     marker.meta_data["ref cnt"] = PerfCounter(marker.data).ref_cnt;
                     marker.meta_data["value"] = PerfCounter(marker.data).counter_value;
 
@@ -2512,8 +2529,19 @@ void DeviceProfiler::updateTracyContext(const std::pair<ChipId, CoreCoord>& devi
     const CoreCoord worker_core = device_core.second;
 
     if (!core_sync_info.contains(worker_core)) {
-        const std::string tracyTTCtxName =
-            fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
+        const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);
+        // disable linting here; slicing is __intended__
+        // NOLINTBEGIN
+        const CoreCoord logical_core =
+            soc_desc.translate_coord_to(worker_core, CoordSystem::NOC0, CoordSystem::LOGICAL);
+        // NOLINTEND
+        const std::string tracyTTCtxName = fmt::format(
+            "Device: {}, Logical ({},{}) Physical ({},{})",
+            device_id,
+            logical_core.x,
+            logical_core.y,
+            worker_core.x,
+            worker_core.y);
 
         double cpu_time = device_sync_info.cpu_time;
         double device_time = device_sync_info.device_time;
