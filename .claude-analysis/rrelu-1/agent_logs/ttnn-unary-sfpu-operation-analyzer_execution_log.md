@@ -80,3 +80,49 @@ All SFPU function names (`_calculate_lrelu_`, `calculate_lrelu`), instruction na
 
 ### Output
 - `.claude-analysis/rrelu-1/leaky_relu_analysis.md`
+
+---
+
+## Operation: selu
+## Date: 2026-03-31
+
+### Summary
+Analyzed the SFPU kernel implementation for the `selu` (SELU) unary operation. The kernel uses SFPI abstractions (vFloat, dst_reg, v_if/v_else/v_endif) and implements the SELU activation function: `scale * (max(0, x) + min(0, alpha * (exp(x) - 1)))`. The negative branch invokes the `_sfpu_exp_21f_bf16_` helper for fast exponential approximation using the Moroz et al. 2022 exp_21f algorithm.
+
+### Key Findings
+- **Compute kernel**: `eltwise_sfpu.cpp` (default path)
+- **SFPU kernel**: `ckernel_sfpu_unary_selu.h` (WH and BH virtually identical, only template default difference for ITERATIONS)
+- **Kernel style**: SFPI-based (Style A) -- uses v_if/v_else branching and SFPI float operations
+- **APPROXIMATION_MODE**: `false` (from `get_op_approx_mode`), but unused -- the kernel does not branch on APPROXIMATION_MODE
+- **Exp helper**: `_sfpu_exp_21f_bf16_<true>` called with `is_fp32_dest_acc_en=true` to preserve FP32 precision in intermediate exp computation
+- **Vector mode**: `VectorMode::RC` (all 4 faces processed, 8 iterations each)
+- **Core instructions**: SFPLOAD, SFPSTORE, SFPMAD, SFPSETCC, SFPCOMPC, SFPLOADI, SFPSWAP, SFPEXEXP, SFPEXMAN, SFPSHFT, SFPCAST, SFPSETEXP, SFPSTOCHRND
+- **Address mode**: ADDR_MOD_7 with all zero increments (explicit advancement via dst_reg++ and SETRWC/inc_dst_addr between faces)
+- **SELU constants**: scale=1.050700987, alpha=1.673263242 (passed as uint32_t bit-cast params)
+
+### External Service Issues
+- DeepWiki returned HTTP 429 (rate limited). All instruction mappings derived from `runtime/sfpi/include/sfpi_lib.h` source code analysis.
+
+### Files Analyzed
+1. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp` -- dispatch configuration
+2. `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.hpp` -- parametrized type check
+3. `ttnn/cpp/ttnn/operations/eltwise/unary/unary.hpp` -- default SELU scale/alpha constants
+4. `tt_metal/hw/inc/api/compute/eltwise_unary/selu.h` -- API header
+5. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_selu.h` -- WH LLK dispatch
+6. `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_selu.h` -- BH LLK dispatch
+7. `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_unary_selu.h` -- WH core SFPU impl
+8. `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_unary_selu.h` -- BH core SFPU impl
+9. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_exp.h` -- exp_21f helper
+10. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_polyval.h` -- PolynomialEvaluator
+11. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_converter.h` -- Converter::as_float
+12. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h` -- WH params dispatch
+13. `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu_params.h` -- BH params dispatch
+14. `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h` -- WH init/addrmod
+15. `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu.h` -- BH init/addrmod
+16. `runtime/sfpi/include/sfpi_lib.h` -- SFPI intrinsic-to-instruction mappings
+
+### Verification
+All SFPU function names (`calculate_selu`, `_sfpu_exp_21f_bf16_`, `_float_to_int32_for_exp_21f_`), instruction names, and file paths were verified via grep. All passed.
+
+### Output
+- `.claude-analysis/rrelu-1/selu_analysis.md`
