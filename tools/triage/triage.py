@@ -240,15 +240,14 @@ class TriageScript:
 
     @staticmethod
     def load(script_path: Path | str) -> "TriageScript":
-        resolved = Path(script_path).resolve()
-        # script_path is now Path (resolved) — used directly as TriageScript.path
-        base_path = str(resolved.parent)  # sys.path requires str entries
+        script_path = Path(script_path).resolve()
+        base_path = str(script_path.parent)  # sys.path requires str entries
         appended = False
         if not base_path in sys.path:
             sys.path.append(base_path)
             appended = True
         try:
-            script_name = resolved.stem
+            script_name = script_path.stem
             script_module = importlib.import_module(script_name)
 
             # Check if script has a configuration
@@ -282,7 +281,7 @@ class TriageScript:
                 )
 
             triage_script = TriageScript(
-                name=resolved.name,
+                name=script_path.name,
                 path=resolved,
                 config=deepcopy(script_config),
                 module=script_module,
@@ -298,7 +297,7 @@ class TriageScript:
                     dep if isinstance(dep, str) and dep.endswith(".py") else f"{dep}.py"
                     for dep in triage_script.config.depends
                 ]
-                triage_script.config.depends = [(resolved.parent / dep).resolve() for dep in triage_script.config.depends]
+                triage_script.config.depends = [(script_path.parent / dep).resolve() for dep in triage_script.config.depends]
 
             return triage_script
         finally:
