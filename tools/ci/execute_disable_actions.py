@@ -53,6 +53,7 @@ ALLOWED_MOCK_WORKFLOW_OUTCOMES = {
     "unknown",
 }
 MockWorkflowSpec = dict[str, dict[str, Any]]
+WorkflowDispatchRecord = dict[str, Any]
 ALLOWED_STATUS = {
     "new",
     "planned",
@@ -508,8 +509,9 @@ def dispatch_required_pr_check_workflows(
     *,
     simulate_only: bool,
     mock_outcomes: MockWorkflowSpec,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], list[WorkflowDispatchRecord]]:
     runs: dict[str, str] = {}
+    records: list[WorkflowDispatchRecord] = []
     for workflow in workflows:
         if simulate_only:
             spec = mock_outcomes.get(workflow, {"outcome": "unknown", "error": "", "details": {}})
@@ -518,6 +520,15 @@ def dispatch_required_pr_check_workflows(
             details = spec.get("details", {})
             details_suffix = f" details={json.dumps(details, sort_keys=True)}" if details else ""
             runs[workflow] = f"(fork-mode simulated outcome: {outcome}" + (f"; error: {error}" if error else "") + ")"
+            records.append(
+                {
+                    "workflow": workflow,
+                    "run_url": runs[workflow],
+                    "outcome": outcome,
+                    "error": error,
+                    "details": details if isinstance(details, dict) else {},
+                }
+            )
             log(
                 f"dispatch: fork-mode would trigger workflow {workflow} for branch {branch} "
                 f"(mock outcome={outcome}{'; error=' + error if error else ''}{details_suffix})"
@@ -530,7 +541,16 @@ def dispatch_required_pr_check_workflows(
                 log(f"dispatch: workflow {workflow} run URL {runs[workflow]}")
             else:
                 log(f"dispatch: workflow {workflow} dispatched (run URL not returned)")
-    return runs
+            records.append(
+                {
+                    "workflow": workflow,
+                    "run_url": runs[workflow],
+                    "outcome": "queued",
+                    "error": "",
+                    "details": {},
+                }
+            )
+    return runs, records
 
 
 def git_changed_files() -> list[str]:
@@ -540,6 +560,10 @@ def git_changed_files() -> list[str]:
         if len(line) > 3:
             files.append(line[3:])
     return files
+
+
+def git_head_sha() -> str:
+    return run(["git", "rev-parse", "HEAD"], capture=True).stdout.strip()
 
 
 def now_utc() -> str:
@@ -559,6 +583,140 @@ def parse_pr_number(pr_url: str) -> int:
     if not m:
         return 0
     return int(m.group(1))
+
+
+def parse_run_id_from_url(url: str) -> int:
+    m = re.search(r"/actions/runs/(\d+)", url)
+    if not m:
+        return 0
+    return int(m.group(1))
+
+
+def record_last_kickoff_runs(item: dict[str, Any], dispatch_records: list[WorkflowDispatchRecord]) -> None:
+    entries: list[dict[str, Any]] = []
+    for rec in dispatch_records:
+        workflow = str(rec.get("workflow", "")).strip()
+        if not workflow:
+            continue
+        run_url = str(rec.get("run_url", "")).strip()
+        entries.append(
+            {
+                "workflow": workflow,
+                "run_id": parse_run_id_from_url(run_url),
+                "url": run_url,
+                "conclusion": str(rec.get("outcome", "unknown")).strip() or "unknown",
+            }
+        )
+    item["last_kickoff_runs"] = entries
+
+
+def is_failure_outcome(outcome: str) -> bool:
+    normalized = outcome.strip().lower()
+    return normalized in {"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"}
+
+
+def detect_new_failure_signal(dispatch_records: list[WorkflowDispatchRecord]) -> dict[str, Any] | None:
+    for rec in dispatch_records:
+        outcome = str(rec.get("outcome", "")).strip().lower()
+        if not is_failure_outcome(outcome):
+            continue
+        details = rec.get("details", {})
+        if not isinstance(details, dict):
+            details = {}
+        target = ""
+        for key in (
+            "new_failure_target",
+            "test_target",
+            "target",
+            "disable_scope_hint",
+            "failing_test",
+            "job_name",
+        ):
+            value = details.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                target = text
+                break
+        error = str(rec.get("error", "")).strip()
+        if target or error:
+            return {
+                "workflow": str(rec.get("workflow", "")).strip(),
+                "outcome": outcome,
+                "error": error,
+                "details": details,
+                "target": target,
+            }
+    return None
+
+
+def resolve_existing_pr_branch(item: dict[str, Any], pr_url: str, pr_repo: str) -> str:
+    disable_pr = item.get("disable_pr")
+    if isinstance(disable_pr, dict):
+        branch = str(disable_pr.get("branch", "")).strip()
+        if branch:
+            return branch
+    pr_number = parse_pr_number(pr_url)
+    if pr_number <= 0:
+        raise RuntimeError(f"unable to parse PR number from URL: {pr_url}")
+    viewed = run_guarded_gh(["gh", "pr", "view", "--repo", pr_repo, str(pr_number), "--json", "headRefName,headRefOid"])
+    payload = json.loads(viewed.stdout or "{}")
+    branch = str(payload.get("headRefName", "")).strip()
+    if not branch:
+        raise RuntimeError(f"unable to resolve headRefName for PR {pr_url}")
+    if isinstance(disable_pr, dict):
+        disable_pr["branch"] = branch
+        disable_pr["head_sha"] = str(payload.get("headRefOid", "")).strip()
+    return branch
+
+
+def checkout_branch_from_target_repo(branch: str, target_pr_repo: str) -> None:
+    remote_url = f"https://github.com/{target_pr_repo}.git"
+    local_ref = f"refs/remotes/fork-target/{branch}"
+    run(["git", "fetch", remote_url, f"{branch}:{local_ref}"], capture=True)
+    run(["git", "checkout", "-B", branch, local_ref], capture=True)
+
+
+def augment_action_for_resume(
+    action: dict[str, Any],
+    *,
+    pr_url: str,
+    failure_signal: dict[str, Any],
+) -> dict[str, Any]:
+    merged = dict(action)
+    target = str(failure_signal.get("target", "")).strip()
+    error = str(failure_signal.get("error", "")).strip()
+    workflow = str(failure_signal.get("workflow", "")).strip()
+    detail_parts: list[str] = [f"Resume existing PR: {pr_url}"]
+    if workflow:
+        detail_parts.append(f"workflow={workflow}")
+    if target:
+        detail_parts.append(f"new_failure_target={target}")
+    if error:
+        detail_parts.append(f"error={error}")
+    details = failure_signal.get("details", {})
+    if isinstance(details, dict) and details:
+        detail_parts.append(f"details={json.dumps(details, sort_keys=True)}")
+    prefix = " | ".join(detail_parts)
+    existing_hint = str(merged.get("disable_scope_hint", "")).strip()
+    merged["disable_scope_hint"] = (prefix + (" | " + existing_hint if existing_hint else "")).strip()
+    job_urls = merged.get("job_urls")
+    if not isinstance(job_urls, list):
+        job_urls = []
+    if isinstance(details, dict):
+        maybe_urls: list[str] = []
+        single_url = details.get("job_url") or details.get("run_url") or details.get("log_url")
+        if single_url:
+            maybe_urls.append(str(single_url))
+        if isinstance(details.get("job_urls"), list):
+            maybe_urls.extend(str(v) for v in details["job_urls"])
+        for url in maybe_urls:
+            cleaned = url.strip()
+            if cleaned and cleaned not in job_urls:
+                job_urls.append(cleaned)
+    merged["job_urls"] = job_urls
+    return merged
 
 
 def post_triggered_workflows_comment(pr_url: str, runs: dict[str, str], pr_repo: str) -> None:
@@ -947,16 +1105,227 @@ def main() -> int:
             result["state_updates"] += 1
             active_pr_url = ""
         if active_pr_url:
-            log(f"action: skipping issue #{issue_number} because tracked open PR exists: {active_pr_url}")
-            result["skipped"].append(
-                {
-                    "source_slack_ts": source_ts,
-                    "issue_number": issue_number,
-                    "reason": f"active_tracked_pr:{active_pr_url}",
+            if args.dry_run:
+                log(
+                    f"action: dry-run would evaluate existing PR resume path for issue #{issue_number}: {active_pr_url}"
+                )
+                result["skipped"].append(
+                    {
+                        "source_slack_ts": source_ts,
+                        "issue_number": issue_number,
+                        "reason": f"active_tracked_pr_dry_run:{active_pr_url}",
+                    }
+                )
+                append_history(item, "dry_run_active_pr_detected", f"Would resume active PR: {active_pr_url}")
+                continue
+
+            required_workflows = [*DEFAULT_REQUIRED_PR_CHECK_WORKFLOWS, *extra_pr_check_workflows]
+            try:
+                branch = resolve_existing_pr_branch(item, active_pr_url, target_pr_repo)
+                log(
+                    f"action: existing PR detected for issue #{issue_number}; branch={branch}; "
+                    f"evaluating workflow outcomes for resume path"
+                )
+                required_check_runs, dispatch_records = dispatch_required_pr_check_workflows(
+                    branch,
+                    required_workflows,
+                    target_pr_repo,
+                    simulate_only=fork_mode,
+                    mock_outcomes=mock_workflow_outcomes,
+                )
+                record_last_kickoff_runs(item, dispatch_records)
+                post_triggered_workflows_comment(active_pr_url, required_check_runs, target_pr_repo)
+                failure_signal = detect_new_failure_signal(dispatch_records)
+                if not failure_signal:
+                    set_status(
+                        item,
+                        "kickoff_running",
+                        event="existing_pr_kickoff_rerun_no_new_failure",
+                        details=f"No actionable new failure signal for {active_pr_url}",
+                    )
+                    result["state_updates"] += 1
+                    result["skipped"].append(
+                        {
+                            "source_slack_ts": source_ts,
+                            "issue_number": issue_number,
+                            "reason": f"active_tracked_pr_no_new_failure:{active_pr_url}",
+                            "required_check_runs": required_check_runs,
+                        }
+                    )
+                    continue
+
+                set_status(
+                    item,
+                    "kickoff_failed_new_failure",
+                    event="existing_pr_new_failure_detected",
+                    details=(
+                        f"workflow={failure_signal.get('workflow','')} "
+                        f"target={failure_signal.get('target','')} "
+                        f"error={failure_signal.get('error','')}"
+                    ).strip(),
+                )
+                result["state_updates"] += 1
+                log(
+                    f"action: new failure detected for issue #{issue_number}; "
+                    f"workflow={failure_signal.get('workflow','')} target={failure_signal.get('target','')}"
+                )
+                checkout_branch_from_target_repo(branch, target_pr_repo)
+                before = set(git_changed_files())
+                if before:
+                    result["skipped"].append(
+                        {
+                            "source_slack_ts": source_ts,
+                            "issue_number": issue_number,
+                            "reason": "working_tree_not_clean_before_resume_action",
+                        }
+                    )
+                    append_history(item, "skip_dirty_tree_resume", "Working tree not clean before resume action")
+                    continue
+
+                item["attempts"] = int(item.get("attempts", 0)) + 1
+                set_status(
+                    item,
+                    "planned",
+                    event="resume_attempt_started",
+                    details=f"Attempt {item['attempts']} on existing branch {branch}",
+                )
+                result["state_updates"] += 1
+
+                resume_action = augment_action_for_resume(action, pr_url=active_pr_url, failure_signal=failure_signal)
+                edit_summary, editor_debug = run_disable_editor(resume_action, issue_url, args.model)
+                if debug_root is not None:
+                    item_dir = debug_root / f"{safe_slug(source_ts)}_issue_{issue_number}"
+                    write_text(
+                        item_dir / "disable_editor_primary.stdout.txt", str(editor_debug.get("primary_stdout", ""))
+                    )
+                    write_text(
+                        item_dir / "disable_editor_primary.stderr.txt", str(editor_debug.get("primary_stderr", ""))
+                    )
+                    if editor_debug.get("used_retry"):
+                        write_text(
+                            item_dir / "disable_editor_retry.stdout.txt", str(editor_debug.get("retry_stdout", ""))
+                        )
+                        write_text(
+                            item_dir / "disable_editor_retry.stderr.txt", str(editor_debug.get("retry_stderr", ""))
+                        )
+                    write_text(item_dir / "disable_edit_summary.json", json.dumps(edit_summary, indent=2))
+
+                changed = git_changed_files()
+                if not changed:
+                    log(f"action: no code changes produced during M3 resume for issue #{issue_number}")
+                    summary_note = str(edit_summary.get("notes", "")).strip() if isinstance(edit_summary, dict) else ""
+                    set_status(
+                        item,
+                        "needs_human",
+                        event="resume_no_changes_from_disable_editor",
+                        details=f"Attempt {item['attempts']} produced no incremental code changes. {summary_note}".strip(),
+                    )
+                    result["state_updates"] += 1
+                    result["skipped"].append(
+                        {
+                            "source_slack_ts": source_ts,
+                            "issue_number": issue_number,
+                            "reason": "resume_no_code_changes_from_agent",
+                            "disable_edit_summary": edit_summary,
+                        }
+                    )
+                    continue
+
+                protected = sorted({p for p in changed if p in PROTECTED_AGENT_PATHS})
+                if protected:
+                    log(f"action: protected paths modified during resume for issue #{issue_number}; escalating")
+                    set_status(
+                        item,
+                        "needs_human",
+                        event="resume_protected_paths_modified",
+                        details=f"Attempt {item['attempts']} modified protected paths: {', '.join(protected)}",
+                    )
+                    result["state_updates"] += 1
+                    result["skipped"].append(
+                        {
+                            "source_slack_ts": source_ts,
+                            "issue_number": issue_number,
+                            "reason": f"resume_protected_paths_modified:{','.join(protected)}",
+                            "disable_edit_summary": edit_summary,
+                        }
+                    )
+                    continue
+
+                run(["git", "add", "."], capture=True)
+                commit_msg = f"ci: extend disable for #{issue_number} (existing PR)"
+                ensure_git_identity()
+                log(f"action: committing incremental disable changes for issue #{issue_number} on existing PR")
+                run(["git", "commit", "-m", commit_msg], capture=True)
+                log(f"action: pushing updated branch {branch} for issue #{issue_number}")
+                push_token = os.environ.get("TARGET_PR_PUSH_TOKEN") or os.environ.get("GITHUB_TOKEN", "")
+                if not push_token:
+                    raise RuntimeError("TARGET_PR_PUSH_TOKEN or GITHUB_TOKEN is required for PR branch push")
+                push_branch_with_token(branch, target_pr_repo, push_token)
+
+                rerun_check_runs, rerun_records = dispatch_required_pr_check_workflows(
+                    branch,
+                    required_workflows,
+                    target_pr_repo,
+                    simulate_only=fork_mode,
+                    mock_outcomes=mock_workflow_outcomes,
+                )
+                record_last_kickoff_runs(item, rerun_records)
+                post_triggered_workflows_comment(active_pr_url, rerun_check_runs, target_pr_repo)
+                if fork_mode:
+                    kickoff_spec = mock_workflow_outcomes.get("kickoff-agent", {"outcome": "unknown", "error": ""})
+                    kickoff_outcome = str(kickoff_spec.get("outcome", "unknown"))
+                    kickoff_error = str(kickoff_spec.get("error", "")).strip()
+                    kickoff_tail = (
+                        "fork-mode: skipped kickoff agent dispatch; "
+                        f"would invoke kickoff for {active_pr_url} (mock outcome={kickoff_outcome}"
+                        + (f", error={kickoff_error}" if kickoff_error else "")
+                        + ")"
+                    )
+                    log(kickoff_tail)
+                else:
+                    log(f"action: invoking kickoff workflow agent for existing PR {active_pr_url}")
+                    kickoff_tail = invoke_kickoff_agent(active_pr_url, args.model)
+
+                item["disable_pr"] = {
+                    "number": parse_pr_number(active_pr_url),
+                    "url": active_pr_url,
+                    "branch": branch,
+                    "head_sha": git_head_sha(),
                 }
-            )
-            append_history(item, "skip_active_state_pr", f"Skipped action because active PR exists: {active_pr_url}")
-            continue
+                set_status(
+                    item,
+                    "kickoff_running",
+                    event="existing_pr_updated_and_kickoff_rerun",
+                    details=active_pr_url,
+                )
+                result["state_updates"] += 1
+                result["executed"].append(
+                    {
+                        "source_slack_ts": source_ts,
+                        "issue_number": issue_number,
+                        "branch": branch,
+                        "pr_url": active_pr_url,
+                        "required_check_runs": rerun_check_runs,
+                        "disable_edit_summary": edit_summary,
+                        "kickoff_output_tail": kickoff_tail,
+                        "attempts": item["attempts"],
+                        "resume_existing_pr": True,
+                    }
+                )
+                continue
+            except Exception as exc:
+                safe_exc = redact_secrets(str(exc))
+                log(f"action: failed M3 resume flow issue #{issue_number}: {safe_exc}")
+                set_status(item, "needs_human", event="resume_action_failed", details=safe_exc)
+                result["state_updates"] += 1
+                result["skipped"].append(
+                    {
+                        "source_slack_ts": source_ts,
+                        "issue_number": issue_number,
+                        "reason": f"resume_action_failed:{safe_exc}",
+                    }
+                )
+                continue
 
         if int(item.get("attempts", 0)) >= args.max_attempts_per_item:
             set_status(
@@ -1132,13 +1501,14 @@ def main() -> int:
             )
             pr_url = pr.stdout.strip().splitlines()[-1].strip()
             log(f"action: created PR {pr_url} for issue #{issue_number}")
-            required_check_runs = dispatch_required_pr_check_workflows(
+            required_check_runs, dispatch_records = dispatch_required_pr_check_workflows(
                 branch,
                 [*DEFAULT_REQUIRED_PR_CHECK_WORKFLOWS, *extra_pr_check_workflows],
                 target_pr_repo,
                 simulate_only=fork_mode,
                 mock_outcomes=mock_workflow_outcomes,
             )
+            record_last_kickoff_runs(item, dispatch_records)
             post_triggered_workflows_comment(pr_url, required_check_runs, target_pr_repo)
             if fork_mode:
                 kickoff_spec = mock_workflow_outcomes.get("kickoff-agent", {"outcome": "unknown", "error": ""})
@@ -1158,7 +1528,7 @@ def main() -> int:
                 "number": parse_pr_number(pr_url),
                 "url": pr_url,
                 "branch": branch,
-                "head_sha": "",
+                "head_sha": git_head_sha(),
             }
             set_status(item, "kickoff_running", event="pr_created_and_kickoff_started", details=pr_url)
             result["state_updates"] += 1
