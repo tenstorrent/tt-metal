@@ -204,7 +204,7 @@ ALWI void matmul_block(
                     enable_reload = false;
                 } else {
                     // L1_ACC + no bias: advance FIFO, reload on K-1
-                    if (block < (int)num_k_blocks - 2) {
+                    if (num_k_blocks >= 2 && block < num_k_blocks - 2) {
                         cb_wait_front(interm_cb, out_block_num_tiles);
                         cb_pop_front(interm_cb, out_block_num_tiles);
                     }
