@@ -99,8 +99,8 @@ void kernel_main() {
     uint32_t zero_init_barrier_l1_offset = get_semaphore(zero_init_barrier_semaphore_id);
 
     // Read NOC coordinates for all cores (for inter-core barrier signaling).
-    // Max 2 cores: one reader + one writer per link, capped by effective_num_links.
-    constexpr uint32_t MAX_BARRIER_CORES = 2;
+    // num_cores = effective_num_links = min(num_links, 4).
+    constexpr uint32_t MAX_BARRIER_CORES = 4;
     ASSERT(num_cores <= MAX_BARRIER_CORES);
     uint64_t all_core_barrier_noc_addrs[MAX_BARRIER_CORES];
     for (uint32_t c = 0; c < num_cores; c++) {
