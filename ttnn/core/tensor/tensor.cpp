@@ -112,6 +112,10 @@ Tensor::Tensor(HostTensor tensor) :
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(std::make_shared<TensorAttributes>(HostStorage(std::move(tensor)))) {}
 
+Tensor::Tensor(MeshTensor tensor) :
+    tensor_id(Tensor::next_tensor_id()),
+    tensor_attributes(std::make_shared<TensorAttributes>(DeviceStorage(std::move(tensor)))) {}
+
 Tensor::Tensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     tensor_id(Tensor::next_tensor_id()),
     tensor_attributes(

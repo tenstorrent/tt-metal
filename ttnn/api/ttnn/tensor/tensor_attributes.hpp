@@ -15,6 +15,7 @@ namespace tt::tt_metal {
 class TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
 public:
     TensorAttributes(HostStorage storage);
+    TensorAttributes(DeviceStorage storage);
 
     // Transitional constructor: use TensorAttributes(HostStorage) instead.
     //
@@ -33,7 +34,11 @@ public:
     // TODO(#40348): Remove this.
     TensorAttributes(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
+    // Transitional constructor: use TensorAttributes(DeviceStorage) instead.
+    // Same reason as above.
+    // TODO(#40348): Remove this.
     TensorAttributes(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
+
     TensorAttributes(const TensorAttributes&) = default;
     TensorAttributes(TensorAttributes&&) = default;
     TensorAttributes& operator=(const TensorAttributes&) = default;

@@ -75,6 +75,13 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
     return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
 }
 
+MeshTensor allocate_mesh_tensor(
+    const TensorSpec& tensor_spec, distributed::MeshDevice& device, TensorTopology topology) {
+    using namespace tt::tt_metal;
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(&device, tensor_spec);
+    return MeshTensor(mesh_buffer, tensor_spec, std::move(topology));
+}
+
 HostTensor pad_bfloat8_b(
     const HostTensor& tensor,
     const tt::tt_metal::Shape& output_padded_shape,
@@ -584,9 +591,7 @@ Tensor to_device(
                                   ? &tensor_spec_overriden_memory_config.value()
                                   : &tensor.tensor_spec();
 
-    auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
-    // Tensor topology will be overwritten in copy_to_device, an empty constructed one is sufficient.
-    auto result = Tensor(DeviceStorage(mesh_buffer), *tensor_spec, TensorTopology{});
+    auto result = Tensor(allocate_mesh_tensor(*tensor_spec, *mesh_device, tensor.tensor_topology()));
     tt::tt_metal::tensor_impl::copy_to_device(tensor, result, cq_id);
     return result;
 }
@@ -681,27 +686,29 @@ Tensor copy_as_replicate_tensor_on_1x1_mesh(
 
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
     auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
-    return Tensor(
-        DeviceStorage(mesh_buffer),
-        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
-        topology);
+    MeshTensor mesh_tensor(
+        mesh_buffer, host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()), topology);
+    return Tensor(std::move(mesh_tensor));
 }
 
 Tensor copy_as_distributed_tensor(
     const Tensor& host_tensor, const Tensor& device_tensor, distributed::MeshCommandQueue& command_queue) {
     auto mesh_buffer = device_tensor.device_storage().get_mesh_buffer_leak_ownership();
     command_queue.enqueue_write(mesh_buffer, host_tensor.host_storage().buffer(), /*blocking=*/false);
+
     // DistributedHostBuffer may not cover the entire MeshDevice, must preserve coords here.
+    // Coordinates here represents the shards that are local to this instance, there maybe other shards that are on
+    // another host.
     std::vector<distributed::MeshCoordinate> coords;
-    coords.reserve(host_tensor.host_storage().buffer().shard_coords().size());
-    std::copy(
-        host_tensor.host_storage().buffer().shard_coords().begin(),
-        host_tensor.host_storage().buffer().shard_coords().end(),
-        std::back_inserter(coords));
-    return Tensor(
-        DeviceStorage(mesh_buffer, std::move(coords)),
+    const auto& shard_coords = host_tensor.host_storage().buffer().shard_coords();
+    coords.reserve(shard_coords.size());
+    std::copy(shard_coords.begin(), shard_coords.end(), std::back_inserter(coords));
+
+    MeshTensor mesh_tensor(
+        mesh_buffer,
         host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
         host_tensor.tensor_topology());
+    return Tensor(DeviceStorage(std::move(mesh_tensor), std::move(coords)));
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE

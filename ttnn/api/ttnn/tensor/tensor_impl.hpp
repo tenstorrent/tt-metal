@@ -87,6 +87,9 @@ std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
 
 HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 
+MeshTensor allocate_mesh_tensor(
+    const TensorSpec& tensor_spec, distributed::MeshDevice& device, TensorTopology topology);
+
 // ======================================================================================
 //                                         .to_host() and .to_device()
 // ======================================================================================
