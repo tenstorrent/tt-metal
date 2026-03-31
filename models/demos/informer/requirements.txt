@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# Informer Model Requirements
+
+# Core dependencies
+torch>=2.0.0
+numpy>=1.21.0
+
+# Testing
+pytest>=7.0.0
+loguru>=0.7.0
+
+# Data processing / HF-compatible time features
+pandas>=1.3.0
+gluonts>=0.16.0
+
+# HF evaluation (optional)
+transformers>=4.30.0
+datasets>=2.0.0
+huggingface_hub>=0.20.0
+safetensors>=0.4.0
+
+# Note: ttnn is provided by the tt-metal environment
+# and should not be installed separately
