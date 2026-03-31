@@ -285,13 +285,20 @@ class WanCausalConv3d(Module):
         self.external_padding = tuple(external_padding)
         self.internal_padding = tuple(internal_padding)
 
+        self.h_factor = self.parallel_config.height_parallel.factor
+        self.w_factor = self.parallel_config.width_parallel.factor
+        self._grid_size = self.mesh_device.compute_with_storage_grid_size()
+        # Initial config without spatial dims — updated on first forward with actual H_out/W_out.
         self.conv_config = get_conv3d_config(
             self.in_channels,
             self.out_channels,
             self.kernel_size,
             dtype,
-            grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            grid_size=self._grid_size,
+            h_factor=self.h_factor,
+            w_factor=self.w_factor,
         )
+        self._conv_config_resolved = False
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -424,6 +431,27 @@ class WanCausalConv3d(Module):
                 neighbor_sems=neighbor_sems,
                 num_links=links,
             )
+
+        # Resolve spatial-specific blocking on first forward when tensor shape is known.
+        if not self._conv_config_resolved:
+            _, _, H_padded, W_padded, _ = x_BTHWC.shape
+            H_out = (H_padded - self.kernel_size[1] + 2 * self.internal_padding[1]) // self.stride[1] + 1
+            W_out = (W_padded - self.kernel_size[2] + 2 * self.internal_padding[2]) // self.stride[2] + 1
+            resolved = get_conv3d_config(
+                self.in_channels,
+                self.out_channels,
+                self.kernel_size,
+                self.dtype,
+                grid_size=self._grid_size,
+                h_factor=self.h_factor,
+                w_factor=self.w_factor,
+                H_out=H_out,
+                W_out=W_out,
+            )
+            # Only apply if C_in_block unchanged — weights were prepared with the init-time C_in_block.
+            if resolved.C_in_block == self.conv_config.C_in_block:
+                self.conv_config = resolved
+            self._conv_config_resolved = True
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
@@ -719,13 +747,19 @@ class WanConv2d(Module):
         self.external_padding = tuple(external_padding)
         self.internal_padding = tuple(internal_padding)
 
+        self.h_factor = self.parallel_config.height_parallel.factor
+        self.w_factor = self.parallel_config.width_parallel.factor
+        self._grid_size = self.mesh_device.compute_with_storage_grid_size()
         self.conv_config = get_conv3d_config(
             self.in_channels,
             self.out_channels,
             self.kernel_size,
             dtype,
-            grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            grid_size=self._grid_size,
+            h_factor=self.h_factor,
+            w_factor=self.w_factor,
         )
+        self._conv_config_resolved = False
         logger.info(f"Loaded conv_config: {self.conv_config}")
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -841,6 +875,27 @@ class WanConv2d(Module):
                 neighbor_sems=neighbor_sems,
                 num_links=links,
             )
+
+        # Resolve spatial-specific blocking on first forward when tensor shape is known.
+        if not self._conv_config_resolved:
+            _, _, H_padded, W_padded, _ = x_BTHWC.shape
+            H_out = (H_padded - self.kernel_size[1] + 2 * self.internal_padding[1]) // self.stride[1] + 1
+            W_out = (W_padded - self.kernel_size[2] + 2 * self.internal_padding[2]) // self.stride[2] + 1
+            resolved = get_conv3d_config(
+                self.in_channels,
+                self.out_channels,
+                self.kernel_size,
+                self.dtype,
+                grid_size=self._grid_size,
+                h_factor=self.h_factor,
+                w_factor=self.w_factor,
+                H_out=H_out,
+                W_out=W_out,
+            )
+            # Only apply if C_in_block unchanged — weights were prepared with the init-time C_in_block.
+            if resolved.C_in_block == self.conv_config.C_in_block:
+                self.conv_config = resolved
+            self._conv_config_resolved = True
 
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
