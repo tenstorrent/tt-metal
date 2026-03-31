@@ -86,6 +86,7 @@ def create_tt_model(
     dtype=ttnn.bfloat8_b,
     state_dict=None,
     num_layers=None,
+    dummy_weights: bool = False,
 ):
     from models.demos.multimodal.gemma3.tt.model_config import ModelArgs
     from models.tt_transformers.tt.model import Transformer
@@ -93,9 +94,10 @@ def create_tt_model(
     tt_model_args = ModelArgs(
         mesh_device,
         instruct=instruct,
+        dummy_weights=dummy_weights,
         max_batch_size=max_batch_size,
-        optimizations=optimizations,
         max_seq_len=max_seq_len,
+        optimizations=optimizations,
     )
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
@@ -280,6 +282,7 @@ def prepare_generator_args(
     max_seq_len,
     page_params,
     paged_attention,
+    dummy_weights: bool = False,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -308,6 +311,7 @@ def prepare_generator_args(
             paged_attention_config=paged_attention_config,
             dtype=ttnn.bfloat8_b,
             state_dict=state_dict,
+            dummy_weights=dummy_weights,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -795,6 +799,7 @@ def test_demo_text(
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
+    dummy_weights = request.config.getoption("--dummy_weights") or False
     # enable_trace = request.config.getoption("--enable_trace") or enable_trace
     assert not (
         enable_trace and token_accuracy
@@ -900,6 +905,7 @@ def test_demo_text(
         max_seq_len=max_seq_len,
         page_params=page_params,
         paged_attention=paged_attention,
+        dummy_weights=dummy_weights,
     )
 
     if token_accuracy:
