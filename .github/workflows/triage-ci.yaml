@@ -82,6 +82,10 @@ on:
         required: false
         type: boolean
         default: false
+      m4-max-new-issues:
+        description: "Maximum number of new M4 issues/slack bootstrap messages to create in one run"
+        required: false
+        default: "1"
 
 permissions:
   actions: write
@@ -271,6 +275,18 @@ jobs:
           set -euo pipefail
           python tools/ci/extract_failing_jobs.py
 
+      - name: M4 restore previous cache artifacts
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p build_ci/m4_cache_prev
+          prev_run_id="$(gh run list --workflow triage-ci.yaml --repo tenstorrent/tt-metal --status success --limit 1 --json databaseId --jq '.[0].databaseId' || true)"
+          if [ -n "${prev_run_id:-}" ] && [ "$prev_run_id" != "null" ]; then
+            gh run download "$prev_run_id" --repo tenstorrent/tt-metal -n auto-disable-artifacts -D build_ci/m4_cache_prev || true
+          fi
+
       - name: M4 create issues and post Slack bootstrap messages
         if: ${{ !inputs['data-gathering-mode'] }}
         env:
@@ -283,7 +299,9 @@ jobs:
           python tools/ci/m4_create_issues_and_notify.py \
             --failing-jobs-json "build_ci/ci_ticketing/create_tickets/failing_jobs.json" \
             --output-json "build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json" \
-            --max-candidates 5 \
+            --review-cache-json "build_ci/ci_ticketing/create_tickets/m4_review_cache.json" \
+            --previous-artifact-dir "build_ci/m4_cache_prev" \
+            --max-new-issues "${{ github.event.inputs['m4-max-new-issues'] || '1' }}" \
             --model "${{ github.event.inputs['auto-disable-model'] || 'claude-4-sonnet' }}"
 
       - name: Upload auto-disable artifacts
@@ -299,6 +317,7 @@ jobs:
             build_ci/auto_disable/debug
             build_ci/ci_ticketing/create_tickets/failing_jobs.json
             build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json
+            build_ci/ci_ticketing/create_tickets/m4_review_cache.json
           retention-days: 7
 
       - name: Upload triage state artifact
