@@ -7,6 +7,7 @@
 #include <variant>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/mesh_program_descriptor.hpp>
+#include <tt-metalium/kernel_types.hpp>
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -14,6 +15,28 @@
 #include "generic_op_device_operation_types.hpp"
 
 namespace ttnn::operations::generic {
+
+// Post-compilation metadata for a generic_op program.
+// Populated by querying the cached, finalized Program object.
+struct ProgramCompileInfo {
+    uint32_t rta_offset = 0;
+    uint32_t sem_offset = 0;
+    uint32_t sem_size = 0;
+    uint32_t cb_offset = 0;
+    uint32_t cb_size = 0;
+    uint32_t dfb_offset = 0;
+    uint32_t dfb_size = 0;
+    uint32_t local_cb_size = 0;
+    uint32_t kernel_text_offset = 0;
+    uint32_t kernel_text_size = 0;
+    std::vector<uint32_t> program_config_sizes;
+    std::vector<tt::tt_metal::detail::KernelMeta> kernel_metas;
+};
+
+// Query the kernel config layout of a compiled generic_op program.
+// Must be called after ttnn.generic_op(io_tensors, program_descriptor) has executed at least once.
+ProgramCompileInfo get_program_compile_info(
+    const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor);
 
 struct GenericOpDeviceOperation {
     using operation_attributes_t = generic::operation_attributes_t;

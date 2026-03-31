@@ -266,6 +266,7 @@ public:
         tt::stl::Span<ProgramImpl*> programs);
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
+    const std::vector<uint32_t>& get_program_config_sizes() const noexcept { return program_config_sizes_; }
 
     CBHandle add_circular_buffer(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
     CBHandle add_circular_buffer(

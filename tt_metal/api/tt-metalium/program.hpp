@@ -66,6 +66,27 @@ struct KernelMeta;
 // Collects the meta data of kernels in a program, and the metadata of the binaries within the kernel if device is non-null
 // Note: device is nullable
 std::vector<detail::KernelMeta> collect_kernel_meta(Program const& program, IDevice* device);
+
+// Post-compilation program config: offsets and sizes of kernel config buffer components.
+struct ProgramConfigInfo {
+    uint32_t rta_offset = 0;
+    uint32_t sem_offset = 0;
+    uint32_t sem_size = 0;
+    uint32_t cb_offset = 0;
+    uint32_t cb_size = 0;
+    uint32_t dfb_offset = 0;
+    uint32_t dfb_size = 0;
+    uint32_t local_cb_size = 0;
+    uint32_t kernel_text_offset = 0;
+    uint32_t kernel_text_size = 0;
+};
+
+// Returns the program config for a given programmable core type index.
+// Only valid after the program has been compiled and finalized.
+ProgramConfigInfo get_program_config_info(const Program& program, uint32_t programmable_core_type_index);
+
+// Returns per-core-type config slot sizes.
+std::vector<uint32_t> get_program_config_sizes(const Program& program);
 }; //namespace detail
 
 }  // namespace tt::tt_metal

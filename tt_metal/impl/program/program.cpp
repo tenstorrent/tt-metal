@@ -469,6 +469,28 @@ std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& progr
     return program.impl().collect_kernel_meta(device);
 }
 
+detail::ProgramConfigInfo detail::get_program_config_info(
+    const Program& program, uint32_t programmable_core_type_index) {
+    const auto& pc = program.impl().get_program_config(programmable_core_type_index);
+    return ProgramConfigInfo{
+        .rta_offset = pc.rta_offset,
+        .sem_offset = pc.sem_offset,
+        .sem_size = pc.sem_size,
+        .cb_offset = pc.cb_offset,
+        .cb_size = pc.cb_size,
+        .dfb_offset = pc.dfb_offset,
+        .dfb_size = pc.dfb_size,
+        .local_cb_size = pc.local_cb_size,
+        .kernel_text_offset = pc.kernel_text_offset,
+        .kernel_text_size = pc.kernel_text_size,
+    };
+}
+
+std::vector<uint32_t> detail::get_program_config_sizes(const Program& program) {
+    auto& sizes = program.impl().get_program_config_sizes();
+    return std::vector<uint32_t>(sizes.begin(), sizes.end());
+}
+
 std::vector<detail::KernelMeta> ProgramImpl::collect_kernel_meta(IDevice* device) const {
     std::vector<detail::KernelMeta> result;
     result.reserve(this->num_kernels());

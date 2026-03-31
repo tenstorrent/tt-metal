@@ -3,10 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/mesh_device_operation_adapter.hpp"
 #include "generic_op_device_operation.hpp"
 #include "generic_op_device_operation_types.hpp"
 
 #include <tt_stl/reflection.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <unordered_set>
 
 namespace ttnn::operations::generic {
@@ -118,6 +122,64 @@ ttsl::hash::hash_t GenericOpDeviceOperation::compute_program_hash(
         ttsl::hash::hash_combine(hash, compute_program_descriptor_hash(program_descriptor));
     }
     return hash;
+}
+
+ProgramCompileInfo get_program_compile_info(
+    const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+    TT_FATAL(!io_tensors.empty(), "io_tensors must not be empty");
+    auto* mesh_device = io_tensors.front().device();
+    TT_FATAL(mesh_device != nullptr, "Tensor must be on a device");
+
+    // Build the same MeshProgramDescriptor that the SPMD generic_op path creates
+    operation_attributes_t attrs;
+    attrs.mesh_programs.emplace_back(ttnn::MeshCoordinateRange(mesh_device->shape()), program_descriptor);
+
+    tensor_args_t tensor_args{.io_tensors = io_tensors, .output_tensor = io_tensors.back()};
+
+    // Compute the exact cache hash used by the device operation
+    using Adapter = ttnn::device_operation::MeshDeviceOperationAdapter<GenericOpDeviceOperation>;
+    auto hash = Adapter::compute_mesh_workload_hash(mesh_device, attrs, tensor_args);
+
+    // Look up the cached program
+    auto& cache = mesh_device->get_program_cache();
+    TT_FATAL(
+        cache.contains(hash),
+        "Program not found in cache. Call ttnn.generic_op(io_tensors, program_descriptor) first.");
+    auto& factory = cache.get(hash);
+
+    // Extract the Program from the type-erased cache
+    using cached_t = program::GenericMeshProgramFactory::cached_mesh_workload_t;
+    auto& cached_workload = factory.cached_program.get<cached_t>();
+    auto& programs = cached_workload.workload.get_programs();
+    TT_FATAL(!programs.empty(), "Cached workload has no programs");
+    auto& program = programs.begin()->second;
+
+    // Read ProgramConfig for TENSIX core type (index 0 — always the first programmable core type)
+    constexpr uint32_t tensix_idx = 0;
+    auto pc = tt::tt_metal::detail::get_program_config_info(program, tensix_idx);
+
+    // Read kernel metadata with binary sizes (pass a device to get packed_size)
+    auto devices = mesh_device->get_devices();
+    tt::tt_metal::IDevice* device = devices.empty() ? nullptr : devices.front();
+    auto kernel_metas = tt::tt_metal::detail::collect_kernel_meta(program, device);
+
+    // Read per-core-type config sizes
+    auto config_sizes = tt::tt_metal::detail::get_program_config_sizes(program);
+
+    return ProgramCompileInfo{
+        .rta_offset = pc.rta_offset,
+        .sem_offset = pc.sem_offset,
+        .sem_size = pc.sem_size,
+        .cb_offset = pc.cb_offset,
+        .cb_size = pc.cb_size,
+        .dfb_offset = pc.dfb_offset,
+        .dfb_size = pc.dfb_size,
+        .local_cb_size = pc.local_cb_size,
+        .kernel_text_offset = pc.kernel_text_offset,
+        .kernel_text_size = pc.kernel_text_size,
+        .program_config_sizes = std::move(config_sizes),
+        .kernel_metas = std::move(kernel_metas),
+    };
 }
 
 }  // namespace ttnn::operations::generic
