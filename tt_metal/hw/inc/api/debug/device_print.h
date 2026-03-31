@@ -589,7 +589,7 @@ struct device_print_type_info {
 };
 
 // Type-to-info mapping for format strings and serialization
-template <typename T>
+template <typename T, typename = void>
 struct device_print_type {
     static constexpr device_print_type_info value = {'#', 0};  // Unknown type default
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, T argument) {
@@ -700,6 +700,41 @@ struct device_print_type<bf16_t> {
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, bf16_t argument) {
         *reinterpret_cast<device_print_buffer_ptr<uint16_t>>(device_print_buffer + offset) =
             static_cast<uint16_t>(argument.val);
+    }
+};
+
+// Catch-all for integral types that don't have an explicit specialization above (e.g. 'int' and
+// 'unsigned int' on platforms where they differ from std::int32_t / std::uint32_t).
+// Delegates to the matching fixed-width specialization based on size and signedness.
+template <typename T>
+struct device_print_type<
+    T,
+    std::enable_if_t<
+        std::is_integral_v<T> && !std::is_same_v<T, bool> && !std::is_same_v<T, std::int8_t> &&
+        !std::is_same_v<T, std::uint8_t> && !std::is_same_v<T, std::int16_t> && !std::is_same_v<T, std::uint16_t> &&
+        !std::is_same_v<T, std::int32_t> && !std::is_same_v<T, std::uint32_t> && !std::is_same_v<T, std::int64_t> &&
+        !std::is_same_v<T, std::uint64_t>>> {
+    // Pick the fixed-width type with matching size and signedness
+    using fixed_type = std::conditional_t<
+        std::is_signed_v<T>,
+        std::conditional_t<
+            sizeof(T) == 1,
+            std::int8_t,
+            std::conditional_t<
+                sizeof(T) == 2,
+                std::int16_t,
+                std::conditional_t<sizeof(T) == 4, std::int32_t, std::int64_t>>>,
+        std::conditional_t<
+            sizeof(T) == 1,
+            std::uint8_t,
+            std::conditional_t<
+                sizeof(T) == 2,
+                std::uint16_t,
+                std::conditional_t<sizeof(T) == 4, std::uint32_t, std::uint64_t>>>>;
+
+    static constexpr device_print_type_info value = device_print_type<fixed_type>::value;
+    static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, T argument) {
+        device_print_type<fixed_type>::serialize(device_print_buffer, offset, static_cast<fixed_type>(argument));
     }
 };
 
@@ -967,7 +1002,7 @@ constexpr auto update_format_string(const char (&format)[N]) {
 // This allows calling with actual arguments: update_format_string_from_args("format {}", arg1, arg2, ...)
 template <std::size_t N, typename... Args>
 constexpr auto update_format_string_from_args(const char (&format)[N], const Args&... args) {
-    (void)((void)args, ...);  // Suppress unused parameter warnings for all args
+    ((void)sizeof(args), ...);  // Suppress unused parameter warnings for all args
     return update_format_string<N, Args...>(format);
 }
 

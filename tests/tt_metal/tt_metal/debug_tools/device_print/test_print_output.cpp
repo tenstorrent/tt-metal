@@ -212,3 +212,18 @@ TEST_F(DevicePrintOutputFixture, PrintAllArgumentSizes) {
 
     TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp", messages);
 }
+
+TEST_F(DevicePrintOutputFixture, PrintBuiltinTypes) {
+    std::vector<std::string> messages = {
+        "i=1",
+        "unknown=5",
+        "u=42",
+        "ll=-123456789012345",
+        "ull=123456789012345",
+        "s=-12345",
+        "us=12345",
+        "cvllu=98765432109876",
+    };
+
+    TestOutput("tests/tt_metal/tt_metal/test_kernels/device_print/print_builtin_types.cpp", messages);
+}

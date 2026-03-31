@@ -175,3 +175,19 @@ TEST_F(DevicePrintFormatUpdatesFixture, PrintAllArgumentSizes) {
     TestFormatUpdate(
         "tests/tt_metal/tt_metal/test_kernels/device_print/print_all_argument_sizes.cpp", ttsl::make_span(messages));
 }
+
+TEST_F(DevicePrintFormatUpdatesFixture, PrintBuiltinTypes) {
+    std::vector<std::string_view> messages = {
+        "i={0,i}\n"sv,
+        "unknown={0,i}\n"sv,
+        "u={0,I}\n"sv,
+        "ll={0,q}\n"sv,
+        "ull={0,Q}\n"sv,
+        "s={0,h}\n"sv,
+        "us={0,H}\n"sv,
+        "cvllu={0,Q}\n"sv,
+    };
+
+    TestFormatUpdate(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_builtin_types.cpp", ttsl::make_span(messages));
+}
