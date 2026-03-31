@@ -209,9 +209,8 @@ class DeepSeekV3:
         if len(prompt_tokens) == 0:
             raise ValueError("Expected at least one prompt token")
 
-        READS_PER_WRITE = 2
         num_writes_before_readback = min(self._pipeline_depth, len(prompt_tokens))
-        total_reads = len(prompt_tokens) * READS_PER_WRITE
+        total_reads = len(prompt_tokens)
 
         write_idx = 0
         read_count = 0
@@ -221,20 +220,19 @@ class DeepSeekV3:
             self._write_fn(prompt_tokens[write_idx])
             write_idx += 1
 
-        # Phase 2: overlap — drain READS_PER_WRITE outputs, then send next token
+        # Phase 2: overlap — drain outputs and issue remaining writes in steady state
         while write_idx < len(prompt_tokens):
-            for _ in range(READS_PER_WRITE):
-                self._read_fn(self._output_buffer)
-                read_count += 1
+            self._read_fn(self._output_buffer)
+            read_count += 1
             self._write_fn(prompt_tokens[write_idx])
             write_idx += 1
 
-        # Phase 3: drain remaining outputs; save the last READS_PER_WRITE
+        # Phase 3: drain remaining outputs; save the last output 
         last_results: list[DecodeResult] = []
         while read_count < total_reads:
             self._read_fn(self._output_buffer)
             read_count += 1
-            if read_count > total_reads - READS_PER_WRITE:
+            if read_count > total_reads - 1:
                 last_results.append(parse_output_page(self._output_buffer))
 
         self._position += len(prompt_tokens)

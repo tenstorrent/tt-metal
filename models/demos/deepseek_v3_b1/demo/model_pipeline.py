@@ -175,7 +175,6 @@ class ModelPipeline:
         while len(generated_tokens) < max_new_tokens:
             result = pending.popleft() if pending else self.model.read_result()
 
-            # On last step of prefill, we get base token + first spec token (needs to be verified)
             if not unverified_spec_tokens:
                 unverified_spec_tokens.append(result.token_1)
                 emit(result.token_0)
