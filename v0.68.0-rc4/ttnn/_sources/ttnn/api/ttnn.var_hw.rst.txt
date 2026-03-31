@@ -1,0 +1,8 @@
+﻿ttnn.var\_hw
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.var_hw:
+
+.. autooperation:: ttnn.var_hw
