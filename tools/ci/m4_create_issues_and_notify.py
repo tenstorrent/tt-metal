@@ -331,8 +331,17 @@ def fingerprint_for(workflow_name: str, job_name: str, signature: str) -> str:
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
+def job_identity_key(workflow_name: str, job_name: str) -> str:
+    raw = f"{workflow_name}\n{job_name}".strip().lower().encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
+
+
 def issue_marker(fingerprint: str) -> str:
     return f"Auto-triage-fingerprint: {fingerprint}"
+
+
+def issue_job_identity_marker(job_key: str) -> str:
+    return f"Auto-triage-job-key: {job_key}"
 
 
 def list_open_issue_bodies(*, issue_token: str) -> list[dict[str, Any]]:
@@ -362,6 +371,28 @@ def find_existing_issue_for_fingerprint(open_issues: list[dict[str, Any]], finge
         body = str(issue.get("body", ""))
         if marker in body:
             return str(issue.get("url", "")).strip() or None
+    return None
+
+
+def find_existing_issue_for_job_identity(
+    open_issues: list[dict[str, Any]],
+    *,
+    workflow_name: str,
+    job_name: str,
+) -> str | None:
+    marker = issue_job_identity_marker(job_identity_key(workflow_name, job_name))
+    workflow_l = workflow_name.lower()
+    job_l = job_name.lower()
+    for issue in open_issues:
+        body = str(issue.get("body", ""))
+        title = str(issue.get("title", ""))
+        url = str(issue.get("url", "")).strip() or None
+        if marker in body:
+            return url
+        combined = f"{title}\n{body}".lower()
+        # Legacy fallback for older issues that predate job-key marker.
+        if workflow_l in combined and job_l in combined:
+            return url
     return None
 
 
@@ -438,8 +469,8 @@ def main() -> int:
     parser.add_argument(
         "--max-agent-reviews",
         type=int,
-        default=3,
-        help="Maximum number of fresh agent reviews (cache reuses do not count).",
+        default=0,
+        help="Deprecated: review count is no longer capped; retained for compatibility.",
     )
     parser.add_argument("--model", default="auto")
     args = parser.parse_args()
@@ -529,6 +560,20 @@ def main() -> int:
         workflow_name = item["workflow_name"]
         job_name = item["job_name"]
         job_urls = item["job_urls"]
+        existing_by_identity = find_existing_issue_for_job_identity(
+            open_issues,
+            workflow_name=workflow_name,
+            job_name=job_name,
+        )
+        if existing_by_identity:
+            skipped.append(
+                {
+                    "job_name": job_name,
+                    "workflow_name": workflow_name,
+                    "reason": f"already_tracked_job_identity:{existing_by_identity}",
+                }
+            )
+            continue
         key = decision_key(workflow_name, job_name, job_urls)
         prior = find_exact_previous_decision(
             prev_review_entries,
@@ -540,15 +585,6 @@ def main() -> int:
             decisions_by_key[key] = prior
             reused_cache_keys.add(key)
             log(f"Reused cached review decision for workflow={workflow_name} job={job_name}")
-            continue
-        if len(to_review) >= max_agent_reviews:
-            skipped.append(
-                {
-                    "job_name": job_name,
-                    "workflow_name": workflow_name,
-                    "reason": f"max_agent_reviews_reached:{max_agent_reviews}",
-                }
-            )
             continue
         job_slug = sanitize_for_path(f"{workflow_name}-{job_name}")[:120]
         log_paths: list[str] = []
@@ -703,9 +739,12 @@ def main() -> int:
                 f"Failing job URLs (last 3):\n" + "\n".join(f"- {url}" for url in job_urls)
             )
         marker = issue_marker(fp)
+        job_marker = issue_job_identity_marker(job_identity_key(workflow_name, job_name))
         issue_body = issue_body_from_agent
         if marker not in issue_body:
             issue_body = issue_body.rstrip() + "\n\n" + marker + "\n"
+        if job_marker not in issue_body:
+            issue_body = issue_body.rstrip() + "\n" + job_marker + "\n"
         if not draft_slack_flag:
             skipped.append(
                 {

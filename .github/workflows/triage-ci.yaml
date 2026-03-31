@@ -87,9 +87,9 @@ on:
         required: false
         default: "1"
       m4-max-agent-reviews:
-        description: "Maximum number of fresh M4 agent log reviews per run"
+        description: "Deprecated compatibility input (M4 now reviews all eligible jobs in one batch call)"
         required: false
-        default: "3"
+        default: "0"
 
 permissions:
   actions: write
@@ -309,7 +309,7 @@ jobs:
             --review-cache-json "build_ci/ci_ticketing/create_tickets/m4_review_cache.json" \
             --previous-artifact-dir "build_ci/m4_cache_prev" \
             --max-new-issues "${{ github.event.inputs['m4-max-new-issues'] || '1' }}" \
-            --max-agent-reviews "${{ github.event.inputs['m4-max-agent-reviews'] || '3' }}" \
+            --max-agent-reviews "${{ github.event.inputs['m4-max-agent-reviews'] || '0' }}" \
             --model "${{ github.event.inputs['auto-disable-model'] || 'claude-4-sonnet' }}"
 
       - name: Upload auto-disable artifacts
