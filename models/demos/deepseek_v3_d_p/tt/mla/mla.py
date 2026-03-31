@@ -89,14 +89,14 @@ class ttMLA:
 
         # Create CCL object for semaphore management
         self.tt_ccl = get_tt_ccl(mesh_device)
-        self.tp_factor = mesh_device.shape[tp_axis]
+        self.tp_factor = mesh_device.shape[self.tp_axis]
 
         self.ccl_num_links = 2 if is_blackhole() else 1
         self.ccl_topology = topology
 
         # ring attention setup
         persistent_v_shard_dims = [None, None]
-        persistent_v_shard_dims[tp_axis] = 1  # TP heads
+        persistent_v_shard_dims[self.tp_axis] = 1  # TP heads
         persistent_k_shard_dims = [None, None]
 
         ag_output_shape_k = (1, 1, seq_len, self.kv_lora_rank + self.qk_rope_head_dim)
@@ -124,10 +124,12 @@ class ttMLA:
             ),
         )
 
+
+
         # Pre-allocate dummy joint tensors for ring_joint_scaled_dot_product_attention (seq_len=0)
         num_heads_local = self.num_heads // self.tp_factor
         joint_shard_dims = [None, None]
-        joint_shard_dims[tp_axis] = 1  # shard on head dimension
+        joint_shard_dims[self.tp_axis] = 1  # shard on head dimension
 
         self.joint_q = ttnn.from_torch(
             torch.zeros(1, num_heads_local, 0, self.qk_head_dim),
