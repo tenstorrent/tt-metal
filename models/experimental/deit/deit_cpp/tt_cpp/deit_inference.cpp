@@ -23,31 +23,31 @@ void update_model_config(deit_inference::DeiTConfig& config, int batch_size) {
     config.batch_size = batch_size;
     config.core_grid = ttnn::CoreCoord{3, static_cast<std::size_t>(batch_size)};
 
-    std::size_t seqL_t = 224 / 32;                      // 7
-    std::size_t dim_t = 192 / 32;                       // 6
-    std::size_t dim_t__x = dim_t / config.core_grid.x;  // 2
+    std::size_t seqL_t = 224 / 32;                     // 7
+    std::size_t dim_t = 192 / 32;                      // 6
+    std::size_t dim_t_x = dim_t / config.core_grid.x;  // 2
     std::size_t head_num = 3;
     std::size_t head_seqL_t = head_num * seqL_t / config.core_grid.x;  // 7
-    std::size_t head_size_t__x = dim_t / head_num;                     // 2
-    std::size_t class__x = 1152 / 32 / config.core_grid.x;             // 3
+    std::size_t head_size_t_x = dim_t / head_num;                      // 2
+    std::size_t class_x = 1152 / 32 / config.core_grid.x;              // 3
 
     auto grid = config.core_grid;
 
     config.query_key_value_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = grid,
-        .in0_block_w = dim_t__x / 2,
+        .in0_block_w = dim_t_x / 2,
         .out_subblock_h = 1,
-        .out_subblock_w = 2 * dim_t__x / 2,
+        .out_subblock_w = 2 * dim_t_x / 2,
         .out_block_h = seqL_t,
-        .out_block_w = 3 * dim_t__x,
+        .out_block_w = 3 * dim_t_x,
         .per_core_M = seqL_t,
-        .per_core_N = 3 * dim_t__x,
+        .per_core_N = 3 * dim_t_x,
         .transpose_mcast = false,
         .fused_activation = std::nullopt};
 
     config.query_by_key_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseProgramConfig{
         .compute_with_storage_grid_size = grid,
-        .in0_block_w = dim_t__x,
+        .in0_block_w = dim_t_x,
         .out_subblock_h = 1,
         .out_subblock_w = seqL_t,
         .per_core_M = seqL_t,
@@ -58,31 +58,31 @@ void update_model_config(deit_inference::DeiTConfig& config, int batch_size) {
             .compute_with_storage_grid_size = grid,
             .in0_block_w = seqL_t,
             .out_subblock_h = 1,
-            .out_subblock_w = head_size_t__x,
+            .out_subblock_w = head_size_t_x,
             .per_core_M = seqL_t,
-            .per_core_N = head_size_t__x};
+            .per_core_N = head_size_t_x};
 
     config.self_output_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = grid,
-        .in0_block_w = dim_t__x / 2,
+        .in0_block_w = dim_t_x / 2,
         .out_subblock_h = 1,
-        .out_subblock_w = dim_t__x,
+        .out_subblock_w = dim_t_x,
         .out_block_h = seqL_t,
-        .out_block_w = dim_t__x,
+        .out_block_w = dim_t_x,
         .per_core_M = seqL_t,
-        .per_core_N = dim_t__x,
+        .per_core_N = dim_t_x,
         .transpose_mcast = false,
         .fused_activation = std::nullopt};
 
     config.ff1_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = grid,
-        .in0_block_w = dim_t__x,
+        .in0_block_w = dim_t_x,
         .out_subblock_h = 1,
-        .out_subblock_w = dim_t__x,
+        .out_subblock_w = dim_t_x,
         .out_block_h = seqL_t,
-        .out_block_w = 4 * dim_t__x,
+        .out_block_w = 4 * dim_t_x,
         .per_core_M = seqL_t,
-        .per_core_N = 4 * dim_t__x,
+        .per_core_N = 4 * dim_t_x,
         .transpose_mcast = false,
         .fused_activation =
             ttnn::operations::unary::UnaryWithParam{
@@ -91,41 +91,41 @@ void update_model_config(deit_inference::DeiTConfig& config, int batch_size) {
 
     config.ff2_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = grid,
-        .in0_block_w = 2 * dim_t__x,
+        .in0_block_w = 2 * dim_t_x,
         .out_subblock_h = 1,
-        .out_subblock_w = dim_t__x,
+        .out_subblock_w = dim_t_x,
         .out_block_h = seqL_t,
-        .out_block_w = dim_t__x,
+        .out_block_w = dim_t_x,
         .per_core_M = seqL_t,
-        .per_core_N = dim_t__x,
+        .per_core_N = dim_t_x,
         .transpose_mcast = false,
         .fused_activation = std::nullopt};
 
     config.classifer_matmul_program_config = ttnn::operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig{
         .compute_with_storage_grid_size = grid,
-        .in0_block_w = dim_t__x,
+        .in0_block_w = dim_t_x,
         .out_subblock_h = 1,
-        .out_subblock_w = class__x / 2,
+        .out_subblock_w = class_x / 2,
         .out_block_h = seqL_t,
-        .out_block_w = class__x,
+        .out_block_w = class_x,
         .per_core_M = seqL_t,
-        .per_core_N = class__x,
+        .per_core_N = class_x,
         .transpose_mcast = false,
         .fused_activation = ttnn::operations::unary::UnaryWithParam{
             ttnn::operations::unary::UnaryOpType::GELU, std::vector<float>{1.0f}}};
 
     config.layernorm_program_config = ttnn::prim::LayerNormShardedMultiCoreProgramConfig{
         .compute_with_storage_grid_size = grid,
-        .subblock_w = dim_t__x / 2,
+        .subblock_w = dim_t_x / 2,
         .block_h = seqL_t,
-        .block_w = dim_t__x,
+        .block_w = dim_t_x,
         .inplace = false};
 
     config.layernorm_after_output_program_config = ttnn::prim::LayerNormShardedMultiCoreProgramConfig{
         .compute_with_storage_grid_size = grid,
-        .subblock_w = dim_t__x / 2,
+        .subblock_w = dim_t_x / 2,
         .block_h = seqL_t,
-        .block_w = dim_t__x,
+        .block_w = dim_t_x,
         .inplace = false};
 
     config.softmax_program_config = ttnn::SoftmaxShardedMultiCoreProgramConfig{
@@ -186,13 +186,13 @@ ttnn::Tensor deit_embeddings(
 ttnn::Tensor deit_layernorm_before(
     const deit_inference::DeiTConfig& config,
     const ttnn::Tensor& hidden_states,
-    const ttnn::Tensor& layernorm_weight,
-    const ttnn::Tensor& layernorm_bias) {
+    const ttnn::Tensor& layernorm_before_weight,
+    const ttnn::Tensor& layernorm_before_bias) {
     return ttnn::layer_norm(
         hidden_states,
         config.layer_norm_eps,
-        layernorm_weight,
-        layernorm_bias,
+        layernorm_before_weight,
+        layernorm_before_bias,
         std::nullopt,
         ttnn::L1_BLOCK_SHARDED_MEMORY_CONFIG,
         config.layernorm_program_config);
@@ -201,13 +201,13 @@ ttnn::Tensor deit_layernorm_before(
 ttnn::Tensor deit_layernorm_after(
     const deit_inference::DeiTConfig& config,
     const ttnn::Tensor& hidden_states,
-    const ttnn::Tensor& layernorm_weight,
-    const ttnn::Tensor& layernorm_bias) {
+    const ttnn::Tensor& layernorm_after_weight,
+    const ttnn::Tensor& layernorm_after_bias) {
     return ttnn::layer_norm(
         hidden_states,
         config.layer_norm_eps,
-        layernorm_weight,
-        layernorm_bias,
+        layernorm_after_weight,
+        layernorm_after_bias,
         std::nullopt,
         ttnn::L1_BLOCK_SHARDED_MEMORY_CONFIG,
         config.layernorm_after_output_program_config);
@@ -391,12 +391,12 @@ ttnn::Tensor deit_encoder(
     const std::unordered_map<std::string, ttnn::Tensor>& parameters) {
     uint32_t seqL_t = 224 / 32;
     uint32_t dim_t = 192 / 32;
-    uint32_t dim_t__x = dim_t / config.core_grid.x;
+    uint32_t dim_t_x = dim_t / config.core_grid.x;
 
     ttnn::CoreCoord grid = config.core_grid;
     tt::tt_metal::CoreRange cr{ttnn::CoreCoord{0, 0}, ttnn::CoreCoord{grid.x - 1, grid.y - 1}};
     tt::tt_metal::CoreRangeSet crs{cr};
-    std::array<uint32_t, 2> shard_shape = {seqL_t * 32, dim_t__x * 32};
+    std::array<uint32_t, 2> shard_shape = {seqL_t * 32, dim_t_x * 32};
     tt::tt_metal::ShardSpec shard_spec{crs, shard_shape, tt::tt_metal::ShardOrientation::ROW_MAJOR};
     auto sharded_mem_config =
         ttnn::MemoryConfig{tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
@@ -466,7 +466,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> deit(
     uint32_t hidden_dim = shape[shape.rank() - 1];
 
     // Dual classifier path (DeiTForImageClassificationWithTeacher)
-    if (parameters.count("cls_classifier.weight") && parameters.count("distillation_classifier.weight")) {
+    if (parameters.contains("cls_classifier.weight") && parameters.contains("distillation_classifier.weight")) {
         auto cls_token_output = ttnn::slice(
             output,
             ttnn::SmallVector<uint32_t>{0, 0, 0},
@@ -562,12 +562,9 @@ std::unordered_map<std::string, ttnn::Tensor> custom_preprocessor(
         // auto padded_cls_shape = ttnn::Shape{1152, cls_shape[1]};
         // parameters["classifier.weight"] = ttnn::pad(classifier_weight, padded_cls_shape, tt::tt_metal::Array4D{0, 0,
         // 0, 0}, 0.0f);
-        parameters["classifier.weight"] = classifier_weight;  // Placeholder
-        parameters["classifier.bias"] = classifier_bias;
-    } else {
-        parameters["classifier.weight"] = classifier_weight;
-        parameters["classifier.bias"] = classifier_bias;
     }
+    parameters["classifier.weight"] = classifier_weight;
+    parameters["classifier.bias"] = classifier_bias;
 
     return parameters;
 }

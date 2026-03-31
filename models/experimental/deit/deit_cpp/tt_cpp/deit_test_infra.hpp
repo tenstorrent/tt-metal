@@ -57,7 +57,7 @@ private:
         const std::vector<uint32_t>& shape,
         ttnn::DataType dtype,
         ttnn::Layout layout,
-        std::optional<ttnn::MemoryConfig> memory_config = std::nullopt) const;
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) const;
 
     std::vector<float> read_tensor_data(const std::string& weights_root, const std::string& relative_path) const;
     ttnn::Tensor load_tensor_from_manifest(
@@ -67,7 +67,7 @@ private:
         const std::string& weights_root,
         ttnn::DataType dtype,
         ttnn::Layout layout,
-        std::optional<ttnn::MemoryConfig> memory_config = std::nullopt) const;
+        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt) const;
 
     std::vector<float> pad_channels_to_four(const std::vector<float>& nchw, int batch, int height, int width) const;
     std::vector<float> reshape_for_patch_input(

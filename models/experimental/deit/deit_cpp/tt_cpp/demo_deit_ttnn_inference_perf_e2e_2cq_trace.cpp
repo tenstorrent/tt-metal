@@ -40,7 +40,7 @@ void dump_device_profiler(tt::tt_metal::distributed::MeshDevice* device) {
 
 void run_trace_2cq_model(
     MeshDevice* device,
-    std::shared_ptr<deit_inference::DeitTestInfra> test_infra,
+    const std::shared_ptr<deit_inference::DeitTestInfra>& test_infra,
     const std::string& model_name,
     int num_warmup_iterations,
     int num_measurement_iterations,

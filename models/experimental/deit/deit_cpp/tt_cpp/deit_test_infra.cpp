@@ -61,7 +61,7 @@ ttnn::Tensor DeitTestInfra::create_tensor_from_vector(
     const std::vector<uint32_t>& shape,
     ttnn::DataType dtype,
     ttnn::Layout layout,
-    std::optional<ttnn::MemoryConfig> memory_config) const {
+    const std::optional<ttnn::MemoryConfig>& memory_config) const {
     const bool block_float = dtype == ttnn::DataType::BFLOAT4_B || dtype == ttnn::DataType::BFLOAT8_B;
     const auto host_layout = block_float ? ttnn::TILE_LAYOUT : ttnn::ROW_MAJOR_LAYOUT;
     const ttnn::TensorSpec spec(
@@ -107,7 +107,7 @@ ttnn::Tensor DeitTestInfra::load_tensor_from_manifest(
     const std::string& weights_root,
     ttnn::DataType dtype,
     ttnn::Layout layout,
-    std::optional<ttnn::MemoryConfig> memory_config) const {
+    const std::optional<ttnn::MemoryConfig>& memory_config) const {
     const auto file_it = tensor_files.find(tensor_name);
     const auto shape_it = tensor_shapes.find(tensor_name);
     if (file_it == tensor_files.end() || shape_it == tensor_shapes.end()) {
