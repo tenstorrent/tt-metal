@@ -232,6 +232,15 @@ def branch_exists_remote(branch: str, repo_slug: str) -> bool:
     return bool((check.stdout or "").strip())
 
 
+def base_checkout_ref(target_pr_repo: str, target_pr_base: str) -> str:
+    if target_pr_repo == PRIMARY_REPO:
+        return f"origin/{target_pr_base}"
+    remote_url = f"https://github.com/{target_pr_repo}.git"
+    local_ref = f"refs/remotes/fork-target/{target_pr_base}"
+    run(["git", "fetch", remote_url, f"{target_pr_base}:{local_ref}"], capture=True)
+    return local_ref
+
+
 def choose_branch_name(base: str, source_ts: str, attempt: int, repo_slug: str) -> str:
     if not branch_exists_remote(base, repo_slug):
         return base
@@ -886,8 +895,8 @@ def main() -> int:
         log("execute_disable_actions: preparing guarded gh runtime copy and auth checks")
         prepare_guarded_gh_runtime_copy()
         run_guarded_gh(["gh", "auth", "status"])
-        run(["git", "fetch", "origin", "main"], capture=True)
-        log("execute_disable_actions: git fetch origin/main complete")
+        run(["git", "fetch", "origin", target_pr_base], capture=True)
+        log(f"execute_disable_actions: git fetch origin/{target_pr_base} complete")
 
     for action in validated_actions:
         source_ts = str(action["source_slack_ts"])
@@ -1017,7 +1026,8 @@ def main() -> int:
 
         try:
             log(f"action: checking out branch {branch} for issue #{issue_number}")
-            run(["git", "checkout", "-B", branch, "origin/main"], capture=True)
+            checkout_ref = base_checkout_ref(target_pr_repo, target_pr_base)
+            run(["git", "checkout", "-B", branch, checkout_ref], capture=True)
             before = set(git_changed_files())
             if before:
                 result["skipped"].append(

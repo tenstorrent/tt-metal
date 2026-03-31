@@ -132,8 +132,8 @@ jobs:
           git config user.email "ci-auto-disable-bot@tenstorrent.invalid"
           # Ensure checkout-injected GITHUB_TOKEN credentials do not override PAT auth.
           git config --local --unset-all http.https://github.com/.extraheader || true
-          git fetch origin "$TARGET_PR_BASE"
-          git checkout -B "$probe_branch" "origin/$TARGET_PR_BASE"
+          git fetch "https://github.com/${TARGET_PR_REPO}.git" "$TARGET_PR_BASE"
+          git checkout -B "$probe_branch" FETCH_HEAD
           git commit --allow-empty -m "ci: fork push probe ${GITHUB_RUN_ID}"
           GIT_TERMINAL_PROMPT=0 \
           GIT_ASKPASS="$askpass" \
