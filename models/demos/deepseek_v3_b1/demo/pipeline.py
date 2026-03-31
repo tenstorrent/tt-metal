@@ -78,24 +78,26 @@ def create_single_pod_pipeline_configuration(
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(weight_provider.load_embedding(device), True)
 
-    def stage_14(device: ttnn.MeshDevice) -> StageKind:
-        return LMHeadStage(
-            weights=weight_provider.load_lm_head(device),
-            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
-            lm_head_persistent_mode=lm_head_persistent_mode,
-        )
+    # def stage_14(device: ttnn.MeshDevice) -> StageKind:
+    #     return LMHeadStage(
+    #         weights=weight_provider.load_lm_head(device),
+    #         lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+    #         lm_head_persistent_mode=lm_head_persistent_mode,
+    #     )
 
     # Same layout as SP4: stage i -> layer_id i-1 for decoder stages; fewer MoE stages (4-13 = layers 3-12)
     def _dense_stage(layer_id: int):
         return lambda d: DenseDecoderStage(
             weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
+            forward_metadata=True,
         )
 
     def _decoder_stage(layer_id: int):
         return lambda d: MoEDecoderStage(
             weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
             layer_idx=layer_id,
+            forward_metadata=True,
         )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
@@ -107,8 +109,8 @@ def create_single_pod_pipeline_configuration(
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
         **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
-        14: stage_14,
-        15: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+        14: lambda d: PassthroughStage(PassthroughPayload.ACTIVATION),
+        15: lambda d: PassthroughStage(PassthroughPayload.ACTIVATION),
     }
     return PipelineConfiguration(stage_factories)
 
@@ -140,13 +142,13 @@ def create_sp4_pipeline_configuration(
     # Stage i -> layer_id i-1 for decoder stages (stage 1 = layer 0, ..., stage 61 = layer 60)
     def _dense_stage(layer_id: int):
         return lambda d: DenseDecoderStage(
-            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
+            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d, forward_metadata=True),
             layer_idx=layer_id,
         )
 
     def _decoder_stage(layer_id: int):
         return lambda d: MoEDecoderStage(
-            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d, forward_metadata=True),
             layer_idx=layer_id,
         )
 

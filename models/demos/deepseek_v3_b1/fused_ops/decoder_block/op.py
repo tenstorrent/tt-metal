@@ -287,7 +287,7 @@ class DecoderBlock:
             persistent_mode=persistent_mode,
             bcast_sender_coord=sender_coord,
             is_torus=is_torus,
-            forward_metadata_size_bytes=DeepseekMetadata.size_bytes() if forward_metadata else 0,
+            forward_metadata_size_bytes=DeepseekMetadata.aligned_size_bytes() if forward_metadata else 0,
             metadata_l1_addr=metadata_addr if forward_metadata else 0,
         )
 

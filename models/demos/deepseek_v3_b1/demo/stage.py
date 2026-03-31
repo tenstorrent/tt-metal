@@ -82,13 +82,13 @@ class EmbeddingStage(StageKind):
         return PipelineBlock(
             mesh_device,
             PIPELINE_CORE_COORD,
-            upstream_d2d_socket_fifo_size=TOKEN_FIFO_SIZE,
+            upstream_d2d_socket_fifo_size=activation_fifo_size,
             downstream_d2d_socket_fifo_size=activation_fifo_size,
-            upstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
+            upstream_d2d_socket_page_size=activation_page_size,
             downstream_d2d_socket_page_size=activation_page_size,
             h2d_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
-            d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
+            d2h_socket_fifo_size=activation_fifo_size,
+            d2h_socket_page_size=activation_page_size,
             embedding_tensor=self._weights.embedding,
             forward_metadata=self._forward_metadata,
         )
@@ -108,8 +108,8 @@ class PassthroughStage(StageKind):
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
         if self._payload == PassthroughPayload.ACTIVATION:
-            up_fifo = down_fifo = ACTIVATION_FIFO_SIZE
-            up_page = down_page = ACTIVATION_PAGE_SIZE_BYTES
+            up_fifo = down_fifo = ACTIVATION_W_METADATA_FIFO_SIZE
+            up_page = down_page = ACTIVATION_W_METADATA_PAGE_SIZE_BYTES
         else:
             up_fifo = down_fifo = TOKEN_FIFO_SIZE
             up_page = down_page = TOKEN_PAGE_SIZE_BYTES

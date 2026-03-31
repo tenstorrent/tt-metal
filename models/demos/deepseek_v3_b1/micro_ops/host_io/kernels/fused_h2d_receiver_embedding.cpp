@@ -222,11 +222,12 @@ void kernel_main() {
         uint64_t noc_addr = embedding_accessor.get_noc_addr(*token_id_ptr);
         noc_async_read(noc_addr, l1_write_addr, embedding_page_size);
 
-        volatile tt_l1_ptr* metadata_ptr = reinterpret_cast<volatile tt_l1_ptr*>(l1_write_addr + embedding_page_size);
+        volatile tt_l1_ptr uint32_t* metadata_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr + embedding_page_size);
         uint32_t num_metadata_words = metadata_size_bytes / sizeof(uint32_t);
 
         for (uint32_t md_idx = 0; md_idx < num_metadata_words - 1; ++md_idx) {
-            metadata_ptr[md_idx] = receiver_socket.read_ptr[md_idx + 1];
+            metadata_ptr[md_idx] = token_id_ptr[md_idx + 1];
         }
 
         noc_async_read_barrier();

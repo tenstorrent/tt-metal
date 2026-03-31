@@ -33,6 +33,13 @@ from dataclasses import dataclass
 from typing import Callable
 
 import torch
+from loguru import logger
+
+import ttnn
+from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_W_METADATA_PAGE_SIZE_BYTES
+
+# Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
+TOKEN_ID_BYTES: int = 4
 
 PCIE_PAGE_ALIGNMENT_BYTES: int = 64
 
@@ -170,7 +177,7 @@ class DeepSeekV3:
         self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
         self._page_size_datums: int = self._tensor_size_bytes // TOKEN_ID_BYTES
         self._position: int = 0
-        self._output_buffer: ttnn.Tensor = create_output_buffer(self._page_size_datums)
+        self._output_buffer: ttnn.Tensor = create_output_buffer(ACTIVATION_W_METADATA_PAGE_SIZE_BYTES // 4)
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
     def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> ttnn.Tensor:
@@ -192,14 +199,19 @@ class DeepSeekV3:
         if len(prompt_tokens) == 0:
             raise ValueError("Expected at least one prompt token")
 
-        last_output: ttnn.Tensor | None = None
+        # last_output: ttnn.Tensor | None = None
         for token in prompt_tokens:
             self._write_fn(token)
             self._read_fn(self._output_buffer)
-            last_output = self._output_buffer
+            slot_id = self._output_buffer[0][3584]
+            position_id = self._output_buffer[0][3585]
+
+            print(f"Iteration: {self._position}, Slot ID: {slot_id}, Position ID: {position_id}")
+
+            # last_output = self._output_buffer
             self._position += 1
-        assert last_output is not None, "Last output tensor is None"
-        return last_output
+        # assert last_output is not None, "Last output tensor is None"
+        # return last_output
 
     def decode_step(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """
