@@ -35,7 +35,7 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim):
     atol = rtol = 0.01
     # All values are close to 1, and we're using bfloat16, so even a rounding error
     # of 1 ULP has a significant impact on PCC.
-    # Therefore PCC threshold has to be lower. ATOL and RTOL should catch any significant errors.
+    # Therefore PCC threshold has to be lower. ATOL/RTOL should catch any significant errors.
     pcc = 0.975
     passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
@@ -143,10 +143,8 @@ def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    atol = 0.125
-    # For values close to 0, relative error can be large.
-    # Absolute error and PCC should catch any significant errors.
-    rtol = 5
+    atol = 0.03
+    rtol = 0.01
     pcc = 0.99
     passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
@@ -176,7 +174,7 @@ def test_sum_7d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, di
     output_tensor = ttnn.to_torch(output_tensor)
 
     atol = 0.03
-    rtol = 0.03
+    rtol = 0.01
     pcc = 0.99
     passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
@@ -231,10 +229,8 @@ def test_sum_5d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim, keep
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    atol = 0.25
-    # For values close to 0, relative error can be large.
-    # Absolute error and PCC should catch any significant errors.
-    rtol = 0.12
+    atol = 0.2
+    rtol = 0.01
     pcc = 0.99
     passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
@@ -260,10 +256,8 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    atol = 0.5
-    # For values close to 0, relative error can be large.
-    # Absolute error and PCC should catch any significant errors.
-    rtol = 110
+    atol = 0.7
+    rtol = 0.05
     pcc = 0.99
     passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"

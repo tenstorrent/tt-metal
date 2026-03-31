@@ -266,16 +266,14 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, correcti
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
+    rtol = 0.05
     if op == "sum" and tensor_shape == (3, 6, 40, 63, 20):
         # Summing large number of bfloat16 values accumulates rounding errors,
         # and results also vary from near 0 to relatively large values (in hundreds)
-        # Near-zero results inflate relative error, while absolute error grows for large values.
         # PCC should catch any significant errors.
         atol = 1.5
-        rtol = 2.5
     else:
         atol = 0.1
-        rtol = 0.1
 
     if op == "var":
         # For var/std there are cases where all values are close to 1, and we're using bfloat16,
@@ -370,7 +368,7 @@ def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op):
 
     output_tensor = ttnn.to_torch(op_output_tensor)
 
-    atol = rtol = 0.1
+    atol = rtol = 0.01
     pcc = 0.99
     passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"op={op} {output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
@@ -484,7 +482,7 @@ def test_generic_ops_wh_shard(device, input_shape, shard_2d_shape, end_x, end_y,
 
     output_tensor = ttnn.to_torch(op_output_tensor)
 
-    atol = rtol = 0.1
+    atol = rtol = 0.01
     pcc = 0.99
     passing, output_pcc = comp_allclose_and_pcc(torch_output_tensor, output_tensor, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"op={op} {output_pcc}, torch: {torch_output_tensor}, ttnn: {output_tensor}"
@@ -524,16 +522,14 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape):
     else:
         torch_result = torch_op(scalar * torch_input, dim=dim)
 
+    rtol = 0.05
     if op == "sum" and shape == (3, 4, 8, 56, 33):
         # Summing large number of bfloat16 values accumulates rounding errors,
         # and results also vary from near 0 to relatively large values (in hundreds)
-        # Near-zero results inflate relative error, while absolute error grows for large values.
         # PCC should catch any significant errors.
-        atol = 25
-        rtol = 0.4
+        atol = 1.5
     else:
         atol = 0.1
-        rtol = 0.1
 
     if op == "var" and shape == (3, 4, 8, 56, 33):
         # For var/std there are cases where all values are close to 1, and we're using bfloat16,
@@ -542,7 +538,7 @@ def test_generic_ops_w_scalar(device, op, scalar, correction, dim, shape):
     elif op == "std" and shape == (3, 4, 8, 56, 33):
         # For std, sqrtf() adds an extra rounding step on top of variance, further
         # lowering PCC when values cluster near 1.0 (e.g. 3-dim reduction on large tensors).
-        # Therefore PCC threshold has to be lower. ATOL and RTOL should catch any significant errors.
+        # Therefore PCC threshold has to be lower. ATOL/RTOL should catch any significant errors.
         pcc = 0.95
     else:
         pcc = 0.999
@@ -596,14 +592,13 @@ def test_generic_ops_dtypes_layouts(device, op, dtype, layout):
 
     ttnn_result_torch = ttnn.to_torch(ttnn.from_device(ttnn_result))
 
+    rtol = 0.01
     if dtype == ttnn.bfloat8_b:
         # BFLOAT8_B has lower precision.
-        atol = 0.3
-        rtol = 0.1
+        atol = 0.25
         pcc = 0.998
     else:
-        atol = 0.1
-        rtol = 0.1
+        atol = 0.01
         pcc = 0.999
 
     passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result_torch, pcc=pcc, rtol=rtol, atol=atol)
@@ -680,7 +675,7 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
         # Other checks are not meaningful for empty tensors.
         return
 
-    atol = rtol = 0.1
+    atol = rtol = 0.01
     pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_values, ttnn_values, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"Values: {output_pcc}, torch: {torch_values}, ttnn: {ttnn_values}"
@@ -787,7 +782,7 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
         return
 
     # Secondary check: PCC on raw indices (ties are rare with random bfloat16)
-    atol = rtol = 0.1
+    atol = rtol = 0.01
     pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result_in_torch, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"Indices PCC: {output_pcc}, torch: {torch_result}, ttnn: {ttnn_result_in_torch}"
@@ -899,7 +894,8 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
         # Other checks are not meaningful for empty tensors.
         return
 
-    atol = rtol = 0.1
+    atol = 0.7
+    rtol = 0.01
     pcc = 0.999
     passing, output_pcc = comp_allclose_and_pcc(torch_result, ttnn_result_in_torch, pcc=pcc, rtol=rtol, atol=atol)
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result_in_torch}"
@@ -1009,7 +1005,7 @@ def test_moe(device, tensor_shape, dtype, layout):
 
         return
 
-    atol = rtol = 0.1
+    atol = rtol = 0.01
     # Looser PCC tolerance than typical single-op tests because MOE chains
     # topk -> softmax -> multiply -> sum, and each step accumulates
     # bfloat16 rounding error.
