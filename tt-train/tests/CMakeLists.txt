@@ -55,6 +55,7 @@ set(SOURCES
     ops/cross_entropy_bw_op_test.cpp
     ops/rope_test.cpp
     ops/rmsnorm_op_test.cpp
+    ops/polynorm_op_test.cpp
     ops/unary_ops_test.cpp
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
@@ -132,6 +133,14 @@ gtest_discover_tests(ttml_tests)
 add_executable(swiglu_fusion_benchmark benchmark/swiglu_fusion_benchmark.cpp)
 target_link_libraries(
     swiglu_fusion_benchmark
+    PUBLIC
+        ttml
+        TTNN::TTNN
+)
+
+add_executable(polynorm_fusion_benchmark benchmark/polynorm_fusion_benchmark.cpp)
+target_link_libraries(
+    polynorm_fusion_benchmark
     PUBLIC
         ttml
         TTNN::TTNN

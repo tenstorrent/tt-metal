@@ -22,8 +22,6 @@
 #include "api/compute/transpose_wh_dest.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
-constexpr uint32_t onetile = 1U;
-
 // now we have to multiply result by scaler factor and then apply mask
 // we need to transform the attention mask for use in softmax:
 // The input `attn_mask` contains 1.0 for valid (keep) positions and 0.0 for masked (drop) positions.
