@@ -202,7 +202,7 @@ def get_verbose_level() -> int:
 @dataclass
 class TriageScript:
     name: str
-    path: str
+    path: Path
     config: ScriptConfig
     module: ModuleType
     run_method: Callable[..., Any]
@@ -241,7 +241,7 @@ class TriageScript:
     @staticmethod
     def load(script_path: Path | str) -> "TriageScript":
         resolved = Path(script_path).resolve()
-        script_path = str(resolved)  # TriageScript.path is str (intentional)
+        # script_path is now Path (resolved) — used directly as TriageScript.path
         base_path = str(resolved.parent)  # sys.path requires str entries
         appended = False
         if not base_path in sys.path:
@@ -283,7 +283,7 @@ class TriageScript:
 
             triage_script = TriageScript(
                 name=resolved.name,
-                path=script_path,
+                path=resolved,
                 config=deepcopy(script_config),
                 module=script_module,
                 run_method=run_method,
@@ -365,7 +365,7 @@ def resolve_execution_order(scripts: dict[Path, TriageScript]) -> list[TriageScr
 
     # If some scripts remain with non-zero in-degree, we have a cycle
     if len(result) != len(scripts):
-        executed_paths = {Path(s.path).resolve() for s in result}
+        executed_paths = {s.path for s in result}
         remaining_scripts = set(scripts.keys()) - executed_paths
         raise ValueError(
             f"Bad dependency detected in scripts: {', '.join(str(p) for p in remaining_scripts)}\n"
@@ -448,12 +448,11 @@ def parse_arguments(
     )
     import sys
 
-    docs: dict[str, str] = {}
+    docs: dict[Path, str] = {}
     assert __doc__ is not None, "Help message must be provided in the script docstring."
-    my_name = Path(__file__).stem
-    docs[my_name] = __doc__
+    docs[Path(__file__).resolve()] = __doc__
     for script in scripts.values():
-        docs[script.name] = script.documentation
+        docs[script.path] = script.documentation
 
     combined_options = []
     combined_pattern: Required = Required(*[Required(*[])])
@@ -467,7 +466,7 @@ def parse_arguments(
             pattern = parse_pattern(formal_usage(usage), script_options)
             combined_pattern.children[0].children.extend(pattern.children[0].children)
         except BaseException as e:
-            utils.ERROR(f"Error parsing arguments for script {script_name}: {e}")
+            utils.ERROR(f"Error parsing arguments for script {script_name.name}: {e}")
             continue
 
     # Deduplicate options if some scripts define the same option
@@ -500,7 +499,7 @@ def parse_arguments(
         else:
             help_message += "\n\nYou can also use arguments of dependent scripts:\n"
         for script in scripts.values():
-            if script.path != str(script_path):
+            if script_path is None or script.path != Path(script_path).resolve():
                 script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
                     help_message += f"\n{script.documentation}\n"
@@ -509,7 +508,7 @@ def parse_arguments(
     else:
         help_message = printable_usage(doc)
         for script in scripts.values():
-            if script.path != str(script_path):
+            if script_path is None or script.path != Path(script_path).resolve():
                 script_options = parse_defaults(script.documentation)
                 if len(script_options) > 0:
                     usage = printable_usage(script.documentation)
@@ -803,7 +802,7 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
 
 
 def run_script(
-    script_path: str | None = None,
+    script_path: Path | str | None = None,
     args: ScriptArguments | None = None,
     context: Context | None = None,
     argv: list[str] | None = None,
