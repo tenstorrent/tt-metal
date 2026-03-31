@@ -361,9 +361,18 @@ void Cluster::assign_mem_channels_to_devices(
 }
 
 void Cluster::get_metal_desc_from_tt_desc() {
+    std::string silicon_dram_metadata_yaml;
+    if (this->target_type_ == TargetDevice::Silicon) {
+        // UMD uses arch-default soc descriptors without sdesc_path; device_descriptor_file_path is empty until we set
+        // it on a copy (public field on tt::umd::SocDescriptor) for metal_SocDescriptor's dram_views YAML load.
+        silicon_dram_metadata_yaml = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
+    }
     for (const auto& id : this->driver_->get_target_device_ids()) {
-        this->sdesc_per_chip_.emplace(
-            id, metal_SocDescriptor(this->driver_->get_soc_descriptor(id), this->cluster_desc_->get_board_type(id)));
+        tt::umd::SocDescriptor umd_soc = this->driver_->get_soc_descriptor(id);
+        if (this->target_type_ == TargetDevice::Silicon) {
+            umd_soc.device_descriptor_file_path = silicon_dram_metadata_yaml;
+        }
+        this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(umd_soc, this->cluster_desc_->get_board_type(id)));
     }
 }
 
@@ -375,7 +384,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
         // One topology discovery; pass descriptor into Cluster so UMD does not discover again. Omit sdesc_path so UMD
-        // builds SocDescriptors from arch/chip_info (no redundant metal YAML parse).
+        // uses its arch-default SocDescriptor; Metal loads dram_views YAML once in get_metal_desc_from_tt_desc().
         auto discovered_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             // Metal uses one host mem channel per MMIO device; see https://github.com/tenstorrent/tt-metal/issues/4087
