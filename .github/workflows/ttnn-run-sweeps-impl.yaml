@@ -15,27 +15,27 @@ on:
       skip-on-timeout:
         description: "Skip remaining tests in running suite after first timeout?"
         required: false
-        type: boolean
+        type: string
         default: true
       upload-results:
         description: "Upload sweep results to Superset?"
         required: false
-        type: boolean
+        type: string
         default: true
       measure-device-perf:
         description: "Measure device performance using device profiler (--device-perf flag)."
         required: false
-        type: boolean
+        type: string
         default: true
       measure-e2e-perf:
         description: "Measure end-to-end performance with cold/cached comparison (--perf-with-cache flag)"
         required: false
-        type: boolean
+        type: string
         default: false
       measure-memory:
         description: "Capture peak L1 memory usage using graph trace (--measure-memory flag)."
         required: false
-        type: boolean
+        type: string
         default: false
       arch:
         description: "Target architecture"
@@ -57,49 +57,29 @@ on:
         required: false
         type: string
         default: ""
-      platform:
-        description: "Platform to build and test"
-        required: false
+      dev-docker-image:
+        description: "Dev Docker image from build-artifact job"
+        required: true
         type: string
-        default: "Ubuntu 22.04"
-      build-type:
-        description: "Build type configuration"
-        required: false
+      build-artifact-name:
+        description: "Build artifact name from build-artifact job"
+        required: true
         type: string
-        default: "Release"
-      enable-lto:
-        description: "Enable Link Time Optimization (LTO)"
-        required: false
-        type: boolean
-        default: false
-      tracy:
-        description: "Build with Tracy profiler support (required for --device-perf)"
-        required: false
-        type: boolean
-        default: false
+      wheel-artifact-name:
+        description: "Wheel artifact name from build-artifact job"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      build-type: ${{ inputs.build-type }}
-      build-wheel: true
-      platform: ${{ inputs.platform }}
-      enable-lto: ${{ inputs.enable-lto }}
-      tracy: ${{ inputs.tracy }}
-
   generate-master-json-from-db:
     name: 🗄️ Generate Master JSON from Database
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
-    if: inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)'
+    if: inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' || inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -114,7 +94,7 @@ jobs:
           pip install psycopg2-binary pyyaml
 
       - name: Generate JSON for lead_models run
-        if: inputs.sweep-name == 'ALL SWEEPS (Lead Models)'
+        if: inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)'
         env:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
@@ -124,7 +104,7 @@ jobs:
             lead_models
 
       - name: Generate JSON for model_traced run
-        if: inputs.sweep-name == 'ALL SWEEPS (Model Traced)'
+        if: inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)'
         env:
           TTNN_OPS_DATABASE_URL: ${{ secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL }}
         run: |
@@ -144,8 +124,8 @@ jobs:
     # Generates sweep vectors for: single sweeps, model traced, lead models, and non-CCL modules for nightly/comprehensive
     # CCL module generation is handled by ttnn-generate-sweeps-ccl job (only for Nightly/Comprehensive)
     name: Generate Sweep Vectors ${{ matrix.arch }} ${{ matrix.runner_label }} (${{ matrix.generate_mode }})
-    needs: [build-artifact, generate-master-json-from-db]
-    if: needs.build-artifact.result == 'success' && (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
+    needs: [generate-master-json-from-db]
+    if: always() && (needs.generate-master-json-from-db.result == 'success' || needs.generate-master-json-from-db.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -159,7 +139,7 @@ jobs:
             runner_label: N150
             generate_mode: non_ccl
     container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: ${{ inputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -192,10 +172,10 @@ jobs:
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: 📥 Download database-generated JSON
-        if: inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)'
+        if: inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' || inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)'
         uses: actions/download-artifact@v4
         with:
           name: ttnn-operations-master-json
@@ -203,24 +183,24 @@ jobs:
 
       - name: Run ttnn sweeps generation (single sweep)
         if: |
-          inputs.sweep-name != 'ALL SWEEPS (Nightly)' &&
-          inputs.sweep-name != 'ALL SWEEPS (Comprehensive)' &&
-          inputs.sweep-name != 'ALL SWEEPS (Model Traced)' &&
-          inputs.sweep-name != 'ALL SWEEPS (Lead Models)' &&
+          inputs['sweep-name'] != 'ALL SWEEPS (Nightly)' &&
+          inputs['sweep-name'] != 'ALL SWEEPS (Comprehensive)' &&
+          inputs['sweep-name'] != 'ALL SWEEPS (Model Traced)' &&
+          inputs['sweep-name'] != 'ALL SWEEPS (Lead Models)' &&
           matrix.generate_mode == 'all'
         run: |
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ inputs.sweep-name }} --tag ci-main
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ inputs['sweep-name'] }} --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps - model traced)
-        if: inputs.sweep-name == 'ALL SWEEPS (Model Traced)' && matrix.generate_mode == 'all'
+        if: inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' && matrix.generate_mode == 'all'
         run: |
           python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced all --suite-name model_traced --group-by hw --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps - lead models)
-        if: inputs.sweep-name == 'ALL SWEEPS (Lead Models)' && matrix.generate_mode == 'all'
+        if: inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)' && matrix.generate_mode == 'all'
         run: |
           python3 tests/sweep_framework/sweeps_parameter_generator.py --model-traced lead --suite-name model_traced --group-by hw --tag ci-main
       - name: Run ttnn sweeps generation (nightly/comprehensive - non-CCL)
         if: |
-          (inputs.sweep-name == 'ALL SWEEPS (Nightly)' || inputs.sweep-name == 'ALL SWEEPS (Comprehensive)') &&
+          (inputs['sweep-name'] == 'ALL SWEEPS (Nightly)' || inputs['sweep-name'] == 'ALL SWEEPS (Comprehensive)') &&
           matrix.generate_mode == 'non_ccl'
         run: |
           # Skip all CCL modules when generating on N150 - CCL handled by ttnn-generate-sweeps-ccl job
@@ -237,13 +217,12 @@ jobs:
     # Generates CCL sweep vectors on n300-llmbox - ONLY for Nightly/Comprehensive runs
     # This job is skipped for Lead Models, Model Traced, and single sweep runs (they don't use CCL)
     name: Generate CCL Sweep Vectors (n300-llmbox)
-    needs: [build-artifact]
+    needs: []
     if: |
       always() &&
-      needs.build-artifact.result == 'success' &&
-      (inputs.sweep-name == 'ALL SWEEPS (Nightly)' || inputs.sweep-name == 'ALL SWEEPS (Comprehensive)')
+      (inputs['sweep-name'] == 'ALL SWEEPS (Nightly)' || inputs['sweep-name'] == 'ALL SWEEPS (Comprehensive)')
     container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: ${{ inputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -272,8 +251,8 @@ jobs:
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run ttnn sweeps generation (CCL modules only)
         run: |
           # Generate only CCL modules on n300-llmbox by skipping all non-CCL modules
@@ -309,7 +288,7 @@ jobs:
       always() &&
       needs.ttnn-generate-sweeps.result == 'success' &&
       (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
-      (inputs.sweep-name == 'ALL SWEEPS (Nightly)' || inputs.sweep-name == 'ALL SWEEPS (Comprehensive)' || inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)')
+      (inputs['sweep-name'] == 'ALL SWEEPS (Nightly)' || inputs['sweep-name'] == 'ALL SWEEPS (Comprehensive)' || inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' || inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)')
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -337,7 +316,7 @@ jobs:
       - id: set-matrix
         shell: bash
         env:
-          SWEEP_NAME: ${{ inputs.sweep-name }}
+          SWEEP_NAME: ${{ inputs['sweep-name'] }}
           MEASURE_DEVICE_PERF: ${{ inputs.measure-device-perf }}
           VECTORS_DIR: /tmp/vectors
         run: |
@@ -348,12 +327,11 @@ jobs:
     name: Run single sweep
     needs:
       - ttnn-generate-sweeps
-      - build-artifact
     if: |
-      inputs.sweep-name != 'ALL SWEEPS (Nightly)' &&
-      inputs.sweep-name != 'ALL SWEEPS (Comprehensive)' &&
-      inputs.sweep-name != 'ALL SWEEPS (Model Traced)' &&
-      inputs.sweep-name != 'ALL SWEEPS (Lead Models)'
+      inputs['sweep-name'] != 'ALL SWEEPS (Nightly)' &&
+      inputs['sweep-name'] != 'ALL SWEEPS (Comprehensive)' &&
+      inputs['sweep-name'] != 'ALL SWEEPS (Model Traced)' &&
+      inputs['sweep-name'] != 'ALL SWEEPS (Lead Models)'
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -364,7 +342,7 @@ jobs:
             arch: ${{ inputs.arch }}
             runner_label: ${{ inputs.runner-label }}
     container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: ${{ inputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -376,7 +354,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ (matrix.test-group.runner_label == 'topology-6u') && 'tt-smi -glx_reset_auto' || 'tt-smi -r' }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ (inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
+        TTNN_OPS_DATABASE_URL: ${{ (inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' || inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -405,15 +383,15 @@ jobs:
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: 📋 Display single sweep configuration
         run: |
           echo "::group::🔧 Single Sweep Execution - Configuration"
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│                 Single Sweep Configuration                  │"
           echo "├─────────────────────────────────────────────────────────────┤"
-          echo "│ Target Sweep:         ${{ inputs.sweep-name }}"
+          echo "│ Target Sweep:         ${{ inputs['sweep-name'] }}"
           echo "│ Suite Name:           ${{ inputs.suite-name || 'Default' }}"
           echo "│ Architecture:         ${{ inputs.arch }}"
           echo "│ Runner Label:         ${{ inputs.runner-label }}"
@@ -421,7 +399,7 @@ jobs:
           echo "│ Skip on Timeout:      ${{ inputs.skip-on-timeout }}"
           echo "│ Measure Device Perf:  ${{ inputs.measure-device-perf }}"
           echo "│ Upload Results:       ${{ inputs.upload-results }}"
-          echo "│ Use Database:         ${{ inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)' }}"
+          echo "│ Use Database:         ${{ inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' || inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)' }}"
           echo "│ Mesh Shape Filter:    ${{ inputs.mesh-shape || 'none' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
@@ -431,7 +409,7 @@ jobs:
           pattern: sweeps-vectors-*
           path: /work/tests/sweep_framework/vectors_export
           merge-multiple: true
-      - name: Run ttnn sweeps (single sweep) ${{ inputs.runner-label }} ${{ inputs.sweep-name }} ${{ inputs.suite-name }}
+      - name: Run ttnn sweeps (single sweep) ${{ inputs.runner-label }} ${{ inputs['sweep-name'] }} ${{ inputs.suite-name }}
         run: |
           SUITE_NAME="${{ inputs.suite-name }}"
 
@@ -457,7 +435,7 @@ jobs:
 
           CMD=(
             python3 tests/sweep_framework/sweeps_runner.py
-            --module-name ${{ inputs.sweep-name }}
+            --module-name ${{ inputs['sweep-name'] }}
             --vector-source vectors_export
             --result-dest results_export
             --tag ci-main
@@ -498,14 +476,13 @@ jobs:
     needs:
       - ttnn-generate-sweeps
       - ttnn-generate-sweeps-ccl
-      - build-artifact
       - ttnn-compute-module-matrix
     if: |
       always() &&
       needs.ttnn-generate-sweeps.result == 'success' &&
       (needs.ttnn-generate-sweeps-ccl.result == 'success' || needs.ttnn-generate-sweeps-ccl.result == 'skipped') &&
       needs.ttnn-compute-module-matrix.result == 'success' &&
-      (inputs.sweep-name == 'ALL SWEEPS (Nightly)' || inputs.sweep-name == 'ALL SWEEPS (Comprehensive)' || inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)')
+      (inputs['sweep-name'] == 'ALL SWEEPS (Nightly)' || inputs['sweep-name'] == 'ALL SWEEPS (Comprehensive)' || inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' || inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)')
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -514,7 +491,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).include }}
     container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: ${{ inputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -525,7 +502,7 @@ jobs:
         GITHUB_ACTIONS: true
         TT_SMI_RESET_COMMAND: ${{ matrix.tt_smi_cmd }}
         TRACY_NO_INVARIANT_CHECK: 1
-        TTNN_OPS_DATABASE_URL: ${{ (inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
+        TTNN_OPS_DATABASE_URL: ${{ (inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' || inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
         LEAD_MODELS_RUN: ${{ startsWith(matrix.test_group_name, 'lead-models') && '1' || '0' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -548,8 +525,8 @@ jobs:
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: 📋 Display parallel sweep configuration
         run: |
           echo "::group::🔧 Parallel Sweeps Execution - Configuration"
@@ -567,7 +544,7 @@ jobs:
           echo "│ Measure E2E Perf:     ${{ inputs.measure-e2e-perf }}"
           echo "│ Measure Memory:       ${{ inputs.measure-memory }}"
           echo "│ Upload Results:       ${{ inputs.upload-results }}"
-          echo "│ Use Database:         ${{ inputs.sweep-name == 'ALL SWEEPS (Model Traced)' || inputs.sweep-name == 'ALL SWEEPS (Lead Models)' }}"
+          echo "│ Use Database:         ${{ inputs['sweep-name'] == 'ALL SWEEPS (Model Traced)' || inputs['sweep-name'] == 'ALL SWEEPS (Lead Models)' }}"
           echo "│ Mesh Shape Filter:    ${{ inputs.mesh-shape || 'none' }}"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
@@ -658,11 +635,10 @@ jobs:
   ttnn-homogenize-run-result:
     name: Homogenize run result
     needs:
-      - build-artifact
       - ttnn-run-sweeps-parallel
     if: ${{ !cancelled() && needs.ttnn-run-sweeps-parallel.result != 'skipped' && needs.ttnn-run-sweeps-parallel.result != 'cancelled' }}
     container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      image: ${{ inputs.dev-docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
@@ -686,8 +662,8 @@ jobs:
         uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Download all sweep results
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
@@ -698,11 +674,11 @@ jobs:
         run: |
           # Determine run type based on sweep name
           RUN_TYPE="nightly"
-          if [[ "${{ inputs.sweep-name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+          if [[ "${{ inputs['sweep-name'] }}" == "ALL SWEEPS (Comprehensive)" ]]; then
             RUN_TYPE="comprehensive"
-          elif [[ "${{ inputs.sweep-name }}" == "ALL SWEEPS (Model Traced)" ]]; then
+          elif [[ "${{ inputs['sweep-name'] }}" == "ALL SWEEPS (Model Traced)" ]]; then
             RUN_TYPE="model_traced"
-          elif [[ "${{ inputs.sweep-name }}" == "ALL SWEEPS (Lead Models)" ]]; then
+          elif [[ "${{ inputs['sweep-name'] }}" == "ALL SWEEPS (Lead Models)" ]]; then
             RUN_TYPE="lead_models"
           fi
           echo "RUN_TYPE=$RUN_TYPE" >> $GITHUB_ENV

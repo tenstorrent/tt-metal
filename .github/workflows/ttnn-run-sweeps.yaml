@@ -734,23 +734,35 @@ jobs:
           echo "enable-lto=${{ github.event.inputs['enable-lto'] || 'false' }}" >> $GITHUB_OUTPUT
           echo "tracy=$TRACY" >> $GITHUB_OUTPUT
 
+  build-artifact:
+    needs: [resolve-inputs]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ needs.resolve-inputs.outputs.build-type }}
+      tracy: ${{ fromJSON(needs.resolve-inputs.outputs.tracy) }}
+      build-wheel: true
+      platform: ${{ needs.resolve-inputs.outputs.platform }}
+      enable-lto: ${{ fromJSON(needs.resolve-inputs.outputs.enable-lto) }}
+
   call-sweeps-impl:
-    needs: resolve-inputs
+    needs: [resolve-inputs, build-artifact]
     uses: ./.github/workflows/ttnn-run-sweeps-impl.yaml
     secrets: inherit
     with:
       sweep-name: ${{ needs.resolve-inputs.outputs.sweep-name }}
       suite-name: ${{ needs.resolve-inputs.outputs.suite-name }}
-      skip-on-timeout: ${{ fromJSON(needs.resolve-inputs.outputs.skip-on-timeout) }}
-      upload-results: ${{ fromJSON(needs.resolve-inputs.outputs.upload-results) }}
-      measure-device-perf: ${{ fromJSON(needs.resolve-inputs.outputs.measure-device-perf) }}
-      measure-e2e-perf: ${{ fromJSON(needs.resolve-inputs.outputs.measure-e2e-perf) }}
-      measure-memory: ${{ fromJSON(needs.resolve-inputs.outputs.measure-memory) }}
+      skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
+      upload-results: ${{ needs.resolve-inputs.outputs.upload-results }}
+      measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
+      measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
       arch: ${{ needs.resolve-inputs.outputs.arch }}
       runner-label: ${{ needs.resolve-inputs.outputs.runner-label }}
       log-level: ${{ needs.resolve-inputs.outputs.log-level }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
-      platform: ${{ needs.resolve-inputs.outputs.platform }}
-      build-type: ${{ needs.resolve-inputs.outputs.build-type }}
-      enable-lto: ${{ fromJSON(needs.resolve-inputs.outputs.enable-lto) }}
-      tracy: ${{ fromJSON(needs.resolve-inputs.outputs.tracy) }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
