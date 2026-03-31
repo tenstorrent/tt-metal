@@ -66,7 +66,8 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* go_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(go_sem_addr);
 
-    DPRINT << "SENDER[" << my_device_index << "]: opening fabric" << ENDL();
+    DPRINT << "SENDER[" << my_device_index << "]: next=(" << next_sender_noc_x << "," << next_sender_noc_y
+           << ") first=(" << first_sender_noc_x << "," << first_sender_noc_y << ") opening fabric" << ENDL();
     fabric_connection.open_finish();
     DPRINT << "SENDER[" << my_device_index << "]: fabric open, go_sem=" << *go_sem_ptr
            << " is_first=" << is_first_ep_device << " is_last=" << is_last_ep_device << ENDL();
@@ -75,87 +76,98 @@ void kernel_main() {
     const uint32_t row_bytes = D_t * tile_bytes;
     uint32_t turn = 0;
 
-    for (uint32_t e = 0; e < num_experts; e++) {
-        uint32_t owner = e / E_local;
-        uint32_t n_rows = expert_n_rows[e];
-        uint32_t src_start = expert_start_row[e];
-        uint32_t dst_start = expert_dst_row[e];
-        bool is_local = (owner == my_device_index);
-
-        // Wait for our turn (device 0: init=1 so first expert is pre-granted)
-        DPRINT << "SENDER[" << my_device_index << "]: e=" << e << " waiting go_sem turn=" << (turn + 1)
+    // Outer loop: num_devices turns, one go_sem grant per turn.
+    // Each turn, this device sends for E_local experts, strided across device groups:
+    //   expert = turn + i * num_devices   (i = 0..E_local-1)
+    // All devices hold the token simultaneously within a turn, so all compute in parallel.
+    for (uint32_t t = 0; t < num_experts / E_local; t++) {
+        // Wait for our turn
+        DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " waiting go_sem=" << (turn + 1)
                << " cur=" << *go_sem_ptr << ENDL();
         noc_semaphore_wait_min(go_sem_ptr, turn + 1);
-        DPRINT << "SENDER[" << my_device_index << "]: e=" << e << " go_sem ok, n_rows=" << n_rows << ENDL();
+        DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " go_sem ok" << ENDL();
 
-        if (n_rows > 0) {
-            uint64_t owner_sem_noc = get_noc_addr(receiver_noc_x, receiver_noc_y, tiles_ready_sem_addr);
+        for (uint32_t i = 0; i < num_devices; i++) {
+            uint32_t e = i * E_local + t;
+            uint32_t owner = e / E_local;
+            uint32_t n_rows = expert_n_rows[e];
+            uint32_t src_start = expert_start_row[e];
+            uint32_t dst_start = expert_dst_row[e];
+            bool is_local = (owner == my_device_index);
 
-            for (uint32_t r = 0; r < n_rows; r++) {
-                uint32_t src_tile_idx = (src_start + r) * D_t;
-                uint32_t dst_tile_idx = (dst_start + r) * D_t;
+            DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " i=" << i << " e=" << e
+                   << " n_rows=" << n_rows << ENDL();
 
-                // Read from sorted_hidden
-                cb_reserve_back(sender_cb_id, 1);
-                uint32_t l1 = get_write_ptr(sender_cb_id);
-                for (uint32_t k = 0; k < D_t; k++) {
-                    noc_async_read(input_acc.get_noc_addr(src_tile_idx + k), l1 + k * tile_bytes, tile_bytes);
-                }
-                noc_async_read_barrier();
+            if (n_rows > 0) {
+                uint64_t owner_sem_noc = get_noc_addr(receiver_noc_x, receiver_noc_y, tiles_ready_sem_addr);
 
-                if (is_local) {
+                for (uint32_t r = 0; r < n_rows; r++) {
+                    uint32_t src_tile_idx = (src_start + r) * D_t;
+                    uint32_t dst_tile_idx = (dst_start + r) * D_t;
+
+                    cb_reserve_back(sender_cb_id, 1);
+                    uint32_t l1 = get_write_ptr(sender_cb_id);
                     for (uint32_t k = 0; k < D_t; k++) {
-                        noc_async_write(l1 + k * tile_bytes, dispatch_acc.get_noc_addr(dst_tile_idx + k), tile_bytes);
+                        noc_async_read(input_acc.get_noc_addr(src_tile_idx + k), l1 + k * tile_bytes, tile_bytes);
                     }
-                    noc_async_write_barrier();
-                    noc_semaphore_inc(owner_sem_noc, 1);
-                } else {
-                    bool use_forward = (owner > my_device_index);
-                    uint8_t num_hops =
-                        use_forward ? (uint8_t)(owner - my_device_index) : (uint8_t)(my_device_index - owner);
+                    noc_async_read_barrier();
 
-                    uint64_t dest_noc = dispatch_acc.get_noc_addr(dst_tile_idx);
+                    if (is_local) {
+                        for (uint32_t k = 0; k < D_t; k++) {
+                            noc_async_write(
+                                l1 + k * tile_bytes, dispatch_acc.get_noc_addr(dst_tile_idx + k), tile_bytes);
+                        }
+                        noc_async_write_barrier();
+                        noc_semaphore_inc(owner_sem_noc, 1);
+                    } else {
+                        bool use_forward = (owner > my_device_index);
+                        uint8_t num_hops =
+                            use_forward ? (uint8_t)(owner - my_device_index) : (uint8_t)(my_device_index - owner);
 
-                    pkt_hdr->to_chip_unicast(num_hops);
-                    pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
-                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dest_noc, owner_sem_noc, 1, false},
-                        row_bytes);
+                        uint64_t dest_noc = dispatch_acc.get_noc_addr(dst_tile_idx);
 
-                    if (use_forward && fabric_connection.has_forward_connection()) {
-                        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                        fabric_connection.get_forward_connection()
-                            .send_payload_without_header_non_blocking_from_address(l1, row_bytes);
-                        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                            (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
-                    } else if (!use_forward && fabric_connection.has_backward_connection()) {
-                        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                        fabric_connection.get_backward_connection()
-                            .send_payload_without_header_non_blocking_from_address(l1, row_bytes);
-                        fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                            (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+                        pkt_hdr->to_chip_unicast(num_hops);
+                        pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
+                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dest_noc, owner_sem_noc, 1, false},
+                            row_bytes);
+
+                        if (use_forward && fabric_connection.has_forward_connection()) {
+                            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                            fabric_connection.get_forward_connection()
+                                .send_payload_without_header_non_blocking_from_address(l1, row_bytes);
+                            fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                                (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+                        } else if (!use_forward && fabric_connection.has_backward_connection()) {
+                            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                            fabric_connection.get_backward_connection()
+                                .send_payload_without_header_non_blocking_from_address(l1, row_bytes);
+                            fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                                (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+                        }
                     }
+
+                    cb_push_back(sender_cb_id, 1);
+                    cb_pop_front(sender_cb_id, 1);
                 }
-
-                cb_push_back(sender_cb_id, 1);
-                cb_pop_front(sender_cb_id, 1);
             }
         }
 
         turn++;
 
         if (!is_last_ep_device) {
-            // Signal next device: its turn for expert e
             uint64_t next_go = get_noc_addr(next_sender_noc_x, next_sender_noc_y, go_sem_addr);
             pkt_hdr->to_chip_unicast(1);
             pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{next_go, 1, false});
+            DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " signaling next (+1 hop fwd)" << ENDL();
             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
             fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
                 (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
         } else {
-            // Last device: signal device 0's go_sem (num_devices-1 hops backward)
             uint64_t first_go = get_noc_addr(first_sender_noc_x, first_sender_noc_y, go_sem_addr);
-            pkt_hdr->to_chip_unicast((uint8_t)(num_devices - 1));
+            pkt_hdr->to_chip_unicast((uint8_t)(num_devices - 2));
             pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{first_go, 1, false});
+            DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " signaling first (" << (num_devices - 2)
+                   << " hops bwd)" << ENDL();
             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
             fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
                 (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
