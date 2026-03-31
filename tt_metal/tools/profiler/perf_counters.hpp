@@ -256,7 +256,7 @@ union PerfCounter {
 };
 static_assert(sizeof(PerfCounter) == sizeof(uint64_t), "PerfCounter must be 64-bit");
 
-#if defined(PROFILE_PERF_COUNTERS) && COMPILE_FOR_TRISC == 1
+#if defined(PROFILE_PERF_COUNTERS) && (COMPILE_FOR_TRISC == 1 || defined(COMPILE_FOR_ERISC))
 
 #include "kernel_profiler.hpp"
 #include "api/debug/assert.h"
