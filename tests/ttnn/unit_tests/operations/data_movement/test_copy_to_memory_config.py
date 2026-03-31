@@ -2479,10 +2479,13 @@ def test_copy_to_memory_config_cache_test_inputs_same_logical_shape_but_differen
         config_tensor_in_dram=True,
     )
 
+    y_torch = ttnn.to_torch(y)
+
     y2_torch = torch.randn([1, 1, 1024, 1], dtype=torch.bfloat16)
     y2 = ttnn.from_torch(y2_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
-    y_torch = ttnn.to_torch(y)
+    y3_torch = torch.randn([1, 1, 1024, 16], dtype=torch.bfloat16)
+    y3 = ttnn.from_torch(y3_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=ttnn.ShardOrientation.ROW_MAJOR)
     sharded_memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
@@ -2502,4 +2505,13 @@ def test_copy_to_memory_config_cache_test_inputs_same_logical_shape_but_differen
     y_sharded2_torch = ttnn.to_torch(y_sharded2)
     assert_equal(y_torch, y_sharded_torch)
     assert_equal(y2_torch, y_sharded2_torch)
+
+    y_sharded3 = ttnn.copy_to_memory_config(y3, sharded_memory_config)
+    check_mem_config(y_sharded3, sharded_memory_config, is_nd_sharded=True)
+    y_sharded3_torch = ttnn.to_torch(y_sharded3)
+    assert_equal(y3_torch, y_sharded3_torch)
+    assert (
+        device.num_program_cache_entries() == 2
+    ), "Expected 2 program cache entries (cache miss on third call), got {device.num_program_cache_entries()}"
+
     device.disable_and_clear_program_cache()
