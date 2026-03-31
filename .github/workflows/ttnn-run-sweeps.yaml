@@ -980,7 +980,7 @@ jobs:
           MEASURE_DEVICE_PERF: ${{ github.event.inputs.measure_device_perf }}
           VECTORS_DIR: /tmp/vectors
         run: |
-          matrix_json=$(python3 tests/sweep_framework/framework/compute_sweep_matrix.py)
+          matrix_json=$(python3 tests/sweep_framework/framework/compute_sweep_matrix.py --profile standard --vectors-dir "$VECTORS_DIR")
           echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
   ttnn-run-single-sweep:
     name: Run single sweep
@@ -1214,6 +1214,18 @@ jobs:
         run: |
           MODULE_SELECTOR="${{ matrix.module_selector }}"
           SUITE_NAME="${{ matrix.suite_name }}"
+
+          mkdir -p /work/tests/sweep_framework/results_export
+          cat <<EOF > /work/tests/sweep_framework/results_export/${{ matrix.test_group_name }}_metadata.json
+          {
+            "trace_ids": ${{ toJSON(matrix.trace_ids) }},
+            "hardware_group": "${{ matrix.hardware_group }}",
+            "module_selector": "${{ matrix.module_selector }}",
+            "suite_name": "${{ matrix.suite_name }}",
+            "runner_label": "${{ matrix.runner_label }}",
+            "arch": "${{ matrix.arch }}"
+          }
+          EOF
 
           # Set skip-on-timeout flag based on input (default to true for all scheduled runs)
           SKIP_ON_TIMEOUT_FLAG=""

@@ -260,6 +260,28 @@ def _normalize_metadata_list(value):
     return [value]
 
 
+def _normalize_trace_ids(value):
+    """Normalize trace IDs to a sorted unique list."""
+    if value is None:
+        return []
+
+    if isinstance(value, (list, tuple, set)):
+        items = value
+    else:
+        items = [value]
+
+    normalized = set()
+    for item in items:
+        if item is None:
+            continue
+        try:
+            normalized.add(int(item))
+        except (TypeError, ValueError):
+            continue
+
+    return sorted(normalized)
+
+
 def _dedupe_metadata_items(items):
     """Deduplicate metadata items deterministically."""
     deduped = []
@@ -298,6 +320,11 @@ def _merge_duplicate_serialized_vectors(existing_vector, new_vector):
     if merged_machine_info:
         merged["traced_machine_info"] = merged_machine_info[0] if len(merged_machine_info) == 1 else merged_machine_info
 
+    merged["trace_ids"] = _normalize_trace_ids(existing_vector.get("trace_ids")) + _normalize_trace_ids(
+        new_vector.get("trace_ids")
+    )
+    merged["trace_ids"] = _normalize_trace_ids(merged["trace_ids"])
+
     return merged
 
 
@@ -305,6 +332,7 @@ def _normalize_serialized_vector_metadata(vector):
     """Normalize exported metadata fields to stable shapes."""
     normalized = dict(vector)
     normalized["traced_source"] = _normalize_metadata_list(vector.get("traced_source"))
+    normalized["trace_ids"] = _normalize_trace_ids(vector.get("trace_ids"))
     return normalized
 
 
@@ -410,7 +438,8 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
         grouped_module_name = module_name if group_key is None else f"{module_name}{format_group_suffix(group_key)}"
 
         # Export vectors WITHOUT modifying sweep_name.
-        # Routing info is already present in traced_machine_info; sweep_name stays
+        # Routing info is already present in traced_machine_info, and trace_ids now
+        # travel in the vector payload for downstream reporting. sweep_name stays
         # stable for historical comparison (full_test_name in Superset).
         _export_grouped_vectors_to_file(grouped_module_name, suite_name, grouped_subset)
 

@@ -948,20 +948,30 @@ class MasterConfigLoader:
         logger.warning(f"⚠️ Master trace lookup failed for operation '{operation_name}'. ")
         return []
 
-    def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str, Any, str]]:
+    def _normalize_configs(self, configs: List) -> List[Tuple[List[Dict], str, Any, str, List[int]]]:
         """
-        Normalize configurations to always return list of (argument list, source, machine_info, config_hash) tuples.
+        Normalize configurations to always return
+        list of (argument list, source, machine_info, config_hash, trace_ids) tuples.
         Handles both old format (list) and new format (dict with source or contexts).
 
         Args:
             configs: List of configurations (dict with 'arguments' and 'source')
 
         Returns:
-            List of (arguments, source, machine_info, config_hash) tuples for traceability
+            List of (arguments, source, machine_info, config_hash, trace_ids) tuples for traceability
         """
         # Check if we should filter for lead models only
         # Uses shared global filter state to work across V1 and V2 loaders
         lead_models_only = lead_models_filter.get_lead_models_filter()
+
+        def normalize_trace_ids(value):
+            trace_ids = set()
+            for trace_id in value or []:
+                try:
+                    trace_ids.add(int(trace_id))
+                except (TypeError, ValueError):
+                    continue
+            return sorted(trace_ids)
 
         normalized = []
         for config in configs:
@@ -975,6 +985,7 @@ class MasterConfigLoader:
                     for execution in config["executions"]:
                         source = execution.get("source", "unknown")
                         machine_info = execution.get("machine_info", None)
+                        trace_ids = normalize_trace_ids(execution.get("trace_run_ids"))
                         # count is tracked but not passed to sweep tests
 
                         # Filter for lead models if requested
@@ -982,7 +993,7 @@ class MasterConfigLoader:
                             if not self._source_matches_lead_models(source):
                                 continue  # Skip this execution
 
-                        normalized.append((arguments, source, machine_info, config_hash))
+                        normalized.append((arguments, source, machine_info, config_hash, trace_ids))
 
                 # Check for mid-level "contexts" format (multiple execution contexts)
                 elif "contexts" in config:
@@ -994,33 +1005,35 @@ class MasterConfigLoader:
 
                         # Extract machine_info
                         machine_info = context.get("machine_info", None)
+                        trace_ids = normalize_trace_ids(context.get("trace_run_ids"))
 
                         # Filter for lead models if requested
                         if lead_models_only:
                             if not self._source_matches_lead_models(source_list):
                                 continue  # Skip this context
 
-                        normalized.append((arguments, source, machine_info, config_hash))
+                        normalized.append((arguments, source, machine_info, config_hash, trace_ids))
 
                 else:
                     # Old format: single source/machine_info (pairing may be lost)
                     source = config.get("source", "unknown")
                     machine_info = config.get("machine_info", None)
+                    trace_ids = normalize_trace_ids(config.get("trace_run_ids"))
 
                     # Filter for lead models if requested
                     if lead_models_only:
                         if not self._source_matches_lead_models(source):
                             continue  # Skip this config
 
-                    normalized.append((arguments, source, machine_info, config_hash))
+                    normalized.append((arguments, source, machine_info, config_hash, trace_ids))
             elif isinstance(config, list):
                 # Legacy list format: use as-is with unknown source
                 # Skip if lead_models_only since we can't determine source
                 if not lead_models_only:
-                    normalized.append((config, "unknown", None, None))
+                    normalized.append((config, "unknown", None, None, []))
             else:
                 # Fallback: wrap in list with unknown source and no machine_info
-                normalized.append((config if isinstance(config, list) else [config], "unknown", None, None))
+                normalized.append((config if isinstance(config, list) else [config], "unknown", None, None, []))
         return normalized
 
     def parse_dtype(self, dtype_str: str) -> Any:
@@ -1291,7 +1304,7 @@ class MasterConfigLoader:
 
         logger.debug(f"_get_generic_parameters processing {len(configs)} configs for {operation_name}")
 
-        for config_args, source, machine_info, config_hash in configs:
+        for config_args, source, machine_info, config_hash, trace_ids in configs:
             try:
                 # Convert config_args from list of dicts to single dict if needed
                 if isinstance(config_args, list):
@@ -1407,6 +1420,7 @@ class MasterConfigLoader:
             config_dict["traced_source"] = source
             config_dict["traced_machine_info"] = machine_info
             config_dict["config_hash"] = config_hash
+            config_dict["trace_ids"] = trace_ids
 
             traced_config_list.append(config_dict)
 
