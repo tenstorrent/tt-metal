@@ -68,6 +68,11 @@ on:
         description: "Base branch in target PR repo"
         required: false
         default: "main"
+      fork-push-check-only:
+        description: "If checked, only verify fork branch creation and skip all triage/AI work"
+        required: false
+        type: boolean
+        default: true
       auto-disable-dry-run:
         description: "If checked, produce plan only and skip push/PR/kickoff execution"
         required: false
@@ -81,8 +86,57 @@ permissions:
   pull-requests: write
 
 jobs:
+  fork-push-check:
+    name: "Fork branch push probe"
+    if: ${{ inputs['fork-push-check-only'] }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure EVAN_PAT is configured
+        env:
+          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_PAT }}
+        run: |
+          if [ -z "$TARGET_PR_PUSH_TOKEN" ]; then
+            echo "Missing secret EVAN_PAT"
+            exit 1
+          fi
+
+      - name: Create probe branch on fork
+        env:
+          TARGET_PR_REPO: ${{ github.event.inputs['target-pr-repo'] || 'ebanerjeeTT/tt-metal' }}
+          TARGET_PR_BASE: ${{ github.event.inputs['target-pr-base'] || 'main' }}
+          TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_PAT }}
+        run: |
+          set -euo pipefail
+          login="$(GH_TOKEN="$TARGET_PR_PUSH_TOKEN" gh api user --jq .login)"
+          probe_branch="ci-fork-push-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          askpass="$(mktemp)"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) echo "$GIT_PUSH_USER" ;;
+            *) echo "$GIT_PUSH_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          git config user.name "CI Auto Disable Bot"
+          git config user.email "ci-auto-disable-bot@tenstorrent.invalid"
+          git fetch origin "$TARGET_PR_BASE"
+          git checkout -B "$probe_branch" "origin/$TARGET_PR_BASE"
+          git commit --allow-empty -m "ci: fork push probe ${GITHUB_RUN_ID}"
+          GIT_TERMINAL_PROMPT=0 \
+          GIT_ASKPASS="$askpass" \
+          GIT_PUSH_USER="$login" \
+          GIT_PUSH_TOKEN="$TARGET_PR_PUSH_TOKEN" \
+          git push "https://github.com/${TARGET_PR_REPO}.git" "HEAD:refs/heads/${probe_branch}"
+          echo "Probe branch pushed to ${TARGET_PR_REPO}: ${probe_branch}"
+
   triage-ci-autonomy:
     name: "Run CI triage autonomy pipeline"
+    if: ${{ !inputs['fork-push-check-only'] }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

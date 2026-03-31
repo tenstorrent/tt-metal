@@ -624,13 +624,39 @@ def ensure_git_identity() -> None:
         run(["git", "config", "user.email", "ci-auto-disable-bot@tenstorrent.invalid"], capture=True)
 
 
+def github_login_for_token(token: str) -> tuple[str | None, str]:
+    req = urllib.request.Request(
+        "https://api.github.com/user",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "tt-metal-ci-triage",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return None, f"http_{exc.code}"
+    except Exception as exc:
+        return None, f"request_error:{type(exc).__name__}"
+    login = str(payload.get("login", "")).strip()
+    if not login:
+        return None, "missing_login"
+    return login, "ok"
+
+
 def push_branch_with_token(branch: str, target_pr_repo: str, token: str) -> None:
+    login, login_reason = github_login_for_token(token)
+    if not login:
+        raise RuntimeError(f"Unable to resolve token login for git push: {login_reason}")
     push_url = f"https://github.com/{target_pr_repo}.git"
     askpass_script = Path(tempfile.mkdtemp(prefix="git-askpass-")) / "askpass.sh"
     askpass_script.write_text(
         "#!/bin/sh\n"
         'case "$1" in\n'
-        '  *Username*) echo "x-access-token" ;;\n'
+        '  *Username*) echo "$GIT_PUSH_USER" ;;\n'
         '  *) echo "$GIT_PUSH_TOKEN" ;;\n'
         "esac\n",
         encoding="utf-8",
@@ -642,6 +668,7 @@ def push_branch_with_token(branch: str, target_pr_repo: str, token: str) -> None
         env={
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_ASKPASS": str(askpass_script),
+            "GIT_PUSH_USER": login,
             "GIT_PUSH_TOKEN": token,
         },
     )
