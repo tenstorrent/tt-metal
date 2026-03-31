@@ -90,26 +90,25 @@ FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t 
 
 // Phase 1: BR/TR0/TR2 signal done → NC waits for all 3
 FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
-#if defined(COMPILE_FOR_BRISC) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
+#if defined(COMPILE_FOR_TRISC)
     tensix_sync();
 #endif
     __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
 #elif defined(COMPILE_FOR_NCRISC)
-    while (__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) < 3) {
+    while (__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) < 4) {
     }
-    sem_addr[0] = 0;
 #endif
 }
 
 // Phase 2: NC signals done → BR/TR0/TR2 wait then proceed
 FORCE_INLINE void sync_riscs_exit(volatile uint32_t tt_l1_ptr* sem_addr) {
 #if defined(COMPILE_FOR_NCRISC)
-    __atomic_fetch_add(&sem_addr[1], 3, __ATOMIC_RELAXED);
-#elif defined(COMPILE_FOR_BRISC) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
-    while (__atomic_load_n(&sem_addr[1], __ATOMIC_RELAXED) == 0) {
+    __atomic_fetch_sub(&sem_addr[0], 4, __ATOMIC_RELAXED);
+#endif
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_TRISC)
+    while (__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) != 0) {
     }
-    __atomic_fetch_sub(&sem_addr[1], 1, __ATOMIC_RELAXED);
 #endif
 }
 
@@ -181,7 +180,7 @@ FORCE_INLINE void reconfig_cbs_for_mask(uint32_t tt_l1_ptr* cb_config, uint32_t 
 }
 
 FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* cb_config) {
-#if defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_BRISC) or defined(UCK_CHLKC_UNPACK) or defined(UCK_CHLKC_PACK)
+#if defined(COMPILE_FOR_NCRISC) or defined(COMPILE_FOR_BRISC) or defined(COMPILE_FOR_TRISC)
 #if defined(COMPILE_FOR_NCRISC)
     constexpr bool do_read = true;
     constexpr bool do_write = true;
@@ -206,9 +205,10 @@ FORCE_INLINE void reconfig_cb_interfaces(uint32_t tt_l1_ptr* cb_config) {
 
     volatile uint32_t tt_l1_ptr* reconfig_sem = reinterpret_cast<volatile uint32_t tt_l1_ptr*>(&cb_config[258]);
     sync_riscs_enter(reconfig_sem);
-
+#if not defined(UCK_CHLKC_MATH)
     reconfig_cbs_for_mask<do_read, do_write, do_write_tile_ptr, do_reset_stream_regs>(cb_config, cb_config[256], 0);
     reconfig_cbs_for_mask<do_read, do_write, do_write_tile_ptr, do_reset_stream_regs>(cb_config, cb_config[257], 32);
+#endif
 
     sync_riscs_exit(reconfig_sem);
 #else

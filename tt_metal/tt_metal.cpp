@@ -607,6 +607,7 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     } else {
         TT_ASSERT(false && "Unsupported buffer layout");
     }
+    MetalContext::instance().get_cluster().l1_barrier(buffer.device()->id());
 }
 
 void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {

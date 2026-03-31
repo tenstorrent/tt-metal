@@ -58,6 +58,9 @@ class StageKind(ABC):
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         """Run stage compute after ``pipeline_block.run()`` (execute pre-built programs where applicable). Default: no-op."""
 
+    def reset_position_ids(self) -> None:
+        """Reset position IDs to 0 after a decode step. Default: no-op."""
+
 
 class EmbeddingStage(StageKind):
     """Stage 0: H2D + embedding lookup, forwards activation; loopback receives token."""
