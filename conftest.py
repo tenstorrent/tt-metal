@@ -1197,7 +1197,13 @@ def ttnn_graph_report(request):
             if json_path.exists():
                 from ttnn.graph_report import import_report
 
-                import_report(json_path, report_path)
+                try:
+                    import_report(json_path, report_path)
+                finally:
+                    try:
+                        json_path.unlink(missing_ok=True)
+                    except OSError as e:
+                        logger.warning("Could not remove graph capture file %s: %s", json_path, e)
 
             config_path = report_path / "config.json"
             ttnn.save_config_to_json_file(config_path)
