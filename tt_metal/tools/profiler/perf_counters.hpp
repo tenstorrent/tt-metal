@@ -6,7 +6,7 @@
 
 constexpr uint16_t PERF_COUNTER_PROFILER_ID = 9090;
 
-enum PerfCounterGroup : uint8_t { FPU, PACK, UNPACK, L1_0, L1_1, INSTRN };
+enum PerfCounterGroup : uint8_t { FPU, PACK, UNPACK, L1_0, L1_1, INSTRN, L1_4 };
 enum PerfCounterType : uint8_t {
     UNDEF = 0,
     // FPU Group (3 counters)
@@ -184,8 +184,26 @@ enum PerfCounterType : uint8_t {
     DEST_READ_GRANTED_1,           // Dest register 1 read granted (grant 268)
     DEST_READ_GRANTED_2,           // Dest register 2 read granted (grant 269)
     DEST_READ_GRANTED_3,           // Dest register 3 read granted (grant 270)
-    MATH_NOT_STALLED_DEST_WR_PORT  // Math not stalled by dest write port (grant 271)
+    MATH_NOT_STALLED_DEST_WR_PORT,  // Math not stalled by dest write port (grant 271)
     // Note: AVAILABLE_MATH (existing, counter_sel 272) = math not stalled by scoreboard (grant 272)
+    // L1 Bank 4 (BH only, MUX_CTRL[6:4] = 4, monitors misc ports 32-39)
+    L1_4_MISC_PORT_0,  // Port 32: misc interface 0
+    L1_4_MISC_PORT_1,  // Port 33: misc interface 1
+    L1_4_MISC_PORT_2,  // Port 34: misc interface 2
+    L1_4_MISC_PORT_3,  // Port 35: misc interface 3
+    L1_4_MISC_PORT_4,  // Port 36: misc interface 4
+    L1_4_MISC_PORT_5,  // Port 37: misc interface 5
+    L1_4_MISC_PORT_6,  // Port 38: misc interface 6
+    L1_4_MISC_PORT_7,  // Port 39: misc interface 7
+    // L1 Bank 4 grant counters
+    L1_4_MISC_PORT_0_GRANT,
+    L1_4_MISC_PORT_1_GRANT,
+    L1_4_MISC_PORT_2_GRANT,
+    L1_4_MISC_PORT_3_GRANT,
+    L1_4_MISC_PORT_4_GRANT,
+    L1_4_MISC_PORT_5_GRANT,
+    L1_4_MISC_PORT_6_GRANT,
+    L1_4_MISC_PORT_7_GRANT
 };
 
 union PerfCounter {
@@ -217,12 +235,13 @@ constexpr PerfCounterGroup counter_groups[] = {
     PerfCounterGroup::UNPACK,
     PerfCounterGroup::L1_0,
     PerfCounterGroup::L1_1,
-    PerfCounterGroup::INSTRN};
+    PerfCounterGroup::INSTRN,
+    PerfCounterGroup::L1_4};
 constexpr size_t NUM_COUNTER_GROUPS = sizeof(counter_groups) / sizeof(counter_groups[0]);
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 3> fpu_counters = {
     {{PerfCounterType::FPU_COUNTER, 0}, {PerfCounterType::SFPU_COUNTER, 1}, {PerfCounterType::MATH_COUNTER, 257}}};
 constexpr size_t NUM_FPU_COUNTERS = 3;
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters = {
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 20> unpack_counters = {
     {{PerfCounterType::MATH_SRC_DATA_READY, 0},
      {PerfCounterType::DATA_HAZARD_STALLS_MOVD2A, 1},
      {PerfCounterType::FIDELITY_PHASE_STALLS, 2},
@@ -245,7 +264,7 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 22> unpack_counters =
      {PerfCounterType::SRCB_WRITE_THREAD0, 264},
      {PerfCounterType::SRCA_WRITE_THREAD1, 265},
      {PerfCounterType::SRCB_WRITE_THREAD1, 266}}};
-constexpr size_t NUM_UNPACK_COUNTERS = 22;
+constexpr size_t NUM_UNPACK_COUNTERS = 20;
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 14> pack_counters = {
     {{PerfCounterType::PACKER_DEST_READ_AVAILABLE, 11},
      {PerfCounterType::PACKER_BUSY, 18},
@@ -316,6 +335,29 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_1_counters = {
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_0_GRANT, 262},
      {PerfCounterType::L1_1_NOC_RING1_INCOMING_1_GRANT, 263}}};
 constexpr size_t NUM_L1_1_COUNTERS = 16;
+
+// L1 bank 4 counters (BH only, MUX_CTRL[6:4] = 4): misc ports 32-39
+// These are ECC, DDR5 RISC interface, and other miscellaneous L1 ports.
+// Mux positions 2-3 require 4-NOC silicon (unavailable on current BH).
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, 16> l1_4_counters = {
+    {{PerfCounterType::L1_4_MISC_PORT_0, 0},
+     {PerfCounterType::L1_4_MISC_PORT_1, 1},
+     {PerfCounterType::L1_4_MISC_PORT_2, 2},
+     {PerfCounterType::L1_4_MISC_PORT_3, 3},
+     {PerfCounterType::L1_4_MISC_PORT_4, 4},
+     {PerfCounterType::L1_4_MISC_PORT_5, 5},
+     {PerfCounterType::L1_4_MISC_PORT_6, 6},
+     {PerfCounterType::L1_4_MISC_PORT_7, 7},
+     // Grant counters
+     {PerfCounterType::L1_4_MISC_PORT_0_GRANT, 256},
+     {PerfCounterType::L1_4_MISC_PORT_1_GRANT, 257},
+     {PerfCounterType::L1_4_MISC_PORT_2_GRANT, 258},
+     {PerfCounterType::L1_4_MISC_PORT_3_GRANT, 259},
+     {PerfCounterType::L1_4_MISC_PORT_4_GRANT, 260},
+     {PerfCounterType::L1_4_MISC_PORT_5_GRANT, 261},
+     {PerfCounterType::L1_4_MISC_PORT_6_GRANT, 262},
+     {PerfCounterType::L1_4_MISC_PORT_7_GRANT, 263}}};
+constexpr size_t NUM_L1_4_COUNTERS = 16;
 
 // INSTRN counters (61 counters)
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, 85> instrn_counters = {
@@ -414,6 +456,7 @@ constexpr size_t NUM_INSTRN_COUNTERS = 85;
 #define PROFILE_PERF_COUNTERS_L1_0 (1 << 3)
 #define PROFILE_PERF_COUNTERS_L1_1 (1 << 4)
 #define PROFILE_PERF_COUNTERS_INSTRN (1 << 5)
+#define PROFILE_PERF_COUNTERS_L1_4 (1 << 6)
 
 /*
 Performance Counter registers (to understand programming sequence in start_perf_counter/stop_perf_counter)
@@ -457,7 +500,8 @@ uint32_t get_cntl_register_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::PACK: reg_addr = RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0; break;
         case PerfCounterGroup::UNPACK: reg_addr = RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0; break;
         case PerfCounterGroup::L1_0:
-        case PerfCounterGroup::L1_1: reg_addr = RISCV_DEBUG_REG_PERF_CNT_L1_0; break;
+        case PerfCounterGroup::L1_1:
+        case PerfCounterGroup::L1_4: reg_addr = RISCV_DEBUG_REG_PERF_CNT_L1_0; break;
         case PerfCounterGroup::INSTRN: reg_addr = RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0; break;
         default: {
             ASSERT(false);
@@ -474,7 +518,8 @@ uint32_t get_read_register_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::PACK: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK; break;
         case PerfCounterGroup::UNPACK: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK; break;
         case PerfCounterGroup::L1_0:
-        case PerfCounterGroup::L1_1: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1; break;
+        case PerfCounterGroup::L1_1:
+        case PerfCounterGroup::L1_4: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1; break;
         case PerfCounterGroup::INSTRN: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD; break;
         default: {
             ASSERT(false);
@@ -493,6 +538,7 @@ uint32_t get_flag_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::L1_0: flag = PROFILE_PERF_COUNTERS_L1_0; break;
         case PerfCounterGroup::L1_1: flag = PROFILE_PERF_COUNTERS_L1_1; break;
         case PerfCounterGroup::INSTRN: flag = PROFILE_PERF_COUNTERS_INSTRN; break;
+        case PerfCounterGroup::L1_4: flag = PROFILE_PERF_COUNTERS_L1_4; break;
         default: {
             ASSERT(false);
             break;
@@ -510,6 +556,7 @@ uint32_t get_num_counters_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::L1_0: num_counters = NUM_L1_0_COUNTERS; break;
         case PerfCounterGroup::L1_1: num_counters = NUM_L1_1_COUNTERS; break;
         case PerfCounterGroup::INSTRN: num_counters = NUM_INSTRN_COUNTERS; break;
+        case PerfCounterGroup::L1_4: num_counters = NUM_L1_4_COUNTERS; break;
         default: {
             ASSERT(false);
             break;
@@ -527,6 +574,7 @@ FORCE_INLINE const std::pair<PerfCounterType, uint16_t>* get_counters_for_counte
         case PerfCounterGroup::L1_0: return l1_0_counters.data();
         case PerfCounterGroup::L1_1: return l1_1_counters.data();
         case PerfCounterGroup::INSTRN: return instrn_counters.data();
+        case PerfCounterGroup::L1_4: return l1_4_counters.data();
         default: {
             ASSERT(false);
             return fpu_counters.data();
@@ -545,13 +593,19 @@ void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
 #else
     constexpr uint32_t L1_MUX_MASK = 0x1 << 4;  // 1 bit [4]
 #endif
-    uint32_t mux_sel = (counter_group == PerfCounterGroup::L1_1) ? 1 : 0;
+    uint32_t mux_sel = 0;
+    if (counter_group == PerfCounterGroup::L1_1) {
+        mux_sel = 1;
+    } else if (counter_group == PerfCounterGroup::L1_4) {
+        mux_sel = 4;
+    }
     mux_val = (mux_val & ~L1_MUX_MASK) | (mux_sel << 4);
     *mux_reg = mux_val;
 }
 
 __attribute__((noinline)) void start_single_group(PerfCounterGroup counter_group) {
-    if (counter_group == PerfCounterGroup::L1_0 || counter_group == PerfCounterGroup::L1_1) {
+    if (counter_group == PerfCounterGroup::L1_0 || counter_group == PerfCounterGroup::L1_1 ||
+        counter_group == PerfCounterGroup::L1_4) {
         set_l1_mux_ctrl(counter_group);
     }
     volatile tt_reg_ptr uint32_t* cntl_reg =
@@ -570,7 +624,8 @@ __attribute__((noinline)) void stop_single_group(PerfCounterGroup counter_group)
 }
 
 __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group) {
-    if (counter_group == PerfCounterGroup::L1_0 || counter_group == PerfCounterGroup::L1_1) {
+    if (counter_group == PerfCounterGroup::L1_0 || counter_group == PerfCounterGroup::L1_1 ||
+        counter_group == PerfCounterGroup::L1_4) {
         set_l1_mux_ctrl(counter_group);
     }
     volatile tt_reg_ptr uint32_t* cntl_reg =
@@ -612,6 +667,9 @@ void start_perf_counter() {
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
     start_single_group(PerfCounterGroup::INSTRN);
 #endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
+    start_single_group(PerfCounterGroup::L1_4);
+#endif
 }
 
 void stop_perf_counter() {
@@ -634,6 +692,9 @@ void stop_perf_counter() {
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
     stop_single_group(PerfCounterGroup::INSTRN);
 #endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
+    stop_single_group(PerfCounterGroup::L1_4);
+#endif
 
     // Read all enabled groups
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_FPU)
@@ -653,6 +714,9 @@ void stop_perf_counter() {
 #endif
 #if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_INSTRN)
     read_single_group(PerfCounterGroup::INSTRN);
+#endif
+#if (PROFILE_PERF_COUNTERS & PROFILE_PERF_COUNTERS_L1_4)
+    read_single_group(PerfCounterGroup::L1_4);
 #endif
 };
 

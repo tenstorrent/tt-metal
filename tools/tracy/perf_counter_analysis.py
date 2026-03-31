@@ -190,6 +190,24 @@ COUNTER_TYPE_NAMES = {
     158: "DEST_READ_GRANTED_2",
     159: "DEST_READ_GRANTED_3",
     160: "MATH_NOT_STALLED_DEST_WR_PORT",
+    # L1 Bank 4 req counters (BH only, mux position 4, misc ports 32-39)
+    161: "L1_4_MISC_PORT_0",
+    162: "L1_4_MISC_PORT_1",
+    163: "L1_4_MISC_PORT_2",
+    164: "L1_4_MISC_PORT_3",
+    165: "L1_4_MISC_PORT_4",
+    166: "L1_4_MISC_PORT_5",
+    167: "L1_4_MISC_PORT_6",
+    168: "L1_4_MISC_PORT_7",
+    # L1 Bank 4 grant counters
+    169: "L1_4_MISC_PORT_0_GRANT",
+    170: "L1_4_MISC_PORT_1_GRANT",
+    171: "L1_4_MISC_PORT_2_GRANT",
+    172: "L1_4_MISC_PORT_3_GRANT",
+    173: "L1_4_MISC_PORT_4_GRANT",
+    174: "L1_4_MISC_PORT_5_GRANT",
+    175: "L1_4_MISC_PORT_6_GRANT",
+    176: "L1_4_MISC_PORT_7_GRANT",
 }
 
 

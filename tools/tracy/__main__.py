@@ -245,6 +245,7 @@ def main():
             "l1_0": 3,  # PROFILE_PERF_COUNTERS_L1_0   (1 << 3)
             "l1_1": 4,  # PROFILE_PERF_COUNTERS_L1_1   (1 << 4)
             "instrn": 5,  # PROFILE_PERF_COUNTERS_INSTRN (1 << 5)
+            "l1_4": 6,  # PROFILE_PERF_COUNTERS_L1_4   (1 << 6)  BH-only misc ports
         }
 
         bitfield = 0
@@ -258,15 +259,23 @@ def main():
                 bitfield |= 1 << counter_group_bits[group_lower]
             else:
                 logger.warning(
-                    f"Unknown counter group '{group}'. " f"Valid groups: fpu, pack, unpack, l1_0, l1_1, instrn, all"
+                    f"Unknown counter group '{group}'. "
+                    f"Valid groups: fpu, pack, unpack, l1_0, l1_1, l1_4, instrn, all"
                 )
 
-        # Validate L1 bank mutual exclusion
-        if (bitfield & (1 << 3)) and (bitfield & (1 << 4)):
+        # Validate L1 bank mutual exclusion - L1_0, L1_1, L1_4 share hardware registers
+        l1_banks_enabled = []
+        if bitfield & (1 << 3):
+            l1_banks_enabled.append("l1_0")
+        if bitfield & (1 << 4):
+            l1_banks_enabled.append("l1_1")
+        if bitfield & (1 << 6):
+            l1_banks_enabled.append("l1_4")
+        if len(l1_banks_enabled) > 1:
             raise ValueError(
-                "L1 bank 0 (l1_0) and L1 bank 1 (l1_1) cannot be enabled simultaneously. "
-                "They share the same hardware registers (selected via MUX_CTRL bit 4). "
-                "Please choose one: l1_0 or l1_1."
+                f"L1 banks {', '.join(l1_banks_enabled)} cannot be enabled simultaneously. "
+                "They share the same hardware registers (selected via MUX_CTRL). "
+                "Please choose one L1 bank per run."
             )
 
         if bitfield > 0:
