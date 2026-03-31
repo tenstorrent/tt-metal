@@ -324,14 +324,12 @@ def test_generic_ops_ndim_shard(device, shapes, keepdim, layout, op):
     torch_output_tensor = torch_op(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     ttnn_op = getattr(ttnn, op)
-    pad_value = 1.0 if op == "prod" else None
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.float32,
         device=device,
         layout=layout,
         memory_config=memory_config,
-        pad_value=pad_value,
     )
     op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim)
 
@@ -415,14 +413,12 @@ def test_generic_ops_wh_shard(device, input_shape, shard_2d_shape, end_x, end_y,
     torch_output_tensor = torch_op(torch_input_tensor, dim=dim, keepdim=keepdim)
 
     ttnn_op = getattr(ttnn, op)
-    pad_value = 1.0 if op == "prod" else None
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.float32,
         device=device,
         layout=layout,
         memory_config=memory_config,
-        pad_value=pad_value,
     )
     op_output_tensor = ttnn_op(input_tensor, dim=dim, keepdim=keepdim)
 
