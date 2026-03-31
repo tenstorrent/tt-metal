@@ -46,6 +46,8 @@ TRIAGE_LOG="/tmp/tt-test-triage-$$.log"
 SIM_MODE=false
 if [[ -n "${TT_METAL_SIMULATOR:-}" ]]; then
     SIM_MODE=true
+    export TT_METAL_SLOW_DISPATCH_MODE=1
+    export TT_METAL_DISABLE_SFPLOADMACRO=1
 fi
 
 # Sim is much slower than silicon — use a higher default timeout.
