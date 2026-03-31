@@ -235,3 +235,30 @@ def test_gather_sub_core_grids(input_shape, index_shape, dim, device):
 
     assert ttnn_gather.shape == index.shape
     assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
+
+
+@pytest.mark.parametrize(
+    "input_shape, index_shape, dim",
+    [
+        ([32, 32, 64 * TILE_HEIGHT], [32, 32, 64 * TILE_HEIGHT], -1),
+        ([64, 64, 128 * TILE_HEIGHT], [64, 64, 128 * TILE_HEIGHT], -1),
+    ],
+)
+def test_gather_multirow(input_shape, index_shape, dim, device):
+    torch.manual_seed(0)
+
+    torch_dtype = torch.bfloat16
+    max_uint32 = np.iinfo(np.uint32).max
+    max_idx_val = min(input_shape[dim], max_uint32)
+    input = torch.randn(input_shape, dtype=torch_dtype)
+    index = torch.randint(0, max_idx_val, index_shape, dtype=torch.int64)
+
+    torch_gather = torch.gather(input, dim, index)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint32, layout=ttnn.Layout.TILE, device=device)
+
+    ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
+
+    assert ttnn_gather.shape == index.shape
+    assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))

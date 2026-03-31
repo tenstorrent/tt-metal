@@ -93,7 +93,7 @@ fabric:
 
 shield:
   e2e:
-    wh_llmbox: 25
+    wh_llmbox: 45
 
 scaleout:
   e2e:
@@ -130,8 +130,8 @@ models:
   demo:
     wh_llmbox_perf: 1090
     wh_llmbox_perf_release: 1090
-    wh_galaxy: 247
-    wh_galaxy_perf: 40
+    wh_galaxy: 0
+    wh_galaxy_perf: 279
     wh_galaxy_release: 345
     bh_galaxy: 30
     wh_n150: 500

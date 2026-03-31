@@ -115,6 +115,8 @@ struct InspectorSettings {
     uint16_t rpc_server_port = 50051;
     bool rpc_server_enabled = true;
     bool serialize_on_dispatch_timeout = true;
+    bool capture_tensor_specs = true;
+    bool log_runtime_entries = false;
     std::string rpc_server_address() const { return rpc_server_host + ":" + std::to_string(rpc_server_port); }
 };
 
@@ -313,6 +315,9 @@ class RunTimeOptions {
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
 
+    // Store command queues in device DRAM
+    bool dram_backed_cq = false;
+
     // To be used for NUMA node based thread binding
     bool numa_based_affinity = false;
 
@@ -434,6 +439,10 @@ public:
         return inspector_settings.rpc_server_host + ":" + std::to_string(inspector_settings.rpc_server_port);
     }
     void set_inspector_rpc_server_enabled(bool enabled) { inspector_settings.rpc_server_enabled = enabled; }
+    bool get_inspector_capture_tensor_specs() const { return inspector_settings.capture_tensor_specs; }
+    void set_inspector_capture_tensor_specs(bool enabled) { inspector_settings.capture_tensor_specs = enabled; }
+    bool get_inspector_log_runtime_entries() const { return inspector_settings.log_runtime_entries; }
+    void set_inspector_log_runtime_entries(bool enabled) { inspector_settings.log_runtime_entries = enabled; }
     // Info from DPrint environment variables, setters included so that user can
     // override with a SW call.
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
@@ -727,6 +736,8 @@ public:
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
+
+    bool get_dram_backed_cq() const { return dram_backed_cq; }
 
     std::optional<uint32_t> get_fabric_router_sync_timeout_ms() const { return fabric_router_sync_timeout_ms; }
 

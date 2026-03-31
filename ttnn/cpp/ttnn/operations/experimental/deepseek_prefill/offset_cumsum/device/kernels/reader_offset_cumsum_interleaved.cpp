@@ -4,8 +4,9 @@
 
 // Offset Cumsum Kernel
 //
-// Computes per-device dispatch offsets into each expert's token buffer by
-// taking a shifted (exclusive) prefix sum over gathered per-device histograms.
+// Computes this device's dispatch offset into each expert's token buffer by
+// taking a shifted (exclusive) prefix sum over gathered per-device histograms
+// and keeping only the row corresponding to this device.
 //
 // Inputs:
 //   - input [H, W]: UINT32 interleaved tensor of per-device expert histograms
@@ -13,28 +14,18 @@
 //     device's masked_bincount output.
 //
 // Outputs:
-//   - offsets [H, W]: row k = sum of input rows 0..k-1 (row 0 is all zeros).
-//     These are the starting positions where each device writes into each
-//     expert's buffer — hence the name "offsets" rather than prefix sum.
+//   - offsets [1, W]: the starting positions where this device writes into each
+//     expert's buffer. Equivalent to row `row_idx` of the full shifted prefix
+//     sum (row k = sum of input rows 0..k-1; row 0 is all zeros).
 //   - totals  [1, W]: sum of all H input rows (total tokens per expert).
 //
-// The kernel loops over H rows. Before the loop it writes a zeroed row to
-// offsets[0]. On each iteration it reads input row h, adds it element-wise into
-// the running sum, then writes the updated sum to offsets[h+1] (or to totals
-// on the final iteration).
+// Runtime args:
+//   - src_addr, dst_offsets_addr, dst_totals_addr: buffer addresses
+//   - row_idx: which row of the prefix sum this device keeps
 //
-// Design choices:
-//  - This is a single data-movement kernel that reads, computes,
-// and writes — there is no separate compute or writer kernel. W is typically
-// n_routed_experts (e.g. 256 for DeepSeek-V3), so the element-wise add is a
-// short scalar loop on UINT32 values in L1 and does not warrant SFPU/FPU
-// compute.
-//  - Because there is only one kernel there is no producer/consumer
-// relationship, so CBs are used as raw L1 scratch (no cb_push_back /
-// cb_pop_front).
-//  - The partial sums are called "offsets" because in the MoE
-// dispatch context they are the starting write positions for each device into
-// each expert's token buffer.
+// The kernel loops over all H rows to compute the running sum (needed for
+// totals), but only writes to the offsets output at the position matching
+// row_idx.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -43,6 +34,7 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t dst_offsets_addr = get_arg_val<uint32_t>(1);
     uint32_t dst_totals_addr = get_arg_val<uint32_t>(2);
+    uint32_t row_idx = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
@@ -74,19 +66,13 @@ void kernel_main() {
         running_sum[i] = 0;
     }
 
-    noc_async_write(out_cb_addr, dst_offsets_accessor.get_noc_addr(0), offsets_page_size);
-    noc_async_write_barrier();
+    // row_idx == 0: offset is all zeros — write immediately
+    if (row_idx == 0) {
+        noc_async_write(out_cb_addr, dst_offsets_accessor.get_noc_addr(0), offsets_page_size);
+        noc_async_write_barrier();
+    }
 
     uint32_t in_cb_addr = get_write_ptr(cb_id_in0);
-
-    // The three tensors are allocated independently and could in principle have
-    // different aligned page sizes (even though in practice they'll likely be the
-    // same, since they all share W and dtype). This doesn't cause correctness
-    // issues because:
-    //  - The inner loop always operates on exactly W elements and ignores any
-    //    padding bytes beyond the W-th element.
-    //  - NOC writes use the destination tensor's own page size (offsets_page_size
-    //    or totals_page_size)
 
     for (uint32_t h = 0; h < H; h++) {
         noc_async_read_page(h, src_accessor, in_cb_addr);
@@ -97,11 +83,16 @@ void kernel_main() {
             running_sum[i] += stick[i];
         }
 
-        if (h < H - 1) {
-            noc_async_write(out_cb_addr, dst_offsets_accessor.get_noc_addr(h + 1), offsets_page_size);
-        } else {
-            noc_async_write(out_cb_addr, dst_totals_accessor.get_noc_addr(0), totals_page_size);
+        // Write offsets when we've accumulated exactly rows 0..row_idx-1
+        if (h + 1 == row_idx) {
+            noc_async_write(out_cb_addr, dst_offsets_accessor.get_noc_addr(0), offsets_page_size);
+            noc_async_write_barrier();
         }
-        noc_async_write_barrier();
+
+        // Write totals on the final iteration
+        if (h == H - 1) {
+            noc_async_write(out_cb_addr, dst_totals_accessor.get_noc_addr(0), totals_page_size);
+            noc_async_write_barrier();
+        }
     }
 }

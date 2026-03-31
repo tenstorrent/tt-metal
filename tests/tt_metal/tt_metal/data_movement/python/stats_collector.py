@@ -189,6 +189,11 @@ class StatsCollector:
                 total_bytes = num_cores * transaction_size * num_transactions
                 combined_bandwidth = total_bytes / wall_clock_time if wall_clock_time > 0 else 0
 
+                # Use real clock frequency from device if logged
+                clock_freq_mhz = attributes.get("Clock frequency MHz", 0)
+                clock_freq_ghz = clock_freq_mhz / 1000.0 if clock_freq_mhz else 0
+                bandwidth_gbps = agg_bandwidth * clock_freq_ghz if clock_freq_ghz else 0
+
                 agg_data = {
                     "duration_cycles": agg_duration,
                     "bandwidth": agg_bandwidth,
@@ -203,6 +208,10 @@ class StatsCollector:
                     "wall_clock_time": wall_clock_time,
                     "total_bytes": total_bytes,
                     "combined_bandwidth": combined_bandwidth,
+                    # Clock frequency and GB/s metrics
+                    "clock_freq_mhz": clock_freq_mhz,
+                    "clock_freq_ghz": clock_freq_ghz,
+                    "bandwidth_gbps": bandwidth_gbps,
                 }
 
                 # Dynamically add attributes based on test type

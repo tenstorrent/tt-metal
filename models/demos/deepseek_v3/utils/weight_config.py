@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -87,6 +88,15 @@ def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_re
     """
     if force_recalculate:
         logger.info("Forcing recalculating weights")
+        if weight_cache_path.exists():
+            logger.info(f"Deleting existing cache directory: {weight_cache_path}")
+            try:
+                if weight_cache_path.is_dir():
+                    shutil.rmtree(weight_cache_path)
+                else:
+                    weight_cache_path.unlink()
+            except OSError as e:
+                logger.warning(f"Failed to remove weight cache at {weight_cache_path}: {e}")
         return None
     if not config_path.exists():
         logger.info("Weight configuration file does not exist, forcing recalculating weights")

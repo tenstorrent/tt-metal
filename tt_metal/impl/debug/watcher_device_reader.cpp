@@ -749,7 +749,8 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
-    if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
+    if (assert_status.tripped() == dev_msgs::DebugAssertOK ||
+        assert_status.tripped() == dev_msgs::DebugAssertWriteInProgress) {
         if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
             assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
             TT_THROW(
@@ -763,7 +764,9 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     std::string error_msg = fmt::format(
         "{}: {} ", core_str_, get_riscv_name(reader_.env.get_hal(), programmable_core_type_, assert_status.which()));
     std::string assert_msg = get_debug_assert_message(
-        static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()), assert_status.line_num());
+        static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()),
+        assert_status.line_num(),
+        assert_status.hw_fault_info());
     if (assert_msg.empty()) {
         LogRunningKernels();
         TT_THROW(

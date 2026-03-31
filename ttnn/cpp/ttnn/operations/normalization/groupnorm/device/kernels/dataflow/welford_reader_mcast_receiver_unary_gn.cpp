@@ -7,10 +7,16 @@
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
 #include "noc_parameters.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/noc_semaphore.h"
+#include "experimental/endpoints.h"
+#include "experimental/core_local_mem.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
-    uint32_t reduce_receiver_semaphore_addr = get_semaphore(get_named_compile_time_arg_val("reduce_receiver_semaphore_id"));
-    uint32_t reduce_sender_semaphore_addr = get_semaphore(get_named_compile_time_arg_val("reduce_sender_semaphore_id"));
+    constexpr uint32_t reduce_receiver_semaphore_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
+    constexpr uint32_t reduce_sender_semaphore_id = get_named_compile_time_arg_val("reduce_sender_semaphore_id");
 
     constexpr uint32_t num_batch_group = get_named_compile_time_arg_val("num_batch_group");
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("num_batches");
@@ -41,20 +47,26 @@ void kernel_main() {
 
     const uint32_t mcast_sender_noc_x = get_arg_val<uint32_t>(5);
     const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(6);
-    const auto reduce_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_sender_semaphore_addr);
-    const auto reduce_receiver_semaphore_noc_addr =
-        get_noc_addr(mcast_sender_noc_x, mcast_sender_noc_y, reduce_receiver_semaphore_addr);
 
-    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;
-    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_repack = tt::CBIndex::c_26;
-    constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
-    constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
+    constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;
+    constexpr uint32_t cb_ex_global_id = tt::CBIndex::c_15;
+    constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
+    constexpr uint32_t cb_repack_id = tt::CBIndex::c_26;
+    constexpr uint32_t cb_repack_out_id = tt::CBIndex::c_31;
+    constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
 
-    constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);
-    constexpr uint32_t src0_tile_bytes = get_tile_size(cb_in0);
+    experimental::Noc noc;
+    experimental::Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
+    experimental::Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
+    experimental::CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    experimental::CircularBuffer cb_ex_global(cb_ex_global_id);
+    experimental::CircularBuffer cb_in0(cb_in0_id);
+    experimental::CircularBuffer cb_repack(cb_repack_id);
+    experimental::CircularBuffer cb_repack_out(cb_repack_out_id);
+    experimental::CircularBuffer cb_out0(cb_out0_id);
+
+    constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
+    constexpr uint32_t src0_tile_bytes = get_tile_size(cb_in0_id);
 
     // This is the stride between two consecutive local means/variances in the cb_ex_partial
     constexpr uint32_t local_stride = 2;
@@ -64,18 +76,24 @@ void kernel_main() {
     const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
-    const uint32_t in0_l1_read_addr = get_read_ptr(cb_in0);
-    uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
+    uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
+    uint32_t src_addr_in0 = in0_l1_read_addr;
+    experimental::UnicastEndpoint self_ep;
     for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_reserve_back(cb_repack, per_core_N);
-        uint32_t l1_write_addr_repack = get_write_ptr(cb_repack);
+        cb_repack.reserve_back(per_core_N);
+        uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
         for (uint32_t i = 0; i < tile_height; ++i) {
-            noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
-            noc_addr_in0 += per_core_N_bytes;
+            noc.async_read(
+                self_ep,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                per_core_N_bytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {});
+            src_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_repack, per_core_N);
+        noc.async_read_barrier();
+        cb_repack.push_back(per_core_N);
     }
 #endif
 
@@ -108,23 +126,28 @@ void kernel_main() {
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                    cb_reserve_back(cb_in0, 1);
-                    const uint32_t l1_write_addr = get_write_ptr(cb_in0);
-                    noc_async_read_tile(start_id + index_b_offset + mt_offset + nt, src_a, l1_write_addr);
-                    noc_async_read_barrier();
-                    cb_push_back(cb_in0, 1);
+                    cb_in0.reserve_back(1);
+                    const uint32_t l1_write_addr = cb_in0.get_write_ptr();
+                    noc.async_read(
+                        src_a,
+                        experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+                        src0_tile_bytes,
+                        {.page_id = start_id + index_b_offset + mt_offset + nt},
+                        {});
+                    noc.async_read_barrier();
+                    cb_in0.push_back(1);
                 }
                 mt_offset += num_channels_tiles;
             }
 #endif
         }
 
-        cb_wait_front(cb_ex_partial, 2);
-        auto local_means_ptr = get_read_ptr(cb_ex_partial);
+        cb_ex_partial.wait_front(2);
+        auto local_means_ptr = cb_ex_partial.get_read_ptr();
         auto local_vars_ptr = local_means_ptr + single_tile_size_bytes;
 
-        cb_reserve_back(cb_ex_global, 2 * num_groups);
-        auto global_means_ptr = get_write_ptr(cb_ex_global);
+        cb_ex_global.reserve_back(2 * num_groups);
+        auto global_means_ptr = cb_ex_global.get_write_ptr();
         auto global_vars_ptr = global_means_ptr + single_tile_size_bytes;
 
         for (uint32_t m = 0; m < num_groups; ++m) {
@@ -144,11 +167,11 @@ void kernel_main() {
             p_global_vars[0] = local_result.variance;
 
             // Signal to sender that our partial data is ready
-            noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+            reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
 
             // Wait for sender to signal that it has sent the global data
-            noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-            noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+            reduce_sender_sem.wait(VALID);
+            reduce_sender_sem.set(INVALID);
 
             local_means_ptr += local_stride_per_group;
             local_vars_ptr += local_stride_per_group;
@@ -156,8 +179,8 @@ void kernel_main() {
             global_vars_ptr += 2 * single_tile_size_bytes;
         }
 
-        cb_pop_front(cb_ex_partial, 2);
-        cb_push_back(cb_ex_global, 2 * num_groups);
+        cb_ex_partial.pop_front(2);
+        cb_ex_global.push_back(2 * num_groups);
 
         mt_offset = 0;
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
@@ -172,11 +195,16 @@ void kernel_main() {
 #if !defined(READER_REPACK) or !defined(TILIZE_IN)
             for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                    cb_reserve_back(cb_in0, 1);
-                    const uint32_t l1_write_addr = get_write_ptr(cb_in0);
-                    noc_async_read_tile(start_id + index_b_offset + mt_offset + nt, src_a, l1_write_addr);
-                    noc_async_read_barrier();
-                    cb_push_back(cb_in0, 1);
+                    cb_in0.reserve_back(1);
+                    const uint32_t l1_write_addr = cb_in0.get_write_ptr();
+                    noc.async_read(
+                        src_a,
+                        experimental::CoreLocalMem<uint32_t>(l1_write_addr),
+                        src0_tile_bytes,
+                        {.page_id = start_id + index_b_offset + mt_offset + nt},
+                        {});
+                    noc.async_read_barrier();
+                    cb_in0.push_back(1);
                 }
                 mt_offset += num_channels_tiles;
             }
@@ -186,18 +214,24 @@ void kernel_main() {
     }
 
 #if defined(READER_REPACK) and defined(UNTILIZE_OUT)
-    uint32_t l1_write_addr_repack = get_write_ptr(cb_out0);
+    uint32_t l1_write_addr_repack = cb_out0.get_write_ptr();
     for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_wait_front(cb_repack_out, per_core_N);
-        const uint32_t in0_l1_read_addr = get_read_ptr(cb_repack_out);
-        uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
+        cb_repack_out.wait_front(per_core_N);
+        uint32_t in0_l1_read_addr = cb_repack_out.get_read_ptr();
+        uint32_t src_addr_in0 = in0_l1_read_addr;
+        experimental::UnicastEndpoint self_ep;
         for (uint32_t i = 0; i < tile_height; ++i) {
-            noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
-            noc_addr_in0 += per_core_N_bytes_with_stride;
+            noc.async_read(
+                self_ep,
+                experimental::CoreLocalMem<uint32_t>(l1_write_addr_repack),
+                per_core_N_bytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
+                {});
+            src_addr_in0 += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;
         }
-        noc_async_read_barrier();
-        cb_pop_front(cb_repack_out, per_core_N);
+        noc.async_read_barrier();
+        cb_repack_out.pop_front(per_core_N);
     }
 #endif
 }

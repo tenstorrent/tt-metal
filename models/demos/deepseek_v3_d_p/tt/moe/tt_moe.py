@@ -71,7 +71,6 @@ class TtMoe(LightweightModule):
         shared_expert_weights: dict = None,
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        combine_output_buffer_memory_config: ttnn.MemoryConfig = None,
     ):
         """
         Initialize TtMoe module.
@@ -146,7 +145,6 @@ class TtMoe(LightweightModule):
             cluster_axis=cluster_axis,
             num_links=num_links,
             topology=topology,
-            memory_config=combine_output_buffer_memory_config,
             init_zeros=True,
         )
 
