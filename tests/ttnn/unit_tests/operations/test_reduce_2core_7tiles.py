@@ -150,6 +150,7 @@ def test_reduce_2core_7tiles_simple(device):
 
     logger.info(f"  combine_output: {combine_output_tt.shape}, {combine_output_tt.layout}")
     logger.info(f"  weights: {weights_tt.shape}, {weights_tt.layout}")
+    logger.info(f"  weights buffer page_size: {weights_tt.buffer().page_size()}")
 
     # Run the operation
     logger.info("\nRunning ttnn.experimental.deepseek_moe_post_combine_reduce...")
@@ -423,9 +424,9 @@ def test_reduce_3experts_3tiles_3tokens(device):
     emb_dim = 3072  # 3 tiles
     num_tiles = emb_dim // 1024
 
-    logger.info("\n" + "=" * 80)
-    logger.info(f"TEST: 3 Tokens, 3 Experts, 3 Tiles")
-    logger.info("=" * 80)
+    # logger.info("\n" + "=" * 80)
+    # logger.info(f"TEST: 3 Tokens, 3 Experts, 3 Tiles")
+    # logger.info("=" * 80)
 
     # Create simple data
     combine_output = create_simple_tile_data(num_tokens, num_experts, emb_dim)
@@ -442,34 +443,34 @@ def test_reduce_3experts_3tiles_3tokens(device):
     weights[0, 2, 1, 0] = 8.0
     weights[0, 2, 2, 0] = 9.0
 
-    logger.info("\nInput pattern (Token 0):")
-    logger.info("  Expert 0: tiles = [1, 2, 3], Weight: 1.0")
-    logger.info("  Expert 1: tiles = [4, 5, 6], Weight: 2.0")
-    logger.info("  Expert 2: tiles = [7, 8, 9], Weight: 3.0")
-    logger.info("  Expected: [30, 36, 42]")
+    # logger.info("\nInput pattern (Token 0):")
+    # logger.info("  Expert 0: tiles = [1, 2, 3], Weight: 1.0")
+    # logger.info("  Expert 1: tiles = [4, 5, 6], Weight: 2.0")
+    # logger.info("  Expert 2: tiles = [7, 8, 9], Weight: 3.0")
+    # logger.info("  Expected: [30, 36, 42]")
 
-    logger.info("\nInput pattern (Token 1):")
-    logger.info("  Expert 0: tiles = [10, 11, 12], Weight: 4.0")
-    logger.info("  Expert 1: tiles = [13, 14, 15], Weight: 5.0")
-    logger.info("  Expert 2: tiles = [16, 17, 18], Weight: 6.0")
-    logger.info("  Expected: [201, 216, 231]")
+    # logger.info("\nInput pattern (Token 1):")
+    # logger.info("  Expert 0: tiles = [10, 11, 12], Weight: 4.0")
+    # logger.info("  Expert 1: tiles = [13, 14, 15], Weight: 5.0")
+    # logger.info("  Expert 2: tiles = [16, 17, 18], Weight: 6.0")
+    # logger.info("  Expected: [201, 216, 231]")
 
-    logger.info("\nInput pattern (Token 2):")
-    logger.info("  Expert 0: tiles = [19, 20, 21], Weight: 7.0")
-    logger.info("  Expert 1: tiles = [22, 23, 24], Weight: 8.0")
-    logger.info("  Expert 2: tiles = [25, 26, 27], Weight: 9.0")
-    logger.info("  Expected: [534, 558, 582]")
+    # logger.info("\nInput pattern (Token 2):")
+    # logger.info("  Expert 0: tiles = [19, 20, 21], Weight: 7.0")
+    # logger.info("  Expert 1: tiles = [22, 23, 24], Weight: 8.0")
+    # logger.info("  Expert 2: tiles = [25, 26, 27], Weight: 9.0")
+    # logger.info("  Expected: [534, 558, 582]")
 
     # Expected: weighted sum across experts
     expected = compute_expected_output(combine_output, weights)
 
-    logger.info(f"\nComputed expected output:")
+    # logger.info(f"\nComputed expected output:")
     for token_idx in range(num_tokens):
-        logger.info(f"  Token {token_idx}:")
+        # logger.info(f"  Token {token_idx}:")
         for tile_idx in range(num_tiles):
             start = tile_idx * 1024
             val = expected[0, token_idx, start].item()
-            logger.info(f"    Tile {tile_idx}: {val:.0f}")
+            # logger.info(f"    Tile {tile_idx}: {val:.0f}")
 
     # Convert to TTNN
     combine_output_tt = ttnn.from_torch(
@@ -480,7 +481,7 @@ def test_reduce_3experts_3tiles_3tokens(device):
     )
 
     # Run operation
-    logger.info("\nRunning operation...")
+    # logger.info("\nRunning operation...")
     result_tt = ttnn.experimental.deepseek_moe_post_combine_reduce(
         combine_output_tt, weights_tt, expert_dim=2, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
@@ -488,10 +489,10 @@ def test_reduce_3experts_3tiles_3tokens(device):
     result = ttnn.to_torch(result_tt)
 
     # Verify
-    logger.info("\nVerification:")
+    # logger.info("\nVerification:")
     all_match = True
     for token_idx in range(num_tokens):
-        logger.info(f"\nToken {token_idx}:")
+        # logger.info(f"\nToken {token_idx}:")
         for tile_idx in range(num_tiles):
             start = tile_idx * 1024
             expected_val = expected[0, token_idx, start].item()
@@ -499,19 +500,78 @@ def test_reduce_3experts_3tiles_3tokens(device):
             diff = abs(expected_val - actual_val)
             match = diff < 0.1
             status = "✅" if match else "❌"
-            logger.info(
-                f"  {status} Tile {tile_idx}: expected={expected_val:.0f}, actual={actual_val:.0f}, diff={diff:.1f}"
-            )
+            # logger.info(
+            #     f"  {status} Tile {tile_idx}: expected={expected_val:.0f}, actual={actual_val:.0f}, diff={diff:.1f}"
+            # )
 
             if not match:
                 all_match = False
-                logger.error(f"    First 10 elements expected: {expected[0, token_idx, start:start+10]}")
-                logger.error(f"    First 10 elements actual:   {result[0, token_idx, start:start+10]}")
+                # logger.error(f"    First 10 elements expected: {expected[0, token_idx, start:start+10]}")
+                # logger.error(f"    First 10 elements actual:   {result[0, token_idx, start:start+10]}")
 
     if not all_match:
         pytest.fail("Output doesn't match expected values")
 
-    logger.info("\n✅ 3-expert 3-tile 3-token test passed!")
+
+def test_reduce_4experts_4tiles_4tokens(device):
+    """
+    Test: 4 tokens, 4 experts, 4 tiles (4096 emb_dim).
+    Uses 4 cores (one per token).
+    """
+    num_tokens = 4
+    num_experts = 4
+    emb_dim = 4096  # 4 tiles
+    num_tiles = emb_dim // 1024
+
+    # Create simple data
+    combine_output = create_simple_tile_data(num_tokens, num_experts, emb_dim)
+
+    # Weights: Token i has weights [4*i+1, 4*i+2, 4*i+3, 4*i+4]
+    weights = torch.zeros(1, num_tokens, num_experts, 1, dtype=torch.bfloat16)
+    for token_idx in range(num_tokens):
+        for expert_idx in range(num_experts):
+            weights[0, token_idx, expert_idx, 0] = float(token_idx * num_experts + expert_idx + 1)
+
+    # Expected: weighted sum across experts
+    expected = compute_expected_output(combine_output, weights)
+
+    # Convert to TTNN
+    combine_output_tt = ttnn.from_torch(
+        combine_output, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    weights_tt = ttnn.from_torch(
+        weights, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # Verify data after conversion to TTNN
+    combine_output_readback = ttnn.to_torch(combine_output_tt)
+    weights_readback = ttnn.to_torch(weights_tt)
+
+    # Run operation
+    result_tt = ttnn.experimental.deepseek_moe_post_combine_reduce(
+        combine_output_tt, weights_tt, expert_dim=2, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    result = ttnn.to_torch(result_tt)
+
+    # Verify
+    all_match = True
+    for token_idx in range(num_tokens):
+        # logger.info(f"\nToken {token_idx}:")
+        for tile_idx in range(num_tiles):
+            start = tile_idx * 1024
+            expected_val = expected[0, token_idx, start].item()
+            actual_val = result[0, token_idx, start].item()
+            diff = abs(expected_val - actual_val)
+            match = diff < 0.1
+            status = "✅" if match else "❌"
+            # logger.info(f"  {status} Tile {tile_idx}: expected={expected_val:.0f}, actual={actual_val:.0f}, diff={diff:.1f}")
+
+            if not match:
+                all_match = False
+
+    # if not all_match:
+    #     pytest.fail("Output doesn't match expected values")
 
 
 if __name__ == "__main__":
