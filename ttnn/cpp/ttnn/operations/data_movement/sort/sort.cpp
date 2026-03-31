@@ -171,22 +171,26 @@ std::vector<Tensor> sort(
 
     // Check for early exit for scalar or empty tensors tensors
     if ((original_lshape == ttnn::Shape{}) || (original_lshape == ttnn::Shape{1})) {
+        auto indices = ttnn::zeros_like(input_tensor, DataType::UINT16);
         if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
                 optional_output_tensors, original_lshape)) {
             std::get<0>(*optional_output_tensors) = input_tensor;
+            std::get<1>(*optional_output_tensors) = indices;
             return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
         }
-        return {input_tensor, ttnn::zeros_like(input_tensor)};
+        return {input_tensor, indices};
     }
 
     const int8_t normalized_dim = dim < 0 ? rank + dim : dim;
     if (original_lshape[normalized_dim] == 1) {
+        auto indices = ttnn::zeros_like(input_tensor, DataType::UINT16);
         if (operations::data_movement::CMAKE_UNIQUE_NAMESPACE::validate_optional_output_tensors_for_early_exit(
                 optional_output_tensors, original_lshape)) {
             std::get<0>(*optional_output_tensors) = input_tensor;
+            std::get<1>(*optional_output_tensors) = indices;
             return {std::get<0>(optional_output_tensors.value()), std::get<1>(optional_output_tensors.value())};
         }
-        return {input_tensor, ttnn::zeros_like(input_tensor)};
+        return {input_tensor, indices};
     }
 
     const bool is_dim_last_idx = (dim == -1 || dim == rank - 1);
