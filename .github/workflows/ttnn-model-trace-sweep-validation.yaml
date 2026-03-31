@@ -97,7 +97,7 @@ jobs:
           echo "::endgroup::"
 
   validate-model-traces:
-    name: Validate model trace to sweeps defined in manifest
+    name: Validate traces in manifest against sweep framework
     needs: display-manifest-options
     uses: ./.github/workflows/ttnn-model-trace-sweep-validation-impl.yaml
     secrets: inherit
