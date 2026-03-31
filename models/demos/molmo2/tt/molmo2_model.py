@@ -68,6 +68,7 @@ class Molmo2Model(LightweightModule):
         layer_norm_eps: float = 1e-6,
         weight_cache_path=None,
         dtype=ttnn.bfloat8_b,
+        lm_head_mesh_column_parallel: bool = False,
     ):
         """
         Initialize Molmo2Model.
@@ -80,6 +81,8 @@ class Molmo2Model(LightweightModule):
             text_*: Language model configuration
             weight_cache_path: Path to cache weights
             dtype: Data type for weights
+            lm_head_mesh_column_parallel: If True on a multi-device mesh, shard LM head weights
+                across devices (column-parallel vocab). See ``molmo2_lm_head`` module.
         """
         super().__init__()
 
@@ -140,6 +143,7 @@ class Molmo2Model(LightweightModule):
             rms_norm_eps=rms_norm_eps,
             weight_cache_path=weight_cache_path,
             dtype=dtype,
+            lm_head_mesh_column_parallel=lm_head_mesh_column_parallel,
         )
 
     def embed_image(
