@@ -9,6 +9,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include "dm_common.hpp"
 #include <distributed/mesh_device_impl.hpp>
 #include <chrono>
@@ -80,12 +81,24 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const PCIeRe
         clock_freq_mhz};
 
     std::string kernel_path = "tests/tt_metal/tt_metal/data_movement/pcie_read_bw/kernels/pcie_read_bw.cpp";
-    CreateKernel(
-        program,
-        kernel_path,
-        test_config.master_core_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = test_config.noc_id, .compile_args = compile_args});
+
+    // Create kernel - branch by architecture
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar path: Use experimental API
+        experimental::quasar::CreateKernel(
+            program,
+            kernel_path,
+            test_config.master_core_coord,
+            experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = compile_args});
+    } else {
+        // WH/BH path: Use legacy API
+        CreateKernel(
+            program,
+            kernel_path,
+            test_config.master_core_coord,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = test_config.noc_id, .compile_args = compile_args});
+    }
 
     log_info(
         LogTest, "Running PCIe Read BW Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
