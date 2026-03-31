@@ -125,11 +125,10 @@ class DispatcherData:
             build_env = self._build_env_cache[device_unique_id]
             # Use build_env for initial firmware paths
             firmware_base = Path(build_env.firmwarePath)
-            # ElfsCache.__getitem__ expects str keys
-            brisc_elf_path = str(firmware_base / "brisc" / "brisc.elf")
-            idle_erisc_elf_path = str(firmware_base / "idle_erisc" / "idle_erisc.elf")
+            brisc_elf_path = firmware_base / "brisc" / "brisc.elf"
+            idle_erisc_elf_path = firmware_base / "idle_erisc" / "idle_erisc.elf"
             active_erisc_elf_name = "erisc" if run_checks.devices[0].is_wormhole() else "active_erisc"
-            active_erisc_elf_path = str(firmware_base / active_erisc_elf_name / f"{active_erisc_elf_name}.elf")
+            active_erisc_elf_path = firmware_base / active_erisc_elf_name / f"{active_erisc_elf_name}.elf"
 
             # On blackhole we have 2 modes (1-ERISC and 2-ERISC)
             # By checking if the subordinate active erisc elf exists, we can determine in which mode we are
