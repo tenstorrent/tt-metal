@@ -9,6 +9,7 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {
