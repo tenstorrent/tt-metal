@@ -354,18 +354,23 @@ void matmul_tile(
     KernelHandle unary_writer_kernel;
     KernelHandle compute_kernel;
     if (is_quasar) {
+        std::vector<uint32_t> reader_cta = {src0_dfb, src1_dfb};
         mm_reader_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             cfg.reader_kernel,
             core,
-            tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = reader_cta});
 
+        std::vector<uint32_t> writer_cta = {dst_dfb};
         unary_writer_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             core,
-            tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1});
+            tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = 1, .compile_args = writer_cta});
 
+        // Build compute_cta from compute_kernel_args followed by dataflow buffer ids
+        std::vector<uint32_t> compute_cta = cfg.compute_kernel_args;
+        compute_cta.insert(compute_cta.end(), {src0_dfb, src1_dfb, dst_dfb});
         compute_kernel = tt_metal::experimental::quasar::CreateKernel(
             program_,
             cfg.compute_kernel,
@@ -375,7 +380,7 @@ void matmul_tile(
                 .math_fidelity = cfg.math_fidelity,
                 .fp32_dest_acc_en = cfg.fp32_dest_acc_en,
                 .dst_full_sync_en = cfg.dst_full_sync_en,
-                .compile_args = cfg.compute_kernel_args,
+                .compile_args = compute_cta,
                 .defines = compute_defines});
 
         tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(

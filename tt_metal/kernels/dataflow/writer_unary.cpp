@@ -3,34 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/endpoints.h"
+
 #ifdef ARCH_QUASAR
 #include "experimental/dataflow_buffer.h"
 #else
 #include "experimental/circular_buffer.h"
 #endif
-#include "experimental/endpoints.h"
 
 void kernel_main() {
     uint32_t dst_addr  = get_arg_val<uint32_t>(0);
     uint32_t bank_id = get_arg_val<uint32_t>(1);
     uint32_t num_tiles = get_arg_val<uint32_t>(2);
 
-#ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb_out(2);
-#else
-    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
-    experimental::CircularBuffer cb(cb_id_out0);
-#endif
+    experimental::Noc noc;
+    uint32_t ublock_size_tiles = 1;
+    uint32_t ublock_size_bytes;
 
     // single-tile ublocks
 #ifdef ARCH_QUASAR
-    uint32_t ublock_size_bytes = dfb_out.get_entry_size();
+    constexpr uint32_t dfb_out_id = get_compile_time_arg_val(0);
+    experimental::DataflowBuffer dfb_out(dfb_out_id);
+    ublock_size_bytes = dfb_out.get_entry_size();
 #else
-    uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);
+    constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
+    experimental::CircularBuffer cb(cb_out_id);
+    ublock_size_bytes = get_tile_size(cb_out_id);
 #endif
-    uint32_t ublock_size_tiles = 1;
-
-    experimental::Noc noc;
 
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
 #ifdef ARCH_QUASAR
