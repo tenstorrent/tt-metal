@@ -255,14 +255,21 @@ void kernel_main() {
 #endif
 
                     if constexpr (in0_transpose_tile) {
+                        reconfig_data_format_srca(in1_cb_id, in0_transpose_cb_id);
                         transpose_wh_init_short(in0_transpose_cb_id);
                         PACK((pack_reconfig_data_format(in0_cb_id)));
 #ifdef PACKER_L1_ACC
                         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_cb_id, in0_cb_id);
-                        mm_block_init_short(
-                            in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
+                        mm_block_init_short_with_dt(
+                            in0_cb_id,
+                            in1_cb_id,
+                            in0_transpose_cb_id,
+                            in1_transpose_tile,
+                            out_subblock_w,
+                            out_subblock_h,
+                            in0_block_w);
                         PACK((pack_reconfig_data_format(mm_partials_cb_id)));
                     }
 
