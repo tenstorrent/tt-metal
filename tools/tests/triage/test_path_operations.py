@@ -63,15 +63,28 @@ _MOCK_MODULES = {
     "ryml": MagicMock(),
 }
 
-# Install mock modules — only if they are not already importable.
-for mod_name, mock_obj in _MOCK_MODULES.items():
-    if mod_name not in sys.modules:
-        sys.modules[mod_name] = mock_obj
+# Install mock modules immediately (so module-level imports below resolve), using
+# patch.dict so the injections are reverted after the session via the autouse fixture.
+_sys_modules_patch = patch.dict(sys.modules, {k: v for k, v in _MOCK_MODULES.items() if k not in sys.modules})
+_sys_modules_patch.start()
 
 # Now safe to import triage modules.
 from triage import run_script, TTTriageError  # noqa: E402
 from parse_inspector_logs import get_log_directory, read_yaml, get_kernels, get_data  # noqa: E402
 from system_info import get_os_version  # noqa: E402
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _scoped_sys_modules_mocks():
+    """Revert sys.modules mock injections after the test session completes.
+
+    _sys_modules_patch.start() is called at module import time so that the
+    module-level imports above can resolve. This fixture owns the stop() call,
+    ensuring the mocks don't leak into other test modules collected in the same
+    pytest session.
+    """
+    yield
+    _sys_modules_patch.stop()
 
 
 # ===================================================================
