@@ -204,6 +204,29 @@ jobs:
       product: tt-nn
       upload-coverage: false
 
+  tt-train-smoke-tests:
+    needs: [ build, find-changed-files ]
+    if: ${{
+        github.ref_name == 'main' ||
+        needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-train-changed == 'true'
+      }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150",
+        ]
+    uses: ./.github/workflows/tt-train-smoke.yaml
+    secrets: inherit
+    with:
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
+      runner: ${{ matrix.platform }}
+      upload-coverage: false
+
   build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     needs: build-docker-images
@@ -493,6 +516,7 @@ jobs:
       - asan-build
       - metalium-smoke-tests
       - ttnn-smoke-tests
+      - tt-train-smoke-tests
       - build
       - metalium-examples
       - clang-tidy-light
@@ -506,7 +530,7 @@ jobs:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "asan-build, build"
+          required-jobs: "asan-build, build, tt-train-smoke-tests"
           optional-jobs: >-
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,

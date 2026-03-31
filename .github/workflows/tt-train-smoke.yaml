@@ -1,0 +1,107 @@
+name: "tt-train Smoke tests"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      runner:
+        required: true
+        type: string
+      upload-coverage:
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  smoke:
+    timeout-minutes: 15
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
+    container:
+      image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+      volumes:
+        - /work
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: --device /dev/tenstorrent
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work
+    steps:
+      - name: Checkout actions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/actions/download-artifact-with-retry
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+          path: /work
+
+      - uses: ./.github/actions/download-artifact-with-retry
+        timeout-minutes: 15
+        with:
+          name: ${{ inputs.wheel-artifact-name || 'wheel artifact unresolved!' }}
+          path: /work/wheels/
+
+      - name: Install wheel packages
+        timeout-minutes: 10
+        run: |
+          # Install ttnn wheel
+          pip install /work/wheels/ttnn-*.whl
+
+          # Install ttml module by adding paths
+          SITE_PACKAGES=$(pip show ttnn | sed -n 's/^Location: //p')
+          TTML_SRC_DIR="/work/tt-train/sources/ttml"
+          echo "$TTML_SRC_DIR" > "$SITE_PACKAGES/ttml.pth"
+
+          # Verify ttml can be imported
+          python -c "import ttml; print('ttml imported successfully')"
+
+      - name: Create test reports directory
+        run: |
+          mkdir -p /work/test-reports
+
+      - name: Run smoke tests
+        id: test
+        timeout-minutes: 10
+        run: |
+          cd /work/tt-train
+          python -m pytest tests/python/smoke/ \
+            -v \
+            --tb=short \
+            --junit-xml=/work/test-reports/smoke-test-results.xml
+
+      - name: workaround
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        run: |
+          # The test-reporting action runs git ls-files with no way to opt-out.
+          # Give it a dummy repo so it doesn't fail.
+          cd /work
+          git init 2>/dev/null || true
+
+      - name: Test Report
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
+        with:
+          name: tt-train ${{ inputs.runner }} smoke tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
+          path: /work/test-reports/*.xml
+          reporter: jest-junit
+          working-directory: /work
+
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          path: /work/test-reports/
+          prefix: "test_reports_tt_train_smoke_"
