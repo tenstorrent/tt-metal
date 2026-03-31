@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import ttnn
 
 if TYPE_CHECKING:
-    from models.demos.deepseek_v3_b1.blitz_decode_weights import OverlappedTensor
+    from models.demos.deepseek_v3_b1.blitz_overlap_tensors import OverlappedTensor
 
 
 class CircularBufferIdManager:

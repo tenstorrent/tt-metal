@@ -13,7 +13,6 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.prepare_weights import SharedExpertWeights, prepare_shared_expert_weights
 
 # If False, load from DEEPSEEK_V3_HF_MODEL when set; otherwise skip. If True, use deterministic random weights.
@@ -244,8 +243,9 @@ def get_model_decoder_weight(hf_state_dict):
             torch_gate = state_dict[_state_dict_key(layer_idx, "mlp.shared_experts.gate_proj.weight")].T.contiguous()
             torch_up = state_dict[_state_dict_key(layer_idx, "mlp.shared_experts.up_proj.weight")].T.contiguous()
             torch_down = state_dict[_state_dict_key(layer_idx, "mlp.shared_experts.down_proj.weight")].T.contiguous()
-            bdw = BlitzDecodeWeights(mesh_device)
-            weights = prepare_shared_expert_weights(bdw, state_dict, layer_idx, is_moe=True, move_to_device=True)
+            weights = prepare_shared_expert_weights(
+                mesh_device, state_dict, layer_idx, is_moe=True, move_to_device=True
+            )
             return SharedExpertWeightBundle(
                 weights=weights,
                 torch_gate=torch_gate,

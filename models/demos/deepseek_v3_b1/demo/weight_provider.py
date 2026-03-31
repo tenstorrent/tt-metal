@@ -18,21 +18,23 @@ import torch
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.prepare_weights import (
+    CACHE_TYPE_OVERLAPPED,
+    CACHE_TYPE_TENSOR,
+    CACHE_TYPE_TENSOR_LIST,
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
-    load_dense_decoder_layer,
-    load_embedding_weights,
-    load_lm_head_weights,
-    load_moe_decoder_layer,
-    load_moe_routed_experts,
+    embedding_fingerprint,
+    layer_fingerprints,
+    lm_head_fingerprints,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
 )
+from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, TensorCache
 
 
 class WeightProvider(Protocol):
@@ -197,27 +199,91 @@ def _build_synthetic_dense_state_dict(layer_id: int) -> dict[str, torch.Tensor]:
 
 
 class CacheWeightProvider:
-    """Load embedding and LM head weights from cache; each host loads only what its stage needs."""
+    """Load weights from a TensorCache (content-addressed) on disk."""
+
+    HF_MODEL_ID = "deepseek-ai/DeepSeek-V3"
+    HF_REVISION = "main"
 
     def __init__(self, cache_path: Path) -> None:
+        cache_path = Path(cache_path)
         assert cache_path.exists(), f"Cache path does not exist: {cache_path}"
         assert cache_path.is_dir(), f"Cache path is not a directory: {cache_path}"
-        self._path = cache_path
+        self._cache = TensorCache(cache_path)
+        self._cc = CacheConfig(cache=self._cache, hf_model_id=self.HF_MODEL_ID, hf_revision=self.HF_REVISION)
+
+    def _mesh_shape(self, device: ttnn.MeshDevice) -> tuple[int, int]:
+        return (device.shape[0], device.shape[1])
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-        return load_embedding_weights(self._path, device)
+        fp = embedding_fingerprint(self._cc, self._mesh_shape(device))
+        return DeepSeekV3EmbeddingLayerWeights(embedding=self._cache.load_tensor(fp, device=device))
 
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
-        return load_lm_head_weights(self._path, device)
+        fps = lm_head_fingerprints(self._cc, self._mesh_shape(device))
+        lm_fp, _ = fps["lm_head"]
+        norm_fp, _ = fps["final_norm"]
+        return DeepSeekV3LMHeadWeights(
+            lm_head=self._cache.load_tensor(lm_fp, device=device),
+            final_norm=self._cache.load_tensor(norm_fp, device=device),
+        )
+
+    def _load_layer_groups(
+        self, layer_id: int, device: ttnn.MeshDevice, is_moe: bool
+    ) -> dict[str, dict | ttnn.Tensor | list[ttnn.Tensor]]:
+        fps = layer_fingerprints(self._cc, self._mesh_shape(device), layer_id, is_moe=is_moe)
+        result: dict = {}
+        for name, (fp, ctype) in fps.items():
+            if ctype == CACHE_TYPE_OVERLAPPED:
+                result[name] = self._cache.load_overlapped(fp, device=device)
+            elif ctype == CACHE_TYPE_TENSOR:
+                result[name] = self._cache.load_tensor(fp, device=device)
+            elif ctype == CACHE_TYPE_TENSOR_LIST:
+                result[name] = self._cache.load_tensor_list(fp, device=device)
+        return result
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        with ttnn.device.setup_fast_dispatch(device):
-            preloaded_experts = load_moe_routed_experts(self._path, device, layer_id)
-        ttnn.enable_asynchronous_slow_dispatch(device)
-        return load_moe_decoder_layer(self._path, device, layer_id, preloaded_routed_experts=preloaded_experts)
+        g = self._load_layer_groups(layer_id, device, is_moe=True)
+        return DeepSeekV3MoELayerWeights(
+            q_a_proj=g["q_ab_kv_a"]["q_a_proj"],
+            q_b_proj=g["q_ab_kv_a"]["q_b_proj"],
+            kv_a_proj=g["q_ab_kv_a"]["kv_a_proj"],
+            o_proj=g["o_proj_gate_mm_norms"]["o_proj"],
+            gate_mm=g["o_proj_gate_mm_norms"]["gate_mm"],
+            attn_norm=g["o_proj_gate_mm_norms"]["attn_norm"],
+            q_norm=g["o_proj_gate_mm_norms"]["q_norm"],
+            kv_norm=g["o_proj_gate_mm_norms"]["kv_norm"],
+            ffn_norm=g["o_proj_gate_mm_norms"]["ffn_norm"],
+            gate_bias=g["gate_bias"],
+            kv_b1_proj=g["kv_b12"]["kv_b1_proj"],
+            kv_b2_proj=g["kv_b12"]["kv_b2_proj"],
+            shared_gate_proj=g["gate_up"]["gate_proj"],
+            shared_up_proj=g["gate_up"]["up_proj"],
+            shared_down_proj=g["shared_down_proj"],
+            routed_gate_proj=g["routed_gate_proj"],
+            routed_up_proj=g["routed_up_proj"],
+            routed_down_proj=g["routed_down_proj"],
+        )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        return load_dense_decoder_layer(self._path, device, layer_id)
+        g = self._load_layer_groups(layer_id, device, is_moe=False)
+        return DeepSeekV3DenseLayerWeights(
+            q_a_proj=g["q_ab_kv_a"]["q_a_proj"],
+            q_b_proj=g["q_ab_kv_a"]["q_b_proj"],
+            kv_a_proj=g["q_ab_kv_a"]["kv_a_proj"],
+            o_proj=g["o_proj_gate_mm_norms"]["o_proj"],
+            attn_norm=g["o_proj_gate_mm_norms"]["attn_norm"],
+            q_norm=g["o_proj_gate_mm_norms"]["q_norm"],
+            kv_norm=g["o_proj_gate_mm_norms"]["kv_norm"],
+            ffn_norm=g["o_proj_gate_mm_norms"]["ffn_norm"],
+            kv_b1_proj=g["kv_b12"]["kv_b1_proj"],
+            kv_b2_proj=g["kv_b12"]["kv_b2_proj"],
+            shared_gate_proj=g["gate_up"]["gate_proj"],
+            shared_up_proj=g["gate_up"]["up_proj"],
+            shared_down_proj=g["shared_down_proj"],
+            routed_gate_proj=g["routed_gate_proj"],
+            routed_up_proj=g["routed_up_proj"],
+            routed_down_proj=g["routed_down_proj"],
+        )
 
 
 class SyntheticWeightProvider:
@@ -253,18 +319,12 @@ class SyntheticWeightProvider:
         )
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
-        bdw = BlitzDecodeWeights(device)
-        return prepare_moe_layer_weights(bdw, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
+        return prepare_moe_layer_weights(device, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
         sd = _build_synthetic_dense_state_dict(layer_id)
-        bdw = BlitzDecodeWeights(device)
-        return prepare_dense_layer_weights(bdw, sd, layer_id, move_to_device=True)
+        return prepare_dense_layer_weights(device, sd, layer_id, move_to_device=True)
 
 
 class StateDictWeightProvider:
@@ -283,11 +343,8 @@ class StateDictWeightProvider:
         return prepare_lm_head_weights(self._state_dict, device, move_to_device=True)
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
-        bdw = BlitzDecodeWeights(device)
         return prepare_moe_layer_weights(
-            bdw,
+            device,
             self._state_dict,
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
@@ -295,7 +352,4 @@ class StateDictWeightProvider:
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
-        bdw = BlitzDecodeWeights(device)
-        return prepare_dense_layer_weights(bdw, self._state_dict, layer_id, move_to_device=True)
+        return prepare_dense_layer_weights(device, self._state_dict, layer_id, move_to_device=True)

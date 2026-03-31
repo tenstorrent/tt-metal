@@ -39,11 +39,11 @@ CB Layout:
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_b1.blitz_decode_weights import (
+from models.demos.deepseek_v3_b1.circular_buffer_utils import cb_descriptor_from_overlapped_tensor
+from models.demos.deepseek_v3_b1.overlap_specs import (
     KVB12_PROJ_SingleDeviceOverlapSpec,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec,
 )
-from models.demos.deepseek_v3_b1.circular_buffer_utils import cb_descriptor_from_overlapped_tensor
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
@@ -243,7 +243,7 @@ class PostSDPA:
 
         # Active Matmul5 cores: o_proj cores (12×8 + 8×2 = 112 cores)
         o_proj_spec = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
-        matmul5_active_core_grid = o_proj_spec.o_proj_core_range_set
+        matmul5_active_core_grid = o_proj_spec.o_proj.core_range_set
         num_matmul5_cores = matmul5_active_core_grid.num_cores()  # 112
 
         # Per-core gather3 sender index: contiguous 0..111 in row-major order.

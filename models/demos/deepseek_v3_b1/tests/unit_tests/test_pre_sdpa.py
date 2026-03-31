@@ -17,9 +17,9 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.pre_sdpa.op import PreSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
+from models.demos.deepseek_v3_b1.prepare_weights import _fuse_kv_b12, _fuse_o_proj_gate_mm_norms, _fuse_q_ab_kv_a
 from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import (
     build_broadcast_test_inputs,
     create_fabric_router_config,
@@ -400,7 +400,7 @@ def test_pre_sdpa(
         (QNOPE_OUT_DIM, num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM), dtype=torch.bfloat16
     )
 
-    # DKV matmul weights (raw, unshuffled — BlitzDecodeWeights handles shard reordering)
+    # DKV matmul weights (raw, unshuffled — prepare_weights handles shard reordering)
     torch_dkv_matmul_weights = generate_mm_weights(dkv_matmul_weights_shape, dtype=torch.bfloat16)
 
     # Placeholder tensors for get_tt_o_proj_and_gate_mm_weights (not consumed by pre-SDPA)
@@ -455,24 +455,25 @@ def test_pre_sdpa(
     intermediate_tensor_mesh = bcast_inputs.output_tensor_mesh
 
     # Fused matmul1 (q_a_proj packed), matmul2 (q_b_proj shuffled), and DKV matmul (kv_a_proj)
-    # weights as overlapped tensors sharing a single L1 buffer via BlitzDecodeWeights.
-    bdw = BlitzDecodeWeights(submesh)
-    (
-        matmul_weights_overlapped,
-        matmul2_weights_overlapped,
-        dkv_matmul_weights_overlapped,
-    ) = bdw.get_tt_q_ab_proj_and_kv_a_proj_weights(
+    # weights as overlapped tensors sharing a single L1 buffer.
+    qab_kva = _fuse_q_ab_kv_a(
+        submesh,
         torch_matmul_weights,
         torch_matmul2_weights_full_unshuffled,
         torch_dkv_matmul_weights,
     )
+    matmul_weights_overlapped = qab_kva["q_a_proj"]
+    matmul2_weights_overlapped = qab_kva["q_b_proj"]
+    dkv_matmul_weights_overlapped = qab_kva["kv_a_proj"]
 
-    # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj via BlitzDecodeWeights
+    # Matmul3 / kv_b1_proj weights — fused with kv_b2_proj
     torch_matmul3_weights_flat = torch_matmul3_weights.reshape(num_tp * NUM_QNOPE_HEADS * QNOPE_HEAD_DIM, QNOPE_OUT_DIM)
-    matmul3_weights_overlapped, _ = bdw.get_tt_kv_b12_proj_weights(
+    kv_b12 = _fuse_kv_b12(
+        submesh,
         torch_matmul3_weights_flat,
         torch_kv_b2_proj_weights,
     )
+    matmul3_weights_overlapped = kv_b12["kv_b1_proj"]
 
     # SDPA input tensor - height sharded on SDPA input grid (cols 0-3, rows 1-2)
     # After 3-phase CreateQHeads tilization:
@@ -572,14 +573,8 @@ def test_pre_sdpa(
     torch_dkv_rmsnorm_gamma = torch.randn((1, KNOPE_DIM), dtype=torch.bfloat16)
 
     # Fused o_proj, gate_mm, and RMSNorm gammas — we only need the 3 gamma overlapped views.
-    (
-        _,  # o_proj
-        _,  # gate_mm
-        gamma_overlapped,
-        rmsnorm2_gamma_overlapped,
-        dkv_rmsnorm_gamma_overlapped,
-        _,  # ffn_norm
-    ) = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = _fuse_o_proj_gate_mm_norms(
+        submesh,
         torch_o_proj_weights,
         torch_gate_mm_weights,
         torch_gamma,
@@ -587,6 +582,9 @@ def test_pre_sdpa(
         torch_dkv_rmsnorm_gamma,
         torch_ffn_norm,
     )
+    gamma_overlapped = o_norms["attn_norm"]
+    rmsnorm2_gamma_overlapped = o_norms["q_norm"]
+    dkv_rmsnorm_gamma_overlapped = o_norms["kv_norm"]
 
     # KRoPE cos/sin: DRAM INTERLEAVED (each krope core reads its width slice)
     krope_num_cores = kv_cache_branch_rope_crs.num_cores()

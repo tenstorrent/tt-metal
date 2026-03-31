@@ -39,14 +39,14 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_b1.blitz_decode_weights import (
-    KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
-    O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
-    BlitzDecodeWeights,
-)
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_reduce_to_all.op import SdpaReduceToAll
+from models.demos.deepseek_v3_b1.overlap_specs import (
+    KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
+    O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
+)
+from models.demos.deepseek_v3_b1.prepare_weights import _fuse_kv_b12, _fuse_o_proj_gate_mm_norms
 
 
 def create_fabric_router_config(max_payload_size):
@@ -185,7 +185,7 @@ def test_post_sdpa(
     num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 130
 
     # Active Matmul2 cores: o_proj cores (12×8 + 8×2 = 112 cores)
-    matmul2_grid = o_proj_cfg.o_proj_core_range_set
+    matmul2_grid = o_proj_cfg.o_proj.core_range_set
     num_matmul2_cores = matmul2_grid.num_cores()  # 112
 
     # Per-core dimensions
@@ -291,26 +291,20 @@ def test_post_sdpa(
     logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create overlapped weight tensors via BlitzDecodeWeights
+    # Create overlapped weight tensors
     # ========================================================================
     single_device = ttnn.get_device_tensors(ttnn_input)[0].device()
-    bdw = BlitzDecodeWeights(submesh)
 
     # Weights1 = kv_b2_proj (second half of fused kv_b12 buffer)
-    _, kv_b2_overlapped = bdw.get_tt_kv_b12_proj_weights(torch_kv_b1_proj_dummy, torch_kv_b2_proj_weights)
+    kv_b12 = _fuse_kv_b12(submesh, torch_kv_b1_proj_dummy, torch_kv_b2_proj_weights)
+    kv_b2_overlapped = kv_b12["kv_b2_proj"]
     logger.info(
         f"Created kv_b2 overlapped tensor: shard {kv_b2_overlapped.shard_shape} on {matmul1_grid.num_cores()} cores"
     )
 
     # Weights2 = o_proj (first element of fused o_proj/gate/gamma buffer)
-    (
-        o_proj_overlapped,
-        _,  # gate_mm
-        _,  # attn_norm
-        _,  # q_norm
-        _,  # kv_norm
-        _,  # ffn_norm
-    ) = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = _fuse_o_proj_gate_mm_norms(
+        submesh,
         torch_o_proj_weights,
         torch_gate_mm_dummy,
         torch_attn_norm_dummy,
@@ -318,6 +312,7 @@ def test_post_sdpa(
         torch_kv_norm_dummy,
         torch_ffn_norm_dummy,
     )
+    o_proj_overlapped = o_norms["o_proj"]
     logger.info(
         f"Created o_proj overlapped tensor: shard {o_proj_overlapped.shard_shape} on {matmul2_grid.num_cores()} cores"
     )
@@ -629,7 +624,7 @@ def test_post_sdpa_with_sdpa_phase(
     num_mcast_cores = MCAST_GRID_X * MCAST_GRID_Y  # 130
 
     # Active Matmul2 cores: o_proj cores (12×8 + 8×2 = 112 cores)
-    matmul2_grid = o_proj_cfg.o_proj_core_range_set
+    matmul2_grid = o_proj_cfg.o_proj.core_range_set
     num_matmul2_cores = matmul2_grid.num_cores()  # 112
 
     # SDPA configuration (matching original sdpa_reduce_to_all test)
@@ -820,24 +815,18 @@ def test_post_sdpa_with_sdpa_phase(
     logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create overlapped weight tensors via BlitzDecodeWeights
+    # Create overlapped weight tensors
     # ========================================================================
     single_device = ttnn.get_device_tensors(ttnn_input)[0].device()
-    bdw = BlitzDecodeWeights(submesh)
 
-    _, kv_b2_overlapped = bdw.get_tt_kv_b12_proj_weights(torch_kv_b1_proj_dummy, torch_kv_b2_proj_weights)
+    kv_b12 = _fuse_kv_b12(submesh, torch_kv_b1_proj_dummy, torch_kv_b2_proj_weights)
+    kv_b2_overlapped = kv_b12["kv_b2_proj"]
     logger.info(
         f"Created kv_b2 overlapped tensor: shard {kv_b2_overlapped.shard_shape} on {matmul1_grid.num_cores()} cores"
     )
 
-    (
-        o_proj_overlapped,
-        _,  # gate_mm
-        _,  # attn_norm
-        _,  # q_norm
-        _,  # kv_norm
-        _,  # ffn_norm
-    ) = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = _fuse_o_proj_gate_mm_norms(
+        submesh,
         torch_o_proj_weights,
         torch_gate_mm_dummy,
         torch_attn_norm_dummy,
@@ -845,6 +834,7 @@ def test_post_sdpa_with_sdpa_phase(
         torch_kv_norm_dummy,
         torch_ffn_norm_dummy,
     )
+    o_proj_overlapped = o_norms["o_proj"]
     logger.info(
         f"Created o_proj overlapped tensor: shard {o_proj_overlapped.shard_shape} on {matmul2_grid.num_cores()} cores"
     )
