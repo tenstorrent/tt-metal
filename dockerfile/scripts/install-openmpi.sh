@@ -38,7 +38,11 @@ echo "Running autogen.pl..."
 # These settings were validated for the current manylinux-based environment.
 # If issues arise with different MPI runtimes or cluster configurations, review with the scaleout team.
 # See: https://github.com/open-mpi/ompi/blob/main/docs/features/ulfm.rst
-./configure \
+#
+# CFLAGS: force C17 (-std=gnu17). GCC 14 auto-selects C23 (gnu23) which promotes
+# certain OpenMPI _Bool->volatile void* assignments to hard errors. GCC uses the
+# last -std flag on the command line, so this overrides the gnu23 embedded in CC.
+CFLAGS="-std=gnu17" ./configure \
     --prefix="${OMPI_PREFIX}" \
     --with-ft=ulfm \
     --enable-wrapper-rpath \
