@@ -34,6 +34,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/float8.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/int8.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/uint8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
