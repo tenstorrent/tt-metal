@@ -8,6 +8,7 @@
 #include <host_api.hpp>
 #include <utility>
 #include <variant>
+#include "impl/buffers/semaphore.hpp"
 
 #include "device.hpp"
 #include "dispatch.hpp"
