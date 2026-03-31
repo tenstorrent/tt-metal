@@ -219,6 +219,29 @@ class ModelOptimizations:
         inst.__name__ = "performance"
         return inst
 
+    @classmethod
+    def max_performance(cls, model_name):
+        """Configuration for maximum throughput: BFP4 all MLP weights, HiFi2 for FF2 accumulation.
+
+        Uses BFP4 for FF2 down_proj (saves ~19% DRAM reads vs performance preset)
+        but keeps HiFi2 math fidelity for FF2 to maintain numerical stability.
+        FF1/FF3 use LoFi (same as performance preset).
+        """
+        inst = cls(
+            {
+                "TensorPrecision": {
+                    TensorGroup.FF1_FF3: PrecisionSetting.BFP4,
+                    TensorGroup.FF2: PrecisionSetting.BFP4,
+                },
+                "OpFidelity": {
+                    OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI,
+                    OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                },
+            }
+        )
+        inst.__name__ = "max_performance"
+        return inst
+
     def __init__(self, settings: dict = None):
         if settings:
             self._validate_settings(settings)
@@ -4186,9 +4209,11 @@ class DecodersPrecision:
             return cls.performance
         elif optimizations == "accuracy":
             return cls.accuracy
+        elif optimizations == "max_performance":
+            return cls.max_performance
         else:
             raise ValueError(
-                f"Invalid optimization configuration: {optimizations}. Allowed values are 'performance' or 'accuracy'"
+                f"Invalid optimization configuration: {optimizations}. Allowed values are 'performance', 'accuracy', or 'max_performance'"
             )
 
     @classmethod
@@ -4201,6 +4226,12 @@ class DecodersPrecision:
     def performance(cls, num_decoders, model_name):
         inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.performance)
         inst.__name__ = "performance"
+        return inst
+
+    @classmethod
+    def max_performance(cls, num_decoders, model_name):
+        inst = cls._precision_factory(num_decoders, model_name, ModelOptimizations.max_performance)
+        inst.__name__ = "max_performance"
         return inst
 
     def __init__(self, num_decoders, model_name, decoder_conf: dict = None):
@@ -4284,14 +4315,19 @@ class DecodersPrecision:
                 decoder_config_filename = ACCURACY_DECODER_CONFIG_FILENAME
             case ModelOptimizations.performance:
                 decoder_config_filename = PERFORMANCE_DECODER_CONFIG_FILENAME
+            case ModelOptimizations.max_performance:
+                decoder_config_filename = None  # No JSON config; use ModelOptimizations.max_performance directly
             case _:
                 raise ValueError(f"optimization_level ({optimization_level}) not implemented")
 
         # check if decoder config exists, if it exists load it else use optimization_level
         model_params_dir = Path(__file__).parent.parent
-        decoder_config_path = model_params_dir / "model_params" / model_name / decoder_config_filename
+        if decoder_config_filename is not None:
+            decoder_config_path = model_params_dir / "model_params" / model_name / decoder_config_filename
+        else:
+            decoder_config_path = None
         inst = None
-        if decoder_config_path.exists():
+        if decoder_config_path is not None and decoder_config_path.exists():
             inst = parse_decoder_json(decoder_config_path, default_optimization=optimization_level)
             logger.info(
                 f"Model {model_name} requires specific TensorPrecision and OpFidelity configuration, using {decoder_config_path}"
