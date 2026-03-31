@@ -80,6 +80,7 @@ void kernel_main() {
     uint32_t payload_size = get_arg_val<uint32_t>(rt_ags++);
     bool is_primary_payload_worker = get_arg_val<uint32_t>(rt_ags++) == 1;
 
+    // Note: these values are uint16_t packed in the uint32_t rt arg buffer
     const auto shared_expert_ids_addr = get_arg_addr(rt_ags++);
     constexpr uint32_t shared_expert_data_size_bytes = num_shared_experts * sizeof(uint16_t);
     constexpr uint16_t bf16_one = 0x3f80;

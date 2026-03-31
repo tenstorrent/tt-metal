@@ -5,6 +5,8 @@
 #include "all_to_all_dispatch_metadata_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
+#include <ranges>
+#include <algorithm>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -811,16 +813,29 @@ AllToAllDispatchMetadataDeviceOperation::AllToAllDispatchMetadataSparse::create_
             reader_runtime_args[reader_payload_size_idx] = input_page_size;
             reader_runtime_args[reader_is_primary_idx] = 1;  // All workers are primary in non-split mode
 
-            // add shared expert IDs to reader args
-            if (shared_expert_ids.has_value()) {
-                reader_runtime_args.insert(
-                    reader_runtime_args.end(), shared_expert_ids->cbegin(), shared_expert_ids->cend());
-            }
-
             // Writer also needs defaults
             writer_runtime_args.push_back(0);                // payload_offset
             writer_runtime_args.push_back(input_page_size);  // payload_size
             writer_runtime_args.push_back(1);                // is_primary (all workers in non-split mode)
+        }
+
+        // add shared expert IDs to reader args
+        // Output tensor is uint16_t, pack expert IDs as uint16_t values into uint32_t
+        // Ordering is preserved: expert_ids[i] -> lower 16 bits, expert_ids[i+1] -> upper 16 bits
+        if (shared_expert_ids.has_value()) {
+            const auto& expert_ids = *shared_expert_ids;
+            // Transform pairs into packed uint32_t values
+            auto packed_values = std::views::iota(size_t{0}, expert_ids.size()) |
+                                 std::views::filter([](size_t i) { return i % 2 == 0; }) |
+                                 std::views::transform([&expert_ids](size_t i) {
+                                     uint16_t low = static_cast<uint16_t>(expert_ids[i]);
+                                     uint16_t high =
+                                         (i + 1 < expert_ids.size()) ? static_cast<uint16_t>(expert_ids[i + 1]) : 0;
+
+                                     return (static_cast<uint32_t>(high) << 16) | static_cast<uint32_t>(low);
+                                 });
+
+            std::ranges::copy(packed_values, std::back_inserter(reader_runtime_args));
         }
 
         if (use_mux) {

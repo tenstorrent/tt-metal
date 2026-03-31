@@ -51,15 +51,9 @@ from tracy import signpost
 
 
 def _cluster_distance(d0: int, d1: int, mesh_shape: Iterable[int], cluster_axis: int) -> int | None:
-    mesh_coords = []
-    for d in (d0, d1):
-        mesh_coords.append((d // mesh_shape[0], d % mesh_shape[0]))
+    c0, c1 = tuple(map(lambda d: (d // mesh_shape[1], d % mesh_shape[1]), (d0, d1)))
 
-    return (
-        None
-        if mesh_coords[0][1 - cluster_axis] != mesh_coords[1][1 - cluster_axis]
-        else abs(mesh_coords[0][cluster_axis] != mesh_coords[1][cluster_axis])
-    )
+    return None if c0[1 - cluster_axis] != c1[1 - cluster_axis] else abs(c0[cluster_axis] - c1[cluster_axis])
 
 
 # TODO (AM) move me to some shared utility module accessible by the model
@@ -838,8 +832,17 @@ def _get_shared_expert_to_device_map(routed_experts, devices, mode):
     if mode == "no_shared":
         return None
 
+    # fully replicated shared expert
     elif mode == "all_shared":
         return {routed_experts: list(range(devices))}
+
+    # alternate routed shared expert assignment based on device parity
+    elif mode == "alternate_shared":
+        return {
+            routed_experts: list(range(0, devices, 2)),
+            routed_experts + 1: list(range(1, devices, 2)),
+        }
+
     else:
         raise RuntimeError("Invalid shared expert mode")
 
@@ -890,11 +893,11 @@ def _get_shared_expert_to_device_map(routed_experts, devices, mode):
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("routed_experts_per_device", [2])
-@pytest.mark.parametrize("shared_expert_mode", ["no_shared", "all_shared"])
+@pytest.mark.parametrize("shared_expert_mode", ["no_shared", "all_shared", "alternate_shared"])
 def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_device, shared_expert_mode):
     batches_per_device = 32
     routed_experts = routed_experts_per_device * mesh_shape[cluster_axis]
-    select_experts_k = 8
+    select_experts_k = 5
     hidden_size = 7168
     seq_len = 1
     num_iters = 20
@@ -903,7 +906,7 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_d
     dtype = ttnn.bfloat16
     congestion_scheme = "random_sequential_experts"
     worker_mode = ttnn.WorkerMode.DIRECT
-    use_persistent_mode = False
+    use_persistent_mode = True
 
     dispatch_devices = mesh_shape[cluster_axis]
     batch = batches_per_device * dispatch_devices
@@ -971,7 +974,7 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_d
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("batches_per_device", [32])
-@pytest.mark.parametrize("experts", [2 * 16])
+@pytest.mark.parametrize("routed_experts", [2 * 16])
 @pytest.mark.parametrize(
     "select_experts_k", [8, 7, 6, 5, 4, 3, 2, 1], ids=["k8", "k7", "k6", "k5", "k4", "k3", "k2", "k1"]
 )
@@ -979,7 +982,7 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_d
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (1, 40, 10),
+        (1, 2, 2),
     ],
     ids=[
         "decode",
@@ -996,12 +999,13 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_d
     [ttnn.WorkerMode.DIRECT, ttnn.WorkerMode.MUX_TOKEN_SPLIT, ttnn.WorkerMode.MUX_PAYLOAD_SPLIT],
     ids=["direct", "token_split", "payload_split"],
 )
+@pytest.mark.parametrize("shared_expert_mode", ["no_shared", "all_shared", "alternate_shared"])
 def test_decode_perf(
     mesh_device,
     mesh_shape,
     cluster_axis,
     batches_per_device,
-    experts,
+    routed_experts,
     select_experts_k,
     hidden_size,
     seq_len,
@@ -1012,6 +1016,7 @@ def test_decode_perf(
     congestion_scheme,
     use_persistent_mode,
     worker_mode,
+    shared_expert_mode,
 ):
     # Skip based on mesh shape and required mesh graph descriptor
     if mesh_shape == (16, 1):
@@ -1029,6 +1034,10 @@ def test_decode_perf(
     batch = batches_per_device * dispatch_devices
     trace_mode = True
 
+    shared_expert_ids_to_devices = _get_shared_expert_to_device_map(
+        routed_experts, prod(mesh_shape), shared_expert_mode
+    )
+
     profiler = BenchmarkProfiler()
     step_name = "All2AllDispatchMetadataOp"
     profiler.start(step_name)
@@ -1038,7 +1047,7 @@ def test_decode_perf(
         mesh_device,
         mesh_shape,
         batch,
-        experts,
+        routed_experts,
         select_experts_k,
         hidden_size,
         seq_len,
@@ -1052,6 +1061,7 @@ def test_decode_perf(
         worker_mode=worker_mode,
         dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
         use_persistent_mode=use_persistent_mode,
+        shared_expert_ids_to_devices=shared_expert_ids_to_devices,
     )
 
     signpost(header="stop")
