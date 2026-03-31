@@ -20,7 +20,16 @@ compute_with_storage_grid_size_bh_orig = (12, 10)
 compute_with_storage_grid_size_11x10 = (11, 10)
 
 prog_config_mm0_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    compute_with_storage_grid_size_11x10[0] - 1, compute_with_storage_grid_size_11x10[1] - 1
+                ),
+            )
+        }
+    ),
     in0_block_w=14,
     out_subblock_h=1,
     out_subblock_w=5,
@@ -32,7 +41,16 @@ prog_config_mm0_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 
 prog_config_mm0_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    compute_with_storage_grid_size_11x10[0] - 1, compute_with_storage_grid_size_11x10[1] - 1
+                ),
+            )
+        }
+    ),
     in0_block_w=14,
     out_subblock_h=5,
     out_subblock_w=1,
@@ -44,7 +62,16 @@ prog_config_mm0_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 
 prog_config_mm1_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    compute_with_storage_grid_size_11x10[0] - 1, compute_with_storage_grid_size_11x10[1] - 1
+                ),
+            )
+        }
+    ),
     in0_block_w=4,
     out_subblock_h=1,
     out_subblock_w=6,
@@ -56,7 +83,16 @@ prog_config_mm1_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 
 prog_config_mm1_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    compute_with_storage_grid_size_11x10[0] - 1, compute_with_storage_grid_size_11x10[1] - 1
+                ),
+            )
+        }
+    ),
     in0_block_w=4,
     out_subblock_h=1,
     out_subblock_w=6,
@@ -68,7 +104,16 @@ prog_config_mm1_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 
 prog_config_mm2_bh = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    compute_with_storage_grid_size_11x10[0] - 1, compute_with_storage_grid_size_11x10[1] - 1
+                ),
+            )
+        }
+    ),
     in0_block_w=4,
     out_subblock_h=1,
     out_subblock_w=8,
@@ -79,7 +124,16 @@ prog_config_mm2_bh = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 )
 
 prog_config_mm2_bh_25k = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    compute_with_storage_grid_size_11x10[0] - 1, compute_with_storage_grid_size_11x10[1] - 1
+                ),
+            )
+        }
+    ),
     in0_block_w=4,
     out_subblock_h=1,
     out_subblock_w=8,
@@ -92,7 +146,16 @@ prog_config_mm2_bh_25k = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 
 # [128, 128] * [128, 224]
 prog_config_mm5_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    compute_with_storage_grid_size_11x10[0] - 1, compute_with_storage_grid_size_11x10[1] - 1
+                ),
+            )
+        }
+    ),
     in0_block_w=8,
     out_subblock_h=1,
     out_subblock_w=7,
@@ -105,7 +168,16 @@ prog_config_mm5_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 
 # [100, 128] * [128, 224]
 prog_config_mm5_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    compute_with_storage_grid_size_11x10[0] - 1, compute_with_storage_grid_size_11x10[1] - 1
+                ),
+            )
+        }
+    ),
     in0_block_w=8,
     out_subblock_h=1,
     out_subblock_w=7,
@@ -118,7 +190,16 @@ prog_config_mm5_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 
 # [128, 56] * [56, 18]
 prog_config_mm3_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    compute_with_storage_grid_size_11x10[0] - 1, compute_with_storage_grid_size_11x10[1] - 1
+                ),
+            )
+        }
+    ),
     in0_block_w=8,
     out_subblock_h=1,
     out_subblock_w=2,
@@ -131,7 +212,16 @@ prog_config_mm3_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 
 # [100, 56] * [56, 18]
 prog_config_mm3_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    compute_with_storage_grid_size_11x10[0] - 1, compute_with_storage_grid_size_11x10[1] - 1
+                ),
+            )
+        }
+    ),
     in0_block_w=8,
     out_subblock_h=2,
     out_subblock_w=2,
@@ -144,7 +234,16 @@ prog_config_mm3_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 
 # [32, 128, 16] * [32, 16, 4]
 prog_config_mm4_bh = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    compute_with_storage_grid_size_11x10[0] - 1, compute_with_storage_grid_size_11x10[1] - 1
+                ),
+            )
+        }
+    ),
     in0_block_w=8,
     out_subblock_h=2,
     out_subblock_w=4,
@@ -157,7 +256,16 @@ prog_config_mm4_bh = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
 
 # [32, 100, 16] * [32, 16, 4]
 prog_config_mm4_bh_25k = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+    allowed_worker_cores=ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(
+                    compute_with_storage_grid_size_11x10[0] - 1, compute_with_storage_grid_size_11x10[1] - 1
+                ),
+            )
+        }
+    ),
     in0_block_w=16,
     out_subblock_h=1,
     out_subblock_w=4,

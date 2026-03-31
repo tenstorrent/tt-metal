@@ -588,6 +588,9 @@ MatmulProgramConfig create_matmul_program_config(
         .per_core_N = n_tiles_per_core,
         .transpose_mcast = transpose_mcast,
         .fused_activation = fused_activation,
+        .allowed_worker_cores =
+            a_is_sharded ? std::nullopt
+                         : std::make_optional(CoreRangeSet(CoreRange({0, 0}, {core_coord.x - 1, core_coord.y - 1}))),
     };
 }
 
@@ -702,7 +705,6 @@ MatmulProgramConfig get_matmul_program_config(
                 .fuse_batch = true,
                 .fused_activation = fused_activation,
                 .mcast_in0 = mcast_in0,
-                .allowed_worker_cores = input_tensor_a.shard_spec().value().grid,
             };
         }
         if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
@@ -1245,6 +1247,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
                 .transpose_mcast = transpose_mcast,
                 .fused_activation = std::nullopt,
                 .fuse_batch = false,
+                .allowed_worker_cores = CoreRangeSet(
+                    CoreRange({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1})),
             };
         }
     }

@@ -30,8 +30,6 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
-    // create_descriptor falls back to allowed_worker_cores (or full device grid) when
-    // core_range_set is not provided, so no need to pass one explicitly here.
     ProgramDescriptor descriptor = create_descriptor(operation_attributes, tensor_args, tensor_return_value);
 
     tt_metal::Program program{descriptor};
@@ -61,10 +59,14 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
         std::get<operations::matmul::MatmulMultiCoreReuseProgramConfig>(operation_attributes.program_config.value());
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
-    CoreCoord compute_with_storage_grid_size =
-        program_config.allowed_worker_cores.has_value()
-            ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
-            : a.device()->compute_with_storage_grid_size();
+    CoreCoord compute_with_storage_grid_size;
+    if (program_config.allowed_worker_cores.has_value()) {
+        compute_with_storage_grid_size = program_config.allowed_worker_cores.value().bounding_box().grid_size();
+    } else if (a.is_sharded()) {
+        compute_with_storage_grid_size = a.shard_spec().value().grid.bounding_box().grid_size();
+    } else {
+        compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
+    }
     auto& output = tensor_return_value.at(0);
 
     bool in0_is_sharded = a.is_sharded();
@@ -192,8 +194,7 @@ CoreRangeSet MatmulMultiCoreReuseOptimizedProgramFactory::default_core_range(IDe
 tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::create_descriptor(
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
-    std::vector<ttnn::Tensor>& tensor_return_value,
-    const std::optional<CoreRangeSet>& core_range_set) {
+    std::vector<ttnn::Tensor>& tensor_return_value) {
     TT_FATAL(operation_attributes.program_config.has_value(), "program_config must be provided for create_descriptor");
     const auto& program_config =
         std::get<operations::matmul::MatmulMultiCoreReuseProgramConfig>(operation_attributes.program_config.value());
@@ -336,17 +337,6 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         num_blocks_per_core_group_1 = num_output_blocks_total / num_cores * batch_scale_factor;
-    } else if (core_range_set.has_value()) {
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(core_range_set.value(), num_output_blocks_total);
-        num_blocks_per_core_group_1 *= batch_scale_factor;
-        num_blocks_per_core_group_2 *= batch_scale_factor;
     } else {
         auto device = a.device();
         CoreCoord grid = program_config.allowed_worker_cores.has_value()

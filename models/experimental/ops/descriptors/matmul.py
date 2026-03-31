@@ -111,7 +111,7 @@ def matmul(
     # Create descriptor via the factory.
     # Only MatmulMultiCoreReuseOptimizedProgramFactory is supported for now.
     program_descriptor = ttnn.MatmulMultiCoreReuseOptimizedProgramFactory.create_descriptor(
-        operation_params, tensor_args, output_tensors, core_range_set
+        operation_params, tensor_args, output_tensors
     )
 
     return OpDescriptor(

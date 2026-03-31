@@ -149,7 +149,7 @@ def test_galaxy_matmul_2d_fracture(M, K, N, weights_dtype, mesh_shape, mesh_devi
         weights,
         dtype=ttnn.bfloat16,
         # program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        #     compute_with_storage_grid_size=(8,8),
+        #     allowed_worker_cores=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
         #     in0_block_w=1,
         #     out_subblock_h=1,
         #     out_subblock_w=1,
