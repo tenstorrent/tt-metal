@@ -26,6 +26,43 @@ def get_padded_size(numerator, denominator):
     return ((numerator + denominator - 1) // denominator) * denominator
 
 
+def make_mochi_vae_parallel_config(mesh_device):
+    """Build VAE parallel config based on mesh topology.
+
+    2D mesh (Galaxy: both dims > 1): H on axis 0, W on axis 1, no time parallelism.
+    1D mesh (T3K/N300/N150): time parallelism on the multi-device axis, no spatial parallelism.
+    """
+    if mesh_device.shape[0] > 1 and mesh_device.shape[1] > 1:
+        return MochiVAEParallelConfig(
+            time_parallel=ParallelFactor(factor=1, mesh_axis=1),
+            h_parallel=ParallelFactor(factor=mesh_device.shape[0], mesh_axis=0),
+            w_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+        )
+    else:
+        t_axis = 1 if mesh_device.shape[1] > 1 else 0
+        return MochiVAEParallelConfig(
+            time_parallel=ParallelFactor(factor=mesh_device.shape[t_axis], mesh_axis=t_axis),
+            h_parallel=ParallelFactor(factor=1, mesh_axis=0),
+            w_parallel=ParallelFactor(factor=1, mesh_axis=1),
+        )
+
+
+def get_shard_dims(parallel_config):
+    """Get ShardTensor2dMesh/ConcatMesh2dToTensor dims based on parallel config.
+
+    For axes with no parallelism (factor=1), uses dim 0 as a dummy.
+    This is safe because those axes have mesh_shape=1 (no actual sharding/concat).
+    """
+    dims = [0, 0]
+    if parallel_config.h_parallel.factor > 1:
+        dims[parallel_config.h_parallel.mesh_axis] = 2
+    if parallel_config.w_parallel.factor > 1:
+        dims[parallel_config.w_parallel.mesh_axis] = 3
+    if parallel_config.time_parallel.factor > 1:
+        dims[parallel_config.time_parallel.mesh_axis] = 1
+    return dims
+
+
 # Custom pytest mark for shared VAE device configuration
 def vae_device_config(func):
     """Decorator to apply standard VAE device configuration to tests"""
@@ -80,54 +117,25 @@ def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
     """Test forward pass of TtConv1x1 against Conv3d with 1x1x1 kernel."""
     reference_model, tt_model = create_random_conv3d_models(mesh_device, C_in, C_out)
 
-    if mesh_device.shape[0] == 1:
-        w_parallel_factor = 1
-    else:
-        w_parallel_factor = 2
-
-    vae_parallel_config = MochiVAEParallelConfig(
-        time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
-        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
-        h_parallel=ParallelFactor(factor=mesh_device.shape[0] // w_parallel_factor, mesh_axis=0),
-    )
-    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[0]
-    assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
+    vae_parallel_config = make_mochi_vae_parallel_config(mesh_device)
+    shard_dims = get_shard_dims(vae_parallel_config)
 
     # Create input tensor
     torch_input = torch.randn(N, C_in, T, H, W)
     tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
 
-    num_devices_T = mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]
-    if T % num_devices_T:
-        padded_T = get_padded_size(T, num_devices_T)
-        T_padding = padded_T - T
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, 0, 0, T_padding))
-    else:
-        padded_T = T
-    num_devices_W = vae_parallel_config.w_parallel.factor
-    if W % num_devices_W:
-        padded_W = get_padded_size(W, num_devices_W)
-        W_padding = padded_W - W
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, W_padding))
-    else:
-        padded_W = W
-    num_devices_H = vae_parallel_config.h_parallel.factor
-    if H % num_devices_H:
-        padded_H = get_padded_size(H, num_devices_H)
-        H_padding = padded_H - H
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, H_padding))
-    else:
-        padded_H = H
-
-    tt_input = torch.reshape(
-        tt_input,
-        (N, padded_T, num_devices_H, padded_H // num_devices_H, num_devices_W, padded_W // num_devices_W, C_in),
-    )
-    tt_input = tt_input.permute(0, 1, 2, 4, 3, 5, 6)
-    tt_input = torch.reshape(
-        tt_input,
-        (N, padded_T, num_devices_H * num_devices_W, padded_H // num_devices_H, padded_W // num_devices_W, C_in),
-    )
+    if vae_parallel_config.time_parallel.factor > 1 and T % vae_parallel_config.time_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, 0, 0, get_padded_size(T, vae_parallel_config.time_parallel.factor) - T)
+        )
+    if vae_parallel_config.w_parallel.factor > 1 and W % vae_parallel_config.w_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, get_padded_size(W, vae_parallel_config.w_parallel.factor) - W)
+        )
+    if vae_parallel_config.h_parallel.factor > 1 and H % vae_parallel_config.h_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, get_padded_size(H, vae_parallel_config.h_parallel.factor) - H)
+        )
 
     tt_input = ttnn.from_torch(
         tt_input,
@@ -135,27 +143,18 @@ def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds):
         dtype=ttnn.DataType.BFLOAT16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 1]),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    tt_input = ttnn.squeeze(tt_input, 2)
 
     logger.info("Run TtConv1x1 forward (Conv3d mode)")
     tt_output = tt_model(tt_input)
     logger.info("End TtConv1x1 forward (Conv3d mode)")
-    tt_output = ttnn.unsqueeze(tt_output, 2)
 
     # Convert TT output to torch tensor
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 0]),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-
-    tt_output_torch = torch.reshape(
-        tt_output_torch,
-        (N, padded_T, num_devices_H, num_devices_W, padded_H // num_devices_H, padded_W // num_devices_W, C_out),
-    )
-    tt_output_torch = tt_output_torch.permute(0, 1, 2, 4, 3, 5, 6)
-    tt_output_torch = torch.reshape(tt_output_torch, (N, padded_T, padded_H, padded_W, C_out))
 
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
     tt_output_torch = tt_output_torch[0:N, 0:C_out, 0:T, 0:H, 0:W]
@@ -227,18 +226,8 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
 
-    if mesh_device.shape[0] == 1:
-        w_parallel_factor = 1
-    else:
-        w_parallel_factor = 2
-
-    vae_parallel_config = MochiVAEParallelConfig(
-        time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
-        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
-        h_parallel=ParallelFactor(factor=mesh_device.shape[0] // w_parallel_factor, mesh_axis=0),
-    )
-    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[0]
-    assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
+    vae_parallel_config = make_mochi_vae_parallel_config(mesh_device)
+    shard_dims = get_shard_dims(vae_parallel_config)
 
     reference_model, tt_model = create_random_resblock_models(
         mesh_device,
@@ -252,35 +241,18 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
     torch_input = torch.randn(N, C, T, H, W)
     tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
 
-    num_devices_T = mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]
-    if T % num_devices_T:
-        padded_T = get_padded_size(T, num_devices_T)
-        T_padding = padded_T - T
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, 0, 0, T_padding))
-    else:
-        padded_T = T
-    num_devices_W = vae_parallel_config.w_parallel.factor
-    if W % num_devices_W:
-        padded_W = get_padded_size(W, num_devices_W)
-        W_padding = padded_W - W
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, W_padding))
-    else:
-        padded_W = W
-    num_devices_H = vae_parallel_config.h_parallel.factor
-    if H % num_devices_H:
-        padded_H = get_padded_size(H, num_devices_H)
-        H_padding = padded_H - H
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, H_padding))
-    else:
-        padded_H = H
-
-    tt_input = torch.reshape(
-        tt_input, (N, padded_T, num_devices_H, padded_H // num_devices_H, num_devices_W, padded_W // num_devices_W, C)
-    )
-    tt_input = tt_input.permute(0, 1, 2, 4, 3, 5, 6)
-    tt_input = torch.reshape(
-        tt_input, (N, padded_T, num_devices_H * num_devices_W, padded_H // num_devices_H, padded_W // num_devices_W, C)
-    )
+    if vae_parallel_config.time_parallel.factor > 1 and T % vae_parallel_config.time_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, 0, 0, get_padded_size(T, vae_parallel_config.time_parallel.factor) - T)
+        )
+    if vae_parallel_config.w_parallel.factor > 1 and W % vae_parallel_config.w_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, get_padded_size(W, vae_parallel_config.w_parallel.factor) - W)
+        )
+    if vae_parallel_config.h_parallel.factor > 1 and H % vae_parallel_config.h_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, get_padded_size(H, vae_parallel_config.h_parallel.factor) - H)
+        )
 
     tt_input = ttnn.from_torch(
         tt_input,
@@ -288,28 +260,19 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 1]),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    tt_input = ttnn.squeeze(tt_input, 2)
 
     logger.info(f"TT input shape: {tt_input.shape}")
     logger.info("Run TtResBlock forward")
     tt_output = tt_model(tt_input)
     logger.info("End TtResBlock forward")
-    tt_output = ttnn.unsqueeze(tt_output, 2)
 
     # Convert TT output to torch tensor
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 0]),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-
-    tt_output_torch = torch.reshape(
-        tt_output_torch,
-        (N, padded_T, num_devices_H, num_devices_W, padded_H // num_devices_H, padded_W // num_devices_W, C),
-    )
-    tt_output_torch = tt_output_torch.permute(0, 1, 2, 4, 3, 5, 6)
-    tt_output_torch = torch.reshape(tt_output_torch, (N, padded_T, padded_H, padded_W, C))
 
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
     tt_output_torch = tt_output_torch[0:N, 0:C, 0:T, 0:H, 0:W]
@@ -462,18 +425,8 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
 
-    if mesh_device.shape[0] == 1:
-        w_parallel_factor = 1
-    else:
-        w_parallel_factor = 2
-
-    vae_parallel_config = MochiVAEParallelConfig(
-        time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
-        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
-        h_parallel=ParallelFactor(factor=mesh_device.shape[0] // w_parallel_factor, mesh_axis=0),
-    )
-    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[0]
-    assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
+    vae_parallel_config = make_mochi_vae_parallel_config(mesh_device)
+    shard_dims = get_shard_dims(vae_parallel_config)
 
     reference_model, tt_model = create_random_causalupsampleblock_models(
         mesh_device,
@@ -491,35 +444,18 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
     torch_input = torch.randn(N, C, T, H, W)
     tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
 
-    num_devices_T = mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]
-    if T % num_devices_T:
-        padded_T = get_padded_size(T, num_devices_T)
-        T_padding = padded_T - T
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, 0, 0, T_padding))
-    else:
-        padded_T = T
-    num_devices_W = vae_parallel_config.w_parallel.factor
-    if W % num_devices_W:
-        padded_W = get_padded_size(W, num_devices_W)
-        W_padding = padded_W - W
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, W_padding))
-    else:
-        padded_W = W
-    num_devices_H = vae_parallel_config.h_parallel.factor
-    if H % num_devices_H:
-        padded_H = get_padded_size(H, num_devices_H)
-        H_padding = padded_H - H
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, H_padding))
-    else:
-        padded_H = H
-
-    tt_input = torch.reshape(
-        tt_input, (N, padded_T, num_devices_H, padded_H // num_devices_H, num_devices_W, padded_W // num_devices_W, C)
-    )
-    tt_input = tt_input.permute(0, 1, 2, 4, 3, 5, 6)
-    tt_input = torch.reshape(
-        tt_input, (N, padded_T, num_devices_H * num_devices_W, padded_H // num_devices_H, padded_W // num_devices_W, C)
-    )
+    if vae_parallel_config.time_parallel.factor > 1 and T % vae_parallel_config.time_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, 0, 0, get_padded_size(T, vae_parallel_config.time_parallel.factor) - T)
+        )
+    if vae_parallel_config.w_parallel.factor > 1 and W % vae_parallel_config.w_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, get_padded_size(W, vae_parallel_config.w_parallel.factor) - W)
+        )
+    if vae_parallel_config.h_parallel.factor > 1 and H % vae_parallel_config.h_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, get_padded_size(H, vae_parallel_config.h_parallel.factor) - H)
+        )
 
     tt_input = ttnn.from_torch(
         tt_input,
@@ -527,36 +463,23 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 1]),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    tt_input = ttnn.squeeze(tt_input, 2)
 
     logger.info(f"Input shape: {torch_input.shape}")
     logger.info("Run TtCausalUpsampleBlock forward")
     tt_output = tt_model(tt_input)
     logger.info("End TtCausalUpsampleBlock forward")
-    tt_output = ttnn.unsqueeze(tt_output, 2)
 
     # Convert TT output to torch tensor
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 0]),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
 
-    expected_T = T * temporal_expansion - temporal_offset
-    expected_padded_T = get_padded_size(expected_T, num_devices_T)
-    expected_H = (H * spatial_expansion) // num_devices_H
-    expected_W = (W * spatial_expansion) // num_devices_W
-    tt_output_torch = torch.reshape(
-        tt_output_torch,
-        (N, expected_padded_T, num_devices_H, num_devices_W, expected_H, expected_W, expected_output_shape[1]),
-    )
-    tt_output_torch = tt_output_torch.permute(0, 1, 2, 4, 3, 5, 6)
-    tt_output_torch = torch.reshape(
-        tt_output_torch, (N, expected_padded_T, H * spatial_expansion, W * spatial_expansion, expected_output_shape[1])
-    )
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
     if mesh_device.get_num_devices() > 1:
+        expected_T = T * temporal_expansion - temporal_offset
         tt_output_torch = tt_output_torch[
             0:N,
             :,
@@ -759,18 +682,8 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
     # Create models
     logger.info("Creating VAE decoder models")
 
-    if mesh_device.shape[0] == 1:
-        w_parallel_factor = 1
-    else:
-        w_parallel_factor = 2
-
-    vae_parallel_config = MochiVAEParallelConfig(
-        time_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
-        w_parallel=ParallelFactor(factor=w_parallel_factor, mesh_axis=0),
-        h_parallel=ParallelFactor(factor=mesh_device.shape[0] // w_parallel_factor, mesh_axis=0),
-    )
-    assert vae_parallel_config.h_parallel.factor * vae_parallel_config.w_parallel.factor == mesh_device.shape[0]
-    assert vae_parallel_config.h_parallel.mesh_axis == vae_parallel_config.w_parallel.mesh_axis
+    vae_parallel_config = make_mochi_vae_parallel_config(mesh_device)
+    shard_dims = get_shard_dims(vae_parallel_config)
 
     reference_model, tt_model = create_decoder_models(
         mesh_device,
@@ -790,35 +703,19 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
     # Create input tensor (latent representation)
     torch_input = torch.randn(N, C, T, H, W)
     tt_input = torch_input.permute(0, 2, 3, 4, 1)  # [N, T, H, W, C]
-    num_devices_T = mesh_device.shape[vae_parallel_config.time_parallel.mesh_axis]
-    if T % num_devices_T:
-        padded_T = get_padded_size(T, num_devices_T)
-        T_padding = padded_T - T
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, 0, 0, T_padding))
-    else:
-        padded_T = T
-    num_devices_W = vae_parallel_config.w_parallel.factor
-    if W % num_devices_W:
-        padded_W = get_padded_size(W, num_devices_W)
-        W_padding = padded_W - W
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, W_padding))
-    else:
-        padded_W = W
-    num_devices_H = vae_parallel_config.h_parallel.factor
-    if H % num_devices_H:
-        padded_H = get_padded_size(H, num_devices_H)
-        H_padding = padded_H - H
-        tt_input = torch.nn.functional.pad(tt_input, pad=(0, 0, 0, 0, 0, H_padding))
-    else:
-        padded_H = H
 
-    tt_input = torch.reshape(
-        tt_input, (N, padded_T, num_devices_H, padded_H // num_devices_H, num_devices_W, padded_W // num_devices_W, C)
-    )
-    tt_input = tt_input.permute(0, 1, 2, 4, 3, 5, 6)
-    tt_input = torch.reshape(
-        tt_input, (N, padded_T, num_devices_H * num_devices_W, padded_H // num_devices_H, padded_W // num_devices_W, C)
-    )
+    if vae_parallel_config.time_parallel.factor > 1 and T % vae_parallel_config.time_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, 0, 0, get_padded_size(T, vae_parallel_config.time_parallel.factor) - T)
+        )
+    if vae_parallel_config.w_parallel.factor > 1 and W % vae_parallel_config.w_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, get_padded_size(W, vae_parallel_config.w_parallel.factor) - W)
+        )
+    if vae_parallel_config.h_parallel.factor > 1 and H % vae_parallel_config.h_parallel.factor:
+        tt_input = torch.nn.functional.pad(
+            tt_input, pad=(0, 0, 0, 0, 0, get_padded_size(H, vae_parallel_config.h_parallel.factor) - H)
+        )
 
     tt_input = ttnn.from_torch(
         tt_input,
@@ -826,20 +723,18 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 1]),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
-    tt_input = ttnn.squeeze(tt_input, 2)
 
     logger.info(f"Input shape: {torch_input.shape}")
     logger.info("Run TtDecoder forward")
     tt_output = tt_model(tt_input)
     logger.info("End TtDecoder forward")
-    tt_output = ttnn.unsqueeze(tt_output, 2)
 
     # Convert TT output to torch tensor
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[2, 1]),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
 
     logger.info(f"TT Output shape {tt_output_torch.shape}")
@@ -850,20 +745,6 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
         ref_output = reference_model(torch_input)[0]
     logger.info("End RefDecoder forward")
 
-    # unpad tt output
-    expected_T = ref_output.shape[2]
-    expected_padded_T = get_padded_size(expected_T, num_devices_T)
-    expected_H = ref_output.shape[3] // num_devices_H
-    expected_W = ref_output.shape[4] // num_devices_W
-    tt_output_torch = torch.reshape(
-        tt_output_torch,
-        (N, expected_padded_T, num_devices_H, num_devices_W, expected_H, expected_W, ref_output.shape[1]),
-    )
-    tt_output_torch = tt_output_torch.permute(0, 1, 2, 4, 3, 5, 6)
-    tt_output_torch = torch.reshape(
-        tt_output_torch,
-        (N, expected_padded_T, num_devices_H * expected_H, num_devices_W * expected_W, ref_output.shape[1]),
-    )
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)  # [N, C, T, H, W]
 
     logger.info("assert quality")
