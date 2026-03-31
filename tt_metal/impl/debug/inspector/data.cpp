@@ -445,18 +445,19 @@ ConfigCallback& ttnn_config_callback() {
 }
 
 // Helper: add an rtoptions entry, catching any exceptions from getters that throw when unset
-#define RT_ENTRY(name_str, expr)                                                 \
-    try {                                                                        \
-        entries.push_back({name_str, fmt::format("{}", expr), kScopeRtOptions}); \
-    } catch (...) {                                                              \
-        entries.push_back({name_str, "(unset)", kScopeRtOptions});               \
+#define RT_ENTRY(name_str, expr)                                                        \
+    try {                                                                               \
+        entries.push_back({name_str, fmt::format("{}", expr), ConfigScope::RtOptions}); \
+    } catch (...) {                                                                     \
+        entries.push_back({name_str, "(unset)", ConfigScope::RtOptions});               \
     }
-#define RT_OPT_ENTRY(name_str, expr)                                                                              \
-    try {                                                                                                         \
-        auto v = expr;                                                                                            \
-        entries.push_back({name_str, v.has_value() ? fmt::format("{}", v.value()) : "(unset)", kScopeRtOptions}); \
-    } catch (...) {                                                                                               \
-        entries.push_back({name_str, "(unset)", kScopeRtOptions});                                                \
+#define RT_OPT_ENTRY(name_str, expr)                                                                       \
+    try {                                                                                                  \
+        auto v = expr;                                                                                     \
+        entries.push_back(                                                                                 \
+            {name_str, v.has_value() ? fmt::format("{}", v.value()) : "(unset)", ConfigScope::RtOptions}); \
+    } catch (...) {                                                                                        \
+        entries.push_back({name_str, "(unset)", ConfigScope::RtOptions});                                  \
     }
 
 void collect_environment_entries(std::vector<ConfigurationEntry>& entries) {
@@ -464,7 +465,7 @@ void collect_environment_entries(std::vector<ConfigurationEntry>& entries) {
         std::string name_str(name);
         const char* val = std::getenv(name_str.c_str());
         if (val) {
-            entries.push_back({std::move(name_str), std::string(val), kScopeEnvironment});
+            entries.push_back({std::move(name_str), std::string(val), ConfigScope::Environment});
         }
     }
 }
@@ -475,13 +476,13 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT_ENTRY("root_dir", rt.get_root_dir());
     // These getters TT_THROW (which logs a critical message) when unset, so guard them
     if (rt.is_cache_dir_specified()) { RT_ENTRY("cache_dir", rt.get_cache_dir()); }
-    else { entries.push_back({"cache_dir", "(unset)", kScopeRtOptions}); }
+    else { entries.push_back({"cache_dir", "(unset)", ConfigScope::RtOptions}); }
     RT_ENTRY("logs_dir", rt.get_logs_dir());
     if (rt.is_kernel_dir_specified()) { RT_ENTRY("kernel_dir", rt.get_kernel_dir()); }
-    else { entries.push_back({"kernel_dir", "(unset)", kScopeRtOptions}); }
+    else { entries.push_back({"kernel_dir", "(unset)", ConfigScope::RtOptions}); }
     RT_ENTRY("system_kernel_dir", rt.get_system_kernel_dir());
     if (rt.is_core_grid_override_todeprecate()) { RT_ENTRY("core_grid_override_todeprecate", rt.get_core_grid_override_todeprecate()); }
-    else { entries.push_back({"core_grid_override_todeprecate", "(unset)", kScopeRtOptions}); }
+    else { entries.push_back({"core_grid_override_todeprecate", "(unset)", ConfigScope::RtOptions}); }
 
     // General
     RT_ENTRY("build_map_enabled", rt.get_build_map_enabled());
@@ -594,7 +595,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
             }
             joined += s;
         }
-        entries.push_back({"watcher_disabled_features", joined.empty() ? "(empty)" : joined, kScopeRtOptions});
+        entries.push_back({"watcher_disabled_features", joined.empty() ? "(empty)" : joined, ConfigScope::RtOptions});
     }
 
     // Inspector
@@ -626,10 +627,10 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
             auto config = rt.get_dispatch_core_config();
             auto type_idx = static_cast<int>(config.get_dispatch_core_type());
             auto axis_idx = static_cast<int>(config.get_dispatch_core_axis());
-            entries.push_back({"dispatch_core_config_type", (type_idx < 2) ? dispatch_core_types[type_idx] : fmt::format("{}", type_idx), kScopeRtOptions});
-            entries.push_back({"dispatch_core_config_axis", (axis_idx < 2) ? dispatch_core_axes[axis_idx] : fmt::format("{}", axis_idx), kScopeRtOptions});
+            entries.push_back({"dispatch_core_config_type", (type_idx < 2) ? dispatch_core_types[type_idx] : fmt::format("{}", type_idx), ConfigScope::RtOptions});
+            entries.push_back({"dispatch_core_config_axis", (axis_idx < 2) ? dispatch_core_axes[axis_idx] : fmt::format("{}", axis_idx), ConfigScope::RtOptions});
         } catch (...) {
-            entries.push_back({"dispatch_core_config", "(unset)", kScopeRtOptions});
+            entries.push_back({"dispatch_core_config", "(unset)", ConfigScope::RtOptions});
         }
     }
 
@@ -637,13 +638,13 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     {
         try {
             const auto& fts = rt.get_fabric_telemetry_settings();
-            entries.push_back({"fabric_telemetry_enabled", fmt::format("{}", fts.enabled), kScopeRtOptions});
-            entries.push_back({"fabric_telemetry_chips_monitor_all", fmt::format("{}", fts.chips.monitor_all), kScopeRtOptions});
-            entries.push_back({"fabric_telemetry_channels_monitor_all", fmt::format("{}", fts.channels.monitor_all), kScopeRtOptions});
-            entries.push_back({"fabric_telemetry_eriscs_monitor_all", fmt::format("{}", fts.eriscs.monitor_all), kScopeRtOptions});
-            entries.push_back({"fabric_telemetry_stats_mask", fmt::format("{}", fts.stats_mask), kScopeRtOptions});
+            entries.push_back({"fabric_telemetry_enabled", fmt::format("{}", fts.enabled), ConfigScope::RtOptions});
+            entries.push_back({"fabric_telemetry_chips_monitor_all", fmt::format("{}", fts.chips.monitor_all), ConfigScope::RtOptions});
+            entries.push_back({"fabric_telemetry_channels_monitor_all", fmt::format("{}", fts.channels.monitor_all), ConfigScope::RtOptions});
+            entries.push_back({"fabric_telemetry_eriscs_monitor_all", fmt::format("{}", fts.eriscs.monitor_all), ConfigScope::RtOptions});
+            entries.push_back({"fabric_telemetry_stats_mask", fmt::format("{}", fts.stats_mask), ConfigScope::RtOptions});
         } catch (...) {
-            entries.push_back({"fabric_telemetry_settings", "(unset)", kScopeRtOptions});
+            entries.push_back({"fabric_telemetry_settings", "(unset)", ConfigScope::RtOptions});
         }
     }
 
@@ -692,11 +693,11 @@ void Data::rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builde
         entry.setName(all_entries[i].name);
         entry.setValue(all_entries[i].value);
 
-        if (all_entries[i].scope == kScopeEnvironment) {
+        if (all_entries[i].scope == ConfigScope::Environment) {
             entry.setScope(rpc::ConfigurationScope::ENVIRONMENT);
-        } else if (all_entries[i].scope == kScopeRtOptions) {
+        } else if (all_entries[i].scope == ConfigScope::RtOptions) {
             entry.setScope(rpc::ConfigurationScope::RT_OPTIONS);
-        } else if (all_entries[i].scope == kScopeTtnnConfig) {
+        } else if (all_entries[i].scope == ConfigScope::TtnnConfig) {
             entry.setScope(rpc::ConfigurationScope::TTNN_CONFIG);
         } else {
             entry.setScope(rpc::ConfigurationScope::UNKNOWN);

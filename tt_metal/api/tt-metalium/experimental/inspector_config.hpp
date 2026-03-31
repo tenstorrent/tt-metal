@@ -7,21 +7,25 @@
 
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
 
 namespace tt::tt_metal::inspector {
 
-// Scope constants — used by producers and the serializer to avoid string typos.
-inline constexpr const char* kScopeEnvironment = "Environment";
-inline constexpr const char* kScopeRtOptions = "RtOptions";
-inline constexpr const char* kScopeTtnnConfig = "TtnnConfig";
+// Mirrors the ConfigurationScope enum in rpc.capnp.
+enum class ConfigScope : uint8_t {
+    Environment = 0,
+    RtOptions = 1,
+    TtnnConfig = 2,
+    Unknown = 3,
+};
 
 struct ConfigurationEntry {
     std::string name;
     std::string value;
-    std::string scope;
+    ConfigScope scope;
 };
 
 using ConfigCallback = std::function<std::vector<ConfigurationEntry>()>;
