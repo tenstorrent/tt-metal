@@ -182,17 +182,6 @@ class SocketInterface:
             0,
             ttnn.BufferType.L1,
         )
-        if self.multi_upstream and sender_mesh.get_mesh_device():
-            sync_core_range = ttnn.CoreRangeSet(
-                [ttnn.CoreRange(send_core_coord.core_coord, send_core_coord.core_coord)]
-            )
-            self._page_ready_sem = ttnn.create_global_semaphore(
-                self.mesh_device, sync_core_range, 0, ttnn.BufferType.L1
-            )
-            self._ncrisc_done_sem = ttnn.create_global_semaphore(
-                self.mesh_device, sync_core_range, 0, ttnn.BufferType.L1
-            )
-
         self.sender_packet_header_cb_index = (
             0 if sender_packet_header_cb_index is None else sender_packet_header_cb_index
         )
@@ -382,8 +371,8 @@ class SocketInterface:
                 ],
             )
 
-        page_ready_sem_addr = ttnn.get_global_semaphore_address(self._page_ready_sem)
-        ncrisc_done_sem_addr = ttnn.get_global_semaphore_address(self._ncrisc_done_sem)
+        page_ready_sem_id = 0
+        ncrisc_done_sem_id = 1
 
         def _build_ct_args(socket_addrs, socket_start_idx, pkt_hdr_slot_start):
             ct_args = [
@@ -398,8 +387,8 @@ class SocketInterface:
                 packet_header_cb_index,  # 8
                 use_fabric_on_receiver,  # 9
                 use_fabric_on_sender,  # 10
-                page_ready_sem_addr,  # 11
-                ncrisc_done_sem_addr,  # 12
+                page_ready_sem_id,  # 11
+                ncrisc_done_sem_id,  # 12
                 socket_start_idx,  # 13
                 pkt_hdr_slot_start,  # 14
             ]
@@ -431,9 +420,20 @@ class SocketInterface:
             config=ttnn.ReaderConfigDescriptor(),
         )
 
+        page_ready_sem_desc = ttnn.SemaphoreDescriptor(
+            id=page_ready_sem_id,
+            core_ranges=core_ranges,
+            initial_value=0,
+        )
+        ncrisc_done_sem_desc = ttnn.SemaphoreDescriptor(
+            id=ncrisc_done_sem_id,
+            core_ranges=core_ranges,
+            initial_value=0,
+        )
+
         program = ttnn.ProgramDescriptor(
             kernels=[brisc_kernel, ncrisc_kernel],
-            semaphores=[],
+            semaphores=[page_ready_sem_desc, ncrisc_done_sem_desc],
             cbs=[packet_header_cb_desc] if packet_header_cb_desc is not None else [],
         )
 

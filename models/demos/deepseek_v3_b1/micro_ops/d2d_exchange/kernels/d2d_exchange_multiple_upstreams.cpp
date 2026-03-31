@@ -31,8 +31,8 @@ constexpr uint32_t partial_packet_size = get_compile_time_arg_val(7);
 constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(8);
 constexpr bool use_fabric_on_receiver = get_compile_time_arg_val(9);
 constexpr bool use_fabric_on_sender = get_compile_time_arg_val(10);
-constexpr uint32_t page_ready_sem_addr = get_compile_time_arg_val(11);
-constexpr uint32_t ncrisc_done_sem_addr = get_compile_time_arg_val(12);
+constexpr uint32_t page_ready_sem_id = get_compile_time_arg_val(11);
+constexpr uint32_t ncrisc_done_sem_id = get_compile_time_arg_val(12);
 constexpr uint32_t socket_start_idx = get_compile_time_arg_val(13);
 constexpr uint32_t packet_header_slot_start = get_compile_time_arg_val(14);
 
@@ -176,10 +176,7 @@ FORCE_INLINE bool process_upstream_sockets(
     return false;
 }
 
-// ============================================================================
-// BRISC – owns the sender socket, handles upstream sockets [0..N/2), link 0
-// ============================================================================
-#if defined(COMPILE_FOR_BRISC)
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
 void kernel_main() {
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
@@ -195,7 +192,9 @@ void kernel_main() {
     }
 
     SocketSenderInterface sender_socket = create_sender_socket_interface(sender_socket_config_addr);
+#if defined(COMPILE_FOR_BRISC)
     set_sender_socket_page_size(sender_socket, page_size);
+#endif
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
 
     SocketReceiverInterface receiver_sockets[num_sockets_this_risc];
@@ -226,8 +225,10 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* page_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_ready_sem_addr);
-    volatile tt_l1_ptr uint32_t* ncrisc_done_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_done_sem_addr);
+    volatile tt_l1_ptr uint32_t* page_ready_sem =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(page_ready_sem_id));
+    volatile tt_l1_ptr uint32_t* ncrisc_done_sem =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ncrisc_done_sem_id));
 
     if constexpr (use_fabric_on_sender) {
         uint32_t hdr_base =
@@ -245,17 +246,28 @@ void kernel_main() {
 
     bool terminated = false;
     while (!terminated) {
+#if defined(COMPILE_FOR_BRISC)
         socket_reserve_pages(sender_socket, 1);
+#elif defined(COMPILE_FOR_NCRISC)
+        noc_semaphore_wait_min(page_ready_sem, 1);
+        noc_semaphore_set(page_ready_sem, 0);
+#endif
 
         invalidate_l1_cache();
         if (termination_semaphore[0] == 1) {
             break;
         }
 
-        // sync with NCRISC to start processing sockets
+        uint64_t dst_addr_base;
+#if defined(COMPILE_FOR_BRISC)
         noc_semaphore_set(page_ready_sem, 1);
-
-        uint64_t dst_addr_base = downstream_data_addr + sender_socket.write_ptr;
+        dst_addr_base = downstream_data_addr + sender_socket.write_ptr;
+#elif defined(COMPILE_FOR_NCRISC)
+        {
+            SocketSenderInterface sender_socket_cur = create_sender_socket_interface(sender_socket_config_addr);
+            dst_addr_base = downstream_data_addr + sender_socket_cur.write_ptr;
+        }
+#endif
 
         terminated = process_upstream_sockets(
             receiver_sockets,
@@ -268,134 +280,24 @@ void kernel_main() {
             upstream_bytes_acked_noc_addrs,
             termination_semaphore);
 
+#if defined(COMPILE_FOR_BRISC)
         if (!terminated) {
             noc_semaphore_wait_min(ncrisc_done_sem, 1);
             noc_semaphore_set(ncrisc_done_sem, 0);
-
-            if constexpr (use_fabric_on_sender) {
-                socket_push_pages(sender_socket, 1);
-            } else {
-                socket_push_pages(sender_socket, 1);
+            socket_push_pages(sender_socket, 1);
+            if constexpr (!use_fabric_on_sender) {
                 socket_notify_receiver(sender_socket);
             }
         }
-    }
-
-    // Ensure NCRISC can observe termination
-    noc_semaphore_set(page_ready_sem, 1);
-
-    update_socket_config(sender_socket);
-    for (uint32_t i = 0; i < num_sockets_this_risc; i++) {
-        update_socket_config(receiver_sockets[i]);
-    }
-
-    if constexpr (use_fabric_on_receiver) {
-        upstream_fabric_connection.close();
-    }
-    if constexpr (use_fabric_on_sender) {
-        downstream_fabric_connection.close();
-    }
-}
-
-// ============================================================================
-// NCRISC – handles upstream sockets [N/2..N), link 1
-// ============================================================================
 #elif defined(COMPILE_FOR_NCRISC)
-void kernel_main() {
-    size_t rt_args_idx = 0;
-    tt::tt_fabric::WorkerToFabricEdmSender downstream_fabric_connection;
-    tt::tt_fabric::WorkerToFabricEdmSender upstream_fabric_connection;
-
-    if constexpr (use_fabric_on_sender) {
-        downstream_fabric_connection =
-            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-    }
-    if constexpr (use_fabric_on_receiver) {
-        upstream_fabric_connection =
-            tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-    }
-
-    // Read sender socket config once for static downstream address info
-    SocketSenderInterface sender_socket_snapshot = create_sender_socket_interface(sender_socket_config_addr);
-    sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket_snapshot, 0);
-
-    SocketReceiverInterface receiver_sockets[num_sockets_this_risc];
-    for (uint32_t i = 0; i < num_sockets_this_risc; i++) {
-        receiver_sockets[i] = create_receiver_socket_interface(receiver_socket_config_addrs[i]);
-        set_receiver_socket_page_size(receiver_sockets[i], upstream_page_size);
-    }
-
-    uint64_t downstream_bytes_sent_noc_addr = get_noc_addr(
-        downstream_enc.d2d.downstream_noc_x,
-        downstream_enc.d2d.downstream_noc_y,
-        sender_socket_snapshot.downstream_bytes_sent_addr);
-    uint64_t downstream_data_addr = get_noc_addr(
-        downstream_enc.d2d.downstream_noc_x,
-        downstream_enc.d2d.downstream_noc_y,
-        sender_socket_snapshot.downstream_fifo_addr);
-
-    uint64_t upstream_bytes_acked_noc_addrs[num_sockets_this_risc];
-    if constexpr (use_fabric_on_receiver) {
-        for (uint32_t i = 0; i < num_sockets_this_risc; i++) {
-            upstream_bytes_acked_noc_addrs[i] = get_noc_addr(
-                receiver_sockets[i].d2d.upstream_noc_x,
-                receiver_sockets[i].d2d.upstream_noc_y,
-                receiver_sockets[i].d2d.upstream_bytes_acked_addr);
-        }
-    }
-
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* downstream_packet_header = nullptr;
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* upstream_packet_header = nullptr;
-
-    volatile tt_l1_ptr uint32_t* termination_semaphore =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
-    volatile tt_l1_ptr uint32_t* page_ready_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_ready_sem_addr);
-    volatile tt_l1_ptr uint32_t* ncrisc_done_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ncrisc_done_sem_addr);
-
-    if constexpr (use_fabric_on_sender) {
-        uint32_t hdr_base =
-            get_write_ptr(fabric_packet_header_cb_id) + packet_header_slot_start * sizeof(PACKET_HEADER_TYPE);
-        downstream_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_base);
-        downstream_fabric_connection.open();
-        fabric_set_unicast_route(downstream_packet_header, downstream_enc);
-    }
-    if constexpr (use_fabric_on_receiver) {
-        uint32_t hdr_base =
-            get_write_ptr(fabric_packet_header_cb_id) + (packet_header_slot_start + 1) * sizeof(PACKET_HEADER_TYPE);
-        upstream_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(hdr_base);
-        upstream_fabric_connection.open();
-    }
-
-    bool terminated = false;
-    while (!terminated) {
-        noc_semaphore_wait_min(page_ready_sem, 1);
-        noc_semaphore_set(page_ready_sem, 0);
-
-        invalidate_l1_cache();
-        if (termination_semaphore[0] == 1) {
-            break;
-        }
-
-        SocketSenderInterface sender_socket_int = create_sender_socket_interface(sender_socket_config_addr);
-        uint64_t dst_addr_base = downstream_data_addr + sender_socket_int.write_ptr;
-
-        terminated = process_upstream_sockets(
-            receiver_sockets,
-            downstream_fabric_connection,
-            downstream_packet_header,
-            dst_addr_base,
-            downstream_bytes_sent_noc_addr,
-            upstream_fabric_connection,
-            upstream_packet_header,
-            upstream_bytes_acked_noc_addrs,
-            termination_semaphore);
-
-        // Signal BRISC that our sockets are done (even on termination path)
         noc_semaphore_set(ncrisc_done_sem, 1);
+#endif
     }
 
-    // Ensure BRISC doesn't hang waiting for NCRISC
-    noc_semaphore_set(ncrisc_done_sem, 1);
+#if defined(COMPILE_FOR_BRISC)
+    noc_semaphore_set(page_ready_sem, 1);
+    update_socket_config(sender_socket);
+#endif
 
     for (uint32_t i = 0; i < num_sockets_this_risc; i++) {
         update_socket_config(receiver_sockets[i]);
