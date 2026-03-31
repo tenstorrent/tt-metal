@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -22,6 +23,7 @@ PRIMARY_REPO = "tenstorrent/tt-metal"
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 SLACK_CHANNEL_TEST = "C0APK6215B5"
 MARKER = "===FINAL_M4_REVIEW_DECISION==="
+PATH_PATTERN = re.compile(r"(?<![A-Za-z0-9_.-])((?:tt_metal|ttnn|models|tests|\\.github)/[A-Za-z0-9_./-]+)")
 
 
 def log(message: str) -> None:
@@ -154,6 +156,217 @@ def build_recent_slack_context(messages: list[dict[str, Any]], cap: int = 10) ->
             text = text[:220] + "..."
         lines.append(f"- ts={ts} user={user} text={text}")
     return "\n".join(lines) if lines else "(none)"
+
+
+def parse_codeowners(path: Path) -> list[tuple[str, list[str]]]:
+    if not path.exists():
+        return []
+    rules: list[tuple[str, list[str]]] = []
+    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        pattern = parts[0].lstrip("/")
+        owners = [p[1:] for p in parts[1:] if p.startswith("@")]
+        if owners:
+            rules.append((pattern, owners))
+    return rules
+
+
+def codeowners_match(path: str, pattern: str) -> bool:
+    p = path.lstrip("/")
+    pat = pattern.lstrip("/")
+    if fnmatch.fnmatch(p, pat):
+        return True
+    if pat.endswith("/") and p.startswith(pat):
+        return True
+    if "/" not in pat and fnmatch.fnmatch(Path(p).name, pat):
+        return True
+    return False
+
+
+def owners_for_paths(paths: list[str], rules: list[tuple[str, list[str]]]) -> set[str]:
+    owners: set[str] = set()
+    for path in paths:
+        matched: list[str] = []
+        for pattern, rule_owners in rules:
+            if codeowners_match(path, pattern):
+                matched = rule_owners
+        owners.update(matched)
+    return owners
+
+
+def extract_repo_paths(text: str) -> list[str]:
+    out: list[str] = []
+    for m in PATH_PATTERN.finditer(text):
+        value = m.group(1).strip()
+        if value and value not in out:
+            out.append(value)
+    return out
+
+
+def github_user_info(token: str, username: str) -> dict[str, Any]:
+    req = urllib.request.Request(
+        f"https://api.github.com/users/{urllib.parse.quote(username)}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "tt-metal-m4-owner-resolver",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return {}
+
+
+def slack_api_form(token: str, endpoint: str, fields: dict[str, str]) -> dict[str, Any]:
+    data = urllib.parse.urlencode(fields).encode("utf-8")
+    req = urllib.request.Request(
+        f"https://slack.com/api/{endpoint}",
+        data=data,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    return payload
+
+
+def slack_lookup_by_email(token: str, email: str) -> str | None:
+    try:
+        payload = slack_api_form(token, "users.lookupByEmail", {"email": email})
+    except Exception:
+        return None
+    if not payload.get("ok"):
+        return None
+    user = payload.get("user", {})
+    user_id = str(user.get("id", "")).strip()
+    return user_id or None
+
+
+def slack_list_members(token: str) -> list[dict[str, Any]]:
+    members: list[dict[str, Any]] = []
+    cursor = ""
+    while True:
+        params = {"limit": "200"}
+        if cursor:
+            params["cursor"] = cursor
+        payload = slack_api_form(token, "users.list", params)
+        if not payload.get("ok"):
+            break
+        batch = payload.get("members", [])
+        if isinstance(batch, list):
+            members.extend([m for m in batch if isinstance(m, dict)])
+        cursor = str(payload.get("response_metadata", {}).get("next_cursor", "")).strip()
+        if not cursor:
+            break
+    return members
+
+
+def slack_lookup_by_username(token: str, username: str, members_cache: list[dict[str, Any]] | None) -> str | None:
+    if members_cache is None:
+        return None
+    target = username.lower()
+    for member in members_cache:
+        if member.get("deleted") or member.get("is_bot"):
+            continue
+        profile = member.get("profile", {}) if isinstance(member.get("profile"), dict) else {}
+        candidates = [
+            str(member.get("name", "")),
+            str(profile.get("display_name", "")),
+            str(profile.get("real_name", "")),
+        ]
+        if any(target == c.strip().lower() for c in candidates if c.strip()):
+            uid = str(member.get("id", "")).strip()
+            if uid:
+                return uid
+    return None
+
+
+def recent_author_emails_for_paths(paths: list[str], *, limit_per_path: int = 5) -> set[str]:
+    emails: set[str] = set()
+    for path in paths:
+        try:
+            proc = run(
+                ["git", "log", f"-n{limit_per_path}", "--format=%ae", "--", path],
+                check=False,
+                capture=True,
+            )
+        except Exception:
+            continue
+        for line in (proc.stdout or "").splitlines():
+            email = line.strip()
+            if email and "@" in email:
+                emails.add(email)
+    return emails
+
+
+def render_owner_mentions(
+    *,
+    issue_token: str,
+    slack_token: str,
+    workflow_name: str,
+    job_name: str,
+    text_sources: list[str],
+    members_cache: list[dict[str, Any]] | None,
+) -> tuple[str, list[str]]:
+    combined = "\n".join(text_sources + [workflow_name, job_name])
+    paths = extract_repo_paths(combined)
+    codeowners = parse_codeowners(Path(".github/CODEOWNERS"))
+    gh_usernames = owners_for_paths(paths, codeowners)
+    resolved_ids: set[str] = set()
+    unresolved_handles: list[str] = []
+
+    for username in sorted(gh_usernames):
+        info = github_user_info(issue_token, username)
+        email = str(info.get("email", "")).strip()
+        user_id = slack_lookup_by_email(slack_token, email) if email else None
+        if not user_id:
+            user_id = slack_lookup_by_username(slack_token, username, members_cache)
+        if user_id:
+            resolved_ids.add(user_id)
+        else:
+            unresolved_handles.append(username)
+
+    # Supplement with recent path authors when CODEOWNERS is sparse.
+    for email in sorted(recent_author_emails_for_paths(paths)):
+        user_id = slack_lookup_by_email(slack_token, email)
+        if user_id:
+            resolved_ids.add(user_id)
+
+    mentions = " ".join(sorted(f"<@{uid}>" for uid in resolved_ids))
+    return mentions, unresolved_handles
+
+
+def normalize_slack_text(
+    *,
+    slack_text: str,
+    issue_url: str,
+    owner_mentions: str,
+) -> str:
+    text = slack_text
+    text = re.sub(
+        r"Issue:\s*https://github\.com/tenstorrent/tt-metal/issues/TBD",
+        f"Issue: {issue_url}",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"Issue:\s*TBD", f"Issue: {issue_url}", text, flags=re.IGNORECASE)
+    text = re.sub(r"Likely owners:\s*.+", f"Likely owners: {owner_mentions}", text, flags=re.IGNORECASE)
+    if issue_url not in text:
+        text = text.rstrip() + f"\nIssue: {issue_url}"
+    if "Likely owners:" not in text:
+        owner_text = owner_mentions if owner_mentions else "(owner resolution pending)"
+        text = text.rstrip() + f"\nLikely owners: {owner_text}"
+    return text
 
 
 def find_exact_previous_decision(
@@ -520,6 +733,7 @@ def main() -> int:
     recent_slack_messages = fetch_recent_slack_messages(
         slack_token=slack_token, channel_id=SLACK_CHANNEL_TEST, limit=20
     )
+    slack_members_cache = slack_list_members(slack_token)
     open_issue_context = build_open_issue_context(open_issues)
     recent_slack_context = build_recent_slack_context(recent_slack_messages)
     created: list[dict[str, Any]] = []
@@ -765,8 +979,25 @@ def main() -> int:
                 f"Fingerprint: `{fp}`\n"
                 f"Latest run: {job_urls[0]}"
             )
-        if issue_url not in slack_text:
-            slack_text = slack_text.rstrip() + f"\nIssue: {issue_url}"
+        owner_mentions, unresolved_handles = render_owner_mentions(
+            issue_token=issue_token,
+            slack_token=slack_token,
+            workflow_name=workflow_name,
+            job_name=job_name,
+            text_sources=[issue_body, excerpt, reason, signature],
+            members_cache=slack_members_cache,
+        )
+        slack_text = normalize_slack_text(
+            slack_text=slack_text,
+            issue_url=issue_url,
+            owner_mentions=owner_mentions,
+        )
+        if unresolved_handles:
+            slack_text = (
+                slack_text.rstrip()
+                + "\nUnresolved GitHub owner handles: "
+                + ", ".join(f"@{h}" for h in unresolved_handles)
+            )
         slack_ts = post_slack_message(slack_token=slack_token, channel_id=SLACK_CHANNEL_TEST, text=slack_text)
         recent_slack_messages.insert(0, {"ts": slack_ts, "user": "m4-auto-triage", "text": slack_text})
         recent_slack_context = build_recent_slack_context(recent_slack_messages)
@@ -781,6 +1012,8 @@ def main() -> int:
                 "slack_ts": slack_ts,
                 "job_urls": job_urls,
                 "agent_decision": decision,
+                "owner_mentions": owner_mentions,
+                "unresolved_owner_handles": unresolved_handles,
             }
         )
         log(f"Created issue and posted Slack bootstrap: {issue_url} (ts={slack_ts})")

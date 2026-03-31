@@ -356,6 +356,41 @@ jobs:
               echo "No summary produced."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+          m4_json="build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json"
+          if [ -s "$m4_json" ]; then
+            python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+            import json
+            from pathlib import Path
+
+            path = Path("build_ci/ci_ticketing/create_tickets/m4_issue_and_slack_result.json")
+            data = json.loads(path.read_text(encoding="utf-8"))
+            created = data.get("created", [])
+            skipped = data.get("skipped", [])
+            print()
+            print("# M4 Issue + Slack Summary")
+            print()
+            print(f"- Candidates total: {data.get('candidate_count', 0)}")
+            print(f"- Candidates processed: {data.get('processed_count', 0)}")
+            print(f"- Fresh agent calls: {data.get('fresh_agent_calls', 0)}")
+            print(f"- Fresh agent reviews: {data.get('fresh_agent_reviews', 0)}")
+            print(f"- Issues created: {len(created)}")
+            print(f"- Skipped: {len(skipped)}")
+            if created:
+                print()
+                print("## Created")
+                for item in created:
+                    print(f"- {item.get('issue_url','(missing issue url)')} | {item.get('workflow_name','')} / {item.get('job_name','')}")
+            if skipped:
+                print()
+                print("## Top skip reasons")
+                counts = {}
+                for item in skipped:
+                    reason = str(item.get("reason", "unknown"))
+                    counts[reason] = counts.get(reason, 0) + 1
+                for reason, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:10]:
+                    print(f"- {reason}: {count}")
+            PY
+          fi
 
       - name: Upload data gathering report artifact
         if: ${{ inputs['data-gathering-mode'] }}
