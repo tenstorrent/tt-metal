@@ -202,33 +202,18 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.1875
     sfpi::vFloat x2 = x * x;              // Hoisted: used by both core CDF and exp regions
 
-    v_if(x >= 2.78125f) { result = x; }
-    // Core CDF region [-3.125, 2.78125): GELU(x) = x * Phi_core(x)
-    // Phi(x) = C0 + x*(C1 + x^2*(C3 + x^2*(C5 + ... + x^2*C15)))
-    // Factored via u=x^2 to eliminate zero even-power coefficients
-    v_elseif(x >= -3.125f) {
-        sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
-            x2,
-            GELU_CDF_CORE_C1,
-            GELU_CDF_CORE_C3,
-            GELU_CDF_CORE_C5,
-            GELU_CDF_CORE_C7,
-            GELU_CDF_CORE_C9,
-            GELU_CDF_CORE_C11,
-            GELU_CDF_CORE_C13,
-            GELU_CDF_CORE_C15);
-        sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
-        result = x * phi;
-    }
-    // Exp-based region (-13.1875, -3.125): exp(-x²/2) · P(x)
-    // P(x) is a degree-4 correction polynomial fitted to the TRUE function
-    // GELU(x)·exp(x²/2) via minimax approximation over x ∈ (-13.1875, -3.125).
-    //
-    // Uses Moroz exp_21f instead of Cody-Waite range reduction, saving ~4
-    // instructions. The exp_21f algorithm packs floor(t/ln2) and frac(t/ln2)
-    // into a single int32 via _float_to_int32_for_exp_21f_, then extracts
-    // exponential and fractional parts via exexp_nodebias/exman9.
-    v_elseif(x > -13.1875f) {
+    // v_if/v_and narrowing pattern: start with widest region, progressively
+    // narrow the mask. Each v_and overwrites the result for the narrowed set.
+    // This avoids separate branch mask setup per region (v_elseif).
+    v_if(x > -13.1875f) {
+        // Exp-based region (-13.1875, -3.125): exp(-x²/2) · P(x)
+        // P(x) is a degree-4 correction polynomial fitted to the TRUE function
+        // GELU(x)·exp(x²/2) via minimax approximation over x ∈ (-13.1875, -3.125).
+        //
+        // Uses Moroz exp_21f instead of Cody-Waite range reduction, saving ~4
+        // instructions. The exp_21f algorithm packs floor(t/ln2) and frac(t/ln2)
+        // into a single int32 via _float_to_int32_for_exp_21f_, then extracts
+        // exponential and fractional parts via exexp_nodebias/exman9.
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
 
         // Moroz exp_21f: compact exp via integer bit tricks
@@ -244,11 +229,31 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         sfpi::vFloat exp_val = sfpi::setexp(frac, exponential_part);
 
         // Correction polynomial: P(x) ≈ GELU(x)·exp(x²/2)
-        // Replaces reciprocal + Mills ratio, saving ~8 ops + LUT init
         sfpi::vFloat correction = PolynomialEvaluator::eval(
             x, GELU_EXP_CORR_C0, GELU_EXP_CORR_C1, GELU_EXP_CORR_C2, GELU_EXP_CORR_C3, GELU_EXP_CORR_C4);
 
         result = exp_val * correction;
+
+        // Core CDF region [-3.125, 2.78125): GELU(x) = x * Phi_core(x)
+        // Phi(x) = C0 + x*(C1 + x^2*(C3 + x^2*(C5 + ... + x^2*C15)))
+        // Factored via u=x^2 to eliminate zero even-power coefficients
+        v_and(x >= -3.125f);
+        sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
+            x2,
+            GELU_CDF_CORE_C1,
+            GELU_CDF_CORE_C3,
+            GELU_CDF_CORE_C5,
+            GELU_CDF_CORE_C7,
+            GELU_CDF_CORE_C9,
+            GELU_CDF_CORE_C11,
+            GELU_CDF_CORE_C13,
+            GELU_CDF_CORE_C15);
+        sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
+        result = x * phi;
+
+        // Identity region: x >= 2.78125
+        v_and(x >= 2.78125f);
+        result = x;
     }
     v_endif;
 
