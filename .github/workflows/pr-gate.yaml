@@ -223,6 +223,7 @@ jobs:
     secrets: inherit
     with:
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
       runner: ${{ matrix.platform }}
       upload-coverage: false
