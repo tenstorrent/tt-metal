@@ -19,6 +19,8 @@ from models.tt_dit.pipelines.wan.pipeline_wan_i2v import WanPipelineI2V
 
 from ....utils.test import line_params, ring_params
 
+DEVICE_PARAMS = {"trace_region_size": 100000000}
+
 
 def t2v_metrics(mesh_device, height):
     expected_metrics = {}
@@ -100,19 +102,30 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
     return pipeline_cls, image_prompt, expected_metrics
 
 
+def create_fabric_router_config():
+    config = ttnn.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = 8192
+    return config
+
+
+device_params_8k = ring_params
+if is_blackhole():
+    device_params_8k.update({"fabric_router_config": create_fabric_router_config()})
+
+
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         # FSDP is needed for 2x2 with encoder now on device
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        [(2, 2), (2, 2), 0, 1, 2, False, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 0, 1, 1, True, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, True],
         # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
-        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        [(4, 8), (4, 8), 1, 0, 4, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",
@@ -143,6 +156,14 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
         "i2v",
     ],
 )
+@pytest.mark.parametrize(
+    "traced",
+    [True, False],
+    ids=[
+        "tracing_on",
+        "tracing_off",
+    ],
+)
 def test_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -158,6 +179,7 @@ def test_pipeline_performance(
     is_ci_env: bool,
     galaxy_type: str,
     is_fsdp: bool,
+    traced: bool,
 ) -> None:
     """Performance test for Wan pipeline with detailed timing analysis."""
 
@@ -195,7 +217,7 @@ def test_pipeline_performance(
     ]
 
     num_frames = 81
-    num_inference_steps = 40
+    num_inference_steps = 10
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
@@ -224,6 +246,15 @@ def test_pipeline_performance(
                 num_frames=num_frames,
                 num_inference_steps=2,  # Small number of steps to reduce test time.
             )
+            pipeline(
+                prompt=prompts[0],
+                image_prompt=image_prompt,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=2,  # Small number of steps to reduce test time.
+                traced=traced,
+            )
 
     logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
@@ -251,10 +282,14 @@ def test_pipeline_performance(
                     profiler=benchmark_profiler,
                     profiler_iteration=i,
                     seed=42,
+                    traced=traced,
                 )
-
+                ttnn.synchronize_device(mesh_device)
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
         # Check output
+
+    pipeline.release_traces()
+
     if hasattr(result, "frames"):
         frames = result.frames
     else:
@@ -276,8 +311,8 @@ def test_pipeline_performance(
     try:
         if not is_ci_env:
             if int(ttnn.distributed_context_get_rank()) == 0:
-                export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
-                print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
+                export_to_video(frames, f"wan_output_video_{model_type}{'_traced' if traced else ''}.mp4", fps=16)
+                print(f"✓ Saved video to: wan_output_video_{model_type}{'_traced' if traced else ''}.mp4")
             else:
                 print(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
     except AttributeError as e:
