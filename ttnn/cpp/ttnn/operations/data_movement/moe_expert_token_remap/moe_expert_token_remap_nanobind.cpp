@@ -45,16 +45,15 @@ Returns:
     ttnn::bind_function<"moe_expert_token_remap">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::moe_expert_token_remap,
-            nb::arg("topk_tensor").noconvert(),
-            nb::arg("expert_mapping_tensor").noconvert(),
-            nb::arg("expert_metadata_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("optional_output_mapping_tensor") = std::nullopt,
-            nb::arg("optional_output_reduced_tensor") = std::nullopt,
-            nb::arg("reduction_size") = MoeExpertTokenRemapDeviceOperation::REDUCTION_SIZE));
+        &ttnn::moe_expert_token_remap,
+        nb::arg("topk_tensor").noconvert(),
+        nb::arg("expert_mapping_tensor").noconvert(),
+        nb::arg("expert_metadata_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = std::nullopt,
+        nb::arg("optional_output_mapping_tensor") = std::nullopt,
+        nb::arg("optional_output_reduced_tensor") = std::nullopt,
+        nb::arg("reduction_size") = MoeExpertTokenRemapDeviceOperation::REDUCTION_SIZE);
 }
 
 }  // namespace ttnn::operations::data_movement::detail

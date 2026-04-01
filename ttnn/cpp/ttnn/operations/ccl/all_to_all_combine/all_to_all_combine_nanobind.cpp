@@ -94,20 +94,19 @@ void bind_all_to_all_combine(nb::module_& mod) {
     ttnn::bind_function<"all_to_all_combine">(
         mod,
         doc,
-        ttnn::overload_t(
-            all_to_all_combine_impl,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("expert_metadata_tensor").noconvert(),
-            nb::arg("expert_mapping_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("local_reduce") = false,
-            nb::arg("output_shard_dim") = 1,
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("num_links") = nb::none(),
-            nb::arg("topology").noconvert() = nb::none()));
+        all_to_all_combine_impl,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("expert_metadata_tensor").noconvert(),
+        nb::arg("expert_mapping_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("local_reduce") = false,
+        nb::arg("output_shard_dim") = 1,
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("num_links") = nb::none(),
+        nb::arg("topology").noconvert() = nb::none());
 }
 
 }  // namespace ttnn::operations::ccl

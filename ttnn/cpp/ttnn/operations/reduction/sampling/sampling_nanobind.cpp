@@ -122,17 +122,16 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
     ttnn::bind_function<"sampling">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::sampling,
-            nb::arg("input_values_tensor").noconvert(),
-            nb::arg("input_indices_tensor").noconvert(),
-            nb::arg("k").noconvert(),
-            nb::arg("p").noconvert(),
-            nb::arg("temp").noconvert(),
-            nb::kw_only(),
-            nb::arg("seed") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("output_tensor") = nb::none()));
+        &ttnn::sampling,
+        nb::arg("input_values_tensor").noconvert(),
+        nb::arg("input_indices_tensor").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("p").noconvert(),
+        nb::arg("temp").noconvert(),
+        nb::kw_only(),
+        nb::arg("seed") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::reduction::detail

@@ -39,12 +39,11 @@ void bind_untilize(nb::module_& mod) {
     ttnn::bind_function<"untilize">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::untilize,
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("use_multicore") = true,
-            nb::arg("sub_core_grids") = nb::none()));
+        &ttnn::untilize,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("use_multicore") = true,
+        nb::arg("sub_core_grids") = nb::none());
 }
 }  // namespace ttnn::operations::data_movement::detail

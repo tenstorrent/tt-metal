@@ -43,15 +43,14 @@ void bind_sharded_to_interleaved_partial(nb::module_& mod) {
     ttnn::bind_function<"sharded_to_interleaved_partial">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::sharded_to_interleaved_partial,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("cache_tensor").noconvert(),
-            nb::arg("num_slices"),
-            nb::arg("slice_index"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_dtype") = nb::none()));
+        &ttnn::sharded_to_interleaved_partial,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("cache_tensor").noconvert(),
+        nb::arg("num_slices"),
+        nb::arg("slice_index"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_dtype") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement

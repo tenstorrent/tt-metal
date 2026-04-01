@@ -66,25 +66,24 @@ void bind_dispatch(nb::module_& mod) {
                     metadata_len=5,
                     max_dispatched_tokens_per_expert=256)
         )doc",
-        ttnn::overload_t(
-            &dispatch,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("weights_tensor").noconvert(),
-            nb::arg("indices_tensor").noconvert(),
-            nb::arg("expert_offsets_tensor").noconvert(),
-            nb::arg("expert_dispatch_table_tensor").noconvert(),
-            nb::kw_only(),
-            nb::arg("dispatch_group_size"),
-            nb::arg("experts_per_chip"),
-            nb::arg("num_routed_experts"),
-            nb::arg("num_experts_per_tok"),
-            nb::arg("metadata_len"),
-            nb::arg("max_dispatched_tokens_per_expert"),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("subdevice_id") = nb::none(),
-            nb::arg("cluster_axis") = nb::none(),
-            nb::arg("num_links") = 1,
-            nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear)));
+        &dispatch,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("weights_tensor").noconvert(),
+        nb::arg("indices_tensor").noconvert(),
+        nb::arg("expert_offsets_tensor").noconvert(),
+        nb::arg("expert_dispatch_table_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("dispatch_group_size"),
+        nb::arg("experts_per_chip"),
+        nb::arg("num_routed_experts"),
+        nb::arg("num_experts_per_tok"),
+        nb::arg("metadata_len"),
+        nb::arg("max_dispatched_tokens_per_expert"),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("num_links") = 1,
+        nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail

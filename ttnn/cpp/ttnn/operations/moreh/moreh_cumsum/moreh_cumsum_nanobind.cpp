@@ -18,26 +18,24 @@ void bind_moreh_cumsum_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_cumsum">(
         mod,
         "Moreh Cumsum Operation",
-        ttnn::overload_t(
-            &ttnn::moreh_cumsum,
-            nb::arg("input"),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("output") = nb::none(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::moreh_cumsum,
+        nb::arg("input"),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("output") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 
 void bind_moreh_cumsum_backward_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_cumsum_backward">(
         mod,
         "Moreh Cumsum Backward Operation",
-        ttnn::overload_t(
-            &ttnn::moreh_cumsum_backward,
-            nb::arg("output_grad"),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("input_grad") = nb::none(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::moreh_cumsum_backward,
+        nb::arg("output_grad"),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("input_grad") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::moreh::moreh_cumsum

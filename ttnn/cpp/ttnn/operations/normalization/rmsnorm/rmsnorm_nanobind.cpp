@@ -107,17 +107,16 @@ void bind_normalization_rms_norm(nb::module_& mod) {
     ttnn::bind_function<"rms_norm">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::rms_norm,
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("epsilon") = 1e-12,
-            nb::arg("weight") = nb::none(),
-            nb::arg("bias") = nb::none(),
-            nb::arg("residual_input_tensor") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("program_config") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none()));
+        &ttnn::rms_norm,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("epsilon") = 1e-12,
+        nb::arg("weight") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("residual_input_tensor") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::normalization::detail

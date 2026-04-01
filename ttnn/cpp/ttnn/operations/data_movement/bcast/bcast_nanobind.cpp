@@ -57,15 +57,14 @@ void bind_bcast(nb::module_& mod) {
     ttnn::bind_function<"bcast">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::bcast,
-            nb::arg("input_a").noconvert(),
-            nb::arg("input_b").noconvert(),
-            nb::arg("math_op"),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()));
+        &ttnn::bcast,
+        nb::arg("input_a").noconvert(),
+        nb::arg("input_b").noconvert(),
+        nb::arg("math_op"),
+        nb::arg("dim"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement::detail
