@@ -67,6 +67,81 @@
   team: models
 
 # ============================================================================
+# DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole Multihost (4x2 mesh)
+# ============================================================================
+
+- name: bh_lb_DeepSeek_B1_Decoder_MoE
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_decoder_block.py::test_decoder \
+      -k "mesh_rows_4 and mesh_cols_2 and position_id_0 and rigged_groups8" \
+      -vvv --tb=short --timeout 600
+  model: deepseek_decode
+  skus:
+    bh_loudbox:
+      timeout: 45
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_lb_DeepSeek_B1_Decoder_DenseMLP
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_decoder_block.py::test_decoder_mlp \
+      -k "mesh_rows_4 and mesh_cols_2 and position_id_0" \
+      -vvv --tb=short --timeout 600
+  model: deepseek_decode
+  skus:
+    bh_loudbox:
+      timeout: 30
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_lb_DeepSeek_B1_Post_SDPA_4x2
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_post_sdpa.py \
+      -k "mesh_rows_4 and mesh_cols_2" \
+      -vvv --tb=short --timeout 600
+  model: deepseek_decode
+  skus:
+    bh_loudbox:
+      timeout: 30
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_lb_DeepSeek_B1_Sampling_4x2
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_sampling.py::test_sampling_argmax_mesh_4x2_axis_x \
+      -vvv --tb=short --timeout 600
+  model: deepseek_decode
+  skus:
+    bh_loudbox:
+      timeout: 25
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_lb_DeepSeek_B1_PrepareWeights_4x2
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/test_prepare_weights.py \
+      -k "4x2" \
+      -vvv --tb=short --timeout 900
+  model: deepseek_decode
+  skus:
+    bh_loudbox:
+      timeout: 60
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_lb_DeepSeek_B1_Full_Unit_Tests
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/ \
+      -m "not skip_post_commit" \
+      -vvv --tb=short --timeout 1200
+  model: deepseek_decode
+  skus:
+    bh_loudbox:
+      timeout: 90
+  owner_id: U03HY7MK4BT
+  team: models
+
+# ============================================================================
 # Wan 2.2 Tests (Galaxy)
 # ============================================================================
 

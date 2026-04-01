@@ -40,6 +40,7 @@ on:
         options:
           - all
           - deepseek_prefill
+          - deepseek_decode
           - wan22
 
   schedule:
@@ -77,7 +78,22 @@ jobs:
       enabled-skus: bh_galaxy,wh_llmbox_perf,bh_loudbox,bh_llmbox
       model: deepseek_prefill
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
-      job-prefix: "[DeepSeek] "
+      job-prefix: "[DeepSeek Prefill] "
+
+  deepseek-decode-tests:
+    name: "DeepSeek Decode Tests (B1 Decoder Block)"
+    needs: build-artifact
+    if: ${{ inputs.test-group == 'all' || inputs.test-group == 'deepseek_decode' || github.event_name == 'schedule' }}
+    secrets: inherit
+    uses: ./.github/workflows/demo-sp-release-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      enabled-skus: bh_loudbox
+      model: deepseek_decode
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      job-prefix: "[DeepSeek Decode] "
 
   wan22-tests:
     name: "Wan 2.2 Tests"
