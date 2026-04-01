@@ -17,7 +17,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
-from models.demos.deepseek_v3_b1.blitz_decode_weights import GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC, BlitzDecodeWeights
+from models.demos.deepseek_v3_b1.blitz_decode_weights import GATE_UP_PROJ_SINGLE_DEVICE_OVERLAP_SPEC, fuse_gate_up
 from models.demos.deepseek_v3_b1.fused_ops.down_proj.op import DownProj
 from models.demos.deepseek_v3_b1.fused_ops.shared_expert.op import SharedExpertOp
 
@@ -107,16 +107,16 @@ def test_shared_expert(device, K_gate, N_per_core, weights_dtype):
     # ========================================================================
     # Gate/Up/Down weights
     # ========================================================================
-    # BlitzDecodeWeights hard-codes weights to bfloat4_b; use the old flow to test bfloat8_b weights
+    # fuse_gate_up hard-codes weights to bfloat4_b; use the old flow to test bfloat8_b weights
     if use_bdw:
-        bdw = BlitzDecodeWeights(device)
-        gate_ov, _up_ov, ttnn_down_weights = bdw.get_tt_moe_shared_expert_weights(
+        gate_ov, _up_ov, ttnn_down_weights = fuse_gate_up(
             torch_gate_weights,
             torch_up_weights,
             torch_down_weights,
+            device,
         )
         ttnn_gate_up_weights = gate_ov.fused_tensor
-        logger.info("Created shared expert weights via BlitzDecodeWeights")
+        logger.info("Created shared expert weights via fuse_gate_up")
     else:
         a_cores_list, b_cores_list = SharedExpertOp.build_ab_grids()
         compute_cores_list = a_cores_list + b_cores_list

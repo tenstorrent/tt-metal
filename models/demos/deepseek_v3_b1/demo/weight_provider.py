@@ -10,34 +10,37 @@ StateDictWeightProvider loads HuggingFace safetensors and runs the same prepare_
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Protocol
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.prepare_weights import (
     _MTP_LAYER_IDX,
+    CURRENT_TRANSFORM_VERSION,
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
     DeepSeekV3EmbeddingLayerWeights,
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
     DeepSeekV3MTPWeights,
-    load_dense_decoder_layer,
-    load_embedding_weights,
-    load_lm_head_weights,
-    load_moe_decoder_layer,
-    load_moe_routed_experts,
-    load_mtp_weights,
+    MoERoutedExpertWeights,
+    OverlappedTensor,
+    prepare_attention_weights,
     prepare_dense_layer_weights,
     prepare_embedding_weights,
     prepare_lm_head_weights,
     prepare_moe_layer_weights,
     prepare_mtp_weights,
+    prepare_routed_expert_weights,
+    prepare_shared_expert_weights,
 )
+from models.demos.deepseek_v3_b1.tensor_cache import CacheConfig, CacheContext, TensorCache
 
 
 class WeightProvider(Protocol):
@@ -201,30 +204,143 @@ def _build_synthetic_mtp_state_dict(mtp_layer_idx: int = _MTP_LAYER_IDX) -> dict
 
 
 class CacheWeightProvider:
-    """Load embedding and LM head weights from cache; each host loads only what its stage needs."""
+    """Load weights through TensorCache-backed ``prepare_*`` calls with LazyStateDict miss source.
 
-    def __init__(self, cache_path: Path) -> None:
-        assert cache_path.exists(), f"Cache path does not exist: {cache_path}"
-        assert cache_path.is_dir(), f"Cache path is not a directory: {cache_path}"
-        self._path = cache_path
+    The cache directory is created on first use if it does not already exist.
+    """
+
+    def __init__(
+        self,
+        cache_path: Path,
+        model_path: Path,
+        *,
+        hf_model_id: str | None = None,
+        hf_revision: str = "local",
+        schema_version: int = 1,
+    ) -> None:
+        cache_path = Path(cache_path)
+        model_path = Path(model_path)
+        assert model_path.exists(), f"Model path does not exist: {model_path}"
+        assert model_path.is_dir(), f"Model path is not a directory: {model_path}"
+        self._cache = TensorCache(cache_path)
+        self._state_dict = LazyStateDict(model_path)
+        self._schema_version = schema_version
+        self._hf_model_id = hf_model_id or model_path.name
+        self._hf_revision = hf_revision
+
+    def _cache_config(self, device: ttnn.MeshDevice) -> CacheConfig:
+        context = CacheContext(
+            schema_version=self._schema_version,
+            hf_model_id=self._hf_model_id,
+            hf_revision=self._hf_revision,
+            transform_version=CURRENT_TRANSFORM_VERSION,
+            mesh_shape=(device.shape[0], device.shape[1]),
+        )
+        return CacheConfig(cache=self._cache, context=context)
 
     def load_embedding(self, device: ttnn.MeshDevice) -> DeepSeekV3EmbeddingLayerWeights:
-        return load_embedding_weights(self._path, device)
+        return prepare_embedding_weights(self._state_dict, device, cache_config=self._cache_config(device))
 
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
-        return load_lm_head_weights(self._path, device)
+        return prepare_lm_head_weights(self._state_dict, device, cache_config=self._cache_config(device))
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+        """Load MoE layer from tensor cache; routed experts use fast dispatch, rest uses slow dispatch."""
+        t_load = time.perf_counter()
+        cache_config = self._cache_config(device)
+        setup_s = time.perf_counter() - t_load
+
+        t_before_with = time.perf_counter()
         with ttnn.device.setup_fast_dispatch(device):
-            preloaded_experts = load_moe_routed_experts(self._path, device, layer_id)
+            t_after_fd_init = time.perf_counter()
+            fd_init_s = t_after_fd_init - t_before_with
+            t0 = time.perf_counter()
+            routed = prepare_routed_expert_weights(
+                device,
+                self._state_dict,
+                layer_id,
+                is_moe=True,
+                num_routed_experts=NUM_ROUTED_EXPERTS,
+                move_to_device=True,
+                cache_config=cache_config,
+            )
+            routed_prepare_s = time.perf_counter() - t0
+            t_before_teardown = time.perf_counter()
+        t_after_with = time.perf_counter()
+        fd_teardown_s = t_after_with - t_before_teardown
+
         ttnn.enable_asynchronous_slow_dispatch(device)
-        return load_moe_decoder_layer(self._path, device, layer_id, preloaded_routed_experts=preloaded_experts)
+
+        logger.info(f"CacheWeightProvider MoE layer {layer_id}: setup (cache_config) {setup_s:.3f}s")
+        logger.info(f"CacheWeightProvider MoE layer {layer_id}: fast_dispatch initialize {fd_init_s:.3f}s")
+        logger.info(f"CacheWeightProvider MoE layer {layer_id}: prepare_routed_expert_weights {routed_prepare_s:.3f}s")
+        logger.info(f"CacheWeightProvider MoE layer {layer_id}: fast_dispatch terminate {fd_teardown_s:.3f}s")
+
+        t0 = time.perf_counter()
+        attn = prepare_attention_weights(
+            device,
+            self._state_dict,
+            layer_id,
+            is_moe=True,
+            move_to_device=True,
+            cache_config=cache_config,
+        )
+        attn_s = time.perf_counter() - t0
+        logger.info(f"CacheWeightProvider MoE layer {layer_id}: prepare_attention_weights {attn_s:.3f}s")
+        t0 = time.perf_counter()
+        shared = prepare_shared_expert_weights(
+            device,
+            self._state_dict,
+            layer_id,
+            is_moe=True,
+            move_to_device=True,
+            cache_config=cache_config,
+        )
+        shared_s = time.perf_counter() - t0
+        logger.info(f"CacheWeightProvider MoE layer {layer_id}: prepare_shared_expert_weights {shared_s:.3f}s")
+
+        total_s = time.perf_counter() - t_load
+        sum_parts = setup_s + fd_init_s + routed_prepare_s + fd_teardown_s + attn_s + shared_s
+        overhead_s = total_s - sum_parts
+        logger.info(
+            f"CacheWeightProvider MoE layer {layer_id}: load_moe_layer total {total_s:.3f}s "
+            f"(sum of parts {sum_parts:.3f}s; unaccounted {overhead_s:+.3f}s — logging / small gaps)"
+        )
+        assert isinstance(attn.gate_mm, OverlappedTensor)
+        assert attn.gate_bias is not None
+        assert isinstance(routed, MoERoutedExpertWeights)
+        return DeepSeekV3MoELayerWeights(
+            q_a_proj=attn.q_a_proj,
+            q_b_proj=attn.q_b_proj,
+            kv_a_proj=attn.kv_a_proj,
+            o_proj=attn.o_proj,
+            gate_mm=attn.gate_mm,
+            attn_norm=attn.attn_norm,
+            q_norm=attn.q_norm,
+            kv_norm=attn.kv_norm,
+            ffn_norm=attn.ffn_norm,
+            gate_bias=attn.gate_bias,
+            kv_b1_proj=attn.kv_b1_proj,
+            kv_b2_proj=attn.kv_b2_proj,
+            shared_gate_proj=shared.shared_gate_proj,
+            shared_up_proj=shared.shared_up_proj,
+            shared_down_proj=shared.shared_down_proj,
+            routed_gate_proj=routed.routed_gate_proj,
+            routed_up_proj=routed.routed_up_proj,
+            routed_down_proj=routed.routed_down_proj,
+        )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        return load_dense_decoder_layer(self._path, device, layer_id)
+        return prepare_dense_layer_weights(
+            device,
+            self._state_dict,
+            layer_id,
+            move_to_device=True,
+            cache_config=self._cache_config(device),
+        )
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
-        return load_mtp_weights(self._path, device)
+        return prepare_mtp_weights(self._state_dict, device, cache_config=self._cache_config(device))
 
 
 class SyntheticWeightProvider:
@@ -260,18 +376,12 @@ class SyntheticWeightProvider:
         )
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
-        bdw = BlitzDecodeWeights(device)
-        return prepare_moe_layer_weights(bdw, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
+        return prepare_moe_layer_weights(device, sd, layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
         sd = _build_synthetic_dense_state_dict(layer_id)
-        bdw = BlitzDecodeWeights(device)
-        return prepare_dense_layer_weights(bdw, sd, layer_id, move_to_device=True)
+        return prepare_dense_layer_weights(device, sd, layer_id, move_to_device=True)
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         sd = _build_synthetic_mtp_state_dict()
@@ -294,11 +404,8 @@ class StateDictWeightProvider:
         return prepare_lm_head_weights(self._state_dict, device, move_to_device=True)
 
     def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
-        bdw = BlitzDecodeWeights(device)
         return prepare_moe_layer_weights(
-            bdw,
+            device,
             self._state_dict,
             layer_id,
             num_routed_experts=NUM_ROUTED_EXPERTS,
@@ -306,10 +413,7 @@ class StateDictWeightProvider:
         )
 
     def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
-
-        bdw = BlitzDecodeWeights(device)
-        return prepare_dense_layer_weights(bdw, self._state_dict, layer_id, move_to_device=True)
+        return prepare_dense_layer_weights(device, self._state_dict, layer_id, move_to_device=True)
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         return prepare_mtp_weights(self._state_dict, device, move_to_device=True)
