@@ -5,7 +5,7 @@
 """
 TG (Single Galaxy) Dispatch Test - 4x8 Mesh
 
-Tests all_to_all_dispatch_metadata operation on single galaxy (32 devices, 4x8 mesh).
+Tests ttnn.experimental.all_to_all_dispatch_metadata operation on single galaxy (32 devices, 4x8 mesh).
 
 This test validates dispatch operations with:
 - 64 experts (2 per device) - same per-device workload as quad
@@ -330,6 +330,18 @@ def run_all_to_all_dispatch_metadata_test(
             f"dispatch_devices should be mesh_shape[{cluster_axis}]={expected_dispatch_devices}, "
             f"and batch should be {expected_batch}. If you swapped num_rows/num_cols in "
             f"all_to_all_dispatch_device_operation.cpp line 104, this is the bug!"
+        )
+
+        # This check catches cluster_axis bugs: batch dimension MUST match expected_dispatch_devices * batches_per_device
+        # If the C++ code swaps num_rows/num_cols, this will fail
+        expected_dispatch_devices = mesh_shape[cluster_axis]
+        calculated_batch_from_shape = tt_metadata_tensor.shape[1]
+
+        assert calculated_batch_from_shape == expected_batch, (
+            f"CRITICAL: Batch dimension {calculated_batch_from_shape} doesn't match expected {expected_batch}! "
+            f"This suggests cluster_axis logic is wrong. With cluster_axis={cluster_axis}, "
+            f"dispatch_devices should be mesh_shape[{cluster_axis}]={expected_dispatch_devices}, "
+            f"and batch should be {expected_batch}."
         )
 
         if tensor_index == 0:
