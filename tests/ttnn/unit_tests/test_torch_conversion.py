@@ -960,3 +960,43 @@ def test_from_torch_row_major_sharded_non_tile_aligned_shard_shape(mesh_device, 
 
     result = ttnn.to_torch(ttnn_tensor)
     torch.testing.assert_close(torch_tensor, result.to(torch.int32))
+
+
+@pytest.mark.parametrize(
+    "torch_dtype,ttnn_dtype,shape",
+    [
+        (torch.float32, ttnn.bfloat16, (8, 32, 2, 7000)),
+    ],
+)
+def test_from_torch_large_tensor_type_conversion_row_major_l1(device, torch_dtype, ttnn_dtype, shape):
+    """
+    Regression test: from_torch with a type conversion (float32 → bfloat16),
+    ROW_MAJOR_LAYOUT, L1_MEMORY_CONFIG, and a mesh_mapper must not OOM.
+
+    Derived from test_all_to_all_combine_no_trace where a float32 [32, 32, 2, 7000]
+    tensor sharded across 4 devices (→ [8, 32, 2, 7000] per device) was converted
+    to bfloat16 in L1. The mesh_mapper path in create_tt_tensor_from_host_data keeps
+    the tensor as float32 on device when has_sufficient_device_memory returns true
+    for the ROW_MAJOR size. Then convert_python_tensor_to_tt_tensor does
+    set_layout(TILE) → typecast → set_layout(ROW_MAJOR), and the tilize step tries
+    to allocate a tile-padded float32 buffer ([8,32,32,7008]*4B ≈ 220 MB) that
+    exceeds L1 bank capacity.
+
+    """
+    torch.manual_seed(42)
+    torch_tensor = torch.rand(shape, dtype=torch_dtype) * 0.2 - 0.1
+
+    ttnn_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ReplicateTensorToMesh(device),
+    )
+
+    assert ttnn_tensor.dtype == ttnn_dtype
+    assert ttnn_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    result = ttnn.to_torch(ttnn_tensor)
+    assert_with_pcc(torch_tensor, result, 0.999)
