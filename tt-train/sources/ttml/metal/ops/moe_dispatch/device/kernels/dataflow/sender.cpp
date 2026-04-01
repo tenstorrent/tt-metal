@@ -98,7 +98,7 @@ void kernel_main() {
     // Each turn, this device sends for E_local experts, strided across device groups:
     //   expert = turn + i * num_devices   (i = 0..E_local-1)
     // All devices hold the token simultaneously within a turn, so all compute in parallel.
-    for (uint32_t t = 0; t < num_experts / E_local; t++) {
+    for (uint32_t t = 0; t < E_local; t++) {
         // Wait for our turn
         DPRINT << "SENDER[" << my_device_index << "]: turn=" << t << " waiting go_sem=" << (turn + 1)
                << " cur=" << *go_sem_ptr << ENDL();
@@ -139,26 +139,45 @@ void kernel_main() {
                         noc_async_write_barrier();
                         noc_semaphore_inc(owner_sem_noc, 1);
                     } else {
-                        uint64_t dest_noc = dispatch_acc.get_noc_addr(dst_tile_idx);
-
-                        pkt_hdr->to_noc_fused_unicast_write_atomic_inc(
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dest_noc, owner_sem_noc, 1, false},
-                            row_bytes);
-                        tt::tt_fabric::fabric_set_unicast_route(
-                            (volatile tt::tt_fabric::HybridMeshPacketHeader*)pkt_hdr, owner_dev_id, my_mesh_id);
-
                         uint32_t route = static_cast<uint32_t>(
                             tt::tt_fabric::get_next_hop_router_direction(my_mesh_id, owner_dev_id));
-                        if (route == fwd_direction) {
+                        bool use_fwd = (route == fwd_direction);
+
+                        // Send each tile individually: dispatch_buf is interleaved, tiles are not contiguous
+                        for (uint32_t k = 0; k < D_t; k++) {
+                            uint64_t tile_dest_noc = dispatch_acc.get_noc_addr(dst_tile_idx + k);
+                            pkt_hdr->to_noc_unicast_write(
+                                tt::tt_fabric::NocUnicastCommandHeader{tile_dest_noc}, tile_bytes);
+                            tt::tt_fabric::fabric_set_unicast_route(
+                                (volatile tt::tt_fabric::HybridMeshPacketHeader*)pkt_hdr, owner_dev_id, my_mesh_id);
+                            if (use_fwd) {
+                                fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+                                fabric_connection.get_forward_connection()
+                                    .send_payload_without_header_non_blocking_from_address(
+                                        l1 + k * tile_bytes, tile_bytes);
+                                fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+                            } else {
+                                fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+                                fabric_connection.get_backward_connection()
+                                    .send_payload_without_header_non_blocking_from_address(
+                                        l1 + k * tile_bytes, tile_bytes);
+                                fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+                            }
+                        }
+
+                        // After all tiles written, send the semaphore increment
+                        pkt_hdr->to_noc_unicast_atomic_inc(
+                            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{owner_sem_noc, 1, false});
+                        tt::tt_fabric::fabric_set_unicast_route(
+                            (volatile tt::tt_fabric::HybridMeshPacketHeader*)pkt_hdr, owner_dev_id, my_mesh_id);
+                        if (use_fwd) {
                             fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-                            fabric_connection.get_forward_connection()
-                                .send_payload_without_header_non_blocking_from_address(l1, row_bytes);
                             fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
                                 (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
                         } else {
                             fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-                            fabric_connection.get_backward_connection()
-                                .send_payload_without_header_non_blocking_from_address(l1, row_bytes);
                             fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
                                 (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
                         }
