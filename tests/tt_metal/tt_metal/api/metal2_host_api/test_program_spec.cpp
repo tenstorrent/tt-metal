@@ -31,8 +31,6 @@ using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorker;
-using test_helpers::MINIMAL_COMPUTE_KERNEL_SOURCE;
-using test_helpers::MINIMAL_DM_KERNEL_SOURCE;
 
 // ============================================================================
 // Test Fixtures
