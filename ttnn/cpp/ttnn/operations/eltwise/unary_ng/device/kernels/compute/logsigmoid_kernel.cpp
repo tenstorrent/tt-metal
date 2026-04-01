@@ -1,16 +1,15 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/eltwise_unary/activations.h"
+#include "api/compute/eltwise_unary/exp.h"
+#include "api/compute/logsigmoid.h"
+#include "api/compute/eltwise_unary/negative.h"
 #include "experimental/circular_buffer.h"
 
 void kernel_main() {
@@ -25,35 +24,31 @@ void kernel_main() {
     init_sfpu(cb_input, cb_output);
 
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        tile_regs_acquire();
-
         cb_in.wait_front(1);
         cb_out.reserve_back(1);
+
+        tile_regs_acquire();
 
         copy_tile_to_dst_init_short(cb_input);
         copy_tile(cb_input, 0, 0);
         copy_tile(cb_input, 0, 1);
 
-        hardsigmoid_tile_init();
-        hardsigmoid_tile(0);
+        negative_tile_init();
+        negative_tile(1);
 
-#ifdef INP_FLOAT32
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);
-#endif
-#ifdef INP_FLOAT
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input);
-        binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input, 0, 0);
-#endif
+        exp_tile_init<true, true>();
+        exp_tile<true, true>(1);
+
+        logsigmoid_tile_init();
+        logsigmoid_tile(0, 1, 0);
 
         tile_regs_commit();
         tile_regs_wait();
 
         pack_tile(0, cb_output);
+        tile_regs_release();
 
         cb_in.pop_front(1);
         cb_out.push_back(1);
-
-        tile_regs_release();
     }
 }
