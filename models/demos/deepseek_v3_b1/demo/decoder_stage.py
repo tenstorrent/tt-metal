@@ -15,8 +15,8 @@ import ttnn
 from models.demos.deepseek_v3_b1.demo.stage import (
     ACTIVATION_FIFO_SIZE,
     ACTIVATION_PAGE_SIZE_BYTES,
-    ACTIVATION_W_METADATA_FIFO_SIZE,
-    ACTIVATION_W_METADATA_PAGE_SIZE_BYTES,
+    ACTIVATION_W_TOKEN_META_FIFO_SIZE,
+    ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES,
     PIPELINE_CORE_COORD,
     StageContext,
     StageKind,
@@ -95,8 +95,8 @@ class DecoderStage(StageKind):
         exit_upstream_page_size = ACTIVATION_PAGE_SIZE_BYTES // len(shard_cores_list)
 
         if self._forward_metadata:
-            fifo_size = ACTIVATION_W_METADATA_FIFO_SIZE
-            page_size = ACTIVATION_W_METADATA_PAGE_SIZE_BYTES
+            fifo_size = ACTIVATION_W_TOKEN_META_FIFO_SIZE
+            page_size = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         else:
             fifo_size = ACTIVATION_FIFO_SIZE
             page_size = ACTIVATION_PAGE_SIZE_BYTES

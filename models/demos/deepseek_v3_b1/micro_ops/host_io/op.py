@@ -51,6 +51,7 @@ class HostInterface:
         embedding_cb_index=None,
         fabric_packet_header_cb_index=None,
         metadata_size_bytes=0,
+        downstream_socket_page_size=0,
     ):
         assert h2d_socket is not None or d2h_socket is not None, "Either h2d_socket or d2h_socket must be provided"
 

@@ -13,7 +13,14 @@ import ttnn
 class DeepseekMetadata:
     FIELD_SIZE_BYTES = 4  # Each field is uint32_t
 
+    tok0_id: int = 0
+    tok0_type: int = 0
+    tok0_pos: int = 0
+    tok1_id: int = 0
+    tok1_type: int = 0
+    tok1_pos: int = 0
     slot_id: int = 0
+    token_id: int = 0
     position_id: int = 0
 
     @classmethod

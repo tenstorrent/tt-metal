@@ -6,6 +6,7 @@
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "pcie_noc_utils.h"
+#include "../../../metadata/metadata.hpp"
 
 // Get this value from MeshSocket struct on host
 constexpr uint32_t recv_socket_config_addr = get_compile_time_arg_val(0);
@@ -81,7 +82,7 @@ FORCE_INLINE void send_pages_over_socket(
     uint64_t dst_addr) {
     if constexpr (use_fabric) {
         constexpr uint32_t num_fabric_connections = 2;
-        constexpr uint32_t page_size_per_link = downstream_socket_page_size / num_fabric_connections;
+        constexpr uint32_t page_size_per_link = (embedding_page_size + metadata_size_bytes) / num_fabric_connections;
         uint32_t l1_read_addr_0 = l1_read_addr;
         uint32_t l1_read_addr_1 = l1_read_addr + page_size_per_link;
         uint64_t dst_addr_0 = dst_addr;
@@ -152,7 +153,7 @@ void kernel_main() {
     if constexpr (!loopback_mode) {
         sender_socket = create_sender_socket_interface(downstream_interface_index);
         DPRINT << "set sender socket page size" << ENDL();
-        set_sender_socket_page_size(sender_socket, downstream_socket_page_size);
+        set_sender_socket_page_size(sender_socket, (embedding_page_size + metadata_size_bytes));
         DPRINT << "set sender socket page size done" << ENDL();
         downstream_enc = get_downstream_encoding(sender_socket, 0);
     }
@@ -226,20 +227,26 @@ void kernel_main() {
         DPRINT << "H2D RECEIVER READ OVER PCIe DONE" << ENDL();
 
         // TODO: Add and assert that token id is within vocab size
-        volatile tt_l1_ptr uint32_t* token_id_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.read_ptr);
+        volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+            reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(receiver_socket.read_ptr);
+
+        DPRINT << "EMB TOKEN ID: " << metadata_ptr->token_id << ENDL();
+
         // Embedding CB is a scratch pad for now. We only read into the first slot of the CB.
         // TODO: Setup separate reader to pipeline reads.
         uint32_t l1_write_addr = get_write_ptr(embedding_cb_index);
-        uint64_t noc_addr = embedding_accessor.get_noc_addr(*token_id_ptr);
+        uint64_t noc_addr = embedding_accessor.get_noc_addr(metadata_ptr->token_id);
         noc_async_read(noc_addr, l1_write_addr, embedding_page_size);
 
-        volatile tt_l1_ptr uint32_t* metadata_ptr =
+        volatile tt_l1_ptr uint32_t* metadata_rd_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.read_ptr);
+
+        volatile tt_l1_ptr uint32_t* metadata_wr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr + embedding_page_size);
         uint32_t num_metadata_words = metadata_size_bytes / sizeof(uint32_t);
 
         for (uint32_t md_idx = 0; md_idx < num_metadata_words; ++md_idx) {
-            metadata_ptr[md_idx] = token_id_ptr[md_idx];
+            metadata_wr_ptr[md_idx] = metadata_rd_ptr[md_idx];
         }
 
         noc_async_read_barrier();

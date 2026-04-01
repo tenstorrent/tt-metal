@@ -162,7 +162,7 @@ def create_single_galaxy_combined_spec_decode_pipeline_configuration(
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return SpecLMHeadWithEmbeddingStage(
             weights=weight_provider.load_lm_head(device),
-            embedding_weights=weight_provider.load_embedding(device, True),
+            embedding_weights=weight_provider.load_embedding(device),
             fp32_dest_acc_en=fp32_dest_acc_en,
             persistent_mode=persistent_mode,
         )

@@ -33,7 +33,6 @@ from models.demos.deepseek_v3_b1.demo.pipeline import (
     PipelineConfiguration,
     create_single_galaxy_combined_spec_decode_pipeline_configuration,
     create_single_galaxy_pipeline_configuration,
-    create_single_galaxy_pipeline_spec_stage_only_configuration,
     create_single_galaxy_spec_decode_pipeline_configuration,
 )
 from models.demos.deepseek_v3_b1.demo.stage import (
@@ -4766,6 +4765,7 @@ def test_reference_payload_mtp_accept_rate_ttnn(
         _log_reference_payload_mtp_metrics(metrics, label="TTNN")
         _assert_reference_payload_accept_rate(metrics, label="TTNN")
 
+
 # @pytest.mark.skipif(not _is_persistent_mode_enabled(), reason="Set RUN_PERSISTENT_MODE=1 to run persistent mode test")
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize(
@@ -4952,8 +4952,7 @@ def test_persistent_mode_pod(mesh_device, use_fp32, device_params):
     indirect=True,
 )
 def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
-    """
-    4-stage 4x2 single-galaxy pipeline with MTP + verification:
+    """4-stage 4x2 single-galaxy pipeline with MTP + verification:
     P1(Embedding + SpecLMHead) -> P2(BaseLMHead+EH Matmul) -> P3(Passthrough ACTIVATION_W_TOKEN_META) -> P4(Passthrough ACTIVATION_W_TOKEN_META) -> P1(D2H TOKEN_META).
 
     The verification stage (P1) receives gathered logits + token metadata, runs its
@@ -4983,6 +4982,10 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
     pipeline = config.build_pipeline(mesh_device)
     pid = pipeline.my_mesh_id
     print(f"[TEST P{pid}] pipeline built, calling setup_and_run", flush=True)
+
+    pos_id = 0
+    slot_id = 23
+
     try:
         pipeline.setup_and_run()
         print(f"[TEST P{pid}] setup_and_run complete", flush=True)
@@ -4996,10 +4999,20 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
                 print(f"[TEST] golden computed, creating config", flush=True)
             else:
                 print(f"[TEST] skipping golden computation", flush=True)
+
+            tok0_id = 0
+            tok0_type = 0
+            tok0_pos = 0
+            tok1_id = 0
+            tok1_type = 0
+            tok1_pos = 0
+
             for iteration in range(iterations):
                 print(f"[TEST P{pid}] iter {iteration} write_token", flush=True)
                 torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
-                torch_token[0, 0] = iteration
+                torch_token[0, 6] = slot_id
+                torch_token[0, 7] = iteration
+                torch_token[0, 8] = tok0_pos if iteration > 0 else pos_id
                 token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
                 output_tensor = ttnn.from_torch(
                     torch.zeros(1, token_meta_words, dtype=torch.uint32),
@@ -5012,13 +5025,12 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
                 print(f"[TEST P{pid}] iter {iteration} to_torch", flush=True)
                 raw = ttnn.to_torch(output_tensor).to(torch.uint32).flatten()
 
-                num_tokens = raw[0].item()
-                tok0_id = raw[1].item()
-                tok0_type = raw[2].item()
-                tok0_pos = raw[3].item()
-                tok1_id = raw[4].item()
-                tok1_type = raw[5].item()
-                tok1_pos = raw[6].item()
+                tok0_id = raw[0].item()
+                tok0_type = raw[1].item()
+                tok0_pos = raw[2].item()
+                tok1_id = raw[3].item()
+                tok1_type = raw[4].item()
+                tok1_pos = raw[5].item()
 
                 if run_golden:
                     dbg = golden_debug[iteration]
@@ -5034,7 +5046,7 @@ def test_persistent_mode_mtp_combined_embedding_spec(mesh_device, use_fp32):
                 type_name = {0: "BASE", 1: "SPEC"}
                 print(
                     f"[TEST P{pid}] iter {iteration} "
-                    f"ntok={num_tokens} t0={tok0_id}/{type_name.get(tok0_type,'?')} "
+                    f"t0={tok0_id}/{type_name.get(tok0_type,'?')} "
                     f"t1={tok1_id}/{type_name.get(tok1_type,'?')} ",
                     f"t0 pos={tok0_pos} t1 pos={tok1_pos} ",
                     f"golden base token={expected_base} golden spec token={expected_spec}",

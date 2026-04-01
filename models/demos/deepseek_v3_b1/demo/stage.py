@@ -110,9 +110,9 @@ class EmbeddingStage(StageKind):
         print(f"[STAGE P{ctx.my_mesh_id}] EmbeddingStage.create_pipeline_block", flush=True)
         mesh_device = ctx.mesh_device
 
-        activation_fifo_size = ACTIVATION_W_METADATA_FIFO_SIZE if self._forward_metadata else ACTIVATION_FIFO_SIZE
+        activation_fifo_size = ACTIVATION_W_TOKEN_META_FIFO_SIZE if self._forward_metadata else ACTIVATION_FIFO_SIZE
         activation_page_size = (
-            ACTIVATION_W_METADATA_PAGE_SIZE_BYTES if self._forward_metadata else ACTIVATION_PAGE_SIZE_BYTES
+            ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES if self._forward_metadata else ACTIVATION_PAGE_SIZE_BYTES
         )
 
         return PipelineBlock(
@@ -134,7 +134,7 @@ class PassthroughPayload(Enum):
     ACTIVATION = "activation"
     TOKEN = "token"
     TOKEN_META = "token_meta"
-    ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES = "activation_w_token_meta"
+    ACTIVATION_W_TOKEN_META = "activation_w_token_meta"
 
 
 class PassthroughStage(StageKind):
@@ -150,7 +150,7 @@ class PassthroughStage(StageKind):
         if self._payload == PassthroughPayload.ACTIVATION:
             up_fifo = down_fifo = ACTIVATION_FIFO_SIZE
             up_page = down_page = ACTIVATION_PAGE_SIZE_BYTES
-        elif self._payload == PassthroughPayload.ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES:
+        elif self._payload == PassthroughPayload.ACTIVATION_W_TOKEN_META:
             up_fifo = down_fifo = ACTIVATION_W_TOKEN_META_FIFO_SIZE
             up_page = down_page = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
         elif self._payload == PassthroughPayload.TOKEN_META:

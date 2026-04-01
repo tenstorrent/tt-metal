@@ -55,18 +55,17 @@ class OutputField:
     TOKEN_0 = 0
     TOKEN_0_TYPE = 1
     TOKEN_0_POS = 2
-    NUM_TOKENS = 3
-    TOKEN_1 = 4
-    TOKEN_1_TYPE = 5
-    TOKEN_1_POS = 6
+    TOKEN_1 = 3
+    TOKEN_1_TYPE = 4
+    TOKEN_1_POS = 5
 
 
 class InputField:
     """uint32 indices within the 16-word input page."""
 
-    TOKEN_ID = 0
-    USER_ID = 1
-    POSITION_ID = 2
+    USER_ID = 6
+    TOKEN_ID = 7
+    POSITION_ID = 8
 
 
 class TokenType:

@@ -60,6 +60,7 @@
 #include "../../../unified_kernels/rmsnorm.hpp"
 #include "../../../unified_kernels/dram_streaming_matmul.hpp"
 #include "../../../unified_kernels/gather.hpp"
+#include "../../../metadata/metadata.hpp"
 #include "api/debug/dprint.h"
 
 // ============================================================================
@@ -531,7 +532,6 @@ void kernel_main() {
     // Pack up to 2 tokens into a single TOKEN_META page (64 bytes) in the given CB.
     // Layout: [num_tokens, tok0_id, tok0_type, tok0_pos, tok1_id, tok1_type, tok1_pos, ...]
     auto write_token_metadata_to_socket_cb = [](uint32_t cb,
-                                                uint32_t num_tokens,
                                                 uint32_t tok0_id,
                                                 uint32_t tok0_type,
                                                 uint32_t tok0_pos,
@@ -540,13 +540,12 @@ void kernel_main() {
                                                 uint32_t tok1_pos = 0) {
         cb_reserve_back(cb, 1);
         volatile tt_l1_ptr uint32_t* page = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb));
-        page[0] = num_tokens;
-        page[1] = tok0_id;
-        page[2] = tok0_type;
-        page[3] = tok0_pos;
-        page[4] = tok1_id;
-        page[5] = tok1_type;
-        page[6] = tok1_pos;
+        page[0] = tok0_id;
+        page[1] = tok0_type;
+        page[2] = tok0_pos;
+        page[3] = tok1_id;
+        page[4] = tok1_type;
+        page[5] = tok1_pos;
         cb_push_back(cb, 1);
     };
 #endif
@@ -827,16 +826,21 @@ void kernel_main() {
             noc_semaphore_wait(metadata_ready_sem, 1);
             noc_semaphore_set(metadata_ready_sem, 0);
 
-            auto metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_output_l1_addr);
-            uint32_t base_token_type = metadata[2];
-            uint32_t base_token_pos = metadata[3];
+            // auto metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_output_l1_addr);
+            volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+                reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
+            invalidate_l1_cache();
+            uint32_t base_token_type = metadata_ptr->tok0_type;
+            uint32_t base_token_pos = metadata_ptr->position_id;
 
             constexpr uint32_t eh_gather_dst_cb = get_named_compile_time_arg_val("gather_dst_cb");
             constexpr uint32_t argmax_socket_cb = get_named_compile_time_arg_val("argmax_socket_cb");
             DPRINT << ">argmax wait front" << ENDL();
             cb_wait_front(argmax_socket_cb, 1);
             uint32_t base_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
-            write_token_metadata_to_socket_cb(eh_gather_dst_cb, 1, base_token_id, base_token_type, base_token_pos);
+
+            DPRINT << "BASE TOKEN ID: " << base_token_id << ENDL();
+            write_token_metadata_to_socket_cb(eh_gather_dst_cb, base_token_id, base_token_type, base_token_pos);
             cb_pop_front(argmax_socket_cb, 1);
             DPRINT << ">argmax pop token done" << ENDL();
         }
@@ -874,18 +878,21 @@ void kernel_main() {
             uint32_t spec_token_id = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(argmax_socket_cb));
 
             // Read the base token from metadata L1 (transferred by NCRISC during the broadcast phase)
-            auto metadata = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_output_l1_addr);
-            uint32_t base_token_id = metadata[1];
-            uint32_t base_token_type = TOKEN_TYPE_BASE;  // metadata[2];
-            uint32_t base_token_pos = metadata[3] + 1;
-            uint32_t spec_token_type = TOKEN_TYPE_SPEC;  // metadata[4];
-            uint32_t spec_token_pos = metadata[5] + 2;
+            volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata* metadata_ptr =
+                reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
+            invalidate_l1_cache();
+            uint32_t base_token_id = metadata_ptr->tok0_id;
+            uint32_t base_token_type = metadata_ptr->tok0_type;
+            uint32_t base_token_pos = metadata_ptr->tok0_pos + 1;
+            uint32_t spec_token_type = TOKEN_TYPE_SPEC;
+            uint32_t spec_token_pos = metadata_ptr->tok0_pos + 2;
             cb_pop_front(argmax_socket_cb, 1);
 
+            DPRINT << "BASE TOKEN ID: " << base_token_id << ENDL();
+            DPRINT << "SPEC TOKEN ID: " << spec_token_id << ENDL();
             // Push the base and speculative tokens to the argmax socket CB that will be written to the socket later
             write_token_metadata_to_socket_cb(
                 argmax_socket_cb,
-                1,
                 base_token_id,
                 base_token_type,
                 base_token_pos,
