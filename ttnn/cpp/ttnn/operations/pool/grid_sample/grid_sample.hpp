@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "grid_sample_prepare_grid.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn {
 

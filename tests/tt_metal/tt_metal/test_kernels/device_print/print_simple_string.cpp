@@ -8,4 +8,9 @@
  * Test printing from a kernel running on BRISC.
  */
 
-void kernel_main() { DEVICE_PRINT("Hello world!\n"); }
+void kernel_main() {
+    DEVICE_PRINT("Hello world!\n");
+    DEVICE_PRINT(
+        "First line.\n"
+        "Second line.\n");
+}
