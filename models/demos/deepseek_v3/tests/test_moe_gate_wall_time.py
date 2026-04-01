@@ -142,7 +142,7 @@ def test_forward_pass(
     model_config = get_model_config(MoEGate, mode, hf_config, mesh_device)
 
     # Create a new model state
-    model_state = MoEGate.create_shared_state(mesh_device)
+    model_state = MoEGate.create_shared_state(hf_config, mesh_device)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)

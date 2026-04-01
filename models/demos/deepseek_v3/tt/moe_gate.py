@@ -101,11 +101,13 @@ class MoEGate(AbstractModule):
     @classmethod
     def create_shared_state(
         cls,
+        hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
     ) -> ModelState:
         """Create input_indices, output_indices and output_tensor for each MoE layer
 
         Args:
+            hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
         Returns:
             ModelState containing input_indices, output_indices and output_tensor for each MoE layer
@@ -198,7 +200,7 @@ class MoEGate(AbstractModule):
                     input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                     memory_config=memory_config,
                     program_config=ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                        compute_with_storage_grid_size=(7, 10),
+                        compute_with_storage_grid_size=mesh_device.compute_with_storage_grid_size(),
                         in0_block_w=32,
                         out_subblock_h=1,
                         out_subblock_w=2,
