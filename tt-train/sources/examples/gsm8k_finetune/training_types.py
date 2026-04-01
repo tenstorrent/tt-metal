@@ -266,15 +266,15 @@ def build_lora_config(config: dict, output_dir: Path) -> Path:
     return config_path
 
 
-# ── GRPO Parameter Validator / Config Builder ─────────────────────────────────
+# ── Pretrain Parameter Validator / Config Builder ────────────────────────────
 
 
-def validate_grpo_params(params: dict) -> dict:
-    """Validate GRPO parameters.
+def validate_pretrain_params(params: dict) -> dict:
+    """Validate Pretrain parameters.
 
-    GRPO routes to pipeline_parallel_training internally; the training script
-    uses its own hardcoded config. batch_size is normalised to 32 so it passes
-    the Galaxy divisibility check in slurm_training_service.
+    Pretrain routes to pipeline_parallel_training internally; the training
+    script uses its own hardcoded config. batch_size is normalised to 32 so it
+    passes the Galaxy divisibility check in slurm_training_service.
     """
     validated = params.copy()
     # Force batch_size=32 — actual training ignores this value
@@ -283,15 +283,15 @@ def validate_grpo_params(params: dict) -> dict:
     return validated
 
 
-def build_grpo_config(config: dict, output_dir: Path) -> Path:
-    """Write a placeholder training_overrides.yaml for GRPO jobs.
+def build_pretrain_config(config: dict, output_dir: Path) -> Path:
+    """Write a placeholder training_overrides.yaml for Pretrain jobs.
 
     The pipeline_parallel training script uses its own config files, so this
     file is created to satisfy the job_manager interface but is never read.
     """
     config_path = output_dir / "training_overrides.yaml"
     with open(config_path, "w") as f:
-        f.write("# GRPO training uses pipeline_parallel_training configs directly.\n")
+        f.write("# Pretrain training uses pipeline_parallel_training configs directly.\n")
         f.write("# This file is not read by the training script.\n")
     return config_path
 
@@ -333,8 +333,8 @@ lora_training_config = TrainingTypeConfig(
 )
 
 
-def _build_grpo_run_command() -> str:
-    """Build the SLURM run-step command for GRPO / pipeline-parallel training."""
+def _build_pretrain_run_command() -> str:
+    """Build the SLURM run-step command for Pretrain / pipeline-parallel training."""
     tt_train_root = f"${{TT_METAL_HOME}}/tt-train"
     pp_root = f"{tt_train_root}/sources/examples/python/multihost/pipeline_parallel_training"
     config_file = "training_configs/training_shakespeare_llama70b_pp4_tp32_fabric_galaxy.yaml"
@@ -351,16 +351,16 @@ def _build_grpo_run_command() -> str:
     )
 
 
-# GRPO Training Type Configuration
+# Pretrain Training Type Configuration
 # Routes all requests to pipeline_parallel_training with llama70b_4stage config.
-grpo_training_config = TrainingTypeConfig(
-    name="grpo",
+pretrain_training_config = TrainingTypeConfig(
+    name="pretrain",
     script_path="python/multihost/pipeline_parallel_training/training.py",
     model_configs={},
     supported_models=set(),
-    param_validator=validate_grpo_params,
-    config_builder=build_grpo_config,
-    run_command_override=_build_grpo_run_command(),
+    param_validator=validate_pretrain_params,
+    config_builder=build_pretrain_config,
+    run_command_override=_build_pretrain_run_command(),
 )
 
 
@@ -370,7 +370,7 @@ grpo_training_config = TrainingTypeConfig(
 TRAINING_TYPES: Dict[str, TrainingTypeConfig] = {
     "sft": sft_training_config,
     "lora": lora_training_config,
-    "grpo": grpo_training_config,
+    "pretrain": pretrain_training_config,
 }
 
 
