@@ -347,16 +347,11 @@ jobs:
           mv .clang-tidy-new .clang-tidy
         fi
         cat .clang-tidy
-    - name: Cache CPM packages
-      uses: actions/cache@v4
-      with:
-        path: .cpmcache
-        key: cpm-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt') }}
-        restore-keys: |
-          cpm-${{ runner.os }}-
     - name: CMake configure
-      # CPM downloads third-party packages from the internet on cache miss;
-      # give a generous timeout to accommodate slow network days.
+      # CPM downloads third-party packages from the internet; give a generous
+      # timeout to accommodate slow network days.
+      # Note: actions/cache doesn't work with containerized jobs (post-step
+      # runs after the container is removed, hashFiles fails). Dropped for now.
       timeout-minutes: 25
       run: |
         cmake -B build \
