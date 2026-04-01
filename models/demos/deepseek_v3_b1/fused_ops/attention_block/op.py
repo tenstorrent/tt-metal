@@ -2353,7 +2353,7 @@ class AttentionBlock:
         kv_rmsnorm_input_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             kv_rmsnorm_input_cb,
             ref_attention_block_output_tensor,
-            address_offset=attn_block_output_kv_cache_update_rope_running_offset,
+            address_offset=attn_block_output_kv_cache_update_nope_running_offset,
             total_size=1 * kv_rmsnorm_page_size,
             core_ranges=dkv_gather_sender_grid.merge(dkv_gather_receiver_core_grid),
         )
@@ -2366,7 +2366,7 @@ class AttentionBlock:
             )
         ]
         # In-place the rmsnorm output, so it uses the same offset as the input
-        # attn_block_output_offset_kv_cache_update_nope_offset += kv_rmsnorm_input_cb_descriptor.total_size
+        # attn_block_output_kv_cache_update_nope_running_offset += kv_rmsnorm_input_cb_descriptor.total_size
 
         # CB 27: KV RMSNorm output buffer — overlap with sdpa_kv_cache L1 buffer
         # at offset 38912 B. This CB is consumed before SDPA runs.
