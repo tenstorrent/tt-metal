@@ -12,6 +12,7 @@ on:
           - all
           - llama3.1-8b
           - llama3.3-70b-galaxy
+          - qwen3-32b-galaxy
           - gpt-oss-120b-high-batch-galaxy
           - whisper
       sku:

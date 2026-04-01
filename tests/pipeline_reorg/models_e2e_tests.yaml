@@ -187,6 +187,18 @@
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
 
+- name: Qwen3-32B e2e tests (Galaxy)
+  cmd: |
+    export HF_MODEL=Qwen/Qwen3-32B TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-32B
+    pytest --timeout 1000 models/demos/llama3_70b_galaxy/tests/test_qwen_accuracy.py
+  model: qwen3-32b-galaxy
+  skus:
+    wh_galaxy:
+      timeout: 30
+      tier: 1
+  owner_id: U053W15B6JF # Djordje Ivanovic
+  team: models
+
 - name: GPT-OSS 120B e2e tests (Galaxy, high batch)
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
