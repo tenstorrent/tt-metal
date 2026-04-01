@@ -28,7 +28,6 @@ Layout = DistributedLayout
 from .mesh_runtime import MeshRuntime, get_runtime, set_runtime
 from .dispatch import dispatch, register_op
 from .redistribute import redistribute
-from .cache import PlanCache
 from .rules.registry import (
     ShardingPlan,
     CCL,
@@ -61,7 +60,6 @@ __all__ = [
     "dispatch",
     "register_op",
     "redistribute",
-    "PlanCache",
     "ShardingPlan",
     "CCL",
     "Broadcast",

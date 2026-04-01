@@ -40,8 +40,8 @@ def _linear_matmul_plan(
 ) -> ShardingPlan:
     """Single plan for linear and matmul. Styles handle pre/post collectives."""
     # Column parallel: weight sharded on dim -2 (out_features)
-    if _is_shard_on(weight_layout, -2) or _is_shard_on(weight_layout, 2):
-        shard_dim = -2 if _is_shard_on(weight_layout, -2) else 2
+    shard_dim = -2
+    if _is_shard_on(weight_layout, shard_dim):
         tp_axis = _find_shard_axis(weight_layout, shard_dim)
         output_layout = input_layout.with_placement(tp_axis, Shard(-1))
         bias_layouts = []

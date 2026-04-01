@@ -20,7 +20,7 @@ Pre- and post-collectives (see ShardingPlan in rules.registry):
 from __future__ import annotations
 
 import functools
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List
 
 from .layout import get_layout, set_layout, replicated_layout
 from .mesh_runtime import get_runtime
@@ -46,18 +46,6 @@ def _get_raw(op_name: str) -> Callable:
 # ---------------------------------------------------------------------------
 # Plan cache helpers
 # ---------------------------------------------------------------------------
-
-
-def _hashable_kwargs(kwargs: Dict[str, Any]) -> Tuple:
-    """Convert kwargs to a hashable tuple for cache keys (best-effort)."""
-    items = []
-    for k, v in sorted(kwargs.items()):
-        try:
-            hash(v)
-            items.append((k, v))
-        except TypeError:
-            items.append((k, id(v)))
-    return tuple(items)
 
 
 _COLLECTIVE_OPS_DIM_CLUSTER = frozenset({"scatter", "all_gather", "reduce_scatter"})
@@ -195,12 +183,7 @@ def dispatch(op_name: str, *args, **kwargs):
         return _fallback_replicated(op_name, tensor_args, other_args, kwargs)
 
     rule_kwargs = _rule_kwargs_for_op(op_name, other_args, kwargs)
-    cache = runtime.plan_cache
-    cache_key = (op_name, tuple(input_layouts), _hashable_kwargs(rule_kwargs))
-    plan: Optional[ShardingPlan] = cache.get(cache_key)
-    if plan is None:
-        plan = rule_fn(*input_layouts, runtime=runtime, **rule_kwargs)
-        cache.put(cache_key, plan)
+    plan = rule_fn(*input_layouts, runtime=runtime, **rule_kwargs)
 
     # Apply optional pre-collective per input (e.g. broadcast for input 0).
     # Rule sets pre_collectives[i] for each tensor input; None = no collective.

@@ -22,7 +22,6 @@ from ttml.distributed.layout import (
     layout_to_mapper_config,
 )
 from ttml.distributed.utils import is_distributed
-from ttml.distributed.cache import PlanCache
 from ttml.distributed.rules.registry import (
     ShardingPlan,
     register_rule,
@@ -93,23 +92,6 @@ class TestDistributedLayout:
 # ---------------------------------------------------------------------------
 # Plan cache & linear rule
 # ---------------------------------------------------------------------------
-
-
-class TestPlanCache:
-    def test_lru_put_get(self):
-        cache = PlanCache(maxsize=2)
-        la = replicated_layout(2)
-        lb = _layout_rep_shard()
-        lc = DistributedLayout(ndim=2, axis_placements={0: Shard(0)})
-        key_a = ("op", (la,), ())
-        key_b = ("op", (lb,), ())
-        key_c = ("op", (lc,), ())
-        cache.put(key_a, "p1")
-        cache.put(key_b, "p2")
-        cache.put(key_c, "p3")
-        assert cache.get(key_a) is None
-        assert cache.get(key_b) == "p2"
-        assert cache.get(key_c) == "p3"
 
 
 class TestLinearMatmulRule:

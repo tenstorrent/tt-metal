@@ -10,10 +10,8 @@ dispatch and redistribute consult at runtime.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
-
-from .cache import PlanCache
 
 
 @dataclass
@@ -31,7 +29,6 @@ class MeshRuntime:
     tp_axis: Optional[int] = None
     dp_axis: Optional[int] = None
     cp_axis: Optional[int] = None
-    plan_cache: PlanCache = field(default_factory=PlanCache)
 
     @property
     def mesh_shape(self):
