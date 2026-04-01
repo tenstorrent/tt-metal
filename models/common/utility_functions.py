@@ -539,20 +539,22 @@ def comp_pcc(golden, calculated, pcc=0.99):
         return False, 0.0
 
     # For now, mask all infs and nans so that we check the rest... TODO
-    golden = golden.clone()
-    golden[
-        torch.logical_or(
-            torch.isnan(golden),
-            torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
-        )
-    ] = 0
-    calculated = calculated.clone()
-    calculated[
-        torch.logical_or(
-            torch.isnan(calculated),
-            torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
-        )
-    ] = 0
+    # Skip this for integer types which don't have NaN/Inf values
+    if golden.dtype.is_floating_point:
+        golden = golden.clone()
+        golden[
+            torch.logical_or(
+                torch.isnan(golden),
+                torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
+            )
+        ] = 0
+        calculated = calculated.clone()
+        calculated[
+            torch.logical_or(
+                torch.isnan(calculated),
+                torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
+            )
+        ] = 0
 
     if torch.equal(golden, calculated):
         return True, 1.0
