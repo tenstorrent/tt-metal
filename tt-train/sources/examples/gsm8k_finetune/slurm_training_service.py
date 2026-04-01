@@ -810,6 +810,7 @@ def catalog():
         "sft": "SFT",
         "lora": "LoRA",
         "grpo": "GRPO",
+        "pretrain": "Pretrain",
     }
 
     trainers = []
@@ -822,8 +823,8 @@ def catalog():
             }
         )
 
-    # Placeholder for future trainers not yet in the registry
-    future_trainers: set = set()
+    # Trainers known to clients but not yet available in the registry
+    future_trainers: set = {"grpo"}
     for trainer_id in sorted(future_trainers - set(TRAINING_TYPES.keys())):
         trainers.append(
             {
