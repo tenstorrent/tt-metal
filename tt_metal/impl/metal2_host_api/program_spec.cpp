@@ -195,7 +195,16 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
 
     // Build DFB endpoint info from kernel bindings
     for (const auto& kernel : spec.kernels) {
+        // Check for duplicate local_accessor_names within this kernel
+        std::unordered_set<std::string> accessor_names;
         for (const auto& dfb_binding : kernel.dfb_bindings) {
+            auto [it, inserted] = accessor_names.insert(dfb_binding.local_accessor_name);
+            TT_FATAL(
+                inserted,
+                "Kernel '{}' has duplicate local_accessor_name '{}'",
+                kernel.unique_id,
+                dfb_binding.local_accessor_name);
+
             // Referential integrity: the DFB must exist
             TT_FATAL(
                 collected.dfb_by_name.contains(dfb_binding.dfb_spec_name),
@@ -245,6 +254,15 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
     for (const auto& semaphore : spec.semaphores) {
         auto [it, inserted] = collected.semaphore_by_name.try_emplace(semaphore.unique_id, &semaphore);
         TT_FATAL(inserted, "Duplicate SemaphoreSpec name '{}'", semaphore.unique_id);
+    }
+
+    // Check for duplicate WorkerSpec unique_ids (not collected)
+    if (spec.workers.has_value()) {
+        std::unordered_set<WorkerSpecName> worker_names;
+        for (const auto& worker : *spec.workers) {
+            auto [it, inserted] = worker_names.insert(worker.unique_id);
+            TT_FATAL(inserted, "Duplicate WorkerSpec name '{}'", worker.unique_id);
+        }
     }
 
     return collected;
@@ -439,6 +457,31 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     // A WorkerSpec must have at least one kernel
     for (const auto& worker : workers) {
         TT_FATAL(!worker.kernels.empty(), "WorkerSpec '{}' has no kernels", worker.unique_id);
+    }
+
+    // Referential integrity: WorkerSpec kernel/DFB/semaphore references must exist
+    for (const auto& worker : workers) {
+        for (const auto& kernel_name : worker.kernels) {
+            TT_FATAL(
+                collected.kernel_by_name.contains(kernel_name),
+                "WorkerSpec '{}' references unknown kernel '{}'",
+                worker.unique_id,
+                kernel_name);
+        }
+        for (const auto& dfb_name : worker.dataflow_buffers) {
+            TT_FATAL(
+                collected.dfb_by_name.contains(dfb_name),
+                "WorkerSpec '{}' references unknown DFB '{}'",
+                worker.unique_id,
+                dfb_name);
+        }
+        for (const auto& semaphore_name : worker.semaphores) {
+            TT_FATAL(
+                collected.semaphore_by_name.contains(semaphore_name),
+                "WorkerSpec '{}' references unknown semaphore '{}'",
+                worker.unique_id,
+                semaphore_name);
+        }
     }
 
     // Does the Worker have enough cores to run all its kernels?
@@ -878,7 +921,17 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
     auto named_compile_args = kernel_spec.compile_time_arg_bindings;
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
         uint32_t dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
-        named_compile_args[dfb_binding.local_accessor_name] = dfb_id;
+        const auto& local_dfb_name = dfb_binding.local_accessor_name;
+        if (named_compile_args.find(local_dfb_name) != named_compile_args.end()) {
+            TT_FATAL(
+                false,
+                "DFB local accessor name '{}' collides with an existing compile-time arg binding. "
+                "DFB local_access_name is (temporarily) being appended to the CTAs. "
+                "This is a temporary hacky solution to pass DFB accessor names to the kernel. "
+                "For now, please rename either the CTA or the DFB local_accessor_name.",
+                local_dfb_name);
+        }
+        named_compile_args[local_dfb_name] = dfb_id;
     }
 
     return experimental::quasar::QuasarDataMovementConfig{
@@ -925,12 +978,22 @@ experimental::quasar::QuasarComputeConfig MakeQuasarComputeConfig(
 
     // Start with user-provided compile-time args, then add DFB accessor mappings
     // TODO: This is a TEMPORARY solution to pass DFB accessor names to the kernel.
-    //    A follow-up PR that will introduce a more elegant kernel-side mechanism
+    //   A follow-up PR that will introduce a more elegant kernel-side mechanism
     //    for creating DFBs from local accessor names.
     auto named_compile_args = kernel_spec.compile_time_arg_bindings;
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
         uint32_t dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
-        named_compile_args[dfb_binding.local_accessor_name] = dfb_id;
+        const auto& local_dfb_name = dfb_binding.local_accessor_name;
+        if (named_compile_args.find(local_dfb_name) != named_compile_args.end()) {
+            TT_FATAL(
+                false,
+                "DFB local accessor name '{}' collides with an existing compile-time arg binding. "
+                "DFB local_access_name is (temporarily) being appended to the CTAs. "
+                "This is a temporary hacky solution to pass DFB accessor names to the kernel. "
+                "For now, please rename either the CTA or the DFB local_accessor_name.",
+                local_dfb_name);
+        }
+        named_compile_args[local_dfb_name] = dfb_id;
     }
 
     return experimental::quasar::QuasarComputeConfig{

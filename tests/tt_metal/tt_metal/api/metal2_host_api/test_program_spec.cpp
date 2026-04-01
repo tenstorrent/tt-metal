@@ -93,6 +93,52 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSemaphoreNameFails) {
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
 }
 
+TEST_F(ProgramSpecTestQuasar, DuplicateWorkerNameFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    // Kernel spans both nodes
+    auto kernel = MakeMinimalDMKernel("kernel", NodeRangeSet(std::set<NodeRange>{NodeRange{node0, node1}}));
+    auto dfb0 = MakeMinimalDFB("dfb_0", node0);
+    auto dfb1 = MakeMinimalDFB("dfb_1", node1);
+    BindDFBToKernel(kernel, "dfb_0", "accessor0", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(kernel, "dfb_1", "accessor1", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {kernel};
+    spec.dataflow_buffers = {dfb0, dfb1};
+
+    // Two workers with the same unique_id!
+    auto worker0 = MakeMinimalWorker("same_name", node0, {"kernel"}, {"dfb_0"});
+    auto worker1 = MakeMinimalWorker("same_name", node1, {"kernel"}, {"dfb_1"});  // Duplicate!
+    spec.workers = std::vector<WorkerSpec>{worker0, worker1};
+
+    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, DuplicateLocalAccessorNameFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto kernel = MakeMinimalDMKernel("kernel", node);
+    auto dfb0 = MakeMinimalDFB("dfb_0", node);
+    auto dfb1 = MakeMinimalDFB("dfb_1", node);
+
+    // Bind two DFBs with the same local_accessor_name
+    BindDFBToKernel(kernel, "dfb_0", "same_accessor", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(kernel, "dfb_1", "same_accessor", KernelSpec::DFBEndpointType::CONSUMER);  // Duplicate accessor!
+
+    spec.kernels = {kernel};
+    spec.dataflow_buffers = {dfb0, dfb1};
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"kernel"}, {"dfb_0", "dfb_1"})};
+
+    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+}
+
 TEST_F(ProgramSpecTestQuasar, KernelReferencesUnknownDFBFails) {
     NodeCoord node{0, 0};
 
@@ -500,6 +546,55 @@ TEST_F(ProgramSpecTestQuasar, WorkerSpecWithNoKernelsFails) {
     worker.unique_id = "worker";
     worker.target_nodes = node;
     worker.kernels = {};  // No kernels!
+    spec.workers = std::vector<WorkerSpec>{worker};
+
+    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, WorkerSpecReferencesUnknownKernelFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto kernel = MakeMinimalDMKernel("real_kernel", node);
+    spec.kernels = {kernel};
+
+    // Worker references a kernel that doesn't exist
+    spec.workers = std::vector<WorkerSpec>{MakeMinimalWorker("worker", node, {"nonexistent_kernel"})};
+
+    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, WorkerSpecReferencesUnknownDFBFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto kernel = MakeMinimalDMKernel("kernel", node);
+    spec.kernels = {kernel};
+
+    // Worker references a DFB that doesn't exist
+    auto worker = MakeMinimalWorker("worker", node, {"kernel"});
+    worker.dataflow_buffers = {"nonexistent_dfb"};
+    spec.workers = std::vector<WorkerSpec>{worker};
+
+    EXPECT_ANY_THROW(MakeProgramFromSpec(spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, WorkerSpecReferencesUnknownSemaphoreFails) {
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    auto kernel = MakeMinimalDMKernel("kernel", node);
+    spec.kernels = {kernel};
+
+    // Worker references a semaphore that doesn't exist
+    auto worker = MakeMinimalWorker("worker", node, {"kernel"});
+    worker.semaphores = {"nonexistent_semaphore"};
     spec.workers = std::vector<WorkerSpec>{worker};
 
     EXPECT_ANY_THROW(MakeProgramFromSpec(spec));

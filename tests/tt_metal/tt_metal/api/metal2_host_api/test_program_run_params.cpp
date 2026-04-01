@@ -269,6 +269,23 @@ TEST_F(ProgramRunParamsTestQuasar, DuplicateDFBParamsFails) {
     EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
 }
 
+TEST_F(ProgramRunParamsTestQuasar, DuplicateNodeCoordInRuntimeArgsFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/0);
+    Program program = MakeProgramFromSpec(spec);
+
+    // Provide runtime_args with duplicate node_coord entries
+    ProgramRunParams params;
+    params.kernel_run_params.push_back({
+        .kernel_spec_name = "dm_kernel",
+        .runtime_args = {{node, {1, 2}}, {node, {3, 4}}},  // Duplicate node!
+        .common_runtime_args = {},
+    });
+    params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
+
+    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+}
+
 // ============================================================================
 // SECTION 2: Success Tests (basic functionality)
 // ============================================================================

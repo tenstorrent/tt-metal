@@ -106,9 +106,15 @@ void ValidateProgramRunParams(const Program& program, const ProgramRunParams& pa
             kernel_name);
 
         // Validate per-node runtime args counts
-        // TODO: O(N^2) in nodes. Can optimize, or add a bypass validation option.
-        //       Not too worried for now, as there's the power user API for speedy update.
+        std::unordered_set<NodeCoord> nodes_with_args;
         for (const auto& [node_coord, args] : kernel_params.runtime_args) {
+            auto [it_node, node_inserted] = nodes_with_args.insert(node_coord);
+            TT_FATAL(
+                node_inserted,
+                "Duplicate node_coord {} in runtime_args for kernel '{}'.",
+                node_coord.str(),
+                kernel_name);
+
             auto it = schema->num_runtime_args_per_node.find(node_coord);
             TT_FATAL(
                 it != schema->num_runtime_args_per_node.end(),
