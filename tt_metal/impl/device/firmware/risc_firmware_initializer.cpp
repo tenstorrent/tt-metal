@@ -350,7 +350,6 @@ void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
         hal_.get_eth_fw_is_cooperative()) {
         return;
     }
-
     auto [term_addr, term_signal] = this->get_control_plane_()
                                         .get_fabric_context()
                                         .get_builder_context()
@@ -364,11 +363,6 @@ void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
     auto launch_msg_size = dev_msgs_factory.size_of<dev_msgs::launch_msg_t>();
     auto launch_msg_buf = dev_msgs_factory.create<dev_msgs::launch_msg_t>();
 
-    // Set exit_erisc_kernel on ALL cores before writing any termination signals.
-    // The kernel checks exit_erisc_kernel in teardown to skip NOC barriers that
-    // would hang if remote peers are already torn down. If we write the termination
-    // signal first, the kernel can race through to the barrier check before
-    // exit_erisc_kernel is visible.
     for (tt::ChipId chip_id : cluster_.all_chip_ids()) {
         for (const auto& logical_core : this->get_control_plane_().get_active_ethernet_cores(chip_id)) {
             CoreCoord virtual_core =
@@ -376,7 +370,7 @@ void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
             uint32_t rd_ptr = 0;
             cluster_.read_core(&rd_ptr, sizeof(rd_ptr), tt_cxy_pair(chip_id, virtual_core), rd_ptr_addr);
             rd_ptr &= (dev_msgs::launch_msg_buffer_num_entries - 1);
-            DeviceAddr launch_slot_addr = launch_base_addr + rd_ptr * launch_msg_size;
+            DeviceAddr launch_slot_addr = launch_base_addr + (rd_ptr * launch_msg_size);
             cluster_.read_core(
                 launch_msg_buf.data(), launch_msg_buf.size(), tt_cxy_pair(chip_id, virtual_core), launch_slot_addr);
             launch_msg_buf.view().kernel_config().exit_erisc_kernel() = 1;
