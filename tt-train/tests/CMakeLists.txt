@@ -73,6 +73,7 @@ set(SOURCES
     ops/moe_ffn_swiglu_op_test.cpp
     ops/binary_ops_fw_test.cpp
     ops/binary_ops_bw_test.cpp
+    ops/variable_matmul_test.cpp
     utils/memory_utils_test.cpp
 )
 
@@ -183,6 +184,7 @@ if(TARGET benchmark::benchmark)
         benchmark/from_vector_benchmark.cpp
         benchmark/adamw_benchmark.cpp
         benchmark/frobenius_normalize_benchmark.cpp
+        benchmark/variable_matmul_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})
