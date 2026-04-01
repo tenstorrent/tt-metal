@@ -36,13 +36,24 @@ def test_32x4_device_sanity(mesh_device):
         mesh_device: 32x4 mesh device fixture with linear fabric
     """
     logger.info("Starting 32x4 device sanity test with linear fabric...")
+    import torch
 
+    hidden_states = torch.randn(1, 1, 1024, 1024).to(torch.bfloat16)
+    tt_hidden_states = ttnn.from_torch(
+        hidden_states,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(-1, None)),
+    )
     # Synchronize device operations
     from tracy import Profiler
 
     profiler = Profiler()
 
     profiler.enable()
+    tt_hidden_states = ttnn.add(tt_hidden_states, tt_hidden_states)
     ttnn.synchronize_device(mesh_device)
     logger.info("✓ Device synchronization completed")
 
