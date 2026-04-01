@@ -29,6 +29,9 @@ _REDUCE_IMPL_AXIS1 = os.environ.get("GLM4_MOE_REDUCE_IMPL_AXIS1", "").strip().lo
 _REDUCE_LOG_ONCE = set()
 _QK_L1 = os.environ.get("GLM4_MOE_QK_L1", "1").strip() != "0"
 _ROPE_PAD = os.environ.get("GLM4_MOE_ROPE_PAD", "1").strip() != "0"
+_FUSED_QK_ROPE = os.environ.get("GLM4_MOE_FUSED_QK_ROPE", "0").strip() == "1"
+_FUSED_KV_UPDATE = os.environ.get("GLM4_MOE_FUSED_KV_UPDATE", "0").strip() == "1"
+_SDPA_L1 = os.environ.get("GLM4_MOE_SDPA_L1", "1").strip() != "0"
 
 logger = logging.getLogger(__name__)
 
@@ -107,45 +110,54 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
     # Build optional subdevice_id kwarg for CCL ops
     _sd_kw = {"subdevice_id": subdevice_id} if subdevice_id is not None else {}
 
+    # Resolve num_links / topology from env vars once per call.
+    _ccl_topo = glm4_moe_ccl_topology_for_collectives()
+    _ccl_nl = (
+        glm4_moe_ccl_num_links_for_axis(int(cluster_axis))
+        if cluster_axis is not None
+        else max(1, int(os.environ.get("GLM4_MOE_CCL_NUM_LINKS", "1").strip() or "1"))
+    )
+
     if impl == "native":
-        # On-device all_reduce with explicit Ring topology (8 chips on axis 0).
         result = ttnn.all_reduce(
             tensor,
             cluster_axis=cluster_axis,
             memory_config=mc,
-            topology=ttnn.Topology.Ring,
+            num_links=_ccl_nl,
+            topology=_ccl_topo,
             **_sd_kw,
         )
         ttnn.deallocate(tensor, force=False)
 
     elif impl == "native_auto":
-        # On-device all_reduce with auto topology (let system choose).
         result = ttnn.all_reduce(
             tensor,
             cluster_axis=cluster_axis,
             memory_config=mc,
+            num_links=_ccl_nl,
+            topology=_ccl_topo,
             **_sd_kw,
         )
         ttnn.deallocate(tensor, force=False)
 
     elif impl == "full_ar":
-        # Single all_reduce across ALL devices (no cluster_axis).
-        # Works on TG 2D mesh — internally iterates all dims.
         result = ttnn.all_reduce(
             tensor,
             memory_config=mc,
+            num_links=_ccl_nl,
+            topology=_ccl_topo,
             **_sd_kw,
         )
         ttnn.deallocate(tensor, force=False)
 
     elif impl == "rs_ag":
-        # 2-step: reduce_scatter then all_gather along same axis.
-        # reduce_scatter sums and scatters along dim=3 (hidden), then all_gather restores.
         scattered = ttnn.reduce_scatter(
             tensor,
             dim=3,
             cluster_axis=cluster_axis,
             memory_config=mc,
+            num_links=_ccl_nl,
+            topology=_ccl_topo,
             **_sd_kw,
         )
         ttnn.deallocate(tensor, force=False)
@@ -154,18 +166,33 @@ def _simple_all_reduce(tensor, mesh_device, cluster_axis, memory_config=None, cc
             dim=3,
             cluster_axis=cluster_axis,
             memory_config=mc,
+            num_links=_ccl_nl,
+            topology=_ccl_topo,
             **_sd_kw,
         )
         ttnn.deallocate(scattered, force=False)
 
     elif impl == "rs_ag_async":
-        # Async 2-step with CCL semaphore management (trace-compatible).
-        # Uses ttnn.experimental.reduce_scatter_minimal_async + all_gather_async.
         if ccl is None:
-            # Fallback to sync rs_ag if CCL not initialized.
-            scattered = ttnn.reduce_scatter(tensor, dim=3, cluster_axis=cluster_axis, memory_config=mc, **_sd_kw)
+            scattered = ttnn.reduce_scatter(
+                tensor,
+                dim=3,
+                cluster_axis=cluster_axis,
+                memory_config=mc,
+                num_links=_ccl_nl,
+                topology=_ccl_topo,
+                **_sd_kw,
+            )
             ttnn.deallocate(tensor, force=False)
-            result = ttnn.all_gather(scattered, dim=3, cluster_axis=cluster_axis, memory_config=mc, **_sd_kw)
+            result = ttnn.all_gather(
+                scattered,
+                dim=3,
+                cluster_axis=cluster_axis,
+                memory_config=mc,
+                num_links=_ccl_nl,
+                topology=_ccl_topo,
+                **_sd_kw,
+            )
             ttnn.deallocate(scattered, force=False)
         else:
             _topo_async = glm4_moe_ccl_topology_for_collectives()
@@ -377,6 +404,13 @@ class Glm4MoeAttention(LightweightModule):
         if self._use_dram_shard:
             self._setup_dram_sharded_configs()
 
+        # Fused QK RoPE caching (B1): doubled cos/sin/trans are created once per
+        # decode step and reused across all 89 layers.
+        self._fused_rot_cos_id = None
+        self._fused_rot_cache = None  # (cos_doubled, sin_doubled)
+        self._fused_trans_id = None
+        self._fused_trans_cached = None
+
         # TG user selection matrices (for slicing batch from all-reduce output).
         # Pre-computed per batch bucket because slice_mat and user_selection_matrix
         # dimensions depend on the runtime batch size (B_phys, Bg vary per bucket).
@@ -511,6 +545,10 @@ class Glm4MoeAttention(LightweightModule):
         When prefetch=True, uses sub_core_grids to place shards within the worker
         grid (cols 0-5) instead of the full grid. This avoids overlapping with
         prefetcher sender cores (cols 6 and 7).
+
+        When _FUSED_QK_ROPE is enabled (non-prefetch only), Q and K are placed on
+        disjoint core grids as required by rotary_embedding_llama_fused_qk. Extra
+        shard configs for the doubled cos/sin/trans are also created.
         """
         cache_key = (batch, prefetch)
         cached = self._shard_cfg_cache.get(cache_key)
@@ -518,7 +556,6 @@ class Glm4MoeAttention(LightweightModule):
             return cached
         b = max(batch, 1)
         if prefetch:
-            # Map b cores within worker grid (cols 0-5, rows 0-8)
             worker_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))])
             start_core = ttnn.CoreCoord(0, 0)
             user_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
@@ -529,22 +566,58 @@ class Glm4MoeAttention(LightweightModule):
             )
         else:
             user_grid = ttnn.num_cores_to_corerangeset(b, self._grid_size, row_wise=True)
-        cfgs = {
-            "q": ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, self.head_dim),
-                core_grid=user_grid,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            ),
-            "k": ttnn.create_sharded_memory_config(
-                shape=(ttnn.TILE_SIZE, self.head_dim),
-                core_grid=user_grid,
-                strategy=ttnn.ShardStrategy.HEIGHT,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            ),
-        }
+
+        _height_shard = dict(
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        if _FUSED_QK_ROPE and not prefetch:
+            from models.tt_transformers.tt.model_config import num_to_corerange
+
+            row_size = self._grid_size.x  # 8 for Galaxy WH
+            k_start = ttnn.CoreCoord(b % row_size, b // row_size)
+            q_grid = ttnn.CoreRangeSet({num_to_corerange(b)})
+            k_grid = ttnn.CoreRangeSet({num_to_corerange(b, start_core=k_start)})
+            combined_grid = ttnn.CoreRangeSet({num_to_corerange(2 * b)})
+
+            cfgs = {
+                "q": ttnn.create_sharded_memory_config(
+                    shape=(ttnn.TILE_SIZE, self.head_dim),
+                    core_grid=q_grid,
+                    **_height_shard,
+                ),
+                "k": ttnn.create_sharded_memory_config(
+                    shape=(ttnn.TILE_SIZE, self.head_dim),
+                    core_grid=k_grid,
+                    **_height_shard,
+                ),
+                "fused_cos_sin": ttnn.create_sharded_memory_config(
+                    shape=(ttnn.TILE_SIZE, self.head_dim),
+                    core_grid=combined_grid,
+                    **_height_shard,
+                ),
+                "fused_trans": ttnn.create_sharded_memory_config(
+                    shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+                    core_grid=combined_grid,
+                    **_height_shard,
+                ),
+            }
+        else:
+            cfgs = {
+                "q": ttnn.create_sharded_memory_config(
+                    shape=(ttnn.TILE_SIZE, self.head_dim),
+                    core_grid=user_grid,
+                    **_height_shard,
+                ),
+                "k": ttnn.create_sharded_memory_config(
+                    shape=(ttnn.TILE_SIZE, self.head_dim),
+                    core_grid=user_grid,
+                    **_height_shard,
+                ),
+            }
+
         self._shard_cfg_cache[cache_key] = cfgs
         return cfgs
 
@@ -629,107 +702,105 @@ class Glm4MoeAttention(LightweightModule):
             o_out,
         )
 
-    def _apply_partial_rope_decode(self, x, cos, sin, trans_mat, sin_neg=None, worker_scg=None):
-        """Apply partial rotary embedding (decode mode, NeoX-style).
+    def _apply_rope_fused_decode(self, x, cos, sin, trans_mat):
+        """Apply partial RoPE via fused rotary_embedding_llama kernel (decode mode).
 
-        Only the first rotary_dim (64) dims get rotary encoding;
-        the remaining pass_dim (64) dims are passed through unchanged.
+        x: [1, batch, n_heads, head_dim=128] — interleaved layout from permuted QKV weights.
+        cos: [1, batch, 1, head_dim=128] — interleaved + pass-through (cos=1, sin=0).
+        sin: [1, batch, 1, head_dim=128]
+        trans_mat: [1, 1, 32, 32]
 
-        Uses NeoX-style rotation: rotate_half(x) = cat(-x[..., d//2:], x[..., :d//2]).
-        GLM-4.7 uses NeoX-style RoPE (confirmed from HuggingFace transformers glm4_moe).
-
-        When sin_neg is provided (pre-computed [-sin[:half], sin[half:]]), uses addcmul
-        fusion to eliminate neg op: 10 → 8 device ops per call.
-
-        Args:
-            worker_scg: Optional CoreRangeSet restricting ops to worker sub-device cores
-                (cols 0-5) when PREFETCH=1 SubDevice is active. None = use full grid.
+        Replaces the 8-10 op manual NeoX slice/concat chain with a single fused kernel.
+        The NeoX→interleaved conversion is absorbed into QKV weight columns at load time.
         """
-        # x: [1, batch, n_heads, head_dim] = [1, B, H, 128]  (DRAM interleaved after QK norm)
-        batch = int(x.shape[1])
-        n_heads = int(x.shape[2])
-
-        # Slice rotary and pass-through portions
-        x_rot = ttnn.slice(x, [0, 0, 0, 0], [1, batch, n_heads, self.rotary_dim], sub_core_grids=worker_scg)
-        x_pass = ttnn.slice(
-            x, [0, 0, 0, self.rotary_dim], [1, batch, n_heads, self.head_dim], sub_core_grids=worker_scg
+        return ttnn.experimental.rotary_embedding_llama(
+            x,
+            cos,
+            sin,
+            trans_mat,
+            is_decode_mode=True,
         )
 
-        # NeoX-style rotate_half
-        half = self.rotary_dim // 2
-        x1 = ttnn.slice(x_rot, [0, 0, 0, 0], [1, batch, n_heads, half], sub_core_grids=worker_scg)
-        x2 = ttnn.slice(x_rot, [0, 0, 0, half], [1, batch, n_heads, self.rotary_dim], sub_core_grids=worker_scg)
+    def _prepare_fused_qk_rot_mats(self, cos, sin, trans_mat, shard_cfgs):
+        """Double cos/sin/trans for fused QK RoPE. Cached in DRAM interleaved.
 
-        if sin_neg is not None:
-            # Optimized path: sin_neg = [-sin[:half], sin[half:]] pre-computed on host.
-            # rearranged = [x2, x1] (no neg needed — absorbed into sin_neg).
-            # x_rot_out = x_rot * cos + rearranged * sin_neg
-            rearranged = ttnn.concat([x2, x1], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG, sub_core_grids=worker_scg)
-            x_rot = ttnn.add(
-                ttnn.multiply(x_rot, cos, sub_core_grids=worker_scg),
-                ttnn.multiply(rearranged, sin_neg, sub_core_grids=worker_scg),
-                sub_core_grids=worker_scg,
-            )
-            ttnn.deallocate(rearranged)
-        else:
-            # Original path: rotated = [-x2, x1], then x_rot*cos + rotated*sin
-            rotated = ttnn.concat(
-                [ttnn.neg(x2, sub_core_grids=worker_scg), x1],
-                dim=-1,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                sub_core_grids=worker_scg,
-            )
-            x_rot = ttnn.add(
-                ttnn.multiply(x_rot, cos, sub_core_grids=worker_scg),
-                ttnn.multiply(rotated, sin, sub_core_grids=worker_scg),
-                sub_core_grids=worker_scg,
-            )
-            ttnn.deallocate(rotated)
-
-        # Concat back: [rotary_dim | pass_dim] = full head_dim
-        x = ttnn.concat([x_rot, x_pass], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG, sub_core_grids=worker_scg)
-
-        ttnn.deallocate(x_rot)
-        ttnn.deallocate(x_pass)
-        return x
-
-    def _apply_partial_rope_prefill(self, x, cos, sin, trans_mat):
-        """Apply partial rotary embedding (prefill mode, NeoX-style).
-
-        x: [1, n_heads, seq_len, head_dim]
-        cos/sin: [1, 1, padded_len, rotary_dim] — sliced to seq_len, broadcasts over n_heads.
+        The fused kernel expects cos/sin batch_dim = q_batch + k_batch = 2*batch,
+        and trans_mat sharded on >= 2*batch cores. Doubled tensors are cached in
+        DRAM interleaved format (no L1 pressure) and converted to HEIGHT_SHARDED
+        per call, then immediately deallocated to avoid L1 clashes with downstream ops.
         """
-        seq_len = x.shape[2]
-        n_heads = x.shape[1]
+        cos_id = id(cos)
+        if cos_id != self._fused_rot_cos_id:
+            if self._fused_rot_cache is not None:
+                ttnn.deallocate(self._fused_rot_cache[0], force=False)
+                ttnn.deallocate(self._fused_rot_cache[1], force=False)
+            cos_i = ttnn.sharded_to_interleaved(cos, ttnn.DRAM_MEMORY_CONFIG)
+            sin_i = ttnn.sharded_to_interleaved(sin, ttnn.DRAM_MEMORY_CONFIG)
+            cos_dram = ttnn.concat([cos_i, cos_i], dim=1)
+            sin_dram = ttnn.concat([sin_i, sin_i], dim=1)
+            ttnn.deallocate(cos_i, force=False)
+            ttnn.deallocate(sin_i, force=False)
+            self._fused_rot_cos_id = cos_id
+            self._fused_rot_cache = (cos_dram, sin_dram)
 
-        x_rot = ttnn.slice(x, [0, 0, 0, 0], [1, n_heads, seq_len, self.rotary_dim])
-        x_pass = ttnn.slice(x, [0, 0, 0, self.rotary_dim], [1, n_heads, seq_len, self.head_dim])
+        trans_id = id(trans_mat)
+        if trans_id != self._fused_trans_id:
+            if self._fused_trans_cached is not None:
+                ttnn.deallocate(self._fused_trans_cached, force=False)
+            trans_i = ttnn.sharded_to_interleaved(trans_mat, ttnn.DRAM_MEMORY_CONFIG)
+            trans_dram = ttnn.concat([trans_i, trans_i], dim=1)
+            ttnn.deallocate(trans_i, force=False)
+            self._fused_trans_cached = trans_dram
+            self._fused_trans_id = trans_id
 
-        if x_rot.dtype != ttnn.bfloat16:
-            x_rot = ttnn.typecast(x_rot, dtype=ttnn.bfloat16)
+        cos_ds = ttnn.interleaved_to_sharded(self._fused_rot_cache[0], shard_cfgs["fused_cos_sin"])
+        sin_ds = ttnn.interleaved_to_sharded(self._fused_rot_cache[1], shard_cfgs["fused_cos_sin"])
+        trans_ds = ttnn.interleaved_to_sharded(self._fused_trans_cached, shard_cfgs["fused_trans"])
+        return (cos_ds, sin_ds, trans_ds)
 
-        # Slice cos/sin to match seq_len (may be padded to max_seq_len)
-        cos_sl = ttnn.slice(cos, [0, 0, 0, 0], [1, 1, seq_len, self.rotary_dim])
-        sin_sl = ttnn.slice(sin, [0, 0, 0, 0], [1, 1, seq_len, self.rotary_dim])
+    def _apply_rope_fused_qk_decode(self, q, k, cos, sin, trans_mat, shard_cfgs):
+        """Apply fused Q+K RoPE in a single kernel launch (decode mode).
 
-        # NeoX-style rotate_half: [-x2, x1] where x1 = first half, x2 = second half
-        half = self.rotary_dim // 2
-        x1 = ttnn.slice(x_rot, [0, 0, 0, 0], [1, n_heads, seq_len, half])
-        x2 = ttnn.slice(x_rot, [0, 0, 0, half], [1, n_heads, seq_len, self.rotary_dim])
-        rotated = ttnn.concat([ttnn.neg(x2), x1], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # output = x_rot * cos + rotate_half(x_rot) * sin
-        x_rot = ttnn.add(
-            ttnn.multiply(x_rot, cos_sl),
-            ttnn.multiply(rotated, sin_sl),
+        Requires Q and K on disjoint HEIGHT_SHARDED core grids, and cos/sin/trans
+        with doubled batch dimension. The doubled HEIGHT_SHARDED tensors are created
+        from DRAM cache right before the kernel and deallocated immediately after to
+        avoid L1 conflicts with downstream ops.
+        """
+        cos_d, sin_d, trans_d = self._prepare_fused_qk_rot_mats(cos, sin, trans_mat, shard_cfgs)
+        q_out, k_out = ttnn.experimental.rotary_embedding_llama_fused_qk(
+            q,
+            k,
+            cos_d,
+            sin_d,
+            trans_d,
         )
-        ttnn.deallocate(rotated)
+        ttnn.deallocate(cos_d, force=False)
+        ttnn.deallocate(sin_d, force=False)
+        ttnn.deallocate(trans_d, force=False)
+        return q_out, k_out
 
-        x = ttnn.concat([x_rot, x_pass], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    def _apply_rope_fused_prefill(self, x, cos, sin, trans_mat):
+        """Apply partial RoPE via fused rotary_embedding_llama kernel (prefill mode).
 
-        ttnn.deallocate(x_rot)
-        ttnn.deallocate(x_pass)
-        return x
+        x: [1, n_heads, seq_len, head_dim=128] — interleaved layout.
+        cos: [1, 1, padded_len, head_dim=128] — sliced to seq_len inside kernel.
+        sin: [1, 1, padded_len, head_dim=128]
+        trans_mat: [1, 1, 32, 32]
+        """
+        if x.dtype != ttnn.bfloat16:
+            x = ttnn.typecast(x, dtype=ttnn.bfloat16)
+        seq_len = int(x.shape[2])
+        head_dim = int(x.shape[3])
+        # Slice cos/sin to match seq_len if they're padded to max_seq_len
+        cos_sl = ttnn.slice(cos, [0, 0, 0, 0], [1, 1, seq_len, head_dim])
+        sin_sl = ttnn.slice(sin, [0, 0, 0, 0], [1, 1, seq_len, head_dim])
+        return ttnn.experimental.rotary_embedding_llama(
+            x,
+            cos_sl,
+            sin_sl,
+            trans_mat,
+            is_decode_mode=False,
+        )
 
     def forward_decode(
         self,
@@ -807,9 +878,6 @@ class Glm4MoeAttention(LightweightModule):
 
         ttnn.deallocate(x)
 
-        # Column-parallel QKV: each device has its own output slice, no all-reduce needed.
-        xqkv = ttnn.to_memory_config(xqkv, ttnn.DRAM_MEMORY_CONFIG)
-
         # Use caller-provided active_batch (reliable) instead of x.shape[-2] which
         # can be inflated to 32 by tile-padding in ttnn.add / sharded_to_interleaved.
         if active_batch is None:
@@ -822,6 +890,8 @@ class Glm4MoeAttention(LightweightModule):
         # With bs<32, logical dim[-2]<32 but TILE_LAYOUT pads to 32 physically.
         # Reshape to expose physical batch as logical so matmul inner dims match.
         if tg_batch_sliced:
+            # TG multi-user path currently expects DRAM interleaved before slice-mat.
+            xqkv = ttnn.to_memory_config(xqkv, ttnn.DRAM_MEMORY_CONFIG)
             # Multi-user: slice batch to this DP group entries via matmul.
             # Lazily create slice_mat/user_sel_mat for this batch size if needed.
             self._tg_init_batch_mats(active_batch)
@@ -877,25 +947,33 @@ class Glm4MoeAttention(LightweightModule):
         q = self.q_norm(q, mode="decode")
         k = self.k_norm(k, mode="decode")
 
-        # 5. Partial RoPE (rotary_dim=64 of head_dim=128)
-        # sin_neg precomputed: saves 1 neg op per partial RoPE call (2/layer × 92 layers = 184 ops).
-        sin_neg = rot_mats[3] if len(rot_mats) > 3 else None
+        # 5. Fused RoPE via rotary_embedding_llama (1 kernel instead of 8-10 ops).
+        # QKV weights were column-permuted NeoX→interleaved at load time, so Q/K
+        # are already in the interleaved format the fused kernel expects.
+        # cos/sin include pass-through padding (cos=1, sin=0) for the non-rotary dims.
+        # Decode-mode fused kernel requires ALL inputs HEIGHT_SHARDED:
+        #   Q/K: convert from interleaved (post-QK-norm) to HEIGHT_SHARDED
+        #   cos/sin/trans_mat: caller (model_tt) converts once before the layer loop
         # When prefetcher SubDevice is active, restrict eltwise ops to worker cores (cols 0-5)
         _worker_scg = None
         if sub_device_id is not None:
             _worker_scg = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))])
-        q = self._apply_partial_rope_decode(
-            q, rot_mats[0], rot_mats[1], rot_mats[2], sin_neg=sin_neg, worker_scg=_worker_scg
-        )
-        k = self._apply_partial_rope_decode(
-            k, rot_mats[0], rot_mats[1], rot_mats[2], sin_neg=sin_neg, worker_scg=_worker_scg
-        )
-
-        # Convert back to HEIGHT_SHARDED for paged_update_cache and SDPA
-        # (partial RoPE returns DRAM interleaved after concat)
         _shard_cfgs = self._get_shard_cfgs(logical_batch_after_slice, prefetch=(sub_device_id is not None))
         q = ttnn.interleaved_to_sharded(q, _shard_cfgs["q"])
         k = ttnn.interleaved_to_sharded(k, _shard_cfgs["k"])
+        if _FUSED_QK_ROPE and sub_device_id is None:
+            q, k = self._apply_rope_fused_qk_decode(
+                q,
+                k,
+                rot_mats[0],
+                rot_mats[1],
+                rot_mats[2],
+                _shard_cfgs,
+            )
+        else:
+            q = self._apply_rope_fused_decode(q, rot_mats[0], rot_mats[1], rot_mats[2])
+            k = self._apply_rope_fused_decode(k, rot_mats[0], rot_mats[1], rot_mats[2])
+        # Output is already HEIGHT_SHARDED (fused kernel preserves input memory layout)
 
         # 6. KV cache update
         keys = kv_cache[0]
@@ -911,14 +989,19 @@ class Glm4MoeAttention(LightweightModule):
                 _puc_kw["mesh_coords"] = {ttnn.MeshCoordinate(r, c) for r in range(_mr) for c in range(_mc)}
             except Exception:
                 pass
-        ttnn.experimental.paged_update_cache(keys, k, **_puc_kw)
-        ttnn.experimental.paged_update_cache(values, v, **_puc_kw)
+        _can_fuse_kv = _FUSED_KV_UPDATE and k.is_sharded() and v.is_sharded() and _FUSED_QK_ROPE
+        if _can_fuse_kv:
+            ttnn.experimental.paged_fused_update_cache(keys, k, values, v, **_puc_kw)
+        else:
+            ttnn.experimental.paged_update_cache(keys, k, **_puc_kw)
+            ttnn.experimental.paged_update_cache(values, v, **_puc_kw)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
         # 7. SDPA (paged) — limit cores for Galaxy Wormhole tree reduction.
         # When prefetcher is active, use sub_core_grids to restrict to worker cores (cols 0-5).
         _sdpa_pc = self._get_prefetch_sdpa_config() if sub_device_id is not None else self.sdpa_decode_program_config
+        _sdpa_mc = ttnn.L1_MEMORY_CONFIG if _SDPA_L1 else ttnn.DRAM_MEMORY_CONFIG
         attn_output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
             keys,
@@ -927,7 +1010,7 @@ class Glm4MoeAttention(LightweightModule):
             cur_pos_tensor=current_pos,
             scale=self.scale,
             program_config=_sdpa_pc,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=_sdpa_mc,
         )
         ttnn.deallocate(q)
 
@@ -1183,8 +1266,8 @@ class Glm4MoeAttention(LightweightModule):
                 flush=True,
                 file=sys.stderr,
             )
-        q = self._apply_partial_rope_prefill(q, rot_mats[0], rot_mats[1], rot_mats[2])
-        k = self._apply_partial_rope_prefill(k, rot_mats[0], rot_mats[1], rot_mats[2])
+        q = self._apply_rope_fused_prefill(q, rot_mats[0], rot_mats[1], rot_mats[2])
+        k = self._apply_rope_fused_prefill(k, rot_mats[0], rot_mats[1], rot_mats[2])
         _sync("after RoPE")
 
         # 6. Fill KV cache

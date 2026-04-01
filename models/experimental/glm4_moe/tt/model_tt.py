@@ -67,24 +67,40 @@ def _rot_transformation_mat_torch() -> torch.Tensor:
     return rot
 
 
-def _rope_cos_sin_torch(*, seq_len: int, dim: int, base: float) -> tuple[torch.Tensor, torch.Tensor]:
-    """Return cos/sin matrices in NeoX half-rotation form: [1,1,seq_len,dim].
+def _rope_cos_sin_torch(*, seq_len: int, dim: int, head_dim: int, base: float) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return cos/sin in interleaved format for fused rotary_embedding_llama.
 
-    Last dim layout: [t0, t1, ..., t_{d/2-1}, t0, t1, ..., t_{d/2-1}]
-    to match NeoX-style rotate_half(x) = cat(-x[..., d//2:], x[..., :d//2]).
-    GLM-4.7 uses NeoX-style RoPE (confirmed from HuggingFace transformers glm4_moe).
+    Output shape: [seq_len, head_dim] (2D, for use as ttnn.embedding weight tables).
+    - First ``dim`` elements: interleaved pairs [c0, c0, c1, c1, ..., c_{h-1}, c_{h-1}]
+      matching the (real, imag) pairing expected by the fused kernel's 32×32 trans_mat.
+    - Remaining ``head_dim - dim`` elements: cos=1.0, sin=0.0 (pass-through).
+
+    The interleaved format corresponds to QKV weights that have been column-permuted
+    from NeoX half-split to adjacent-pair layout via ``_neox_to_interleaved_perm``.
     """
     if dim % 2 != 0:
         raise ValueError(f"rope dim must be even, got dim={dim}")
     half = dim // 2
     inv_freq = 1.0 / (base ** (torch.arange(0, half, dtype=torch.float32) * (2.0 / dim)))
     positions = torch.arange(seq_len, dtype=torch.float32)
-    freqs = torch.outer(positions, inv_freq)
-    cos = torch.cos(freqs)
-    sin = torch.sin(freqs)
-    cos = torch.cat((cos, cos), dim=-1)
-    sin = torch.cat((sin, sin), dim=-1)
-    return cos.unsqueeze(0).unsqueeze(0), sin.unsqueeze(0).unsqueeze(0)
+    freqs = torch.outer(positions, inv_freq)  # [seq_len, half]
+    cos_half = torch.cos(freqs)
+    sin_half = torch.sin(freqs)
+
+    # Interleave: [c0, c0, c1, c1, ...] — each freq value appears twice (real & imag slots)
+    cos_interleaved = torch.stack([cos_half, cos_half], dim=-1).reshape(seq_len, dim)
+    sin_interleaved = torch.stack([sin_half, sin_half], dim=-1).reshape(seq_len, dim)
+
+    # Pad pass-through dims: cos=1 (identity), sin=0 (no rotation)
+    pass_dim = head_dim - dim
+    if pass_dim > 0:
+        cos_full = torch.cat([cos_interleaved, torch.ones(seq_len, pass_dim)], dim=-1)
+        sin_full = torch.cat([sin_interleaved, torch.zeros(seq_len, pass_dim)], dim=-1)
+    else:
+        cos_full = cos_interleaved
+        sin_full = sin_interleaved
+
+    return cos_full, sin_full  # [seq_len, head_dim]
 
 
 def _make_rope_tensors(
@@ -92,48 +108,81 @@ def _make_rope_tensors(
     device,
     seq_len: int,
     rope_dim: int,
+    head_dim: int,
     rope_theta: float,
 ) -> dict[str, object]:
     """Create RoPE cos/sin/trans tensors for GQA with partial RoPE.
 
     For GLM-4.7-REAP: partial_rotary_factor=0.5, so rope_dim=64 (half of head_dim=128).
-    RoPE tables are created at rope_dim (the portion that gets rotated).
+    cos/sin are in interleaved format with pass-through padding (full head_dim width)
+    for use with ttnn.experimental.rotary_embedding_llama.
+
+    Following the Llama pattern: cos/sin stored as ROW_MAJOR [seq_len, head_dim] on device
+    for use with ttnn.embedding (on-device per-position lookup).
     """
-    cos_t, sin_t = _rope_cos_sin_torch(seq_len=seq_len, dim=rope_dim, base=rope_theta)
-    trans_t = _rot_transformation_mat_torch().to(dtype=torch.bfloat16)
+    cos_t, sin_t = _rope_cos_sin_torch(seq_len=seq_len, dim=rope_dim, head_dim=head_dim, base=rope_theta)
+    # cos_t, sin_t: [seq_len, head_dim]
 
     is_mesh_device = device.__class__.__name__ == "MeshDevice"
-    cos_host = cos_t.to(dtype=torch.bfloat16).cpu()
-    sin_host = sin_t.to(dtype=torch.bfloat16).cpu()
+    mesh_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
 
-    cos = ttnn.from_torch(
+    # Store cos/sin as ROW_MAJOR embedding tables on device (Llama pattern).
+    # ttnn.embedding will do per-position lookup on device.
+    cos_emb = ttnn.from_torch(
         cos_t.to(dtype=torch.bfloat16),
         device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+        mesh_mapper=mesh_mapper,
     )
-    sin = ttnn.from_torch(
+    sin_emb = ttnn.from_torch(
         sin_t.to(dtype=torch.bfloat16),
         device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+        mesh_mapper=mesh_mapper,
     )
-    trans = ttnn.from_torch(
+
+    # Prefill trans_mat: [1, 1, head_dim, head_dim] in DRAM (not sharded).
+    # Decode trans_mat is created per-batch in _capture_decode_trace (HEIGHT_SHARDED).
+    trans_t = _rot_transformation_mat_torch().to(dtype=torch.bfloat16)  # [1, 1, 32, 32]
+    trans_prefill = ttnn.from_torch(
         trans_t,
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
+        mesh_mapper=mesh_mapper,
     )
+
+    # TILE_LAYOUT cos/sin for prefill: [1, 1, seq_len, head_dim] — needed by
+    # rotary_embedding_llama in prefill mode (INTERLEAVED, not HEIGHT_SHARDED).
+    cos_prefill = ttnn.from_torch(
+        cos_t.unsqueeze(0).unsqueeze(0).to(dtype=torch.bfloat16),  # [1,1,seq_len,head_dim]
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+    )
+    sin_prefill = ttnn.from_torch(
+        sin_t.unsqueeze(0).unsqueeze(0).to(dtype=torch.bfloat16),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+    )
+
     return {
-        "cos_matrix": cos,
-        "sin_matrix": sin,
-        "trans_matrix": trans,
-        "cos_matrix_host": cos_host,
-        "sin_matrix_host": sin_host,
+        "cos_emb": cos_emb,  # [seq_len, head_dim] ROW_MAJOR on device (decode embedding)
+        "sin_emb": sin_emb,  # [seq_len, head_dim] ROW_MAJOR on device (decode embedding)
+        "cos_prefill": cos_prefill,  # [1,1,seq_len,head_dim] TILE_LAYOUT (prefill)
+        "sin_prefill": sin_prefill,  # [1,1,seq_len,head_dim] TILE_LAYOUT (prefill)
+        "trans_matrix_prefill": trans_prefill,  # [1,1,32,32] DRAM for prefill
+        "trans_matrix_host": trans_t.cpu(),  # host copy for decode sharded creation
+        "head_dim": head_dim,
+        "max_seq_len": seq_len,
     }
 
 
@@ -142,37 +191,124 @@ def _make_rope_tensors(
 # ---------------------------------------------------------------------------
 
 
-def _prepare_decode_rope_and_positions_tt(
+def _make_decode_rope_sharded(
     *,
     device,
     rope: dict,
+    effective_batch: int,
+    prefetcher=None,
+) -> dict[str, object]:
+    """Create persistent HEIGHT_SHARDED trans_mat and shard configs for decode RoPE.
+
+    Following Llama pattern: trans_mat is created ONCE at trace setup (not per step).
+    cos/sin are looked up on-device via ttnn.embedding each step.
+
+    Args:
+        effective_batch: per-device batch after DP sharding (active // dp_size).
+    """
+    is_mesh = device.__class__.__name__ == "MeshDevice"
+    b = max(effective_batch, 1)
+
+    if prefetcher is not None:
+        worker_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))])
+        batch_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            ttnn.CoreCoord(0, 0),
+            b,
+            worker_crs,
+            row_wise=True,
+        )
+    else:
+        grid_size = device.compute_with_storage_grid_size()
+        batch_grid = ttnn.num_cores_to_corerangeset(b, grid_size, row_wise=True)
+
+    head_dim = rope["head_dim"]
+    rope_shard_cfg = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, head_dim),
+        core_grid=batch_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    trans_shard_cfg = ttnn.create_sharded_memory_config(
+        shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+        core_grid=batch_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    # Persistent sharded trans_mat: repeat [1,1,32,32] for batch, shard across cores (Llama pattern).
+    trans_sharded = ttnn.from_torch(
+        rope["trans_matrix_host"].repeat(1, 1, b, 1),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=trans_shard_cfg,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+    )
+
+    return {
+        "rope_shard_cfg": rope_shard_cfg,
+        "trans_sharded": trans_sharded,
+        "batch_grid": batch_grid,
+    }
+
+
+def _decode_rope_embedding_lookup(
+    *,
+    rot_idxs: ttnn.Tensor,
+    rope: dict,
+    rope_shard_cfg,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Look up cos/sin for given position indices using on-device ttnn.embedding.
+
+    Following Llama T3000 pattern: embedding to DRAM interleaved, then
+    unsqueeze → transpose → interleaved_to_sharded.
+    rot_idxs: [1, batch] uint32 position indices on device.
+    Returns: (cos_sharded, sin_sharded) both HEIGHT_SHARDED [1, batch, 1(32), head_dim].
+    """
+    # Embedding lookup: [1, batch] -> [1, batch, head_dim] (3D, DRAM interleaved)
+    cos = ttnn.embedding(rot_idxs, rope["cos_emb"], layout=ttnn.TILE_LAYOUT)
+    sin = ttnn.embedding(rot_idxs, rope["sin_emb"], layout=ttnn.TILE_LAYOUT)
+
+    # Reshape to 4D: [1, 1, batch, head_dim] → transpose → [1, batch, 1(32), head_dim]
+    cos = ttnn.unsqueeze_to_4D(cos)
+    sin = ttnn.unsqueeze_to_4D(sin)
+    cos = ttnn.transpose(cos, 1, 2)
+    sin = ttnn.transpose(sin, 1, 2)
+
+    # Convert to HEIGHT_SHARDED (same as Llama T3000 pattern)
+    cos = ttnn.interleaved_to_sharded(cos, rope_shard_cfg)
+    sin = ttnn.interleaved_to_sharded(sin, rope_shard_cfg)
+
+    return cos, sin
+
+
+def _prepare_decode_positions_tt(
+    *,
+    device,
     positions: torch.Tensor,
     dp_shard_axis: int | None = None,
-) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-    """Prepare per-step RoPE cos/sin/sin_neg and position tensors for decode.
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Upload position tensors and rot_idxs to device for decode.
 
-    positions: [B] int32 tensor of current positions.
-    dp_shard_axis: If set, shard cos/sin along dim=1 (batch) across this mesh axis
-        instead of replicating.  Used on TG (Galaxy) where DP groups each process
-        a subset of the batch.  The mesh axis must evenly divide the batch size.
-    Returns: (tt_positions, cos_batch, sin_batch, sin_neg_batch) on device.
-    sin_neg_batch: [-sin[:half], sin[half:]] for fused addcmul RoPE (OPT-3).
+    Returns: (tt_positions, rot_idxs)
+    - tt_positions: [B] int32 for KV cache update
+    - rot_idxs: [1, B] uint32 for ttnn.embedding cos/sin lookup
     """
     is_mesh_device = device.__class__.__name__ == "MeshDevice"
     batch = int(positions.shape[0])
 
-    # Upload positions to device.
-    # When dp_shard_axis is set, shard positions across DP groups (each group gets
-    # only its subset of positions).
     if is_mesh_device and dp_shard_axis is not None:
         mesh_shape = list(device.shape)
         pos_dims = [None, None]
-        pos_dims[dp_shard_axis] = 0  # shard tensor dim=0 across dp_shard_axis
+        pos_dims[dp_shard_axis] = 0
         pos_mapper = ttnn.ShardTensor2dMesh(device, dims=tuple(pos_dims), mesh_shape=mesh_shape)
     elif is_mesh_device:
         pos_mapper = ttnn.ReplicateTensorToMesh(device)
     else:
         pos_mapper = None
+
     tt_positions = ttnn.from_torch(
         positions.view(-1).contiguous().to(torch.int32),
         device=device,
@@ -182,57 +318,18 @@ def _prepare_decode_rope_and_positions_tt(
         mesh_mapper=pos_mapper,
     )
 
-    # Gather per-position cos/sin from host-side RoPE tables.
-    cos_host = rope["cos_matrix_host"]  # [1, 1, max_seq_len, rope_dim]
-    sin_host = rope["sin_matrix_host"]
-    rope_dim = int(cos_host.shape[3])
-
-    positions_cpu = positions.to(torch.long).clamp(min=0, max=int(cos_host.shape[2]) - 1)
-    cos_batch_t = cos_host[0, 0, positions_cpu, :].reshape(1, batch, 1, rope_dim).to(torch.bfloat16)
-    sin_batch_t = sin_host[0, 0, positions_cpu, :].reshape(1, batch, 1, rope_dim).to(torch.bfloat16)
-
-    # Determine mesh mapper for cos/sin.
-    if is_mesh_device and dp_shard_axis is not None:
-        # Shard batch dim across DP groups so each group gets only its positions' cos/sin.
-        mesh_shape = list(device.shape)
-        dims = [None, None]
-        dims[dp_shard_axis] = 1  # shard tensor dim=1 (batch) across dp_shard_axis
-        rope_mapper = ttnn.ShardTensor2dMesh(device, dims=tuple(dims), mesh_shape=mesh_shape)
-    elif is_mesh_device:
-        rope_mapper = ttnn.ReplicateTensorToMesh(device)
-    else:
-        rope_mapper = None
-
-    cos_batch = ttnn.from_torch(
-        cos_batch_t,
+    # rot_idxs for ttnn.embedding: [1, batch] uint32
+    rot_idxs_t = positions.view(1, batch).contiguous().clamp(min=0).to(torch.int32)
+    rot_idxs = ttnn.from_torch(
+        rot_idxs_t,
         device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=rope_mapper,
-    )
-    sin_batch = ttnn.from_torch(
-        sin_batch_t,
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=rope_mapper,
+        mesh_mapper=pos_mapper,
     )
 
-    # Pre-compute sin_neg = [-sin[:half], sin[half:]] for addcmul RoPE fusion (OPT-3).
-    half = rope_dim // 2
-    sin_neg_batch_t = torch.cat([-sin_batch_t[..., :half], sin_batch_t[..., half:]], dim=-1)
-    sin_neg_batch = ttnn.from_torch(
-        sin_neg_batch_t,
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=rope_mapper,
-    )
-
-    return tt_positions, cos_batch, sin_batch, sin_neg_batch
+    return tt_positions, rot_idxs
 
 
 # ---------------------------------------------------------------------------
@@ -287,10 +384,9 @@ class _DecodeTraceState:
     page_table_width: int = 0
     tokens_tt: ttnn.Tensor | None = None
     positions_tt: ttnn.Tensor | None = None
-    cos_batch_tt: ttnn.Tensor | None = None
-    sin_batch_tt: ttnn.Tensor | None = None
-    sin_neg_batch_tt: ttnn.Tensor | None = None
-    trans_matrix_tt: ttnn.Tensor | None = None
+    rot_idxs_tt: ttnn.Tensor | None = None  # [1,B] uint32 — persistent, updated via copy_host_to_device
+    trans_matrix_sharded_tt: ttnn.Tensor | None = None  # HEIGHT_SHARDED trans_mat for fused RoPE
+    rope_shard_cfg: object = None  # HEIGHT_SHARDED memory config for embedding output
     page_table_tt: ttnn.Tensor | None = None
     logits_tt: ttnn.Tensor | None = None
     top1_values_tt: ttnn.Tensor | None = None
@@ -300,9 +396,7 @@ class _DecodeTraceState:
     # MTP trace state
     mtp_hidden_tt: ttnn.Tensor | None = None  # [1,1,B,hidden] clone from main trace
     mtp_positions_tt: ttnn.Tensor | None = None  # [B] int32 — MTP positions (start_pos+1)
-    mtp_cos_batch_tt: ttnn.Tensor | None = None  # [1,B,1,rope_dim] bf16
-    mtp_sin_batch_tt: ttnn.Tensor | None = None  # [1,B,1,rope_dim] bf16
-    mtp_sin_neg_batch_tt: ttnn.Tensor | None = None  # [1,B,1,rope_dim] bf16
+    mtp_rot_idxs_tt: ttnn.Tensor | None = None  # [1,B] uint32 — MTP position indices for embedding
     mtp_page_table_tt: ttnn.Tensor | None = None  # [B,W] int32 (or None to reuse main)
     mtp_embed_tt: ttnn.Tensor | None = None  # [1,1,B,hidden] — MTP embedding buffer
     mtp_trace_id: int | None = None
@@ -411,6 +505,7 @@ class Glm4MoeTT:
             device=device,
             seq_len=int(max_seq_len),
             rope_dim=rope_dim,
+            head_dim=int(hparams.head_dim),
             rope_theta=float(hparams.rope_theta),
         )
 
@@ -523,6 +618,7 @@ class Glm4MoeTT:
             logger.info("  [DEBUG] Starting layer {} weight conversion", layer_idx)
             lw = convert_decoder_layer_weights(
                 device=device,
+                tt_ccl=tt_ccl,
                 state=state,
                 layer_idx=layer_idx,
                 hparams=hparams,
@@ -839,12 +935,28 @@ class Glm4MoeTT:
             mesh_mapper=dp_batch_mapper,
         )
 
-        tt_positions, cos_batch, sin_batch, sin_neg_batch = _prepare_decode_rope_and_positions_tt(
+        tt_positions, rot_idxs = _prepare_decode_positions_tt(
             device=self.device,
-            rope=self.rope,
             positions=positions,
             dp_shard_axis=dp_shard_axis,
         )
+
+        # Create HEIGHT_SHARDED trans_mat and shard configs for fused RoPE.
+        dp_size = int(self.device.shape[1]) if is_mesh and int(self.device.shape[1]) > 1 else 1
+        effective_batch = active // dp_size if dp_shard_axis is not None else active
+        _rope_sharded = _make_decode_rope_sharded(
+            device=self.device,
+            rope=self.rope,
+            effective_batch=effective_batch,
+        )
+
+        # On-device cos/sin lookup via ttnn.embedding (Llama pattern).
+        cos_batch, sin_batch = _decode_rope_embedding_lookup(
+            rot_idxs=rot_idxs,
+            rope=self.rope,
+            rope_shard_cfg=_rope_sharded["rope_shard_cfg"],
+        )
+        ttnn.deallocate(rot_idxs, force=False)
 
         # Embedding: host-side lookup to avoid device-side tile conversion hang on TG mesh.
         embed_torch = self.embed_w_cpu[tokens[:, 0].long()]  # [B, hidden]
@@ -857,8 +969,8 @@ class Glm4MoeTT:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
         )
 
-        # RoPE mats for attention (cos, sin, trans_matrix).
-        rot_mats = (cos_batch, sin_batch, self.rope["trans_matrix"], sin_neg_batch)
+        # RoPE mats for attention (cos, sin, trans_matrix) — all HEIGHT_SHARDED for fused decode.
+        rot_mats = (cos_batch, sin_batch, _rope_sharded["trans_sharded"])
 
         # Decoder stack.
         for layer_idx in range(self.num_layers_to_run):
@@ -1338,9 +1450,8 @@ class Glm4MoeTT:
                 )
 
         mtp_pos_clamped = mtp_positions[:batch].to(torch.int32).clamp(min=0, max=max(0, int(self.max_seq_len) - 1))
-        tt_positions, cos_batch, sin_batch, sin_neg_batch = _prepare_decode_rope_and_positions_tt(
+        tt_positions, rot_idxs = _prepare_decode_positions_tt(
             device=self.device,
-            rope=self.rope,
             positions=mtp_pos_clamped,
             dp_shard_axis=dp_shard_axis,
         )
@@ -1356,7 +1467,21 @@ class Glm4MoeTT:
             mesh_mapper=dp_batch_mapper,
         )
 
-        rot_mats = (cos_batch, sin_batch, self.rope["trans_matrix"], sin_neg_batch)
+        # Create HEIGHT_SHARDED trans_mat and cos/sin via on-device embedding lookup.
+        dp_size = int(self.device.shape[1]) if is_mesh and dp_shard_axis is not None else 1
+        effective_batch = batch // dp_size if dp_shard_axis is not None else batch
+        _rope_sharded = _make_decode_rope_sharded(
+            device=self.device,
+            rope=self.rope,
+            effective_batch=effective_batch,
+        )
+        cos_batch, sin_batch = _decode_rope_embedding_lookup(
+            rot_idxs=rot_idxs,
+            rope=self.rope,
+            rope_shard_cfg=_rope_sharded["rope_shard_cfg"],
+        )
+        ttnn.deallocate(rot_idxs, force=False)
+        rot_mats = (cos_batch, sin_batch, _rope_sharded["trans_sharded"])
 
         # 5. Run MTP decoder layer (OOP forward)
         x = self.mtp_decoder_layer.forward(
@@ -1383,7 +1508,7 @@ class Glm4MoeTT:
         ttnn.deallocate(tt_positions, force=False)
         ttnn.deallocate(cos_batch, force=False)
         ttnn.deallocate(sin_batch, force=False)
-        ttnn.deallocate(sin_neg_batch, force=False)
+        ttnn.deallocate(_rope_sharded["trans_sharded"], force=False)
         ttnn.deallocate(page_table_tt, force=False)
 
         return draft_token_ids[:batch]  # Slice to real batch size
@@ -1426,12 +1551,17 @@ class Glm4MoeTT:
         ttnn.deallocate(proj_e, force=False)
         ttnn.deallocate(proj_h, force=False)
 
-        # 4. RoPE from persistent cos/sin tensors
+        # 4. RoPE via on-device embedding lookup (Llama pattern).
+        # rot_idxs → ttnn.embedding → HEIGHT_SHARDED cos/sin. Captured in trace.
+        mtp_cos_sharded, mtp_sin_sharded = _decode_rope_embedding_lookup(
+            rot_idxs=state.mtp_rot_idxs_tt,
+            rope=self.rope,
+            rope_shard_cfg=state.rope_shard_cfg,
+        )
         rot_mats = (
-            state.mtp_cos_batch_tt,
-            state.mtp_sin_batch_tt,
-            self.rope["trans_matrix"],
-            state.mtp_sin_neg_batch_tt,
+            mtp_cos_sharded,
+            mtp_sin_sharded,
+            state.trans_matrix_sharded_tt,
         )
 
         # 5. Run MTP decoder layer
@@ -1471,7 +1601,6 @@ class Glm4MoeTT:
 
         # DP sharding for TG mesh
         dp_batch_mapper = mapper
-        rope_mapper = mapper
         if is_mesh and int(self.device.shape[1]) > 1:
             dp_size = int(self.device.shape[1])
             if active > 1 and active % dp_size == 0:
@@ -1479,11 +1608,6 @@ class Glm4MoeTT:
                 dp_batch_mapper = ttnn.ShardTensor2dMesh(
                     self.device,
                     dims=(None, 0),
-                    mesh_shape=mesh_shape,
-                )
-                rope_mapper = ttnn.ShardTensor2dMesh(
-                    self.device,
-                    dims=(None, 1),
                     mesh_shape=mesh_shape,
                 )
 
@@ -1516,32 +1640,20 @@ class Glm4MoeTT:
         )
         ttnn.copy_host_to_device_tensor(host_pos, state.mtp_positions_tt)
 
-        # 3. Copy MTP cos/sin/sin_neg (use `active` batch, not mtp_batch)
-        mtp_pos_clamped = mtp_positions.to(torch.long).clamp(min=0, max=int(self.rope["cos_matrix_host"].shape[2]) - 1)
-        if len(mtp_pos_clamped) < active:
-            pad = torch.zeros(active - len(mtp_pos_clamped), dtype=torch.long)
-            mtp_pos_clamped = torch.cat([mtp_pos_clamped, pad])
-        elif len(mtp_pos_clamped) > active:
-            mtp_pos_clamped = mtp_pos_clamped[:active]
-        cos_host = self.rope["cos_matrix_host"]
-        sin_host = self.rope["sin_matrix_host"]
-        rope_dim = int(cos_host.shape[3])
-
-        cos_batch_t = cos_host[0, 0, mtp_pos_clamped, :].reshape(1, active, 1, rope_dim).to(torch.bfloat16)
-        sin_batch_t = sin_host[0, 0, mtp_pos_clamped, :].reshape(1, active, 1, rope_dim).to(torch.bfloat16)
-
-        host_cos = ttnn.from_torch(cos_batch_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rope_mapper)
-        host_sin = ttnn.from_torch(sin_batch_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rope_mapper)
-        ttnn.copy_host_to_device_tensor(host_cos, state.mtp_cos_batch_tt)
-        ttnn.copy_host_to_device_tensor(host_sin, state.mtp_sin_batch_tt)
-
-        # sin_neg for addcmul RoPE fusion
-        half = rope_dim // 2
-        sin_neg_batch_t = torch.cat([-sin_batch_t[..., :half], sin_batch_t[..., half:]], dim=-1)
-        host_sin_neg = ttnn.from_torch(
-            sin_neg_batch_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rope_mapper
+        # 3. Copy MTP rot_idxs for on-device embedding lookup (replaces cos/sin copy)
+        mtp_rot_idxs_t = mtp_positions.view(1, -1).contiguous().clamp(min=0).to(torch.int32)
+        if mtp_rot_idxs_t.shape[1] < active:
+            pad = torch.zeros(1, active - mtp_rot_idxs_t.shape[1], dtype=torch.int32)
+            mtp_rot_idxs_t = torch.cat([mtp_rot_idxs_t, pad], dim=1)
+        elif mtp_rot_idxs_t.shape[1] > active:
+            mtp_rot_idxs_t = mtp_rot_idxs_t[:, :active]
+        host_rot_idxs = ttnn.from_torch(
+            mtp_rot_idxs_t,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=dp_batch_mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_sin_neg, state.mtp_sin_neg_batch_tt)
+        ttnn.copy_host_to_device_tensor(host_rot_idxs, state.mtp_rot_idxs_tt)
 
     def _copy_mtp_trace_inputs_positions_only(
         self,
@@ -1562,7 +1674,6 @@ class Glm4MoeTT:
 
         # DP sharding for TG mesh
         dp_batch_mapper = mapper
-        rope_mapper = mapper
         if is_mesh and int(self.device.shape[1]) > 1:
             dp_size = int(self.device.shape[1])
             if active > 1 and active % dp_size == 0:
@@ -1570,11 +1681,6 @@ class Glm4MoeTT:
                 dp_batch_mapper = ttnn.ShardTensor2dMesh(
                     self.device,
                     dims=(None, 0),
-                    mesh_shape=mesh_shape,
-                )
-                rope_mapper = ttnn.ShardTensor2dMesh(
-                    self.device,
-                    dims=(None, 1),
                     mesh_shape=mesh_shape,
                 )
 
@@ -1593,32 +1699,20 @@ class Glm4MoeTT:
         )
         ttnn.copy_host_to_device_tensor(host_pos, state.mtp_positions_tt)
 
-        # 2. Copy MTP cos/sin/sin_neg
-        mtp_pos_clamped = mtp_positions.to(torch.long).clamp(min=0, max=int(self.rope["cos_matrix_host"].shape[2]) - 1)
-        if len(mtp_pos_clamped) < active:
-            pad = torch.zeros(active - len(mtp_pos_clamped), dtype=torch.long)
-            mtp_pos_clamped = torch.cat([mtp_pos_clamped, pad])
-        elif len(mtp_pos_clamped) > active:
-            mtp_pos_clamped = mtp_pos_clamped[:active]
-        cos_host = self.rope["cos_matrix_host"]
-        sin_host = self.rope["sin_matrix_host"]
-        rope_dim = int(cos_host.shape[3])
-
-        cos_batch_t = cos_host[0, 0, mtp_pos_clamped, :].reshape(1, active, 1, rope_dim).to(torch.bfloat16)
-        sin_batch_t = sin_host[0, 0, mtp_pos_clamped, :].reshape(1, active, 1, rope_dim).to(torch.bfloat16)
-
-        host_cos = ttnn.from_torch(cos_batch_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rope_mapper)
-        host_sin = ttnn.from_torch(sin_batch_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rope_mapper)
-        ttnn.copy_host_to_device_tensor(host_cos, state.mtp_cos_batch_tt)
-        ttnn.copy_host_to_device_tensor(host_sin, state.mtp_sin_batch_tt)
-
-        # sin_neg for addcmul RoPE fusion
-        half = rope_dim // 2
-        sin_neg_batch_t = torch.cat([-sin_batch_t[..., :half], sin_batch_t[..., half:]], dim=-1)
-        host_sin_neg = ttnn.from_torch(
-            sin_neg_batch_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rope_mapper
+        # 2. Copy MTP rot_idxs for on-device embedding lookup (replaces cos/sin copy)
+        mtp_rot_idxs_t = mtp_positions.view(1, -1).contiguous().clamp(min=0).to(torch.int32)
+        if mtp_rot_idxs_t.shape[1] < active:
+            pad = torch.zeros(1, active - mtp_rot_idxs_t.shape[1], dtype=torch.int32)
+            mtp_rot_idxs_t = torch.cat([mtp_rot_idxs_t, pad], dim=1)
+        elif mtp_rot_idxs_t.shape[1] > active:
+            mtp_rot_idxs_t = mtp_rot_idxs_t[:, :active]
+        host_rot_idxs = ttnn.from_torch(
+            mtp_rot_idxs_t,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=dp_batch_mapper,
         )
-        ttnn.copy_host_to_device_tensor(host_sin_neg, state.mtp_sin_neg_batch_tt)
+        ttnn.copy_host_to_device_tensor(host_rot_idxs, state.mtp_rot_idxs_tt)
 
     # -------------------------------------------------------------------
     # Decode Trace (capture/replay)
@@ -1915,9 +2009,8 @@ class Glm4MoeTT:
             mesh_mapper=dp_batch_mapper,
         )
 
-        tt_positions, cos_batch, sin_batch, sin_neg_batch = _prepare_decode_rope_and_positions_tt(
+        tt_positions, rot_idxs = _prepare_decode_positions_tt(
             device=self.device,
-            rope=self.rope,
             positions=positions,
             dp_shard_axis=dp_shard_axis,
         )
@@ -1931,18 +2024,6 @@ class Glm4MoeTT:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mapper,
         )
-
-        # Compute rope_mapper for MTP (DP-sharded cos/sin on batch dim)
-        rope_mapper = mapper  # replicate by default
-        if is_mesh and int(self.device.shape[1]) > 1:
-            dp_size = int(self.device.shape[1])
-            if active > 1 and active % dp_size == 0:
-                mesh_shape = list(self.device.shape)
-                rope_mapper = ttnn.ShardTensor2dMesh(
-                    self.device,
-                    dims=(None, 1),
-                    mesh_shape=mesh_shape,
-                )
 
         # Embedding strategy: use in-trace ttnn.embedding when embed_w is on device,
         # otherwise fall back to host-side lookup + pre-allocated device buffer.
@@ -1965,9 +2046,7 @@ class Glm4MoeTT:
         # Allocate MTP persistent tensors (before compile warm-up)
         mtp_embed_tt = None
         mtp_positions_tt = None
-        mtp_cos_batch_tt = None
-        mtp_sin_batch_tt = None
-        mtp_sin_neg_batch_tt = None
+        mtp_rot_idxs_tt = None
         mtp_hidden_tt = None
         mtp_trace_id = None
         mtp_logits_tt = None
@@ -1975,7 +2054,6 @@ class Glm4MoeTT:
         mtp_traced = os.environ.get("GLM4_MOE_MTP_TRACED", "").strip() != "0"  # default ON
 
         if self.mtp_enabled:
-            rope_dim = int(self.hparams.head_dim * self.hparams.partial_rotary_factor)
             # MTP batch = active batch. TILE_LAYOUT handles physical padding internally.
             # mtp_embed_tt must match mtp_hidden_tt's logical batch for ttnn.add compatibility.
             mtp_batch = active
@@ -1988,8 +2066,8 @@ class Glm4MoeTT:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
-            # Positions, cos, sin use `active` (NOT mtp_batch) because the decoder layer's
-            # attention uses active_batch for batch slicing, and cos/sin must match q/k batch.
+            # Positions use `active` (NOT mtp_batch) because the decoder layer's
+            # attention uses active_batch for batch slicing.
             mtp_positions_tt = ttnn.from_torch(
                 torch.zeros(active, dtype=torch.int32),
                 device=self.device,
@@ -1998,32 +2076,15 @@ class Glm4MoeTT:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=dp_batch_mapper,
             )
-            mtp_cos_batch_tt = ttnn.from_torch(
-                torch.zeros(1, active, 1, rope_dim, dtype=torch.bfloat16),
+            # MTP rot_idxs: [1, active] uint32 — persistent buffer for embedding lookup inside trace
+            mtp_rot_idxs_tt = ttnn.from_torch(
+                torch.zeros(1, active, dtype=torch.int32),
                 device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=rope_mapper,
+                mesh_mapper=dp_batch_mapper,
             )
-            mtp_sin_batch_tt = ttnn.from_torch(
-                torch.zeros(1, active, 1, rope_dim, dtype=torch.bfloat16),
-                device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=rope_mapper,
-            )
-            mtp_sin_neg_batch_tt = ttnn.from_torch(
-                torch.zeros(1, active, 1, rope_dim, dtype=torch.bfloat16),
-                device=self.device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=rope_mapper,
-            )
-
-        rot_mats = (cos_batch, sin_batch, self.rope["trans_matrix"], sin_neg_batch)
 
         # Prefetcher shorthand variables — set before compile warmup so warmup
         # matches trace exactly (same SubDevice configs, same buffer shapes).
@@ -2058,6 +2119,20 @@ class Glm4MoeTT:
             _worker_scg = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 8))])
             logger.info("=== PREFETCH: configs read, gcb={}, sdid={} ===", _gcb, _sdid)
 
+        # Prepare HEIGHT_SHARDED trans_mat and shard config for fused rotary_embedding_llama.
+        # cos/sin are looked up on-device via ttnn.embedding each step (Llama pattern).
+        dp_size = int(self.device.shape[1]) if is_mesh and dp_shard_axis is not None else 1
+        effective_batch = active // dp_size if dp_shard_axis is not None else active
+        _pf_for_shard = self.prefetcher if hasattr(self, "prefetcher") and self.prefetcher else None
+        _rope_sharded_trace = _make_decode_rope_sharded(
+            device=self.device,
+            rope=self.rope,
+            effective_batch=effective_batch,
+            prefetcher=_pf_for_shard,
+        )
+        _rope_shard_cfg = _rope_sharded_trace["rope_shard_cfg"]
+        trans_sharded = _rope_sharded_trace["trans_sharded"]
+
         # Run forward once (compile warm-up).
         # With prefetcher: runs WITH SubDevice active so buffer configs match trace.
         # Without prefetcher: runs without SubDevice (original path).
@@ -2082,6 +2157,15 @@ class Glm4MoeTT:
         else:
             # Use embed_tt directly (no copy). Skip dealloc of layer 0 input in loop below.
             x = embed_tt
+
+        # On-device cos/sin lookup via ttnn.embedding → HEIGHT_SHARDED (Llama pattern).
+        # Compile warmup must match trace exactly — same embedding ops.
+        cos_warmup, sin_warmup = _decode_rope_embedding_lookup(
+            rot_idxs=rot_idxs,
+            rope=self.rope,
+            rope_shard_cfg=_rope_shard_cfg,
+        )
+        rot_mats = (cos_warmup, sin_warmup, trans_sharded)
 
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
@@ -2205,9 +2289,9 @@ class Glm4MoeTT:
                     mtp_hidden_tt=mtp_hidden_warmup,
                     mtp_embed_tt=mtp_embed_tt,
                     mtp_positions_tt=mtp_positions_tt,
-                    mtp_cos_batch_tt=mtp_cos_batch_tt,
-                    mtp_sin_batch_tt=mtp_sin_batch_tt,
-                    mtp_sin_neg_batch_tt=mtp_sin_neg_batch_tt,
+                    mtp_rot_idxs_tt=mtp_rot_idxs_tt,
+                    rope_shard_cfg=_rope_shard_cfg,
+                    trans_matrix_sharded_tt=trans_sharded,
                 )
                 mtp_logits_warm = self._mtp_decode_step_tt(
                     state=mtp_state_warmup,
@@ -2310,6 +2394,15 @@ class Glm4MoeTT:
             # Use embed_tt directly — no copy needed. The embed buffer is dedicated
             # to this trace and overwritten (via write_tensor) before each execution.
             x = embed_tt
+
+        # On-device cos/sin lookup via ttnn.embedding → HEIGHT_SHARDED INSIDE trace.
+        # After _update_trace_inputs copies new rot_idxs, the traced embedding re-runs.
+        cos_traced, sin_traced = _decode_rope_embedding_lookup(
+            rot_idxs=rot_idxs,
+            rope=self.rope,
+            rope_shard_cfg=_rope_shard_cfg,
+        )
+        rot_mats = (cos_traced, sin_traced, trans_sharded)
 
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
@@ -2446,9 +2539,9 @@ class Glm4MoeTT:
                 mtp_hidden_tt=mtp_hidden_tt,
                 mtp_embed_tt=mtp_embed_tt,
                 mtp_positions_tt=mtp_positions_tt,
-                mtp_cos_batch_tt=mtp_cos_batch_tt,
-                mtp_sin_batch_tt=mtp_sin_batch_tt,
-                mtp_sin_neg_batch_tt=mtp_sin_neg_batch_tt,
+                mtp_rot_idxs_tt=mtp_rot_idxs_tt,
+                rope_shard_cfg=_rope_shard_cfg,
+                trans_matrix_sharded_tt=trans_sharded,
             )
             mtp_logits_tt = self._mtp_decode_step_tt(
                 state=mtp_state_for_trace,
@@ -2473,10 +2566,9 @@ class Glm4MoeTT:
             page_table_width=int(page_table.shape[1]),
             tokens_tt=tokens_tt,
             positions_tt=tt_positions,
-            cos_batch_tt=cos_batch,
-            sin_batch_tt=sin_batch,
-            sin_neg_batch_tt=sin_neg_batch,
-            trans_matrix_tt=self.rope["trans_matrix"],
+            rot_idxs_tt=rot_idxs,
+            trans_matrix_sharded_tt=trans_sharded,
+            rope_shard_cfg=_rope_shard_cfg,
             page_table_tt=page_table_tt,
             logits_tt=logits_tt,
             top1_values_tt=top1_values_tt,
@@ -2486,9 +2578,7 @@ class Glm4MoeTT:
             mtp_hidden_tt=mtp_hidden_tt,
             mtp_embed_tt=mtp_embed_tt,
             mtp_positions_tt=mtp_positions_tt,
-            mtp_cos_batch_tt=mtp_cos_batch_tt,
-            mtp_sin_batch_tt=mtp_sin_batch_tt,
-            mtp_sin_neg_batch_tt=mtp_sin_neg_batch_tt,
+            mtp_rot_idxs_tt=mtp_rot_idxs_tt,
             mtp_page_table_tt=None,  # reuse main page_table_tt
             mtp_trace_id=mtp_trace_id,
             mtp_logits_tt=mtp_logits_tt,
@@ -2506,11 +2596,10 @@ class Glm4MoeTT:
         mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None
         batch = int(tokens.shape[0])
 
-        # On TG with multi-user batch, batch-dimension inputs (positions, cos/sin,
+        # On TG with multi-user batch, batch-dimension inputs (positions, rot_idxs,
         # page_table) were sharded across DP groups during trace capture.
         # Must use the same sharding here for copy_host_to_device_tensor.
-        dp_batch_mapper = mapper  # for page_table (dim=0), positions (dim=0)
-        rope_mapper = mapper  # for cos/sin (dim=1)
+        dp_batch_mapper = mapper  # for page_table (dim=0), positions (dim=0), rot_idxs (dim=0)
         if is_mesh and int(self.device.shape[1]) > 1:
             dp_size = int(self.device.shape[1])
             if batch > 1 and batch % dp_size == 0:
@@ -2518,11 +2607,6 @@ class Glm4MoeTT:
                 dp_batch_mapper = ttnn.ShardTensor2dMesh(
                     self.device,
                     dims=(None, 0),
-                    mesh_shape=mesh_shape,
-                )
-                rope_mapper = ttnn.ShardTensor2dMesh(
-                    self.device,
-                    dims=(None, 1),
                     mesh_shape=mesh_shape,
                 )
 
@@ -2556,39 +2640,15 @@ class Glm4MoeTT:
         )
         ttnn.copy_host_to_device_tensor(host_positions, state.positions_tt)
 
-        # Update cos/sin for new positions.
-        cos_host = self.rope["cos_matrix_host"]
-        sin_host = self.rope["sin_matrix_host"]
-        rope_dim = int(cos_host.shape[3])
-        positions_cpu = positions.to(torch.long).clamp(min=0, max=int(cos_host.shape[2]) - 1)
-        cos_batch_t = cos_host[0, 0, positions_cpu, :].reshape(1, batch, 1, rope_dim).to(torch.bfloat16)
-        sin_batch_t = sin_host[0, 0, positions_cpu, :].reshape(1, batch, 1, rope_dim).to(torch.bfloat16)
-
-        host_cos = ttnn.from_torch(
-            cos_batch_t,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=rope_mapper,
+        # Update rot_idxs for on-device embedding lookup (replaces cos/sin host gather + copy).
+        rot_idxs_t = positions.view(1, batch).contiguous().clamp(min=0).to(torch.int32)
+        host_rot_idxs = ttnn.from_torch(
+            rot_idxs_t,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=dp_batch_mapper,
         )
-        host_sin = ttnn.from_torch(
-            sin_batch_t,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=rope_mapper,
-        )
-        ttnn.copy_host_to_device_tensor(host_cos, state.cos_batch_tt)
-        ttnn.copy_host_to_device_tensor(host_sin, state.sin_batch_tt)
-
-        # Update sin_neg for addcmul RoPE fusion (OPT-3).
-        half = rope_dim // 2
-        sin_neg_batch_t = torch.cat([-sin_batch_t[..., :half], sin_batch_t[..., half:]], dim=-1)
-        host_sin_neg = ttnn.from_torch(
-            sin_neg_batch_t,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=rope_mapper,
-        )
-        ttnn.copy_host_to_device_tensor(host_sin_neg, state.sin_neg_batch_tt)
+        ttnn.copy_host_to_device_tensor(host_rot_idxs, state.rot_idxs_tt)
 
         # Update page table (host tensor, then copy).
         host_pt = ttnn.from_torch(
@@ -2628,17 +2688,14 @@ class Glm4MoeTT:
                 state.top1_indices_tt,
                 state.tokens_tt,
                 state.positions_tt,
-                state.cos_batch_tt,
-                state.sin_batch_tt,
-                state.sin_neg_batch_tt,
+                state.rot_idxs_tt,
+                state.trans_matrix_sharded_tt,
                 state.page_table_tt,
                 state.embed_tt,
                 # MTP tensors
                 state.mtp_embed_tt,
                 state.mtp_positions_tt,
-                state.mtp_cos_batch_tt,
-                state.mtp_sin_batch_tt,
-                state.mtp_sin_neg_batch_tt,
+                state.mtp_rot_idxs_tt,
                 state.mtp_page_table_tt,
                 state.mtp_logits_tt,
                 # mtp_hidden_tt is trace-owned — released with main trace
@@ -2733,17 +2790,18 @@ class Glm4MoeTT:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None,
             )
 
-            # Slice RoPE tables.
+            # Slice RoPE tables (full head_dim width — interleaved + pass-through padding).
+            head_dim = int(self.hparams.head_dim)
             rope_slices_owned = True
-            if int(padded_len) == int(self.rope["cos_matrix"].shape[2]) and int(rope_dim) == int(
-                self.rope["cos_matrix"].shape[3]
+            if int(padded_len) == int(self.rope["cos_prefill"].shape[2]) and head_dim == int(
+                self.rope["cos_prefill"].shape[3]
             ):
-                cos_matrix = self.rope["cos_matrix"]
-                sin_matrix = self.rope["sin_matrix"]
+                cos_matrix = self.rope["cos_prefill"]
+                sin_matrix = self.rope["sin_prefill"]
                 rope_slices_owned = False
             else:
-                cos_matrix = ttnn.slice(self.rope["cos_matrix"], [0, 0, 0, 0], [1, 1, padded_len, rope_dim])
-                sin_matrix = ttnn.slice(self.rope["sin_matrix"], [0, 0, 0, 0], [1, 1, padded_len, rope_dim])
+                cos_matrix = ttnn.slice(self.rope["cos_prefill"], [0, 0, 0, 0], [1, 1, padded_len, head_dim])
+                sin_matrix = ttnn.slice(self.rope["sin_prefill"], [0, 0, 0, 0], [1, 1, padded_len, head_dim])
 
             # DEBUG: sync checkpoints for prefill pipeline
             _dbg = os.environ.get("GLM4_MOE_DEBUG_SYNC", "0") != "0"
@@ -2771,7 +2829,7 @@ class Glm4MoeTT:
             )
             _psync("after embedding (host)")
 
-            rot_mats = (cos_matrix, sin_matrix, self.rope["trans_matrix"])
+            rot_mats = (cos_matrix, sin_matrix, self.rope["trans_matrix_prefill"])
 
             _psync("before layer loop")
 

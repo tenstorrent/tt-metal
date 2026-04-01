@@ -19,6 +19,13 @@ export GLM4_MOE_REDUCE_IMPL=native
 export GLM4_MOE_EP_REDUCE_DEVICE=1
 export GLM4_MOE_CCL_NUM_LINKS=4
 export GLM4_MOE_CCL_TOPOLOGY=ring
+export GLM4_MOE_EXPERTS_TT_DTYPE=bf4
+export GLM4_MOE_DISTRIBUTED_QK_NORM=1
+export GLM4_MOE_ROUTER_USE_BIASED_TOPK_VALUES=1
+export GLM4_MOE_DRAM_SHARD=1
+export GLM4_MOE_PACKER_L1_ACC=1
+export GLM4_MOE_EP_L1=1
+export GLM4_MOE_SDPA_L1=1
 "$TT_METAL_HOME/python_env/bin/python3" \
   "$TT_METAL_HOME/models/experimental/glm4_moe/scripts/debug_run_full_tt_greedy.py" \
   --model-id cerebras/GLM-4.7-REAP-218B-A32B \

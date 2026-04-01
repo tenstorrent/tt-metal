@@ -19,6 +19,42 @@ import math
 from typing import Sequence
 
 
+def _neox_to_interleaved_perm(head_dim: int, rotary_dim: int) -> list[int]:
+    """Column permutation: NeoX half-split → interleaved pairs for rotary dims.
+
+    NeoX layout per head: [real_0, real_1, ..., real_{h-1}, imag_0, ..., imag_{h-1}, pass_0, ...]
+    Interleaved layout:   [real_0, imag_0, real_1, imag_1, ..., real_{h-1}, imag_{h-1}, pass_0, ...]
+
+    This allows ttnn.experimental.rotary_embedding_llama (which pairs adjacent dims
+    via its 32×32 trans_mat) to correctly apply NeoX-style partial RoPE.
+    """
+    half = rotary_dim // 2
+    perm: list[int] = []
+    for i in range(half):
+        perm.append(i)  # real part
+        perm.append(i + half)  # imaginary part
+    for i in range(rotary_dim, head_dim):
+        perm.append(i)  # pass-through dims unchanged
+    return perm
+
+
+def _permute_qk_weight_cols(w: torch.Tensor, n_heads: int, head_dim: int, rotary_dim: int) -> torch.Tensor:
+    """Permute weight columns from NeoX → interleaved RoPE layout for each head."""
+    perm = _neox_to_interleaved_perm(head_dim, rotary_dim)
+    # w: [hidden_in, n_heads * head_dim]
+    w_heads = w.reshape(w.shape[0], n_heads, head_dim)
+    w_heads = w_heads[:, :, perm]
+    return w_heads.reshape(w.shape)
+
+
+def _permute_qk_bias(b: torch.Tensor, n_heads: int, head_dim: int, rotary_dim: int) -> torch.Tensor:
+    """Permute bias from NeoX → interleaved RoPE layout for each head."""
+    perm = _neox_to_interleaved_perm(head_dim, rotary_dim)
+    b_heads = b.reshape(n_heads, head_dim)
+    b_heads = b_heads[:, perm]
+    return b_heads.reshape(b.shape)
+
+
 def dequantize_tensor(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
     """Block-wise dequantize using inverse scales (formerly in deepseek_v3.utils.dequantize)."""
     if tensor.ndim != inv_scale.ndim:
@@ -486,6 +522,7 @@ class DecoderLayerTTWeights:
 def convert_decoder_layer_weights(
     *,
     device,
+    tt_ccl=None,
     state,
     layer_idx: int,
     hparams: Glm4MoeHParams,
@@ -546,27 +583,58 @@ def convert_decoder_layer_weights(
     )
 
     # ---- QK Norm (replicated, per-head dim=128) ----
+    # Permute QK norm weights from NeoX → interleaved layout to match the
+    # column-permuted QKV weights (needed for fused rotary_embedding_llama).
+    # LazyStateDict is read-only, so we create a local dict with permuted weights.
+    # Using "_interleaved_rope" suffix in weight_key to invalidate old caches.
+    _rotary_dim = int(hparams.head_dim * hparams.partial_rotary_factor)
+    _rope_perm = _neox_to_interleaved_perm(hparams.head_dim, _rotary_dim)
+    _qn_key = f"model.layers.{layer_idx}.self_attn.q_norm.weight"
+    _kn_key = f"model.layers.{layer_idx}.self_attn.k_norm.weight"
+    _prefix = f"model.layers.{layer_idx}.self_attn."
+    _permuted_qk_norms = {
+        f"{_prefix}q_norm_interleaved_rope.weight": state[_qn_key][_rope_perm].clone(),
+        f"{_prefix}k_norm_interleaved_rope.weight": state[_kn_key][_rope_perm].clone(),
+    }
+
+    ccl_has_distributed_norm_api = (
+        tt_ccl is not None
+        and hasattr(tt_ccl, "get_and_cycle_ag_semaphore_handles")
+        and hasattr(tt_ccl, "get_and_cycle_barrier_semaphore_handle")
+    )
+    use_distributed_qk_norm = (
+        os.environ.get("GLM4_MOE_DISTRIBUTED_QK_NORM", "0").strip() == "1"
+        and tp_size > 1
+        and ccl_has_distributed_norm_api
+    )
+
+    def _decode_only(mode: Any) -> bool:
+        # RMSNorm forwards Mode enums to this callback; keep distributed path decode-only.
+        return str(getattr(mode, "value", mode)) == "decode"
+
     q_norm = RMSNorm(
         device=device,
         dim=hparams.head_dim,
         eps=hparams.rms_norm_eps,
-        state_dict=state,
-        state_dict_prefix=f"model.layers.{layer_idx}.self_attn.",
-        weight_key="q_norm",
+        state_dict=_permuted_qk_norms,
+        state_dict_prefix=_prefix,
+        weight_key="q_norm_interleaved_rope",
         weight_cache_path=cache_dir,
         weight_dtype=ttnn.bfloat16,
-        is_distributed=False,
+        is_distributed=_decode_only if use_distributed_qk_norm else False,
+        tt_ccl=tt_ccl,
     )
     k_norm = RMSNorm(
         device=device,
         dim=hparams.head_dim,
         eps=hparams.rms_norm_eps,
-        state_dict=state,
-        state_dict_prefix=f"model.layers.{layer_idx}.self_attn.",
-        weight_key="k_norm",
+        state_dict=_permuted_qk_norms,
+        state_dict_prefix=_prefix,
+        weight_key="k_norm_interleaved_rope",
         weight_cache_path=cache_dir,
         weight_dtype=ttnn.bfloat16,
-        is_distributed=False,
+        is_distributed=_decode_only if use_distributed_qk_norm else False,
+        tt_ccl=tt_ccl,
     )
     logger.info("  [DEBUG L{}] norms done", layer_idx)
 
@@ -588,11 +656,18 @@ def convert_decoder_layer_weights(
     wk_chunks = torch.chunk(wk_full, tp_size, dim=0)
     wv_chunks = torch.chunk(wv_full, tp_size, dim=0)
 
+    _n_q_per_tp = hparams.num_attention_heads // tp_size  # 12 Q heads per device
+    _n_kv_per_tp = hparams.num_key_value_heads // tp_size  # 1 KV head per device
+
     qkv_list = []
     for i in range(tp_size):
         wq_t = wq_chunks[i].transpose(-2, -1)  # [5120, 1536]
         wk_t = wk_chunks[i].transpose(-2, -1)  # [5120, 128]
         wv_t = wv_chunks[i].transpose(-2, -1)  # [5120, 128]
+        # Permute Q/K columns: NeoX → interleaved for fused rotary_embedding_llama.
+        # V columns are NOT permuted (attention output = softmax(Q@K^T) @ V is invariant).
+        wq_t = _permute_qk_weight_cols(wq_t, _n_q_per_tp, hparams.head_dim, _rotary_dim)
+        wk_t = _permute_qk_weight_cols(wk_t, _n_kv_per_tp, hparams.head_dim, _rotary_dim)
         qkv = torch.cat([wq_t, wk_t, wv_t], dim=-1)  # [5120, 1792]
         qkv_list.append(qkv)
 
@@ -617,7 +692,7 @@ def convert_decoder_layer_weights(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=qkv_mapper,
-        cache_file_name=c("w_qkv", tp_variant),
+        cache_file_name=c("w_qkv_interleaved_rope", tp_variant),
     )
     # When prefetcher is active: replace interleaved with DRAM-sharded copy.
     # NO dual storage — saves 1.66 GB/device across 92 layers (was causing OOM with MTP).
@@ -633,7 +708,7 @@ def convert_decoder_layer_weights(
             device=device,
             memory_config=create_dram_sharded_mem_config(device, 5120, 1792),
             mesh_mapper=qkv_mapper,
-            cache_file_name=c("w_qkv", tp_variant + "_dram_shard"),
+            cache_file_name=c("w_qkv_interleaved_rope", tp_variant + "_dram_shard"),
         )
         logger.info("  [DEBUG L{}] QKV DRAM-sharded (single copy, no dual storage)", layer_idx)
     logger.info("  [DEBUG L{}] w_qkv done", layer_idx)
@@ -649,7 +724,10 @@ def convert_decoder_layer_weights(
 
     bias_list = []
     for i in range(tp_size):
-        b_fused = torch.cat([bq_chunks[i], bk_chunks[i], bv_chunks[i]], dim=-1)  # [1792]
+        # Permute Q/K bias to match interleaved column order; V bias unchanged.
+        bq_i = _permute_qk_bias(bq_chunks[i], _n_q_per_tp, hparams.head_dim, _rotary_dim)
+        bk_i = _permute_qk_bias(bk_chunks[i], _n_kv_per_tp, hparams.head_dim, _rotary_dim)
+        b_fused = torch.cat([bq_i, bk_i, bv_chunks[i]], dim=-1)  # [1792]
         bias_list.append(b_fused)
 
     # Concatenate all TP chunks -> [1792*tp_size], reshape to [1, 1, 1, 1792*tp_size]
@@ -662,7 +740,7 @@ def convert_decoder_layer_weights(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=qkv_mapper,
-        cache_file_name=c("w_qkv_bias", tp_variant),
+        cache_file_name=c("w_qkv_bias_interleaved_rope", tp_variant),
     )
     logger.info("  [DEBUG L{}] w_qkv_bias done", layer_idx)
 

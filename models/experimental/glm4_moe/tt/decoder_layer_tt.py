@@ -113,8 +113,16 @@ def _make_prefill_matmul_program_config(seq_len: int, K: int, N: int, label: str
     return cfg
 
 
+_NORM_L1 = _env_bool("GLM4_MOE_NORM_L1", default=False)
+
+
 def _sharded_rms_norm(
-    x: ttnn.Tensor, norm_module: Any, hidden_size: int, num_cores: int = 8, worker_core_range: Any = None
+    x: ttnn.Tensor,
+    norm_module: Any,
+    hidden_size: int,
+    num_cores: int = 8,
+    worker_core_range: Any = None,
+    output_l1: bool | None = None,
 ) -> ttnn.Tensor:
     """Width-sharded multi-core RMSNorm to avoid L1 overflow for large hidden sizes.
 
@@ -131,6 +139,8 @@ def _sharded_rms_norm(
         worker_core_range: Optional CoreRangeSet to use for sharding (e.g. worker grid
             when DRAM prefetcher is active). When provided, num_cores is derived from it
             and the core range is used directly instead of building CoreRange((0,0)..(N-1,0)).
+        output_l1: If True, output is L1 interleaved instead of DRAM interleaved.
+            Defaults to _NORM_L1 env var when None.
     """
     input_shape = [int(d) for d in x.shape]  # save for shape restoration
     h_logical = int(x.shape[-2])  # logical height (may NOT be tile-padded)
@@ -205,8 +215,8 @@ def _sharded_rms_norm(
     )
     ttnn.deallocate(x_sharded, force=False)
 
-    # Convert back to interleaved DRAM
-    result = ttnn.to_memory_config(result, ttnn.DRAM_MEMORY_CONFIG)
+    _out_l1 = output_l1 if output_l1 is not None else _NORM_L1
+    result = ttnn.to_memory_config(result, ttnn.L1_MEMORY_CONFIG if _out_l1 else ttnn.DRAM_MEMORY_CONFIG)
 
     # Restore original logical shape — sharding pads batch to tile boundary (e.g. 1→32)
     # and sharded_to_interleaved does NOT restore the logical shape.
@@ -818,6 +828,12 @@ class Glm4MoeDecoderLayer:
             if moe_runtime
             else ttnn.DRAM_MEMORY_CONFIG
         )
+        # GLM4_MOE_EP_L1=1 sets decode_memory_config to L1 (good for decode / one sparse
+        # block). Long prefill builds many blocks; sparse_matmul + fuse add/mul cannot
+        # fit ~10^7+ BF16 elements in L1 — force DRAM for routed path and EP fuse eltwise.
+        _moe_tok = int(x.shape[2])
+        _sparse_blk = int(moe_runtime.sparsity_block_size) if moe_runtime else 32
+        moe_ep_large_act_mc = ttnn.DRAM_MEMORY_CONFIG if _moe_tok > _sparse_blk else moe_decode_mc
 
         # ---- Router: run BEFORE decode-path padding ----
         # For decode (tokens==1): scores.shape[2]==1 → uses e_score_correction_bias_tile
@@ -855,7 +871,7 @@ class Glm4MoeDecoderLayer:
             topk_expert_weights=topk_weights,
             moe_w=moe_w,
             rt=moe_runtime,
-            memory_config=moe_decode_mc,
+            memory_config=moe_ep_large_act_mc,
             skip_final_reduce=True,
         )
 
@@ -869,11 +885,17 @@ class Glm4MoeDecoderLayer:
             num_dp = mesh_shape[1]  # DP = cols = 4 for Galaxy TG
             if num_dp > 1:
                 shared_out_partial = ttnn.mul(
-                    shared_out_partial, 1.0 / num_dp, memory_config=moe_decode_mc, sub_core_grids=worker_scg
+                    shared_out_partial,
+                    1.0 / num_dp,
+                    memory_config=moe_ep_large_act_mc,
+                    sub_core_grids=worker_scg,
                 )
 
             combined = ttnn.add(
-                shared_out_partial, routed_out_partial, memory_config=moe_decode_mc, sub_core_grids=worker_scg
+                shared_out_partial,
+                routed_out_partial,
+                memory_config=moe_ep_large_act_mc,
+                sub_core_grids=worker_scg,
             )
             ttnn.deallocate(shared_out_partial, force=False)
             ttnn.deallocate(routed_out_partial, force=False)
@@ -979,7 +1001,10 @@ class Glm4MoeDecoderLayer:
                         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
                     )
             mlp_out = ttnn.add(
-                shared_out_partial, routed_out_partial, memory_config=moe_decode_mc, sub_core_grids=worker_scg
+                shared_out_partial,
+                routed_out_partial,
+                memory_config=moe_ep_large_act_mc,
+                sub_core_grids=worker_scg,
             )
             ttnn.deallocate(shared_out_partial, force=False)
             ttnn.deallocate(routed_out_partial, force=False)

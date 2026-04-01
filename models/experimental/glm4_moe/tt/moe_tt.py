@@ -64,6 +64,9 @@ def _env_bool(name: str, *, default: bool = False) -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+_SKIP_SLICE_COPY = _env_bool("GLM4_MOE_SKIP_SLICE_COPY", default=False)
+
+
 def _parse_math_fidelity(value: str, *, default: ttnn.MathFidelity) -> ttnn.MathFidelity:
     raw = value.strip().lower()
     if not raw:
@@ -374,12 +377,17 @@ def moe_topk_tt(
         ttnn.deallocate(bias, force=False)
 
     topk_values, topk_indices = ttnn.topk(scores_with_bias, k=k, dim=-1, largest=True, sorted=False)
-    ttnn.deallocate(topk_values, force=False)
+    use_biased_topk_values = os.environ.get("GLM4_MOE_ROUTER_USE_BIASED_TOPK_VALUES", "0").strip() == "1"
+    if use_biased_topk_values:
+        # Optional fast path: skip gather(scores, indices) and use topk values directly.
+        topk_weights = topk_values
+        ttnn.deallocate(scores, force=False)
+    else:
+        ttnn.deallocate(topk_values, force=False)
+        # Default path keeps unbiased sigmoid scores for routing weights.
+        topk_weights = ttnn.gather(scores, dim=3, index=topk_indices)
+        ttnn.deallocate(scores, force=False)
     ttnn.deallocate(scores_with_bias, force=False)
-
-    # Gather weights from the *unbiased* sigmoid scores.
-    topk_weights = ttnn.gather(scores, dim=3, index=topk_indices)
-    ttnn.deallocate(scores, force=False)
 
     if norm_topk_prob:
         sum_kwargs = {"dim": 3, "keepdim": True}
@@ -461,18 +469,38 @@ def moe_sparse_experts_forward_tt(
     # Pad to sparsity block alignment.
     block = int(rt.sparsity_block_size)
     pad_tokens = (-total_tokens) % block
-    if pad_tokens:
-        hidden_states = ttnn.pad(hidden_states, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
-        topk_expert_indices = ttnn.pad(topk_expert_indices, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0)
-        topk_expert_weights = ttnn.pad(topk_expert_weights, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
-        total_tokens += pad_tokens
-        tokens_per_device += pad_tokens
 
-    # Build local expert routing weights and sparsity via scatter + moe_expert_token_remap.
+    # Convert topk tensors to ROW_MAJOR *before* padding so the untilize
+    # operates on the smaller unpadded [1,1,T,K] tensor, and the subsequent
+    # pad runs on ROW_MAJOR layout — avoiding TILE-layout FillPadDeviceOperation.
     topk_indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     topk_weights_rm = ttnn.to_layout(topk_expert_weights, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(topk_expert_indices, force=False)
     ttnn.deallocate(topk_expert_weights, force=False)
+
+    if pad_tokens:
+        # hidden_states: untilize → tilize_with_val_padding (multicore).
+        # Replaces single-core TILE FillPadDeviceOperation with multicore
+        # TilizeWithValPaddingDeviceOperation that auto-zeros the padded rows.
+        _hs_mc = hidden_states.memory_config()
+        hidden_rm = ttnn.untilize(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_multicore=True)
+        ttnn.deallocate(hidden_states, force=False)
+        hidden_states = ttnn.tilize_with_val_padding(
+            hidden_rm,
+            [1, 1, tokens_per_device + pad_tokens, hidden_size],
+            0.0,
+            memory_config=_hs_mc,
+            use_multicore=True,
+        )
+        ttnn.deallocate(hidden_rm, force=False)
+
+        topk_indices_rm = ttnn.pad(topk_indices_rm, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0)
+        topk_weights_rm = ttnn.pad(topk_weights_rm, [(0, 0), (0, 0), (0, pad_tokens), (0, 0)], 0.0)
+
+        total_tokens += pad_tokens
+        tokens_per_device += pad_tokens
+
+    # Build local expert routing weights and sparsity via scatter + moe_expert_token_remap.
 
     weights_zero = _get_scatter_zero_tensor(
         device=device, tokens_per_device=tokens_per_device, num_experts=int(rt.num_experts)
@@ -557,11 +585,15 @@ def moe_sparse_experts_forward_tt(
         begin_up[-1] = moe_inter
         end_up = [int(w1w3_out.shape[i]) for i in range(ndim)]
 
-        gate_view = ttnn.slice(w1w3_out, begin_gate, end_gate)
-        up_view = ttnn.slice(w1w3_out, begin_up, end_up)
-        w1_out = ttnn.typecast(gate_view, dtype=gate_view.dtype, memory_config=sparse_mc)
-        w3_out = ttnn.typecast(up_view, dtype=up_view.dtype, memory_config=sparse_mc)
-        ttnn.deallocate(w1w3_out, force=False)
+        if _SKIP_SLICE_COPY:
+            w1_out = ttnn.slice(w1w3_out, begin_gate, end_gate)
+            w3_out = ttnn.slice(w1w3_out, begin_up, end_up)
+        else:
+            gate_view = ttnn.slice(w1w3_out, begin_gate, end_gate)
+            up_view = ttnn.slice(w1w3_out, begin_up, end_up)
+            w1_out = ttnn.typecast(gate_view, dtype=gate_view.dtype, memory_config=sparse_mc)
+            w3_out = ttnn.typecast(up_view, dtype=up_view.dtype, memory_config=sparse_mc)
+            ttnn.deallocate(w1w3_out, force=False)
     else:
         # Separate gate (w1) and up (w3) projections.
         w1_out = ttnn.sparse_matmul(
@@ -594,6 +626,8 @@ def moe_sparse_experts_forward_tt(
     x_ff = ttnn.mul(w1_out, w3_out, memory_config=sparse_mc, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
     ttnn.deallocate(w1_out, force=False)
     ttnn.deallocate(w3_out, force=False)
+    if _SKIP_SLICE_COPY and getattr(moe_w, "w1w3_experts", None) is not None:
+        ttnn.deallocate(w1w3_out, force=False)
 
     # Reshape for down projection.
     _x_ff_target = (num_blocks, int(rt.num_experts_per_device), block, int(rt.moe_intermediate_size))
@@ -650,8 +684,14 @@ def moe_sparse_experts_forward_tt(
     if not skip_final_reduce and num_devices > 1:
         ep_reduce = os.environ.get("GLM4_MOE_EP_REDUCE", "full_ar").strip().lower()
         if ep_reduce == "full_ar":
-            # Single all_reduce across all 32 devices (no cluster_axis).
-            result = ttnn.all_reduce(routed_out, memory_config=memory_config)
+            _ep_nl = int(os.environ.get("GLM4_MOE_CCL_NUM_LINKS", "1").strip() or "1")
+            _ep_topo = glm4_moe_ccl_topology_for_collectives()
+            result = ttnn.all_reduce(
+                routed_out,
+                memory_config=memory_config,
+                num_links=max(1, _ep_nl),
+                topology=_ep_topo,
+            )
             ttnn.deallocate(routed_out, force=False)
             routed_out = result
         elif ep_reduce == "2step":
@@ -811,11 +851,15 @@ def moe_a2a_experts_forward_tt(
         begin_up[-1] = moe_inter
         end_up = [int(w1w3_out.shape[i]) for i in range(ndim)]
 
-        gate_view = ttnn.slice(w1w3_out, begin_gate, end_gate)
-        up_view = ttnn.slice(w1w3_out, begin_up, end_up)
-        w1_out = ttnn.typecast(gate_view, dtype=gate_view.dtype, memory_config=sparse_mc)
-        w3_out = ttnn.typecast(up_view, dtype=up_view.dtype, memory_config=sparse_mc)
-        ttnn.deallocate(w1w3_out, force=False)
+        if _SKIP_SLICE_COPY:
+            w1_out = ttnn.slice(w1w3_out, begin_gate, end_gate)
+            w3_out = ttnn.slice(w1w3_out, begin_up, end_up)
+        else:
+            gate_view = ttnn.slice(w1w3_out, begin_gate, end_gate)
+            up_view = ttnn.slice(w1w3_out, begin_up, end_up)
+            w1_out = ttnn.typecast(gate_view, dtype=gate_view.dtype, memory_config=sparse_mc)
+            w3_out = ttnn.typecast(up_view, dtype=up_view.dtype, memory_config=sparse_mc)
+            ttnn.deallocate(w1w3_out, force=False)
     else:
         # Separate gate (w1) and up (w3) projections.
         w1_out = ttnn.sparse_matmul(
@@ -847,6 +891,8 @@ def moe_a2a_experts_forward_tt(
     x_ff = ttnn.mul(w1_out, w3_out, memory_config=sparse_mc, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
     ttnn.deallocate(w1_out, force=False)
     ttnn.deallocate(w3_out, force=False)
+    if _SKIP_SLICE_COPY and getattr(moe_w, "w1w3_experts", None) is not None:
+        ttnn.deallocate(w1w3_out, force=False)
 
     _x_ff_target = (num_blocks, int(rt.num_experts_per_device), block, int(rt.moe_intermediate_size))
     if tuple(x_ff.shape) != _x_ff_target:
