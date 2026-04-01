@@ -351,7 +351,7 @@ jobs:
       uses: actions/cache@v4
       with:
         path: .cpmcache
-        key: cpm-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt', '**/*.cmake') }}
+        key: cpm-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt') }}
         restore-keys: |
           cpm-${{ runner.os }}-
     - name: CMake configure
