@@ -546,7 +546,12 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
 
 
 @ttnn.register_python_operation(name="ttnn.dump_tensor")
-def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> None:
+def dump_tensor(
+    file_name: Union[str, pathlib.Path],
+    tensor: ttnn.Tensor,
+    *,
+    mode: Any = ttnn._ttnn.tensor.DumpTensorMode.DISTRIBUTED_GATHER,
+) -> None:
     """
     Dump tensor to a file.
 
@@ -559,7 +564,7 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> Non
     """
     file_name = pathlib.Path(file_name)
     _validate_file_extension(file_name)
-    ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor)
+    ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor, mode)
 
 
 @ttnn.register_python_operation(name="ttnn.as_tensor")
