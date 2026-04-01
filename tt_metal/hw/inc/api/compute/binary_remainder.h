@@ -43,6 +43,9 @@ ALWI void remainder_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_remai
 // clang-format off
 /**
  * Performs an elementwise remainder operation with the two float inputs: y = remainder(x0,x1)
+ * Compute integer value r such that x0 % x1 = r. Output is a floating point that has been rounded to the nearest integer value
+ * If x0 < 0, then r will be negative calculated as 'r = -( |r| % x1 )'
+ *
  * Output overwrites odst in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available

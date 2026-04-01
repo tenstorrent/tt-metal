@@ -520,8 +520,8 @@ Tensor remainder(
     const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    return ttnn::unary_remainder(input, scalar, output_mem_config, std::nullopt);
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::unary_remainder(input, scalar, output_mem_config, std::nullopt, sub_core_grids);
 }
 
 // FMOD result = input − (other * trunc(input/other))

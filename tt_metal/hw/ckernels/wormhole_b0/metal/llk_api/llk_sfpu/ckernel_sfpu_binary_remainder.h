@@ -175,17 +175,13 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     // Compute remainder = a - floor(a/b) * b
     sfpi::vFloat result = a - floor_div * b;
 
-    // Sign correction - remainder result must have same sign as 'b' (or be zero).
+    // Sign correction: remainder must match the sign of b (or be zero).
+    // XOR of the float bit-patterns detects sign mismatch via the MSB,
+    // avoiding a compound conditional with four comparisons and an OR.
     v_if(
-        (result > sfpi::vFloat(0.0f) && b < sfpi::vFloat(0.0f)) ||
-        (result < sfpi::vFloat(0.0f) && b > sfpi::vFloat(0.0f))) {
+        result != 0.0f && (((sfpi::reinterpret<sfpi::vUInt>(result) ^ sfpi::reinterpret<sfpi::vUInt>(b)) >> 31) != 0)) {
         result += b;
     }
-    v_endif;
-
-    // Handle special cases using conditional assignment (NOT early return!)
-    // When a == b, remainder(a, b) = 0
-    v_if(a == b) { result = sfpi::vFloat(0.0f); }
     v_endif;
 
     // Handle division by zero - return NaN
