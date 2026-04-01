@@ -138,7 +138,7 @@ TEST_F(LaunchOperation2x4Test, UniformTensor) {
 TEST_F(LaunchOperation2x4Test, UnevenTensor) {
     auto uneven_tensor = make_tensor_with_num_shards(2, mesh_device_.get());
 
-    EXPECT_THAT(uneven_tensor.device_storage().coords, SizeIs(2));
+    EXPECT_THAT(uneven_tensor.device_storage().get_coords(), SizeIs(2));
 
     EXPECT_FALSE(all_tensors_have_uniform_storage(uneven_tensor));
     EXPECT_THAT(
