@@ -33,6 +33,18 @@ from pathlib import Path
 # Import grouping utilities from shared constants module
 from constants import get_mesh_shape_string, parse_hardware_suffix, strip_grouping_suffix
 
+# Single source of truth: maps GitHub Actions output key → test_group_names that belong to each hw group.
+# This is used to split the combined matrix into per-hardware matrices for parallel CI runners.
+# When adding a new hardware group, add an entry here AND a corresponding runner config
+# in get_runner_config_for_hardware_group() or get_lead_models_mesh_runner_config().
+HW_GROUP_MATRIX_KEYS = {
+    "n150": ["wormhole-n150-sweeps", "lead-models-single-chip"],
+    "n300": ["wormhole-n300-sweeps", "n300-llmbox-ccl"],
+    "p150b": ["blackhole-p150b-sweeps"],
+    "t3k": ["wormhole-t3k-sweeps"],
+    "galaxy": ["wormhole-galaxy-sweeps", "lead-models-galaxy"],
+}
+
 
 def chunk_modules(items, size):
     """Split modules into batches of specified size."""
@@ -497,15 +509,21 @@ def main():
         )
         sys.exit(1)
 
-    # Output matrix JSON
+    # Output matrix JSON and per-hardware matrices as GitHub Actions output lines.
+    # All output goes to stdout; the caller pipes it to $GITHUB_OUTPUT.
     result = {
         "module": modules,
         "batches": batches,
         "ccl_batches": ccl_batches,
         "include": include_entries,
     }
+    compact = {"separators": (",", ":")}
 
-    print(json.dumps(result))
+    print("matrix=" + json.dumps(result, **compact))
+
+    for hw_key, group_names in HW_GROUP_MATRIX_KEYS.items():
+        hw_entries = [e for e in include_entries if e.get("test_group_name", "") in group_names]
+        print(f"{hw_key}-matrix=" + json.dumps({"include": hw_entries}, **compact))
 
 
 if __name__ == "__main__":

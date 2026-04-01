@@ -902,22 +902,8 @@ jobs:
           MEASURE_DEVICE_PERF: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
           VECTORS_DIR: /tmp/vectors
         run: |
-          matrix_json=$(python3 tests/sweep_framework/framework/compute_sweep_matrix.py)
-          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
-          # Filter per-hardware-group matrices for parallel hw runners
-          echo "$matrix_json" | python3 -c "
-          import json, sys
-          data = json.load(sys.stdin)
-          items = data.get('include', [])
-          def hw_matrix(groups):
-              hw_items = [x for x in items if x.get('test_group_name', '') in groups]
-              return json.dumps({'include': hw_items}, separators=(',', ':'))
-          print('n150-matrix=' + hw_matrix(['wormhole-n150-sweeps', 'lead-models-single-chip']))
-          print('n300-matrix=' + hw_matrix(['wormhole-n300-sweeps', 'n300-llmbox-ccl']))
-          print('p150b-matrix=' + hw_matrix(['blackhole-p150b-sweeps']))
-          print('t3k-matrix=' + hw_matrix(['wormhole-t3k-sweeps']))
-          print('galaxy-matrix=' + hw_matrix(['wormhole-galaxy-sweeps', 'lead-models-galaxy']))
-          " >> "$GITHUB_OUTPUT"
+          # Compute combined + per-hardware matrices (all output lines go to GITHUB_OUTPUT)
+          python3 tests/sweep_framework/framework/compute_sweep_matrix.py >> "$GITHUB_OUTPUT"
 
   ttnn-run-single-sweep:
     name: Run single sweep
