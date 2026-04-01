@@ -374,9 +374,15 @@ Tensor reduce(
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     ttnn::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
-    float pad_value = get_pad_value(reduce_type);
-    bool is_tiled = input_tensor_arg.layout() == TILE_LAYOUT;
-    auto input_tensor = is_tiled ? ttnn::fill_implicit_tile_padding(input_tensor_arg, pad_value) : input_tensor_arg;
+    auto input_tensor = input_tensor_arg;
+
+    // Kernel-level tile padding only supports BFLOAT16 and FLOAT32.
+    // For BFLOAT8_B (shared-exponent format), fall back to host-side padding.
+    if (input_tensor.layout() == TILE_LAYOUT && input_tensor.dtype() == DataType::BFLOAT8_B) {
+        float pad_value = get_pad_value(reduce_type);
+        input_tensor = ttnn::fill_implicit_tile_padding(input_tensor, pad_value);
+    }
+
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
     ttnn::SmallVector<int> non_height_width_dims{}, height_width_dims{};
     if (call_fast_nc<reduce_type>(input_tensor.dtype())) {
