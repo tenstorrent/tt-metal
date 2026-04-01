@@ -84,9 +84,15 @@ bool can_construct_on_single_device(
     return true;
 }
 
-// Estimates peak per-bank memory during the on-device conversion path (borrow → to_device →
-// tilize → typecast) and returns true when it fits within the bank capacity. During tilize and
-// typecast the input and output buffers coexist, so peak memory is the sum of both.
+// Estimates peak per-bank memory during the on-device conversion path and returns true when it
+// fits within the bank capacity. During each stage the input and output buffers coexist, so peak
+// memory is the sum of both.
+//
+// Possible on-device paths (see convert_python_tensor_to_tt_tensor):
+//   target TILE, same dtype:  RM(src) → tilize → TILE(src)
+//   target TILE, diff dtype:  RM(src) → tilize → TILE(src) → typecast → TILE(dst)
+//   target RM,   diff dtype:  RM(src) → tilize → TILE(src) → typecast → TILE(dst) → untilize → RM(dst)
+//   target RM,   same dtype:  RM(src)  (no conversion needed)
 bool has_sufficient_device_memory(
     ttnn::distributed::MeshDevice* device,
     const ttnn::Shape& tensor_shape,
@@ -112,25 +118,34 @@ bool has_sufficient_device_memory(
 
     size_t peak_per_bank = src_rm_per_bank;
 
-    if (target_layout == Layout::TILE) {
-        // Tilize: input (src_dtype, RM) + output (src_dtype, TILE) coexist.
+    if (src_dtype != dst_dtype) {
+        // Typecast requires TILE layout, so the path always goes through tilize → typecast,
+        // regardless of the target layout.
+        TensorSpec src_tile_spec(
+            tensor_shape, TensorLayout(src_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
+        auto src_tile_per_bank = src_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
+
+        TensorSpec dst_tile_spec(
+            tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
+        auto dst_tile_per_bank = dst_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
+
+        // Tilize: RM(src) + TILE(src) coexist.
+        // Typecast: TILE(src) + TILE(dst) coexist.
+        peak_per_bank = std::max(src_rm_per_bank + src_tile_per_bank, src_tile_per_bank + dst_tile_per_bank);
+
+        if (target_layout == Layout::ROW_MAJOR) {
+            // Untilize: TILE(dst) + RM(dst) coexist.
+            TensorSpec dst_rm_spec(tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
+            auto dst_rm_per_bank = dst_rm_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
+            peak_per_bank = std::max(peak_per_bank, dst_tile_per_bank + dst_rm_per_bank);
+        }
+    } else if (target_layout == Layout::TILE) {
+        // Same dtype, target TILE: only tilize needed.
+        // Tilize: RM(src) + TILE(src) coexist.
         TensorSpec src_tile_spec(
             tensor_shape, TensorLayout(src_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
         auto src_tile_per_bank = src_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
         peak_per_bank = src_rm_per_bank + src_tile_per_bank;
-
-        if (src_dtype != dst_dtype) {
-            // Typecast follows tilize: input (src_dtype, TILE) + output (dst_dtype, TILE) coexist.
-            TensorSpec dst_tile_spec(
-                tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::TILE, optional_tile), memory_config));
-            auto dst_tile_per_bank = dst_tile_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
-            peak_per_bank = std::max(peak_per_bank, src_tile_per_bank + dst_tile_per_bank);
-        }
-    } else if (src_dtype != dst_dtype) {
-        // Typecast in ROW_MAJOR: input + output coexist.
-        TensorSpec dst_rm_spec(tensor_shape, TensorLayout(dst_dtype, PageConfig(Layout::ROW_MAJOR), memory_config));
-        auto dst_rm_per_bank = dst_rm_spec.compute_consumed_memory_bytes_per_bank(alignment, num_banks);
-        peak_per_bank = src_rm_per_bank + dst_rm_per_bank;
     }
 
     return peak_per_bank <= bank_size;
