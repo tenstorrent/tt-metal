@@ -24,7 +24,7 @@ pytestmark = pytest.mark.use_module_device
 import torch
 
 import ttnn
-from models.common.utility_functions import ulp as compute_ulp
+from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
 
 logger = logging.getLogger(__name__)
 
@@ -44,83 +44,6 @@ def create_recip_tensor(device, w, use_welford):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_NEAR_ZERO_RELATIVE_FRACTION = 1e-2
-
-
-def _measure_ulp_safe(golden, actual, ulp_threshold, near_zero_atol_fraction):
-    """
-    Measure max ULP while handling near-zero golden values safely.
-
-    Elements where |golden| < _NEAR_ZERO_RELATIVE_FRACTION * max(|golden|)
-    are excluded from the ULP check and validated with an absolute tolerance
-    equal to near_zero_atol_fraction * max(|golden|).
-
-    Returns (passed, max_ulp, max_atol_err, message).
-    """
-    if golden.dtype != actual.dtype:
-        actual = actual.to(golden.dtype)
-
-    abs_golden = torch.abs(golden.float())
-    golden_max = abs_golden.max().item()
-    if golden_max == 0:
-        abs_err = torch.abs(actual.float()).max().item()
-        return abs_err == 0, 0.0, abs_err, f"All-zero golden; max |actual|={abs_err:.6e}"
-
-    dynamic_threshold = _NEAR_ZERO_RELATIVE_FRACTION * golden_max
-    normal_mask = abs_golden >= dynamic_threshold
-    near_zero_mask = ~normal_mask
-    n_near_zero = near_zero_mask.sum().item()
-
-    scaled_atol = near_zero_atol_fraction * golden_max
-
-    max_ulp = 0.0
-    ulp_msg = ""
-    if normal_mask.any():
-        g = golden[normal_mask]
-        a = actual[normal_mask]
-        ulp_values = compute_ulp(g)
-        ulp_diffs = torch.abs(a.float() - g.float()) / ulp_values.float()
-        max_ulp = torch.max(ulp_diffs).item()
-        if max_ulp > ulp_threshold:
-            worst = torch.argmax(ulp_diffs)
-            ulp_msg = (
-                f"Max ULP: {max_ulp:.1f} "
-                f"(golden={g[worst].item()}, actual={a[worst].item()}, "
-                f"ulp@golden={ulp_values[worst].item()})"
-            )
-
-    max_atol_err = 0.0
-    atol_msg = ""
-    if n_near_zero > 0:
-        g_nz = golden[near_zero_mask].float()
-        a_nz = actual[near_zero_mask].float()
-        abs_diffs = torch.abs(a_nz - g_nz)
-        max_atol_err = torch.max(abs_diffs).item()
-        if max_atol_err > scaled_atol:
-            worst = torch.argmax(abs_diffs)
-            atol_msg = (
-                f"Max atol err: {max_atol_err:.6e} > {scaled_atol:.6e} "
-                f"(golden={g_nz[worst].item()}, actual={a_nz[worst].item()}) "
-                f"[{n_near_zero} near-zero elems]"
-            )
-
-    ulp_ok = max_ulp <= ulp_threshold
-    atol_ok = max_atol_err <= scaled_atol
-
-    parts = [f"ULP: max={max_ulp:.1f} (threshold={ulp_threshold})"]
-    if n_near_zero > 0:
-        parts.append(
-            f"Near-zero atol: max={max_atol_err:.6e} "
-            f"(threshold={scaled_atol:.6e}, count={n_near_zero}/{golden.numel()})"
-        )
-    msg = "; ".join(parts)
-    if not ulp_ok:
-        msg += f" | FAIL ULP: {ulp_msg}"
-    if not atol_ok:
-        msg += f" | FAIL atol: {atol_msg}"
-
-    return ulp_ok and atol_ok, max_ulp, max_atol_err, msg
 
 
 def _run_ttnn_layer_norm(
@@ -156,14 +79,18 @@ def _run_ttnn_layer_norm(
 # BF16 tests
 # ---------------------------------------------------------------------------
 
-# Layer norm chains mean, variance, rsqrt, and elementwise ops; error compounds.
-# Start conservative (256 ULP); tighten only if hardware + golden routinely measure lower.
-_BF16_ULP_THRESHOLD = 256
+# BH characterization stayed below ~14 ULP; keep modest margin.
+_BF16_ULP_THRESHOLD = 24
 _BF16_NEAR_ZERO_ATOL_FRACTION = 0.02
 
 _SHAPES = [
     (32, 64, "32x64"),
     (37, 41, "37x41-odd"),
+    (17, 33, "17x33-odd"),
+    (128, 128, "128x128"),
+    (256, 64, "256x64-wide"),
+    (64, 256, "64x256-tall"),
+    (1, 512, "1x512-vector"),
 ]
 
 
@@ -176,7 +103,7 @@ def test_layer_norm_ulp_bf16_no_weight_bias(device, h, w, desc, use_welford):
     golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
     actual = _run_ttnn_layer_norm(torch_input_tensor, device, use_welford)
 
-    passed, max_ulp, max_atol_err, msg = _measure_ulp_safe(
+    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
     logger.info(
@@ -211,7 +138,7 @@ def test_layer_norm_ulp_bf16_with_weight_bias(device, h, w, desc, use_welford):
         torch_input_tensor, device, use_welford, torch_weight=torch_weight, torch_bias=torch_bias
     )
 
-    passed, max_ulp, max_atol_err, msg = _measure_ulp_safe(
+    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _BF16_ULP_THRESHOLD, _BF16_NEAR_ZERO_ATOL_FRACTION
     )
     logger.info(
@@ -234,9 +161,8 @@ def test_layer_norm_ulp_bf16_with_weight_bias(device, h, w, desc, use_welford):
 # FP32 tests
 # ---------------------------------------------------------------------------
 
-# Device vs torch both FP32 but ordering differs (tiling, fused stages).
-# Threshold is intentionally very high until characterized on hardware.
-_FP32_ULP_THRESHOLD = 50_000_000
+# BH: ~1.28e6 on 32x64; larger mats + use_welford=False top ~1.73e6 (e.g. 64x256).
+_FP32_ULP_THRESHOLD = 1_900_000
 _FP32_NEAR_ZERO_ATOL_FRACTION = 0.005
 
 
@@ -249,7 +175,7 @@ def test_layer_norm_ulp_fp32_no_weight_bias(device, h, w, desc, use_welford):
     golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
     actual = _run_ttnn_layer_norm(torch_input_tensor, device, use_welford)
 
-    passed, max_ulp, max_atol_err, msg = _measure_ulp_safe(
+    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
     )
     logger.info(

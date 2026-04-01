@@ -22,6 +22,9 @@ FP32 reference:
   - Same nominal precision as a full FP32 device path; differences vs hardware
     mainly reflect operation ordering (tile-local vs fully sequential).
 
+Device requirement: FLOAT32 inputs require fp32_dest_acc_en=True in the compute
+kernel config; the FP32 ULP tests only exercise that supported combination.
+
 ULP is measured in the output dtype (BF16 or FP32).  Elements where
 |golden| is very small relative to the tensor's dynamic range are excluded
 from ULP (where the metric breaks down due to division by a tiny ULP
@@ -47,9 +50,9 @@ import torch
 import torch.nn.functional as F
 
 import ttnn
-from models.common.utility_functions import ulp as compute_ulp
 
 from tests.ttnn.unit_tests.operations.test_utils import get_compute_kernel_options
+from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +60,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-# Elements with |golden| below this fraction of max(|golden|) are excluded
-# from the ULP check and verified with absolute tolerance instead.  This
-# avoids the well-documented breakdown of ULP near zero.
-_NEAR_ZERO_RELATIVE_FRACTION = 1e-2
 
 
 def _golden_logsoftmax_bf16(input_bf16: torch.Tensor, dim: int) -> torch.Tensor:
@@ -95,95 +93,21 @@ def _run_ttnn_logsoftmax(
     return ttnn.to_torch(tt_out).to(input_torch.dtype)
 
 
-def _measure_ulp_safe(golden, actual, ulp_threshold, near_zero_atol_fraction):
-    """
-    Measure max ULP while handling near-zero golden values safely.
-
-    Elements where |golden| < _NEAR_ZERO_RELATIVE_FRACTION * max(|golden|)
-    are excluded from the ULP check and validated with an absolute tolerance
-    equal to near_zero_atol_fraction * max(|golden|).
-
-    Returns (passed, max_ulp, max_atol_err, message).
-    """
-    if golden.dtype != actual.dtype:
-        actual = actual.to(golden.dtype)
-
-    abs_golden = torch.abs(golden.float())
-    golden_max = abs_golden.max().item()
-    if golden_max == 0:
-        abs_err = torch.abs(actual.float()).max().item()
-        return abs_err == 0, 0.0, abs_err, f"All-zero golden; max |actual|={abs_err:.6e}"
-
-    dynamic_threshold = _NEAR_ZERO_RELATIVE_FRACTION * golden_max
-    normal_mask = abs_golden >= dynamic_threshold
-    near_zero_mask = ~normal_mask
-    n_near_zero = near_zero_mask.sum().item()
-
-    # Scaled absolute tolerance for near-zero elements: proportional to the
-    # golden tensor's dynamic range so it naturally adapts to input magnitude.
-    scaled_atol = near_zero_atol_fraction * golden_max
-
-    # --- ULP check on elements above the dynamic threshold ---
-    max_ulp = 0.0
-    ulp_msg = ""
-    if normal_mask.any():
-        g = golden[normal_mask]
-        a = actual[normal_mask]
-        ulp_values = compute_ulp(g)
-        ulp_diffs = torch.abs(a.float() - g.float()) / ulp_values.float()
-        max_ulp = torch.max(ulp_diffs).item()
-        if max_ulp > ulp_threshold:
-            worst = torch.argmax(ulp_diffs)
-            ulp_msg = (
-                f"Max ULP: {max_ulp:.1f} "
-                f"(golden={g[worst].item()}, actual={a[worst].item()}, "
-                f"ulp@golden={ulp_values[worst].item()})"
-            )
-
-    # --- Absolute tolerance check on near-zero elements ---
-    max_atol_err = 0.0
-    atol_msg = ""
-    if n_near_zero > 0:
-        g_nz = golden[near_zero_mask].float()
-        a_nz = actual[near_zero_mask].float()
-        abs_diffs = torch.abs(a_nz - g_nz)
-        max_atol_err = torch.max(abs_diffs).item()
-        if max_atol_err > scaled_atol:
-            worst = torch.argmax(abs_diffs)
-            atol_msg = (
-                f"Max atol err: {max_atol_err:.6e} > {scaled_atol:.6e} "
-                f"(golden={g_nz[worst].item()}, actual={a_nz[worst].item()}) "
-                f"[{n_near_zero} near-zero elems]"
-            )
-
-    ulp_ok = max_ulp <= ulp_threshold
-    atol_ok = max_atol_err <= scaled_atol
-
-    parts = [f"ULP: max={max_ulp:.1f} (threshold={ulp_threshold})"]
-    if n_near_zero > 0:
-        parts.append(
-            f"Near-zero atol: max={max_atol_err:.6e} "
-            f"(threshold={scaled_atol:.6e}, count={n_near_zero}/{golden.numel()})"
-        )
-    msg = "; ".join(parts)
-    if not ulp_ok:
-        msg += f" | FAIL ULP: {ulp_msg}"
-    if not atol_ok:
-        msg += f" | FAIL atol: {atol_msg}"
-
-    return ulp_ok and atol_ok, max_ulp, max_atol_err, msg
-
-
 # ---------------------------------------------------------------------------
 # Test parameters (shapes / dims / strategies aligned with callback tests)
 # ---------------------------------------------------------------------------
 
 _STRATEGY_CASES = [
     ((32, 32), 1, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_W, "SMALL_W"),
+    ((64, 96), 1, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_W, "SMALL_W-64x96"),
     ((32, 32), 0, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_H, "SMALL_H"),
+    ((96, 32), 0, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.SMALL_H, "SMALL_H-96x32"),
     ((2, 3, 32 * 4, 32 * 5), 3, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W, "LARGE_W"),
+    ((1, 2, 64, 320), 3, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_W, "LARGE_W-1x2x64x320"),
     ((2, 3, 32 * 4, 32 * 5), 2, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H, "LARGE_H"),
+    ((1, 2, 256, 160), 2, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_H, "LARGE_H-1x2x256x160"),
     ((1, 15, 32, 32), 1, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_C, "LARGE_C"),
+    ((2, 7, 32, 32), 1, ttnn.operations.moreh.SoftmaxOpParallelizationStrategy.LARGE_C, "LARGE_C-2x7"),
 ]
 
 
@@ -192,8 +116,9 @@ _STRATEGY_CASES = [
 # ---------------------------------------------------------------------------
 
 # ULP limits depend on dest accumulation: FP32 dest tightens the reduction.
-_BF16_ULP_THRESHOLD_FP32_DEST = 16
-_BF16_ULP_THRESHOLD_BF16_DEST = 32
+# Tightened from 16/32 after BH characterization (all cases passed with margin).
+_BF16_ULP_THRESHOLD_FP32_DEST = 12
+_BF16_ULP_THRESHOLD_BF16_DEST = 24
 _BF16_NEAR_ZERO_ATOL_FRACTION = 0.02
 
 
@@ -223,7 +148,9 @@ def test_moreh_logsoftmax_ulp_bf16(device, shape, dim, strategy, desc, distribut
     golden = _golden_logsoftmax_bf16(x, dim=dim)
     actual = _run_ttnn_logsoftmax(x, ttnn.bfloat16, device, dim, strategy, fp32_dest_acc_en)
 
-    passed, max_ulp, max_atol_err, msg = _measure_ulp_safe(golden, actual, ulp_threshold, _BF16_NEAR_ZERO_ATOL_FRACTION)
+    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
+        golden, actual, ulp_threshold, _BF16_NEAR_ZERO_ATOL_FRACTION
+    )
     logger.info(
         "moreh.logsoftmax ULP dtype=BF16 desc=%r distribution=%r shape=%s dim=%s "
         "fp32_dest_acc_en=%s max_ulp=%s ulp_threshold=%s max_atol_err=%s passed=%s | %s",
@@ -245,11 +172,8 @@ def test_moreh_logsoftmax_ulp_bf16(device, shape, dim, strategy, desc, distribut
 # FP32 tests
 # ---------------------------------------------------------------------------
 
-# FP32 ULP threshold: device softmax uses tile-ordered reductions and possibly
-# different intermediate staging vs a flat PyTorch reference, while exp/log
-# amplify ordering differences.  This bound is intentionally conservative so
-# CI is stable; tighten only after measuring per-strategy maxima.
-_FP32_ULP_THRESHOLD = 8_000_000
+# FP32 fp32_dest_acc_en=True; BH max ~2.5e5 ULP (wide_uniform, large tensors).
+_FP32_ULP_THRESHOLD = 400_000
 _FP32_NEAR_ZERO_ATOL_FRACTION = 0.005
 
 
@@ -259,13 +183,11 @@ _FP32_NEAR_ZERO_ATOL_FRACTION = 0.005
     ids=[c[3] for c in _STRATEGY_CASES],
 )
 @pytest.mark.parametrize("distribution", ["uniform_01", "normal", "wide_uniform"])
-@pytest.mark.parametrize(
-    "fp32_dest_acc_en",
-    [False, True],
-    ids=["fp32_dest_acc_en=False", "fp32_dest_acc_en=True"],
-)
-def test_moreh_logsoftmax_ulp_fp32(device, shape, dim, strategy, desc, distribution, fp32_dest_acc_en):
-    """Characterize FP32 moreh logsoftmax ULP vs Torch FP32 golden."""
+def test_moreh_logsoftmax_ulp_fp32(device, shape, dim, strategy, desc, distribution):
+    """Characterize FP32 moreh logsoftmax ULP vs Torch FP32 golden.
+
+    fp32_dest_acc_en=True is required for FLOAT32 input (device enforces this).
+    """
     torch.manual_seed(42)
     if distribution == "uniform_01":
         x = torch.empty(shape, dtype=torch.float32).uniform_(0.0, 1.0)
@@ -275,23 +197,22 @@ def test_moreh_logsoftmax_ulp_fp32(device, shape, dim, strategy, desc, distribut
         x = torch.empty(shape, dtype=torch.float32).uniform_(-1e3, 1e3)
 
     golden = _golden_logsoftmax_fp32(x, dim=dim)
-    actual = _run_ttnn_logsoftmax(x, ttnn.float32, device, dim, strategy, fp32_dest_acc_en)
+    actual = _run_ttnn_logsoftmax(x, ttnn.float32, device, dim, strategy, fp32_dest_acc_en=True)
 
-    passed, max_ulp, max_atol_err, msg = _measure_ulp_safe(
+    passed, max_ulp, max_atol_err, msg = measure_ulp_with_near_zero_atol(
         golden, actual, _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
     )
     logger.info(
         "moreh.logsoftmax ULP dtype=FP32 desc=%r distribution=%r shape=%s dim=%s "
-        "fp32_dest_acc_en=%s max_ulp=%s ulp_threshold=%s max_atol_err=%s passed=%s | %s",
+        "fp32_dest_acc_en=True max_ulp=%s ulp_threshold=%s max_atol_err=%s passed=%s | %s",
         desc,
         distribution,
         shape,
         dim,
-        fp32_dest_acc_en,
         max_ulp,
         _FP32_ULP_THRESHOLD,
         max_atol_err,
         passed,
         msg,
     )
-    assert passed, f"[FP32 {desc} {distribution} fp32_dest_acc_en={fp32_dest_acc_en}] {msg}"
+    assert passed, f"[FP32 {desc} {distribution}] {msg}"
