@@ -107,8 +107,6 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
 @pytest.mark.parametrize("tile_h", [8, 16])
 @pytest.mark.parametrize("tile_w", [16])
 def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, tile_h, tile_w):
-    if tile_h == 8 and is_llk_assert_enabled():
-        pytest.skip("Hits LLK assert check for unpacker configuration. Issue #39023")
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((n, c, m, k), dtype=torch.bfloat16)
@@ -1313,11 +1311,23 @@ def test_padded_2d_matmul(device, side, tile_count):
     dummy_out = torch.zeros([1, 1, M, N])
     dummy_upper = torch.full([1, 1, X, X], 4)
 
-    act = ttnn.from_torch(torch_act, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    lower_tt = ttnn.from_torch(dummy_lower, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    out_tt = ttnn.from_torch(dummy_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    upper_tt = ttnn.from_torch(dummy_upper, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    act = ttnn.from_torch(torch_act, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    lower_tt = ttnn.from_torch(dummy_lower, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    out_tt = ttnn.from_torch(dummy_out, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    upper_tt = ttnn.from_torch(dummy_upper, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+
+    # This test measures matmul performance by collecting hardware counter statistics
+    # (see: test_perf_op_report.py::TestPerfCountersSingleOp::test_performance_counter_columns[Matmul_perf_counters]).
+    # To ensure accurate results, we must avoid executing additional operations on the device.
+    # If a device is not passed to ttnn.from_torch(), any layout or typecast transformations
+    # will be performed on the host, as before.
+    act = ttnn.to_device(act, device)
+    weight = ttnn.to_device(weight, device)
+    lower_tt = ttnn.to_device(lower_tt, device)
+    out_tt = ttnn.to_device(out_tt, device)
+    upper_tt = ttnn.to_device(upper_tt, device)
+
     # Free up dummy output tensor so matmul will allocate output there
     ttnn.deallocate(out_tt)
     output_tensor = ttnn.matmul(
@@ -2860,7 +2870,7 @@ def _setup_subdevice(device, skip_rows=1):
     device.set_sub_device_stall_group([dummy_sub_device_id, worker_sub_device_id])
 
     worker_core_grid = ttnn.CoreGrid(x=cols, y=rows - skip_rows)
-    return sub_device_manager, worker_sub_device_id, worker_core_grid
+    return sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs
 
 
 def _teardown_subdevice(device, sub_device_manager):
@@ -2888,15 +2898,17 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
     if grid.y < 2:
         pytest.skip("Need at least 2 rows for sub-device test")
 
-    sub_device_manager, worker_sub_device_id, worker_core_grid = _setup_subdevice(device)
+    sub_device_manager, worker_sub_device_id, worker_core_grid, worker_crs = _setup_subdevice(device)
     try:
         torch.manual_seed(0)
         torch_input_a = torch.randn((1, 1, m_size, k_size), dtype=torch.bfloat16)
         torch_input_b = torch.randn((1, 1, k_size, n_size), dtype=torch.bfloat16)
         torch_output = torch_input_a @ torch_input_b
 
-        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+        input_a = ttnn.from_torch(torch_input_a, dtype=ttnn.bfloat16, device=device)
+        input_a = ttnn.to_layout(input_a, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
+        input_b = ttnn.from_torch(torch_input_b, dtype=ttnn.bfloat16, device=device)
+        input_b = ttnn.to_layout(input_b, ttnn.TILE_LAYOUT, sub_core_grids=worker_crs)
 
         output = ttnn.matmul(
             input_a,

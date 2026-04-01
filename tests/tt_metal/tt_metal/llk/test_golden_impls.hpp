@@ -21,6 +21,7 @@ struct GoldenConfig {
     int face_c_dim = 16;
     int num_faces = 4;
     bool tiny_tile = false;
+    uint32_t datum_bytes = 2;  // bytes per element: 2=BF16 (default), 1=FP8, 4=FP32
 };
 
 std::vector<uint32_t> gold_standard_untilize(const std::vector<uint32_t>& src_vec, const GoldenConfig& config);

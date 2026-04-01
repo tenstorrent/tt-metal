@@ -165,17 +165,21 @@ void Tensor::deallocate_impl(bool force) {
         std::visit(
             ttsl::overloaded{
                 [](HostStorage&) {},
-                [this, force, tracking, &can_deallocate](DeviceStorage& storage) {
-                    if (can_deallocate(storage.get_root_mesh_buffer(), force)) {
-                        if (tracking) {
-                            GraphTracker::instance().track_function_start(std::string_view("Tensor::deallocate"));
-                        }
-                        storage.deallocate_root_mesh_buffer();
-                        if (tracking) {
-                            GraphTracker::instance().track_function_end();
-                        }
+                [force, tracking](DeviceStorage& storage) {
+                    // The underlying device memory could be shared by multiple other owners.
+                    if (!storage.is_sole_owner_of_device_memory() && !force) {
+                        return;
                     }
-                    storage.reset_root_mesh_buffer();
+
+                    if (tracking) {
+                        GraphTracker::instance().track_function_start(std::string_view("Tensor::deallocate"));
+                    }
+
+                    storage.deallocate();
+
+                    if (tracking) {
+                        GraphTracker::instance().track_function_end();
+                    }
                 }},
             this->tensor_attributes->get_storage());
     }
@@ -480,11 +484,8 @@ Tensor Tensor::reshape(
     return view(*this, new_logical_shape, new_padded_shape);
 }
 
-Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
-    Tensor result = *this;
-    result.tensor_attributes =
-        std::make_shared<TensorAttributes>(tensor_attributes->with_tensor_topology(std::move(tensor_topology)));
-    return result;
+void Tensor::update_tensor_topology(const TensorTopology& tensor_topology) {
+    tensor_attributes->update_tensor_topology(tensor_topology);
 }
 
 bool Tensor::is_allocated() const {

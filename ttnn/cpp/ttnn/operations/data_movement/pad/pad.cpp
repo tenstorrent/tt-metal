@@ -327,13 +327,19 @@ ttnn::Tensor invoke_tile(
     }
     if (output_tensor.memory_config().shard_spec().has_value() !=
         memory_config_arg.value_or(input_tensor.memory_config()).shard_spec().has_value()) {
-        const auto sharded_mem_config = create_sharded_memory_config(
-            ttnn::Shape{requested_logical_shape},
-            input_tensor.shard_spec()->grid,
-            ShardStrategy::HEIGHT,
-            ShardOrientation::ROW_MAJOR);
-        output_tensor =
-            ttnn::to_memory_config(output_tensor, memory_config_arg.value_or(sharded_mem_config), std::nullopt);
+        if (memory_config_arg.has_value()) {
+            output_tensor = ttnn::to_memory_config(output_tensor, memory_config_arg.value(), std::nullopt);
+        } else {
+            // memory_config_arg is nullopt → condition can only be true if input is sharded
+            // (interleaved input + nullopt config → both sides false → condition false)
+            // so input_tensor.shard_spec()->grid is safe here.
+            const auto sharded_mem_config = create_sharded_memory_config(
+                ttnn::Shape{requested_logical_shape},
+                input_tensor.shard_spec()->grid,
+                ShardStrategy::HEIGHT,
+                ShardOrientation::ROW_MAJOR);
+            output_tensor = ttnn::to_memory_config(output_tensor, sharded_mem_config, std::nullopt);
+        }
     }
     return output_tensor;
 }

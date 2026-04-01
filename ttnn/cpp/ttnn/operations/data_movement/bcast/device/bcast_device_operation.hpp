@@ -5,13 +5,14 @@
 #pragma once
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "bcast_device_operation_types.hpp"
 #include "bcast_multi_core_h_program_factory.hpp"
 #include "bcast_sharded_h_program_factory.hpp"
 #include "bcast_sharded_h_optimised_program_factory.hpp"
 #include "bcast_multi_core_w_program_factory.hpp"
 #include "bcast_multi_core_hw_program_factory.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 

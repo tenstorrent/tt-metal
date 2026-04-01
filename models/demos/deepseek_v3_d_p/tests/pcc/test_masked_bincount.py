@@ -167,10 +167,10 @@ def test_masked_bincount(
     for device_id in range(len(device_tensors)):
         tt_hist = ttnn.to_torch(device_tensors[device_id]).flatten().to(torch.int32)
 
-        row_idx = device_id // n_cols
-        group_idx = device_id % n_cols
+        row = device_id // n_cols
+        col = device_id % n_cols
 
-        ref_hist = torch_histograms[(group_idx, row_idx)]
+        ref_hist = torch_histograms[(col, row)]
 
         matches = torch.equal(tt_hist[:n_routed_experts], ref_hist)
         if not matches:

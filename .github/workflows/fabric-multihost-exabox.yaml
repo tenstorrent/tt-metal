@@ -2,7 +2,7 @@ name: "Fabric Test on a BH Quad"
 
 on:
   schedule:
-    - cron: "0 9 * * 1-5" # Runs weekdays at 10:00 AM GMT+1 (9:00 UTC)
+    - cron: "0 7 * * 1-5" # Runs weekdays at 8:00 AM GMT+1 (7:00 UTC/9:00 CEST)
   workflow_dispatch:
 
 run-name: Fabric Test on a BH Quad
