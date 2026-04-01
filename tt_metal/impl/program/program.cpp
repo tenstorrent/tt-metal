@@ -2022,8 +2022,8 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 
     // Determine the DRAM kernel binary size per program and the max across all programs.
     // populate_dispatch_data (called above via set_program_attrs_across_core_types) packs all
-    // kernel binaries from every core type into program_transfer_info.binary_data, so its size
-    // reflects the full unpadded binary payload the prefetcher must cache.
+    // kernel binaries from every core type into program_transfer_info.binary_data as a single,
+    // page-aligned payload, so its size reflects the full padded binary data the prefetcher must cache.
     uint32_t max_program_sizeB = 0;
     for (auto& program : programs) {
         uint32_t binary_sizeB =

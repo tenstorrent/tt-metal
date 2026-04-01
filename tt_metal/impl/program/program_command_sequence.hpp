@@ -51,7 +51,7 @@ struct ProgramCommandSequence {
     HostMemDeviceCommand program_config_buffer_command_sequence;
     HostMemDeviceCommand program_binary_setup_prefetcher_cache_command;
     HostMemDeviceCommand program_binary_command_sequence;
-    // When the program_binary_command_sequuence is skippped, this command sequence is used to wait for the writes for
+    // When the program_binary_command_sequence is skipped, this command sequence is used to wait for the writes for
     // the runtime_args_command_sequences and program_config_buffer_command_sequence to complete, to ensure that all
     // writes have landed before the launch message is sent and the worker starts loading data. This isn't needed when
     // writing program binaries, because writing binaries always barriers (as a workaround for an mcast hang).
