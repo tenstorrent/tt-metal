@@ -2087,6 +2087,10 @@ def test_copy_rm_legacy_2d_sharded_to_interleaved(
 def test_copy_rm_interleaved_to_nd_sharded_large_row(
     device, tensor_shape, shard_shape, grid, shard_orientation, buffer_type
 ):
+    num_device_dram_banks = device.dram_grid_size().x
+    required_banks = grid.num_cores()
+    if required_banks > num_device_dram_banks:
+        pytest.skip(f"This architecture has fewer than {required_banks} DRAM banks ({num_device_dram_banks} available)")
     torch.manual_seed(0)
 
     nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=shard_orientation)
@@ -2120,6 +2124,10 @@ def test_copy_rm_interleaved_to_nd_sharded_large_row(
 def test_copy_rm_interleaved_to_legacy_2D_sharded_large_row(
     device, tensor_shape, shard_shape, grid, shard_orientation, buffer_type
 ):
+    num_device_dram_banks = device.dram_grid_size().x
+    required_banks = grid.num_cores()
+    if required_banks > num_device_dram_banks:
+        pytest.skip(f"This architecture has fewer than {required_banks} DRAM banks ({num_device_dram_banks} available)")
     torch.manual_seed(0)
 
     shard_spec = ttnn.ShardSpec(grid, shard_shape, shard_orientation)
@@ -2162,6 +2170,10 @@ def test_copy_rm_interleaved_to_legacy_2D_sharded_large_row(
 def test_copy_rm_nd_sharded_to_interleaved_large_row(
     device, tensor_shape, shard_shape, grid, shard_orientation, buffer_type
 ):
+    num_device_dram_banks = device.dram_grid_size().x
+    required_banks = grid.num_cores()
+    if required_banks > num_device_dram_banks:
+        pytest.skip(f"This architecture has fewer than {required_banks} DRAM banks ({num_device_dram_banks} available)")
     torch.manual_seed(0)
 
     nd_shard_spec = ttnn.NdShardSpec(shard_shape, grid, orientation=shard_orientation)
