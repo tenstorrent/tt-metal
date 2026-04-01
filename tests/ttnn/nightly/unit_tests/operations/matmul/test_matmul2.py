@@ -9,7 +9,6 @@ from models.common.utility_functions import is_wormhole_b0
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero, roundup32
 import torch
 import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 
