@@ -56,6 +56,8 @@ void enumerate_jit_device_configs(
     // Only support compiling 2-ERISC mode for Blackhole.
     const bool enable_2_erisc_mode = (arch == tt::ARCH::BLACKHOLE);
 
+    const bool enable_dram_backed_cq = false;
+
     // FIXME: hardcoded based on UMD values
     static const std::unordered_map<tt::ARCH, uint32_t> num_dram_banks_map = {
         {tt::ARCH::WORMHOLE_B0, 12},
@@ -123,7 +125,11 @@ void enumerate_jit_device_configs(
                     for (const auto& dram_harvesting_count : dram_harvesting_cfgs) {
                         const uint32_t num_dram_banks = num_dram_banks_map.at(arch) - dram_harvesting_count;
                         tt::tt_metal::Hal hal(
-                            arch, routing_fw_enabled, enable_2_erisc_mode, profiler_dram_bank_size_per_risc_bytes);
+                            arch,
+                            routing_fw_enabled,
+                            enable_2_erisc_mode,
+                            profiler_dram_bank_size_per_risc_bytes,
+                            enable_dram_backed_cq);
                         JitDeviceConfig jit_device_config = {
                             .hal = &hal,
                             .arch = arch,

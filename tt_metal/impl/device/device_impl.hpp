@@ -136,13 +136,13 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    void init_command_queue_host() override;
-    void init_command_queue_device() override;
+    void init_command_queue_host();
+    void init_command_queue_device();
 
     void init_command_queue_device_with_topology(DispatchTopology* topology);
 
-    bool compile_fabric() override;
-    void configure_fabric() override;
+    bool compile_fabric();
+    void configure_fabric();
     // Puts device into reset
     bool close() override;
 

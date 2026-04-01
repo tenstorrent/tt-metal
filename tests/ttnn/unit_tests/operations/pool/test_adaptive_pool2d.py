@@ -5,7 +5,6 @@
 import ttnn
 import pytest
 from tests.sweep_framework.sweep_utils.adaptive_pool2d_common import run_adaptive_pool2d
-from models.common.utility_functions import skip_with_llk_assert
 
 
 @pytest.fixture(scope="module")
@@ -23,7 +22,6 @@ failing_parameters = [
 ]
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",
@@ -75,7 +73,6 @@ def test_adaptive_pool2d(
     )
 
 
-@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape, output_size, num_slices",

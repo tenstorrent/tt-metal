@@ -27,6 +27,7 @@ FabricRouterChannelMapping::FabricRouterChannelMapping(
 void FabricRouterChannelMapping::initialize_mappings() {
     initialize_vc0_mappings();
     initialize_vc1_mappings();
+    initialize_vc2_mappings();
 }
 
 void FabricRouterChannelMapping::initialize_vc0_mappings() {
@@ -131,6 +132,47 @@ void FabricRouterChannelMapping::initialize_vc1_mappings() {
     }
 }
 
+void FabricRouterChannelMapping::initialize_vc2_mappings() {
+    const bool is_2d = is_2D_topology(topology_);
+    if (!is_2d) {
+        return;  // VC2 only for 2D topologies
+    }
+
+    if (is_z_router()) {
+        // Z router VC2: sender only, no receiver
+        if (intermesh_vc_config_ == nullptr || !intermesh_vc_config_->requires_vc2) {
+            return;
+        }
+
+        // VC2 sender at last flat index (after VC0 + VC1 senders)
+        constexpr uint32_t z_router_vc2_base_sender_channel =
+            builder_config::num_sender_channels_z_router_vc0 +
+            builder_config::num_sender_channels_z_router_vc1;  // 5 + 4 = 9
+
+        sender_channel_map_[LogicalSenderChannelKey{2, 0}] =
+            InternalSenderChannelMapping{BuilderType::ERISC, z_router_vc2_base_sender_channel};
+        // No receiver for Z router VC2
+    } else {
+        // Mesh router VC2: 1 sender + 1 receiver
+        if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc2) {
+            // VC2 sender at last flat index (after VC0 + VC1 senders)
+            // Use actual VC1 sender count (0 if VC1 not active, 3 or 4 if active)
+            uint32_t actual_vc1_sender_count = get_num_sender_channels_for_vc(1);
+            uint32_t mesh_vc2_base_sender_channel =
+                builder_config::num_sender_channels_2d_mesh + actual_vc1_sender_count;
+
+            sender_channel_map_[LogicalSenderChannelKey{2, 0}] =
+                InternalSenderChannelMapping{BuilderType::ERISC, mesh_vc2_base_sender_channel};
+
+            // VC2 receiver after VC0 and VC1 receivers (index 1 if VC1 disabled, index 2 if VC1 active)
+            uint32_t num_vc1_receivers = (intermesh_vc_config_ && intermesh_vc_config_->requires_vc1) ? 1 : 0;
+            uint32_t mesh_vc2_receiver_channel = 1 + num_vc1_receivers;  // VC0=0, then VC1 if active, then VC2
+            receiver_channel_map_[LogicalReceiverChannelKey{2, 0}] =
+                InternalReceiverChannelMapping{BuilderType::ERISC, mesh_vc2_receiver_channel};
+        }
+    }
+}
+
 bool FabricRouterChannelMapping::is_z_router() const {
     return variant_ == RouterVariant::Z_ROUTER;
 }
@@ -155,6 +197,11 @@ InternalReceiverChannelMapping FabricRouterChannelMapping::get_receiver_mapping(
 }
 
 uint32_t FabricRouterChannelMapping::get_num_virtual_channels() const {
+    // Check VC2 first (VC2 requires VC1, so if VC2 is active, VC1 is also active)
+    if (intermesh_vc_config_ && intermesh_vc_config_->requires_vc2) {
+        return 3;
+    }
+
     // Z routers always have 2 VCs: VC0 (mesh traffic) and VC1 (Z traffic)
     if (is_z_router()) {
         return 2;
@@ -205,9 +252,30 @@ uint32_t FabricRouterChannelMapping::get_num_sender_channels_for_vc(uint32_t vc)
                 return count;
             }
             return no_channels;  // 1D topologies don't have VC1
+        case 2:                  // VC2
+            if (!intermesh_vc_config_ || !intermesh_vc_config_->requires_vc2) {
+                return no_channels;
+            }
+            if (is_z_router()) {
+                return builder_config::num_sender_channels_z_router_vc2;  // 1
+            }
+            return builder_config::num_sender_channels_vc2;  // 1
         default:
             return no_channels;
     }
+}
+
+uint32_t FabricRouterChannelMapping::get_num_receiver_channels_for_vc(uint32_t vc) const {
+    // Count receiver channels for this VC by checking the receiver channel map
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; ++i) {
+        if (receiver_channel_map_.contains(LogicalReceiverChannelKey{vc, i})) {
+            count++;
+        } else {
+            break;  // Channels are created sequentially
+        }
+    }
+    return count;
 }
 
 std::vector<InternalSenderChannelMapping> FabricRouterChannelMapping::get_all_sender_mappings() const {

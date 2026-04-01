@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import numpy as np
-import ml_dtypes
 
 import ttnn
 import ttml
@@ -29,9 +28,7 @@ def sin_pos_embedding_np(seq_len: int, d_model: int) -> np.ndarray:
         raise ValueError(f"d_model must be even, got {d_model}")
 
     position = np.arange(seq_len)[:, np.newaxis]  # (seq_len, 1)
-    div_term = np.exp(
-        np.arange(0, d_model, 2) * (-np.log(10000.0) / d_model)
-    )  # (d_model/2,)
+    div_term = np.exp(np.arange(0, d_model, 2) * (-np.log(10000.0) / d_model))  # (d_model/2,)
 
     pe = np.zeros((seq_len, d_model))
     pe[:, 0::2] = np.sin(position * div_term)  # even indices
@@ -43,9 +40,7 @@ def sin_pos_embedding_np(seq_len: int, d_model: int) -> np.ndarray:
 class PositionalEmbedding(AbstractModuleBase):
     """Positional embedding matching C++ PositionalEmbedding."""
 
-    def __init__(
-        self, sequence_length: int, embedding_dim: int, dropout_prob: float = 0.0
-    ) -> None:
+    def __init__(self, sequence_length: int, embedding_dim: int, dropout_prob: float = 0.0) -> None:
         """Initialize positional embedding.
 
         Args:
@@ -63,8 +58,8 @@ class PositionalEmbedding(AbstractModuleBase):
         emb_np = emb_np.astype(np.float32)
         emb_np = emb_np.reshape(1, 1, sequence_length, embedding_dim)
         # TODO: Migrate to autograd tensor after branch pruning optimization.
-        emb = ttnn.Tensor(emb_np, ttnn.float32, device, ttnn.TILE_LAYOUT)
-        emb = ttnn.typecast(emb, ttnn.bfloat16)
+        emb = ttnn.Tensor(emb_np, ttnn.DataType.FLOAT32, device, ttnn.Layout.TILE)
+        emb = ttnn.typecast(emb, ttnn.DataType.BFLOAT16)
         self.positional_embedding = emb
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
@@ -78,9 +73,7 @@ class PositionalEmbedding(AbstractModuleBase):
         """
         # Simply add the positional embedding tensor (matching C++ ops::add(input, m_positional_embedding))
         if len(input.shape()) != 4:
-            raise ValueError(
-                f"PositionalEmbedding: input tensor must have 4 dimensions. Got rank {len(input.shape())}"
-            )
+            raise ValueError(f"PositionalEmbedding: input tensor must have 4 dimensions. Got rank {len(input.shape())}")
         if input.shape()[2] != self.sequence_length:
             raise ValueError(
                 f"PositionalEmbedding: input tensor sequence length ({input.shape()[2]}) does not match the expected value ({self.sequence_length})"
@@ -100,7 +93,10 @@ class TrainablePositionalEmbedding(AbstractModuleBase):
     """Trainable positional embedding matching C++ TrainablePositionalEmbedding."""
 
     def __init__(
-        self, sequence_length: int, embedding_dim: int, dropout_prob: float = 0.0
+        self,
+        sequence_length: int,
+        embedding_dim: int,
+        dropout_prob: float = 0.0,
     ) -> None:
         """Initialize trainable positional embedding.
 
@@ -115,13 +111,7 @@ class TrainablePositionalEmbedding(AbstractModuleBase):
         self.dropout_prob = dropout_prob
 
         weight_shape = (1, 1, sequence_length, embedding_dim)
-        weight_np = np.random.normal(0.0, 0.02, size=weight_shape).astype(
-            ml_dtypes.bfloat16
-        )
-        weight_tensor = ttml.autograd.Tensor.from_numpy(
-            weight_np, layout=ttnn.Layout.TILE
-        )
-        self.weight = Parameter(weight_tensor)
+        self.weight = Parameter(ttml.init.normal(0.0, 0.02)(weight_shape))
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass: add positional embeddings and apply dropout.

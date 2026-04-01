@@ -2,11 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
+import os
+
 import numpy as np
 import PIL
 import pytest
 import torch
 from diffusers.utils import export_to_video
+from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
@@ -14,6 +18,10 @@ from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelin
 from ....utils.test import line_params, ring_params
 
 
+@pytest.mark.parametrize(
+    "no_prompt",
+    [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), False)],
+)
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
@@ -57,12 +65,11 @@ def test_pipeline_inference(
     width,
     height,
     is_fsdp,
+    no_prompt,
 ):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    # Test parameters
-    prompt = "The cat in the hat runs up the hill to the house."
     pil_image = PIL.Image.open("./prompt_image.png")
     image_prompt = [ImagePrompt(image=pil_image, frame_pos=0)]
     negative_prompt = "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走"
@@ -71,9 +78,6 @@ def test_pipeline_inference(
     num_inference_steps = 40
     guidance_scale = 3.5
     guidance_scale_2 = 3.5
-
-    print(f"Running inference with prompt: '{prompt}'")
-    print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
     pipeline = WanPipelineI2V.create_pipeline(
         mesh_device=mesh_device,
@@ -85,42 +89,56 @@ def test_pipeline_inference(
         is_fsdp=is_fsdp,
     )
 
-    # Run inference
-    with torch.no_grad():
-        result = pipeline(
-            prompt=prompt,
-            image_prompt=image_prompt,
-            negative_prompt=negative_prompt,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            guidance_scale_2=guidance_scale_2,
-        )
+    prompt = "The cat in the hat runs up the hill to the house."
 
-    # Check output
-    if hasattr(result, "frames"):
-        frames = result.frames
+    def run(*, prompt, number, seed):
+        logger.info(f"Running inference with prompt: '{prompt}'")
+        logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
+
+        with torch.no_grad():
+            result = pipeline(
+                prompt=prompt,
+                image_prompt=image_prompt,
+                negative_prompt=negative_prompt,
+                height=height,
+                width=width,
+                num_frames=num_frames,
+                num_inference_steps=num_inference_steps,
+                seed=seed,
+                guidance_scale=guidance_scale,
+                guidance_scale_2=guidance_scale_2,
+            )
+
+        if hasattr(result, "frames"):
+            frames = result.frames
+        else:
+            frames = result[0] if isinstance(result, tuple) else result
+
+        logger.info(f"Inference completed successfully")
+        logger.info(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
+        logger.info(f"  Output type: {type(frames)}")
+
+        if isinstance(frames, np.ndarray):
+            logger.info(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
+        elif isinstance(frames, torch.Tensor):
+            logger.info(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
+
+        # Remove batch dimension
+        frames = frames[0]
+        output_filename = f"wan_i2v_{width}x{height}_{number}.mp4"
+        try:
+            export_to_video(frames, output_filename, fps=16)
+            logger.info(f"Saved video to: {output_filename}")
+        except AttributeError as e:
+            logger.info(f"AttributeError: {e}")
+
+    if no_prompt:
+        run(prompt=prompt, number=0, seed=42)
     else:
-        frames = result[0] if isinstance(result, tuple) else result
-
-    print(f"✓ Inference completed successfully")
-    print(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
-    print(f"  Output type: {type(frames)}")
-
-    # Basic validation
-    if isinstance(frames, np.ndarray):
-        print(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
-    elif isinstance(frames, torch.Tensor):
-        print(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
-
-    # Save video using diffusers utility
-    # Remove batch dimension
-    frames = frames[0]
-
-    try:
-        export_to_video(frames, "wan_output_video.mp4", fps=16)
-    except AttributeError as e:
-        print(f"AttributeError: {e}")
-    print("✓ Saved video to: wan_output_video.mp4")
+        for i in itertools.count():
+            new_prompt = input("Enter the input prompt, or q to exit: ")
+            if new_prompt:
+                prompt = new_prompt
+            if prompt[0] == "q":
+                break
+            run(prompt=prompt, number=i, seed=i)

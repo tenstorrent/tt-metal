@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.hpp"
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::experimental {
 
@@ -15,7 +16,7 @@ std::vector<ttnn::Tensor> llama_rs_matmul(
     const GlobalSemaphore& cross_device_semaphore,  // rs4
     const uint32_t cluster_axis,                    // rs 5
     const MeshDevice& mesh_device,                  // rs 6
-    const uint32_t num_links,                       // rs 7 default 1
+    std::optional<uint32_t> num_links,              // rs 7 auto-detect max available
     const tt::tt_metal::SubDeviceId& subdevice_id,
     const std::optional<const ttnn::Tensor>& second_weight_tensor,
     const std::optional<const ttnn::Tensor>& rs_tensor,  // rs1
@@ -34,6 +35,8 @@ std::vector<ttnn::Tensor> llama_rs_matmul(
     const std::optional<const tt::tt_metal::Tile>& output_tile,                          // mm10 std::nullopt
     const std::optional<Tensor>& optional_output_tensor,                                 // mm11 std::nullopt
     bool use_noc1_only) {
+    uint32_t resolved_num_links =
+        num_links.value_or(ttnn::operations::ccl::common::get_num_links(mesh_device, cluster_axis));
     const auto& mesh_view = mesh_device.get_view();
     const uint32_t ring_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     TT_FATAL(ring_devices > 1, "reduce_scatter async op will only work for ring_devices > 1, but has {}", ring_devices);
@@ -47,7 +50,7 @@ std::vector<ttnn::Tensor> llama_rs_matmul(
         cross_device_semaphore,
         cluster_axis,
         ring_devices,
-        num_links,
+        resolved_num_links,
         subdevice_id,
         memory_config_rs,
         memory_config_mm,

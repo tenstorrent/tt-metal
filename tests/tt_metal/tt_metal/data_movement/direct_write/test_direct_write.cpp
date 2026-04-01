@@ -7,6 +7,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
@@ -129,14 +130,26 @@ bool run_dm(
 
     std::string sender_kernel_path = kernels_dir + sender_kernel_filename;
 
-    CreateKernel(
-        program,
-        sender_kernel_path,
-        test_config.sender_core_coord,
-        DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = test_config.noc_id,
-            .compile_args = sender_compile_args});
+    // Create kernel on sender core - branch by architecture
+    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+        // Quasar path: Use experimental API
+        experimental::quasar::CreateKernel(
+            program,
+            sender_kernel_path,
+            test_config.sender_core_coord,
+            experimental::quasar::QuasarDataMovementConfig{
+                .num_threads_per_cluster = 1, .compile_args = sender_compile_args});
+    } else {
+        // WH/BH path: Use legacy API with processor selection
+        CreateKernel(
+            program,
+            sender_kernel_path,
+            test_config.sender_core_coord,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = test_config.noc_id,
+                .compile_args = sender_compile_args});
+    }
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);

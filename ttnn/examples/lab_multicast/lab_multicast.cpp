@@ -249,10 +249,10 @@ void multicast_tensor_tensix(
     // Create output tensor on device (no initialization needed - kernels will write into it).
     Tensor dst_tensor = create_device_tensor(output_spec, prog_state.mesh_device.get());
 
-    // Get MeshBuffer pointers from tensors. Mesh buffers hold info about how tensor data is distributed
+    // Get MeshBuffers from tensors. Mesh buffers hold info about how tensor data is distributed
     // across physical DRAM banks.
-    auto src_mesh_buffer = src_tensor.mesh_buffer();
-    auto dst_mesh_buffer = dst_tensor.mesh_buffer();
+    const auto& src_mesh_buffer = src_tensor.mesh_buffer();
+    const auto& dst_mesh_buffer = dst_tensor.mesh_buffer();
 
     ////////// TENSIX CORE SETUP //////////
     // Define logical sender core and receiver core range (for kernel creation on the host).
@@ -293,7 +293,7 @@ void multicast_tensor_tensix(
     // TensorAccessorArgs extracts data distribution details from MeshBuffer so kernels
     // don't need to deal with low-level details like bank IDs.
     std::vector<uint32_t> mcast_sender_compile_args;
-    TensorAccessorArgs(*src_mesh_buffer).append_to(mcast_sender_compile_args);
+    TensorAccessorArgs(src_mesh_buffer).append_to(mcast_sender_compile_args);
     DataMovementConfig mcast_sender_config = {
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::RISCV_0_default,
@@ -304,7 +304,7 @@ void multicast_tensor_tensix(
         .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
 
     std::vector<uint32_t> write_tiles_compile_args;
-    TensorAccessorArgs(*dst_mesh_buffer).append_to(write_tiles_compile_args);
+    TensorAccessorArgs(dst_mesh_buffer).append_to(write_tiles_compile_args);
     DataMovementConfig write_tiles_config = {
         .processor = DataMovementProcessor::RISCV_1,
         .noc = NOC::RISCV_1_default,
@@ -362,7 +362,7 @@ void multicast_tensor_tensix(
          static_cast<uint32_t>(receiver_cores_device.end_coord.y),
          receivers_ready_semaphore,
          tile_sent_semaphore,
-         src_mesh_buffer->address(),
+         src_mesh_buffer.address(),
          n_tiles,
          num_dests});
 
@@ -387,7 +387,7 @@ void multicast_tensor_tensix(
             prog_state.program,
             write_tiles_id,
             core,
-            {dst_mesh_buffer->address(), n_tiles, static_cast<uint32_t>(receiver_idx)});
+            {dst_mesh_buffer.address(), n_tiles, static_cast<uint32_t>(receiver_idx)});
         receiver_idx++;
     }
 

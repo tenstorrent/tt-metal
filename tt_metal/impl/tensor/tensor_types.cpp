@@ -113,3 +113,21 @@ tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataforma
 }
 
 }  // namespace tt::tt_metal
+
+auto fmt::formatter<tt::tt_metal::DataType>::format(tt::tt_metal::DataType dt, format_context& ctx) const
+    -> format_context::iterator {
+    string_view name;
+    switch (dt) {
+        case tt::tt_metal::DataType::BFLOAT16: name = "DataType::BFLOAT16"; break;
+        case tt::tt_metal::DataType::FLOAT32: name = "DataType::FLOAT32"; break;
+        case tt::tt_metal::DataType::UINT32: name = "DataType::UINT32"; break;
+        case tt::tt_metal::DataType::BFLOAT8_B: name = "DataType::BFLOAT8_B"; break;
+        case tt::tt_metal::DataType::BFLOAT4_B: name = "DataType::BFLOAT4_B"; break;
+        case tt::tt_metal::DataType::UINT8: name = "DataType::UINT8"; break;
+        case tt::tt_metal::DataType::UINT16: name = "DataType::UINT16"; break;
+        case tt::tt_metal::DataType::INT32: name = "DataType::INT32"; break;
+        case tt::tt_metal::DataType::INVALID:
+        default: name = "Invalid"; break;
+    }
+    return formatter<string_view>::format(name, ctx);
+}

@@ -152,16 +152,6 @@ public:
         size_t worker_l1_size,
         ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) = 0;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    virtual void init_command_queue_host() = 0;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    virtual void init_command_queue_device() = 0;
-
-    // return false if compile fails (mainly come from Nebula on TG)
-    [[deprecated("This is an internal function. It will be removed.")]]
-    virtual bool compile_fabric() = 0;
-    [[deprecated("This is an internal function. It will be removed.")]]
-    virtual void configure_fabric() = 0;
     // Puts device into reset
     virtual bool close() = 0;
 
@@ -176,10 +166,6 @@ public:
 
     virtual HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const = 0;
     virtual HalMemType get_mem_type_of_core(CoreCoord virtual_core) const = 0;
-
-    // Returns the starting address and memory region size on the device for a given virtual core and L1 memory type
-    uint64_t get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
-    uint64_t get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
 
     virtual bool has_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;

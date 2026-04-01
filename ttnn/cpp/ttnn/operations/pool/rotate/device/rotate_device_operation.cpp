@@ -133,7 +133,7 @@ ttsl::hash::hash_t RotateDeviceOperation::compute_program_hash(
 }
 
 std::tuple<RotateDeviceOperation::operation_attributes_t, RotateDeviceOperation::tensor_args_t>
-RotateDeviceOperation::invoke(
+rotate_build_operation_args(
     const Tensor& input,
     float angle,
     const std::optional<std::tuple<float, float>>& center,
@@ -142,9 +142,26 @@ RotateDeviceOperation::invoke(
     const std::string& interpolation_mode,
     const std::optional<MemoryConfig>& memory_config) {
     return {
-        operation_attributes_t{
+        RotateDeviceOperation::operation_attributes_t{
             angle, center, fill, expand, interpolation_mode, memory_config.value_or(input.memory_config())},
-        tensor_args_t{input}};
+        RotateDeviceOperation::tensor_args_t{input}};
 }
 
 }  // namespace ttnn::operations::rotate
+
+namespace ttnn::prim {
+
+Tensor rotate(
+    const Tensor& input,
+    float angle,
+    const std::optional<std::tuple<float, float>>& center,
+    float fill,
+    bool expand,
+    const std::string& interpolation_mode,
+    const std::optional<MemoryConfig>& memory_config) {
+    auto [attrs, tensor_args] = operations::rotate::rotate_build_operation_args(
+        input, angle, center, fill, expand, interpolation_mode, memory_config);
+    return ttnn::device_operation::launch<operations::rotate::RotateDeviceOperation>(attrs, tensor_args);
+}
+
+}  // namespace ttnn::prim

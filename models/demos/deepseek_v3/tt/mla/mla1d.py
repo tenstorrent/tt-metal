@@ -47,7 +47,6 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
-from models.experimental.ops.descriptors.fusion import Parallel
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
@@ -67,7 +66,7 @@ def pad_batch_to_dram_banks(batch, num_banks=12):
     return ((batch + num_banks - 1) // num_banks) * num_banks
 
 
-def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32):
+def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_w=32, *, mesh_device: ttnn.Device):
     """Build MatmulMultiCoreReuseMultiCastProgramConfig for prefill matmuls.
 
     Handles both unbatched (batch=1, fuse_batch=True) and batched (batch>1, fuse_batch=False)
@@ -80,6 +79,7 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
         batch: Batch dimension (1 for unbatched, >1 for batched)
         tile_h: Tile height (default 32)
         tile_w: Tile width (default 32)
+        mesh_device: Device (or mesh) used for the tests - needed to retrieve the core grid
 
     Returns:
         MatmulMultiCoreReuseMultiCastProgramConfig
@@ -88,15 +88,17 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
     K_tiles = even_int_div(k, tile_w)
     N_tiles = even_int_div(n, tile_w)
 
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+
     # grid_x splits N dimension; grid_y splits M dimension
     grid_x = 1
-    for x in range(min(8, N_tiles), 0, -1):
+    for x in range(min(compute_grid.x, N_tiles), 0, -1):
         if N_tiles % x == 0:
             grid_x = x
             break
 
     grid_y = 1
-    for y in range(min(8, M_tiles), 0, -1):
+    for y in range(min(compute_grid.y, M_tiles), 0, -1):
         if M_tiles % y == 0:
             grid_y = y
             break
@@ -173,6 +175,25 @@ def build_prefill_matmul_program_config(seq_len, k, n, batch=1, tile_h=32, tile_
 
 def _deepseek_kvdbg_enabled() -> bool:
     return os.getenv("DEEPSEEK_KVDBG", "").lower() in ("1", "true", "yes", "y")
+
+
+def _launch_merged_descriptors(op_descriptors):
+    # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275.
+    # Keep the DeepSeek decode Q/KV norm path on the old merged generic_op
+    # dispatch until the Parallel(...).build().launch() cache/rebind logic is fixed.
+    if not op_descriptors:
+        raise ValueError("op_descriptors cannot be empty")
+
+    merged_descriptor = op_descriptors[0].descriptor
+    if len(op_descriptors) > 1:
+        merged_descriptor = ttnn.merge_program_descriptors([op.descriptor for op in op_descriptors])
+
+    io_tensors = [tensor for op in op_descriptors for tensor in op.input_tensors] + [
+        tensor for op in op_descriptors for tensor in op.output_tensors
+    ]
+    ttnn.generic_op(io_tensors, merged_descriptor)
+
+    return [op.output_tensors for op in op_descriptors]
 
 
 class MLA1D(AbstractModule):
@@ -648,7 +669,7 @@ class MLA1D(AbstractModule):
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim  # 2112
         qkv_a_n_padded = pad_n_to_dram_banks(qkv_a_n, tile_size=32, num_dram_banks=num_dram_banks)  # 2304
         qkv_a_in0_core_grid = ttnn.CoreGrid(y=1, x=7)
-        qkv_a_out_core_grid = ttnn.CoreGrid(y=1, x=8)
+        qkv_a_out_core_grid = ttnn.CoreGrid(y=8, x=1)
 
         # Program config for qkv_a
         qkv_a_num_in0_cores = qkv_a_in0_core_grid.x * qkv_a_in0_core_grid.y
@@ -689,8 +710,8 @@ class MLA1D(AbstractModule):
         wq_b_n_padded = pad_n_to_dram_banks(
             wq_b_n, tile_size=32, num_dram_banks=num_dram_banks
         )  # 3072 (already aligned)
-        wq_b_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
-        wq_b_out_core_grid = ttnn.CoreGrid(y=2, x=8)
+        wq_b_in0_core_grid = ttnn.CoreGrid(y=8, x=2)
+        wq_b_out_core_grid = ttnn.CoreGrid(y=8, x=2)
 
         # Program config for wq_b
         wq_b_num_in0_cores = wq_b_in0_core_grid.x * wq_b_in0_core_grid.y
@@ -851,7 +872,7 @@ class MLA1D(AbstractModule):
         wo_k = num_heads * v_head_dim  # 16384
         wo_n = dim // mesh_device.shape[1]  # 896
         wo_n_padded = pad_n_to_dram_banks(wo_n, tile_size=32, num_dram_banks=num_dram_banks)  # 1152
-        wo_in0_core_grid = ttnn.CoreGrid(y=2, x=8)
+        wo_in0_core_grid = ttnn.CoreGrid(y=8, x=2)
         wo_out_core_grid = ttnn.CoreGrid(y=2, x=6)
 
         # Program config for wo
@@ -1051,18 +1072,9 @@ class MLA1D(AbstractModule):
             out_dim=1,
         )
 
-        wq_a2a_reshard_out_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW, num_heads, kv_lora_rank + qk_rope_head_dim),
-            core_grid=ttnn.CoreGrid(y=8, x=8),
-            strategy=ttnn.ShardStrategy.HEIGHT,
-        )
-        wq_a2a_reshard_config = ReshardConfig(
-            memory_config=wq_a2a_reshard_out_mem_config,
-        )  # 1,4,128,576, height sharded 8x8 [32,576]
-
         # Slice configs for fused wq_kv_a output: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
-        # Q and KV nope use non-overlapping core grids so they can run parallel norms
-        # via Parallel (which requires non-overlapping core ranges).
+        # Q and KV nope use non-overlapping core grids, but keep this decode path
+        # on the pre-40275 merged-descriptor dispatch as a temporary workaround.
         num_q_cores = 16
         num_kv_nope_cores = 16
         shard_height = ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE)
@@ -1147,7 +1159,6 @@ class MLA1D(AbstractModule):
             "kv_nope_slice_decode": kv_nope_slice_config,
             "kv_rope_slice_decode": kv_rope_slice_config,
             "wq_a2a_decode": wq_a2a_config,
-            "wq_a2a_reshard_decode": wq_a2a_reshard_config,
             "flash_mla_a2a_decode": flash_mla_a2a_config,
             "wo_ag_decode": wo_ag_config,
             "mesh_device": mesh_device,
@@ -1648,7 +1659,7 @@ class MLA1D(AbstractModule):
         # Q path: norm + wq_b (interleaved in0 + DRAM WIDTH sharded in1)
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
         wq_b_program_config = build_prefill_matmul_program_config(
-            seq_len, k=q_lora_rank, n=num_heads_local * qk_head_dim
+            seq_len, k=q_lora_rank, n=num_heads_local * qk_head_dim, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
         )
         tt_q = ttnn.linear(tt_q, **cfg["wq_b"], program_config=wq_b_program_config)
 
@@ -1664,7 +1675,11 @@ class MLA1D(AbstractModule):
         num_heads_local_padded = pad_batch_to_dram_banks(num_heads_local)
 
         wkv_b1_program_config = build_prefill_matmul_program_config(
-            seq_len, k=qk_nope_head_dim, n=kv_lora_rank, batch=num_heads_local_padded
+            seq_len,
+            k=qk_nope_head_dim,
+            n=kv_lora_rank,
+            batch=num_heads_local_padded,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
         )
         tt_q_nope = ttnn.linear(
             tt_q_nope, **cfg["wkv_b1"], program_config=wkv_b1_program_config
@@ -1746,7 +1761,11 @@ class MLA1D(AbstractModule):
         num_heads_padded = pad_batch_to_dram_banks(num_heads)
 
         wkv_b2_program_config = build_prefill_matmul_program_config(
-            seq_len, k=kv_lora_rank, n=v_head_dim, batch=num_heads_padded
+            seq_len,
+            k=kv_lora_rank,
+            n=v_head_dim,
+            batch=num_heads_padded,
+            mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY],
         )
         v_out = ttnn.linear(
             v_out, **cfg["wkv_b2"], program_config=wkv_b2_program_config
@@ -1777,7 +1796,9 @@ class MLA1D(AbstractModule):
                 # Pad the sequence dimension (dim=1)
                 v_out = ttnn.pad(v_out, padding=((0, 0), (0, padded_seq_len - seq_len), (0, 0), (0, 0)), value=0.0)
 
-            wo_chunk_program_config = build_prefill_matmul_program_config(SEQ_LEN_CHUNK_SIZE, k=wo_k, n=dim)
+            wo_chunk_program_config = build_prefill_matmul_program_config(
+                SEQ_LEN_CHUNK_SIZE, k=wo_k, n=dim, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+            )
 
             output_chunks = []
             hidden_dim = num_heads * v_head_dim
@@ -1805,7 +1826,9 @@ class MLA1D(AbstractModule):
         else:
             # For non-chunked case: [1, seq_len, num_heads, v_head_dim] -> [1, 1, seq_len, hidden_dim]
             v_out = ttnn.reshape(v_out, (1, 1, seq_len, num_heads * v_head_dim))
-            wo_program_config = build_prefill_matmul_program_config(seq_len, k=wo_k, n=dim)
+            wo_program_config = build_prefill_matmul_program_config(
+                seq_len, k=wo_k, n=dim, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+            )
             out = ttnn.linear(v_out, **cfg["wo"], program_config=wo_program_config)  # [1, 1, seq_len, dim]
             ttnn.deallocate(v_out)
 
@@ -1868,9 +1891,12 @@ class MLA1D(AbstractModule):
         kv_norm_desc = descriptors.rms_norm(
             tt_kv_nope, program_config=RMSNorm._get_pc(tt_kv_nope.memory_config()), **cfg["kv_norm"]
         )
-        Parallel(q_norm_desc, kv_norm_desc).build(tt_q.device()).launch()
-        tt_q = q_norm_desc.output_tensors[0]
-        tt_kv_nope = kv_norm_desc.output_tensors[0]
+        # Temporary workaround for https://github.com/tenstorrent/tt-metal/issues/40275:
+        # avoid the fusion cache/rebind path here until
+        # Parallel(...).build().launch() is fixed for this decode flow.
+        results = _launch_merged_descriptors([q_norm_desc, kv_norm_desc])
+        tt_q = results[0][0]
+        tt_kv_nope = results[1][0]
         # Q: 1,1,32,1536, width sharded 8x2 [32,96]
 
         # KV RoPE
@@ -2180,7 +2206,9 @@ class MLA1D(AbstractModule):
         # Fused wq_kv_a matmul (interleaved in0 + DRAM WIDTH sharded in1)
         dim = x.shape[3]
         qkv_a_n = q_lora_rank + kv_lora_rank + qk_rope_head_dim
-        wq_kv_a_program_config = build_prefill_matmul_program_config(seq_len, k=dim, n=qkv_a_n)
+        wq_kv_a_program_config = build_prefill_matmul_program_config(
+            seq_len, k=dim, n=qkv_a_n, mesh_device=cfg[MESH_DEVICE_STATE_DICT_KEY]
+        )
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)

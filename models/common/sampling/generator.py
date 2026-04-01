@@ -37,6 +37,7 @@ class SamplingParams:
     repetition_penalty: float | list[float] = 1.0
     seed: int | list[int] | None = None
     enable_log_probs: bool | list[bool] = False
+    num_logprobs: int | list[int] = 0
 
 
 SAMPLING_PARAM_FIELDS = tuple(f.name for f in fields(SamplingParams))
@@ -142,7 +143,7 @@ class SamplingGenerator:
 
         Resets params, seeds, prompt tokens, and output state in the correct order.
         """
-        self.reset_sampling_params(sampling_params)
+        self.reset_sampling_params(sampling_params, empty_slots=empty_slots)
         seed = getattr(sampling_params, "seed", None)
         # assert on condition that seed is not None
         assert seed is not None, "sampling_params must be formatted (seed should be a list, not None)"
@@ -201,13 +202,16 @@ class SamplingGenerator:
     # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------
-    def reset_sampling_params(self, sampling_params):
+    def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
         old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
+        num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
             k=sampling_params.top_k,
             p=sampling_params.top_p,
             temp=sampling_params.temperature,
             enable_log_probs=sampling_params.enable_log_probs,
+            num_logprobs=num_logprobs,
+            empty_slots=empty_slots,
         )
         if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
             self.reset_trace()
@@ -387,6 +391,8 @@ def format_sampling_params(sampling_params, max_batch_size):
         "frequency_penalty": 0.0,
         "repetition_penalty": 1.0,
         "seed": None,
+        "num_logprobs": 0,
+        "enable_log_probs": False,
     }
 
     def _pad(lst, name):
@@ -395,12 +401,28 @@ def format_sampling_params(sampling_params, max_batch_size):
             return list(lst)
         return list(lst) + [defaults[name]] * (target_len - len(lst))
 
-    # Pad core sampling fields
+    # Pad core sampling fields (scalar→list already done above)
     temperature = _pad(sampling_params.temperature, "temperature")
     top_p = _pad(sampling_params.top_p, "top_p")
     top_k = _pad(sampling_params.top_k, "top_k")
 
-    # Normalise and pad penalty / seed fields
+    # enable_log_probs / num_logprobs: scalar → broadcast to all users.
+    # Multi-element list → pad with default (False/0) for inactive slots.
+    # Single-element list (from scalar→list conversion) → broadcast to all.
+    def _broadcast_pad(lst, name):
+        if not isinstance(lst, list):
+            return [lst] * target_len
+        if len(lst) == 1:
+            return lst * target_len
+        return _pad(lst, name)
+
+    enable_log_probs = _broadcast_pad(sampling_params.enable_log_probs, "enable_log_probs")
+    if getattr(sampling_params, "num_logprobs", None) is not None:
+        num_logprobs = _broadcast_pad(sampling_params.num_logprobs, "num_logprobs")
+    else:
+        num_logprobs = None
+
+    # Normalise and pad penalty / seed fields (may still be None/scalar)
     def _normalise_and_pad(name):
         value = getattr(sampling_params, name, None)
         if value is None:
@@ -439,8 +461,7 @@ def format_sampling_params(sampling_params, max_batch_size):
         if repetition_penalty[i] == 0:
             repetition_penalty[i] = defaults["repetition_penalty"]
 
-    return replace(
-        sampling_params,
+    kwargs = dict(
         temperature=temperature,
         top_p=top_p,
         top_k=top_k,
@@ -449,6 +470,15 @@ def format_sampling_params(sampling_params, max_batch_size):
         repetition_penalty=repetition_penalty,
         seed=seed,
     )
+    # Only include logprobs fields if the input dataclass has them
+    # (vLLM's TTSamplingParams may not have these fields)
+    input_fields = {f.name for f in fields(sampling_params)}
+    if "num_logprobs" in input_fields:
+        kwargs["num_logprobs"] = num_logprobs
+    if "enable_log_probs" in input_fields:
+        kwargs["enable_log_probs"] = enable_log_probs
+
+    return replace(sampling_params, **kwargs)
 
 
 def broadcast_sampling_params(

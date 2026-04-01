@@ -119,7 +119,6 @@ class Model:
         self.mesh_device = mesh_device
         self.vocab_size = hf_config.vocab_size
         self.hf_config = hf_config
-        # hf_config.num_hidden_layers = 1
         self.core_grid = ttnn.CoreCoord(8, 8)
         self.head_dim = hf_config.head_dim
         self.max_local_batch_size = max_local_batch_size
@@ -180,6 +179,7 @@ class Model:
                 max_local_batch_size=max_local_batch_size,
                 users_row_sharded=users_row_sharded,
                 use_throughput_experts=use_throughput_experts,
+                tokens_per_device=max_local_batch_size,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
@@ -236,8 +236,8 @@ class Model:
             # before prefill forward; tells _forward_layers_and_head to skip TP all-gather
             _orig_reset = self.sampling.reset_sampling_params
 
-            def _reset_with_flag(params, _orig=_orig_reset):
-                _orig(params)
+            def _reset_with_flag(params, _orig=_orig_reset, **kwargs):
+                _orig(params, **kwargs)
                 self._prefill_sampling_active = True
 
             self.sampling.reset_sampling_params = _reset_with_flag
@@ -264,6 +264,7 @@ class Model:
         # sampling_dp: number of independent sampling groups (one per mesh row)
         # Only use row-sharded sampling when users_row_sharded is active
         args.sampling_dp = self.sampling_dp
+        args.use_topk_logprobs = True
         return args
 
     def _increment_decode_positions_device(self, current_pos, rot_mat_idxs):

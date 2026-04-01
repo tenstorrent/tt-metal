@@ -640,7 +640,7 @@ void pytensor_module(nb::module_& mod) {
                const distributed::TensorToMesh* mesh_mapper,
                bool preserve_nan_values,
                bool col_tilize,
-               bool fast_approx) {
+               bool enable_bfloat_opt) {
                 auto py_tensor_dtype = dlpack_tensor.dtype();
 
                 // handle bool types by changing them to uint8
@@ -674,7 +674,7 @@ void pytensor_module(nb::module_& mod) {
                     pad_value,
                     preserve_nan_values,
                     col_tilize,
-                    fast_approx));
+                    enable_bfloat_opt));
             },
             nb::arg("tensor").noconvert(false),
             nb::arg("data_type") = nb::none(),
@@ -688,7 +688,7 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("preserve_nan_values") = false,  // TODO: Remove preserve_nan_values argument after
                                                      // https://github.com/tenstorrent/tt-metal/issues/31406
             nb::arg("col_tilize") = false,
-            nb::arg("fast_approx") = false,
+            nb::arg("enable_bfloat_opt") = false,
             nb::keep_alive<1, 4>(),  // test: matches other k_a
             nb::rv_policy::move,
             R"doc(
@@ -1309,9 +1309,8 @@ void pytensor_module(nb::module_& mod) {
             "buffer_address",
             [](const Tensor& self) -> uint32_t {
                 TT_FATAL(is_device_tensor(self), "{} doesn't support buffer_address method", self.storage_type());
-                const auto& storage = self.device_storage();
-                TT_FATAL(storage.mesh_buffer != nullptr, "Tensor is not allocated.");
-                return storage.mesh_buffer->address();
+                TT_FATAL(self.is_allocated(), "Tensor is not allocated.");
+                return self.mesh_buffer().address();
             },
             R"doc(
             Get the address of the underlying buffer.

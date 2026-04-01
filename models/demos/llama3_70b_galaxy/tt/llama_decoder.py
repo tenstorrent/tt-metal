@@ -129,6 +129,7 @@ class TtTransformerBlock(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
     ) -> ttnn.Tensor:
@@ -164,6 +165,7 @@ class TtTransformerBlock(LightweightModule):
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
             kv_cache=kv_cache,
             batch_size=batch_size,
         )

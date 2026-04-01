@@ -23,11 +23,12 @@ void FabricBuilderContext::compute_max_channel_counts() {
     std::vector<FabricRouterChannelMapping> possible_mappings;
 
     // Always have MESH routers
+    bool needs_vc_config = intermesh_vc_config_.requires_vc1 || intermesh_vc_config_.requires_vc2;
     possible_mappings.emplace_back(
         topology,
         false,  // no tensix
         RouterVariant::MESH,
-        intermesh_vc_config_.requires_vc1 ? &intermesh_vc_config_ : nullptr,
+        needs_vc_config ? &intermesh_vc_config_ : nullptr,
         false);
 
     // If Z routers exist in this fabric, add Z_ROUTER mapping
@@ -47,12 +48,14 @@ void FabricBuilderContext::compute_max_channel_counts() {
     for (const auto& mapping : possible_mappings) {
         uint32_t num_vcs = mapping.get_num_virtual_channels();
         for (uint32_t vc = 0; vc < num_vcs; ++vc) {
-            max_sender_channels_per_vc_[vc] = std::max(
-                max_sender_channels_per_vc_[vc],
-                static_cast<std::size_t>(mapping.get_num_sender_channels_for_vc(vc)));
-            max_receiver_channels_per_vc_[vc] = std::max(
-                max_receiver_channels_per_vc_[vc],
-                static_cast<std::size_t>(1u));  // Always 1 receiver per VC
+            auto sender_count = mapping.get_num_sender_channels_for_vc(vc);
+            max_sender_channels_per_vc_[vc] =
+                std::max(max_sender_channels_per_vc_[vc], static_cast<std::size_t>(sender_count));
+            // Count a receiver for this VC if the mapping created one.
+            // A VC has a receiver if it has a LogicalReceiverChannelKey{vc, 0} in the map.
+            auto receiver_count = mapping.get_num_receiver_channels_for_vc(vc);
+            max_receiver_channels_per_vc_[vc] =
+                std::max(max_receiver_channels_per_vc_[vc], static_cast<std::size_t>(receiver_count));
         }
     }
 }
@@ -120,12 +123,20 @@ std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_con
         .direction = direction,
     };
 
+    // MUX/UDM modes are mutually exclusive with VC2 — zero out VC2 channels
+    auto sender_channels = max_sender_channels_per_vc_;
+    auto receiver_channels = max_receiver_channels_per_vc_;
+    if (fabric_tensix_config == FabricTensixConfig::MUX || fabric_tensix_config == FabricTensixConfig::UDM) {
+        sender_channels[2] = 0;
+        receiver_channels[2] = 0;
+    }
+
     return std::make_unique<FabricEriscDatamoverConfig>(
         fabric_context_.get_fabric_channel_buffer_size_bytes(),
         fabric_context_.get_fabric_topology(),
         edm_options,
-        max_sender_channels_per_vc_,      // Max for this fabric instance
-        max_receiver_channels_per_vc_);   // Max for this fabric instance
+        sender_channels,
+        receiver_channels);
 }
 
 FabricEriscDatamoverConfig& FabricBuilderContext::get_fabric_router_config(
@@ -183,7 +194,9 @@ chan_id_t FabricBuilderContext::get_fabric_master_router_chan(ChipId chip_id) co
 
 std::vector<size_t> FabricBuilderContext::get_fabric_router_addresses_to_clear() const {
     std::vector<size_t> addresses_to_clear = {
-        router_config_->edm_local_sync_address, router_config_->edm_local_tensix_sync_address};
+        router_config_->edm_local_sync_address,
+        router_config_->edm_local_tensix_sync_address,
+        router_config_->termination_signal_address};
 
     if (router_config_->sender_txq_id != router_config_->receiver_txq_id) {
         addresses_to_clear.push_back(router_config_->to_sender_channel_remote_ack_counters_base_addr);
@@ -227,58 +240,70 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& mesh_graph = control_plane.get_mesh_graph();
 
-    // Check if multiple meshes exist
+    auto config = IntermeshVCConfig::disabled();
+
+    // Check if multiple meshes exist — needed for VC1 (intermesh traffic)
     const auto& mesh_ids = mesh_graph.get_mesh_ids();
     constexpr size_t single_mesh_count = 1;
-    if (mesh_ids.size() <= single_mesh_count) {
-        return IntermeshVCConfig::disabled();
-    }
+    bool is_multi_mesh = mesh_ids.size() > single_mesh_count;
 
-    // Check if intermesh connections exist (use inter_mesh_connectivity which has actual parsed connections)
-    const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
+    if (is_multi_mesh) {
+        // Check if intermesh connections exist (use inter_mesh_connectivity which has actual parsed connections)
+        const auto& inter_mesh_connectivity = mesh_graph.get_inter_mesh_connectivity();
 
-    // Count total intermesh connections across all meshes
-    size_t total_intermesh_connections = 0;
-    for (const auto& mesh_connections : inter_mesh_connectivity) {
-        for (const auto& chip_connections : mesh_connections) {
-            total_intermesh_connections += chip_connections.size();
+        // Count total intermesh connections across all meshes
+        size_t total_intermesh_connections = 0;
+        for (const auto& mesh_connections : inter_mesh_connectivity) {
+            for (const auto& chip_connections : mesh_connections) {
+                total_intermesh_connections += chip_connections.size();
+            }
         }
-    }
 
-    if (total_intermesh_connections == 0) {
-        return IntermeshVCConfig::disabled();
-    }
-
-    // Detect Z vs XY intermesh by checking for Z-direction connections in inter-mesh connectivity
-    bool has_z_routers = false;
-    for (const auto& mesh_connections : inter_mesh_connectivity) {
-        for (const auto& chip_connections : mesh_connections) {
-            for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
-                if (router_edge.port_direction == RoutingDirection::Z) {
-                    has_z_routers = true;
+        if (total_intermesh_connections > 0) {
+            // Detect Z vs XY intermesh by checking for Z-direction connections in inter-mesh connectivity
+            bool has_z_routers = false;
+            for (const auto& mesh_connections : inter_mesh_connectivity) {
+                for (const auto& chip_connections : mesh_connections) {
+                    for (const auto& [dst_mesh_id, router_edge] : chip_connections) {
+                        if (router_edge.port_direction == RoutingDirection::Z) {
+                            has_z_routers = true;
+                            break;
+                        }
+                    }
+                    if (has_z_routers) {
+                        break;
+                    }
+                }
+                if (has_z_routers) {
                     break;
                 }
             }
-            if (has_z_routers) {
-                break;
-            }
-        }
-        if (has_z_routers) {
-            break;
+
+            // Default to FULL_MESH when intermesh exists
+            // TODO: Implement detection logic for:
+            //   - EDGE_ONLY: Check if workload only needs edge nodes (optimization)
+            //   - FULL_MESH_WITH_PASS_THROUGH: Check if any mesh forwards traffic between other meshes
+            constexpr bool needs_mesh_pass_through = false;
+
+            config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
+                                             : IntermeshVCConfig::full_mesh();
+
+            // Set router type based on detection
+            config.router_type = has_z_routers ? IntermeshRouterType::Z_INTERMESH : IntermeshRouterType::XY_INTERMESH;
         }
     }
 
-    // Default to FULL_MESH when intermesh exists
-    // TODO: Implement detection logic for:
-    //   - EDGE_ONLY: Check if workload only needs edge nodes (optimization)
-    //   - FULL_MESH_WITH_PASS_THROUGH: Check if any mesh forwards traffic between other meshes
-    constexpr bool needs_mesh_pass_through = false;
-
-    auto config =
-        needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through() : IntermeshVCConfig::full_mesh();
-
-    // Set router type based on detection
-    config.router_type = has_z_routers ? IntermeshRouterType::Z_INTERMESH : IntermeshRouterType::XY_INTERMESH;
+    // VC2 is independent of VC1 — only requires: RT option + Blackhole + no UDM/mux + 2D topology
+    // (2D topology check happens in initialize_vc2_mappings, not here)
+    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.get_enable_fabric_vc2()) {
+        auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+        auto tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+        bool is_blackhole = (arch == tt::ARCH::BLACKHOLE);
+        bool is_udm_mode = (tensix_config == FabricTensixConfig::UDM);
+        bool is_mux_extension = (tensix_config == FabricTensixConfig::MUX);
+        config.requires_vc2 = is_blackhole && !is_udm_mode && !is_mux_extension;
+    }
 
     return config;
 }

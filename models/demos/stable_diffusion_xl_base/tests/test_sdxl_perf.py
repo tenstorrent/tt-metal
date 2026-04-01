@@ -109,15 +109,15 @@ def test_refiner_unet(
 DEVICE_PERF_EXPECTATIONS = {
     "unet_1024x1024": {
         "wormhole": 191_201_442 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": 119_138_750 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "blackhole": 78_106_452 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "unet_512x512": {
-        "wormhole": 83_531_333 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "wormhole": 82_300_000 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
         "blackhole": None,  # Only 1024x1024 tested on Blackhole
     },
     "refiner_unet_1024x1024": {
         "wormhole": 244_107_203 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
-        "blackhole": 131_795_269 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
+        "blackhole": 114_154_100 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
     },
     "refiner_unet_512x512": {
         "wormhole": 79_843_092 * UNET_DEVICE_TEST_TOTAL_ITERATIONS,
@@ -125,7 +125,7 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_decode_1024x1024": {
         "wormhole": 663_083_865,
-        "blackhole": 708_023_460,  # Used to be 369_666_097, group_norm welford disabled caused regression
+        "blackhole": 267_498_780,
     },
     "vae_decode_512x512": {
         "wormhole": 171_560_642,
@@ -133,7 +133,7 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "vae_encode_1024x1024": {
         "wormhole": 324_271_938,
-        "blackhole": 372_879_420,  # Used to be 170_093_216, group_norm welford disabled caused regression
+        "blackhole": 140_042_000,
     },
     "vae_encode_512x512": {
         "wormhole": 83_537_085,
@@ -141,11 +141,11 @@ DEVICE_PERF_EXPECTATIONS = {
     },
     "clip_encoder_1": {
         "wormhole": 13_112_562,
-        "blackhole": 6_795_180,
+        "blackhole": 7_089_747,
     },
     "clip_encoder_2": {
         "wormhole": 63_591_763,  # Note: this is an average value of 30 test runs due to high variability
-        "blackhole": 31_220_061,
+        "blackhole": 29_182_499,
     },
 }
 

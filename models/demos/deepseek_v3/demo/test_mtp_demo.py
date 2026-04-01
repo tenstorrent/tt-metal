@@ -97,10 +97,13 @@ def test_mtp_demp_compare_outputs(
         repeat_batches=1,
         force_recalculate=force_recalculate_weight_config,
         signpost=True,
+        sampling_temperature=0.0,
+        sampling_top_k=1,
+        sampling_top_p=1.0,
     )
 
     baseline = run_demo(enable_mtp=False, **common_kwargs)
-    mtp = run_demo(enable_mtp=True, **common_kwargs)
+    mtp = run_demo(enable_mtp=True, sample_on_device=False, **common_kwargs)
 
     _assert_demo_outputs_match(baseline, mtp)
 

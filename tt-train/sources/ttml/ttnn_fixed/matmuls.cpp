@@ -8,7 +8,11 @@
 
 namespace ttml::ttnn_fixed {
 tt::tt_metal::Tensor matmul(
-    const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b, bool transpose_a, bool transpose_b) {
+    const tt::tt_metal::Tensor& a,
+    const tt::tt_metal::Tensor& b,
+    bool transpose_a,
+    bool transpose_b,
+    std::optional<tt::tt_metal::Tensor> output_tensor) {
     const auto grid_size = a.device()->compute_with_storage_grid_size();
     auto core_grid = std::make_optional<ttnn::CoreGrid>(grid_size.x, grid_size.y);
 
@@ -24,7 +28,8 @@ tt::tt_metal::Tensor matmul(
         /* compute_kernel_config */
         ttml::core::ComputeKernelConfig::matmul(),
         /* core_grid */ core_grid,
-        /* output_tile */ std::nullopt);
+        /* output_tile */ std::nullopt,
+        /* optional_output_tensor */ std::move(output_tensor));
 }
 
 std::pair<tt::tt_metal::Tensor, tt::tt_metal::Tensor> matmul_backward(

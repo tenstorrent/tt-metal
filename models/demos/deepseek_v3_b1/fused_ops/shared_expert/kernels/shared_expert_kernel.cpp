@@ -444,7 +444,7 @@ void kernel_main() {
         DeviceZoneScopedN("MCAST2");
         mcast(mcast2_args);
     }
-    act_mcast.teardown();
+    act_mcast.teardown(act_mcast_args);
 
     // ========================================================================
     // Phase 7: Down Proj Matmul — [1, K_down] x [K_down, N_per_core] on 112 cores

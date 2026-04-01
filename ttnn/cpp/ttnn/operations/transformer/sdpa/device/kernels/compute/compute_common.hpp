@@ -1649,8 +1649,10 @@ void sdpa_inner_loop(
     const uint32_t cb_out,
     const LightweightMaskContext& lw_mask = {},
     const bool is_causal = false,
-    const bool is_balanced = false) {
+    const bool is_balanced = false,
+    const bool is_last_ring_iter = true) {
     uint32_t KV_chunks_processed_in_iter = 0;
+    const uint32_t q_per_core = iter_q_end - iter_q_start;
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_low_idx;
@@ -1738,6 +1740,7 @@ void sdpa_inner_loop(
              *
              * matmul_blocks internally waits on both inputs
              */
+            reconfig_data_format(cb_k_in, cb_q_in);
             pack_reconfig_data_format(cb_qk_im);
             matmul_blocks(
                 cb_q_in,
@@ -1831,6 +1834,10 @@ void sdpa_inner_loop(
              */
             sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
                 alias_cur_max, alias_cur_sum, Sk_chunk_t);
+
+            // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in matmul)
+            reconfig_data_format(cb_v_in, cb_qk_im);
+            pack_reconfig_data_format(alias_mm2_cur_out);
 
             /* OUT_IM = QK @ V_CHUNK */
             matmul_blocks(
@@ -2012,7 +2019,11 @@ void sdpa_inner_loop(
             cb_pop_front(alias_prev_max, Sq_chunk_t);
         }
 
-        cb_pop_front(cb_q_in, q_chunk_tiles);
+        // When q_per_core == 1, Q is identical across ring iterations so we keep it
+        // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
+        if (q_per_core > 1 || is_last_ring_iter) {
+            cb_pop_front(cb_q_in, q_chunk_tiles);
+        }
     }
 
     if constexpr (sdpa_type == RING) {
@@ -2351,7 +2362,8 @@ void sdpa_ring(
     const uint32_t cb_out,
     const LightweightMaskContext& lw_mask,
     const bool is_causal,
-    const bool is_balanced) {
+    const bool is_balanced,
+    const bool is_last_ring_iter) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2426,7 +2438,8 @@ void sdpa_ring(
         cb_out,
         lw_mask,
         is_causal,
-        is_balanced);
+        is_balanced,
+        is_last_ring_iter);
 }
 
 /**

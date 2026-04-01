@@ -76,7 +76,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
 
-run-name: "DeepSeek V3 – ${{ inputs.setup }} [${{ inputs.deepseekv3_unit_tests && 'unit ' || '' }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress' || '' }}]"
+run-name: "DeepSeek V3 – ${{ github.event_name == 'schedule' && 'nightly' || inputs.setup }} [${{ github.event_name == 'schedule' && 'nightly' || (inputs.deepseekv3_unit_tests && 'unit ' || '') }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress' || '' }}]"
 
 jobs:
   build-artifact:
@@ -357,7 +357,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run dual MTP demo parity smoke test
-        if: ${{ (inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: ${{ ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 400 || 40 }}
         with:

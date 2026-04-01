@@ -295,6 +295,12 @@ ASICLocation PhysicalSystemDescriptor::get_asic_location(AsicID asic_id) const {
     return asic_descriptors_.at(asic_id).asic_location;
 }
 
+ChipId PhysicalSystemDescriptor::get_umd_unique_id(AsicID asic_id) const {
+    auto it = asic_descriptors_.find(asic_id);
+    TT_FATAL(it != asic_descriptors_.end(), "No ASIC descriptor found for asic_id {}", asic_id);
+    return it->second.umd_unique_id;
+}
+
 std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(const std::string& hostname) const {
     std::vector<AsicID> asics;
     if (system_graph_.asic_connectivity_graph.contains(hostname)) {

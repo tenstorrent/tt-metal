@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-device Supervised Fine-Tuning (SFT) trainer."""
+"""Supervised Fine-Tuning (SFT) trainer."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ from tqdm import tqdm
 logger = logging.getLogger(__name__)
 
 import ttml
-from ttml.common.data import build_causal_mask
 from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
 
@@ -37,12 +36,13 @@ class TrainerCallback:
     def on_train_begin(self, trainer: "SFTTrainer") -> None:
         pass
 
-    def on_step_end(
-        self, trainer: "SFTTrainer", step: int, loss: float, lr: float
-    ) -> None:
+    def on_step_end(self, trainer: "SFTTrainer", step: int, loss: float, lr: float) -> None:
         pass
 
     def on_eval_end(self, trainer: "SFTTrainer", step: int, eval_loss: float) -> None:
+        pass
+
+    def on_before_optimizer_step(self, trainer: "SFTTrainer") -> None:
         pass
 
     def on_save(self, trainer: "SFTTrainer", step: int, path: str) -> None:
@@ -68,7 +68,8 @@ class SFTConfig:
         save_interval: Save a checkpoint every *N* steps (0 to disable).
         checkpoint_dir: Directory for checkpoint files.
         seed: Optional RNG seed for reproducibility.
-        max_seq_len: Maximum sequence length (used for the causal mask).
+        max_seq_len: Maximum sequence length (currently unused; kept for
+            backward compatibility).
         learning_rate: Peak learning rate, also used to initialise the default
             AdamW optimizer when no explicit optimizer is provided.
         warmup_steps: Linear warmup steps for the default schedule.
@@ -96,17 +97,24 @@ class SFTConfig:
 
 
 class SFTTrainer:
-    """Supervised fine-tuning trainer for a single Tenstorrent device.
-
-    .. note::
-        Multi-device (e.g. data-parallel, tensor-parallel) training is not
-        yet supported.  This is planned as a future enhancement.
-        TODO: extend to multi-device topologies.
+    """Supervised fine-tuning trainer for Tenstorrent devices.
 
     The trainer owns the training loop, optimizer, and scheduler.  It knows
     nothing about model internals or dataset structure — only the interfaces
     defined by :class:`~ttml.modules.module_base.AbstractModuleBase` and
     :class:`~ttml.datasets.TTMLDataloader`.
+
+    Multi-device training (e.g. DDP) is supported by combining two
+    extension points:
+
+    * A **collate function** that shards batch tensors across the mesh
+      (via ``shard_tensor_to_mesh_mapper``).
+    * The :meth:`~TrainerCallback.on_before_optimizer_step` callback to
+      synchronise gradients before the optimiser step.
+
+    Loss aggregation across devices is handled automatically via a default
+    ``concat_mesh_to_tensor_composer(device, 0)``.  Pass a custom
+    ``loss_composer`` to override.
 
     Example::
 
@@ -133,6 +141,8 @@ class SFTTrainer:
         lr_schedule: Optional[Callable[[int], float]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         compute_loss_func: Optional[Callable] = None,
+        loss_composer: Any = None,
+        attention_mask: Any = None,
     ) -> None:
         """
         Args:
@@ -158,6 +168,13 @@ class SFTTrainer:
                 caller is fully responsible for applying ``batch.loss_mask``
                 (or any other prompt/pad masking strategy); the default masking
                 logic is bypassed entirely.
+            loss_composer: Optional mesh composer passed to
+                ``loss.to_numpy(composer=...)`` when extracting scalar loss
+                values for logging. By default a `concat_mesh_to_tensor_composer` with dim=0 is used.
+                (Covers both single-device and multi-device DDP configurations.)
+            attention_mask: Optional attention mask passed as the second
+                argument to ``model(input_ids, mask)``.  ``None`` (default)
+                lets the model generate a causal mask on the fly.
 
         Note:
             When ``config.gradient_checkpointing`` is ``True`` the model's
@@ -182,13 +199,12 @@ class SFTTrainer:
         self.step = 0  # 0-based; incremented after each optimizer step
 
         self._optimizer = self._build_optimizer(optimizer)
-        self._lr_schedule = (
-            lr_schedule if lr_schedule is not None else self._build_lr_schedule()
-        )
-        self._causal_mask = self._build_causal_mask()
+        self._lr_schedule = lr_schedule if lr_schedule is not None else self._build_lr_schedule()
+        self._attention_mask = attention_mask
         self._loss_fn = ttml.ops.loss.cross_entropy_loss
         self._callbacks = callbacks or []
         self._compute_loss_override = compute_loss_func
+        self._loss_composer = self._build_loss_composer(loss_composer)
 
     # ------------------------------------------------------------------
     # Public API
@@ -227,27 +243,25 @@ class SFTTrainer:
             for _ in range(cfg.gradient_accumulation_steps):
                 batch = _next_batch()
                 loss = self._compute_loss(batch)
-                micro_losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32).mean()))
+                micro_losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean()))
 
-                scaled = ttml.ops.binary.mul(
-                    loss, 1.0 / cfg.gradient_accumulation_steps
-                )
-                scaled.backward(False)
+                if cfg.gradient_accumulation_steps > 1:
+                    loss = ttml.ops.binary.mul(loss, 1.0 / cfg.gradient_accumulation_steps)
+                loss.backward(False)
                 ttml.autograd.AutoContext.get_instance().reset_graph()
 
+            for cb in self._callbacks:
+                cb.on_before_optimizer_step(self)
+
             if cfg.max_grad_norm > 0:
-                ttml.core.clip_grad_norm(
-                    self.model.parameters(), cfg.max_grad_norm, 2.0, False
-                )
+                ttml.core.clip_grad_norm(self.model.parameters(), cfg.max_grad_norm, 2.0, False)
 
             self._optimizer.step()
             self.step += 1
 
             step_loss = float(np.mean(micro_losses))
             if cfg.log_interval > 0 and self.step % cfg.log_interval == 0:
-                bar.set_postfix(
-                    {"loss": f"{step_loss:.4f}", "lr": f"{lr:.2e}"}, refresh=False
-                )
+                bar.set_postfix({"loss": f"{step_loss:.4f}", "lr": f"{lr:.2e}"}, refresh=False)
                 for cb in self._callbacks:
                     cb.on_step_end(self, self.step, step_loss, lr)
 
@@ -265,11 +279,7 @@ class SFTTrainer:
                     for cb in self._callbacks:
                         cb.on_eval_end(self, self.step, val_loss)
 
-            if (
-                cfg.save_interval > 0
-                and self.step % cfg.save_interval == 0
-                and self.step > 0
-            ):
+            if cfg.save_interval > 0 and self.step % cfg.save_interval == 0 and self.step > 0:
                 self._save_checkpoint()
                 for cb in self._callbacks:
                     cb.on_save(
@@ -291,7 +301,7 @@ class SFTTrainer:
         If *compute_loss_func* was provided it is called instead of the
         default masked cross-entropy.
         """
-        logits = self.model(batch.input_ids, self._causal_mask)  # [B, 1, T, V]
+        logits = self.model(batch.input_ids, self._attention_mask)  # [B, 1, T, V]
         if self._compute_loss_override is not None:
             return self._compute_loss_override(logits, batch)
 
@@ -299,7 +309,7 @@ class SFTTrainer:
         # should sum to B*T (one entry per token position).  A large deviation
         # usually indicates a custom collate that forgot to normalise.
         if batch.loss_mask is not None:
-            mask_np = batch.loss_mask.to_numpy(ttnn.DataType.FLOAT32)
+            mask_np = batch.loss_mask.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer)
             B, _, T, _ = mask_np.shape
             expected = float(B * T)
             actual = float(mask_np.sum())
@@ -312,9 +322,7 @@ class SFTTrainer:
                     int(expected),
                 )
 
-        loss = self._loss_fn(
-            logits, batch.labels, ttml.ops.ReduceType.NONE
-        )  # [B, 1, T, 1]
+        loss = self._loss_fn(logits, batch.labels, ttml.ops.ReduceType.NONE)  # [B, 1, T, 1]
         loss = loss * batch.loss_mask  # zero out prompt + padding
         return ttml.ops.unary.mean(loss)
 
@@ -325,7 +333,7 @@ class SFTTrainer:
         with no_grad():
             for batch in self.eval_dataloader:
                 loss = self._compute_loss(batch)
-                losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32).mean()))
+                losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean()))
         self.model.train()
         return float(np.mean(losses))
 
@@ -385,6 +393,13 @@ class SFTTrainer:
 
         return schedule
 
+    def _build_loss_composer(self, loss_composer: Optional[Any] = None):
+        """Create a mesh composer for aggregating loss across devices."""
+        if loss_composer is not None:
+            return loss_composer
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        return ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
+
     @staticmethod
     def _enable_gradient_checkpointing(model: Any) -> None:
         """Switch the model's runner type to ``MemoryEfficient``.
@@ -397,9 +412,3 @@ class SFTTrainer:
         if cfg is None or not hasattr(cfg, "runner_type"):
             return
         target.config = replace(cfg, runner_type=ttml.models.RunnerType.MemoryEfficient)
-
-    def _build_causal_mask(self):
-        mask_np = build_causal_mask(self.config.max_seq_len)  # [1, 1, T, T]
-        return ttml.autograd.Tensor.from_numpy(
-            mask_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
-        )

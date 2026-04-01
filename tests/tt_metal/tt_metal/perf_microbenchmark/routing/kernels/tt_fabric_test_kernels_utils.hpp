@@ -458,38 +458,46 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, true> {
     }
 };
 
-// Forward declaration for NOC operation function pointer types
+template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct SenderKernelTrafficConfig;
 
-namespace NocOperationTypes {
-using ParseSetupFunc = void (*)(SenderKernelTrafficConfig*, size_t&);
-using UpdateHeaderFunc = void (*)(SenderKernelTrafficConfig*);
+// NOC op structs and function pointer types are all templated on EdmSenderT.
+// VC_ID is a compile-time arg so each binary contains exactly one EdmSenderT
+// instantiation — function pointer types match call sites exactly, no casting needed.
+template <typename EdmSenderT = WorkerToFabricEdmSender>
+struct NocOperationTypes {
+    using ParseSetupFunc = void (*)(SenderKernelTrafficConfig<EdmSenderT>*, size_t&);
+    using UpdateHeaderFunc = void (*)(SenderKernelTrafficConfig<EdmSenderT>*);
 
-struct Operations {
-    ParseSetupFunc parse_and_setup;
-    UpdateHeaderFunc update_header;
+    struct Operations {
+        ParseSetupFunc parse_and_setup;
+        UpdateHeaderFunc update_header;
+    };
 };
-}  // namespace NocOperationTypes
 
 // NOC Operation Class Declarations (implementations after SenderKernelTrafficConfig)
+template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct NocWriteSenderOperations {
-    static void parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx);
-    static void update_header_impl(SenderKernelTrafficConfig* config);
+    static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
+    static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
 };
 
+template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct NocAtomicSenderOperations {
-    static void parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx);
-    static void update_header_impl(SenderKernelTrafficConfig* config);
+    static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
+    static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
 };
 
+template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct NocFusedSenderOperations {
-    static void parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx);
-    static void update_header_impl(SenderKernelTrafficConfig* config);
+    static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
+    static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
 };
 
+template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct NocScatterWriteSenderOperations {
-    static void parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx);
-    static void update_header_impl(SenderKernelTrafficConfig* config);
+    static void parse_and_setup_impl(SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx);
+    static void update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config);
 };
 
 /* ****************************************************************************
@@ -508,15 +516,16 @@ struct MuxCachedInfo {
  * Provides type-erased storage for both WorkerToFabricEdmSender and
  * WorkerToFabricMuxSender connections with runtime dispatch.
  * *****************************************************************************/
+template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct FabricConnectionArray {
     // TODO: get the num buffers more systematically
     static constexpr uint8_t NUM_BUFFERS = 8;
 
     using MuxConnectionType = tt::tt_fabric::WorkerToFabricMuxSender<NUM_BUFFERS>;
-    static constexpr size_t MAX_CONNECTION_SIZE = std::max(sizeof(WorkerToFabricEdmSender), sizeof(MuxConnectionType));
+    static constexpr size_t MAX_CONNECTION_SIZE = std::max(sizeof(EdmSenderT), sizeof(MuxConnectionType));
 
     // Type-erased storage for connections (sized for maximum)
-    alignas(std::max(alignof(WorkerToFabricEdmSender), alignof(MuxConnectionType)))
+    alignas(std::max(alignof(EdmSenderT), alignof(MuxConnectionType)))
         std::array<char, MAX_NUM_FABRIC_CONNECTIONS * MAX_CONNECTION_SIZE> storage;
     std::array<bool, MAX_NUM_FABRIC_CONNECTIONS> is_mux;
 
@@ -527,8 +536,8 @@ struct FabricConnectionArray {
     uint8_t num_connections = 0;
 
     // Accessors with proper type casting
-    FORCE_INLINE WorkerToFabricEdmSender& get_fabric_connection(uint8_t idx) {
-        return *reinterpret_cast<WorkerToFabricEdmSender*>(storage.data() + idx * MAX_CONNECTION_SIZE);
+    FORCE_INLINE EdmSenderT& get_fabric_connection(uint8_t idx) {
+        return *reinterpret_cast<EdmSenderT*>(storage.data() + idx * MAX_CONNECTION_SIZE);
     }
 
     FORCE_INLINE MuxConnectionType& get_mux_connection(uint8_t idx) {
@@ -578,8 +587,8 @@ struct FabricConnectionArray {
                 new (&get_mux_connection(i)) MuxConnectionType(conn);
             } else {
                 // Initialize fabric connection using placement new
-                auto conn = WorkerToFabricEdmSender::build_from_args<core_type>(rt_args_idx);
-                new (&get_fabric_connection(i)) WorkerToFabricEdmSender(conn);
+                auto conn = EdmSenderT::template build_from_args<core_type>(rt_args_idx);
+                new (&get_fabric_connection(i)) EdmSenderT(conn);
             }
         }
     }
@@ -616,13 +625,13 @@ struct FabricConnectionArray {
     FORCE_INLINE void wait_for_empty_write_slot(void* conn_ptr, uint8_t idx) {
         if constexpr (BENCHMARK_MODE) {
             // Fast path: no runtime check, direct cast
-            static_cast<WorkerToFabricEdmSender*>(conn_ptr)->wait_for_empty_write_slot();
+            static_cast<EdmSenderT*>(conn_ptr)->wait_for_empty_write_slot();
         } else {
             // Normal path: runtime dispatch using cached is_mux array
             if (is_mux[idx]) {
                 static_cast<MuxConnectionType*>(conn_ptr)->wait_for_empty_write_slot();
             } else {
-                static_cast<WorkerToFabricEdmSender*>(conn_ptr)->wait_for_empty_write_slot();
+                static_cast<EdmSenderT*>(conn_ptr)->wait_for_empty_write_slot();
             }
         }
     }
@@ -631,14 +640,14 @@ struct FabricConnectionArray {
     template <bool BENCHMARK_MODE = false>
     FORCE_INLINE void send_header_non_blocking(void* conn_ptr, uint8_t idx, uint32_t header_addr) {
         if constexpr (BENCHMARK_MODE) {
-            static_cast<WorkerToFabricEdmSender*>(conn_ptr)->send_payload_flush_non_blocking_from_address(
+            static_cast<EdmSenderT*>(conn_ptr)->send_payload_flush_non_blocking_from_address(
                 header_addr, sizeof(PACKET_HEADER_TYPE));
         } else {
             if (is_mux[idx]) {
                 static_cast<MuxConnectionType*>(conn_ptr)->send_payload_flush_non_blocking_from_address(
                     header_addr, sizeof(PACKET_HEADER_TYPE));
             } else {
-                static_cast<WorkerToFabricEdmSender*>(conn_ptr)->send_payload_flush_non_blocking_from_address(
+                static_cast<EdmSenderT*>(conn_ptr)->send_payload_flush_non_blocking_from_address(
                     header_addr, sizeof(PACKET_HEADER_TYPE));
             }
         }
@@ -648,14 +657,14 @@ struct FabricConnectionArray {
     template <bool BENCHMARK_MODE = false>
     FORCE_INLINE void send_payload_without_header(void* conn_ptr, uint8_t idx, uint32_t payload_addr, size_t size) {
         if constexpr (BENCHMARK_MODE) {
-            static_cast<WorkerToFabricEdmSender*>(conn_ptr)->send_payload_without_header_non_blocking_from_address(
+            static_cast<EdmSenderT*>(conn_ptr)->send_payload_without_header_non_blocking_from_address(
                 payload_addr, size);
         } else {
             if (is_mux[idx]) {
                 static_cast<MuxConnectionType*>(conn_ptr)->send_payload_without_header_non_blocking_from_address(
                     payload_addr, size);
             } else {
-                static_cast<WorkerToFabricEdmSender*>(conn_ptr)->send_payload_without_header_non_blocking_from_address(
+                static_cast<EdmSenderT*>(conn_ptr)->send_payload_without_header_non_blocking_from_address(
                     payload_addr, size);
             }
         }
@@ -665,14 +674,14 @@ struct FabricConnectionArray {
     template <bool BENCHMARK_MODE = false>
     FORCE_INLINE void send_header_flush_blocking(void* conn_ptr, uint8_t idx, uint32_t header_addr) {
         if constexpr (BENCHMARK_MODE) {
-            static_cast<WorkerToFabricEdmSender*>(conn_ptr)->send_payload_flush_blocking_from_address(
+            static_cast<EdmSenderT*>(conn_ptr)->send_payload_flush_blocking_from_address(
                 header_addr, sizeof(PACKET_HEADER_TYPE));
         } else {
             if (is_mux[idx]) {
                 static_cast<MuxConnectionType*>(conn_ptr)->send_payload_flush_blocking_from_address(
                     header_addr, sizeof(PACKET_HEADER_TYPE));
             } else {
-                static_cast<WorkerToFabricEdmSender*>(conn_ptr)->send_payload_flush_blocking_from_address(
+                static_cast<EdmSenderT*>(conn_ptr)->send_payload_flush_blocking_from_address(
                     header_addr, sizeof(PACKET_HEADER_TYPE));
             }
         }
@@ -683,7 +692,7 @@ struct FabricConnectionArray {
     FORCE_INLINE void send_payload_with_header(
         void* conn_ptr, uint8_t idx, uint32_t payload_addr, size_t payload_size, uint32_t header_addr) {
         if constexpr (BENCHMARK_MODE) {
-            auto* conn = static_cast<WorkerToFabricEdmSender*>(conn_ptr);
+            auto* conn = static_cast<EdmSenderT*>(conn_ptr);
             if (payload_size > 0) {
                 conn->send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
             }
@@ -696,7 +705,7 @@ struct FabricConnectionArray {
                 }
                 conn->send_payload_flush_non_blocking_from_address(header_addr, sizeof(PACKET_HEADER_TYPE));
             } else {
-                auto* conn = static_cast<WorkerToFabricEdmSender*>(conn_ptr);
+                auto* conn = static_cast<EdmSenderT*>(conn_ptr);
                 if (payload_size > 0) {
                     conn->send_payload_without_header_non_blocking_from_address(payload_addr, payload_size);
                 }
@@ -707,9 +716,10 @@ struct FabricConnectionArray {
 };
 
 // Line sync for each fabric connection (used by SyncKernelConfig)
+template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct LineSyncConfig {
     LineSyncConfig(
-        FabricConnectionArray* connection_array,
+        FabricConnectionArray<EdmSenderT>* connection_array,
         uint8_t connection_idx,
         const uint32_t packet_header_address,
         const uint32_t line_sync_val) :
@@ -739,8 +749,9 @@ struct LineSyncConfig {
     }
 
     void global_sync_start() {
-        connection_manager_->wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
-        connection_manager_->send_header_non_blocking<false>(connection_ptr_, connection_idx_, (uint32_t)packet_header);
+        connection_manager_->template wait_for_empty_write_slot<false>(connection_ptr_, connection_idx_);
+        connection_manager_->template send_header_non_blocking<false>(
+            connection_ptr_, connection_idx_, (uint32_t)packet_header);
     }
 
     void global_sync_finish(uint8_t sync_iter) {
@@ -749,7 +760,7 @@ struct LineSyncConfig {
     }
 
 private:
-    FabricConnectionArray* connection_manager_;
+    FabricConnectionArray<EdmSenderT>* connection_manager_;
     void* connection_ptr_;    // Cached connection pointer
     uint8_t connection_idx_;  // Index into the connection array
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header;
@@ -945,9 +956,10 @@ private:
     static constexpr uint32_t CREDIT_STRIDE_WORDS = CREDIT_ADDRESS_STRIDE / sizeof(uint32_t);
 };
 
+template <typename EdmSenderT>
 struct SenderKernelTrafficConfig {
     SenderKernelTrafficConfig(
-        FabricConnectionArray* connection_array,
+        FabricConnectionArray<EdmSenderT>* connection_array,
         uint8_t connection_idx,
         const SenderTrafficConfigMetadata& metadata,
         const uint32_t packet_header_address) :
@@ -989,23 +1001,22 @@ struct SenderKernelTrafficConfig {
         uint32_t noc_type_raw = get_local_arg_val<uint32_t>(arg_idx++);
         noc_send_type_ = static_cast<NocSendType>(noc_type_raw);
 
-        // Validate NOC send type and set up operations
         switch (noc_send_type_) {
             case NocSendType::NOC_UNICAST_WRITE:
-                noc_ops_.parse_and_setup = NocWriteSenderOperations::parse_and_setup_impl;
-                noc_ops_.update_header = NocWriteSenderOperations::update_header_impl;
+                noc_ops_.parse_and_setup = NocWriteSenderOperations<EdmSenderT>::parse_and_setup_impl;
+                noc_ops_.update_header = NocWriteSenderOperations<EdmSenderT>::update_header_impl;
                 break;
             case NocSendType::NOC_UNICAST_ATOMIC_INC:
-                noc_ops_.parse_and_setup = NocAtomicSenderOperations::parse_and_setup_impl;
-                noc_ops_.update_header = NocAtomicSenderOperations::update_header_impl;
+                noc_ops_.parse_and_setup = NocAtomicSenderOperations<EdmSenderT>::parse_and_setup_impl;
+                noc_ops_.update_header = NocAtomicSenderOperations<EdmSenderT>::update_header_impl;
                 break;
             case NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC:
-                noc_ops_.parse_and_setup = NocFusedSenderOperations::parse_and_setup_impl;
-                noc_ops_.update_header = NocFusedSenderOperations::update_header_impl;
+                noc_ops_.parse_and_setup = NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl;
+                noc_ops_.update_header = NocFusedSenderOperations<EdmSenderT>::update_header_impl;
                 break;
             case NocSendType::NOC_UNICAST_SCATTER_WRITE:
-                noc_ops_.parse_and_setup = NocScatterWriteSenderOperations::parse_and_setup_impl;
-                noc_ops_.update_header = NocScatterWriteSenderOperations::update_header_impl;
+                noc_ops_.parse_and_setup = NocScatterWriteSenderOperations<EdmSenderT>::parse_and_setup_impl;
+                noc_ops_.update_header = NocScatterWriteSenderOperations<EdmSenderT>::update_header_impl;
                 break;
             default: ASSERT(false); break;
         }
@@ -1027,7 +1038,7 @@ struct SenderKernelTrafficConfig {
 
     bool has_packets_to_send() const { return num_packets_processed < metadata.num_packets; }
 
-    FORCE_INLINE void setup_credit_update_noc_state(const WorkerToFabricEdmSender& adapter, uint8_t noc) {
+    FORCE_INLINE void setup_credit_update_noc_state(const EdmSenderT& adapter, uint8_t noc) {
         auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
         const uint64_t noc_sem_addr =
             get_noc_addr(adapter.edm_noc_x, adapter.edm_noc_y, adapter.edm_buffer_remote_free_slots_update_addr, noc);
@@ -1038,7 +1049,7 @@ struct SenderKernelTrafficConfig {
     template <bool BENCHMARK_MODE>
     FORCE_INLINE void send_packets_stateful(const uint32_t num_packets, const uint32_t num_warmup) {
         ASSERT(connection_ptr_ != nullptr);
-        auto* conn = static_cast<WorkerToFabricEdmSender*>(connection_ptr_);
+        auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
 
         // Perform stateful noc send by filling buffers with headers, first, then performing credit-only NOC sends
         // Phase 1: Warmup — send actual headers to fill all buffer slots
@@ -1068,26 +1079,26 @@ struct SenderKernelTrafficConfig {
 
         // STEP 2: Wait for space
         if constexpr (BENCHMARK_MODE){
-            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+            connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
             // STEP 3: Send packet
-            auto* conn = static_cast<WorkerToFabricEdmSender*>(connection_ptr_);
+            auto* conn = static_cast<EdmSenderT*>(connection_ptr_);
             if (num_packets_processed < conn->num_buffers_per_channel) {
                 conn->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
             } else {
                 fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
             }
         } else {
-            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+            connection_manager_->template wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
             // STEP 3: Send packet
             if (payload_size_bytes > 0 && payload_buffer_) {
                 payload_buffer_->fill_data(metadata.seed);
 
                 // Send payload without header
-                connection_manager_->send_payload_without_header<BENCHMARK_MODE>(
+                connection_manager_->template send_payload_without_header<BENCHMARK_MODE>(
                     connection_ptr_, connection_idx_, payload_buffer_->get_physical_address(), payload_size_bytes);
             }
             // Send header
-            connection_manager_->send_header_non_blocking<BENCHMARK_MODE>(
+            connection_manager_->template send_header_non_blocking<BENCHMARK_MODE>(
                 connection_ptr_, connection_idx_, (uint32_t)packet_header);
         }
 
@@ -1128,11 +1139,10 @@ struct SenderKernelTrafficConfig {
 
     bool has_wrapped() const { return payload_buffer_ ? payload_buffer_->has_wrapped() : false; }
 
-    // Friend classes for operation implementations
-    friend struct NocWriteSenderOperations;
-    friend struct NocAtomicSenderOperations;
-    friend struct NocFusedSenderOperations;
-    friend struct NocScatterWriteSenderOperations;
+    friend struct NocWriteSenderOperations<EdmSenderT>;
+    friend struct NocAtomicSenderOperations<EdmSenderT>;
+    friend struct NocFusedSenderOperations<EdmSenderT>;
+    friend struct NocScatterWriteSenderOperations<EdmSenderT>;
 
 private:
     void update_header_for_next_packet() {
@@ -1142,7 +1152,7 @@ private:
     }
 
 public:
-    FabricConnectionArray* connection_manager_;
+    FabricConnectionArray<EdmSenderT>* connection_manager_;
     void* connection_ptr_;    // Cached connection pointer
     uint8_t connection_idx_;  // Index into the connection array
 
@@ -1156,7 +1166,7 @@ public:
 
 private:
     NocSendType noc_send_type_;
-    NocOperationTypes::Operations noc_ops_;
+    typename NocOperationTypes<EdmSenderT>::Operations noc_ops_;
 
     union NocFields {
         NocUnicastWriteFields write_fields;
@@ -1173,7 +1183,9 @@ private:
 };
 
 // NOC Operation Implementations (now that SenderKernelTrafficConfig is fully defined)
-inline void NocWriteSenderOperations::parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx) {
+template <typename EdmSenderT>
+inline void NocWriteSenderOperations<EdmSenderT>::parse_and_setup_impl(
+    SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx) {
     auto fields = NocUnicastWriteFields::build_from_args<true>(arg_idx);
 
     uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
@@ -1183,7 +1195,8 @@ inline void NocWriteSenderOperations::parse_and_setup_impl(SenderKernelTrafficCo
     config->payload_size_bytes = fields.payload_size_bytes;
 }
 
-inline void NocWriteSenderOperations::update_header_impl(SenderKernelTrafficConfig* config) {
+template <typename EdmSenderT>
+inline void NocWriteSenderOperations<EdmSenderT>::update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config) {
     const auto& fields = config->noc_fields_.write_fields;
     uint32_t buffer_offset = config->payload_buffer_->get_current_offset();
     uint32_t dest_address = fields.dst_address + buffer_offset;
@@ -1191,7 +1204,9 @@ inline void NocWriteSenderOperations::update_header_impl(SenderKernelTrafficConf
     config->packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_addr}, fields.payload_size_bytes);
 }
 
-inline void NocAtomicSenderOperations::parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx) {
+template <typename EdmSenderT>
+inline void NocAtomicSenderOperations<EdmSenderT>::parse_and_setup_impl(
+    SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx) {
     auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
 
     uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
@@ -1201,11 +1216,14 @@ inline void NocAtomicSenderOperations::parse_and_setup_impl(SenderKernelTrafficC
     config->payload_size_bytes = 0;
 }
 
-inline void NocAtomicSenderOperations::update_header_impl(SenderKernelTrafficConfig* config) {
+template <typename EdmSenderT>
+inline void NocAtomicSenderOperations<EdmSenderT>::update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config) {
     // No-op - atomic operations use fixed addresses
 }
 
-inline void NocFusedSenderOperations::parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx) {
+template <typename EdmSenderT>
+inline void NocFusedSenderOperations<EdmSenderT>::parse_and_setup_impl(
+    SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx) {
     auto fields = NocUnicastWriteAtomicIncFields::build_from_args<true>(arg_idx);
 
     uint64_t write_noc_addr =
@@ -1221,7 +1239,8 @@ inline void NocFusedSenderOperations::parse_and_setup_impl(SenderKernelTrafficCo
     config->payload_size_bytes = fields.write_fields.payload_size_bytes;
 }
 
-inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConfig* config) {
+template <typename EdmSenderT>
+inline void NocFusedSenderOperations<EdmSenderT>::update_header_impl(SenderKernelTrafficConfig<EdmSenderT>* config) {
     const auto& fields = config->noc_fields_.write_atomic_inc_fields;
     uint32_t buffer_offset = config->payload_buffer_->get_current_offset();
     uint32_t write_dest_address = fields.write_fields.dst_address + buffer_offset;
@@ -1234,7 +1253,9 @@ inline void NocFusedSenderOperations::update_header_impl(SenderKernelTrafficConf
         fields.write_fields.payload_size_bytes);
 }
 
-inline void NocScatterWriteSenderOperations::parse_and_setup_impl(SenderKernelTrafficConfig* config, size_t& arg_idx) {
+template <typename EdmSenderT>
+inline void NocScatterWriteSenderOperations<EdmSenderT>::parse_and_setup_impl(
+    SenderKernelTrafficConfig<EdmSenderT>* config, size_t& arg_idx) {
     auto fields = NocUnicastScatterWriteFields::build_from_args<true>(arg_idx);
 
     ASSERT(fields.chunk_count == NocUnicastScatterWriteFields::MAX_CHUNKS);
@@ -1250,7 +1271,9 @@ inline void NocScatterWriteSenderOperations::parse_and_setup_impl(SenderKernelTr
     config->payload_size_bytes = fields.payload_size_bytes;
 }
 
-inline void NocScatterWriteSenderOperations::update_header_impl(SenderKernelTrafficConfig* config) {
+template <typename EdmSenderT>
+inline void NocScatterWriteSenderOperations<EdmSenderT>::update_header_impl(
+    SenderKernelTrafficConfig<EdmSenderT>* config) {
     const auto& fields = config->noc_fields_.scatter_write_fields;
     uint32_t buffer_offset = config->payload_buffer_->get_current_offset();
     ASSERT(fields.chunk_count == NocUnicastScatterWriteFields::MAX_CHUNKS);
@@ -1531,7 +1554,8 @@ template <
     uint8_t NUM_TRAFFIC_CONFIGS,
     bool IS_2D_FABRIC,
     bool LINE_SYNC,
-    uint8_t NUM_LOCAL_SYNC_CORES>
+    uint8_t NUM_LOCAL_SYNC_CORES,
+    typename EdmSenderT = WorkerToFabricEdmSender>
 struct SenderKernelConfig {
     static constexpr bool MASTER_SYNC_CORE = false;
 
@@ -1571,13 +1595,13 @@ struct SenderKernelConfig {
 
     SenderKernelMemoryMap memory_map;
 
-    FabricConnectionArray connections;
+    FabricConnectionArray<EdmSenderT> connections;
 
     alignas(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)
         std::array<char, sizeof(LocalSyncConfig<MASTER_SYNC_CORE, NUM_LOCAL_SYNC_CORES>)> local_sync_config_storage;
     std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_fabric_connection_map;
 
-    using TrafficConfigType = SenderKernelTrafficConfig;
+    using TrafficConfigType = SenderKernelTrafficConfig<EdmSenderT>;
 
     alignas(
         TrafficConfigType) std::array<char, NUM_TRAFFIC_CONFIGS * sizeof(TrafficConfigType)> traffic_configs_storage;
@@ -1686,7 +1710,7 @@ struct ReceiverCreditManager {
     // Initialize with credit info and fabric connection array
     template <bool IS_2D_FABRIC>
     void init(
-        size_t& arg_idx, FabricConnectionArray* connections, uint8_t connection_idx, uint32_t credit_header_address) {
+        size_t& arg_idx, FabricConnectionArray<>* connections, uint8_t connection_idx, uint32_t credit_header_address) {
         connection_manager_ = connections;
         connection_idx_ = connection_idx;
         accumulated_credits_ = 0;
@@ -1745,7 +1769,7 @@ private:
             connection_ptr_, connection_idx_, (uint32_t)packet_header_);
     }
 
-    FabricConnectionArray* connection_manager_ = nullptr;
+    FabricConnectionArray<>* connection_manager_ = nullptr;
     void* connection_ptr_ = nullptr;  // Cached connection pointer
     uint8_t connection_idx_ = 0;
     uint32_t accumulated_credits_ = 0;
@@ -2083,7 +2107,7 @@ private:
     }
 
     ReceiverKernelMemoryMap memory_map;
-    FabricConnectionArray credit_connections;
+    FabricConnectionArray<> credit_connections;
     std::array<uint8_t, NUM_TRAFFIC_CONFIGS> traffic_config_to_credit_connection_map;
 
     // Credit managers - one per traffic config
@@ -2199,9 +2223,9 @@ struct SyncKernelConfig {
 
     SenderKernelMemoryMap memory_map;
 
-    FabricConnectionArray sync_connections;
+    FabricConnectionArray<> sync_connections;
 
-    using LineSyncConfigType = LineSyncConfig;
+    using LineSyncConfigType = LineSyncConfig<>;
     alignas(LineSyncConfigType)
         std::array<char, NUM_SYNC_FABRIC_CONNECTIONS * sizeof(LineSyncConfigType)> line_sync_configs_storage;
     alignas(LocalSyncConfig<true, NUM_LOCAL_SYNC_CORES>)

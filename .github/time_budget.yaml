@@ -81,37 +81,33 @@ ttnn:
     wh_llmbox: 30
     wh_galaxy: 350
 
-fabric:
-  unit:
-    wh_llmbox: 40
-  integration:
-    wh_llmbox: 10
+shield:
   e2e:
-    wh_llmbox: 165
+    wh_llmbox: 45
+
+# Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
+scaleout:
+  unit:
+    wh_llmbox: 60
+  integration:
+    wh_llmbox: 40
+  health:
+    wh_galaxy: 15
+    bh_galaxy: 10
+  e2e:
+    wh_llmbox: 185
     wh_galaxy: 100
     bh_galaxy: 60
 
-shield:
-  e2e:
-    wh_llmbox: 15
-
-scaleout:
-  e2e:
-    wh_llmbox: 20
-  unit:
-    wh_llmbox: 20
-  integration:
-    wh_llmbox: 30
-
 models:
   e2e:
-    wh_llmbox: 180
+    wh_llmbox: 198
     wh_llmbox_perf: 90
     wh_n150: 30
     wh_n300: 30
     wh_galaxy: 30
   unit:
-    wh_llmbox: 315
+    wh_llmbox: 320
     wh_llmbox_perf: 60
     wh_n150: 30
     wh_n300: 30
@@ -121,11 +117,19 @@ models:
   perf:
     wh_llmbox_perf: 685
     wh_galaxy: 280
+    wh_galaxy_perf: 150
+  device_perf:
+    wh_n150: 100
+    bh_p150: 100
+    bh_p300: 100
+
   demo:
     wh_llmbox_perf: 1090
     wh_llmbox_perf_release: 1090
-    wh_galaxy: 287
+    wh_galaxy: 0
+    wh_galaxy_perf: 279
     wh_galaxy_release: 345
+    bh_galaxy: 30
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
@@ -142,3 +146,4 @@ models:
   sweep:
     wh_n150: 15
     wh_llmbox_perf: 30
+    wh_galaxy: 30

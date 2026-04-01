@@ -128,6 +128,7 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
     }
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     uint32_t dram_alignment = hal::get_dram_alignment();
+    uint32_t l1_alignment = hal::get_l1_alignment();
     uint32_t num_trids = 4;
     if ((src_is_dram && (input_unit_size % dram_alignment != 0)) || is_blackhole || keep_l1_aligned) {
         uint32_t scratch_cb_page_size;
@@ -305,13 +306,14 @@ InterleavedToShardedProgramFactory::cached_program_t InterleavedToShardedProgram
                 }
             }
 
-            uint32_t dram_alignment = hal::get_dram_alignment();
-            uint32_t l1_alignment = hal::get_l1_alignment();
-            bool aligned =
-                (src_is_dram ? (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0)
-                             : true);
-            // for blackhole and keep_l1_aligned cases, always enforce unaligned kernel call
-            aligned = aligned and !(is_blackhole);
+            bool aligned;
+            if (src_is_dram) {
+                aligned = (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0);
+            } else if (is_blackhole) {
+                aligned = (curr_idx_w % l1_alignment == 0) && (padded_offset_bytes % l1_alignment == 0);
+            } else {
+                aligned = true;
+            }
             uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
             if (!aligned) {
                 // TODO: is this right, leaving non BH case the same for now, should investigate

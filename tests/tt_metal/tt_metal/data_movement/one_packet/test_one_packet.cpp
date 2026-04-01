@@ -9,6 +9,7 @@
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/experimental/host_api.hpp>
 #include <distributed/mesh_device_impl.hpp>
 
 namespace tt::tt_metal {
@@ -84,23 +85,41 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
     // Kernel
     tt::tt_metal::KernelHandle kernel;
     if (test_config.read) {
-        kernel = CreateKernel(
-            program,
-            kernels_dir,
-            master_core_set,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::RISCV_1_default,
-                .compile_args = compile_args});
+        if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+            kernel = experimental::quasar::CreateKernel(
+                program,
+                kernels_dir,
+                master_core_set,
+                experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .compile_args = compile_args});
+        } else {
+            kernel = CreateKernel(
+                program,
+                kernels_dir,
+                master_core_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::RISCV_1_default,
+                    .compile_args = compile_args});
+        }
     } else {
-        kernel = CreateKernel(
-            program,
-            kernels_dir,
-            master_core_set,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .compile_args = compile_args});
+        if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
+            kernel = experimental::quasar::CreateKernel(
+                program,
+                kernels_dir,
+                master_core_set,
+                experimental::quasar::QuasarDataMovementConfig{
+                    .num_threads_per_cluster = 1, .compile_args = compile_args});
+        } else {
+            kernel = CreateKernel(
+                program,
+                kernels_dir,
+                master_core_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = compile_args});
+        }
     }
 
     // Runtime Arguments

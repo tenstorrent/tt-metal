@@ -9,6 +9,7 @@
 from _ttml.modules import InferenceMode, ModuleBase, RunMode
 
 # Python implementations
+from .embedding import Embedding
 from .linear import LinearLayer
 from .lora import LoraConfig, LoraLinear, LoraModel
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
@@ -22,6 +23,7 @@ __all__ = [
     # Python classes
     "AbstractModuleBase",
     "Buffer",
+    "Embedding",
     "LinearLayer",
     "LoraConfig",
     "LoraLinear",

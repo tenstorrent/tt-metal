@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -36,6 +35,7 @@ struct RunningStatistics {
             tt::tt_metal::KernelHandle writer_kernel_id{};
             tt::tt_metal::KernelHandle compute_kernel_id{};
             CoreCoord compute_with_storage_grid_size;
+            bool any_float32{};
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

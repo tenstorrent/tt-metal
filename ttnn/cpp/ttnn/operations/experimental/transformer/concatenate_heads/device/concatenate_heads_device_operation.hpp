@@ -10,9 +10,6 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "concatenate_heads_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
-
 #include "concatenate_heads_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {

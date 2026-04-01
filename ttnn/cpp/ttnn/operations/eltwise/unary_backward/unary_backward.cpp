@@ -1363,9 +1363,10 @@ std::vector<ComplexTensor> reciprocal_bw(
     ComplexTensor neg_grad =
         ComplexTensor({ttnn::neg(grad.real(), output_mem_config), ttnn::neg(grad.imag(), output_mem_config)});
     ComplexTensor inp_recip = ttnn::reciprocal(input, output_mem_config);
-    ComplexTensor grad_inp = ttnn::operations::complex_binary::_mul(
+    ComplexTensor grad_inp = ttnn::operations::complex_binary::multiply(
         neg_grad,
-        ttnn::conj(ttnn::operations::complex_binary::_mul(inp_recip, inp_recip, output_mem_config), output_mem_config),
+        ttnn::conj(
+            ttnn::operations::complex_binary::multiply(inp_recip, inp_recip, output_mem_config), output_mem_config),
         output_mem_config);
     neg_grad.deallocate();
     inp_recip.deallocate();
