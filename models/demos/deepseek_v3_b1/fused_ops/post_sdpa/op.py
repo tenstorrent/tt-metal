@@ -199,6 +199,11 @@ class PostSDPA:
                     f"Expected at least ccl_num_links semaphores, got len(semaphores)={len(semaphores)} "
                     f"< ccl_num_links={ccl_num_links}"
                 )
+            intermediate_tensors_per_device = ttnn.get_device_tensors(intermediate_tensor)
+            output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
+            residual_tensors_per_device = (
+                ttnn.get_device_tensors(residual_tensor_mesh) if residual_tensor_mesh is not None else None
+            )
 
         # Get tensor properties from first device
         input_tensor_sample = input_tensors_per_device[0]
@@ -208,6 +213,8 @@ class PostSDPA:
         # Tile definitions
         TILE_1x32 = ttnn.Tile((1, 32))
         tile_1x32_size = TILE_1x32.get_tile_size(data_format)
+        TILE_32x32 = ttnn.Tile((32, 32))
+        tile_32x32_size = TILE_32x32.get_tile_size(data_format)
 
         # ========================================================================
         # Core grid configuration — derived from production weight overlap specs
@@ -435,6 +442,8 @@ class PostSDPA:
         # CCL parameters: [1, 7168] all-reduce
         # ========================================================================
         # CCL all-reduce uses 32x32 tile format to match gather3 output.
+        ccl_num_tiles = gather3_dst_num_pages  # 7 tiles of 32x32
+        ccl_page_size_bytes = tile_32x32_size
 
         # ========================================================================
         # Semaphore IDs
@@ -449,8 +458,7 @@ class PostSDPA:
 
         allreduce_config = DeepseekMinimalAllReduce.configure(
             mesh_device=mesh_device,
-            input_tensor_mesh=gather3_output_tensor,
-            intermediate_tensor=intermediate_tensor,
+            intermediate_tensor=None,
             output_tensor=output_tensor,
             semaphores=semaphores,
             cluster_axis=cluster_axis,
@@ -460,11 +468,15 @@ class PostSDPA:
             recv_local_data_cb_id=ccl_recv_local_data_cb,
             remote_data_cb_id=ccl_remote_data_cb,
             output_cb_id=ccl_output_cb,
-            residual_tensor_mesh=residual_tensor_mesh,
             residual_cb_id=ccl_residual_cb if residual_tensor_mesh is not None else None,
             skip_local_push=True,
             skip_ccl=not ccl_enabled,
+            sender_core=sender_core,
         )
+
+        if ccl_enabled:
+            allreduce_config.set_local_data_addr(gather3_output_tensors_per_device[0].buffer_address())
+            allreduce_config.set_remote_data_addr(intermediate_tensors_per_device[0].buffer_address())
 
         per_device_contexts = []
 
@@ -782,6 +794,19 @@ class PostSDPA:
                         format_descriptors=[matmul5_out_cb_format],
                     )
 
+                # CB 51: gather3 output = CCL local data (backed by gather3_output_tensor)
+                gather3_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                    gather3_dst_cb, gather3_output_tensor_device
+                )
+                gather3_dst_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=gather3_dst_cb,
+                        data_format=data_format,
+                        page_size=tile_32x32_size,
+                        tile=ttnn.TileDescriptor(TILE_32x32),
+                    )
+                ]
+
                 cb_list = [
                     matmul4_in0_cb_descriptor,
                     matmul4_in1_cb_descriptor,
@@ -790,9 +815,87 @@ class PostSDPA:
                     matmul5_in0_cb_descriptor,
                     matmul5_in1_cb_descriptor,
                     matmul5_out_cb_descriptor,
+                    gather3_dst_cb_descriptor,
                 ]
 
-                # CCL CBs: only when CCL is enabled
+                # CCL CBs: fused op owns all CCL CB descriptors (no-ownership mode)
+                if ccl_enabled:
+                    ccl_32x32_tile_descriptor = ttnn.TileDescriptor(TILE_32x32)
+
+                    # CB 52: recv local data (overlapped with kv_cache when available)
+                    ccl_recv_local_data_cb_format = ttnn.CBFormatDescriptor(
+                        buffer_index=ccl_recv_local_data_cb,
+                        data_format=data_format,
+                        page_size=ccl_page_size_bytes,
+                        tile=ccl_32x32_tile_descriptor,
+                    )
+                    if sdpa_kv_cache_buffer_device is not None:
+                        ccl_recv_local_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                            ccl_recv_local_data_cb,
+                            sdpa_kv_cache_buffer_device,
+                            address_offset=running_address_offset,
+                            total_size=ccl_num_tiles * ccl_page_size_bytes,
+                        )
+                        ccl_recv_local_data_cb_descriptor.format_descriptors = [ccl_recv_local_data_cb_format]
+                        running_address_offset += ccl_recv_local_data_cb_descriptor.total_size
+                    else:
+                        ccl_recv_local_data_cb_descriptor = ttnn.CBDescriptor(
+                            total_size=ccl_num_tiles * ccl_page_size_bytes,
+                            core_ranges=gather_core_grid,
+                            format_descriptors=[ccl_recv_local_data_cb_format],
+                        )
+                    cb_list.append(ccl_recv_local_data_cb_descriptor)
+
+                    # CB 53: remote data (backed by intermediate tensor on receiver core)
+                    ccl_remote_data_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        ccl_remote_data_cb, intermediate_tensors_per_device[device_idx]
+                    )
+                    ccl_remote_data_cb_descriptor.core_ranges = gather_core_grid
+                    ccl_remote_data_cb_descriptor.total_size = ccl_num_tiles * ccl_page_size_bytes
+                    ccl_remote_data_cb_descriptor.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=ccl_remote_data_cb,
+                            data_format=data_format,
+                            page_size=ccl_page_size_bytes,
+                            tile=ccl_32x32_tile_descriptor,
+                        )
+                    ]
+                    cb_list.append(ccl_remote_data_cb_descriptor)
+
+                    # CB 54: residual (optional, backed by residual tensor)
+                    if residual_tensor_mesh is not None:
+                        ccl_residual_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                            ccl_residual_cb, residual_tensors_per_device[device_idx]
+                        )
+                        ccl_residual_cb_descriptor.core_ranges = gather_core_grid
+                        ccl_residual_cb_descriptor.total_size = ccl_num_tiles * ccl_page_size_bytes
+                        ccl_residual_cb_descriptor.format_descriptors = [
+                            ttnn.CBFormatDescriptor(
+                                buffer_index=ccl_residual_cb,
+                                data_format=data_format,
+                                page_size=ccl_page_size_bytes,
+                                tile=ccl_32x32_tile_descriptor,
+                            )
+                        ]
+                        cb_list.append(ccl_residual_cb_descriptor)
+
+                    # CB 55: output (backed by output tensor on receiver core)
+                    ccl_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+                        ccl_output_cb, output_tensors_per_device[device_idx]
+                    )
+                    ccl_output_cb_descriptor.core_ranges = gather_core_grid
+                    ccl_output_cb_descriptor.total_size = ccl_num_tiles * ccl_page_size_bytes
+                    ccl_output_cb_descriptor.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=ccl_output_cb,
+                            data_format=data_format,
+                            page_size=ccl_page_size_bytes,
+                            tile=ccl_32x32_tile_descriptor,
+                        )
+                    ]
+                    cb_list.append(ccl_output_cb_descriptor)
+
+                # In no-ownership mode, get_cb_descriptors() returns []
                 cb_list.extend(allreduce_config.get_cb_descriptors(coord))
 
                 # SDPA CBs (14-24): only when SDPA is enabled

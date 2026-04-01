@@ -1506,6 +1506,8 @@ void kernel_main() {
         if constexpr (Core::is_allreduce_receiver_core) {
             DeviceZoneScopedN("CCL_RECEIVER");
 #if defined(COMPILE_FOR_NCRISC)
+            // TODO: We're popping the RMSNorm input and then re-pushing it here as the residual
+            // Should avoid this and not pop in RMSNorm
             deepseek_b1_ops::AllReduce::Reader<AllReduceReaderCTArgs> ccl_reader;
             ccl_reader(ccl_receiver_args);
 #elif defined(COMPILE_FOR_TRISC)

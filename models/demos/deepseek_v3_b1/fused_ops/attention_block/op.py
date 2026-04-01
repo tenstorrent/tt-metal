@@ -719,12 +719,6 @@ class AttentionBlock:
         gather3_noc1_num_senders = 0
 
         # ========================================================================
-        # CCL parameters: [1, 7168] all-reduce via AllReduceConfig
-        # ========================================================================
-        ccl_num_tiles = gather3_dst_num_pages
-        ccl_num_links = num_links_allreduce
-
-        # ========================================================================
         # Semaphore IDs
         # ========================================================================
         gather2_noc0_receiver_semaphore_id = 0
@@ -984,7 +978,7 @@ class AttentionBlock:
             output_tensor=attention_block_output_tensor,
             semaphores=ccl_fabric_semaphores + [ccl_local_ready_semaphore],
             cluster_axis=reduce_cluster_axis,
-            num_links=ccl_num_links,
+            num_links=num_links_allreduce,
             local_data_cb_id=gather3_dst_cb,
             recv_local_data_cb_id=ccl_recv_local_data_cb,
             remote_data_cb_id=ccl_remote_data_cb,
