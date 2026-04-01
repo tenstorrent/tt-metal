@@ -436,11 +436,9 @@ def test_empty_multi_device(mesh_device, input_shapes):
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        [2, 1, 4, 4],  # 256x256
+        [2, 1, 4, 4],
         [2, 1280, 8, 8],
         [2, 640, 16, 16],
-        [2, 1280, 8, 8],  # 512x512
-        [2, 1280, 16, 16],
         [2, 1280, 16, 16],
     ],
 )
@@ -449,36 +447,128 @@ def test_empty_like(device, input_shapes):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
-    output_tensor = ttnn.empty_like(input_tensor, layout=ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
+    output_tensor = ttnn.empty_like(input_tensor)
 
-    assert list(torch_input_tensor.shape) == list(output_tensor.shape)
+    assert list(input_tensor.shape) == list(output_tensor.shape)
+    assert (
+        output_tensor.dtype == input_tensor.dtype
+    ), f"dtype mismatch: input={input_tensor.dtype}, output={output_tensor.dtype}"
+    assert (
+        output_tensor.layout == input_tensor.layout
+    ), f"layout mismatch: input={input_tensor.layout}, output={output_tensor.layout}"
+    assert (
+        output_tensor.memory_config() == input_tensor.memory_config()
+    ), f"memory_config mismatch: input={input_tensor.memory_config()}, output={output_tensor.memory_config()}"
 
 
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        [2, 1, 4, 4],  # 256x256
+        [2, 1, 4, 4],
         [2, 1280, 8, 8],
         [2, 640, 16, 16],
-        [2, 1280, 8, 8],  # 512x512
-        [2, 1280, 16, 16],
         [2, 1280, 16, 16],
     ],
 )
 def test_empty_like_multi_device(mesh_device, input_shapes):
-    torch_input_tensor = torch.empty((input_shapes), dtype=torch.bfloat16)
+    torch_input_tensor = torch.ones((input_shapes), dtype=torch.bfloat16)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, mesh_device)
+    output_tensor = ttnn.empty_like(input_tensor)
+
+    assert list(input_tensor.shape) == list(output_tensor.shape)
+    assert (
+        output_tensor.dtype == input_tensor.dtype
+    ), f"dtype mismatch: input={input_tensor.dtype}, output={output_tensor.dtype}"
+    assert (
+        output_tensor.layout == input_tensor.layout
+    ), f"layout mismatch: input={input_tensor.layout}, output={output_tensor.layout}"
+    assert (
+        output_tensor.memory_config() == input_tensor.memory_config()
+    ), f"memory_config mismatch: input={input_tensor.memory_config()}, output={output_tensor.memory_config()}"
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        [2, 1, 4, 4],
+        [2, 1280, 8, 8],
+    ],
+)
+def test_empty_like_preserves_topology_replicate(mesh_device, input_shapes):
+    torch_input_tensor = torch.ones((input_shapes), dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    input_topology = input_tensor.tensor_topology()
+
     output_tensor = ttnn.empty_like(input_tensor, layout=ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output_tensor.cpu())]
-    for output_tensor in output_tensors:
-        assert list(torch_input_tensor.shape) == list(output_tensor.shape)
+
+    output_topology = output_tensor.tensor_topology()
+    assert input_topology == output_topology, f"Topology mismatch: input={input_topology}, output={output_topology}"
+
+
+@pytest.mark.parametrize(
+    "shape_suffix",
+    [
+        [1, 32, 32],
+        [8, 64, 64],
+    ],
+)
+def test_empty_like_preserves_topology_shard(mesh_device, shape_suffix):
+    num_devices = mesh_device.get_num_devices()
+    input_shapes = [num_devices] + shape_suffix
+    torch_input_tensor = torch.ones((input_shapes), dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    input_topology = input_tensor.tensor_topology()
+
+    output_tensor = ttnn.empty_like(input_tensor, layout=ttnn.TILE_LAYOUT)
+
+    output_topology = output_tensor.tensor_topology()
+    assert input_topology == output_topology, f"Topology mismatch: input={input_topology}, output={output_topology}"
+
+
+@pytest.mark.parametrize(
+    "mesh_shape, dims",
+    [
+        ((2, 2), (0, 1)),
+        ((2, 2), (0, 2)),
+    ],
+)
+def test_empty_like_preserves_topology_shard_2d(mesh_device, mesh_shape, dims):
+    num_devices = mesh_device.get_num_devices()
+    required = mesh_shape[0] * mesh_shape[1]
+    if num_devices < required:
+        pytest.skip(f"Need at least {required} devices, have {num_devices}")
+
+    mesh_device.reshape(ttnn.MeshShape(*mesh_shape))
+
+    input_shapes = [mesh_shape[0], mesh_shape[1], 32, 32]
+    torch_input_tensor = torch.ones(input_shapes, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=list(mesh_shape), dims=dims),
+    )
+    input_topology = input_tensor.tensor_topology()
+
+    output_tensor = ttnn.empty_like(input_tensor, layout=ttnn.TILE_LAYOUT)
+
+    output_topology = output_tensor.tensor_topology()
+    assert input_topology == output_topology, f"Topology mismatch: input={input_topology}, output={output_topology}"
 
 
 @pytest.mark.parametrize("input_shape, dtype", [([32, 32], ttnn.bfloat8_b), ((5, 96, 64), ttnn.bfloat8_b)])
