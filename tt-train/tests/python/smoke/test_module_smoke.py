@@ -12,7 +12,6 @@ import numpy as np
 import pytest
 
 import ttml
-import ttnn
 from ttml.modules import AbstractModuleBase, Parameter, RunMode
 
 

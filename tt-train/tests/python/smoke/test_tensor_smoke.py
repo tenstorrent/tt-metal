@@ -34,6 +34,9 @@ def test_tensor_from_numpy_bfloat16():
     assert tensor is not None
     result = tensor.to_numpy(ttnn.DataType.FLOAT32)
     assert result.shape == data.shape
+    assert result.dtype == np.float32
+    # Allow for reduced precision due to BFLOAT16 quantization
+    assert np.allclose(data, result, rtol=1e-2, atol=1e-2)
 
 
 @pytest.mark.smoke

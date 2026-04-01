@@ -32,7 +32,8 @@ def pytest_collection_modifyitems(config, items):
         auto_ctx.open_device()
         auto_ctx.close_device()
         device_available = True
-    except Exception:
+    except Exception:  # noqa: S110 - intentionally ignore device check failures
+        # If device cannot be opened, treat as not available and skip device tests
         pass
 
     if not device_available:
@@ -61,5 +62,6 @@ def reset_graph_after_test():
         import ttml
 
         ttml.autograd.AutoContext.get_instance().reset_graph()
-    except Exception:
+    except Exception:  # noqa: S110 - intentionally ignore cleanup failures
+        # Graph reset is best-effort; ignore failures during test cleanup
         pass
