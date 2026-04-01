@@ -12,7 +12,7 @@ from tt_lib.utils import (
     _nearest_32,
     pad_activation,
 )
-from models.common.utility_functions import print_diff_argmax, is_close, skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 import torch
 
