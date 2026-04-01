@@ -486,10 +486,20 @@ jobs:
           EOF
           fi
 
+      - name: Ensure CURSOR_API_KEY is configured for M5 agent review
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "Missing secret EVAN_CURSOR_API_KEY"
+            exit 1
+          fi
+
       - name: M5 lifecycle follow-up + assignment + post-disable notices
         env:
           ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
         run: |
           set -euo pipefail
           python tools/ci/m5_manage_issue_lifecycle.py \

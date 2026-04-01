@@ -575,7 +575,9 @@ def main() -> int:
                         model=m5_agent_model,
                     )
                 except Exception as exc:
-                    claim = {"claimed": False, "reason": f"agent_owner_claim_failed:{exc}"}
+                    reason = f"agent_owner_claim_failed:{exc}"
+                    claim = {"claimed": False, "reason": reason}
+                    output["notes"].append(f"thread_owner_claim_agent_error_issue_{issue_number}:{exc}")
                 owner_claim_cache[claim_cache_key] = claim
             if claim.get("claimed"):
                 claim_user_id = str(claim.get("slack_user_id", "")).strip()
@@ -735,7 +737,9 @@ def main() -> int:
                     model=m5_agent_model,
                 )
             except Exception as exc:
-                claim = {"claimed": False, "reason": f"agent_owner_claim_failed:{exc}"}
+                reason = f"agent_owner_claim_failed:{exc}"
+                claim = {"claimed": False, "reason": reason}
+                output["notes"].append(f"ad_hoc_owner_claim_agent_error_issue_{issue_number}:{exc}")
             owner_claim_cache[claim_cache_key] = claim
         if not claim.get("claimed"):
             continue
