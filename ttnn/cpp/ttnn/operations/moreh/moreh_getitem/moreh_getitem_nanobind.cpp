@@ -18,13 +18,12 @@ void bind_moreh_getitem_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_getitem">(
         mod,
         "Moreh Getitem operation",
-        ttnn::overload_t(
-            &ttnn::moreh_getitem,
-            nb::arg("input") = nb::none(),
-            nb::arg("index_tensors"),
-            nb::arg("index_dims"),
-            nb::kw_only(),
-            nb::arg("output") = nb::none(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::moreh_getitem,
+        nb::arg("input") = nb::none(),
+        nb::arg("index_tensors"),
+        nb::arg("index_dims"),
+        nb::kw_only(),
+        nb::arg("output") = nb::none(),
+        nb::arg("memory_config") = nb::none());
 }
 }  // namespace ttnn::operations::moreh::moreh_getitem

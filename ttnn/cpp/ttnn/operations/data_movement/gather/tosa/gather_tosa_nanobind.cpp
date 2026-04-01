@@ -69,11 +69,10 @@ void bind_gather_tosa_operation(nb::module_& mod) {
     ttnn::bind_function<"tosa_gather">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::tosa::gather,
-            nb::arg("input").noconvert(),
-            nb::arg("index"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()));
+        &ttnn::tosa::gather,
+        nb::arg("input").noconvert(),
+        nb::arg("index"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 }  // namespace ttnn::operations::data_movement::detail
