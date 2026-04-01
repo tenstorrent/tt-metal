@@ -8,7 +8,7 @@ import ttnn
 from ttnn.operations.activations import get_golden_function_for_activation
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
 from models.common.utility_functions import torch_random
 
 pytestmark = pytest.mark.use_module_device
@@ -28,6 +28,7 @@ def test_linear(
     *,
     device,
 ):
+    torch.manual_seed(0)
     input_shape_a = (*batch_sizes, m_size, k_size)
     input_shape_b = (k_size, n_size)
 
@@ -70,7 +71,15 @@ def test_linear(
     )
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.001 * k_size,
+        rtol=0.016 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -91,6 +100,7 @@ def test_linear_with_core_grid(
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6984: Compute Grid size too small")
+    torch.manual_seed(0)
     input_shape_a = (batch_size, 1, m_size, k_size)
     input_shape_b = (k_size, n_size)
 
@@ -135,7 +145,15 @@ def test_linear_with_core_grid(
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.001 * k_size,
+        rtol=0.055 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -161,7 +179,15 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, core_grid=device.core_grid, activation=activation)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.005 * k_size,
+        rtol=3.125 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.997,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -200,7 +226,15 @@ def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_s
     # We supply no program config or core grid, so this uses the unfused path.
     output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, activation=activation)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.003 * k_size,
+        rtol=1.321 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.997,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -228,7 +262,15 @@ def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.005 * k_size,
+        rtol=2.266 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.997,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("m_size", [32, 512])
@@ -260,10 +302,19 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.063 * k_size,
+        rtol=0.115 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.997,
+        check_ulp=False,
+    )
 
 
 def test_bloom_ff2_linear(device):
+    torch.manual_seed(0)
     torch_input_tensor = torch_random((8, 384, 4096), -0.1, 0.1, dtype=torch.float32)
     torch_weight = torch_random((4096, 1024), -0.1, 0.1, dtype=torch.float32)
     torch_bias = torch_random((1024,), -0.01, 0.01, dtype=torch.float32)
@@ -297,7 +348,16 @@ def test_bloom_ff2_linear(device):
         dtype=ttnn.bfloat16,
     )
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9992
+    output_torch = ttnn.to_torch(output)
+    assert_numeric_metrics(
+        torch_output,
+        output_torch,
+        atol=0.001 * 4096,
+        rtol=0.02 * 4096,
+        frobenius_threshold=0.001 * 4096,
+        pcc_threshold=0.9992,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
@@ -343,7 +403,14 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
 
     assert len(output_tensor.shape) == len(torch_output_tensor.shape) == len(optional_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape == optional_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.0059 * k_size,
+        rtol=7.9688 * k_size,
+        frobenius_threshold=0.0001 * k_size,
+        pcc_threshold=0.997,
+    )
     assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.997)
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
 
@@ -376,7 +443,15 @@ def test_linear_with_fp32_dest_acc_and_bias(device):
         transpose_b=True,
     )
     output_tensor = ttnn.to_torch(output1)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+    assert_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        atol=0.002 * 384,
+        rtol=0.001 * 384,
+        frobenius_threshold=0.001 * 384,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
 
 
 def test_resnet50_linear(device):
@@ -446,7 +521,15 @@ def test_resnet50_linear(device):
     )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
+    assert_numeric_metrics(
+        torch_out_golden_tensor,
+        torch_output_tensor[0, 0, :, :],
+        atol=0.003 * 2048,
+        rtol=0.258 * 2048,
+        frobenius_threshold=0.001 * 2048,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
 
 
 @pytest.mark.parametrize(
@@ -474,6 +557,7 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     tensor shapes.
     Checks for the exactness of shape, values, and dtype of the output tensors.
     """
+    torch.manual_seed(0)
     # Create random tensors with appropriate dimensions
     torch_a = torch.randn(*shape_a, dtype=torch.bfloat16)
     torch_b = torch.randn(*shape_b, dtype=torch.bfloat16)
@@ -532,8 +616,16 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
     if ttnn_result_torch.shape != torch_result.shape:
         assert False, f"mismatch in shape: torch: {torch_result.shape}, ttnn: {ttnn_result_torch.shape}"
 
-    # Check values with PCC
-    assert_with_pcc(torch_result, ttnn_result_torch, 0.99)
+    # Check values with numeric metrics
+    k_value = shape_a[-1] if len(shape_a) > 0 else 1
+    assert_numeric_metrics(
+        torch_result,
+        ttnn_result_torch,
+        atol=0.0157 * k_value,
+        rtol=0.1954 * k_value,
+        frobenius_threshold=0.0047 * k_value,
+        pcc_threshold=0.99,
+    )
 
     # Allow some tolerance for numeric differences
     atol = rtol = 0.1
@@ -654,7 +746,15 @@ def test_linear_yolov7(
     )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
-    assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
+    assert_numeric_metrics(
+        torch_out_golden_tensor,
+        torch_output_tensor[0, 0, :, :],
+        atol=0.014 * 512,
+        rtol=24.25 * 512,
+        frobenius_threshold=0.001 * 512,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
 
 
 # ============================================================================
@@ -746,7 +846,15 @@ def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose
             sub_device_id=worker_sub_device_id,
         )
         output = ttnn.to_torch(output)
-        assert_with_pcc(torch_output, output, 0.999)
+        assert_numeric_metrics(
+            torch_output,
+            output,
+            atol=0.007 * k_size,
+            rtol=7.313 * k_size,
+            frobenius_threshold=0.001 * k_size,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
     finally:
         _teardown_subdevice(device, sub_device_manager)
 
@@ -783,7 +891,15 @@ def test_linear_on_subdevice_variable_start_row(device, m_size, k_size, n_size, 
             sub_device_id=worker_sub_device_id,
         )
         output = ttnn.to_torch(output)
-        assert_with_pcc(torch_output, output, 0.999)
+        assert_numeric_metrics(
+            torch_output,
+            output,
+            atol=0.005 * k_size,
+            rtol=4.188 * k_size,
+            frobenius_threshold=0.001 * k_size,
+            pcc_threshold=0.999,
+            check_ulp=False,
+        )
     finally:
         _teardown_subdevice(device, sub_device_manager)
 
@@ -834,4 +950,12 @@ def test_linear_bias_cb_estimation_with_large_n_small_k(device, batch_size, seq_
         compute_kernel_config=compute_kernel_config,
     )
     output = ttnn.to_torch(output)
-    assert_with_pcc(torch_output, output, 0.99)
+    assert_numeric_metrics(
+        torch_output,
+        output,
+        atol=0.004 * k_size,
+        rtol=4.334 * k_size,
+        frobenius_threshold=0.001 * k_size,
+        pcc_threshold=0.99,
+        check_ulp=False,
+    )
