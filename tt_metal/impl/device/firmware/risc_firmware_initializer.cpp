@@ -350,11 +350,6 @@ void RiscFirmwareInitializer::terminate_active_ethernet_cores_on_all_chips() {
         hal_.get_eth_fw_is_cooperative()) {
         return;
     }
-    auto [term_addr, term_signal] = this->get_control_plane_()
-                                        .get_fabric_context()
-                                        .get_builder_context()
-                                        .get_fabric_router_termination_address_and_signal();
-    std::vector<uint32_t> term_val = {term_signal};
 
     constexpr auto k_ActiveEthCoreType = HalProgrammableCoreType::ACTIVE_ETH;
     auto dev_msgs_factory = hal_.get_dev_msgs_factory(k_ActiveEthCoreType);
