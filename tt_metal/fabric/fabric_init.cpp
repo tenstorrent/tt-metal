@@ -59,6 +59,8 @@ void configure_fabric_cores(tt::tt_metal::IDevice* device) {
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+    log_info(
+        tt::LogFabric, "configure fabrid cores fabric_node_id: {} {}", *fabric_node_id.mesh_id, fabric_node_id.chip_id);
     const auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& builder_context = fabric_context.get_builder_context();

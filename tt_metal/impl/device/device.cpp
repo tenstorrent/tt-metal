@@ -409,7 +409,8 @@ void Device::configure_fabric() {
                 hal.get_dev_addr(this->get_programmable_core_type(physical_core), HalL1MemAddrType::LAUNCH));
         }
     }
-    log_info(tt::LogMetal, "Fabric initialized on Device {}", this->id_);
+    auto asic_id = MetalEnvAccessor(*env_).impl().get_cluster().get_unique_chip_ids().at(this->id_);
+    log_info(tt::LogMetal, "Fabric initialized on Device {} (asic_id={})", this->id_, asic_id);
 }
 
 bool Device::initialize(

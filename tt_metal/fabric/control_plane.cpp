@@ -472,8 +472,81 @@ void ControlPlane::init_control_plane(
         topology_mapping_timeout = std::chrono::duration<float>(120.0f);
     }
 
-    if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
-        // Initialize topology mapper with provided mapping, skipping discovery
+    // Full logical-to-physical mapping derived from physical_chip_mesh_coordinate_mapping_1_of_1.yaml
+    // FabricNodeId{MeshId{0}, logical_chip_id} -> physical_chip_id
+    const std::map<FabricNodeId, ChipId> full_mapping = {
+        {FabricNodeId{MeshId{0}, 0}, 0},   {FabricNodeId{MeshId{0}, 1}, 4},   {FabricNodeId{MeshId{0}, 2}, 28},
+        {FabricNodeId{MeshId{0}, 3}, 24},  {FabricNodeId{MeshId{0}, 4}, 1},   {FabricNodeId{MeshId{0}, 5}, 5},
+        {FabricNodeId{MeshId{0}, 6}, 29},  {FabricNodeId{MeshId{0}, 7}, 25},  {FabricNodeId{MeshId{0}, 8}, 2},
+        {FabricNodeId{MeshId{0}, 9}, 6},   {FabricNodeId{MeshId{0}, 10}, 30}, {FabricNodeId{MeshId{0}, 11}, 26},
+        {FabricNodeId{MeshId{0}, 12}, 3},  {FabricNodeId{MeshId{0}, 13}, 7},  {FabricNodeId{MeshId{0}, 14}, 31},
+        {FabricNodeId{MeshId{0}, 15}, 27}, {FabricNodeId{MeshId{0}, 16}, 11}, {FabricNodeId{MeshId{0}, 17}, 15},
+        {FabricNodeId{MeshId{0}, 18}, 23}, {FabricNodeId{MeshId{0}, 19}, 19}, {FabricNodeId{MeshId{0}, 20}, 10},
+        {FabricNodeId{MeshId{0}, 21}, 14}, {FabricNodeId{MeshId{0}, 22}, 22}, {FabricNodeId{MeshId{0}, 23}, 18},
+        {FabricNodeId{MeshId{0}, 24}, 9},  {FabricNodeId{MeshId{0}, 25}, 13}, {FabricNodeId{MeshId{0}, 26}, 21},
+        {FabricNodeId{MeshId{0}, 27}, 17}, {FabricNodeId{MeshId{0}, 28}, 8},  {FabricNodeId{MeshId{0}, 29}, 12},
+        {FabricNodeId{MeshId{0}, 30}, 20}, {FabricNodeId{MeshId{0}, 31}, 16},
+    };
+
+    // Filter to only this rank's TT_VISIBLE_DEVICES
+    std::set<ChipId> visible_chips;
+    const char* visible_str = std::getenv("TT_VISIBLE_DEVICES");
+    if (visible_str) {
+        std::string s(visible_str);
+        std::istringstream iss(s);
+        std::string token;
+        while (std::getline(iss, token, ',')) {
+            visible_chips.insert(static_cast<ChipId>(std::stoi(token)));
+        }
+    }
+
+    std::map<FabricNodeId, ChipId> rank_mapping;
+    for (const auto& [fnode, phys] : full_mapping) {
+        if (visible_chips.empty() || visible_chips.count(phys)) {
+            rank_mapping[fnode] = phys;
+        }
+    }
+
+    // UMD renumbers visible devices to local IDs 0..N-1 sorted by BDF.
+    // TT_VISIBLE_DEVICES indices are PCI device positions (also BDF-sorted),
+    // so sorting them gives the global-to-local translation.
+    std::map<ChipId, ChipId> global_to_local;
+    if (!visible_chips.empty()) {
+        std::vector<ChipId> sorted_visible(visible_chips.begin(), visible_chips.end());
+        std::sort(sorted_visible.begin(), sorted_visible.end());
+        for (size_t i = 0; i < sorted_visible.size(); i++) {
+            global_to_local[sorted_visible[i]] = static_cast<ChipId>(i);
+        }
+    }
+
+    std::map<FabricNodeId, ChipId> local_rank_mapping;
+    for (const auto& [fnode, global_phys] : rank_mapping) {
+        ChipId local_id = global_to_local.empty() ? global_phys : global_to_local.at(global_phys);
+        local_rank_mapping[fnode] = local_id;
+    }
+
+    if (true) {
+        for (const auto& [fnode, local_phys] : local_rank_mapping) {
+            log_info(tt::LogFabric, "  mesh={} chip={} -> local_phys={}", *fnode.mesh_id, fnode.chip_id, local_phys);
+        }
+        log_info(
+            tt::LogFabric,
+            "Initializing topology mapper with hardcoded mapping (rank {}, {} local chips)",
+            rank,
+            local_rank_mapping.size());
+
+        this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
+            this->cluster_.get(),
+            this->distributed_context_.get(),
+            *this->mesh_graph_,
+            *this->physical_system_descriptor_,
+            this->local_mesh_binding_,
+            local_rank_mapping,
+            topology_mapping_timeout);
+
+        this->load_physical_chip_mapping(local_rank_mapping);
+    } else if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
+        log_info(tt::LogFabric, "Initializing topology mapper with provided mapping");
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
             this->cluster_.get(),
             this->distributed_context_.get(),
@@ -482,8 +555,10 @@ void ControlPlane::init_control_plane(
             this->local_mesh_binding_,
             logical_mesh_chip_id_to_physical_chip_id_mapping->get(),
             topology_mapping_timeout);
+
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
+        log_info(tt::LogFabric, "Initializing topology mapper with auto discovery");
         // Generate corner pinning for full host galaxy systems
         std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
 

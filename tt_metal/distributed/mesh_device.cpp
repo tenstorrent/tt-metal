@@ -161,6 +161,14 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
     ContextId context_id) :
     context_id_(context_id) {
     auto local_devices = extract_locals(all_device_ids);
+    auto& ctx = MetalContext::instance(context_id);
+    auto rank = *ctx.global_distributed_context().rank();
+    std::cout << "MPI rank: " << rank << " local device_ids: ";
+    for (auto device_id : local_devices) {
+        std::cout << device_id << " ";
+    }
+    std::cout << std::endl;
+
     opened_local_devices_ = tt_metal::experimental::CreateDevices(
         context_id,
         local_devices,
@@ -176,6 +184,7 @@ MeshDeviceImpl::ScopedDevices::ScopedDevices(
     for (auto device_id : active_device_ids) {
         if (device_id.is_local()) {
             auto* device = opened_local_devices_.at(*device_id);
+            std::cout << " localdevice_id: " << *device_id << std::endl;
             devices_.push_back(MaybeRemoteDevice::local(device));
         } else {
             devices_.push_back(MaybeRemoteDevice::remote());

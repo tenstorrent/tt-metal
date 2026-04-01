@@ -241,6 +241,20 @@ TopologyMapper::TopologyMapper(
     mesh_host_rank_to_mpi_rank_.clear();
     initialize_chip_topology_mapping_map();
     build_mapping(cluster);
+
+    std::cout << "[TopologyMapper] fabric_node_id_to_mapping_ (rank " << *distributed_context_.get().rank() << ", "
+              << fabric_node_id_to_mapping_.size() << " entries):" << std::endl;
+    for (const auto& [fnode, info_ptr] : fabric_node_id_to_mapping_) {
+        if (info_ptr && info_ptr->is_mapped) {
+            std::cout << "  mesh=" << *fnode.mesh_id << " chip=" << fnode.chip_id
+                      << " -> phys=" << info_ptr->physical_chip_id << " host_rank=" << info_ptr->mesh_host_rank.get()
+                      << " mpi_rank=" << info_ptr->mpi_rank << " coord=(" << info_ptr->mesh_coord[0] << ","
+                      << info_ptr->mesh_coord[1] << ")"
+                      << " host=" << info_ptr->hostname << std::endl;
+        } else {
+            std::cout << "  mesh=" << *fnode.mesh_id << " chip=" << fnode.chip_id << " -> UNMAPPED" << std::endl;
+        }
+    }
 }
 
 // Constructor that skips discovery and builds mapping directly from provided logical to physical chip mapping
@@ -350,13 +364,41 @@ TopologyMapper::TopologyMapper(
             receive_chip_info_from_host(control_host_rank);
         }
     }
-
+    // Debug dump fabric_node_id_to_mapping_
+    std::cout << "[TopologyMapper] fabric_node_id_to_mapping_ (rank " << *distributed_context_.get().rank() << ", "
+              << fabric_node_id_to_mapping_.size() << " entries):" << std::endl;
+    for (const auto& [fnode, info_ptr] : fabric_node_id_to_mapping_) {
+        if (info_ptr && info_ptr->is_mapped) {
+            std::cout << "  mesh=" << *fnode.mesh_id << " chip=" << fnode.chip_id
+                      << " -> phys=" << info_ptr->physical_chip_id << " host_rank=" << info_ptr->mesh_host_rank.get()
+                      << " mpi_rank=" << info_ptr->mpi_rank << " coord=(" << info_ptr->mesh_coord[0] << ","
+                      << info_ptr->mesh_coord[1] << ")"
+                      << " host=" << info_ptr->hostname << std::endl;
+        } else {
+            std::cout << "  mesh=" << *fnode.mesh_id << " chip=" << fnode.chip_id << " -> UNMAPPED" << std::endl;
+        }
+    }
     // Rebuild lookup maps from container (now complete after broadcast)
     rebuild_lookup_maps();
 
     // Build host rank structures from the complete mapping (same as discovery path)
     std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
     rebuild_host_rank_structs_from_mapping(asic_id_to_mesh_rank);
+
+    // Debug dump fabric_node_id_to_mapping_
+    std::cout << "[TopologyMapper] fabric_node_id_to_mapping_ (rank " << *distributed_context_.get().rank() << ", "
+              << fabric_node_id_to_mapping_.size() << " entries):" << std::endl;
+    for (const auto& [fnode, info_ptr] : fabric_node_id_to_mapping_) {
+        if (info_ptr && info_ptr->is_mapped) {
+            std::cout << "  mesh=" << *fnode.mesh_id << " chip=" << fnode.chip_id
+                      << " -> phys=" << info_ptr->physical_chip_id << " host_rank=" << info_ptr->mesh_host_rank.get()
+                      << " mpi_rank=" << info_ptr->mpi_rank << " coord=(" << info_ptr->mesh_coord[0] << ","
+                      << info_ptr->mesh_coord[1] << ")"
+                      << " host=" << info_ptr->hostname << std::endl;
+        } else {
+            std::cout << "  mesh=" << *fnode.mesh_id << " chip=" << fnode.chip_id << " -> UNMAPPED" << std::endl;
+        }
+    }
 }
 
 ChipId TopologyMapper::get_physical_chip_id_from_asic_id(tt::tt_metal::AsicID asic_id) const {
