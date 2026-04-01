@@ -13,13 +13,15 @@ The demo runs prefill + decode over `DeepSeekV3` sockets and streams decoded tex
 
 | Mode | Flag | Extra args | Behavior |
 |------|------|------------|----------|
-| **Cached tensorbin** | `--weights real` (default) | `--cache-path` (required) | Loads pre-generated `.tensorbin` + `manifest.json` from the weight cache (same layout as `scripts/generate_cache.py`). |
+| **TensorCache + HF safetensors** | `--weights real` (default) | `--cache-path` + `--model-path` (both required) | Uses `LazyStateDict` as miss source and `TensorCache` as content-addressed store; first run prepares+caches artifacts, subsequent runs reuse cache hits. |
 | **HF safetensors + prepare** | `--weights state_dict` | `--model-path` (required) | Uses `LazyStateDict` ([`models/demos/deepseek_v3/utils/lazy_state_dict.py`](../../deepseek_v3/utils/lazy_state_dict.py)) over a local HuggingFace checkpoint (`model.safetensors.index.json` + shards) and runs the same `prepare_*` path as synthetic weights (`StateDictWeightProvider` in [`weight_provider.py`](weight_provider.py)) — no tensorbin cache. |
 | **Synthetic** | `--weights synthetic` | — | Random HF-shaped tensors through `prepare_*` for bring-up (no disk weights). |
 
 Optional overrides (all modes): `--dense-layer-id-override`, `--moe-layer-id-override` (see `python -m models.demos.deepseek_v3_b1.demo.cli --help`).
 
 Other common flags: `--prompt`, `--max-new-tokens`, `--tokenizer`, `--fp32` / `--no-fp32`, `--persistent-mode` / `--no-persistent-mode`.
+
+For `--weights real`, both `--cache-path` and `--model-path` are required: cache misses read from the HF state dict and populate TensorCache, while cache hits load prepared artifacts directly from cache.
 
 ## Host setup
 

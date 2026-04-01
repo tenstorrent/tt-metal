@@ -18,7 +18,7 @@ _DTYPE_ELEMENT_BYTES = {
 }
 
 
-@dataclass
+@dataclass(frozen=True)
 class OverlappedTensorSpec:
     """Describes one sub-tensor within a fused raw-byte buffer.
 
@@ -44,6 +44,9 @@ class OverlappedTensorSpec:
     overlapping, ``raw_tensor_shape`` reflects the physical layout
     while ``logical_tensor_shape`` preserves the original per-device
     shape for downstream consumers.
+
+    ``name`` is an optional logical identifier used when the spec is
+    embedded in a :class:`RegionSpec` for cache fingerprinting.
     """
 
     core_range_set: ttnn.CoreRangeSet
@@ -57,6 +60,8 @@ class OverlappedTensorSpec:
     tp_dim: tuple[int | None, int | None] = (None, None)
 
     logical_tensor_shape: tuple[int, int] | None = None
+
+    name: str = ""
 
     def _tile_bytes(self) -> int:
         num_elements = self.tile_h * self.tile_w

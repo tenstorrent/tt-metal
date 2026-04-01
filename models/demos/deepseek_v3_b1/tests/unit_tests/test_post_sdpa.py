@@ -41,7 +41,8 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_b1.blitz_decode_weights import (
     KVB12_PROJ_SINGLE_DEVICE_OVERLAP_SPEC,
     O_PROJ_GATE_MM_RMSNORM_GAMMA_SINGLE_DEVICE_OVERLAP_SPEC,
-    BlitzDecodeWeights,
+    fuse_kv_b12,
+    fuse_o_proj_gate_mm_norms,
 )
 from models.demos.deepseek_v3_b1.fused_ops.post_sdpa.op import PostSDPA
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
@@ -239,26 +240,26 @@ def test_post_sdpa(
     logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create overlapped weight tensors via BlitzDecodeWeights
+    # Create overlapped weight tensors via fusion helpers
     # ========================================================================
     single_device = ttnn.get_device_tensors(ttnn_input)[0].device()
-    bdw = BlitzDecodeWeights(submesh)
 
     # Weights1 = kv_b2_proj (second half of fused kv_b12 buffer)
-    kv_b12 = bdw.get_tt_kv_b12_proj_weights(torch_kv_b1_proj_dummy, torch_kv_b2_proj_weights)
+    kv_b12 = fuse_kv_b12(torch_kv_b1_proj_dummy, torch_kv_b2_proj_weights, submesh)
     kv_b2_overlapped = kv_b12["kv_b2_proj"]
     logger.info(
         f"Created kv_b2 overlapped tensor: shard {kv_b2_overlapped.shard_shape} on {matmul1_grid.num_cores()} cores"
     )
 
     # Weights2 = o_proj (first element of fused o_proj/gate/gamma buffer)
-    o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = fuse_o_proj_gate_mm_norms(
         torch_o_proj_weights,
         torch_gate_mm_dummy,
         torch_attn_norm_dummy,
         torch_q_norm_dummy,
         torch_kv_norm_dummy,
         torch_ffn_norm_dummy,
+        submesh,
     )
     o_proj_overlapped = o_norms["o_proj"]
     logger.info(
@@ -762,24 +763,24 @@ def test_post_sdpa_with_sdpa_phase(
     logger.info(f"Created input tensor: shard {input_shard_shape} on {num_matmul1_cores} cores per device")
 
     # ========================================================================
-    # Create overlapped weight tensors via BlitzDecodeWeights
+    # Create overlapped weight tensors via fusion helpers
     # ========================================================================
     single_device = ttnn.get_device_tensors(ttnn_input)[0].device()
-    bdw = BlitzDecodeWeights(submesh)
 
-    kv_b12 = bdw.get_tt_kv_b12_proj_weights(torch_kv_b1_proj_dummy, torch_kv_b2_proj_weights)
+    kv_b12 = fuse_kv_b12(torch_kv_b1_proj_dummy, torch_kv_b2_proj_weights, submesh)
     kv_b2_overlapped = kv_b12["kv_b2_proj"]
     logger.info(
         f"Created kv_b2 overlapped tensor: shard {kv_b2_overlapped.shard_shape} on {matmul1_grid.num_cores()} cores"
     )
 
-    o_norms = bdw.get_tt_o_proj_and_gate_mm_weights(
+    o_norms = fuse_o_proj_gate_mm_norms(
         torch_o_proj_weights,
         torch_gate_mm_dummy,
         torch_attn_norm_dummy,
         torch_q_norm_dummy,
         torch_kv_norm_dummy,
         torch_ffn_norm_dummy,
+        submesh,
     )
     o_proj_overlapped = o_norms["o_proj"]
     logger.info(
