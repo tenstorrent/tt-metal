@@ -127,7 +127,7 @@ inline void llk_pack_init(const std::uint32_t pack_output = 16, std::uint32_t nu
         false,  // partial_face,
         false,  // narrow_tile,
         num_tiles,
-        is_input_8bit_format /* skip_bh_tilize_workaround */);
+        is_input_8bit_format);
 #else
     _llk_pack_init_<untilize, zero_output, tilize>(
         pack_src_format[output_id],

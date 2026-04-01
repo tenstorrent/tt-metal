@@ -27,16 +27,16 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/blockfloat_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16_utils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/blockfloat_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/float8.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/int8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/int8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/uint8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp

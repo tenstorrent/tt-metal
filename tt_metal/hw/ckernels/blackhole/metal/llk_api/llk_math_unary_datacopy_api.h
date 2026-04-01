@@ -54,9 +54,9 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand = 0
     // For tilize operation, the init function needs to know the src format to determine the is_8bit_format to avoid the
     // tilize workaround. 8bit datums in input format do not require the tilize workaround on blackhole.
     const std::uint32_t src_format = get_operand_src_format(operand_id);
-    const bool is_8bit_format = IS_8BIT_FORMAT(src_format);
+    const bool is_input_8bit_format = IS_8BIT_FORMAT(src_format);
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, tilize, is_int_fpu_en>(
-        num_faces, dst_format, is_8bit_format /* skip_bh_tilize_workaround */);
+        num_faces, dst_format, is_input_8bit_format);
 #else
     _llk_math_eltwise_unary_datacopy_init_<type, is_fp32_dest_acc_en, src_b_bcast_type, tilize, is_int_fpu_en>(
         num_faces, dst_format);
