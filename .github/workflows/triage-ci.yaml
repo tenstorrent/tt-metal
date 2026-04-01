@@ -90,6 +90,15 @@ on:
         description: "Deprecated compatibility input (M4 now reviews all eligible jobs in one batch call)"
         required: false
         default: "0"
+      testing-mode:
+        description: "If checked, run only owner-resolution Slack testing session"
+        required: false
+        type: boolean
+        default: false
+      testing-max-codeowners:
+        description: "Maximum CODEOWNERS GitHub users to test in testing mode"
+        required: false
+        default: "10"
 
 permissions:
   actions: write
@@ -152,7 +161,7 @@ jobs:
 
   triage-ci-autonomy:
     name: "Run CI triage autonomy pipeline"
-    if: ${{ !inputs['fork-push-check-only'] }}
+    if: ${{ !inputs['fork-push-check-only'] && !inputs['testing-mode'] }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -378,4 +387,65 @@ jobs:
             echo "# Slack Data Gathering Report"
             echo
             cat "$report_path"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  triage-ci-testing-session:
+    name: "Run CI triage testing session"
+    if: ${{ !inputs['fork-push-check-only'] && inputs['testing-mode'] }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Ensure SLACK_BOT_TOKEN is configured
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "Missing secret SLACK_BOT_TOKEN"
+            exit 1
+          fi
+
+      - name: Ensure EVAN_RESTRICTED_TOKEN is configured
+        env:
+          OWNER_LOOKUP_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          if [ -z "$OWNER_LOOKUP_TOKEN" ]; then
+            echo "Missing secret EVAN_RESTRICTED_TOKEN"
+            exit 1
+          fi
+
+      - name: Run owner-resolution Slack testing session
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/testing_owner_resolution_session.py \
+            --codeowners-path ".github/CODEOWNERS" \
+            --slack-channel-id "C0APK6215B5" \
+            --max-codeowners "${{ github.event.inputs['testing-max-codeowners'] || '10' }}" \
+            --output-json "build_ci/testing/owner_resolution_session.json" \
+            --summary-md "build_ci/testing/owner_resolution_session.md"
+
+      - name: Upload testing session artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # @v4
+        with:
+          name: triage-testing-session
+          path: |
+            build_ci/testing/owner_resolution_session.json
+            build_ci/testing/owner_resolution_session.md
+          retention-days: 7
+
+      - name: Publish testing summary to run summary
+        run: |
+          set -euo pipefail
+          summary_path="build_ci/testing/owner_resolution_session.md"
+          {
+            echo "# CI Triage Testing Session"
+            echo
+            cat "$summary_path"
           } >> "$GITHUB_STEP_SUMMARY"
