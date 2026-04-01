@@ -80,7 +80,7 @@ def _deallocate_layer(layer: DeepSeekV3DenseLayerWeights | DeepSeekV3MoELayerWei
     ):
         ot = getattr(layer, f, None)
         if ot is not None and hasattr(ot, "fused_tensor"):
-            fid = id(ot.fused_tensor)
+            fid = ot.fused_tensor.tensor_id
             if fid not in seen:
                 seen.add(fid)
                 ttnn.deallocate(ot.fused_tensor, force=True)
@@ -169,25 +169,25 @@ def _assert_layer_on_device_with_topology(
     # Check fusion groups via one representative OverlappedTensor per group
     # q_ab_kv_a
     _assert_on_device(layer.q_a_proj.fused_tensor)
-    fid = id(layer.q_a_proj.fused_tensor)
+    fid = layer.q_a_proj.fused_tensor.tensor_id
     if fid not in seen_fused:
         seen_fused.add(fid)
         _assert_topology(layer.q_a_proj.fused_tensor, _PLACEMENTS_SHARD_0_1)
     # o_proj_gate_mm_norms
     _assert_on_device(layer.o_proj.fused_tensor)
-    fid = id(layer.o_proj.fused_tensor)
+    fid = layer.o_proj.fused_tensor.tensor_id
     if fid not in seen_fused:
         seen_fused.add(fid)
         _assert_topology(layer.o_proj.fused_tensor, _PLACEMENTS_SHARD_0_1)
     # kv_b12
     _assert_on_device(layer.kv_b1_proj.fused_tensor)
-    fid = id(layer.kv_b1_proj.fused_tensor)
+    fid = layer.kv_b1_proj.fused_tensor.tensor_id
     if fid not in seen_fused:
         seen_fused.add(fid)
         _assert_topology(layer.kv_b1_proj.fused_tensor, _PLACEMENTS_SHARD_0_1)
     # gate_up
     _assert_on_device(layer.shared_gate_proj.fused_tensor)
-    fid = id(layer.shared_gate_proj.fused_tensor)
+    fid = layer.shared_gate_proj.fused_tensor.tensor_id
     if fid not in seen_fused:
         seen_fused.add(fid)
         _assert_topology(layer.shared_gate_proj.fused_tensor, _PLACEMENTS_SHARD_0_1)
@@ -805,11 +805,11 @@ def test_save_load_dense_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
     assert layer.routed_up_proj.shape == orig.routed_up_proj.shape
     assert layer.routed_down_proj.shape == orig.routed_down_proj.shape
 
-    assert id(layer.q_a_proj.fused_tensor) == id(layer.q_b_proj.fused_tensor)
-    assert id(layer.q_b_proj.fused_tensor) == id(layer.kv_a_proj.fused_tensor)
-    assert id(layer.o_proj.fused_tensor) == id(layer.attn_norm.fused_tensor)
-    assert id(layer.kv_b1_proj.fused_tensor) == id(layer.kv_b2_proj.fused_tensor)
-    assert id(layer.shared_gate_proj.fused_tensor) == id(layer.shared_up_proj.fused_tensor)
+    assert layer.q_a_proj.fused_tensor.tensor_id == layer.q_b_proj.fused_tensor.tensor_id
+    assert layer.q_b_proj.fused_tensor.tensor_id == layer.kv_a_proj.fused_tensor.tensor_id
+    assert layer.o_proj.fused_tensor.tensor_id == layer.attn_norm.fused_tensor.tensor_id
+    assert layer.kv_b1_proj.fused_tensor.tensor_id == layer.kv_b2_proj.fused_tensor.tensor_id
+    assert layer.shared_gate_proj.fused_tensor.tensor_id == layer.shared_up_proj.fused_tensor.tensor_id
     _assert_layer_on_device_with_topology(layer)
 
 
@@ -957,7 +957,7 @@ def test_save_load_moe_layer_single_layer_4x2(bh_2d_mesh_device, tmp_path):
         assert layer.routed_up_proj[e].shape == orig.routed_up_proj[e].shape
         assert layer.routed_down_proj[e].shape == orig.routed_down_proj[e].shape
 
-    assert id(layer.shared_gate_proj.fused_tensor) == id(layer.shared_up_proj.fused_tensor)
+    assert layer.shared_gate_proj.fused_tensor.tensor_id == layer.shared_up_proj.fused_tensor.tensor_id
     _assert_layer_on_device_with_topology(layer)
 
 
