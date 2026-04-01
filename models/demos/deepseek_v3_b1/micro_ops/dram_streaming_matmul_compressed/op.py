@@ -49,6 +49,7 @@ def _compute_subblock_metadata(
     cb_in1_base_shifted: int,
     max_subblock_bytes_shifted: int,
     num_buffers: int,
+    iteration_offset: int = 0,
 ) -> tuple[list[int], list[int]]:
     """Compute per-subblock NOC read metadata and per-tile format metadata.
 
@@ -72,7 +73,7 @@ def _compute_subblock_metadata(
     block_sizes = []
     tile_infos = []
 
-    iteration = 0  # global iteration index for slot rotation
+    iteration = iteration_offset  # global iteration index for slot rotation
     tile_idx = 0
     for _n in range(per_core_n):
         for sb_k in range(num_subblocks_k):
