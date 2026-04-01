@@ -38,11 +38,17 @@ def test_32x4_device_sanity(mesh_device):
     logger.info("Starting 32x4 device sanity test with linear fabric...")
 
     # Synchronize device operations
+    from tracy import Profiler
+
+    profiler = Profiler()
+
+    profiler.enable()
     ttnn.synchronize_device(mesh_device)
     logger.info("✓ Device synchronization completed")
 
     # Perform distributed synchronization
     ttnn.distributed_context_barrier()
+    profiler.disable()
     logger.info("✓ Distributed synchronization completed")
 
     logger.success("✓ 32x4 device sanity test executed successfully!")
