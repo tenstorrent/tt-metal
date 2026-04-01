@@ -198,7 +198,7 @@ Inspector provides insights into host runtime. It logs necessary data for invest
 
 | Release | Release Date | FW Version | KMD Version | SMI Version |
 |:---------:|:--------------:|:------------:|:--------:|:--------:|
-| 0.68.0 | ETA Apr 17, 2026 | 19.2.0 | 2.5.0 | 3.0.38 |
+| 0.68.0 | ETA Apr 30, 2026 | 19.2.0 | 2.5.0 | 3.0.38 |
 | [0.67.4](https://github.com/tenstorrent/tt-metal/releases/tag/v0.67.4) | Mar 30, 2026 | 19.2.0 | 2.5.0 | 3.0.38 |
 | [0.67.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.67.0) | Mar 25, 2026 | 19.2.0 | 2.5.0 | 3.0.38 |
 | [0.66.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.66.0) | Feb 18, 2026 | 19.2.0 | 2.5.0 | 3.0.38 |
