@@ -151,7 +151,9 @@ struct FabricTelemetrySettings {
 };
 
 class RunTimeOptions {
-    // --- String fields (32 bytes each, 8-byte aligned) ---
+    // Fields are ordered largest-alignment-first to minimize struct padding.
+    // Keep bool fields grouped in the bool section below; do not interleave
+    // them with larger types.
     std::string root_dir;
     std::string cache_dir_;
     std::string logs_dir_ = (std::filesystem::current_path() / "").string();
@@ -172,30 +174,13 @@ class RunTimeOptions {
     std::string mock_cluster_desc_path;
     // Command to run when a dispatch timeout occurs
     std::string dispatch_timeout_command_to_execute;
-    // Watcher feature name strings (used in env vars + defines in the device code), as well as a
-    // set to track disabled features.
-    const std::string watcher_waypoint_str = "WAYPOINT";
-    const std::string watcher_noc_sanitize_str = "NOC_SANITIZE";
-    const std::string watcher_assert_str = "ASSERT";
-    const std::string watcher_pause_str = "PAUSE";
-    const std::string watcher_ring_buffer_str = "RING_BUFFER";
-    const std::string watcher_stack_usage_str = "STACK_USAGE";
-    const std::string watcher_dispatch_str = "DISPATCH";
-    const std::string watcher_eth_str = "ETH";
-    const std::string watcher_eth_link_status_str = "ETH_LINK_STATUS";
-    const std::string watcher_sanitize_read_only_l1_str = "SANITIZE_READ_ONLY_L1";
-    const std::string watcher_sanitize_write_only_l1_str = "SANITIZE_WRITE_ONLY_L1";
-    const std::string watcher_cb_sanitize_str = "CB_SANITIZE";
-    // std::filesystem::path and std::set are also 8-byte aligned pointer-based types
     std::filesystem::path simulator_path = "";
     std::set<std::string> watcher_disabled_features;
 
-    // --- Large struct/array fields ---
     InspectorSettings inspector_settings;
     FabricTelemetrySettings fabric_telemetry_settings;
     TargetSelection feature_targets[RunTimeDebugFeatureCount];
 
-    // --- 4-byte aligned fields ---
     uint32_t profiler_perf_counter_mode = 0;
     uint32_t watcher_debug_delay = 0;
     unsigned num_hw_cqs = 1;
@@ -207,18 +192,19 @@ class RunTimeOptions {
     // Dispatch kernel progress update period in milliseconds (default 100ms)
     uint32_t dispatch_progress_update_ms = 100;
 
-    // --- Optional fields ---
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     // Reliability mode override parsed from environment (RELIABILITY_MODE)
     std::optional<tt::tt_fabric::FabricReliabilityMode> reliability_mode = std::nullopt;
     // Fabric router sync timeout configuration (in milliseconds)
     // If not set, fabric code will use its own default
     std::optional<uint32_t> fabric_router_sync_timeout_ms = std::nullopt;
+    // User override for fabric kernel compiler optimization level
+    // If not set, automatic selection is used (O3 when VC1 inactive, Os when VC1 active)
+    std::optional<tt_metal::KernelBuildOptLevel> fabric_kernel_opt_level = std::nullopt;
 
-    // --- WatcherSettings (contains std::atomic members) ---
     WatcherSettings watcher_settings;
 
-    // --- Bool fields (1-byte aligned) ---
+    // Bool fields — add new bool members here, not interleaved with larger types above.
     bool is_cache_dir_env_var_set = false;
     bool is_kernel_dir_env_var_set = false;
     bool is_core_grid_override_todeprecate_env_var_set = false;
@@ -341,12 +327,6 @@ class RunTimeOptions {
 
     // Use new DEVICE_PRINT system instead of legacy DPRINT
     bool use_device_print = false;
-
-    // User override for fabric kernel compiler optimization level
-    // If not set, automatic selection is used (O3 when VC1 inactive, Os when VC1 active)
-    // Note: optional<uint8_t> is 2 bytes (1-byte aligned), so it is placed last to avoid
-    // introducing padding between the bool fields and the larger optional<uint32_t> fields above.
-    std::optional<tt_metal::KernelBuildOptLevel> fabric_kernel_opt_level = std::nullopt;
 
 public:
     RunTimeOptions();
@@ -800,6 +780,20 @@ private:
     // Returns true if the variable was set.
     bool ParseFeatureMeshCoords(RunTimeDebugFeatures feature, const std::string& env_var);
 
+    // Watcher feature name strings (used in env vars + defines in the device code).
+    // constexpr: points to string literals in read-only memory, zero runtime overhead.
+    static constexpr auto watcher_waypoint_str = "WAYPOINT";
+    static constexpr auto watcher_noc_sanitize_str = "NOC_SANITIZE";
+    static constexpr auto watcher_assert_str = "ASSERT";
+    static constexpr auto watcher_pause_str = "PAUSE";
+    static constexpr auto watcher_ring_buffer_str = "RING_BUFFER";
+    static constexpr auto watcher_stack_usage_str = "STACK_USAGE";
+    static constexpr auto watcher_dispatch_str = "DISPATCH";
+    static constexpr auto watcher_eth_str = "ETH";
+    static constexpr auto watcher_eth_link_status_str = "ETH_LINK_STATUS";
+    static constexpr auto watcher_sanitize_read_only_l1_str = "SANITIZE_READ_ONLY_L1";
+    static constexpr auto watcher_sanitize_write_only_l1_str = "SANITIZE_WRITE_ONLY_L1";
+    static constexpr auto watcher_cb_sanitize_str = "CB_SANITIZE";
     bool watcher_feature_disabled(const std::string& name) const { return watcher_disabled_features.contains(name); }
 };
 
