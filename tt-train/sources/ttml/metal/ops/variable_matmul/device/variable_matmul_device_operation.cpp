@@ -54,24 +54,11 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const uint32_t M = a_logical[-2];
     const uint32_t K = a_logical[-1];
     const uint32_t K_w = w_logical[-2];
-    const uint32_t N = w_logical[-1];
 
     TT_FATAL(K == K_w, "variable_matmul inner dimensions must match, got K={} and K_w={}", K, K_w);
-    TT_FATAL(M > 0 && K > 0 && N > 0, "variable_matmul dimensions must be positive");
-
-    // Variable-M constraint
-    TT_FATAL(
-        M <= operation_attributes.max_M,
-        "variable_matmul actual M ({}) exceeds max_M ({})",
-        M,
-        operation_attributes.max_M);
+    TT_FATAL(M > 0 && K > 0, "variable_matmul dimensions must be positive");
     TT_FATAL(
         M % TILE_HEIGHT == 0, "variable_matmul actual M ({}) must be a multiple of TILE_HEIGHT ({})", M, TILE_HEIGHT);
-    TT_FATAL(
-        operation_attributes.max_M % TILE_HEIGHT == 0,
-        "variable_matmul max_M ({}) must be a multiple of TILE_HEIGHT ({})",
-        operation_attributes.max_M,
-        TILE_HEIGHT);
 
     // Tile alignment checks
     const auto& a_padded = act_tensor.padded_shape();
@@ -136,20 +123,13 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Two-program caching: transpose_core_grid is determined by actual_M vs N.
     // This gives at most 2 cached programs: one for actual_M <= N, one for actual_M > N.
-    // Each program uses an effective_max_M appropriate for its transpose layout.
     const auto& w = tensor_args.weight_tensor;
     const auto& a = tensor_args.input_tensor;
     uint32_t actual_M = a.physical_volume() / a.padded_shape()[-1];
     uint32_t N = w.logical_shape()[-1];
     bool transpose_core_grid = actual_M > N;
 
-    // effective_max_M: for non-transposed (M <= N), cap at N since M never exceeds N in this variant.
-    // For transposed (M > N), use the full max_M.
-    uint32_t effective_max_M =
-        transpose_core_grid ? operation_attributes.max_M : std::min(operation_attributes.max_M, N);
-
     return ttsl::hash::hash_objects_with_default_seed(
-        effective_max_M,
         transpose_core_grid,
         operation_attributes.config.M_block_size,
         operation_attributes.config.K_block_size,
@@ -171,7 +151,6 @@ namespace ttnn::prim {
 ttnn::Tensor ttml_variable_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    uint32_t max_M,
     const ttml::metal::ops::variable_matmul::device::VariableMatmulConfig& config,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     using OperationType = ttml::metal::ops::variable_matmul::device::VariableMatmulDeviceOperation;
@@ -184,8 +163,7 @@ ttnn::Tensor ttml_variable_matmul(
         true /*packer_acc*/);
 
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{
-            .max_M = max_M, .config = config, .compute_kernel_config = kernel_config_val},
+        OperationType::operation_attributes_t{.config = config, .compute_kernel_config = kernel_config_val},
         OperationType::tensor_args_t{.input_tensor = input_tensor, .weight_tensor = weight_tensor});
 }
 

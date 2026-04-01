@@ -22,13 +22,12 @@ struct VariableMatmulConfig {
 };
 
 struct VariableMatmulParams {
-    uint32_t max_M{};  // Maximum M in elements. Determines CB sizes + core grid at compile time.
     VariableMatmulConfig config;
     ttnn::DeviceComputeKernelConfig compute_kernel_config;
 };
 
 struct VariableMatmulInputs {
-    ttnn::Tensor input_tensor;   // [actual_M, K] where actual_M <= max_M
+    ttnn::Tensor input_tensor;   // [actual_M, K]
     ttnn::Tensor weight_tensor;  // [K, N]
 };
 
