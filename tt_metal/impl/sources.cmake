@@ -17,6 +17,12 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/mock_device_util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/device_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/memory_config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/mesh_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/mesh_device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/per_core_allocation/tt_metal.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_distribution_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_page_mapping.cpp

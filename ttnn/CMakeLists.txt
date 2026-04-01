@@ -479,6 +479,7 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/cluster.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/per_core_allocation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/events.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/global_circular_buffer.cpp

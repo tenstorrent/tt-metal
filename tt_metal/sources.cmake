@@ -1,5 +1,11 @@
 set(TT_METAL_PUBLIC_API
     api/tt-metalium/allocator.hpp
+    api/tt-metalium/experimental/per_core_allocation/allocator_mode.hpp
+    api/tt-metalium/experimental/per_core_allocation/buffer.hpp
+    api/tt-metalium/experimental/per_core_allocation/device.hpp
+    api/tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp
+    api/tt-metalium/experimental/per_core_allocation/mesh_device.hpp
+    api/tt-metalium/experimental/per_core_allocation/tt_metal.hpp
     api/tt-metalium/base_types.hpp
     api/tt-metalium/bfloat16.hpp
     api/tt-metalium/bfloat4.hpp

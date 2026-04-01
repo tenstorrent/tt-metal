@@ -189,7 +189,8 @@ void DeviceManager::initialize(
     const std::vector<ChipId>& device_ids,
     bool init_profiler,
     bool initialize_fabric_and_dispatch_fw,
-    const std::shared_ptr<ContextDescriptor>& descriptor) {
+    const std::shared_ptr<ContextDescriptor>& descriptor,
+    AllocatorMode allocator_mode) {
     ZoneScoped;
     log_debug(tt::LogMetal, "DeviceManager initialize");
 
@@ -201,6 +202,7 @@ void DeviceManager::initialize(
     using_fast_dispatch_ = MetalEnvAccessor(env_).impl().get_rtoptions().get_fast_dispatch();
     init_profiler_ = init_profiler;
     initialize_fabric_and_dispatch_fw_ = initialize_fabric_and_dispatch_fw;
+    allocator_mode_ = allocator_mode;
 
     worker_thread_to_cpu_core_map_ = device_cpu_allocator::get_device_id_to_core_map(
         this->ctx_.get_context_id(), num_hw_cqs_, completion_queue_reader_to_cpu_core_map_);
@@ -335,7 +337,8 @@ void DeviceManager::activate_device(ChipId id) {
             false,
             worker_core_thread_core,
             completion_queue_reader_core,
-            this->worker_l1_size_);
+            this->worker_l1_size_,
+            this->allocator_mode_);
         devices_.emplace_back(std::unique_ptr<Device>(device));
     } else {
         log_debug(tt::LogMetal, "DeviceManager re-initialize device {}", id);
@@ -345,7 +348,9 @@ void DeviceManager::activate_device(ChipId id) {
                 this->l1_small_size_,
                 this->trace_region_size_,
                 this->worker_l1_size_,
-                this->l1_bank_remap_);
+                this->l1_bank_remap_,
+                /*minimal=*/false,
+                this->allocator_mode_);
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
         }

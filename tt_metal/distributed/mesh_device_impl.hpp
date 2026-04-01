@@ -25,6 +25,7 @@
 #include "context/context_types.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/experimental/per_core_allocation/allocator_mode.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_config.hpp>
@@ -94,7 +95,8 @@ private:
             size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config,
             const MeshDeviceConfig& config,
-            ContextId context_id);
+            ContextId context_id,
+            AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
         ScopedDevices(
             const std::vector<MaybeRemote<int>>& all_device_ids,
             const std::vector<MaybeRemote<int>>& active_device_ids,
@@ -103,7 +105,8 @@ private:
             size_t num_command_queues,
             size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config,
-            ContextId context_id);
+            ContextId context_id,
+            AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
 
         // Destructor releases physical resources
         ~ScopedDevices();
@@ -278,7 +281,8 @@ public:
         size_t trace_region_size,
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        bool minimal = false);
+        bool minimal = false,
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;
@@ -396,7 +400,8 @@ public:
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
     static std::shared_ptr<MeshDevice> create_unit_mesh(
         int device_id,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
@@ -404,7 +409,8 @@ public:
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
     static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
         const std::vector<int>& device_ids,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
@@ -412,7 +418,8 @@ public:
         size_t num_command_queues = 1,
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
-        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE,
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
 
     // Create Mesh Devices which refer to a specific MetalContext instance.
     // When owns_context is true, the MeshDevice will destroy the MetalContext on close.
@@ -425,7 +432,8 @@ public:
         size_t num_command_queues,
         const DispatchCoreConfig& dispatch_core_config,
         tt::stl::Span<const std::uint32_t> l1_bank_remap,
-        size_t worker_l1_size);
+        size_t worker_l1_size,
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
     static std::shared_ptr<MeshDevice> create_unit_mesh(
         ContextId context_id,
         int device_id,
@@ -434,7 +442,8 @@ public:
         size_t num_command_queues,
         const DispatchCoreConfig& dispatch_core_config,
         tt::stl::Span<const std::uint32_t> l1_bank_remap,
-        size_t worker_l1_size);
+        size_t worker_l1_size,
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
     static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
         ContextId context_id,
         const std::vector<int>& device_ids,
@@ -443,7 +452,8 @@ public:
         size_t num_command_queues,
         const DispatchCoreConfig& dispatch_core_config,
         tt::stl::Span<const std::uint32_t> l1_bank_remap,
-        size_t worker_l1_size);
+        size_t worker_l1_size,
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDeviceImpl& mesh_device);

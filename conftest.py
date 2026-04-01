@@ -404,7 +404,12 @@ def _device_module_impl(request):
     original_default_device = ttnn.GetDefaultDevice()
 
     updated_device_params = get_updated_device_params(device_params)
-    device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
+    if "allocator_mode" in updated_device_params:
+        from ttnn.per_core_allocation import CreateDevice
+
+        device = CreateDevice(device_id=device_id, **updated_device_params)
+    else:
+        device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     request.node.pci_ids = [ttnn.GetPCIeDeviceID(device_id)]
     ttnn.SetDefaultDevice(device)
 
@@ -452,7 +457,12 @@ def device(request, device_params):
     original_default_device = ttnn.GetDefaultDevice()
 
     updated_device_params = get_updated_device_params(device_params)
-    device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
+    if "allocator_mode" in updated_device_params:
+        from ttnn.per_core_allocation import CreateDevice
+
+        device = CreateDevice(device_id=device_id, **updated_device_params)
+    else:
+        device = ttnn.CreateDevice(device_id=device_id, **updated_device_params)
     ttnn.SetDefaultDevice(device)
 
     from tests.tests_common.cache_entries_counter import CacheEntriesCounter

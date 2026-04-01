@@ -373,6 +373,8 @@ auto_register_ttnn_cpp_operations(ttnn._ttnn)
 import ttnn.experimental_loader
 import ttnn.experimental_loader.golden_functions
 
+import ttnn.per_core_allocation
+
 import ttnn.operations
 
 from ttnn.operations.unary import SigmoidMode

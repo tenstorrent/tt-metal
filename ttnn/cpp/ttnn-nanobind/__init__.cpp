@@ -12,6 +12,7 @@
 #include "ttnn-nanobind/cluster.hpp"
 #include "ttnn-nanobind/core.hpp"
 #include "ttnn-nanobind/device.hpp"
+#include "ttnn-nanobind/per_core_allocation.hpp"
 #include "ttnn-nanobind/events.hpp"
 #include "ttnn-nanobind/fabric.hpp"
 #include "ttnn-nanobind/global_circular_buffer.hpp"
@@ -234,6 +235,7 @@ NB_MODULE(_ttnn, mod) {
     auto m_cluster = mod.def_submodule("cluster", "ttnn cluster");
     auto m_core = mod.def_submodule("core", "core functions");
     auto m_device = mod.def_submodule("device", "ttnn devices");
+    auto m_per_core_allocation = mod.def_submodule("per_core_allocation", "per-core allocation APIs");
     auto m_multi_device = mod.def_submodule("multi_device", "ttnn multi_device");
     auto m_events = mod.def_submodule("events", "ttnn events");
     auto m_global_circular_buffer = mod.def_submodule("global_circular_buffer", "ttnn global circular buffer");
@@ -295,6 +297,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::activation::py_module(m_activation);
     ttnn::cluster::py_cluster_module(m_cluster);
     ttnn::device::py_device_module(m_device);
+    ttnn::per_core_allocation::py_module(m_per_core_allocation);
     ttnn::distributed::py_module(m_multi_device);
     ttnn::events::py_module(m_events);
     ttnn::global_circular_buffer::py_module(m_global_circular_buffer);

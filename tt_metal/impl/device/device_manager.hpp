@@ -38,7 +38,8 @@ public:
         const std::vector<ChipId>& device_ids,
         bool init_profiler,
         bool initialize_fabric_and_dispatch_fw,
-        const std::shared_ptr<ContextDescriptor>& descriptor);
+        const std::shared_ptr<ContextDescriptor>& descriptor,
+        AllocatorMode allocator_mode = AllocatorMode::LOCKSTEP);
 
     IDevice* get_active_device(ChipId device_id) const;
     std::vector<IDevice*> get_all_active_devices() const;
@@ -73,6 +74,7 @@ private:
     bool using_fast_dispatch_ = false;
     bool init_profiler_ = true;
     bool initialize_fabric_and_dispatch_fw_ = false;
+    AllocatorMode allocator_mode_ = AllocatorMode::LOCKSTEP;
     bool is_initialized_ = false;
 
     mutable std::mutex lock_;
