@@ -222,6 +222,19 @@ void D2HSocket::set_page_size(uint32_t page_size) {
     fifo_curr_size_ = fifo_page_aligned_size;
 }
 
+bool D2HSocket::has_data() {
+    TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
+    uint32_t num_bytes = page_size_;
+    if (read_ptr_ + num_bytes >= fifo_curr_size_) {
+        num_bytes += fifo_size_ - fifo_curr_size_;
+    }
+    tt_driver_atomics::mfence();
+    volatile uint32_t bytes_sent_value = bytes_sent_ptr_[0];
+    bytes_sent_ = bytes_sent_value;
+    uint32_t bytes_recv = bytes_sent_value - bytes_acked_;
+    return bytes_recv >= num_bytes;
+}
+
 void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     if (read_ptr_ + num_bytes >= fifo_curr_size_) {
         num_bytes += fifo_size_ - fifo_curr_size_;
