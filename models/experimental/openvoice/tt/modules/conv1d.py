@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Conv1d wrapper that maps to TTNN conv2d operations.
+Conv1d wrapper using native ttnn.conv1d.
 
-TTNN provides conv2d but not conv1d, so we reshape tensors to use conv2d
-with height=1, effectively implementing conv1d.
+Handles format conversion between PyTorch's NCL convention and
+ttnn.conv1d's NLC convention, with PyTorch fallback for torch tensors
+and large-stride operations.
 """
 
 from typing import Any, Optional
@@ -91,40 +92,34 @@ def ttnn_conv1d(
             out = ttnn.from_torch(out, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         return out
 
-    # Get dimensions (TTNN tensors have shape.rank)
+    # TTNN path using native ttnn.conv1d
     is_3d_input = x.shape.rank == 3
 
     if is_3d_input:
-        # Reshape [B, C, L] -> [B, 1, L, C] for TTNN (NHWC format)
-        batch, channels, length = x.shape
+        # NCL → NLC for ttnn.conv1d
+        batch_size, in_channels_dim, input_length = x.shape
         x = ttnn.permute(x, (0, 2, 1))  # [B, C, L] -> [B, L, C]
-        x = ttnn.reshape(x, (batch, 1, length, channels))  # [B, L, C] -> [B, 1, L, C]
+    else:
+        batch_size = x.shape[0]
+        input_length = x.shape[1]
+        in_channels_dim = x.shape[-1]
 
     # Get weight dimensions - handle both 3D [C_out, C_in, K] and 4D [C_out, C_in, 1, K]
     weight_rank = weight.shape.rank if hasattr(weight.shape, "rank") else len(weight.shape)
-    if weight_rank == 3:
-        out_channels, in_channels, kernel_size = weight.shape
-        # Reshape to 4D for conv2d: [C_out, C_in, K] -> [C_out, C_in, 1, K]
-        weight = ttnn.reshape(weight, (out_channels, in_channels, 1, kernel_size))
-    else:
+    if weight_rank == 4:
         out_channels, in_channels, _, kernel_size = weight.shape
-    # x.shape is [B, H, W, C] after reshape where H=1, W=L (sequence length), C=channels
-    batch_size, input_height, input_width, input_channels = x.shape
+        weight = ttnn.reshape(weight, (out_channels, in_channels, kernel_size))
+    elif weight_rank == 3:
+        out_channels, in_channels, kernel_size = weight.shape
 
-    # Note: In TTNN's NHWC convention with our reshape:
-    # - input_height = 1 (our added dimension)
-    # - input_width = L (sequence length)
-    # - input_channels = C_in (last dimension in NHWC)
-
-    # Default conv config if not provided
-    # Use WIDTH_SHARDED for convolutions - channels are naturally parallel
+    # Default conv config
     if conv_config is None:
         conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat16,
-            config_tensors_in_dram=True,  # Required - L1_SMALL may not be available
+            config_tensors_in_dram=True,
             deallocate_activation=False,
             reallocate_halo_output=False,
-            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,  # Sharding optimization
+            shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         )
 
     # Add activation to config if specified
@@ -142,87 +137,32 @@ def ttnn_conv1d(
             fp32_dest_acc_en=True,
         )
 
-    # Prepare conv kwargs (shared between prepare_conv_weights and conv2d)
-    conv_kwargs = {
-        "in_channels": in_channels,
-        "out_channels": out_channels,
-        "batch_size": batch_size,
-        "input_height": input_height,
-        "input_width": input_width,
-        "kernel_size": (1, kernel_size),
-        "stride": (1, stride),
-        "padding": (0, padding),
-        "dilation": (1, dilation),
-        "groups": groups,
-    }
-
-    # Track bias for manual addition after conv2d
-    bias_to_add = None
-
-    # Prepare conv weights if not already on device
-    # This is REQUIRED - conv weights must go through prepare_conv_weights() before conv2d
-    # See: https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/ttnn/TTNN-model-bringup.md
-    if device is not None and not ttnn.is_tensor_storage_on_device(weight):
-        weight = ttnn.prepare_conv_weights(
-            weight_tensor=weight,
-            weights_format="OIHW",
-            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            input_layout=x.get_layout(),
-            input_dtype=x.dtype,
-            has_bias=False,  # We'll add bias manually
-            device=device,
-            conv_config=conv_config,
-            **conv_kwargs,
-        )
-        # prepare_conv_weights may already put weight on device, check before to_device
-        if not ttnn.is_tensor_storage_on_device(weight):
-            weight = ttnn.to_device(weight, device)
-
-        # Store bias for manual addition after conv2d
-        # (Passing bias to conv2d has issues with shape validation)
-        if bias is not None and not ttnn.is_tensor_storage_on_device(bias):
-            # Reshape 1D bias to broadcastable shape [1, C_out, 1] for [B, C, L] output
-            if bias.shape.rank == 1:
-                bias_to_add = ttnn.reshape(bias, (1, out_channels, 1))
-            else:
-                bias_to_add = bias
-
-    # Run conv2d without bias
-    out = ttnn.conv2d(
+    # Call native ttnn.conv1d
+    [out, out_length, [weight_on_device, _]] = ttnn.conv1d(
         input_tensor=x,
         weight_tensor=weight,
-        bias_tensor=None,  # Handle bias manually
+        in_channels=in_channels,
+        out_channels=out_channels,
         device=device,
+        bias_tensor=bias,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        groups=groups,
+        batch_size=batch_size,
+        input_length=input_length,
+        dtype=x.dtype,
         conv_config=conv_config,
         compute_config=compute_config,
-        **conv_kwargs,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
 
+    # Reshape output to [B, L_out, C_out] then back to NCL
     if is_3d_input:
-        # Reshape back [B, 1, L_out, C_out] -> [B, C_out, L_out]
-        # TTNN conv2d output is [B*H*W, 1, 1, C] in some cases or [B, H, W, C] depending on settings
-        # We need to check the actual rank and shape
-        if out.shape.rank == 4:
-            batch = out.shape[0]
-            out_length = out.shape[2]
-            out_channels = out.shape[3]
-            out = ttnn.reshape(out, (batch, out_length, out_channels))  # [B, L, C]
-            out = ttnn.permute(out, (0, 2, 1))  # [B, C, L]
-        elif out.shape.rank == 2:
-            # Flattened output [B*L, C] - need to reshape
-            batch = x.shape[0] if is_3d_input else x.shape[0]
-            total = out.shape[0]
-            out_channels = out.shape[1]
-            out_length = total // batch
-            out = ttnn.reshape(out, (batch, out_length, out_channels))  # [B, L, C]
-            out = ttnn.permute(out, (0, 2, 1))  # [B, C, L]
-
-    # Add bias after reshape (if we stored it earlier)
-    if bias_to_add is not None and device is not None:
-        # Convert bias to TILE layout for broadcast
-        bias_to_add_tile = ttnn.to_layout(bias_to_add, ttnn.TILE_LAYOUT)
-        bias_to_add_tile = ttnn.to_device(bias_to_add_tile, device)
-        out = ttnn.add(out, bias_to_add_tile)
+        out = ttnn.reshape(out, (batch_size, out_length, out_channels))
+        out = ttnn.permute(out, (0, 2, 1))  # NLC → NCL
 
     return out
 

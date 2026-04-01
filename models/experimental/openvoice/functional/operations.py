@@ -31,10 +31,7 @@ def ttnn_conv1d_functional(
     """
     Functional Conv1D that works on both PyTorch and TTNN tensors.
 
-    TTNN doesn't have native Conv1D, so we reshape to use Conv2D:
-    - Input: [B, C, L] -> [B, C, 1, L]
-    - Kernel: [O, I, K] -> [O, I, 1, K]
-    - Output: [B, O, 1, L'] -> [B, O, L']
+    Uses native ttnn.conv1d for TTNN tensors, F.conv1d for PyTorch tensors.
 
     Args:
         x: Input tensor [B, in_channels, length]
@@ -50,6 +47,8 @@ def ttnn_conv1d_functional(
     Returns:
         Output tensor [B, out_channels, length']
     """
+    from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
+
     is_torch = isinstance(x, torch.Tensor)
 
     if is_torch or not use_ttnn:
@@ -66,42 +65,15 @@ def ttnn_conv1d_functional(
 
         return F.conv1d(x, w, bias, stride=stride, padding=padding, dilation=dilation, groups=groups)
 
-    # TTNN path: Conv1D via Conv2D
+    # TTNN path using native ttnn.conv1d
     if weight is None:
         return x
 
-    # Reshape for Conv2D: [B, C, L] -> [B, C, 1, L]
-    x_4d = ttnn.unsqueeze(x, 2)
-
-    # Prepare weight: [O, I, K] -> [O, I, 1, K]
-    # Weight might already be 4D from preprocessing
-    w = weight
-    if len(w.shape) == 3:
-        w = ttnn.unsqueeze(w, 2)
-
-    # Conv2D with kernel [1, K]
-    # Note: TTNN conv2d has different parameter order
-    # Using matmul-based implementation for flexibility
-
-    # For simplicity, fall back to reshaping to PyTorch, compute, reshape back
-    # This is the "hybrid" approach - production would use native ttnn.conv2d
-    x_torch = ttnn.to_torch(x).float()
-    w_torch = ttnn.to_torch(weight).float()
-    if w_torch.dim() == 4:
-        w_torch = w_torch.squeeze(2)
-    elif w_torch.dim() == 2:
-        w_torch = w_torch.unsqueeze(2)
-
-    b_torch = None
-    if bias is not None:
-        b_torch = ttnn.to_torch(bias).float()
-
-    y_torch = F.conv1d(x_torch, w_torch, b_torch, stride=stride, padding=padding, dilation=dilation, groups=groups)
-
-    # Convert back to TTNN
-    y = ttnn.from_torch(y_torch, dtype=x.dtype, device=device)
-
-    return y
+    return ttnn_conv1d(
+        x, weight, bias,
+        stride=stride, padding=padding, dilation=dilation, groups=groups,
+        device=device,
+    )
 
 
 def ttnn_layer_norm_functional(
