@@ -27,6 +27,7 @@
  * and that Wt is a multiple of 2. It reserves space in the output buffers, processes
  * tiles in pairs, and pushes the results to the output buffers upon completion.
  */
+template <bool stable>
 FORCE_INLINE
 void sort_Wt_tiles_row_to_bitonic_sequence(
     DataflowBuffer& input_dfb,
@@ -59,7 +60,10 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
         transpose_tile(index_dfb.get_id(), 1, 3);
 
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort(0, (int)ascending_local, end_phase);
+        if constexpr (stable) {
+            ckernel::topk_set_stable_descending_mode(!ascending);
+        }
+        ckernel::topk_local_sort<stable>(0, (int)ascending_local, end_phase);
 
         tile_regs_commit();
         tile_regs_wait();

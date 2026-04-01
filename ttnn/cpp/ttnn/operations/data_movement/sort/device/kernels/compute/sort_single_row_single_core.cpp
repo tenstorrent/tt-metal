@@ -174,7 +174,7 @@ void kernel_main() {
         }
 #endif
 
-        sort_Wt_tiles_row_to_bitonic_sequence(
+        sort_Wt_tiles_row_to_bitonic_sequence<stable>(
             input_tensor_dfb,
             index_tensor_dfb,
             input_tensor_transposed_dfb,
@@ -226,24 +226,18 @@ void kernel_main() {
                         copy_tile(dfb::input_tensor_transposed, left_tile_id, input_dest_start);
                         copy_tile(dfb::input_tensor_transposed, right_tile_id, input_dest_end);
 
-                        uint32_t tile_input_low = input_dest_start;
-                        uint32_t tile_input_high = input_dest_end;
-                        uint32_t tile_index_low = index_dest_start;
-                        uint32_t tile_index_high = index_dest_end;
+                        if constexpr (stable) {
+                            ckernel::topk_set_stable_descending_mode(descending);
+                        }
 
                         if (sub == 1) {
                             // Use sort LLK only the last stage to sort the last pair of tiles - speed up
-                            ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                            ckernel::topk_local_sort<stable>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                         } else {
-                            ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/64);
-
                             if (dir) {
-                                // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
-                                // We swap their indices when using descending order
-                                tile_input_low = input_dest_end;
-                                tile_input_high = input_dest_start;
-                                tile_index_low = index_dest_end;
-                                tile_index_high = index_dest_start;
+                                ckernel::topk_merge<true, stable>(/*idst=*/0, m_iter, /*k=*/64);
+                            } else {
+                                ckernel::topk_merge<false, stable>(/*idst=*/0, m_iter, /*k=*/64);
                             }
                         }
 
@@ -251,12 +245,12 @@ void kernel_main() {
                         tile_regs_wait();
 
                         pack_reconfig_data_format(dfb::input_tensor_transposed);
-                        pack_tile<true>(tile_input_low, dfb::input_tensor_transposed, left_tile_id);
-                        pack_tile<true>(tile_input_high, dfb::input_tensor_transposed, right_tile_id);
+                        pack_tile<true>(input_dest_start, dfb::input_tensor_transposed, left_tile_id);
+                        pack_tile<true>(input_dest_end, dfb::input_tensor_transposed, right_tile_id);
 
                         pack_reconfig_data_format(dfb::index_tensor_transposed);
-                        pack_tile<true>(tile_index_low, dfb::index_tensor_transposed, left_tile_id);
-                        pack_tile<true>(tile_index_high, dfb::index_tensor_transposed, right_tile_id);
+                        pack_tile<true>(index_dest_start, dfb::index_tensor_transposed, left_tile_id);
+                        pack_tile<true>(index_dest_end, dfb::index_tensor_transposed, right_tile_id);
 
                         synchronization_dfb.push_back(one_tile);
 

@@ -145,26 +145,20 @@ void kernel_main() {
                                 copy_tile(index_tensor_cb_id, 1, index_dest_end);
                             }
 
-                            uint32_t tile_input_low = input_dest_start;
-                            uint32_t tile_input_high = input_dest_end;
-                            uint32_t tile_index_low = index_dest_start;
-                            uint32_t tile_index_high = index_dest_end;
+                            if constexpr (stable) {
+                                ckernel::topk_set_stable_descending_mode(descending);
+                            }
 
                             if (sub == 1) {
                                 // Use sort LLK only the last substage to sort the last pair of tiles - speed up
-                                ckernel::topk_local_sort(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
+                                ckernel::topk_local_sort<stable>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
                                 // For all other stages use topk_merge to put the top K values in one tile, and the
                                 // bottom K values in another tile
-                                ckernel::topk_merge(/*idst=*/0, m_iter, /*k=*/32);
-
-                                // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
-                                // We swap their indices when using descending order
                                 if (dir) {
-                                    tile_input_low = input_dest_end;
-                                    tile_input_high = input_dest_start;
-                                    tile_index_low = index_dest_end;
-                                    tile_index_high = index_dest_start;
+                                    ckernel::topk_merge<true, stable>(/*idst=*/0, m_iter, /*k=*/32);
+                                } else {
+                                    ckernel::topk_merge<false, stable>(/*idst=*/0, m_iter, /*k=*/32);
                                 }
                             }
 
@@ -184,12 +178,12 @@ void kernel_main() {
 
                                 tile_regs_wait();
                                 pack_reconfig_data_format(input_tensor_transposed_cb_id);
-                                pack_tile(tile_input_low, input_tensor_transposed_cb_id);
-                                pack_tile(tile_input_high, input_tensor_transposed_cb_id);
+                                pack_tile(input_dest_start, input_tensor_transposed_cb_id);
+                                pack_tile(input_dest_end, input_tensor_transposed_cb_id);
 
                                 pack_reconfig_data_format(index_tensor_transposed_cb_id);
-                                pack_tile(tile_index_low, index_tensor_transposed_cb_id);
-                                pack_tile(tile_index_high, index_tensor_transposed_cb_id);
+                                pack_tile(index_dest_start, index_tensor_transposed_cb_id);
+                                pack_tile(index_dest_end, index_tensor_transposed_cb_id);
                                 tile_regs_release();
 
                                 input_tensor_transposed_dfb.push_back(2 * one_tile);
@@ -247,12 +241,12 @@ void kernel_main() {
                                 tile_regs_wait();
                                 // Process value tiles
                                 pack_reconfig_data_format(input_tensor_output_cb_id);
-                                pack_tile(tile_input_low, input_tensor_output_cb_id);
-                                pack_tile(tile_input_high, input_tensor_output_cb_id);
+                                pack_tile(input_dest_start, input_tensor_output_cb_id);
+                                pack_tile(input_dest_end, input_tensor_output_cb_id);
 
                                 pack_reconfig_data_format(index_tensor_output_cb_id);
-                                pack_tile(tile_index_low, index_tensor_output_cb_id);
-                                pack_tile(tile_index_high, index_tensor_output_cb_id);
+                                pack_tile(index_dest_start, index_tensor_output_cb_id);
+                                pack_tile(index_dest_end, index_tensor_output_cb_id);
                                 tile_regs_release();
 
                                 input_tensor_output_dfb.push_back(2 * one_tile);
