@@ -157,7 +157,6 @@ void SimpleTraceAllocator::allocate_trace_programs(const Hal& hal, std::vector<T
 
 void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
     const Hal& hal, std::vector<TraceNode*>& trace_nodes, SubDeviceId sub_device_id) {
-
     uint32_t expected_workers_completed = 0;
     std::optional<uint32_t> last_active_eth_sync_idx;
     std::optional<int> last_stall_idx;

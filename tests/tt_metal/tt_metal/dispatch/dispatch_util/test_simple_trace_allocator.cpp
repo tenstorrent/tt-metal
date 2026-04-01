@@ -31,9 +31,7 @@ protected:
         return SimpleTraceAllocator::merge_syncs(a, b);
     }
 
-    RegionAllocator make_allocator(uint32_t ringbuffer_size) {
-        return RegionAllocator(ringbuffer_size, extra_data_);
-    }
+    RegionAllocator make_allocator(uint32_t ringbuffer_size) { return RegionAllocator(ringbuffer_size, extra_data_); }
 
     std::vector<ExtraData> extra_data_;
 };
@@ -59,9 +57,7 @@ TEST_F(SimpleTraceAllocatorFixture, IntersectsContainment) {
     EXPECT_TRUE(intersects(10, 5, 0, 100));
 }
 
-TEST_F(SimpleTraceAllocatorFixture, IntersectsSameRegion) {
-    EXPECT_TRUE(intersects(5, 10, 5, 10));
-}
+TEST_F(SimpleTraceAllocatorFixture, IntersectsSameRegion) { EXPECT_TRUE(intersects(5, 10, 5, 10)); }
 
 // --- merge_syncs ---
 
@@ -69,13 +65,9 @@ TEST_F(SimpleTraceAllocatorFixture, MergeSyncsBothNullopt) {
     EXPECT_EQ(merge_syncs(std::nullopt, std::nullopt), std::nullopt);
 }
 
-TEST_F(SimpleTraceAllocatorFixture, MergeSyncsFirstOnly) {
-    EXPECT_EQ(merge_syncs(5, std::nullopt), 5);
-}
+TEST_F(SimpleTraceAllocatorFixture, MergeSyncsFirstOnly) { EXPECT_EQ(merge_syncs(5, std::nullopt), 5); }
 
-TEST_F(SimpleTraceAllocatorFixture, MergeSyncsSecondOnly) {
-    EXPECT_EQ(merge_syncs(std::nullopt, 7), 7);
-}
+TEST_F(SimpleTraceAllocatorFixture, MergeSyncsSecondOnly) { EXPECT_EQ(merge_syncs(std::nullopt, 7), 7); }
 
 TEST_F(SimpleTraceAllocatorFixture, MergeSyncsBothPicksMax) {
     EXPECT_EQ(merge_syncs(3, 9), 9);
@@ -156,7 +148,7 @@ TEST_F(SimpleTraceAllocatorFixture, CurrentNodeEvictionPenalty) {
     // Use wide spacing to isolate the penalty from stall-avoidance costs.
     constexpr uint32_t spacing = 100;
     extra_data_.resize(3 * spacing);
-    extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 2 * spacing;           // Next use IS the current allocation.
+    extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 2 * spacing;            // Next use IS the current allocation.
     extra_data_[spacing].next_use_idx[ExtraData::kNonBinary] = 3 * spacing - 1;  // Far away (low Belady cost).
 
     auto alloc = make_allocator(200);
@@ -311,15 +303,15 @@ TEST_F(SimpleTraceAllocatorFixture, BeladyEvictsLowestCostRegion) {
     extra_data_.resize(4 * spacing);
 
     // Regions at indices 0, spacing, 2*spacing. Future uses at different distances from 3*spacing.
-    extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 3 * spacing + 2;           // distance 2 (high cost)
-    extra_data_[spacing].next_use_idx[ExtraData::kNonBinary] = 3 * spacing + 1;     // distance 1 (highest cost)
-    extra_data_[2 * spacing].next_use_idx[ExtraData::kNonBinary] = 3 * spacing + 3; // distance 3 (lowest cost)
+    extra_data_[0].next_use_idx[ExtraData::kNonBinary] = 3 * spacing + 2;            // distance 2 (high cost)
+    extra_data_[spacing].next_use_idx[ExtraData::kNonBinary] = 3 * spacing + 1;      // distance 1 (highest cost)
+    extra_data_[2 * spacing].next_use_idx[ExtraData::kNonBinary] = 3 * spacing + 3;  // distance 3 (lowest cost)
 
     auto alloc = make_allocator(300);
 
-    alloc.allocate_region(100, 0, ExtraData::kNonBinary, 10);             // [0, 100)
-    alloc.allocate_region(100, spacing, ExtraData::kNonBinary, 20);       // [100, 200)
-    alloc.allocate_region(100, 2 * spacing, ExtraData::kNonBinary, 30);   // [200, 300)
+    alloc.allocate_region(100, 0, ExtraData::kNonBinary, 10);            // [0, 100)
+    alloc.allocate_region(100, spacing, ExtraData::kNonBinary, 20);      // [100, 200)
+    alloc.allocate_region(100, 2 * spacing, ExtraData::kNonBinary, 30);  // [200, 300)
 
     // Allocate 100 bytes at trace_idx=3*spacing. Each placement overlaps exactly one region.
     // The Belady cost for each: size / (next_use - trace_idx).
@@ -379,13 +371,13 @@ TEST_F(SimpleTraceAllocatorFixture, StallAvoidanceIncreasesCost) {
     uint32_t old_idx = 0;
     uint32_t recent_idx = num_entries - 3;
 
-    alloc.allocate_region(100, old_idx, ExtraData::kNonBinary, 10);      // [0, 100)
-    alloc.allocate_region(100, recent_idx, ExtraData::kNonBinary, 20);   // [100, 200)
+    alloc.allocate_region(100, old_idx, ExtraData::kNonBinary, 10);     // [0, 100)
+    alloc.allocate_region(100, recent_idx, ExtraData::kNonBinary, 20);  // [100, 200)
 
     // Allocate at trace_idx = num_entries-1. Both placements overlap one region each.
-    // Region at old_idx: region_idx_diff = (num_entries-1) - 0 = num_entries-1 >= desired_write_ahead, no stall penalty.
-    // Region at recent_idx: region_idx_diff = (num_entries-1) - recent_idx = 2 < desired_write_ahead, stall penalty.
-    // Should prefer evicting the old region.
+    // Region at old_idx: region_idx_diff = (num_entries-1) - 0 = num_entries-1 >= desired_write_ahead, no stall
+    // penalty. Region at recent_idx: region_idx_diff = (num_entries-1) - recent_idx = 2 < desired_write_ahead, stall
+    // penalty. Should prefer evicting the old region.
     uint32_t alloc_idx = num_entries - 1;
     auto [sync, addr] = alloc.allocate_region(100, alloc_idx, ExtraData::kNonBinary, 30);
     ASSERT_TRUE(addr.has_value());
