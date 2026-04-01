@@ -422,3 +422,77 @@ class TTNNViTIntermediate(TTNNLinearGelu):
         new_intermediate._fallback_torch_layer = torch_vit_intermediate
         new_intermediate.dense = TTNNLinear.from_torch(torch_vit_intermediate.dense)
         return new_intermediate
+
+
+class TTNNNoTPFeedForward(TTNNModule):
+    """Two-layer feedforward with quick GELU (no tensor parallelism, for DeepSeek-OCR ViT)."""
+
+    def __init__(self, dim: int = 1024, hidden_dim: int = 4096):
+        super().__init__()
+        self.dim = dim
+        self.hidden_dim = hidden_dim
+        self.torch_layer_cp = None
+
+    @classmethod
+    def from_torch(cls, NoTPFeedForward):
+        obj = cls(NoTPFeedForward.fc1.in_features, NoTPFeedForward.fc1.out_features)
+        obj.torch_layer_cp = NoTPFeedForward
+        obj._fallback_torch_layer = NoTPFeedForward
+        return obj
+
+    def preprocess_weights_impl(self):
+        fc1_weight = self.torch_layer_cp.fc1.weight.data.T
+        self.fc1_weight = ttnn.from_torch(fc1_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        self.fc1_bias = (
+            ttnn.from_torch(
+                self.torch_layer_cp.fc1.bias.data.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            if self.torch_layer_cp.fc1.bias is not None
+            else None
+        )
+        fc2_weight = self.torch_layer_cp.fc2.weight.data.T
+        self.fc2_weight = ttnn.from_torch(fc2_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        self.fc2_bias = (
+            ttnn.from_torch(
+                self.torch_layer_cp.fc2.bias.data.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            if self.torch_layer_cp.fc2.bias is not None
+            else None
+        )
+
+    def move_weights_to_device_impl(self):
+        self.fc1_weight = ttnn.to_device(self.fc1_weight, self.device)
+        self.fc2_weight = ttnn.to_device(self.fc2_weight, self.device)
+        if self.fc1_bias is not None:
+            self.fc1_bias = ttnn.to_device(self.fc1_bias, self.device)
+        if self.fc2_bias is not None:
+            self.fc2_bias = ttnn.to_device(self.fc2_bias, self.device)
+
+    def deallocate_weights_impl(self):
+        ttnn.deallocate(self.fc1_weight)
+        ttnn.deallocate(self.fc2_weight)
+        if self.fc1_bias is not None:
+            ttnn.deallocate(self.fc1_bias)
+        if self.fc2_bias is not None:
+            ttnn.deallocate(self.fc2_bias)
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if isinstance(x, torch.Tensor):
+            x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+        output = ttnn.linear(
+            x, self.fc1_weight, bias=self.fc1_bias, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+
+        # Quick GELU: x * sigmoid(1.702 * x)
+        scaled = ttnn.multiply(output, 1.702)
+        sigmoid_out = ttnn.sigmoid(scaled)
+        output = ttnn.multiply(output, sigmoid_out)
+        ttnn.deallocate(scaled)
+        ttnn.deallocate(sigmoid_out)
+
+        output = ttnn.linear(
+            output, self.fc2_weight, bias=self.fc2_bias, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        output = ttnn.to_torch(output)
+        return output

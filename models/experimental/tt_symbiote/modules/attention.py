@@ -5,9 +5,11 @@
 """Attention mechanism implementations for TTNN."""
 
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 import torch
+from torch.nn import functional as F
+import math
 
 try:
     from transformers.integrations.sdpa_attention import sdpa_attention_forward
@@ -17,6 +19,15 @@ except ImportError:
 import ttnn
 from models.experimental.tt_symbiote.core.module import TTNNModule
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+
+def _unwrap_ttnn(x):
+    """Unwrap TorchTTNNTensor to raw ttnn.Tensor if wrapped, else return as-is."""
+    if isinstance(x, TorchTTNNTensor):
+        return x.ttnn_tensor
+    return x
+
+
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinear,
     TTNNLinearIColShardedWRowSharded,
@@ -537,7 +548,7 @@ class TTNNFusedQKVSelfAttention(TTNNModule):
         """Forward pass through fused QKV linear layer."""
         if len(hidden_states.shape) == 3:
             hidden_states = ttnn.unsqueeze(hidden_states, 1)
-        query_key_value = self.linear(hidden_states).ttnn_tensor
+        query_key_value = _unwrap_ttnn(self.linear(hidden_states))
         query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
         queries, keys, values = ttnn.experimental.nlp_create_qkv_heads(
             query_key_value,
@@ -783,7 +794,7 @@ class TTNNWhisperAttention(TTNNModule):
         else:
             # Self-attention: fused QKV
             hidden_states = ttnn.unsqueeze(hidden_states, 1)
-            query_key_value = self.qkv_proj(hidden_states).ttnn_tensor
+            query_key_value = _unwrap_ttnn(self.qkv_proj(hidden_states))
             query_key_value = ttnn.to_memory_config(query_key_value, ttnn.L1_MEMORY_CONFIG)
             query, key, value = ttnn.experimental.nlp_create_qkv_heads(
                 query_key_value,
@@ -973,18 +984,55 @@ class LlamaAttention(TTNNModule):
             value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
 
         if position_embeddings is None:
-            print("Warning: position_embeddings is None, computing from position_ids.")  # --- IGNORE ---
-            cos, sin = self.torch_layer.rotary_emb(value_states.to_torch, TorchTTNNTensor(position_ids).to_torch)
+            if hasattr(self.torch_layer, "rotary_emb"):
+                cos, sin = self.torch_layer.rotary_emb(value_states.to_torch, TorchTTNNTensor(position_ids).to_torch)
+            else:
+                if not hasattr(self, "_rotary_emb_shim"):
+                    from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
+
+                    config = self.torch_layer.config
+                    self._rotary_emb_shim = LlamaRotaryEmbedding(config=config)
+                v_torch = _unwrap_ttnn(value_states)
+                if isinstance(v_torch, ttnn.Tensor):
+                    v_torch = ttnn.to_torch(v_torch)
+                p_torch = _unwrap_ttnn(position_ids)
+                if isinstance(p_torch, ttnn.Tensor):
+                    p_torch = ttnn.to_torch(p_torch)
+                cos, sin = self._rotary_emb_shim(v_torch, p_torch)
+                if isinstance(cos, torch.Tensor) and not isinstance(cos, TorchTTNNTensor):
+                    cos = ttnn.from_torch(
+                        cos.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+                    )
+                if isinstance(sin, torch.Tensor) and not isinstance(sin, TorchTTNNTensor):
+                    sin = ttnn.from_torch(
+                        sin.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+                    )
         else:
             cos, sin = position_embeddings
 
         query_states, key_states = self.rope(query_states, key_states, cos, sin)
 
         if past_key_values is not None:
-            # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            key_states, value_states = past_key_values.update(
-                key_states, value_states, self.torch_layer.layer_idx, cache_kwargs
+            sin_torch = ttnn.to_torch(sin) if isinstance(sin, ttnn.Tensor) else sin
+            cos_torch = ttnn.to_torch(cos) if isinstance(cos, ttnn.Tensor) else cos
+            cache_kwargs = {"sin": sin_torch, "cos": cos_torch, "cache_position": cache_position}
+
+            k_torch = (
+                ttnn.to_torch(_unwrap_ttnn(key_states))
+                if isinstance(_unwrap_ttnn(key_states), ttnn.Tensor)
+                else _unwrap_ttnn(key_states)
+            )
+            v_torch = (
+                ttnn.to_torch(_unwrap_ttnn(value_states))
+                if isinstance(_unwrap_ttnn(value_states), ttnn.Tensor)
+                else _unwrap_ttnn(value_states)
+            )
+            k_torch, v_torch = past_key_values.update(k_torch, v_torch, self.torch_layer.layer_idx, cache_kwargs)
+            key_states = ttnn.from_torch(
+                k_torch.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+            )
+            value_states = ttnn.from_torch(
+                v_torch.to(torch.bfloat16), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
             )
 
         original_q_len = query_states.shape[2]
@@ -1022,7 +1070,7 @@ class LlamaAttention(TTNNModule):
             # Slice: [B, kv_len, D] -> [B, q_len, D]
             attn_out = attn_out[:, -original_q_len:, :]
 
-        return self.o_proj(attn_out), None
+        return self.o_proj(attn_out), None, past_key_values
 
 
 class TTNNGR00TSelfAttention(TTNNModule):
@@ -2870,3 +2918,442 @@ class TTNNBailingMoEAttention(TTNNModule):
             past_key_values,
             cache_position,
         )
+
+
+def _get_rel_pos_sam(q_size: int, k_size: int, rel_pos: torch.Tensor) -> torch.Tensor:
+    """Relative position table (q_size, k_size, head_dim). Matches working tt_sam / deepencoder."""
+    max_rel_dist = int(2 * max(q_size, k_size) - 1)
+    if rel_pos.shape[0] != max_rel_dist:
+        rel_pos = rel_pos.float()
+        rel_pos_resized = F.interpolate(
+            rel_pos.reshape(1, rel_pos.shape[0], -1).permute(0, 2, 1),
+            size=max_rel_dist,
+            mode="linear",
+        ).to(rel_pos.dtype)
+        rel_pos_resized = rel_pos_resized.reshape(-1, max_rel_dist).permute(1, 0)
+    else:
+        rel_pos_resized = rel_pos
+    q_coords = torch.arange(q_size, device=rel_pos.device)[:, None] * max(k_size / q_size, 1.0)
+    k_coords = torch.arange(k_size, device=rel_pos.device)[None, :] * max(q_size / k_size, 1.0)
+    relative_coords = (q_coords - k_coords) + (k_size - 1) * max(q_size / k_size, 1.0)
+    return rel_pos_resized[relative_coords.long()]
+
+
+def _add_decomposed_rel_pos_sam(
+    q: torch.Tensor,
+    rel_pos_h: torch.Tensor,
+    rel_pos_w: torch.Tensor,
+    q_size: Tuple[int, int],
+    k_size: Tuple[int, int],
+) -> torch.Tensor:
+    """q: (B, n_heads, q_h*q_w, head_dim). Returns attn_bias (B, n_heads, S, S)."""
+    q_h, q_w = q_size
+    k_h, k_w = k_size
+    Rh = _get_rel_pos_sam(q_h, k_h, rel_pos_h)
+    Rw = _get_rel_pos_sam(q_w, k_w, rel_pos_w)
+    B, n_heads, S, dim = q.shape
+    r_q = q.reshape(B, n_heads, q_h, q_w, dim)
+    rel_h = torch.einsum("bnhwc,hkc->bnhwk", r_q, Rh)
+    rel_w = torch.einsum("bnhwc,wkc->bnhwk", r_q, Rw)
+    rel_h = rel_h.reshape(B, n_heads, S, k_h, 1)
+    rel_w = rel_w.reshape(B, n_heads, S, 1, k_w)
+    return (rel_h + rel_w).reshape(B, n_heads, S, k_h * k_w)
+
+
+def compute_sam_attn_bias(
+    q: torch.Tensor,
+    rel_pos_h: torch.Tensor,
+    rel_pos_w: torch.Tensor,
+    spatial_size: Tuple[int, int],
+) -> torch.Tensor:
+    """q: (B, n_heads, S, head_dim). Returns attn_bias (B, n_heads, S, S) for SDPA."""
+    H, W = spatial_size
+    dtype = q.dtype
+    q = q.float()
+    rel_pos_h = rel_pos_h.float()
+    rel_pos_w = rel_pos_w.float()
+    bias = _add_decomposed_rel_pos_sam(q, rel_pos_h, rel_pos_w, (H, W), (H, W))
+    return bias.to(dtype)
+
+
+def _window_partition_unpartition_sam(
+    x_bhwc: ttnn.Tensor,
+    device: ttnn.Device,
+    H: int,
+    W: int,
+    window_size: int,
+    C: int,
+    run_attn_per_window,
+    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """Partition (B, H, W, C) into windows, run attention per window, then unpartition."""
+    B = x_bhwc.shape[0]
+    pad_h = (window_size - H % window_size) % window_size
+    pad_w = (window_size - W % window_size) % window_size
+    Hp, Wp = H + pad_h, W + pad_w
+
+    if pad_h > 0 or pad_w > 0:
+        x_t = ttnn.to_torch(x_bhwc)
+        if x_t.device.type != "cpu":
+            x_t = x_t.cpu()
+        x_t = x_t.reshape(B, H, W, C)
+        x_t = F.pad(x_t, (0, 0, 0, pad_w, 0, pad_h))
+        x_bhwc = ttnn.from_torch(
+            x_t.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=memory_config,
+        )
+        x_t = None
+
+    if pad_h > 0 or pad_w > 0:
+        x_rm = x_bhwc
+    else:
+        x_rm = ttnn.to_layout(x_bhwc, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
+        if x_rm is not x_bhwc:
+            ttnn.deallocate(x_bhwc)
+    if tuple(x_rm.shape) != (B, Hp, Wp, C):
+        x_rm = ttnn.reshape(x_rm, (B, Hp, Wp, C))
+    nH, nW = Hp // window_size, Wp // window_size
+    ws = window_size
+    x_rm = ttnn.reshape(x_rm, (B, nH, ws, Wp, C))
+    x_rm = ttnn.reshape(x_rm, (B, nH, ws, nW, ws, C))
+    x_rm = ttnn.permute(x_rm, (0, 1, 3, 2, 4, 5))
+    num_windows = nH * nW
+    x_rm = ttnn.reshape(x_rm, (B, num_windows, ws * ws, C))
+
+    out_list = []
+    for b in range(B):
+        for i in range(num_windows):
+            win = ttnn.slice(x_rm, (b, i, 0, 0), (b + 1, i + 1, ws * ws, C), memory_config=memory_config)
+            win = ttnn.reshape(win, (1, ws, ws, C))
+            win = ttnn.to_layout(win, ttnn.TILE_LAYOUT, memory_config=memory_config)
+            out_i = run_attn_per_window(win)
+            ttnn.deallocate(win)
+            out_i = out_i.ttnn_tensor if hasattr(out_i, "ttnn_tensor") else out_i
+            out_i = ttnn.to_layout(out_i, ttnn.ROW_MAJOR_LAYOUT, memory_config=memory_config)
+            out_list.append(out_i)
+    ttnn.deallocate(x_rm)
+
+    out_cat = ttnn.concat(out_list, dim=0, memory_config=memory_config)
+    for t in out_list:
+        ttnn.deallocate(t)
+    out_cat = ttnn.reshape(out_cat, (B, nH, nW, ws, ws, C))
+    out_cat = ttnn.permute(out_cat, (0, 1, 3, 2, 4, 5))
+    out_cat = ttnn.reshape(out_cat, (B, Hp, Wp, C))
+    if Hp > H or Wp > W:
+        out_cat = ttnn.slice(out_cat, (0, 0, 0, 0), (B, H, W, C), memory_config=memory_config)
+    out_cat = ttnn.reshape(out_cat, (B, H * W, C))
+    out_tt = ttnn.to_layout(out_cat, ttnn.TILE_LAYOUT, memory_config=memory_config)
+    ttnn.deallocate(out_cat)
+    out_tt = ttnn.reshape(out_tt, (B, H, W, C))
+    return out_tt
+
+
+class TTNNSAMAttention(TTNNModule):
+    """TTNN version of SAM image encoder Attention.
+    Supports both global and windowed attention. Uses manual attention path
+    (matmul QK^T -> scale -> [+bias] -> softmax -> matmul @ V).
+    """
+
+    def __init__(self, dim: int, num_heads: int, head_dim: int, scale: float, window_size: int = 0):
+        super().__init__()
+        self.dim = dim
+        self.num_heads = num_heads
+        self.head_dim = head_dim
+        self.scaling = scale
+        self.window_size = window_size
+        self._use_rel_pos = False
+        self._rel_pos_h = None
+        self._rel_pos_w = None
+        self.sdpa = TTNNSDPAAttention()
+        self.sdpa.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        self._attn_compute_config = self.sdpa.compute_kernel_config
+
+    @classmethod
+    def from_torch(cls, sam_attn: "torch.nn.Module", window_size: int = 0):
+        """Build from SAM Attention (blocks[i].attn)."""
+        dim = sam_attn.qkv.in_features
+        num_heads = sam_attn.num_heads
+        head_dim = dim // num_heads
+        scale = head_dim**-0.5
+        new_attn = cls(dim=dim, num_heads=num_heads, head_dim=head_dim, scale=scale, window_size=window_size)
+        new_attn._fallback_torch_layer = sam_attn
+        new_attn.qkv = TTNNLinear.from_torch(sam_attn.qkv)
+        new_attn.proj = TTNNLinear.from_torch(sam_attn.proj)
+        if getattr(sam_attn, "use_rel_pos", False):
+            new_attn._use_rel_pos = True
+            new_attn._rel_pos_h = sam_attn.rel_pos_h.detach()
+            new_attn._rel_pos_w = sam_attn.rel_pos_w.detach()
+        return new_attn
+
+    def _forward_core(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Core attention on (B, H, W, C)."""
+        B, H, W, C = x.shape
+        seq_len = H * W
+        x = ttnn.reshape(x, ttnn.Shape((B, seq_len, C)))
+        x = ttnn.unsqueeze(x, 1)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        qkv_out = _unwrap_ttnn(self.qkv(x))
+        qkv_out = ttnn.to_memory_config(qkv_out, ttnn.L1_MEMORY_CONFIG)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_out,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_heads,
+            transpose_k_heads=False,
+        )
+        ttnn.deallocate(qkv_out)
+        attn_bias_tt = None
+        if self._use_rel_pos and self._rel_pos_h is not None and self._rel_pos_w is not None:
+            q_t = ttnn.to_torch(q)
+            if q_t.device.type != "cpu":
+                q_t = q_t.cpu()
+            attn_bias = compute_sam_attn_bias(q_t, self._rel_pos_h, self._rel_pos_w, (H, W))
+            attn_bias_tt = ttnn.from_torch(
+                attn_bias.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        cfg = self._attn_compute_config
+        qk = ttnn.matmul(
+            q,
+            k,
+            transpose_b=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=cfg,
+        )
+        ttnn.deallocate(q)
+        ttnn.deallocate(k)
+        qk = ttnn.multiply(qk, self.scaling, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if attn_bias_tt is not None:
+            qk = ttnn.add(qk, attn_bias_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(attn_bias_tt)
+        try:
+            attn_weights = ttnn.softmax(
+                qk,
+                dim=-1,
+                compute_kernel_config=cfg,
+                numeric_stable=True,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(qk)
+        except RuntimeError:
+            qk_torch = ttnn.to_torch(qk)
+            ttnn.deallocate(qk)
+            attn_weights_torch = torch.nn.functional.softmax(qk_torch.float(), dim=-1).to(torch.bfloat16)
+            attn_weights = ttnn.from_torch(
+                attn_weights_torch,
+                dtype=ttnn.bfloat16,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        attn_out = ttnn.matmul(
+            attn_weights,
+            v,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=cfg,
+        )
+        ttnn.deallocate(attn_weights)
+        ttnn.deallocate(v)
+        attn_out = ttnn.experimental.nlp_concat_heads(attn_out)
+        attn_out = ttnn.squeeze(attn_out, 1)
+        attn_out = ttnn.reshape(attn_out, ttnn.Shape((B, H, W, C)))
+        out = _unwrap_ttnn(self.proj(attn_out))
+        return out
+
+    def forward(self, x):
+        """x: (B, H, W, C). Windowed or global attention."""
+        x = _unwrap_ttnn(x)
+        if isinstance(x, torch.Tensor) and not isinstance(x, ttnn.Tensor):
+            x = ttnn.from_torch(x, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.window_size > 0:
+            B, H, W, C = x.shape
+            return _window_partition_unpartition_sam(
+                x,
+                device=self.device,
+                H=H,
+                W=W,
+                window_size=self.window_size,
+                C=C,
+                run_attn_per_window=self._forward_core,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self._forward_core(x)
+
+
+class TTNNNoTPAttention(TTNNModule):
+    """Multi-head self-attention with QKV projection (no tensor parallelism, for DeepSeek-OCR ViT)."""
+
+    def __init__(self, num_heads, n_local_heads, head_dim, max_seq_len, use_flash_attention):
+        super().__init__()
+        self.num_heads = num_heads
+        self.n_local_heads = n_local_heads
+        self.head_dim = head_dim
+        self.max_seq_len = max_seq_len
+        self.use_flash_attention = use_flash_attention
+        self.hidden_size = self.head_dim * self.num_heads
+        self.torch_layer_cp = None
+
+    @classmethod
+    def from_torch(cls, NoTPAttention):
+        obj = cls(
+            NoTPAttention.num_heads,
+            NoTPAttention.n_local_heads,
+            NoTPAttention.head_dim,
+            NoTPAttention.max_seq_len,
+            NoTPAttention.use_flash_attention,
+        )
+        obj._fallback_torch_layer = NoTPAttention
+        obj.torch_layer_cp = NoTPAttention
+        return obj
+
+    def preprocess_weights_impl(self):
+        qkv_weight = self.torch_layer_cp.qkv_proj.weight.data
+        qkv_bias = self.torch_layer_cp.qkv_proj.bias.data if self.torch_layer_cp.qkv_proj.bias is not None else None
+
+        q_weight = qkv_weight[: self.hidden_size, :].T
+        k_weight = qkv_weight[self.hidden_size : 2 * self.hidden_size, :].T
+        v_weight = qkv_weight[2 * self.hidden_size :, :].T
+
+        self.q_weight = ttnn.from_torch(q_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        self.k_weight = ttnn.from_torch(k_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        self.v_weight = ttnn.from_torch(v_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+        if qkv_bias is not None:
+            self.q_bias = ttnn.from_torch(
+                qkv_bias[: self.hidden_size].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            self.k_bias = ttnn.from_torch(
+                qkv_bias[self.hidden_size : 2 * self.hidden_size].unsqueeze(0),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            self.v_bias = ttnn.from_torch(
+                qkv_bias[2 * self.hidden_size :].unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+        else:
+            self.q_bias = self.k_bias = self.v_bias = None
+
+        out_weight = self.torch_layer_cp.out_proj.weight.data.T
+        self.out_weight = ttnn.from_torch(out_weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        out_bias = self.torch_layer_cp.out_proj.bias.data
+        self.out_bias = (
+            ttnn.from_torch(out_bias.unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            if out_bias is not None
+            else None
+        )
+
+    def move_weights_to_device_impl(self):
+        self.q_weight = ttnn.to_device(self.q_weight, self.device)
+        self.k_weight = ttnn.to_device(self.k_weight, self.device)
+        self.v_weight = ttnn.to_device(self.v_weight, self.device)
+        self.out_weight = ttnn.to_device(self.out_weight, self.device)
+        if self.q_bias is not None:
+            self.q_bias = ttnn.to_device(self.q_bias, self.device)
+            self.k_bias = ttnn.to_device(self.k_bias, self.device)
+            self.v_bias = ttnn.to_device(self.v_bias, self.device)
+        if self.out_bias is not None:
+            self.out_bias = ttnn.to_device(self.out_bias, self.device)
+
+    def deallocate_weights_impl(self):
+        ttnn.deallocate(self.q_weight)
+        ttnn.deallocate(self.k_weight)
+        ttnn.deallocate(self.v_weight)
+        ttnn.deallocate(self.out_weight)
+        if self.q_bias is not None:
+            ttnn.deallocate(self.q_bias)
+            ttnn.deallocate(self.k_bias)
+            ttnn.deallocate(self.v_bias)
+        if self.out_bias is not None:
+            ttnn.deallocate(self.out_bias)
+
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if isinstance(x, torch.Tensor):
+            x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+
+        bsz, seqlen, _ = x.shape
+
+        query = ttnn.linear(
+            x, self.q_weight, bias=self.q_bias, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        key = ttnn.linear(x, self.k_weight, bias=self.k_bias, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+        value = ttnn.linear(
+            x, self.v_weight, bias=self.v_bias, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+
+        query = ttnn.reshape(query, (bsz, seqlen, self.num_heads, self.head_dim))
+        key = ttnn.reshape(key, (bsz, seqlen, self.num_heads, self.head_dim))
+        value = ttnn.reshape(value, (bsz, seqlen, self.num_heads, self.head_dim))
+        query = ttnn.permute(query, (0, 2, 1, 3))
+        key = ttnn.permute(key, (0, 2, 1, 3))
+        value = ttnn.permute(value, (0, 2, 1, 3))
+
+        scale = 1.0 / math.sqrt(self.head_dim)
+
+        try:
+            TILE_SIZE = 32
+            chunk_size = max(128, ((seqlen + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE)
+            device_grid = self.device.compute_with_storage_grid_size()
+            sdpa_cfg = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(min(8, device_grid.x), min(8, device_grid.y)),
+                q_chunk_size=chunk_size,
+                k_chunk_size=chunk_size,
+                exp_approx_mode=False,
+            )
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+            attention_output = ttnn.transformer.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                scale=scale,
+                is_causal=False,
+                program_config=sdpa_cfg,
+                compute_kernel_config=compute_kernel_config,
+            )
+            attention_output = ttnn.permute(attention_output, (0, 2, 1, 3))
+            attention_output = ttnn.reshape(attention_output, (bsz, seqlen, self.hidden_size))
+        except RuntimeError:
+            q_t = ttnn.to_torch(query).float()
+            k_t = ttnn.to_torch(key).float()
+            v_t = ttnn.to_torch(value).float()
+            attn_out = torch.nn.functional.scaled_dot_product_attention(q_t, k_t, v_t, scale=scale).to(torch.bfloat16)
+            attn_out = attn_out.permute(0, 2, 1, 3).reshape(bsz, seqlen, self.hidden_size)
+            attention_output = ttnn.from_torch(
+                attn_out, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+            )
+
+        output = ttnn.linear(
+            attention_output,
+            self.out_weight,
+            bias=self.out_bias,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+        ttnn.deallocate(query)
+        ttnn.deallocate(key)
+        ttnn.deallocate(value)
+        ttnn.deallocate(attention_output)
+
+        output = ttnn.to_torch(output)
+        return output

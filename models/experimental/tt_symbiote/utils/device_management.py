@@ -12,6 +12,20 @@ from models.experimental.tt_symbiote.core.run_config import DispatchManager, Dis
 from models.experimental.tt_symbiote.utils.graph_visualization import draw_model_graph
 
 
+_current_ttnn_device = None
+
+
+def get_current_ttnn_device():
+    """Return the TTNN device last set via set_device(obj, device), or None."""
+    return _current_ttnn_device
+
+
+def set_current_ttnn_device(device):
+    """Set the current TTNN device (called by set_device)."""
+    global _current_ttnn_device
+    _current_ttnn_device = device
+
+
 class DeviceInit:
     DEVICE_TO_STATE_DICT = {}
 
@@ -43,6 +57,7 @@ def set_device(obj, device, device_init=DeviceInit, **kwargs):
     """Recursively set device for all TTNN modules in a model."""
     from models.experimental.tt_symbiote.core.module import TTNNModule
 
+    set_current_ttnn_device(device)
     # Build module name mapping before recursion
     module_names = {}
     if isinstance(obj, nn.Module):

@@ -1967,6 +1967,178 @@ def handle_gather(func, args, kwargs):
     return res
 
 
+def handle_index_put_(func, args, kwargs):
+    """Handle index_put_ (in-place) using ttnn.index_fill.
+
+    Supports the case where indices is a tuple with exactly one index tensor
+    (others None), and value is a scalar. This maps to ttnn.index_fill(input, dim, index, value).
+    ttnn.index_fill requires ROW_MAJOR layout; we convert to/from TILE as needed.
+    """
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    indices = args[1]
+    value = args[2]
+
+    index_dim = None
+    index_tensor = None
+    if isinstance(indices, (list, tuple)):
+        for dim, idx in enumerate(indices):
+            if isinstance(idx, (torch.Tensor, TorchTTNNTensor)):
+                if index_tensor is not None:
+                    raise NotImplementedError(
+                        "aten::index_put_ with multiple index tensors is not supported; "
+                        "only single-dim index (compatible with index_fill) is supported."
+                    )
+                index_dim = dim
+                index_tensor = idx
+
+    if index_dim is None or index_tensor is None:
+        raise NotImplementedError("aten::index_put_ requires exactly one index tensor in the indices tuple.")
+
+    if isinstance(value, torch.Tensor) and value.numel() != 1:
+        raise NotImplementedError(
+            "aten::index_put_ with non-scalar value is not supported; use scalar value for index_fill."
+        )
+    if isinstance(value, torch.Tensor):
+        value = value.item()
+
+    device = None
+    deallocate_input = False
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+        deallocate_input = True
+    else:
+        if input_tensor.ttnn_tensor is None:
+            deallocate_input = True
+        device = input_tensor.to_ttnn.device()
+
+    deallocate_index = False
+    if not isinstance(index_tensor, TorchTTNNTensor):
+        if isinstance(index_tensor, (int, float)):
+            index_tensor = torch.tensor([index_tensor], dtype=torch.int64)
+        else:
+            index_tensor = index_tensor if isinstance(index_tensor, torch.Tensor) else torch.tensor(index_tensor)
+        if index_tensor.dim() > 1:
+            index_tensor = index_tensor.flatten()
+        index_tensor = TorchTTNNTensor(index_tensor, dtype=torch.int64)
+        deallocate_index = True
+    else:
+        if index_tensor.ttnn_tensor is None:
+            deallocate_index = True
+        device = index_tensor.to_ttnn.device() if device is None else device
+        if index_tensor.to_ttnn.dim() > 1:
+            index_tensor.ttnn_tensor = ttnn.reshape(index_tensor.to_ttnn, -1)
+
+    if device is None:
+        raise RuntimeError("At least one of the inputs must be a TTNN tensor.")
+    if input_tensor.to_ttnn.device() != index_tensor.to_ttnn.device():
+        input_tensor.ttnn_tensor = ttnn.to_device(input_tensor.to_ttnn, device)
+        index_tensor.ttnn_tensor = ttnn.to_device(index_tensor.to_ttnn, device)
+    if deallocate_input:
+        input_tensor.ttnn_tensor = ttnn.to_device(input_tensor.to_ttnn, device)
+    if deallocate_index:
+        index_tensor.ttnn_tensor = ttnn.to_device(index_tensor.to_ttnn, device)
+
+    index_shape = index_tensor.shape
+    if index_shape is not None and (not index_shape or 0 in index_shape):
+        if deallocate_index:
+            _cleanup_tensors((index_tensor, True))
+        return input_tensor
+
+    input_tt = input_tensor.to_ttnn
+    original_layout = input_tt.layout
+    if original_layout != ttnn.ROW_MAJOR_LAYOUT:
+        input_tt = ttnn.to_layout(input_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    index_tt = index_tensor.to_ttnn
+    if index_tt.layout != ttnn.ROW_MAJOR_LAYOUT:
+        index_tt = ttnn.to_layout(index_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    if index_tt.dtype != ttnn.uint32:
+        index_tt = ttnn.typecast(index_tt, ttnn.uint32)
+
+    result = ttnn.index_fill(input_tt, index_dim, index_tt, value)
+    if original_layout != ttnn.ROW_MAJOR_LAYOUT:
+        result = ttnn.to_layout(result, original_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    input_tensor.ttnn_tensor = result
+    input_tensor.elem = None
+
+    if deallocate_index:
+        _cleanup_tensors((index_tensor, True))
+    return input_tensor
+
+
+def handle_isin(func, args, kwargs):
+    """Handle isin operation using ttnn.experimental.isin."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+    from models.experimental.tt_symbiote.utils.device_management import get_current_ttnn_device
+
+    elements = args[0]
+    test_elements = args[1]
+    invert = kwargs.get("invert", False)
+
+    from models.experimental.tt_symbiote.core.run_config import no_dispatch
+
+    def has_ttnn_on_device(t):
+        if not isinstance(t, TorchTTNNTensor):
+            return False
+        if t.ttnn_tensor is None:
+            return False
+        try:
+            return t.ttnn_tensor.device() is not None
+        except Exception:
+            return False
+
+    both_cpu = not has_ttnn_on_device(elements) and not has_ttnn_on_device(test_elements)
+    if both_cpu:
+
+        def to_torch(t):
+            if isinstance(t, TorchTTNNTensor):
+                return t.elem if t.elem is not None else t.to_torch
+            return t
+
+        with no_dispatch():
+            a, b = to_torch(elements), to_torch(test_elements)
+            out = torch.isin(a, b, invert=invert)
+        return TorchTTNNTensor(out, dtype=torch.bool)
+
+    device = None
+    for t in (elements, test_elements):
+        if isinstance(t, TorchTTNNTensor) and t.ttnn_tensor is not None:
+            try:
+                d = t.ttnn_tensor.device()
+                if d is not None:
+                    device = d
+                    break
+            except Exception:
+                pass
+    if device is None:
+        for t in (elements, test_elements):
+            if isinstance(t, TorchTTNNTensor):
+                try:
+                    device = t.to_ttnn.device()
+                    if device is not None:
+                        break
+                except Exception:
+                    pass
+    if device is None:
+        device = get_current_ttnn_device()
+    if device is None:
+        raise RuntimeError(
+            "Cannot dispatch torch.isin to TTNN: could not resolve device. "
+            "Ensure set_device(model, device) was called, or at least one input has a TTNN tensor on device."
+        )
+
+    tensor1, tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(elements, test_elements, device)
+    if deallocate_a:
+        tensor1.ttnn_tensor = ttnn.to_device(tensor1.to_ttnn, device)
+    if deallocate_b:
+        tensor2.ttnn_tensor = ttnn.to_device(tensor2.to_ttnn, device)
+    result = ttnn.experimental.isin(tensor1.to_ttnn, tensor2.to_ttnn, invert=invert)
+    res = TorchTTNNTensor(result, dtype=torch.bool)
+    _cleanup_tensors((tensor1, deallocate_a), (tensor2, deallocate_b))
+    return res
+
+
 def _get_func_to_ttnn_compatible():
     """aten op name -> TTNN handler."""
     return {
@@ -2065,6 +2237,9 @@ def _get_func_to_ttnn_compatible():
         "aten::copy_": handle_copy_,
         "aten::_scaled_dot_product_attention": handle_sdpa,
         "aten::_scaled_dot_product_attention_flash_attention": handle_sdpa,
+        "aten::index_put_": handle_index_put_,
+        "aten::isin": handle_isin,
+        "aten::isin.Tensor_Tensor": handle_isin,
     }
 
 
@@ -2083,6 +2258,8 @@ def _log_fallback_op(func_name: str) -> None:
 def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
     """Return True if this op can run on TTNN with the given args/kwargs."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    dispatch_func_name = "aten::isin" if (func_name and func_name.startswith("aten::isin")) else func_name
 
     any_ttnn_tensor = False
     for elem in args:
@@ -2120,6 +2297,11 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
                         f"TTNN: Found unsupported dtype {sub_elem.dtype} for TTNN tensor in list/tuple, cannot dispatch {func_name} to TTNN"
                     )
                     return False
+    if not any_ttnn_tensor and dispatch_func_name == "aten::isin":
+        for elem in args:
+            if isinstance(elem, TorchTTNNTensor):
+                any_ttnn_tensor = True
+                break
     passed = True
     if "aten::slice.Tensor" == func_name:
         if (
@@ -2300,7 +2482,7 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
             print(
                 f"[TTNN im2col debug] func_name={func_name!r} any_ttnn_tensor={any_ttnn_tensor} shape={_shp} passed={passed}"
             )
-    if func_name in _get_func_to_ttnn_compatible() and any_ttnn_tensor:
+    if dispatch_func_name in _get_func_to_ttnn_compatible() and any_ttnn_tensor:
         return passed
     if func_name.startswith("aten::sum") and any_ttnn_tensor and passed:
         return True
@@ -2312,8 +2494,9 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
 def dispatch_to_ttnn(func_name, args, kwargs):
     """Call the TTNN handler for this op or raise KeyError."""
     func_to_ttnn_compatible = _get_func_to_ttnn_compatible()
-    if func_name in func_to_ttnn_compatible:
-        return func_to_ttnn_compatible[func_name](func_name, args, kwargs)
+    dispatch_func_name = "aten::isin" if (func_name and func_name.startswith("aten::isin")) else func_name
+    if dispatch_func_name in func_to_ttnn_compatible:
+        return func_to_ttnn_compatible[dispatch_func_name](func_name, args, kwargs)
     if func_name.startswith("aten::sum"):
         return handle_sum(func_name, args, kwargs)
     raise KeyError(f"No TTNN handler for {func_name}")
