@@ -2303,7 +2303,7 @@ class AttentionBlock:
         create_q_heads_out_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             create_q_heads_out_cb,
             ref_attention_block_output_tensor,  # Overlap with attn output since it's only on the mcast core
-            address_offset=0,
+            address_offset=attn_block_output_running_offset,
             total_size=create_q_heads_out_total_size,
             core_ranges=full_device_grid,
         )
@@ -2315,6 +2315,7 @@ class AttentionBlock:
                 tile=create_q_heads_out_tile_descriptor,
             )
         ]
+        attn_block_output_running_offset += create_q_heads_out_cb_descriptor.total_size
 
         # CB 24: DKV Matmul output — shares CB ID with matmul_output_cb (disjoint grids)
         # matmul_output_cb covers matmul_weights_core_grid (rows 0-7)
