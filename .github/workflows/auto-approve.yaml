@@ -4,7 +4,8 @@ name: Auto-approve dependency bumps
 # dependency version file — no human review needed.
 #
 # Currently covers:
-#   - SFPI: @nathan-TT bumping tt_metal/sfpi-version
+#   - SFPI:  @nathan-TT bumping tt_metal/sfpi-version
+#   - ttsim: @mcraigheadTT bumping .github/workflows/ttsim.yaml
 #
 # To add a new component: add a new job following the same pattern.
 #
@@ -91,3 +92,70 @@ jobs:
             --repo tenstorrent/tt-metal \
             --approve \
             --body "🤖 Auto-approved: SFPI version bump from @nathan-TT (component author). Only tt_metal/sfpi-version was modified."
+
+  # ---------------------------------------------------------------------------
+  # ttsim — @mcraigheadTT bumping .github/workflows/ttsim.yaml
+  # ---------------------------------------------------------------------------
+  auto-approve-ttsim:
+    name: Auto-approve ttsim bump
+    runs-on: ubuntu-latest
+    # Fast-exit: only run for mcraigheadTT non-draft PRs
+    if: |
+      github.event.pull_request.user.login == 'mcraigheadTT' &&
+      !github.event.pull_request.draft
+    steps:
+      - name: Verify only ttsim files are changed
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Fetch changed files via API (no code checkout needed)
+          FILES=$(gh api "repos/tenstorrent/tt-metal/pulls/${PR_NUMBER}/files" \
+            --jq '.[].filename')
+
+          echo "Changed files in PR #${PR_NUMBER}:"
+          echo "$FILES"
+
+          # Allowed files for ttsim version bumps.
+          # ttsim.yaml holds the version string; the skip list is updated
+          # alongside new versions to suppress newly-failing tests.
+          ALLOWED=(
+            ".github/workflows/ttsim.yaml"
+            "tests/pipeline_reorg/ttsim-skip-list.yaml"
+          )
+
+          SAFE=true
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            match=false
+            for allowed in "${ALLOWED[@]}"; do
+              if [[ "$file" == "$allowed" ]]; then
+                match=true
+                break
+              fi
+            done
+            if [[ "$match" == "false" ]]; then
+              echo "FAIL: Unexpected file not in ttsim allowlist: $file"
+              SAFE=false
+            fi
+          done <<< "$FILES"
+
+          if [[ "$SAFE" == "true" ]]; then
+            echo "All changed files are in the ttsim allowlist — safe to auto-approve."
+            echo "safe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "PR contains files outside the ttsim allowlist — skipping auto-approve."
+            echo "safe=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Approve PR
+        if: steps.verify.outputs.safe == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr review "$PR_NUMBER" \
+            --repo tenstorrent/tt-metal \
+            --approve \
+            --body "🤖 Auto-approved: ttsim version bump from @mcraigheadTT (component author)."
