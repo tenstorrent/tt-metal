@@ -1891,7 +1891,12 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset = program_dispatch::finalize_kernel_bins(
-            device, index, kernels_getter(index), kernel_groups_getter(index), state.offset, state.kernel_text_offset);
+            device,
+            index,
+            kernels_getter(index),
+            kernel_groups_getter(index),
+            state.offset,
+            state.kernel_text_offset);
 
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
