@@ -529,6 +529,11 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         suffix = " (%)" if is_pct else ""
         unit = "%" if is_pct else ""
 
+        # Skip metrics that have no data columns (e.g. BH-dead counters)
+        avg_col = f"{base_metric} Avg{suffix}"
+        if avg_col not in metrics_df.columns or metrics_df[avg_col].dropna().empty:
+            continue
+
         print("\n" + "=" * 80)
         print(f"{base_metric.upper()}")
         print("=" * 80)

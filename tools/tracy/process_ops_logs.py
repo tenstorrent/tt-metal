@@ -1266,7 +1266,7 @@ def _enrich_ops_from_device_logs(
             math_pipe_util = (math_instrn_started / math_instrn_available * 100).replace(
                 [float("inf"), -float("inf")], nan
             )
-            math_pack_eff = (available_math / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
+            math_pack_eff = (available_math / packer_busy * 100).clip(upper=100).replace([float("inf"), -float("inf")], nan)
             unpack_math_flow = (
                 ((srca_write_avail + srcb_write_avail) / 2) / ((unpack0_busy + unpack1_busy) / 2) * 100
             ).replace([float("inf"), -float("inf")], nan)
@@ -2201,14 +2201,15 @@ def get_device_data_generate_report(
                         lambda x: safe_div(x.get("value_PACKER_DEST_READ_AVAILABLE", 0), x.get("value_PACKER_BUSY", 0)),
                         axis=1,
                     )
-                    eff_pivot["Math Pipeline Utilization"] = eff_pivot.apply(
-                        lambda x: safe_div(
-                            x.get("value_MATH_INSTRN_STARTED", 0), x.get("value_MATH_INSTRN_AVAILABLE", 0)
-                        ),
-                        axis=1,
-                    )
+                    if "value_MATH_INSTRN_STARTED" in eff_pivot.columns:
+                        eff_pivot["Math Pipeline Utilization"] = eff_pivot.apply(
+                            lambda x: safe_div(
+                                x.get("value_MATH_INSTRN_STARTED", 0), x.get("value_MATH_INSTRN_AVAILABLE", 0)
+                            ),
+                            axis=1,
+                        )
                     eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
-                        lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("value_PACKER_BUSY", 0)), axis=1
+                        lambda x: min(100.0, safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("value_PACKER_BUSY", 0))), axis=1
                     )
                     eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
                         lambda x: safe_div(
@@ -2455,12 +2456,40 @@ def get_device_data_generate_report(
                         safe_ratio("value_WAITING_FOR_SFPU_IDLE_1", "value_THREAD_STALLS_1"), axis=1)
 
                     # Write port blocking
+                    eff_pivot["SrcA Write Port Blocked Rate"] = eff_pivot.apply(
+                        safe_complement("value_SRCA_WRITE_NOT_BLOCKED_OVR", "value_SRCA_WRITE_AVAILABLE"), axis=1)
                     eff_pivot["SrcB Write Port Blocked Rate"] = eff_pivot.apply(
                         safe_complement("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"), axis=1)
                     eff_pivot["SrcA Write Actual Efficiency"] = eff_pivot.apply(
                         safe_ratio("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"), axis=1)
-                    eff_pivot["SrcB Write Actual Efficiency"] = eff_pivot.apply(
-                        safe_ratio("value_SRCB_WRITE_ACTUAL", "value_SRCB_WRITE_AVAILABLE"), axis=1)
+                    if "value_SRCB_WRITE_ACTUAL" in eff_pivot.columns:
+                        eff_pivot["SrcB Write Actual Efficiency"] = eff_pivot.apply(
+                            safe_ratio("value_SRCB_WRITE_ACTUAL", "value_SRCB_WRITE_AVAILABLE"), axis=1)
+
+                    # Dest read and math stall metrics
+                    def safe_bp_single(req_key, grant_key):
+                        def fn(x):
+                            r = x.get(req_key, 0)
+                            g = x.get(grant_key, 0)
+                            return max(0.0, (r - g) / r * 100) if r > 0 else nan
+                        return fn
+                    eff_pivot["Dest Read Backpressure"] = eff_pivot.apply(
+                        safe_bp_single("value_PACKER_DEST_READ_AVAILABLE", "value_DEST_READ_GRANTED_0"), axis=1)
+                    eff_pivot["Math Dest Write Port Stall Rate"] = eff_pivot.apply(
+                        safe_complement("value_MATH_NOT_STALLED_DEST_WR_PORT", "value_MATH_INSTRN_AVAILABLE"), axis=1)
+                    eff_pivot["Math Scoreboard Stall Rate"] = eff_pivot.apply(
+                        safe_complement("value_AVAILABLE_MATH", "value_MATH_INSTRN_AVAILABLE"), axis=1)
+
+                    # Instruction issue rates (per cycle, not %)
+                    eff_pivot["Unpack Instrn Issue Rate T0"] = eff_pivot.apply(
+                        lambda x: x.get("value_UNPACK_INSTRN_ISSUED_0", 0) / x.get("ref_cnt_UNPACK_INSTRN_ISSUED_0", 1)
+                        if x.get("ref_cnt_UNPACK_INSTRN_ISSUED_0", 0) > 0 else nan, axis=1)
+                    eff_pivot["Math Instrn Issue Rate T1"] = eff_pivot.apply(
+                        lambda x: x.get("value_FPU_INSTRN_ISSUED_1", 0) / x.get("ref_cnt_FPU_INSTRN_ISSUED_1", 1)
+                        if x.get("ref_cnt_FPU_INSTRN_ISSUED_1", 0) > 0 else nan, axis=1)
+                    eff_pivot["Pack Instrn Issue Rate T2"] = eff_pivot.apply(
+                        lambda x: x.get("value_PACK_INSTRN_ISSUED_2", 0) / x.get("ref_cnt_PACK_INSTRN_ISSUED_2", 1)
+                        if x.get("ref_cnt_PACK_INSTRN_ISSUED_2", 0) > 0 else nan, axis=1)
 
                     # Fidelity analysis
                     def hifi4_rate_fn(x):
@@ -2472,13 +2501,14 @@ def get_device_data_generate_report(
                     eff_pivot["Fidelity Phase Overhead"] = eff_pivot.apply(
                         safe_util("value_FIDELITY_PHASE_STALLS", "ref_cnt_FIDELITY_PHASE_STALLS"), axis=1)
 
-                    # Packer engine granularity
-                    eff_pivot["Packer Engine 0 Util"] = eff_pivot.apply(
-                        safe_util("value_PACKER_BUSY_0", "ref_cnt_PACKER_BUSY_0"), axis=1)
-                    eff_pivot["Packer Engine 1 Util"] = eff_pivot.apply(
-                        safe_util("value_PACKER_BUSY_1", "ref_cnt_PACKER_BUSY_1"), axis=1)
-                    eff_pivot["Packer Engine 2 Util"] = eff_pivot.apply(
-                        safe_util("value_PACKER_BUSY_2", "ref_cnt_PACKER_BUSY_2"), axis=1)
+                    # Packer engine granularity (WH only — BH has PACK_COUNT=1, counters not collected)
+                    if "value_PACKER_BUSY_0" in eff_pivot.columns:
+                        eff_pivot["Packer Engine 0 Util"] = eff_pivot.apply(
+                            safe_util("value_PACKER_BUSY_0", "ref_cnt_PACKER_BUSY_0"), axis=1)
+                        eff_pivot["Packer Engine 1 Util"] = eff_pivot.apply(
+                            safe_util("value_PACKER_BUSY_1", "ref_cnt_PACKER_BUSY_1"), axis=1)
+                        eff_pivot["Packer Engine 2 Util"] = eff_pivot.apply(
+                            safe_util("value_PACKER_BUSY_2", "ref_cnt_PACKER_BUSY_2"), axis=1)
 
                     # Low priority waits
                     eff_pivot["MMIO Idle Wait T0"] = eff_pivot.apply(
