@@ -392,6 +392,7 @@ if(NOT EXISTS "${GPT2_TOKENIZER_FILE}")
             ${GPT2_TOKENIZER_URL}
             ${GPT2_TOKENIZER_FILE}
         SHOW_PROGRESS
+        EXPECTED_HASH SHA256=8414cab924d8b9b33013f0d221c5862f365ee9be39c5c2bfae8a5a9e970478a6
     )
 else()
     message(STATUS "Tokenizer text file already exists at ${GPT2_TOKENIZER_FILE}, skipping download.")
@@ -408,6 +409,7 @@ if(NOT EXISTS "${TINYLLAMA_TOKENIZER_FILE}")
             ${TINYLLAMA_TOKENIZER_URL}
             ${TINYLLAMA_TOKENIZER_FILE}
         SHOW_PROGRESS
+        EXPECTED_HASH SHA256=bcd04f0eadf90287bd26e1a183ac487d8a141b09b06aecb7725bbdd343640f2e
     )
 else()
     message(STATUS "Tokenizer text file already exists at ${TINYLLAMA_TOKENIZER_FILE}, skipping download.")

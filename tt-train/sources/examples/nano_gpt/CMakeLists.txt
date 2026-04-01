@@ -64,6 +64,7 @@ if(NOT EXISTS "${SHAKESPEARE_FILE}")
             ${SHAKESPEARE_URL}
             ${SHAKESPEARE_FILE}
         SHOW_PROGRESS
+        EXPECTED_HASH SHA256=86c4e6aa9db7c042ec79f339dcb96d42b0075e16b8fc2e86bf0ca57e2dc565ed
     )
 else()
     message(STATUS "Shakespeare text file already exists at ${SHAKESPEARE_FILE}, skipping download.")

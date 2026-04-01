@@ -102,6 +102,7 @@ if(NOT EXISTS "${TOKENIZER_FILE}")
             ${TOKENIZER_URL}
             ${TOKENIZER_FILE}
         SHOW_PROGRESS
+        EXPECTED_HASH SHA256=3cf430678137c8491ca82fb7092ee49e44ad38857fffe1e4a4a5ed860139a5b8
     )
 else()
     message(STATUS "Tokenizer text file already exists at ${TOKENIZER_FILE}, skipping download.")
@@ -122,6 +123,7 @@ if(NOT EXISTS "${SHAKESPEARE_FILE}")
             ${SHAKESPEARE_URL}
             ${SHAKESPEARE_FILE}
         SHOW_PROGRESS
+        EXPECTED_HASH SHA256=86c4e6aa9db7c042ec79f339dcb96d42b0075e16b8fc2e86bf0ca57e2dc565ed
     )
 else()
     message(STATUS "Shakespeare text file already exists at ${SHAKESPEARE_FILE}, skipping download.")
