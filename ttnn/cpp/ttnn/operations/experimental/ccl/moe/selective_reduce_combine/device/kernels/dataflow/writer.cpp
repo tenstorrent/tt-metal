@@ -42,6 +42,7 @@ inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
 template <uint32_t TokensPerDevice>
 inline uint32_t get_output_page_idx(const uint32_t t, const uint32_t k) {
     uint32_t t_idx = t % TokensPerDevice;
+    // uint32_t t_idx = 1 + t % TokensPerDevice; // breaking change
     return k * TokensPerDevice + t_idx;
 }
 }  // namespace detail
