@@ -115,7 +115,6 @@ class TtLingbotVA:
         B, _, F, H, W = spatial.shape
         pF, pH, pW = tt_transformer.patch_size
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
-        N = patch_F * patch_H * patch_W
 
         # Build regular (non-action) grid/timestep inputs and run existing preprocessing helpers once.
         grid_id = lingbot_demo.get_mesh_id(patch_F, patch_H, patch_W, 0, 1, 0).to(spatial.device)

@@ -113,7 +113,8 @@ def _release_ttnn_runtime_configs(obj, _visited: set[int] | None = None) -> None
             try:
                 setattr(obj, name, None)
             except Exception:
-                pass
+                # Best-effort teardown; some descriptors reject clearing.
+                logger.debug("Could not clear %s on %s", name, type(obj).__name__, exc_info=True)
 
 
 class _TTTransformerAdapter:
@@ -795,7 +796,7 @@ def _encode_obs(models, state, obs):
         vae_device = next(streaming_vae.vae.parameters()).device
         enc_out = streaming_vae.encode_chunk(videos.to(vae_device).to(dtype))
 
-    mu, logvar = torch.chunk(enc_out, 2, dim=1)
+    mu, _ = torch.chunk(enc_out, 2, dim=1)
     latents_mean = torch.tensor(vae.config.latents_mean).to(mu.device)
     latents_std = torch.tensor(vae.config.latents_std).to(mu.device)
     mu_norm = _normalize_latents(mu, latents_mean, 1.0 / latents_std)

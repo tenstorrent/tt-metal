@@ -467,7 +467,7 @@ class WanTransformer3DModel(Module):
     def __enter__(self) -> WanTransformer3DModel:
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+    def __exit__(self, _exc_type, _exc_val, _exc_tb) -> None:
         self.cleanup_all()
 
     def clear_cache(self, cache_name: str) -> None:
@@ -849,9 +849,6 @@ class WanTransformer3DModel(Module):
             rope_sin_1HND = grid_id["rope_sin"]
             trans_mat = grid_id["trans_mat"]
             N = grid_id["N"]
-            F = grid_id["F"]
-            H = grid_id["H"]
-            W = grid_id["W"]
             use_per_token = grid_id["use_per_token"]
             action_mode = grid_id.get("action_mode", action_mode)
 
