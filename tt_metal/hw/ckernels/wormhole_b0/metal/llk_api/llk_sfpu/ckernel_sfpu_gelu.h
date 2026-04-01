@@ -210,15 +210,13 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         // P(x) is a degree-4 correction polynomial fitted to the TRUE function
         // GELU(x)·exp(x²/2) via minimax approximation over x ∈ (-13.1875, -3.125).
         //
-        // Uses Moroz exp_21f instead of Cody-Waite range reduction, saving ~4
-        // instructions. The exp_21f algorithm packs floor(t/ln2) and frac(t/ln2)
-        // into a single int32 via _float_to_int32_for_exp_21f_, then extracts
-        // exponential and fractional parts via exexp_nodebias/exman9.
-        sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
-
+        // Uses Moroz exp_21f instead of Cody-Waite range reduction.
+        // The intermediate t = -x²/2 is folded into the log2 constant,
+        // computing x2 * (-0.5/ln2) + 127 directly (saves 1 mul).
         // Moroz exp_21f: compact exp via integer bit tricks
-        constexpr float ONE_LN2 = 1.4426950216293334961f;
-        sfpi::vFloat xlog2 = t * ONE_LN2 + 127.0f;
+        // Fold t = -x²/2 into the log2 constant: x2 * (-0.5 / ln2) + 127
+        constexpr float NEG_HALF_ONE_LN2 = -0.72134752044f;  // -0.5 / ln(2)
+        sfpi::vFloat xlog2 = x2 * NEG_HALF_ONE_LN2 + 127.0f;
 
         sfpi::vInt z = _float_to_int32_for_exp_21f_(xlog2);
         sfpi::vInt exponential_part = sfpi::exexp_nodebias(sfpi::reinterpret<sfpi::vFloat>(z));
