@@ -437,7 +437,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 @pytest.mark.parametrize("layer_id, num_layers", [(0, 1)])
-@pytest.mark.parametrize("batches_per_device", [32])  # Same as TG dispatch test
+@pytest.mark.parametrize("batches_per_device", [32])
 @pytest.mark.parametrize("shard_dim", [0])
 @pytest.mark.parametrize("experts", [64])
 @pytest.mark.parametrize("select_experts_k", [8])
@@ -447,7 +447,7 @@ def verify_output(iteration, mesh_device, mesh_shape, tt_output_tensor, output_r
 @pytest.mark.parametrize("scheme", ["random_sequential_experts"])
 @pytest.mark.parametrize("compute_output_height_shard_dim", [4])
 @pytest.mark.parametrize("compute_output_width_shard_dim", [4])
-@pytest.mark.parametrize("combine_mux_core_range", [((2, 0), (3, 7))])  # TG-specific core range
+@pytest.mark.parametrize("combine_mux_core_range", [((2, 0), (3, 7))])
 @pytest.mark.parametrize("combine_token_parallel_core_dim", [4])
 @pytest.mark.parametrize("combine_data_parallel_core_dim", [4])
 @pytest.mark.parametrize("enable_trace", [True])
