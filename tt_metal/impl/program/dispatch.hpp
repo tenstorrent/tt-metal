@@ -110,7 +110,8 @@ uint32_t finalize_kernel_bins(
     const std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& kernels,
     std::vector<std::shared_ptr<KernelGroup>>& kernel_groups,
     uint32_t base_offset,
-    uint32_t& kernel_text_offset);
+    uint32_t& kernel_text_offset,
+    uint32_t& kernel_text_size);
 
 void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_command_sequence);
 
