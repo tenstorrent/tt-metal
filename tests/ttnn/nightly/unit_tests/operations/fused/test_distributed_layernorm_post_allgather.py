@@ -13,6 +13,8 @@ from models.common.utility_functions import tt2torch_tensor, torch2tt_tensor
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
 
+TEST_PADDING_VALUE = -42
+
 
 def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
     if is_rmsnorm:
@@ -72,6 +74,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
+        tt_inp = ttnn.fill_implicit_tile_padding(tt_inp, TEST_PADDING_VALUE)
         tt_gamma = torch2tt_tensor(
             gamma_chunked[d].reshape(1, 1, -1, 32),
             tt_dtype=ttnn.bfloat16,
@@ -93,6 +96,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
+        tt_stats = ttnn.fill_implicit_tile_padding(tt_stats, TEST_PADDING_VALUE)
 
         if is_rmsnorm:
             tt_lnp2_out = ttnn.rms_norm_post_all_gather(
@@ -146,6 +150,9 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
         (1, 1, 2048, 8192),
         (1, 1, 128, 8192),
         (2, 1, 128, 8192),
+        # (1, 1, 1025, 3201)  # Implicit padding case
+        # Disabled due to issue #31983:
+        # Fails when per-device feature size is not divisible by 32 (invalid reshape assumption)
     ],
 )
 @pytest.mark.parametrize(
@@ -177,6 +184,9 @@ def test_layernorm_part_2_with_program_cache(
     "inp_shape",
     [
         (1, 1, 2048, 8192),
+        # (1,1,32,33) # Implicit padding case
+        # Disabled due to issue #31983:
+        # Incorrect results when padding values are included in computation for non tile-aligned inputs
     ],
 )
 @pytest.mark.parametrize(

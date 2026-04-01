@@ -18,6 +18,8 @@ from models.common.utility_functions import print_diff_argmax
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
 
+TEST_PADDING_VALUE = -42
+
 
 @pytest.mark.parametrize(
     "dtype",
@@ -35,6 +37,7 @@ def test_softmax(device, inplace, dtype):
         input_tensor = torch.randn(input_shape).bfloat16()
 
         tt_input_tensor = ttnn.from_torch(input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
         if dtype == ttnn.float32:
             compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -80,6 +83,7 @@ def test_softmax_with_program_cache(device, inplace):
         input_tensor = torch.randn(input_shape).bfloat16()
 
         tt_input_tensor = ttnn.from_torch(input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
         tt_output_tensor_on_device = sm_op(tt_input_tensor)
         tt_output_tensor = ttnn.to_layout(tt_output_tensor_on_device, ttnn.ROW_MAJOR_LAYOUT)
         tt_output_tensor = ttnn.from_device(tt_output_tensor)
@@ -114,6 +118,7 @@ def test_softmax_mix_precision(device, inplace, in_dtype):
         input_tensor = torch.randn(input_shape).bfloat16()
 
         tt_input_tensor = ttnn.from_torch(input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
         tt_output_tensor_on_device = sm_op(tt_input_tensor)
         tt_output_tensor = ttnn.to_layout(tt_output_tensor_on_device, ttnn.ROW_MAJOR_LAYOUT)
         tt_output_tensor = ttnn.from_device(tt_output_tensor)
@@ -180,17 +185,20 @@ def test_scale_mask_softmax_inplace(device, in_dtype, in0_mem_config, causal_mas
         mask = torch.rand_like(attention_mask) < 0.2
         attention_mask[mask] = float("-inf")
         attention_mask_t = ttnn.from_torch(attention_mask, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
     else:
         attention_mask = torch.rand(batch, 1, seq_len, seq_len)
         mask = torch.rand_like(attention_mask) < 0.2
         attention_mask[mask] = float("-inf")
         attention_mask = pad_weight(attention_mask)
         attention_mask_t = ttnn.from_torch(attention_mask, dtype=mask_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
 
     input_tensor = torch.randn(input_shape).bfloat16().float()
     in1_t = ttnn.from_torch(
         input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
+    in1_t = ttnn.fill_implicit_tile_padding(in1_t, TEST_PADDING_VALUE)
 
     if in_dtype == ttnn.float32:
         compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -261,11 +269,13 @@ def test_scale_mask_softmax(device, in_dtype, in0_mem_config):
     attention_mask = torch.rand(batch, 1, 32, 384)
     attention_mask = (attention_mask > 0.5).float()
     attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    attention_mask_t = ttnn.fill_implicit_tile_padding(attention_mask_t, TEST_PADDING_VALUE)
 
     input_tensor = torch.randn(input_shape).bfloat16().float()
     in1_t = ttnn.from_torch(
         input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in0_mem_config
     )
+    in1_t = ttnn.fill_implicit_tile_padding(in1_t, TEST_PADDING_VALUE)
 
     tt_output = ttnn.scale_mask_softmax(in1_t, scale, attention_mask_t)
 

@@ -77,6 +77,7 @@ def test_layer_norm(device, h, w, use_welford, dtype):
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
@@ -100,6 +101,7 @@ def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -130,6 +132,7 @@ def test_layer_norm_with_weight_and_bias_row_major(device, h, w, use_welford):
     )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
@@ -160,7 +163,9 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welfor
     )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     residual_input_tensor = ttnn.from_torch(torch_residual_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_input_tensor = ttnn.fill_implicit_tile_padding(residual_input_tensor, PAD_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -199,6 +204,7 @@ def test_layer_norm_with_tile_layout(device, h, w):
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
     input_tensor = ttnn.to_device(input_tensor, device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
 
     weight = ttnn.from_torch(torch_weight)
     weight = ttnn.to_layout(weight, ttnn.TILE_LAYOUT)
@@ -231,6 +237,7 @@ def test_large_layer_norm(device, h, w, use_welford, dtype):
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
@@ -256,6 +263,7 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -283,6 +291,7 @@ def test_large_layer_norm_with_weight(device, h, w, use_welford):
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w], weight=torch_weight)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
@@ -309,6 +318,7 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w], bias=torch_bias)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
@@ -333,6 +343,7 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w], bias=torch_bias)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
     program_config = ttnn.LayerNormDefaultProgramConfig(
@@ -391,6 +402,7 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     residual_input_tensor = ttnn.from_torch(torch_residual_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_input_tensor = ttnn.fill_implicit_tile_padding(residual_input_tensor, PAD_VALUE)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
@@ -438,6 +450,7 @@ def test_l1_interleaved(device, use_welford, dtype):
     input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=l1_interleaved_mem_config
     )
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
     recip_tensor = create_recip_tensor(device, w, use_welford)
     output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config, recip_tensor=recip_tensor)
@@ -460,6 +473,7 @@ def test_layer_norm_across_dtypes(*, device: ttnn.Device, dim_a: int, dim_b: int
     torch_output = torch.nn.functional.layer_norm(torch_input, (input_shape[-1],), eps=epsilon)
 
     tt_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, PAD_VALUE)
     tt_output = ttnn.layer_norm(tt_input, epsilon=epsilon)
 
     tt_output_torch = ttnn.to_torch(tt_output)
@@ -501,6 +515,7 @@ def test_layer_norm_with_padding(device, h, w, use_welford, dtype):
         layout=ttnn.Layout.TILE,
         device=device,
     )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, PAD_VALUE)
 
     # Run layer norm
     program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
