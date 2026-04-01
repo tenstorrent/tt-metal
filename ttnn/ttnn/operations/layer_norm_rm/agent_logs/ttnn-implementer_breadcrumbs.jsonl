@@ -1,1 +1,2 @@
 {"event":"test_run","status":"pass","test":"test_layer_norm_rm_pure[shape=(32, 32)]","path":"tests/ttnn/unit_tests/operations/layer_norm_rm/test_layer_norm_rm.py","ts":"2026-04-01T21:16:14+00:00"}
+{"event":"test_run","status":"pass","test":"FULL SUITE - all 37 tests","path":"tests/ttnn/unit_tests/operations/layer_norm_rm/test_layer_norm_rm.py","details":"9 pure + 9 gamma + 9 gamma_beta + 3 epsilon + 2 beta_only + 3 validation + 2 output_properties = 37 passed","ts":"2026-04-01T21:19:14+00:00"}
