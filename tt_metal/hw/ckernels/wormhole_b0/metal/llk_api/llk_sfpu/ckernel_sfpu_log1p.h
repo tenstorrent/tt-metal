@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: Apache-2.0 AND BSD-2-Clause
 
 /*
+ * The log1p(x) code is derived from code by Norbert Juffa.
+ *
  * Copyright (c) 2015-2023, Norbert Juffa
  * All rights reserved.
  *
@@ -103,17 +105,16 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
             r = r * m + sfpi::vConstFloatPrgm1;
             r = r * m + -0.5f;
         } else {
-            // log1p(x) = x + x*x * (
-            //   -0x1p-1 + x * (0x1.5ap-2 + x * (-0x1p-2 + x * 0x1.024p-3)))
+            // log1p(x) = x + x*x * (-0x1.008p-1 + x * (0x1.744p-2 + x * (-0x1p-2)))
 
             sfpi::vInt abs_e = sfpi::abs(e);
             m = m + t;
             e_float = sfpi::int32_to_float(abs_e);
 
             s = m * m;
-            r = 0x1.024p-3f;
-            r = r * s + neg_quarter;
-            r = r * m + -0.5f;
+            r = neg_quarter;
+            r = r * m + 0x1.744p-2f;
+            r = r * m + -0x1.008p-1f;
         }
         // int32_to_float returns |e| as a real number in exponent-bit units;
         // restore sign and multiply by log(2) * 2^(-23) to recover k * log(2).
