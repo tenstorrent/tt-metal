@@ -2,11 +2,11 @@
 
 ## Adding a New Skill
 
-1. **Decide the layer.** Which directory does your skill belong in?
-   - `skills/orchestration/` — routes and dispatches requests
-   - `skills/workflows/` — autonomous loops with convergence criteria
-   - `skills/tools/` — single-purpose capabilities used during execution
-   - `skills/meta/` — system-level utilities (extending or learning from the system)
+1. **Decide the layer.** Set the `layer:` field in YAML frontmatter:
+   - `orchestration` — routes and dispatches requests
+   - `workflow` — autonomous loops with convergence criteria
+   - `tool` — single-purpose capabilities used during execution
+   - `meta` — system-level utilities (extending or learning from the system)
 
 2. **Use `/tt:skill-creator`.** It wraps `/skill-creator` and applies tt-agent
    conventions automatically.
