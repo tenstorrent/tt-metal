@@ -196,8 +196,10 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
 
             uint32_t binary_addr = 0;
 
-            // Only tensix binaries are stored in the kernel config buffer. Active ethernet binaries have a fixed
-            // address.
+            // Tensix binaries are allocated separately from non-binary data in the ring buffer. Active ethernet
+            // binaries don't need a separate allocation: on architectures where the binary is stored in the config
+            // buffer (Blackhole), it's included in the non-binary allocation which covers the entire config; on
+            // architectures where it's not (Wormhole), the binary goes to a fixed L1 address from the ELF.
             if (core_type == HalProgrammableCoreType::TENSIX) {
                 if (auto mem_addr = allocator.get_region(ExtraData::kBinary, pid)) {
                     binary_addr = *mem_addr;
@@ -247,8 +249,8 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
         if (nonbinary_sync_idx.has_value()) {
             final_nonbinary_sync_idx = *nonbinary_sync_idx;
         }
-        // Do adjustments to the sync index to ensure we don't overwrite the previous ethernet binary (since ethernet
-        // doesn't use the ringbuffer).
+        // Do adjustments to the sync index to ensure we don't overwrite the previous ethernet program's data.
+        // Active ethernet configs are always re-sent rather than cached.
         if (has_active_eth_kernel) {
             if (last_active_eth_sync_idx.has_value()) {
                 final_binary_sync_idx =
