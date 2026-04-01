@@ -12,11 +12,6 @@ on:
       build-artifact-name:
         required: true
         type: string
-      enabled-skus:
-        required: false
-        type: string
-        default: "wh_galaxy,wh_galaxy_perf"
-        description: "Comma-separated SKUs to run from tests/pipeline_reorg/galaxy_sanity_tests.yaml"
 
 jobs:
   load-test-matrix:
@@ -49,7 +44,7 @@ jobs:
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            ALL_SKUS_IN_TESTS \
             ./.github/sku_config.yaml
 
   galaxy-sanity-tests:
