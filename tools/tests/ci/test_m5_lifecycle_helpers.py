@@ -5,6 +5,7 @@ from pathlib import Path
 from tools.ci.m5_manage_issue_lifecycle import (
     candidate_github_owners_from_text,
     issue_numbers_from_text,
+    message_replies,
     parse_json_after_marker,
     parse_codeowners,
 )
@@ -51,3 +52,10 @@ def test_issue_numbers_from_text_parses_issue_dump_urls() -> None:
         "https://github.com/ebanerjeeTT/issue_dump/issues/858"
     )
     assert issue_numbers_from_text(text) == [851, 858]
+
+
+def test_message_replies_supports_legacy_replies_key() -> None:
+    msg = {"replies": [{"ts": "1.0", "user": "U1", "text": "working on it"}]}
+    out = message_replies(msg)
+    assert len(out) == 1
+    assert out[0]["user"] == "U1"

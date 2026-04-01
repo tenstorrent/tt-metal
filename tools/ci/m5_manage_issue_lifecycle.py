@@ -441,6 +441,15 @@ def message_by_ts(slack_payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return out
 
 
+def message_replies(msg: dict[str, Any]) -> list[dict[str, Any]]:
+    replies = msg.get("thread_replies")
+    if not isinstance(replies, list):
+        replies = msg.get("replies")
+    if not isinstance(replies, list):
+        return []
+    return [row for row in replies if isinstance(row, dict)]
+
+
 def issue_numbers_from_text(text: str) -> list[int]:
     nums: list[int] = []
     for m in ISSUE_URL_RE.finditer(text):
@@ -522,9 +531,7 @@ def main() -> int:
             continue
 
         top_text = str(msg.get("text", ""))
-        thread_replies = msg.get("thread_replies", [])
-        if not isinstance(thread_replies, list):
-            thread_replies = []
+        thread_replies = message_replies(msg)
         progress = classify_thread_progress(
             top_level_text=top_text,
             thread_replies=thread_replies,
@@ -707,8 +714,8 @@ def main() -> int:
         ts = str(msg.get("ts", "")).strip()
         if not ts:
             continue
-        thread_replies = msg.get("thread_replies", [])
-        if not isinstance(thread_replies, list) or not thread_replies:
+        thread_replies = message_replies(msg)
+        if not thread_replies:
             continue
         thread_fingerprint = hashlib.sha256(
             json.dumps(
