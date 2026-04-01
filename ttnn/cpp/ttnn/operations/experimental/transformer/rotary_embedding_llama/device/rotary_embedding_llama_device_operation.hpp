@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include "ttnn/decorators.hpp"
 #include <tt-metalium/host_api.hpp>
 #include "rotary_embedding_llama_device_operation_types.hpp"
 #include "rotary_embedding_llama_multi_core_program_factory.hpp"
 #include "rotary_embedding_llama_multi_core_prefill_sharded_program_factory.hpp"
 #include "rotary_embedding_llama_sharded_program_factory.hpp"
-#include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 

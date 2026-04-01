@@ -6,11 +6,12 @@
 
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
 #include "copy_device_operation_types.hpp"
 #include "copy_program_factory.hpp"
 #include "copy_default_row_major_program_factory.hpp"
 #include "copy_default_tilized_program_factory.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 

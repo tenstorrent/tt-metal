@@ -4,8 +4,8 @@
 
 #include "prefetch.hpp"
 
-#include <host_api.hpp>
 #include <tt_metal.hpp>
+#include "impl/buffers/semaphore.hpp"
 #include <array>
 #include <map>
 #include <string>
