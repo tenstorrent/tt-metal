@@ -4,9 +4,14 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <map>
+#include <numeric>
 #include <ostream>
+#include <set>
 #include <string>
+#include <utility>
 #include <filesystem>
 #include <memory>
 #include <vector>
@@ -55,10 +60,12 @@ struct GroupingItemInfo {
 struct GroupingInfo {
     std::string name;  // Unique identifier/name for this specific grouping instance
     std::string type;  // Type of grouping (e.g., "MESH", "TRAY_1", "meshes", "pods")
-    std::vector<GroupingItemInfo> items;  // items[i] is the item for graph node i (0..n-1)
+    // items[node_id] is the item for graph node node_id. Flattened meshes may use non-contiguous IDs;
+    // in that case size is max_node_id+1 (only indices present in adjacency_graph are meaningful).
+    std::vector<GroupingItemInfo> items;
     uint32_t asic_count = 0;  // Total ASICs provided by this grouping, calculated bottom-up during population
 
-    // Adjacency graph. For flattened groupings, nodes are 0..n-1 and items[i] = item for node i.
+    // Adjacency graph. For flattened groupings, items[node_id] matches each node in the graph.
     // Empty graph if no connection type is specified.
     AdjacencyGraph<uint32_t> adjacency_graph;
 };
@@ -143,6 +150,20 @@ public:
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
         std::vector<std::string>& errors_out) const;
 
+    // Same as find_all_in_psd above, but uses a prebuilt flat ASIC adjacency graph from the PSD (from
+    // build_flat_adjacency_map_from_psd). Callers that already built the graph can pass it to avoid a
+    // duplicate O(|PSD|) scan and graph construction.
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
+        const std::vector<GroupingInfo>& groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph) const;
+
+    std::vector<std::unordered_set<tt::tt_metal::AsicID>> find_all_in_psd(
+        const std::vector<GroupingInfo>& groupings,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph,
+        std::vector<std::string>& errors_out) const;
+
     // Build flattened adjacency meshes - one per possibility based on possible groupings that can be formed
     // Returns vector of GroupingInfo objects, each with adjacency_graph populated and node metadata maps filled
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(const GroupingInfo& grouping) const;
@@ -150,6 +171,39 @@ public:
     // Overload that accepts a PhysicalSystemDescriptor reference for validation/filtering
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(
         const GroupingInfo& grouping, const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const;
+
+    // Greedy minimum coverage over disjoint global groups (e.g. one set per host). Returns whether some single group
+    // has enough capacity for all targets, and the union of the largest groups until target count is covered.
+    template <typename TargetNode, typename GlobalNode>
+    static std::pair<bool, std::set<GlobalNode>> find_minimum_coverage_group(
+        const std::set<TargetNode>& all_targets, const std::vector<std::set<GlobalNode>>& global_groups) {
+        std::pair<bool, std::set<GlobalNode>> out{false, {}};
+        if (all_targets.empty() || global_groups.empty()) {
+            return out;
+        }
+        const std::size_t target_count = all_targets.size();
+        for (const auto& g : global_groups) {
+            if (g.size() >= target_count) {
+                out.first = true;
+                break;
+            }
+        }
+        std::vector<std::size_t> group_indices(global_groups.size());
+        std::iota(group_indices.begin(), group_indices.end(), 0);
+        std::sort(group_indices.begin(), group_indices.end(), [&](std::size_t a, std::size_t b) {
+            return global_groups[a].size() > global_groups[b].size();
+        });
+        std::size_t covered = 0;
+        for (std::size_t idx : group_indices) {
+            const auto& g = global_groups[idx];
+            out.second.insert(g.begin(), g.end());
+            covered += g.size();
+            if (covered >= target_count) {
+                break;
+            }
+        }
+        return out;
+    }
 
 private:
     // Data members
