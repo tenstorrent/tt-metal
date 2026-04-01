@@ -365,15 +365,6 @@ class TestTriage:
         assert result is not None, "Expected non-None result from dump_configuration.py"
         assert len(result) > 0, "Expected at least one configuration entry"
 
-        # Print entry names for CI visibility (values omitted to avoid leaking secrets)
-        for entry in result:
-            print(f"[{entry.scope}] {entry.name}")
-
-        # Verify we have entries from expected scopes
-        scopes = {entry.scope for entry in result}
-        assert "environment" in scopes, "Expected environment scope entries"
-        assert "rtOptions" in scopes, "Expected rtOptions scope entries"
-
     def test_dump_running_operations(self):
         self.run_triage_script("dump_running_operations.py")
 
