@@ -15,38 +15,8 @@ import torch.nn.functional as F
 
 import ttnn
 
+from models.experimental.openvoice.functional.operations import Flip, LayerNorm1d, ensure_conv1d_weight
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
-
-
-def _ensure_conv1d_weight(w):
-    """Ensure weight tensor has correct shape for F.conv1d [out, in, kernel]."""
-    if w is None:
-        return None
-    if w.dim() == 2:
-        return w.unsqueeze(2)
-    return w
-
-
-class LayerNorm1d:
-    """Layer normalization for 1D sequences."""
-
-    def __init__(self, channels: int, weight: Any = None, bias: Any = None, eps: float = 1e-5):
-        self.channels = channels
-        self.weight = weight
-        self.bias = bias
-        self.eps = eps
-
-    def __call__(self, x: Any) -> Any:
-        is_torch = isinstance(x, torch.Tensor)
-        if is_torch:
-            x = x.transpose(1, -1)
-            x = F.layer_norm(x, (self.channels,), self.weight, self.bias, self.eps)
-            return x.transpose(1, -1)
-
-        x = ttnn.permute(x, (0, 2, 1))
-        x = ttnn.layer_norm(x, weight=self.weight, bias=self.bias, epsilon=self.eps)
-        x = ttnn.permute(x, (0, 2, 1))
-        return x
 
 
 class MultiHeadAttentionFlow:
@@ -89,9 +59,9 @@ class MultiHeadAttentionFlow:
         return self._forward_ttnn(x, c, attn_mask)
 
     def _forward_pytorch(self, x, c, attn_mask):
-        q = F.conv1d(x, _ensure_conv1d_weight(self.conv_q_weight), self.conv_q_bias)
-        k = F.conv1d(c, _ensure_conv1d_weight(self.conv_k_weight), self.conv_k_bias)
-        v = F.conv1d(c, _ensure_conv1d_weight(self.conv_v_weight), self.conv_v_bias)
+        q = F.conv1d(x, ensure_conv1d_weight(self.conv_q_weight), self.conv_q_bias)
+        k = F.conv1d(c, ensure_conv1d_weight(self.conv_k_weight), self.conv_k_bias)
+        v = F.conv1d(c, ensure_conv1d_weight(self.conv_v_weight), self.conv_v_bias)
 
         b, d, t_s = k.size()
         t_t = q.size(2)
@@ -109,7 +79,7 @@ class MultiHeadAttentionFlow:
         output = torch.matmul(attn, v)
 
         output = output.transpose(2, 3).contiguous().view(b, d, t_t)
-        output = F.conv1d(output, _ensure_conv1d_weight(self.conv_o_weight), self.conv_o_bias)
+        output = F.conv1d(output, ensure_conv1d_weight(self.conv_o_weight), self.conv_o_bias)
 
         return output
 
@@ -230,7 +200,7 @@ class FFTBlock:
         attn_mask = x_mask.unsqueeze(2) * x_mask.unsqueeze(-1)
 
         if g is not None and self.cond_weight is not None:
-            g_cond = F.conv1d(g, _ensure_conv1d_weight(self.cond_weight), self.cond_bias)
+            g_cond = F.conv1d(g, ensure_conv1d_weight(self.cond_weight), self.cond_bias)
             x = x + g_cond
 
         for i in range(self.n_layers):
@@ -238,11 +208,11 @@ class FFTBlock:
             x = self.norm1_layers[i](x + y)
 
             # FFN with padding to preserve sequence length
-            w1 = _ensure_conv1d_weight(self.ffn_conv1_weights[i])
+            w1 = ensure_conv1d_weight(self.ffn_conv1_weights[i])
             k1 = w1.shape[2] if w1.dim() == 3 else 1
             y = F.conv1d(x * x_mask, w1, self.ffn_conv1_biases[i], padding=k1 // 2)
             y = F.gelu(y)
-            w2 = _ensure_conv1d_weight(self.ffn_conv2_weights[i])
+            w2 = ensure_conv1d_weight(self.ffn_conv2_weights[i])
             k2 = w2.shape[2] if w2.dim() == 3 else 1
             y = F.conv1d(y * x_mask, w2, self.ffn_conv2_biases[i], padding=k2 // 2)
             x = self.norm2_layers[i](x + y)
@@ -316,9 +286,9 @@ class TransformerCouplingLayer:
     def _forward_pytorch(self, x, x_mask, g, reverse):
         x0, x1 = torch.split(x, [self.half_channels, self.half_channels], 1)
 
-        h = F.conv1d(x0, _ensure_conv1d_weight(self.pre_weight), self.pre_bias)
+        h = F.conv1d(x0, ensure_conv1d_weight(self.pre_weight), self.pre_bias)
         h = self.fft(h, x_mask, g=g)
-        stats = F.conv1d(h, _ensure_conv1d_weight(self.post_weight), self.post_bias) * x_mask
+        stats = F.conv1d(h, ensure_conv1d_weight(self.post_weight), self.post_bias) * x_mask
 
         if self.mean_only:
             m = stats
@@ -361,38 +331,6 @@ class TransformerCouplingLayer:
             x1 = ttnn.multiply(ttnn.multiply(ttnn.subtract(x1, m), ttnn.exp(ttnn.neg(logs))), x_mask)
             x = ttnn.concat([x0, x1], dim=1)
             return x
-
-
-class Flip:
-    """
-    Flip operation for normalizing flows.
-
-    Note: Uses CPU roundtrip - TTNN lacks native flip operation.
-    Impact is minimal (~0.01ms per flip).
-    """
-
-    def __call__(self, x: Any, *args, reverse: bool = False, **kwargs):
-        is_torch = isinstance(x, torch.Tensor)
-        if is_torch:
-            x = torch.flip(x, [1])
-            if not reverse:
-                return x, torch.zeros(x.size(0), dtype=x.dtype, device=x.device)
-            return x
-
-        # CPU roundtrip required - TTNN has no native flip operation
-        was_on_device = ttnn.is_tensor_storage_on_device(x)
-        device = x.device() if was_on_device else None
-        orig_layout = x.get_layout()
-
-        x_torch = ttnn.to_torch(x)
-        x_flipped = torch.flip(x_torch, [1])
-        x = ttnn.from_torch(x_flipped, dtype=ttnn.bfloat16, layout=orig_layout)
-
-        if was_on_device and device is not None:
-            x = ttnn.to_device(x, device)
-        if not reverse:
-            return x, ttnn.zeros((x.shape[0],), dtype=x.dtype)
-        return x
 
 
 class TTNNTransformerCouplingBlock:

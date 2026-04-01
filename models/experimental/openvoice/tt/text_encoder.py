@@ -16,16 +16,8 @@ import torch.nn.functional as F
 
 import ttnn
 
+from models.experimental.openvoice.functional.operations import LayerNorm1d, ensure_conv1d_weight
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
-
-
-def _ensure_conv1d_weight(w):
-    """Ensure weight tensor has correct shape for F.conv1d [out, in, kernel]."""
-    if w is None:
-        return None
-    if w.dim() == 2:
-        return w.unsqueeze(2)
-    return w
 
 
 class MultiHeadAttention:
@@ -93,15 +85,15 @@ class MultiHeadAttention:
 
     def _forward_pytorch(self, x, c, attn_mask):
         # Project Q, K, V using 1x1 convolutions
-        q = F.conv1d(x, _ensure_conv1d_weight(self.conv_q_weight), self.conv_q_bias)
-        k = F.conv1d(c, _ensure_conv1d_weight(self.conv_k_weight), self.conv_k_bias)
-        v = F.conv1d(c, _ensure_conv1d_weight(self.conv_v_weight), self.conv_v_bias)
+        q = F.conv1d(x, ensure_conv1d_weight(self.conv_q_weight), self.conv_q_bias)
+        k = F.conv1d(c, ensure_conv1d_weight(self.conv_k_weight), self.conv_k_bias)
+        v = F.conv1d(c, ensure_conv1d_weight(self.conv_v_weight), self.conv_v_bias)
 
         # Compute attention
         x, _ = self._attention(q, k, v, attn_mask)
 
         # Output projection
-        x = F.conv1d(x, _ensure_conv1d_weight(self.conv_o_weight), self.conv_o_bias)
+        x = F.conv1d(x, ensure_conv1d_weight(self.conv_o_weight), self.conv_o_bias)
         return x
 
     def _forward_ttnn(self, x, c, attn_mask):
@@ -259,12 +251,12 @@ class FFN:
 
         # First conv
         x_padded = F.pad(x * x_mask, (pad_l, pad_r))
-        x = F.conv1d(x_padded, _ensure_conv1d_weight(self.conv_1_weight), self.conv_1_bias)
+        x = F.conv1d(x_padded, ensure_conv1d_weight(self.conv_1_weight), self.conv_1_bias)
         x = F.relu(x)
 
         # Second conv
         x_padded = F.pad(x * x_mask, (pad_l, pad_r))
-        x = F.conv1d(x_padded, _ensure_conv1d_weight(self.conv_2_weight), self.conv_2_bias)
+        x = F.conv1d(x_padded, ensure_conv1d_weight(self.conv_2_weight), self.conv_2_bias)
 
         return x * x_mask
 
@@ -282,30 +274,6 @@ class FFN:
         x = ttnn_conv1d(x, self.conv_2_weight, self.conv_2_bias, device=self.device)
 
         return ttnn.multiply(x, x_mask)
-
-
-class LayerNorm1d:
-    """Layer normalization for 1D sequences (channel-first)."""
-
-    def __init__(self, channels: int, weight: Any = None, bias: Any = None, eps: float = 1e-5):
-        self.channels = channels
-        self.weight = weight
-        self.bias = bias
-        self.eps = eps
-
-    def __call__(self, x: Any) -> Any:
-        is_torch = isinstance(x, torch.Tensor)
-        if is_torch:
-            # Transpose, apply layer norm, transpose back
-            x = x.transpose(1, -1)
-            x = F.layer_norm(x, (self.channels,), self.weight, self.bias, self.eps)
-            return x.transpose(1, -1)
-
-        # TTNN
-        x = ttnn.permute(x, (0, 2, 1))  # [B, C, T] -> [B, T, C]
-        x = ttnn.layer_norm(x, weight=self.weight, bias=self.bias, epsilon=self.eps)
-        x = ttnn.permute(x, (0, 2, 1))  # [B, T, C] -> [B, C, T]
-        return x
 
 
 class TTNNTextEncoder:
@@ -403,7 +371,7 @@ class TTNNTextEncoder:
         x = x * x_mask
 
         # Project to stats
-        stats = F.conv1d(x, _ensure_conv1d_weight(self.proj_weight), self.proj_bias)
+        stats = F.conv1d(x, ensure_conv1d_weight(self.proj_weight), self.proj_bias)
         stats = stats * x_mask
 
         m, logs = torch.split(stats, self.out_channels, dim=1)

@@ -22,43 +22,13 @@ import ttnn
 from models.experimental.openvoice.tt.generator import TTNNGenerator
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
 
-
-def _ensure_conv1d_weight(w):
-    """Ensure weight tensor has correct shape for F.conv1d [out, in, kernel]."""
-    if w is None:
-        return None
-    if w.dim() == 2:
-        return w.unsqueeze(2)
-    return w
-
+from models.experimental.openvoice.functional.operations import LayerNorm1d, ensure_conv1d_weight
 
 from models.experimental.openvoice.tt.duration_predictor import TTNNDurationPredictor, TTNNStochasticDurationPredictor
 from models.experimental.openvoice.tt.posterior_encoder import TTNNPosteriorEncoder
 from models.experimental.openvoice.tt.reference_encoder import TTNNReferenceEncoder
 from models.experimental.openvoice.tt.residual_coupling import TTNNResidualCouplingBlock
 from models.experimental.openvoice.tt.transformer_flow import TTNNTransformerCouplingBlock
-
-
-class LayerNorm1d:
-    """Layer normalization for 1D sequences."""
-
-    def __init__(self, channels: int, weight: Any = None, bias: Any = None, eps: float = 1e-5):
-        self.channels = channels
-        self.weight = weight
-        self.bias = bias
-        self.eps = eps
-
-    def __call__(self, x: Any) -> Any:
-        is_torch = isinstance(x, torch.Tensor)
-        if is_torch:
-            x = x.transpose(1, -1)
-            x = F.layer_norm(x, (self.channels,), self.weight, self.bias, self.eps)
-            return x.transpose(1, -1)
-
-        x = ttnn.permute(x, (0, 2, 1))
-        x = ttnn.layer_norm(x, weight=self.weight, bias=self.bias, epsilon=self.eps)
-        x = ttnn.permute(x, (0, 2, 1))
-        return x
 
 
 class MultiHeadAttention:
@@ -101,9 +71,9 @@ class MultiHeadAttention:
         return self._forward_ttnn(x, c, attn_mask)
 
     def _forward_pytorch(self, x, c, attn_mask):
-        q = F.conv1d(x, _ensure_conv1d_weight(self.conv_q_weight), self.conv_q_bias)
-        k = F.conv1d(c, _ensure_conv1d_weight(self.conv_k_weight), self.conv_k_bias)
-        v = F.conv1d(c, _ensure_conv1d_weight(self.conv_v_weight), self.conv_v_bias)
+        q = F.conv1d(x, ensure_conv1d_weight(self.conv_q_weight), self.conv_q_bias)
+        k = F.conv1d(c, ensure_conv1d_weight(self.conv_k_weight), self.conv_k_bias)
+        v = F.conv1d(c, ensure_conv1d_weight(self.conv_v_weight), self.conv_v_bias)
 
         b, d, t_s = k.size()
         t_t = q.size(2)
@@ -121,7 +91,7 @@ class MultiHeadAttention:
         output = torch.matmul(attn, v)
 
         output = output.transpose(2, 3).contiguous().view(b, d, t_t)
-        output = F.conv1d(output, _ensure_conv1d_weight(self.conv_o_weight), self.conv_o_bias)
+        output = F.conv1d(output, ensure_conv1d_weight(self.conv_o_weight), self.conv_o_bias)
 
         return output
 
@@ -221,9 +191,9 @@ class FFN:
 
     def _forward_pytorch(self, x, x_mask):
         pad = self.kernel_size // 2
-        x = F.conv1d(F.pad(x * x_mask, (pad, pad)), _ensure_conv1d_weight(self.conv_1_weight), self.conv_1_bias)
+        x = F.conv1d(F.pad(x * x_mask, (pad, pad)), ensure_conv1d_weight(self.conv_1_weight), self.conv_1_bias)
         x = F.relu(x)
-        x = F.conv1d(F.pad(x * x_mask, (pad, pad)), _ensure_conv1d_weight(self.conv_2_weight), self.conv_2_bias)
+        x = F.conv1d(F.pad(x * x_mask, (pad, pad)), ensure_conv1d_weight(self.conv_2_weight), self.conv_2_bias)
         return x * x_mask
 
     def _forward_ttnn(self, x, x_mask):
@@ -345,9 +315,9 @@ class MeloTextEncoder:
         lang_emb = F.embedding(language, self.language_emb_weight)
 
         # BERT projections
-        bert_emb = F.conv1d(bert, _ensure_conv1d_weight(self.bert_proj_weight), self.bert_proj_bias).transpose(1, 2)
+        bert_emb = F.conv1d(bert, ensure_conv1d_weight(self.bert_proj_weight), self.bert_proj_bias).transpose(1, 2)
         ja_bert_emb = F.conv1d(
-            ja_bert, _ensure_conv1d_weight(self.ja_bert_proj_weight), self.ja_bert_proj_bias
+            ja_bert, ensure_conv1d_weight(self.ja_bert_proj_weight), self.ja_bert_proj_bias
         ).transpose(1, 2)
 
         # Combine embeddings
@@ -361,7 +331,7 @@ class MeloTextEncoder:
 
         # Apply speaker conditioning if present
         if g is not None and self.cond_weight is not None:
-            g_cond = F.conv1d(g, _ensure_conv1d_weight(self.cond_weight), self.cond_bias)
+            g_cond = F.conv1d(g, ensure_conv1d_weight(self.cond_weight), self.cond_bias)
             x = x + g_cond
 
         # Transformer encoder
@@ -377,7 +347,7 @@ class MeloTextEncoder:
         x = x * x_mask
 
         # Project to mean/variance
-        stats = F.conv1d(x, _ensure_conv1d_weight(self.proj_weight), self.proj_bias) * x_mask
+        stats = F.conv1d(x, ensure_conv1d_weight(self.proj_weight), self.proj_bias) * x_mask
         m, logs = torch.split(stats, self.out_channels, dim=1)
 
         return x, m, logs, x_mask

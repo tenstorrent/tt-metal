@@ -15,50 +15,9 @@ import torch.nn.functional as F
 
 import ttnn
 
+from models.experimental.openvoice.functional.operations import Flip, to_torch_tensor
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
 from models.experimental.openvoice.tt.modules.wavenet import WaveNetModule
-
-
-class Flip:
-    """
-    Flip operation for normalizing flows.
-
-    Reverses the channel dimension to alternate which half of channels
-    is transformed in coupling layers.
-
-    Note: Uses CPU roundtrip because TTNN lacks native flip operation.
-    Impact is minimal (~0.01ms) as this is a simple memory copy.
-    See TRADEOFFS.md section 10.2 for details.
-    """
-
-    def __call__(self, x: Any, *args, reverse: bool = False, **kwargs):
-        is_torch = isinstance(x, torch.Tensor)
-
-        if is_torch:
-            x = torch.flip(x, [1])
-            if not reverse:
-                logdet = torch.zeros(x.size(0), device=x.device, dtype=x.dtype)
-                return x, logdet
-            return x
-
-        # CPU roundtrip required - TTNN has no native flip operation
-        # and slicing with negative step is not supported
-        was_on_device = ttnn.is_tensor_storage_on_device(x)
-        device = x.device() if was_on_device else None
-        orig_layout = x.get_layout()
-
-        x_torch = ttnn.to_torch(x)
-        x_flipped = torch.flip(x_torch, [1])
-        x = ttnn.from_torch(x_flipped, dtype=ttnn.bfloat16, layout=orig_layout)
-
-        if was_on_device and device is not None:
-            x = ttnn.to_device(x, device)
-
-        if not reverse:
-            batch = x.shape[0]
-            logdet = ttnn.zeros((batch,), dtype=x.dtype)
-            return x, logdet
-        return x
 
 
 class ResidualCouplingLayer:
@@ -115,27 +74,18 @@ class ResidualCouplingLayer:
         return self._forward_ttnn(x, x_mask, g, reverse)
 
     def _forward_pytorch(self, x, x_mask, g, reverse):
-        # Helper to convert TTNN tensors to PyTorch (and match dtype)
-        def to_torch(t, dtype=torch.float32):
-            if t is None:
-                return None
-            if isinstance(t, torch.Tensor):
-                return t.to(dtype) if t.dtype != dtype else t
-            return ttnn.to_torch(t).to(dtype)
-            return t
-
         # Split channels
         x0, x1 = torch.split(x, [self.half_channels, self.half_channels], dim=1)
 
         # Transform x0 through network to get parameters for x1
-        pre_w = to_torch(self.pre_weight)
+        pre_w = to_torch_tensor(self.pre_weight)
         pre_w = pre_w.squeeze(2) if pre_w.dim() == 4 else pre_w
-        h = F.conv1d(x0, pre_w, to_torch(self.pre_bias))
+        h = F.conv1d(x0, pre_w, to_torch_tensor(self.pre_bias))
         h = h * x_mask
         h = self.wavenet(h, x_mask, g=g)
-        post_w = to_torch(self.post_weight)
+        post_w = to_torch_tensor(self.post_weight)
         post_w = post_w.squeeze(2) if post_w.dim() == 4 else post_w
-        stats = F.conv1d(h, post_w, to_torch(self.post_bias))
+        stats = F.conv1d(h, post_w, to_torch_tensor(self.post_bias))
         stats = stats * x_mask
 
         if not self.mean_only:

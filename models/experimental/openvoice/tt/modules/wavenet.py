@@ -15,6 +15,7 @@ import torch.nn.functional as F
 
 import ttnn
 
+from models.experimental.openvoice.functional.operations import to_torch_tensor
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
 
 
@@ -152,22 +153,13 @@ class WaveNetModule:
     def _forward_pytorch(self, x, x_mask, g):
         """PyTorch fallback implementation."""
 
-        # Helper to convert TTNN tensors to PyTorch (and match dtype)
-        def to_torch(t, dtype=torch.float32):
-            if t is None:
-                return None
-            if isinstance(t, torch.Tensor):
-                return t.to(dtype) if t.dtype != dtype else t
-            return ttnn.to_torch(t).to(dtype)
-            return t
-
         output = torch.zeros_like(x)
 
         # Process conditioning
         if g is not None and self.gin_channels > 0 and self.cond_layer_weight is not None:
-            cond_w = to_torch(self.cond_layer_weight)
+            cond_w = to_torch_tensor(self.cond_layer_weight)
             cond_w = cond_w.squeeze(2) if cond_w.dim() == 4 else cond_w
-            cond_b = to_torch(self.cond_layer_bias) if self.cond_layer_bias is not None else None
+            cond_b = to_torch_tensor(self.cond_layer_bias) if self.cond_layer_bias is not None else None
             g = F.conv1d(g, cond_w, cond_b)
 
         for i in range(self.n_layers):
@@ -175,9 +167,9 @@ class WaveNetModule:
             padding = int((self.kernel_size * dilation - dilation) / 2)
 
             # Dilated convolution
-            weight = to_torch(self.in_layer_weights[i])
+            weight = to_torch_tensor(self.in_layer_weights[i])
             weight = weight.squeeze(2) if weight.dim() == 4 else weight  # [2H, H, K]
-            x_in = F.conv1d(x, weight, to_torch(self.in_layer_biases[i]), padding=padding, dilation=dilation)
+            x_in = F.conv1d(x, weight, to_torch_tensor(self.in_layer_biases[i]), padding=padding, dilation=dilation)
 
             # Add conditioning
             if g is not None:
@@ -190,9 +182,9 @@ class WaveNetModule:
             acts = fused_add_tanh_sigmoid_multiply(x_in, g_l, self.hidden_channels)
 
             # Residual + skip
-            res_skip_weight = to_torch(self.res_skip_weights[i])
+            res_skip_weight = to_torch_tensor(self.res_skip_weights[i])
             res_skip_weight = res_skip_weight.squeeze(2) if res_skip_weight.dim() == 4 else res_skip_weight
-            res_skip_acts = F.conv1d(acts, res_skip_weight, to_torch(self.res_skip_biases[i]))
+            res_skip_acts = F.conv1d(acts, res_skip_weight, to_torch_tensor(self.res_skip_biases[i]))
 
             if i < self.n_layers - 1:
                 res_acts = res_skip_acts[:, : self.hidden_channels, :]

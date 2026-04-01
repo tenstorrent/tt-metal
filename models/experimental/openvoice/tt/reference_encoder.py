@@ -15,6 +15,7 @@ import torch.nn.functional as F
 
 import ttnn
 
+from models.experimental.openvoice.functional.operations import to_torch_tensor
 from models.experimental.openvoice.tt.modules.gru import GRULayer
 
 
@@ -137,15 +138,6 @@ class TTNNReferenceEncoder:
     def _forward_pytorch(self, inputs):
         """PyTorch fallback implementation."""
 
-        # Helper to convert TTNN tensors to PyTorch
-        def to_torch(t, dtype=torch.float32):
-            if t is None:
-                return None
-            if isinstance(t, torch.Tensor):
-                return t.to(dtype)
-            return ttnn.to_torch(t).to(dtype)
-            return t
-
         # Ensure input is float32
         inputs = inputs.to(torch.float32)
         N = inputs.size(0)
@@ -155,14 +147,14 @@ class TTNNReferenceEncoder:
 
         # LayerNorm on last dimension
         if self.use_layernorm:
-            ln_w = to_torch(self.layernorm_weight)
-            ln_b = to_torch(self.layernorm_bias)
+            ln_w = to_torch_tensor(self.layernorm_weight)
+            ln_b = to_torch_tensor(self.layernorm_bias)
             out = F.layer_norm(out, (self.spec_channels,), ln_w, ln_b)
 
         # 6 Conv2d layers with ReLU
         for i, (conv_w, conv_b) in enumerate(zip(self.conv_weights, self.conv_biases)):
-            w = to_torch(conv_w)
-            b = to_torch(conv_b)
+            w = to_torch_tensor(conv_w)
+            b = to_torch_tensor(conv_b)
             out = F.conv2d(out, w, b, stride=2, padding=1)
             out = F.relu(out)
 
@@ -177,8 +169,8 @@ class TTNNReferenceEncoder:
         # Project to speaker embedding
         # h is [1, N, hidden_size], squeeze to [N, hidden_size]
         h = h.squeeze(0)
-        proj_w = to_torch(self.proj_weight)
-        proj_b = to_torch(self.proj_bias)
+        proj_w = to_torch_tensor(self.proj_weight)
+        proj_b = to_torch_tensor(self.proj_bias)
         out = F.linear(h, proj_w, proj_b)
 
         return out

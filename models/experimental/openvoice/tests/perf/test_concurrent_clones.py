@@ -31,16 +31,7 @@ def create_test_audio(duration: float = 2.0, freq: float = 440.0, sample_rate: i
     return audio
 
 
-@pytest.fixture(scope="module")
-def device():
-    """Get TTNN device."""
-    try:
-        dev = ttnn.open_device(device_id=0)
-        yield dev
-        ttnn.close_device(dev)
-    except Exception as e:
-        print(f"Could not open TTNN device: {e}")
-        yield None
+
 @pytest.fixture(scope="module")
 def voice_converter(device):
     """Load voice converter model."""

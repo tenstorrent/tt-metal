@@ -15,6 +15,7 @@ import torch.nn.functional as F
 
 import ttnn
 
+from models.experimental.openvoice.functional.operations import to_torch_tensor
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d, ttnn_conv_transpose1d
 
 # Leaky ReLU slope used in HiFi-GAN
@@ -89,15 +90,6 @@ class ResBlock:
         return self._forward_ttnn(x, x_mask)
 
     def _forward_pytorch(self, x, x_mask):
-        # Helper to convert TTNN tensors to PyTorch (and match dtype)
-        def to_torch(t, dtype=torch.float32):
-            if t is None:
-                return None
-            if isinstance(t, torch.Tensor):
-                return t.to(dtype) if t.dtype != dtype else t
-            return ttnn.to_torch(t).to(dtype)
-            return t
-
         if self.block_type == "1":
             # ResBlock1: pairs of (dilated, non-dilated)
             for i in range(len(self.dilations)):
@@ -108,9 +100,9 @@ class ResBlock:
                 # Dilated conv
                 dilation = self.dilations[i]
                 padding = (self.kernel_size * dilation - dilation) // 2
-                w1 = to_torch(self.conv_weights[i * 2])
+                w1 = to_torch_tensor(self.conv_weights[i * 2])
                 w1 = w1.squeeze(2) if w1.dim() == 4 else w1
-                xt = F.conv1d(xt, w1, to_torch(self.conv_biases[i * 2]), padding=padding, dilation=dilation)
+                xt = F.conv1d(xt, w1, to_torch_tensor(self.conv_biases[i * 2]), padding=padding, dilation=dilation)
 
                 xt = F.leaky_relu(xt, LRELU_SLOPE)
                 if x_mask is not None:
@@ -118,9 +110,9 @@ class ResBlock:
 
                 # Non-dilated conv
                 padding = (self.kernel_size - 1) // 2
-                w2 = to_torch(self.conv_weights[i * 2 + 1])
+                w2 = to_torch_tensor(self.conv_weights[i * 2 + 1])
                 w2 = w2.squeeze(2) if w2.dim() == 4 else w2
-                xt = F.conv1d(xt, w2, to_torch(self.conv_biases[i * 2 + 1]), padding=padding)
+                xt = F.conv1d(xt, w2, to_torch_tensor(self.conv_biases[i * 2 + 1]), padding=padding)
 
                 x = xt + x
         else:
@@ -131,9 +123,9 @@ class ResBlock:
                     xt = xt * x_mask
 
                 padding = (self.kernel_size * dilation - dilation) // 2
-                w = to_torch(self.conv_weights[i])
+                w = to_torch_tensor(self.conv_weights[i])
                 w = w.squeeze(2) if w.dim() == 4 else w
-                xt = F.conv1d(xt, w, to_torch(self.conv_biases[i]), padding=padding, dilation=dilation)
+                xt = F.conv1d(xt, w, to_torch_tensor(self.conv_biases[i]), padding=padding, dilation=dilation)
 
                 x = xt + x
 
@@ -297,25 +289,16 @@ class TTNNGenerator:
         return self._forward_ttnn(x, g)
 
     def _forward_pytorch(self, x, g):
-        # Helper to convert TTNN tensors to PyTorch (and match dtype)
-        def to_torch(t, dtype=torch.float32):
-            if t is None:
-                return None
-            if isinstance(t, torch.Tensor):
-                return t.to(dtype) if t.dtype != dtype else t
-            return ttnn.to_torch(t).to(dtype)
-            return t
-
         # Pre-conv
-        pre_w = to_torch(self.conv_pre_weight)
+        pre_w = to_torch_tensor(self.conv_pre_weight)
         w = pre_w.squeeze(2) if pre_w.dim() == 4 else pre_w
-        x = F.conv1d(x, w, to_torch(self.conv_pre_bias), padding=3)
+        x = F.conv1d(x, w, to_torch_tensor(self.conv_pre_bias), padding=3)
 
         # Add conditioning
         if g is not None and self.cond_weight is not None:
-            cond_w = to_torch(self.cond_weight)
+            cond_w = to_torch_tensor(self.cond_weight)
             cw = cond_w.squeeze(2) if cond_w.dim() == 4 else cond_w
-            x = x + F.conv1d(g, cw, to_torch(self.cond_bias))
+            x = x + F.conv1d(g, cw, to_torch_tensor(self.cond_bias))
 
         # Upsampling blocks
         for i in range(self.num_upsamples):
@@ -325,9 +308,9 @@ class TTNNGenerator:
             stride = self.upsample_rates[i]
             kernel_size = self.upsample_kernel_sizes[i]
             padding = (kernel_size - stride) // 2
-            ups_w = to_torch(self.ups_weights[i])
+            ups_w = to_torch_tensor(self.ups_weights[i])
             w = ups_w.squeeze(2) if ups_w.dim() == 4 else ups_w
-            x = F.conv_transpose1d(x, w, to_torch(self.ups_biases[i]), stride=stride, padding=padding)
+            x = F.conv_transpose1d(x, w, to_torch_tensor(self.ups_biases[i]), stride=stride, padding=padding)
 
             # Sum of ResBlocks
             xs = None
@@ -338,9 +321,9 @@ class TTNNGenerator:
 
         # Final activation + post-conv
         x = F.leaky_relu(x, LRELU_SLOPE)
-        post_w = to_torch(self.conv_post_weight)
+        post_w = to_torch_tensor(self.conv_post_weight)
         w = post_w.squeeze(2) if post_w.dim() == 4 else post_w
-        x = F.conv1d(x, w, to_torch(self.conv_post_bias), padding=3)
+        x = F.conv1d(x, w, to_torch_tensor(self.conv_post_bias), padding=3)
         x = torch.tanh(x)
 
         return x

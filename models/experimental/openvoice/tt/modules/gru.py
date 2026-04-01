@@ -15,6 +15,8 @@ import torch.nn as nn
 
 import ttnn
 
+from models.experimental.openvoice.functional.operations import to_torch_tensor
+
 
 def ttnn_gru_cell(
     x: Any,
@@ -140,23 +142,14 @@ def ttnn_gru(
     is_torch = isinstance(x, torch.Tensor)
 
     if is_torch:
-        # Helper to convert TTNN tensors to PyTorch (float32 for CPU compatibility)
-        def to_torch(t, dtype=torch.float32):
-            if t is None:
-                return None
-            if isinstance(t, torch.Tensor):
-                return t.to(dtype)
-            return ttnn.to_torch(t).to(dtype)
-            return t
-
         # Convert input to float32 if needed
         x = x.to(torch.float32)
 
         # PyTorch fallback
-        weight_ih_pt = to_torch(weight_ih)
-        weight_hh_pt = to_torch(weight_hh)
-        bias_ih_pt = to_torch(bias_ih)
-        bias_hh_pt = to_torch(bias_hh)
+        weight_ih_pt = to_torch_tensor(weight_ih)
+        weight_hh_pt = to_torch_tensor(weight_hh)
+        bias_ih_pt = to_torch_tensor(bias_ih)
+        bias_hh_pt = to_torch_tensor(bias_hh)
 
         gru = nn.GRU(
             input_size=weight_ih_pt.shape[1],

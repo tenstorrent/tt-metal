@@ -15,6 +15,7 @@ import torch.nn.functional as F
 
 import ttnn
 
+from models.experimental.openvoice.functional.operations import to_torch_tensor
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
 from models.experimental.openvoice.tt.modules.wavenet import WaveNetModule
 
@@ -157,22 +158,12 @@ class TTNNPosteriorEncoder:
         return self._forward_ttnn(x, x_lengths, g, tau)
 
     def _forward_pytorch(self, x, x_lengths, g, tau):
-        # Helper to convert TTNN tensors to PyTorch (and match dtype)
-        def to_torch(t, dtype=torch.float32):
-            if t is None:
-                return None
-            if isinstance(t, torch.Tensor):
-                return t.to(dtype) if t.dtype != dtype else t
-            # TTNN tensor - convert to PyTorch
-            return ttnn.to_torch(t).to(dtype)
-            return t
-
         # Create mask [B, 1, T]
         x_mask = sequence_mask(x_lengths, x.size(2)).unsqueeze(1).to(x.dtype)
 
         # Pre-conv - convert weights from TTNN if needed
-        pre_w = to_torch(self.pre_weight)
-        pre_b = to_torch(self.pre_bias)
+        pre_w = to_torch_tensor(self.pre_weight)
+        pre_b = to_torch_tensor(self.pre_bias)
         w = pre_w.squeeze(2) if pre_w.dim() == 4 else pre_w
         x = F.conv1d(x, w, pre_b)
         x = x * x_mask
@@ -181,8 +172,8 @@ class TTNNPosteriorEncoder:
         x = self.wavenet(x, x_mask, g=g)
 
         # Project to mean + log-variance
-        proj_w = to_torch(self.proj_weight)
-        proj_b = to_torch(self.proj_bias)
+        proj_w = to_torch_tensor(self.proj_weight)
+        proj_b = to_torch_tensor(self.proj_bias)
         w = proj_w.squeeze(2) if proj_w.dim() == 4 else proj_w
         stats = F.conv1d(x, w, proj_b)
         stats = stats * x_mask

@@ -15,38 +15,8 @@ import torch.nn.functional as F
 
 import ttnn
 
+from models.experimental.openvoice.functional.operations import Flip, LayerNorm1d, ensure_conv1d_weight
 from models.experimental.openvoice.tt.modules.conv1d import ttnn_conv1d
-
-
-def _ensure_conv1d_weight(w):
-    """Ensure weight tensor has correct shape for F.conv1d [out, in, kernel]."""
-    if w is None:
-        return None
-    if w.dim() == 2:
-        return w.unsqueeze(2)
-    return w
-
-
-class LayerNorm1d:
-    """Layer normalization for 1D sequences (channel-first)."""
-
-    def __init__(self, channels: int, weight: Any = None, bias: Any = None, eps: float = 1e-5):
-        self.channels = channels
-        self.weight = weight
-        self.bias = bias
-        self.eps = eps
-
-    def __call__(self, x: Any) -> Any:
-        is_torch = isinstance(x, torch.Tensor)
-        if is_torch:
-            x = x.transpose(1, -1)
-            x = F.layer_norm(x, (self.channels,), self.weight, self.bias, self.eps)
-            return x.transpose(1, -1)
-
-        x = ttnn.permute(x, (0, 2, 1))
-        x = ttnn.layer_norm(x, weight=self.weight, bias=self.bias, epsilon=self.eps)
-        x = ttnn.permute(x, (0, 2, 1))
-        return x
 
 
 class TTNNDurationPredictor:
@@ -118,22 +88,22 @@ class TTNNDurationPredictor:
         x = x.detach()
         if g is not None and self.cond_weight is not None:
             g = g.detach()
-            x = x + F.conv1d(g, _ensure_conv1d_weight(self.cond_weight), self.cond_bias)
+            x = x + F.conv1d(g, ensure_conv1d_weight(self.cond_weight), self.cond_bias)
 
         padding = self.kernel_size // 2
-        x = F.conv1d(x * x_mask, _ensure_conv1d_weight(self.conv_1_weight), self.conv_1_bias, padding=padding)
+        x = F.conv1d(x * x_mask, ensure_conv1d_weight(self.conv_1_weight), self.conv_1_bias, padding=padding)
         x = torch.relu(x)
         x = self.norm_1(x)
         if self.training:
             x = F.dropout(x, self.p_dropout)
 
-        x = F.conv1d(x * x_mask, _ensure_conv1d_weight(self.conv_2_weight), self.conv_2_bias, padding=padding)
+        x = F.conv1d(x * x_mask, ensure_conv1d_weight(self.conv_2_weight), self.conv_2_bias, padding=padding)
         x = torch.relu(x)
         x = self.norm_2(x)
         if self.training:
             x = F.dropout(x, self.p_dropout)
 
-        x = F.conv1d(x * x_mask, _ensure_conv1d_weight(self.proj_weight), self.proj_bias)
+        x = F.conv1d(x * x_mask, ensure_conv1d_weight(self.proj_weight), self.proj_bias)
         return x * x_mask
 
     def _forward_ttnn(self, x, x_mask, g):
@@ -247,7 +217,7 @@ class DDSConv:
 
             y = F.conv1d(
                 x * x_mask,
-                _ensure_conv1d_weight(self.convs_sep_weights[i]),
+                ensure_conv1d_weight(self.convs_sep_weights[i]),
                 self.convs_sep_biases[i],
                 padding=padding,
                 dilation=dilation,
@@ -256,7 +226,7 @@ class DDSConv:
             y = self.norms_1[i](y)
             y = F.gelu(y)
 
-            y = F.conv1d(y, _ensure_conv1d_weight(self.convs_1x1_weights[i]), self.convs_1x1_biases[i])
+            y = F.conv1d(y, ensure_conv1d_weight(self.convs_1x1_weights[i]), self.convs_1x1_biases[i])
             y = self.norms_2[i](y)
             y = F.gelu(y)
 
@@ -322,40 +292,6 @@ class Log:
             return y, logdet
         else:
             return ttnn.multiply(ttnn.exp(x), x_mask)
-
-
-class Flip:
-    """
-    Flip operation for normalizing flows.
-
-    Note: Uses CPU roundtrip - TTNN lacks native flip operation.
-    Impact is minimal (~0.01ms per flip).
-    """
-
-    def __call__(self, x: Any, x_mask: Any = None, reverse: bool = False) -> Any:
-        is_torch = isinstance(x, torch.Tensor)
-        if is_torch:
-            x = torch.flip(x, [1])
-            if not reverse:
-                logdet = torch.zeros(x.size(0), dtype=x.dtype, device=x.device)
-                return x, logdet
-            return x
-
-        # CPU roundtrip required - TTNN has no native flip operation
-        was_on_device = ttnn.is_tensor_storage_on_device(x)
-        device = x.device() if was_on_device else None
-        orig_layout = x.get_layout()
-
-        x_torch = ttnn.to_torch(x)
-        x_flipped = torch.flip(x_torch, [1])
-        x = ttnn.from_torch(x_flipped, dtype=ttnn.bfloat16, layout=orig_layout)
-
-        if was_on_device and device is not None:
-            x = ttnn.to_device(x, device)
-        if not reverse:
-            logdet = ttnn.zeros((x.shape[0],), dtype=x.dtype)
-            return x, logdet
-        return x
 
 
 class ElementwiseAffine:
@@ -439,9 +375,9 @@ class ConvFlow:
     def _forward_pytorch(self, x, x_mask, g, reverse):
         x0, x1 = torch.split(x, [self.half_channels, self.half_channels], 1)
 
-        h = F.conv1d(x0, _ensure_conv1d_weight(self.pre_weight), self.pre_bias)
+        h = F.conv1d(x0, ensure_conv1d_weight(self.pre_weight), self.pre_bias)
         h = self.convs(h, x_mask, g=g)
-        h = F.conv1d(h, _ensure_conv1d_weight(self.proj_weight), self.proj_bias) * x_mask
+        h = F.conv1d(h, ensure_conv1d_weight(self.proj_weight), self.proj_bias) * x_mask
 
         b, c, t = x0.shape
         h = h.reshape(b, c, -1, t).permute(0, 1, 3, 2)
@@ -687,23 +623,23 @@ class TTNNStochasticDurationPredictor:
 
     def _forward_pytorch(self, x, x_mask, w, g, reverse, noise_scale):
         x = x.detach()
-        x = F.conv1d(x, _ensure_conv1d_weight(self.pre_weight), self.pre_bias)
+        x = F.conv1d(x, ensure_conv1d_weight(self.pre_weight), self.pre_bias)
 
         if g is not None and self.cond_weight is not None:
             g = g.detach()
-            x = x + F.conv1d(g, _ensure_conv1d_weight(self.cond_weight), self.cond_bias)
+            x = x + F.conv1d(g, ensure_conv1d_weight(self.cond_weight), self.cond_bias)
 
         x = self.convs(x, x_mask)
-        x = F.conv1d(x, _ensure_conv1d_weight(self.proj_weight), self.proj_bias) * x_mask
+        x = F.conv1d(x, ensure_conv1d_weight(self.proj_weight), self.proj_bias) * x_mask
 
         if not reverse:
             flows = self.flows
             assert w is not None
 
             logdet_tot_q = 0
-            h_w = F.conv1d(w, _ensure_conv1d_weight(self.post_pre_weight), self.post_pre_bias)
+            h_w = F.conv1d(w, ensure_conv1d_weight(self.post_pre_weight), self.post_pre_bias)
             h_w = self.post_convs(h_w, x_mask)
-            h_w = F.conv1d(h_w, _ensure_conv1d_weight(self.post_proj_weight), self.post_proj_bias) * x_mask
+            h_w = F.conv1d(h_w, ensure_conv1d_weight(self.post_proj_weight), self.post_proj_bias) * x_mask
 
             e_q = torch.randn(w.size(0), 2, w.size(2), device=x.device, dtype=x.dtype) * x_mask
             z_q = e_q
