@@ -30,7 +30,7 @@ void bind_stack(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"stack">(mod, doc, ttnn::overload_t(&ttnn::stack, nb::arg("input_tensors"), nb::arg("dim")));
+    ttnn::bind_function<"stack">(mod, doc, &ttnn::stack, nb::arg("input_tensors"), nb::arg("dim"));
 }
 
 }  // namespace ttnn::operations::data_movement

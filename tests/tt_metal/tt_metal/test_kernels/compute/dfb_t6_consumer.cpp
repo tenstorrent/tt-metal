@@ -37,6 +37,7 @@ void kernel_main() {
         // DPRINT << "pfd" << ENDL();
         // DEVICE_PRINT("pfd\n");
     }
+    // dfb.finish();
     DPRINT << "CBWD" << ENDL();
     DEVICE_PRINT("CBWD\n");
 }

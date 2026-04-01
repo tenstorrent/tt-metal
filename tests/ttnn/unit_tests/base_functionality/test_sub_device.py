@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+from models.common.utility_functions import skip_for_slow_dispatch
 
 
 def run_sub_devices(device):
@@ -127,17 +128,21 @@ def run_sub_devices_program(device):
     device.remove_sub_device_manager(sub_device_manager)
 
 
+@skip_for_slow_dispatch()
 def test_sub_devices(device):
     run_sub_devices(device)
 
 
+@skip_for_slow_dispatch()
 def test_sub_devices_mesh(mesh_device):
     run_sub_devices(mesh_device)
 
 
+@skip_for_slow_dispatch()
 def test_sub_device_program(device):
     run_sub_devices_program(device)
 
 
+@skip_for_slow_dispatch()
 def test_sub_device_program_mesh(mesh_device):
     run_sub_devices_program(mesh_device)

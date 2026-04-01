@@ -66,21 +66,20 @@ void bind_adaptive_avg_pool2d_operation(nb::module_& mod) {
                             applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                         )
         )doc",
-        ttnn::overload_t(
-            &ttnn::adaptive_avg_pool2d,
-            nb::arg("input_tensor"),
-            nb::arg("batch_size"),
-            nb::arg("input_h"),
-            nb::arg("input_w"),
-            nb::arg("channels"),
-            nb::arg("output_size"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dram_slice_config") = nb::none(),
-            nb::arg("applied_shard_scheme") = nb::none(),
-            nb::arg("compute_kernel_config") = nb::none(),
-            nb::arg("deallocate_input") = false,
-            nb::arg("reallocate_output") = true));
+        &ttnn::adaptive_avg_pool2d,
+        nb::arg("input_tensor"),
+        nb::arg("batch_size"),
+        nb::arg("input_h"),
+        nb::arg("input_w"),
+        nb::arg("channels"),
+        nb::arg("output_size"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dram_slice_config") = nb::none(),
+        nb::arg("applied_shard_scheme") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("deallocate_input") = false,
+        nb::arg("reallocate_output") = true);
 }
 
 void bind_adaptive_max_pool2d_operation(nb::module_& mod) {
@@ -131,20 +130,19 @@ void bind_adaptive_max_pool2d_operation(nb::module_& mod) {
                             applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                         )
         )doc",
-        ttnn::overload_t(
-            &ttnn::adaptive_max_pool2d,
-            nb::arg("input_tensor"),
-            nb::arg("batch_size"),
-            nb::arg("input_h"),
-            nb::arg("input_w"),
-            nb::arg("channels"),
-            nb::arg("output_size"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("dram_slice_config") = nb::none(),
-            nb::arg("applied_shard_scheme") = nb::none(),
-            nb::arg("deallocate_input") = false,
-            nb::arg("reallocate_output") = true));
+        &ttnn::adaptive_max_pool2d,
+        nb::arg("input_tensor"),
+        nb::arg("batch_size"),
+        nb::arg("input_h"),
+        nb::arg("input_w"),
+        nb::arg("channels"),
+        nb::arg("output_size"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dram_slice_config") = nb::none(),
+        nb::arg("applied_shard_scheme") = nb::none(),
+        nb::arg("deallocate_input") = false,
+        nb::arg("reallocate_output") = true);
 }
 
 }  // namespace ttnn::operations::experimental::adaptive_pool

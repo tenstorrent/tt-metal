@@ -43,11 +43,10 @@ void bind_reshard(nb::module_& mod) {
     ttnn::bind_function<"reshard">(
         mod,
         doc,
-        ttnn::overload_t(
-            &ttnn::reshard,
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("output_memory_config"),
-            nb::arg("output_tensor").noconvert() = nb::none()));
+        &ttnn::reshard,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("output_memory_config"),
+        nb::arg("output_tensor").noconvert() = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement
