@@ -89,7 +89,6 @@ def hf_model():
 )
 def test_umt5_encoder_comparison(
     mesh_device,
-    num_links,
     parallel_config_and_ccl_manager,
     hf_model,
 ):

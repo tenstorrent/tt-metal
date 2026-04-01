@@ -15,7 +15,6 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
-# Before Hugging Face tokenizers import (avoids fork warning under multiprocessing).
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 import numpy as np
@@ -63,6 +62,10 @@ from tt.utils import (
     load_transformer as load_transformer_tt,
     WanVAEStreamingWrapper as TTWanVAEStreamingWrapper,
     WanVAEDecoderWrapper as TTWanVAEDecoderWrapper,
+)
+from models.experimental.lingbot_va.tests.mesh_utils import (
+    inference_work_mesh_from_opened,
+    ttnn_mesh_shape_for_inference_demo,
 )
 
 OBS_CAM_HIGH = "observation.images.cam_high"
@@ -269,21 +272,7 @@ def _open_lingbot_mesh_device():
     Env overrides (optional): ``LINGBOT_VA_NUM_COMMAND_QUEUES``, ``LINGBOT_VA_TRACE_REGION_SIZE``,
     ``LINGBOT_VA_L1_SMALL_SIZE``, ``LINGBOT_VA_WORKER_L1_SIZE``. Submesh: ``LINGBOT_VA_INFERENCE_SINGLE_CHIP_MESH``.
     """
-    from models.experimental.lingbot_va.tests.mesh_utils import ttnn_mesh_shape_for_inference_demo
-
     kwargs: dict = {"mesh_shape": ttnn_mesh_shape_for_inference_demo()}
-    n_cq = os.environ.get("LINGBOT_VA_NUM_COMMAND_QUEUES")
-    if n_cq is not None and str(n_cq).strip() != "":
-        kwargs["num_command_queues"] = int(n_cq)
-    tr = os.environ.get("LINGBOT_VA_TRACE_REGION_SIZE")
-    if tr is not None and str(tr).strip() != "":
-        kwargs["trace_region_size"] = int(tr)
-    l1 = os.environ.get("LINGBOT_VA_L1_SMALL_SIZE")
-    if l1 is not None and str(l1).strip() != "":
-        kwargs["l1_small_size"] = int(l1)
-    wl1 = os.environ.get("LINGBOT_VA_WORKER_L1_SIZE")
-    if wl1 is not None and str(wl1).strip() != "":
-        kwargs["worker_l1_size"] = int(wl1)
     return ttnn.open_mesh_device(**kwargs)
 
 
@@ -340,8 +329,6 @@ def _load_models_phase1(config, load_text_encoder=True, mesh_device=None):
     enable_offload = getattr(config, "enable_offload", True)
     ckpt = config.wan22_pretrained_model_name_or_path
 
-    from models.experimental.lingbot_va.tests.mesh_utils import inference_work_mesh_from_opened
-
     if mesh_device is None:
         opened_mesh = _open_lingbot_mesh_device()
         mesh_device, mesh_parent = inference_work_mesh_from_opened(opened_mesh)
@@ -391,8 +378,6 @@ def _load_models_phase1(config, load_text_encoder=True, mesh_device=None):
         torch_device="cpu" if enable_offload else device,
     )
     streaming_vae = WanVAEStreamingWrapper(vae)
-    vae_half = vae if config.env_type == "robotwin_tshape" else None
-    streaming_vae_half = WanVAEStreamingWrapper(vae) if config.env_type == "robotwin_tshape" else None
 
     tokenizer = load_tokenizer(os.path.join(ckpt, "tokenizer"))
 
@@ -403,11 +388,11 @@ def _load_models_phase1(config, load_text_encoder=True, mesh_device=None):
 
     return {
         "vae": vae,
-        "vae_half": vae_half,
+        # "vae_half": vae_half,
         "streaming_vae": streaming_vae,
         "tokenizer": tokenizer,
         "text_encoder": text_encoder,
-        "streaming_vae_half": streaming_vae_half,
+        # "streaming_vae_half": streaming_vae_half,
         "scheduler": scheduler,
         "action_scheduler": action_scheduler,
         "device": device,
@@ -472,7 +457,7 @@ def _prepare_state_for_vae_encode(state: dict, config) -> None:
         state["latent_width"] = config.width // 16
 
 
-def _load_tt_vae_into_models(models: dict, config) -> None:
+def _load_tt_vae_into_models(models: dict) -> None:
     """Load TTNN VAE (streaming encoder + quant_conv) into models. Only one TT sub-network on device."""
     vae_parallel_config = _lingbot_vae_hw_parallel_config(models["mesh_device"])
     models["streaming_vae"] = TTWanVAEStreamingWrapper(
@@ -481,59 +466,25 @@ def _load_tt_vae_into_models(models: dict, config) -> None:
         models["ccl_manager"],
         vae_parallel_config,
     )
-    # One TT wrapper for high + wrist unless LINGBOT_VA_TT_USE_DUAL_ENCODER_WRAPPERS=1.
-    use_dual_tt_wrappers = os.environ.get("LINGBOT_VA_TT_USE_DUAL_ENCODER_WRAPPERS", "0") == "1"
-    if use_dual_tt_wrappers and config.env_type == "robotwin_tshape" and models.get("vae_half") is not None:
-        models["streaming_vae_half"] = TTWanVAEStreamingWrapper(
-            models["vae_half"],
-            models["mesh_device"],
-            models["ccl_manager"],
-            vae_parallel_config,
-        )
-    else:
-        models["streaming_vae_half"] = models["streaming_vae"]
-        if config.env_type == "robotwin_tshape":
-            logger.info(
-                "Using single TT VAE wrapper for high + left_right "
-                "(set LINGBOT_VA_TT_USE_DUAL_ENCODER_WRAPPERS=1 to force dual wrappers)."
-            )
     logger.info("Loaded TT VAE encoder (streaming_vae) on device.")
 
 
-def _free_tt_vae_from_models(models: dict, config) -> None:
+def _free_tt_vae_from_models(models: dict) -> None:
     """Replace TT VAE in models with PyTorch wrappers and run gc to free device memory."""
-    old_streaming_vae = models.get("streaming_vae")
-    old_streaming_vae_half = models.get("streaming_vae_half")
-    if old_streaming_vae is not None:
-        _release_ttnn_runtime_configs(old_streaming_vae)
+    streaming_vae = models.get("streaming_vae")
+    # old_streaming_vae_half = models.get("streaming_vae_half")
+    if streaming_vae is not None:
+        _release_ttnn_runtime_configs(streaming_vae)
         try:
-            if hasattr(old_streaming_vae, "cleanup_all"):
-                old_streaming_vae.cleanup_all()
+            if hasattr(streaming_vae, "cleanup_all"):
+                streaming_vae.cleanup_all()
         except Exception as e:
             logger.warning("cleanup_all failed for streaming_vae: %s", e)
         try:
-            if hasattr(old_streaming_vae, "deallocate_weights"):
-                old_streaming_vae.deallocate_weights()
+            if hasattr(streaming_vae, "deallocate_weights"):
+                streaming_vae.deallocate_weights()
         except Exception as e:
             logger.warning("deallocate_weights failed for streaming_vae: %s", e)
-    if old_streaming_vae_half is not None and old_streaming_vae_half is not old_streaming_vae:
-        _release_ttnn_runtime_configs(old_streaming_vae_half)
-        try:
-            if hasattr(old_streaming_vae_half, "cleanup_all"):
-                old_streaming_vae_half.cleanup_all()
-        except Exception as e:
-            logger.warning("cleanup_all failed for streaming_vae_half: %s", e)
-        try:
-            if hasattr(old_streaming_vae_half, "deallocate_weights"):
-                old_streaming_vae_half.deallocate_weights()
-        except Exception as e:
-            logger.warning("deallocate_weights failed for streaming_vae_half: %s", e)
-
-    models["streaming_vae"] = WanVAEStreamingWrapper(models["vae"])
-    if config.env_type == "robotwin_tshape" and models.get("vae_half") is not None:
-        models["streaming_vae_half"] = WanVAEStreamingWrapper(models["vae_half"])
-    else:
-        models["streaming_vae_half"] = None
     gc.collect()
     logger.info("Freed TT VAE from device")
 
@@ -575,7 +526,7 @@ def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_
     text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
     seq_lens = mask.gt(0).sum(dim=1).long()
 
-    # TTNN text encoder (always used; no PyTorch fallback).
+    # TTNN text encoder.
     mesh_device = text_encoder.mesh_device
     tt_input = ttnn.from_torch(text_input_ids, dtype=ttnn.uint32, device=mesh_device)
     tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, device=mesh_device)
@@ -636,22 +587,6 @@ def _normalize_latents(latents, latents_mean, latents_std):
     latents_mean = latents_mean.view(1, -1, 1, 1, 1).to(device=latents.device)
     latents_std = latents_std.view(1, -1, 1, 1, 1).to(device=latents.device)
     return ((latents.float() - latents_mean) * latents_std).to(latents.dtype)
-
-
-def _preprocess_action(models, state, action):
-    config = models["config"]
-    actions_q01 = state["actions_q01"]
-    actions_q99 = state["actions_q99"]
-    action_norm_method = state["action_norm_method"]
-
-    action_model_input = torch.from_numpy(action)
-    action_model_input = F.pad(action_model_input, [0, 0, 0, 0, 0, 1], mode="constant", value=0)
-    action_model_input = action_model_input[config.inverse_used_action_channel_ids]
-    if action_norm_method == "quantiles":
-        action_model_input = (action_model_input - actions_q01) / (actions_q99 - actions_q01 + 1e-6) * 2.0 - 1.0
-    else:
-        raise NotImplementedError
-    return action_model_input.unsqueeze(0).unsqueeze(-1)
 
 
 def _postprocess_action(models, state, action):
@@ -756,7 +691,6 @@ def _encode_obs(models, state, obs):
     height = state["height"]
     width = state["width"]
     streaming_vae = models["streaming_vae"]
-    streaming_vae_half = models["streaming_vae_half"]
     vae = models["vae"]
 
     images = obs["obs"]
@@ -782,7 +716,7 @@ def _encode_obs(models, state, obs):
         videos_left_and_right = torch.cat(videos[1:], dim=0) / 255.0 * 2.0 - 1.0
         vae_device = next(streaming_vae.vae.parameters()).device
         enc_out_high = streaming_vae.encode_chunk(videos_high.to(vae_device).to(dtype))
-        encode_lr = streaming_vae_half if streaming_vae_half is not None else streaming_vae
+        encode_lr = streaming_vae
         enc_out_left_and_right = encode_lr.encode_chunk(videos_left_and_right.to(vae_device).to(dtype))
         enc_out = torch.cat(
             [
@@ -810,7 +744,6 @@ def _reset_state(models, state, prompt):
     config = models["config"]
     transformer = models["transformer"]
     streaming_vae = models["streaming_vae"]
-    streaming_vae_half = models["streaming_vae_half"]
     device = models["device"]
     dtype = models["dtype"]
     cache_name = models["cache_name"]
@@ -824,8 +757,6 @@ def _reset_state(models, state, prompt):
 
     transformer.clear_cache(cache_name)
     streaming_vae.clear_cache()
-    if streaming_vae_half is not None:
-        streaming_vae_half.clear_cache()
 
     state["action_per_frame"] = config.action_per_frame
     state["height"], state["width"] = config.height, config.width
@@ -1018,57 +949,14 @@ def _infer_impl(models, state, obs, frame_st_id=0):
     return actions_out, latents
 
 
-def _compute_kv_cache(models, state, obs):
-    transformer = models["transformer"]
-    cache_name = models["cache_name"]
-
-    transformer.clear_pred_cache(cache_name)
-    latent_model_input = _encode_obs(models, state, obs)
-    if state["frame_st_id"] == 0:
-        latent_model_input = (
-            torch.cat([state["init_latent"], latent_model_input], dim=2)
-            if latent_model_input is not None
-            else state["init_latent"]
-        )
-    action_model_input = _preprocess_action(models, state, obs["state"])
-    action_model_input = action_model_input.to(latent_model_input)
-    logger.info(f"get KV cache obs: {latent_model_input.shape} {action_model_input.shape}")
-    input_dict = _prepare_latent_input(
-        models,
-        state,
-        latent_model_input,
-        action_model_input,
-        frame_st_id=state["frame_st_id"],
-    )
-    with torch.no_grad():
-        transformer(
-            _repeat_input_for_cfg(models, state, input_dict["latent_res_lst"]),
-            update_cache=2,
-            cache_name=cache_name,
-            action_mode=False,
-        )
-        transformer(
-            _repeat_input_for_cfg(models, state, input_dict["action_res_lst"]),
-            update_cache=2,
-            cache_name=cache_name,
-            action_mode=True,
-        )
-    state["frame_st_id"] += latent_model_input.shape[2]
-
-
 def _infer_entry(models, state, obs):
     """Dispatch: reset, compute_kv_cache, or infer one chunk. Returns result dict."""
     reset = obs.get("reset", False)
     prompt = obs.get("prompt", None)
-    compute_kv_cache = obs.get("compute_kv_cache", False)
 
     if reset:
         logger.info("Reset server")
         _reset_state(models, state, prompt=prompt)
-        return {}
-    if compute_kv_cache:
-        logger.info("Compute KV cache")
-        _compute_kv_cache(models, state, obs)
         return {}
     logger.info("Infer one chunk")
     action, _ = _infer_impl(models, state, obs, frame_st_id=state["frame_st_id"])
@@ -1194,9 +1082,9 @@ def run_inference(
 
     # Phase 2: load only TT VAE encoder; run _encode_obs, then free.
     _prepare_state_for_vae_encode(state, config)
-    _load_tt_vae_into_models(models, config)
+    _load_tt_vae_into_models(models)
     state["init_latent"] = _encode_obs(models, state, message)
-    _free_tt_vae_from_models(models, config)
+    _free_tt_vae_from_models(models)
 
     # Phase 3: load TT transformer and run inference.
     _load_transformer_into_models(models, config)
@@ -1262,9 +1150,9 @@ def run_generate(
     # Phase 2: load only TT VAE encoder; run _encode_obs, then free.
     _prepare_state_for_vae_encode(state, config)
     init_obs = _load_init_obs(config, config.input_img_path)
-    _load_tt_vae_into_models(models, config)
+    _load_tt_vae_into_models(models)
     state["init_latent"] = _encode_obs(models, state, init_obs)
-    _free_tt_vae_from_models(models, config)
+    _free_tt_vae_from_models(models)
 
     # Phase 3: load TT transformer and run generation.
     _load_transformer_into_models(models, config)
@@ -1302,16 +1190,7 @@ def run_generate(
             logger.warning("transformer.deallocate_weights failed: %s", e)
         models.pop("transformer", None)
         del transformer
-    if models.get("streaming_vae_half"):
-        _release_ttnn_runtime_configs(models["streaming_vae_half"])
-        try:
-            if hasattr(models["streaming_vae_half"], "cleanup_all"):
-                models["streaming_vae_half"].cleanup_all()
-            if hasattr(models["streaming_vae_half"], "deallocate_weights"):
-                models["streaming_vae_half"].deallocate_weights()
-        except Exception as e:
-            logger.warning("streaming_vae_half cleanup failed: %s", e)
-        del models["streaming_vae_half"]
+
     if models.get("streaming_vae"):
         _release_ttnn_runtime_configs(models["streaming_vae"])
         try:
@@ -1327,38 +1206,19 @@ def run_generate(
     gc.collect()
     gc.collect()
     _close_lingbot_mesh_stack(models)
-    from models.experimental.lingbot_va.tests.mesh_utils import inference_work_mesh_from_opened
-
     opened_mesh = _open_lingbot_mesh_device()
     mesh_device, mesh_parent = inference_work_mesh_from_opened(opened_mesh)
     models["mesh_device"] = mesh_device
     models["mesh_device_parent"] = mesh_parent
     models["ccl_manager"] = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
-    # TT decoder on fresh mesh; PyTorch fallback on OOM. Disable: LINGBOT_VA_USE_TT_DECODER=0.
-    use_tt_decoder = os.environ.get("LINGBOT_VA_USE_TT_DECODER", "1").strip().lower() in ("1", "true", "yes")
-    decoded_video = None
-    if use_tt_decoder:
-        try:
-            _load_tt_vae_decoder_into_models(models, config)
-            if getattr(config, "enable_offload", True):
-                models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
-            decoded_video = _decode_one_video(models, pred_latent, "np")[0]
-        except RuntimeError as e:
-            if "Out of Memory" in str(e) or "OOM" in str(e).upper():
-                logger.warning("TT VAE decoder OOM, falling back to PyTorch decode: %s", e)
-                _free_tt_vae_decoder_from_models(models)
-                decoded_video = None
-            else:
-                _free_tt_vae_decoder_from_models(models)
-                raise
-        finally:
-            if models.get("vae_decoder_tt") is not None:
-                _free_tt_vae_decoder_from_models(models)
-    if decoded_video is None:
-        if getattr(config, "enable_offload", True):
-            models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
+    _load_tt_vae_decoder_into_models(models, config)
+    if getattr(config, "enable_offload", True):
+        models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
         decoded_video = _decode_one_video(models, pred_latent, "np")[0]
+        _free_tt_vae_decoder_from_models(models)
+        if models.get("vae_decoder_tt") is not None:
+            _free_tt_vae_decoder_from_models(models)
     export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=10)
     _close_lingbot_mesh_stack(models)
     return str(Path(save_dir) / "demo.mp4")
