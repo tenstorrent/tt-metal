@@ -21,7 +21,6 @@
 #include <vector>
 #include <atomic>
 
-#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "buffer_types.hpp"
@@ -216,12 +215,6 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
 
     bool use_prefetcher_cache =
         this->max_program_kernels_sizeB_ and this->max_program_kernels_sizeB_ <= prefetcher_cache_sizeB;
-    log_debug(
-        tt::LogDispatch,
-        "Prefetcher cache: max_program_kernels_sizeB={}, prefetcher_cache_sizeB={}, enabled={}",
-        this->max_program_kernels_sizeB_,
-        prefetcher_cache_sizeB,
-        use_prefetcher_cache);
     for (auto& [device_range, program] : programs_) {
         program.impl().generate_dispatch_commands(mesh_device, use_prefetcher_cache);
     }
