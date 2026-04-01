@@ -1185,12 +1185,8 @@ jobs:
       - ttnn-sweeps-galaxy
     if: |
       !cancelled() &&
-      (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n150.result == 'skipped') &&
-      (needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-n300.result == 'skipped') &&
-      (needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-p150b.result == 'skipped') &&
-      (needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-t3k.result == 'skipped') &&
-      (needs.ttnn-sweeps-galaxy.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'skipped') &&
-      (needs.ttnn-sweeps-n150.result != 'skipped' || needs.ttnn-sweeps-n300.result != 'skipped' || needs.ttnn-sweeps-p150b.result != 'skipped' || needs.ttnn-sweeps-t3k.result != 'skipped' || needs.ttnn-sweeps-galaxy.result != 'skipped')
+      !contains(needs.*.result, 'failure') &&
+      (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'success')
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -1265,8 +1261,7 @@ jobs:
       - ttnn-run-single-sweep
     if: |
       !cancelled() &&
-      (needs.ttnn-homogenize-run-result.result == 'success' || needs.ttnn-compute-module-matrix.result == 'success') &&
-      (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-compute-module-matrix.result != 'skipped') &&
+      (needs.ttnn-homogenize-run-result.result == 'success' || needs.ttnn-run-single-sweep.result == 'success') &&
       needs.resolve-inputs.outputs.upload-results == 'true'
     runs-on: ubuntu-22.04
     steps:
@@ -1278,8 +1273,9 @@ jobs:
       - name: Download sweep results
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
-          name: sweeps-run-result
+          pattern: sweeps-*
           path: tests/sweep_framework/results_export
+          merge-multiple: true
       - name: List all downloaded files
         run: |
           ls -hal tests/sweep_framework/results_export
