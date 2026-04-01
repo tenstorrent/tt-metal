@@ -73,6 +73,9 @@ private:
 //   - Query of device memory state/ device will throw.
 //   - get_coords/ is_uniform_storage will be undefined (for transition, ideally they should all throw).
 //   - Calls to deallocate will have no effect.
+//
+// Right now the deallocated state is only restircted to have a nullptr to the mesh_buffer,
+// in the future we should restrict it to also cover have a non-null mesh_buffer that has a deallocated state.
 struct DeviceStorage {
     // Construct a DeviceStorage that is deallocated
     DeviceStorage() = default;
