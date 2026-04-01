@@ -102,10 +102,11 @@ def _reset_device_state(device):
     Reset shared device state before each test so module-scoped device
     behaves like a fresh device for state-sensitive tests.
 
-    Clears program cache (prevents stale entries from affecting cache-count
-    assertions), loaded sub-device manager, and cache_entries_counter delta.
+    Clears loaded sub-device manager and resets cache_entries_counter delta.
+    Program cache is intentionally NOT cleared — doing so invalidates
+    pre-compiled ethernet dispatch kernel binaries and causes 'binary not
+    found' fatals during CQ re-init.
     """
-    device.clear_program_cache()
     device.clear_loaded_sub_device_manager()
     device.cache_entries_counter.reset()
     yield

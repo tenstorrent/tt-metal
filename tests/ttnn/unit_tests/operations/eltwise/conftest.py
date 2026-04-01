@@ -106,15 +106,20 @@ def _reset_device_state(device):
     behaves like a fresh device for state-sensitive tests.
 
     Clears:
-    - Program cache: prevents prior-test programs from affecting cache-count
-      assertions or causing core-mismatch errors via stale sub-device programs.
     - Loaded sub-device manager: tests that call load_sub_device_manager()
       without cleanup would otherwise leave the sub-device config active for
       the next test, causing 'num_intersections == num_cores' fatals.
     - cache_entries_counter: resets the delta counter so per-test cache-entry
-      assertions start from zero.
+      assertions (which measure new entries since reset, not absolute counts)
+      start from zero.
+
+    Note: program cache is intentionally NOT cleared here. Clearing it
+    invalidates pre-compiled ethernet dispatch kernel binaries stored in
+    command_queue_programs_, causing 'binary not found' fatals during CQ
+    re-init in tests that use ethernet dispatch (e.g. test_ttnn_where_forge).
+    Tests that check absolute program cache entry counts must instead assert
+    on deltas via cache_entries_counter or opt out of the shared fixture.
     """
-    device.clear_program_cache()
     device.clear_loaded_sub_device_manager()
     device.cache_entries_counter.reset()
     yield
