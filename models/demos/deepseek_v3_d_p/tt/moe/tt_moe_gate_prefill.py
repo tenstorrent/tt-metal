@@ -138,6 +138,10 @@ class TtMoEGatePrefill(LightweightModule):
 
         # Torch copies for host fallback paths — keep in HF convention (n_experts, dim)
         if fallback_mode != GateComputeMode.DEVICE:
+            # Host fallback paths assume real torch tensors; validate early to avoid
+            # obscure AttributeError later when calling methods like .float().
+            if weight is None or bias is None:
+                assert False, "Host fallback modes require non-None weight and bias tensors"
             self.torch_weight = weight  # (n_experts, dim)
             self.torch_bias = bias  # (n_experts,)
 
@@ -256,15 +260,16 @@ class TtMoEGatePrefill(LightweightModule):
             program_config=program_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        logits = ttnn.experimental.all_reduce_async(
-            logits,
-            cluster_axis=self.config.ccl_config["TP_AXIS"],
-            mesh_device=self.mesh_device,
-            num_links=self.config.ccl_config["NUM_LINKS"],
-            math_op=ttnn.ReduceType.Sum,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            topology=ttnn.Topology.Linear,
-        )
+        if self.mesh_device.shape[self.config.ccl_config["TP_AXIS"]] > 1:
+            logits = ttnn.experimental.all_reduce_async(
+                logits,
+                cluster_axis=self.config.ccl_config["TP_AXIS"],
+                mesh_device=self.mesh_device,
+                num_links=self.config.ccl_config["NUM_LINKS"],
+                math_op=ttnn.ReduceType.Sum,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+            )
         return logits
 
     def _host_matmul(self, x: ttnn.Tensor) -> torch.Tensor:
