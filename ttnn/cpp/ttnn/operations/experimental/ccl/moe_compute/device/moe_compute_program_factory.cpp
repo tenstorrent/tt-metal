@@ -435,7 +435,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_e_t_output_data_format);
 
     // Assume indices tensor is sharded in L1
-    tt::tt_metal::create_cb(
+    const auto indices_cb_output = tt::tt_metal::create_cb(
         indices_tensor_cb_id,
         program,
         tilize_core_range_set,
@@ -443,9 +443,10 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_indices_pages,  // double buffer buffer packets
         tilize_indices_data_format,
         tilize_indices_tensor.buffer());
+    const auto indices_cb_handle = std::get<1>(indices_cb_output);
 
     // Assume scores tensor is sharded in L1
-    tt::tt_metal::create_cb(
+    const auto scores_cb_output = tt::tt_metal::create_cb(
         scores_tensor_cb_id,
         program,
         tilize_core_range_set,
@@ -453,6 +454,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_input_scores_pages,
         tilize_input_scores_data_format,
         tilize_input_scores_tensor.buffer());
+    const auto scores_cb_handle = std::get<1>(scores_cb_output);
 
     // For each batch's tokens, we need to read the relevant experts from the mapping tensor
     // For in range (tokens) every time tokens/batch increments, read in new mapping tensor page
@@ -761,6 +763,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_compute.cpp",
         tilize_core_range_set,
         tt::tt_metal::ComputeConfig{.named_compile_args = compute_tilize_named_compile_time_args});
+
+    std::cout << "PROGRAM FACTORY: " << tilize_indices_tensor.buffer()->address() << std::endl;
 
     std::vector<uint32_t> tilize_runtime_args = {
         tilize_input_tensor.buffer()->address(),                           // 0
@@ -1083,8 +1087,10 @@ MoEComputeMeshWorkloadFactory::create_at(
          .tilize_cores = tilize_cores,
          .matmul_kernel_handles = {matmul_dm0_kernel_handle, matmul_dm1_kernel_handle, matmul_compute_kernel_handle},
          .matmul_cores = matmul_cores,
+         .indices_cb_handle = indices_cb_handle,
+         .scores_cb_handle = scores_cb_handle,
          .sharded_output_cb_handle = sharded_output_cb_handle,
-         .matmul_writer_cb_handle=matmul_writer_cb_handle}};
+         .matmul_writer_cb_handle = matmul_writer_cb_handle}};
 }
 
 void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
@@ -1103,6 +1109,12 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
 
         // Update sharded circular buffer address
         tt::tt_metal::UpdateDynamicCircularBufferAddress(
+            program, shared_variables.indices_cb_handle, *tensor_args.tilize_expert_indices_tensor.buffer());
+
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(
+            program, shared_variables.scores_cb_handle, *tensor_args.tilize_expert_scores_tensor.buffer());
+
+        tt::tt_metal::UpdateDynamicCircularBufferAddress(
             program, shared_variables.sharded_output_cb_handle, *tilize_output_tensor.buffer());
 
         tt::tt_metal::UpdateDynamicCircularBufferAddress(
@@ -1111,6 +1123,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
         //-------------------------------------------------------------------------
         // Tilize
         //-------------------------------------------------------------------------
+
         for (const auto& core : shared_variables.tilize_cores) {
             // reader
             auto& tilize_reader_runtime_args =
