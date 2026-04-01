@@ -1,0 +1,8 @@
+﻿ttnn.from\_buffer
+=================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.from_buffer:
+
+.. autooperation:: ttnn.from_buffer

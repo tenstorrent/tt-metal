@@ -1,0 +1,1420 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lab 3: Multicast for Improved Data Reuse in Multi Core Matrix Multiplication &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/tt-metalium/tt_metal/labs/matmul/lab3/lab3.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../../" id="documentation_options" src="../../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script src="../../../../_static/posthog.js?v=aa5946f9"></script>
+    <script src="../../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../../search.html" />
+    <link rel="next" title="Advanced Topics" href="../../../advanced_topics/index.html" />
+    <link rel="prev" title="Lab 2: Multi Core Matrix Multiplication" href="../lab2/lab2.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../../programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../index.html">Lab Exercises</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../lab1/lab1.html">Lab 1: Single Core Matrix Multiplication</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../lab2/lab2.html">Lab 2: Multi Core Matrix Multiplication</a></li>
+<li class="toctree-l2 current"><a class="current reference internal" href="#">Lab 3: Multicast for Improved Data Reuse in Multi Core Matrix Multiplication</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#introduction">Introduction</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#high-level-motivation">High-Level Motivation</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#background-tenstorrent-noc-and-multicast">Background: Tenstorrent NoC and Multicast</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#example-multicast-program">Example Multicast Program</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#synchronization-with-semaphores">Synchronization with Semaphores</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#high-level-multicast-protocol">High-Level Multicast Protocol</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#overview-of-provided-files">Overview of Provided Files</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#logical-vs-device-coordinates">Logical vs. Device Coordinates</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#data-movement-processors-and-noc-selection">Data Movement Processors and NoC Selection</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#receiver-kernel-overview">Receiver Kernel Overview</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#sender-kernel-overview">Sender Kernel Overview</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#compute-and-writer-kernels">Compute and Writer Kernels</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#multicast-and-double-buffering">Multicast and Double Buffering</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#multicast-exclusions">Multicast Exclusions</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#debugging-hangs-with-watcher">Debugging Hangs with Watcher</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#exercise-1-debugging-multicast-issues-using-watcher">Exercise 1: Debugging Multicast Issues Using Watcher</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#exercise-2-extending-the-standalone-multicast-example">Exercise 2: Extending the Standalone Multicast Example</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#exercise-3-batched-multicast-for-improved-throughput">Exercise 3: Batched Multicast for Improved Throughput</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#applying-multicast-to-multi-core-matrix-multiplication">Applying Multicast to Multi Core Matrix Multiplication</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#exercise-4-multi-core-matrix-multiplication-with-multicast">Exercise 4: Multi Core Matrix Multiplication with Multicast</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#conclusion">Conclusion</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#appendix-a-watcher-log-file-format">Appendix A: Watcher Log File Format</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../../advanced_topics/index.html">Advanced Topics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../environment_variables/index.html">Environment Variables</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../index.html">Lab Exercises</a></li>
+      <li class="breadcrumb-item active">Lab 3: Multicast for Improved Data Reuse in Multi Core Matrix Multiplication</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../../_sources/tt_metal/labs/matmul/lab3/lab3.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="lab-3-multicast-for-improved-data-reuse-in-multi-core-matrix-multiplication">
+<h1>
+<a class="toc-backref" href="#id6" role="doc-backlink">Lab 3: Multicast for Improved Data Reuse in Multi Core Matrix Multiplication</a><a class="headerlink" href="#lab-3-multicast-for-improved-data-reuse-in-multi-core-matrix-multiplication" title="Permalink to this heading"></a>
+</h1>
+<nav class="contents" id="table-of-contents">
+<p class="topic-title">Table of Contents</p>
+<ul class="simple">
+<li>
+<p><a class="reference internal" href="#lab-3-multicast-for-improved-data-reuse-in-multi-core-matrix-multiplication" id="id6">Lab 3: Multicast for Improved Data Reuse in Multi Core Matrix Multiplication</a></p>
+<ul>
+<li><p><a class="reference internal" href="#introduction" id="id7">Introduction</a></p></li>
+<li><p><a class="reference internal" href="#background-tenstorrent-noc-and-multicast" id="id8">Background: Tenstorrent NoC and Multicast</a></p></li>
+<li><p><a class="reference internal" href="#example-multicast-program" id="id9">Example Multicast Program</a></p></li>
+<li><p><a class="reference internal" href="#debugging-hangs-with-watcher" id="id10">Debugging Hangs with Watcher</a></p></li>
+<li><p><a class="reference internal" href="#exercise-1-debugging-multicast-issues-using-watcher" id="id11">Exercise 1: Debugging Multicast Issues Using Watcher</a></p></li>
+<li><p><a class="reference internal" href="#exercise-2-extending-the-standalone-multicast-example" id="id12">Exercise 2: Extending the Standalone Multicast Example</a></p></li>
+<li><p><a class="reference internal" href="#exercise-3-batched-multicast-for-improved-throughput" id="id13">Exercise 3: Batched Multicast for Improved Throughput</a></p></li>
+<li><p><a class="reference internal" href="#applying-multicast-to-multi-core-matrix-multiplication" id="id14">Applying Multicast to Multi Core Matrix Multiplication</a></p></li>
+<li><p><a class="reference internal" href="#exercise-4-multi-core-matrix-multiplication-with-multicast" id="id15">Exercise 4: Multi Core Matrix Multiplication with Multicast</a></p></li>
+<li><p><a class="reference internal" href="#conclusion" id="id16">Conclusion</a></p></li>
+<li><p><a class="reference internal" href="#appendix-a-watcher-log-file-format" id="id17">Appendix A: Watcher Log File Format</a></p></li>
+</ul>
+</li>
+</ul>
+</nav>
+<section id="introduction">
+<h2>
+<a class="toc-backref" href="#id7" role="doc-backlink">Introduction</a><a class="headerlink" href="#introduction" title="Permalink to this heading"></a>
+</h2>
+<p>In Lab 2, you implemented multi core matrix multiplication with data reuse within each core.
+Each core read tiles of input matrices from DRAM into its own circular buffers (CBs) and
+reused them locally across multiple multiply-accumulate steps. However, data was not reused across cores:
+each core read its own tiles from DRAM, even when neighboring cores needed the same data.</p>
+<p>Ideally, each piece of data should be fetched from DRAM only once and then reused by all cores that need it.
+On Tenstorrent devices, cores do not have direct access to each other’s circular buffers (CBs), but they are
+connected by a 2D <strong>Network on Chip (NoC)</strong> that allows them to pass data to each other.
+While sending data over the NoC is more efficient than reading data from DRAM multiple times,
+it still introduces overhead that we would like to minimize.
+The NoC supports <strong>unicast</strong> and <strong>multicast</strong> operations.
+Unicast allows a sender core to write data to a single destination core.
+Multicast allows a sender core to write the same data to multiple destination cores in a single NoC operation,
+minimizing the overhead when the same data needs to be sent to multiple cores.</p>
+<p>In this lab, you will:</p>
+<ul class="simple">
+<li><p>Learn how to use simple multicast to send tiles from one sender core to multiple receiver cores.</p></li>
+<li><p>Understand how semaphores, device coordinates, and multicast addressing work together.</p></li>
+<li><p>Apply multicast to your Lab 2 multi core matrix multiplication so that tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> are reused across cores,
+not just within a single core.</p></li>
+</ul>
+<section id="high-level-motivation">
+<h3>High-Level Motivation<a class="headerlink" href="#high-level-motivation" title="Permalink to this heading"></a>
+</h3>
+<p>Consider the example matrix multiplication shown in Figure 1.</p>
+<figure class="align-center" id="id1">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/data_reuse_no_multicast.png"><img alt="Example matrix multiplication on a 3x3 core grid" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/data_reuse_no_multicast.png" style="width: 900px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 1: Example matrix multiplication on a 3x3 core grid</span><a class="headerlink" href="#id1" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>Each square in Figure 1 represents a tile, and the dimensions of the matrices are <code class="docutils literal notranslate"><span class="pre">9x6</span></code> tiles
+for <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">6x9</span></code> tiles for <code class="docutils literal notranslate"><span class="pre">B</span></code>, resulting in a <code class="docutils literal notranslate"><span class="pre">9x9</span></code> tile output matrix <code class="docutils literal notranslate"><span class="pre">C</span></code>.
+The squares in the middle of the figure represent the core grid, with each square labeled
+with its core coordinates <code class="docutils literal notranslate"><span class="pre">(x,</span> <span class="pre">y)</span></code>. The core coordinates are also shown over the output
+matrix <code class="docutils literal notranslate"><span class="pre">C</span></code> to indicate the core that computes the corresponding rectangular block of tiles.</p>
+<p>From the basic matrix multiplication algorithm, we know that computing an element of the output matrix <code class="docutils literal notranslate"><span class="pre">C</span></code>
+requires all elements of the corresponding row of <code class="docutils literal notranslate"><span class="pre">A</span></code> and the corresponding column of <code class="docutils literal notranslate"><span class="pre">B</span></code>.
+The same applies when computing tiles or rectangular blocks of tiles of <code class="docutils literal notranslate"><span class="pre">C</span></code>.
+This means that all cores in the same row need the same tile rows of <code class="docutils literal notranslate"><span class="pre">A</span></code>,
+and all cores in the same column need the same tile columns of <code class="docutils literal notranslate"><span class="pre">B</span></code>.</p>
+<p>Arrows in Figure 1 show tiles being read from DRAM into the cores’ on-chip SRAM:
+all cores in the same row read the same tile rows of <code class="docutils literal notranslate"><span class="pre">A</span></code>, and all cores in the same
+column read the same tile columns of <code class="docutils literal notranslate"><span class="pre">B</span></code>.</p>
+<p>Since DRAM bandwidth is limited, this is inefficient because the same data is read multiple times from DRAM.
+Instead, we would like to load a tile from DRAM once and share it across all cores that need it through the NoC.
+A possible way to achieve this is shown in Figure 2.</p>
+<figure class="align-center" id="id2">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/data_reuse_with_multicast.png"><img alt="Example matrix multiplication on a 3x3 core grid with multicast" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/data_reuse_with_multicast.png" style="width: 900px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 2: Example matrix multiplication on a 3x3 core grid with multicast</span><a class="headerlink" href="#id2" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>In the example in Figure 2, only the leftmost core in each grid row reads tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> from DRAM,
+depicted by thin arrows in the figure.
+Each leftmost core stores the tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> into its own CBs for its own computation, just as it did in Lab 2.
+However, it now also multicasts the tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> it read from DRAM to all the other cores in the same row.
+Similarly, only the topmost core in each grid column reads tiles of <code class="docutils literal notranslate"><span class="pre">B</span></code> from DRAM, storing them into
+its own CBs for its own computation, and multicasts these tiles to all the other cores in the same column.
+The multicast operations are depicted by thick arrows in the figure.</p>
+<p>In the rest of this lab, you will first work through a simple example program demonstrating NoC and
+multicast features, and then retrofit your Lab 2 matrix multiplication with data reuse solution
+to use multicast.</p>
+</section>
+</section>
+<section id="background-tenstorrent-noc-and-multicast">
+<h2>
+<a class="toc-backref" href="#id8" role="doc-backlink">Background: Tenstorrent NoC and Multicast</a><a class="headerlink" href="#background-tenstorrent-noc-and-multicast" title="Permalink to this heading"></a>
+</h2>
+<p>The Network on Chip (NoC) is a high-bandwidth 2D torus interconnect (often visualized as a 2D grid)
+that connects:</p>
+<ul class="simple">
+<li><p>All Tensix cores</p></li>
+<li><p>DRAM controllers</p></li>
+<li><p>PCIe interfaces</p></li>
+<li><p>Ethernet cores (for multi-device systems)</p></li>
+</ul>
+<p>The NoC transfers data between components of the device, including between DRAM and on-chip SRAM.
+As you have seen in earlier labs, a TT-Metalium programmer does not need to understand all of the
+hardware details to use the NoC.
+In this lab, we will expand our use of the NoC to include multicast operations to transfer data between cores.
+For more detailed information about the NoC, refer to the resources listed in the Additional Information
+section at the end of this lab.</p>
+<p>In TT-Metalium, NoC multicast is a data movement operation where one core writes directly into the
+on-chip SRAM of multiple other cores with a single command. The sender core specifies a group of
+destination cores and a destination memory address, and the NoC hardware delivers the data to that
+address on every destination core.
+Unlike a “pull” model where receivers issue read requests, multicast is a “push” model: the sender
+pushes the data into the receivers’ on-chip memories.</p>
+<p>From the receiving core’s point of view, a multicast operation writes tiles straight into its on-chip SRAM,
+typically into a location it has already set aside in a circular buffer (CB). The receiver does not
+need to perform any explicit read or copy for the data itself; it only needs to prepare space and
+indicate that it is ready to accept a tile (for example, by reserving a CB slot). Once the multicast
+completes, the tile is simply present in the CB, ready to be consumed by the compute or writer
+kernels just like any other locally produced data.</p>
+<p>We will illustrate the multicast operation with a simple example program in the next section.</p>
+</section>
+<section id="example-multicast-program">
+<h2>
+<a class="toc-backref" href="#id9" role="doc-backlink">Example Multicast Program</a><a class="headerlink" href="#example-multicast-program" title="Permalink to this heading"></a>
+</h2>
+<p>The main host program for the multicast example is <code class="docutils literal notranslate"><span class="pre">ttnn/examples/lab_multicast/lab_multicast.cpp</span></code>.
+The program creates a 2D tensor and fills it with random data.
+One <strong>sender core</strong> uses a reader kernel to read tiles of this tensor from DRAM and also multicasts them to three <strong>receiver cores</strong>.
+The flow of data is shown in Figure 3.</p>
+<figure class="align-center" id="id3">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/data_flow_multicast.png"><img alt="Data flow in the multicast example program" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/data_flow_multicast.png" style="width: 700px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 3: Data flow in the multicast example program</span><a class="headerlink" href="#id3" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>Core <code class="docutils literal notranslate"><span class="pre">(0,0)</span></code> is the <strong>sender core</strong> and cores <code class="docutils literal notranslate"><span class="pre">(1,0)</span></code>, <code class="docutils literal notranslate"><span class="pre">(2,0)</span></code>, and <code class="docutils literal notranslate"><span class="pre">(3,0)</span></code> are <strong>receiver cores</strong>.
+Receiver cores do not read the input tensor from DRAM, but receive tiles via multicast from the sender.
+Each receiver core has three kernels:</p>
+<ul class="simple">
+<li><p>A reader kernel that manages the CB and signals to the sender core when it is ready for the next tile.</p></li>
+<li><p>A compute kernel, which simply copies each tile to the output CB. In a real application, this is where computation would happen.</p></li>
+<li><p>A writer kernel that writes each tile into an appropriate region of the output tensor in DRAM.</p></li>
+</ul>
+<p>The host reads back all receiver outputs and verifies that the output tensor contains three
+copies of the original tensor stacked vertically.
+Note that the number of tiles in Figure 3 is symbolic and does not accurately represent
+the number of tiles in the actual program.</p>
+<section id="synchronization-with-semaphores">
+<h3>Synchronization with Semaphores<a class="headerlink" href="#synchronization-with-semaphores" title="Permalink to this heading"></a>
+</h3>
+<p>Given that multicast uses a “push” model in which the sender writes data directly into the receivers’ on-chip SRAM,
+it is important to coordinate execution between the sender and receivers to avoid data corruption and
+race conditions. This coordination is done using semaphores.
+In general, a semaphore is a small shared variable used to coordinate concurrently running code.
+For example, one semaphore can signal that receivers are ready for data (for example, after reserving
+a CB slot for an incoming tile), and another can signal that data has been sent
+(i.e., written to receivers’ memory).</p>
+<p>In TT-Metalium, a semaphore is an integer value stored in on-chip SRAM that multiple cores can read and update.
+Typical use cases for semaphores include:</p>
+<ul class="simple">
+<li><p>A core <strong>increments or sets</strong> a semaphore to signal that some condition is now true
+(for example, “a receiver is ready” or “a tile has been sent”).</p></li>
+<li><p>A core <strong>waits until the semaphore reaches a target value</strong> before proceeding, ensuring it does not
+read data or start an action too early (e.g., before the data has been written to memory).</p></li>
+</ul>
+<p>A semaphore can be created on one or more Tensix cores using the <code class="docutils literal notranslate"><span class="pre">CreateSemaphore</span></code> host-side API,
+which allocates and initializes a semaphore in on-chip SRAM and returns a semaphore ID.
+For example, in <code class="docutils literal notranslate"><span class="pre">lab_multicast.cpp</span></code>, there are two semaphores created:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">receivers_ready_semaphore</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateSemaphore</span><span class="p">(</span><span class="n">prog_state</span><span class="p">.</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores_logical</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">);</span>
+<span class="kt">uint32_t</span><span class="w"> </span><span class="n">tile_sent_semaphore</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">CreateSemaphore</span><span class="p">(</span><span class="n">prog_state</span><span class="p">.</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores_logical</span><span class="p">,</span><span class="w"> </span><span class="n">INVALID</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>where <code class="docutils literal notranslate"><span class="pre">prog_state.program</span></code> is the TT-Metalium <code class="docutils literal notranslate"><span class="pre">Program</span></code> that these semaphores belong to,
+and <code class="docutils literal notranslate"><span class="pre">all_cores_logical</span></code> is the logical core range on which to create the semaphore
+(in this example, all four cores). Finally, the last argument is the initial value of the
+semaphore on each core. In this example, <code class="docutils literal notranslate"><span class="pre">0</span></code> is used for the <code class="docutils literal notranslate"><span class="pre">receivers_ready_semaphore</span></code>
+to indicate that none of the receivers are ready to receive a tile.
+Similarly, <code class="docutils literal notranslate"><span class="pre">tile_sent_semaphore</span></code> is initialized to the <code class="docutils literal notranslate"><span class="pre">INVALID</span></code> value because initially the sender
+core has not sent any tiles. <code class="docutils literal notranslate"><span class="pre">INVALID</span></code> and <code class="docutils literal notranslate"><span class="pre">VALID</span></code> are constant integer values defined in the
+TT-Metalium API to make the code more readable.</p>
+<p>The IDs returned by <code class="docutils literal notranslate"><span class="pre">CreateSemaphore</span></code> are then passed as kernel arguments so that kernels can use
+them to access the semaphore on the core they are running on.</p>
+</section>
+<section id="high-level-multicast-protocol">
+<h3>High-Level Multicast Protocol<a class="headerlink" href="#high-level-multicast-protocol" title="Permalink to this heading"></a>
+</h3>
+<p>Before looking at the code, it is helpful to describe the multicast protocol at a high level,
+as shown in Figure 4.</p>
+<figure class="align-center" id="id4">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/multicast_protocol.png"><img alt="Multicast Protocol" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/multicast_protocol.png" style="width: 1900px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 4: Multicast Protocol</span><a class="headerlink" href="#id4" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>Figure 4(a) shows the multicast protocol near the beginning of kernel code execution,
+with all semaphores at their initial values.
+The sender core has just read a tile from DRAM into its input CB, and is ready to multicast it
+to other cores. However, it must wait until all receivers signal that they are ready for the tile.
+The sender does this by waiting for the <code class="docutils literal notranslate"><span class="pre">receivers_ready</span></code> semaphore, which resides
+<strong>in the sender’s on-chip SRAM</strong>, to reach the number of receivers (three in our example program).
+Waiting on a semaphore is a blocking call and does <strong>not</strong> involve any NoC traffic since the
+semaphore is in the local on-chip SRAM.</p>
+<p>Receivers, for their part, must allocate space in their input CBs for the incoming tile and then
+signal that they are ready to receive the next tile. They do so by calling <code class="docutils literal notranslate"><span class="pre">noc_semaphore_inc</span></code>
+on the <code class="docutils literal notranslate"><span class="pre">receivers_ready</span></code> semaphore <strong>in the sender’s on-chip SRAM</strong>, to increment it by 1.
+This is shown in Figure 4(b).
+Note that this increment <strong>does</strong> require a NoC transaction, since the <code class="docutils literal notranslate"><span class="pre">receivers_ready</span></code>
+semaphore is in the sender’s on-chip SRAM. These transactions are <strong>unicast transactions</strong>:
+each receiver core sends an independent increment transaction to the sender core, so the order
+of increments is not guaranteed. However, incrementing a semaphore is an atomic operation, so
+the sender will eventually see the correct number of receivers ready for the tile.
+The sender core does not send the tile until all receivers have indicated they are ready.
+After indicating readiness, each receiver core waits for the sender to multicast the tile to it.
+This is done by waiting on the <code class="docutils literal notranslate"><span class="pre">tile_sent</span></code> semaphore <strong>in the receiver’s on-chip SRAM</strong>.
+This wait operation also does not involve any NoC traffic since the semaphore is in the local on-chip SRAM.</p>
+<p>Once the sender core has seen the correct number of receivers ready for the tile,
+it can <strong>multicast</strong> the tile to all receiver cores in one operation, using the <code class="docutils literal notranslate"><span class="pre">noc_async_write_multicast</span></code>
+function. This is illustrated in Figure 4(c).
+The sender core also resets the <code class="docutils literal notranslate"><span class="pre">receivers_ready</span></code> semaphore to <code class="docutils literal notranslate"><span class="pre">0</span></code> to avoid accidental reuse of
+the same semaphore value, and in preparation for the next tile.
+Since the <code class="docutils literal notranslate"><span class="pre">receivers_ready</span></code> semaphore is in the sender’s on-chip SRAM, this does not require any NoC traffic.</p>
+<p>Having sent the tile to all receiver cores, the sender core must signal to the receivers that the tile has been sent.
+This is done by calling <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set_multicast</span></code> on the <code class="docutils literal notranslate"><span class="pre">tile_sent</span></code> semaphore <strong>in the receiver’s on-chip SRAM</strong>,
+to set it to <code class="docutils literal notranslate"><span class="pre">VALID</span></code>. This is illustrated in Figure 4(d).
+Since we wish to update the <code class="docutils literal notranslate"><span class="pre">tile_sent</span></code> semaphore on <strong>all receiver cores</strong>, this requires a NoC <strong>multicast transaction</strong>.</p>
+<p>Finally, once a receiver core observes that its <code class="docutils literal notranslate"><span class="pre">tile_sent</span></code> semaphore has been set to <code class="docutils literal notranslate"><span class="pre">VALID</span></code>,
+it can proceed to consume the tile. Once the tile has been consumed, the receiver core calls <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set</span></code>
+on the <code class="docutils literal notranslate"><span class="pre">tile_sent</span></code> semaphore in its own on-chip SRAM, to set it to <code class="docutils literal notranslate"><span class="pre">INVALID</span></code> to prepare for the next tile.
+Similar to the earlier <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set</span></code> call, this does <strong>not</strong> require any NoC traffic since the
+semaphore is in the local on-chip SRAM. This is illustrated in Figure 4(e).
+As can be seen, the state of all the semaphores is now the same as at the beginning of the protocol,
+ready for the next tile to be multicast.</p>
+<p>This high-level protocol helps explain the overall flow of the multicast operation.
+The following sections describe TT-Metalium APIs used to implement it.</p>
+</section>
+<section id="overview-of-provided-files">
+<h3>Overview of Provided Files<a class="headerlink" href="#overview-of-provided-files" title="Permalink to this heading"></a>
+</h3>
+<p>The example multicast program located in <code class="docutils literal notranslate"><span class="pre">ttnn/examples/lab_multicast/</span></code> contains the following files:</p>
+<ul class="simple">
+<li>
+<p>Host program:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">lab_multicast.cpp</span></code> - Creates kernels, CBs, and semaphores on appropriate cores and launches kernel execution.</p></li>
+</ul>
+</li>
+<li>
+<p>Dataflow kernels:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">kernels/dataflow/mcast_sender.cpp</span></code> - Reads tiles from DRAM and multicasts them to receiver cores.
+This kernel runs only on the sender core.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">kernels/dataflow/mcast_receiver.cpp</span></code> - Receives tiles via multicast into its input CB.
+This kernel runs only on the receiver cores.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">kernels/dataflow/write_tiles.cpp</span></code> - Writes tiles to DRAM at this receiver’s region of the output tensor.
+This kernel runs only on the receiver cores.</p></li>
+</ul>
+</li>
+<li>
+<p>Compute kernel:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">kernels/compute/tiles_copy.cpp</span></code> - Copies tiles from input CB to output CB.
+This kernel runs only on the receiver cores.</p></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="logical-vs-device-coordinates">
+<h3>Logical vs. Device Coordinates<a class="headerlink" href="#logical-vs-device-coordinates" title="Permalink to this heading"></a>
+</h3>
+<p>The example multicast program uses <strong>device coordinates</strong>, a new concept not previously seen in Labs 1 and 2.
+So far, we have been using logical coordinates to describe how you want to assign work to cores in a program.
+Logical coordinates assume that the physical layout of Tensix cores is a contiguous grid of compute cores.
+However, a typical Tensix device also contains multiple DRAM controllers, multiple Ethernet cores and a PCIe interface.
+Since the NoC interconnects all these components, it needs a coordinate system that includes all components, not just compute cores.</p>
+<p>The Tenstorrent architecture defines more than two coordinate systems, but
+for the purposes of TT-Metalium programming for this lab, we only need to consider logical and device coordinates.
+Note that device coordinates are also referred to as <em>virtual coordinates</em> in the Tenstorrent architecture documentation.</p>
+<p>The host code always uses logical coordinates (e.g., when creating kernels and CBs), and the compiler takes care of converting
+them to device coordinates when needed, making the program easier to write and understand.
+However, to maximize performance, we want to avoid performing such coordinate conversions in device kernels.
+Therefore, device kernels must use device coordinates when performing NoC operations.
+To facilitate this, TT-Metalium provides the <code class="docutils literal notranslate"><span class="pre">worker_core_from_logical_core</span></code> function that is called on the host to
+convert logical coordinates to device coordinates before passing them to the device kernels as either compile-time or runtime arguments.
+For example, to convert the logical coordinates of the sender core to device coordinates, you can use the following code:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">sender_core_device</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">mesh_device</span><span class="o">-&gt;</span><span class="n">worker_core_from_logical_core</span><span class="p">(</span><span class="n">sender_core_logical</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>This conversion allows TT-Metalium programmers to write host code using device-independent logical coordinates, while still
+supplying correct NoC addresses to the kernels, which use device coordinates internally when performing NoC operations.
+Remember that host code must pass logical coordinates to all host APIs, such as <code class="docutils literal notranslate"><span class="pre">CreateKernel</span></code>, <code class="docutils literal notranslate"><span class="pre">CreateCircularBuffer</span></code>,
+<code class="docutils literal notranslate"><span class="pre">SetRuntimeArgs</span></code>, etc.
+On the other hand, device kernels must use device coordinates when calling NoC APIs that address other cores (e.g., multicast).</p>
+</section>
+<section id="data-movement-processors-and-noc-selection">
+<h3>Data Movement Processors and NoC Selection<a class="headerlink" href="#data-movement-processors-and-noc-selection" title="Permalink to this heading"></a>
+</h3>
+<p>When creating kernels using <code class="docutils literal notranslate"><span class="pre">CreateKernel</span></code> in Labs 1 and 2, we always assigned reader kernels to
+<code class="docutils literal notranslate"><span class="pre">DataMovementProcessor::RISCV_0</span></code> and writer kernels to <code class="docutils literal notranslate"><span class="pre">DataMovementProcessor::RISCV_1</span></code>.
+We also set the <code class="docutils literal notranslate"><span class="pre">noc</span></code> field of <code class="docutils literal notranslate"><span class="pre">DataMovementConfig</span></code> to its default value for the corresponding RISC-V processor,
+without discussing it in detail.
+On each Tensix core, there are two NoC instances, <code class="docutils literal notranslate"><span class="pre">NOC0</span></code> and <code class="docutils literal notranslate"><span class="pre">NOC1</span></code>. The default mapping used by TT-Metalium assigns
+<code class="docutils literal notranslate"><span class="pre">DataMovementProcessor::RISCV_0</span></code> to <code class="docutils literal notranslate"><span class="pre">NOC0</span></code> and <code class="docutils literal notranslate"><span class="pre">DataMovementProcessor::RISCV_1</span></code> to <code class="docutils literal notranslate"><span class="pre">NOC1</span></code>.
+As a result, our simple choice of processor index had an implicit effect: all reader kernels (on <code class="docutils literal notranslate"><span class="pre">RISCV_0</span></code>) used <code class="docutils literal notranslate"><span class="pre">NOC0</span></code>,
+and all writer kernels (on <code class="docutils literal notranslate"><span class="pre">RISCV_1</span></code>) used <code class="docutils literal notranslate"><span class="pre">NOC1</span></code>. We will continue to use this pattern in Lab 3, so that all reader kernels
+use <code class="docutils literal notranslate"><span class="pre">NOC0</span></code> and all writer kernels use <code class="docutils literal notranslate"><span class="pre">NOC1</span></code>.</p>
+<p>This default assignment is convenient and works well for many examples, but it is not always optimal. If there is significantly
+more NoC traffic on readers than on writers (or vice versa), it may be beneficial to rebalance which kernels use <code class="docutils literal notranslate"><span class="pre">NOC0</span></code> vs. <code class="docutils literal notranslate"><span class="pre">NOC1</span></code>,
+or to route specific high-traffic kernels through a particular NoC. TT-Metalium allows more complex assignments by explicitly
+setting the <code class="docutils literal notranslate"><span class="pre">noc</span></code> field in <code class="docutils literal notranslate"><span class="pre">DataMovementConfig</span></code>, but exploring alternative NoC mappings is beyond the scope of this lab.</p>
+</section>
+<section id="receiver-kernel-overview">
+<h3>Receiver Kernel Overview<a class="headerlink" href="#receiver-kernel-overview" title="Permalink to this heading"></a>
+</h3>
+<p>The multicast receiver kernel plays a role analogous to a reader kernel that reads tiles from DRAM
+into a circular buffer. In a DRAM reader kernel, the basic pattern is:</p>
+<ul class="simple">
+<li><p>Reserve space in the CB with <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code>.</p></li>
+<li><p>Initiate an asynchronous DRAM read into the CB write pointer.</p></li>
+<li><p>Wait for the read to complete.</p></li>
+<li><p>Mark the tile as available with <code class="docutils literal notranslate"><span class="pre">cb_push_back</span></code>.</p></li>
+</ul>
+<p>The multicast receiver kernel follows the same CB protocol, but instead of initiating a DRAM read,
+it relies on the sender to write the tile into its on-chip SRAM via the NoC. For each tile, the receiver:</p>
+<ol class="arabic simple">
+<li><p>Calls <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code> to reserve space in the input CB for the incoming tile.
+This ensures that the CB has a free slot at the write pointer.</p></li>
+<li><p>Resets its local <code class="docutils literal notranslate"><span class="pre">tile_sent</span></code> semaphore to <code class="docutils literal notranslate"><span class="pre">INVALID</span></code> using <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set</span></code>.
+This clears any previous state so the kernel can reliably detect when the next tile arrives.</p></li>
+<li><p>Signals to the sender that it is ready for the next tile by incrementing the sender’s
+<code class="docutils literal notranslate"><span class="pre">receivers_ready</span></code> semaphore by calling <code class="docutils literal notranslate"><span class="pre">noc_semaphore_inc</span></code>.</p></li>
+<li><p>Waits for the sender to multicast the tile and then mark it as valid by calling
+<code class="docutils literal notranslate"><span class="pre">noc_semaphore_wait(tile_sent_sem_ptr,</span> <span class="pre">VALID)</span></code>. This blocks until the sender has both issued the
+multicast and updated the <code class="docutils literal notranslate"><span class="pre">tile_sent</span></code> semaphore.</p></li>
+<li><p>At that point, the tile has been written into the reserved CB slot in on-chip SRAM by the sender’s NoC multicast
+operation. The receiver then calls <code class="docutils literal notranslate"><span class="pre">cb_push_back</span></code> to mark this tile as available to downstream
+compute kernels, exactly as if it had been read from DRAM locally.</p></li>
+</ol>
+<section id="semaphores-local-vs-remote-access">
+<h4>Semaphores: Local vs. Remote Access<a class="headerlink" href="#semaphores-local-vs-remote-access" title="Permalink to this heading"></a>
+</h4>
+<p>This kernel also illustrates two ways semaphores are referenced depending on whether they are local or remote.</p>
+<p>As discussed earlier, the host passes a semaphore ID (integer) as a kernel argument.
+Inside the kernel, <code class="docutils literal notranslate"><span class="pre">get_semaphore()</span></code> converts this semaphore ID into a concrete on-chip SRAM address
+on the current core, represented by a <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> value.
+The next step depends on whether we wish to access the semaphore in local memory or the semaphore on another core.</p>
+<ul>
+<li>
+<p>To access a <strong>local semaphore</strong> (such as the <code class="docutils literal notranslate"><span class="pre">tile_sent</span></code> semaphore on the receiver core), the kernel casts
+this on-chip SRAM address to a pointer:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">volatile</span><span class="w"> </span><span class="n">tt_l1_ptr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="o">*</span><span class="w"> </span><span class="n">tile_sent_sem_ptr</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="k">reinterpret_cast</span><span class="o">&lt;</span><span class="k">volatile</span><span class="w"> </span><span class="n">tt_l1_ptr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="o">*&gt;</span><span class="p">(</span><span class="n">tile_sent_semaphore_addr</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The kernel can now use <code class="docutils literal notranslate"><span class="pre">tile_sent_sem_ptr</span></code> with local semaphore APIs such as
+<code class="docutils literal notranslate"><span class="pre">noc_semaphore_set</span></code> and <code class="docutils literal notranslate"><span class="pre">noc_semaphore_wait</span></code> to manipulate and observe the semaphore value on this core.
+The <code class="docutils literal notranslate"><span class="pre">tt_l1_ptr</span></code> qualifier tells the compiler that this pointer refers to a specific section of on-chip SRAM memory.
+This qualifier does not change program semantics, but it enables better compiler optimizations.</p>
+</li>
+<li>
+<p>To access a <strong>remote semaphore</strong> (such as the sender’s <code class="docutils literal notranslate"><span class="pre">receivers_ready</span></code> semaphore), the kernel does not need
+to cast the address into a pointer. Rather, it is used to compute the NoC address that points to the remote core’s on-chip SRAM.
+To compute the NoC address, the kernel calls <code class="docutils literal notranslate"><span class="pre">get_noc_addr</span></code>. For example:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">receivers_ready_sem_noc_addr</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">get_noc_addr</span><span class="p">(</span><span class="n">sender_x</span><span class="p">,</span><span class="w"> </span><span class="n">sender_y</span><span class="p">,</span><span class="w"> </span><span class="n">receivers_ready_semaphore_addr</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Here, <code class="docutils literal notranslate"><span class="pre">sender_x</span></code> and <code class="docutils literal notranslate"><span class="pre">sender_y</span></code> identify the sender core in device coordinates, and
+<code class="docutils literal notranslate"><span class="pre">receivers_ready_semaphore_addr</span></code> is the on-chip SRAM address of the semaphore obtained from <code class="docutils literal notranslate"><span class="pre">get_semaphore()</span></code>.
+It may seem counterintuitive to use the local semaphore address to compute the NoC address of a remote semaphore.
+This is possible because <code class="docutils literal notranslate"><span class="pre">CreateSemaphore</span></code> guarantees that the same semaphore
+ID will always map to the same local on-chip SRAM address on all cores created by one <code class="docutils literal notranslate"><span class="pre">CreateSemaphore</span></code> call.
+Therefore, the receiver core can use the local semaphore address, knowing that the same address is used by all cores.
+This convention avoids the need for different cores to pass their local addresses to each other.
+This is the main reason why both semaphores are created on all cores; although the receiver kernel never reads or writes
+its local <code class="docutils literal notranslate"><span class="pre">receivers_ready</span></code> semaphore, it needs it to determine its on-chip SRAM address.
+It is worth noting that the overhead of creating a semaphore is minimal.</p>
+<p><code class="docutils literal notranslate"><span class="pre">get_noc_addr</span></code> combines the sender’s core coordinates with the semaphore’s on-chip SRAM address
+to produce a 64-bit NoC address, which can be used to directly access the same semaphore in a remote core.
+In our example program, the receiver then uses this NoC address with APIs such as <code class="docutils literal notranslate"><span class="pre">noc_semaphore_inc</span></code> to update
+the sender’s semaphore over the NoC.</p>
+</li>
+</ul>
+</section>
+</section>
+<section id="sender-kernel-overview">
+<h3>Sender Kernel Overview<a class="headerlink" href="#sender-kernel-overview" title="Permalink to this heading"></a>
+</h3>
+<p>The multicast sender kernel builds directly on the standard reader pattern you saw in earlier labs.
+A regular reader kernel reserves space in a circular buffer (CB), reads a tile from device DRAM into
+the CB using an asynchronous NoC read, waits for the read to complete, and then calls <code class="docutils literal notranslate"><span class="pre">cb_push_back</span></code>
+to mark the tile as present in the CB.
+The main difference from a standard reader is that the sender kernel in the multicast example program
+does not feed a local compute kernel directly; instead, it uses NoC multicast to send the tile to multiple
+remote cores.</p>
+<p>After loading a tile from DRAM and pushing it into the CB, the sender waits until all receivers have
+indicated that they are ready to receive the next tile. It does this by calling <code class="docutils literal notranslate"><span class="pre">noc_semaphore_wait</span></code>
+on its local <code class="docutils literal notranslate"><span class="pre">receivers_ready</span></code> semaphore.
+Once the semaphore reaches the expected value, indicating that all receivers are ready,
+the sender resets it to zero with <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set</span></code> so it can later be used for the next tile.</p>
+<p>The multicast operation is performed by calling <code class="docutils literal notranslate"><span class="pre">noc_async_write_multicast</span></code>, which generally requires
+the following:</p>
+<ol class="arabic simple">
+<li><p>The memory address where the source data is located in local memory.</p></li>
+<li><p>The NoC address of the memory in the destination cores.
+To make the process efficient, multicast implicitly assumes that destination memory addresses are
+the same on all destination cores.</p></li>
+<li><p>The number of bytes of data to be multicast. In our example program, this is the number of bytes in a tile.</p></li>
+<li><p>The number of destination cores.
+While this value could technically be decoded from the NoC destination address, it is more efficient to pass it as an argument since this value is known to the code issuing the <code class="docutils literal notranslate"><span class="pre">noc_async_write_multicast</span></code> command.</p></li>
+</ol>
+<p>The memory address of source data is simply the CB read pointer obtained by calling <code class="docutils literal notranslate"><span class="pre">get_read_ptr</span></code>
+after calling <code class="docutils literal notranslate"><span class="pre">cb_wait_front</span></code>, since the tile has just been pushed into the CB.
+The NoC address of the destination memory is more complex to understand, so we discuss it in more detail below.</p>
+<section id="cb-address-synchronization">
+<h4>CB Address Synchronization<a class="headerlink" href="#cb-address-synchronization" title="Permalink to this heading"></a>
+</h4>
+<p>To multicast data, the NoC needs to know <strong>where</strong> in each receiver’s on-chip SRAM to write the data and what
+cores to multicast the data to.
+Both types of information are encoded into one 64-bit value by the <code class="docutils literal notranslate"><span class="pre">get_noc_multicast_addr</span></code> function:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">mcast_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_multicast_addr</span><span class="p">(</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">noc_x_start</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">noc_y_start</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">noc_x_end</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">noc_y_end</span><span class="p">,</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dest_mem_addr</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The first four arguments specify the coordinates of the opposite corners of a rectangle of cores, which are
+the destination for the multicast. To use <code class="docutils literal notranslate"><span class="pre">noc_async_write_multicast</span></code> or <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set_multicast</span></code>,
+the destination must be a rectangular grid of cores.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">dest_mem_addr</span></code> argument is an <strong>on-chip SRAM address in the destination cores</strong> where the data will be written.
+As noted above, it is assumed that all destination cores use the same on-chip SRAM address to receive data.
+This is possible because <code class="docutils literal notranslate"><span class="pre">CreateCircularBuffer</span></code> guarantees that the same CB index
+will always map to the same local on-chip SRAM addresses on all cores created by one <code class="docutils literal notranslate"><span class="pre">CreateCircularBuffer</span></code> call.
+While the range of addresses is guaranteed to be the same, CBs often have room for multiple tiles, so the
+read/write pointers change as tiles are pushed and popped from the CB.
+Therefore, all receiver cores must issue their CB push and pop operations in the same order so that their CB read/write pointers,
+when used as multicast source or destination addresses, always point to the same on-chip SRAM addresses when they receive a tile via multicast.
+Furthermore, if the sender also synchronizes its own CB push and pop operations with receivers, its own CB read/write pointers
+will be in sync with the receivers’ pointers. Note that different cores only need to synchronize the order of their CB push and
+pop operations, not their precise timing, which would be difficult to achieve given that they run on separate cores.
+The semaphore handshake protocol ensures that the timing of the operations achieves the desired outcome.</p>
+<p>This synchronized CB push and pop approach avoids the need for receiver cores to pass their local addresses to the sender;
+the sender can simply use its own CB read/write pointer as the destination address in <code class="docutils literal notranslate"><span class="pre">get_noc_multicast_addr</span></code> because it is
+guaranteed to be in sync with the receivers’ CB read/write pointers.
+This can be seen in the example multicast program, where the sender uses its own <code class="docutils literal notranslate"><span class="pre">cb_read_addr</span></code> in a call to
+<code class="docutils literal notranslate"><span class="pre">get_noc_multicast_addr</span></code>.</p>
+</section>
+<section id="multicast-operation">
+<h4>Multicast Operation<a class="headerlink" href="#multicast-operation" title="Permalink to this heading"></a>
+</h4>
+<p>Once the sender kernel has obtained the encoded destination address via <code class="docutils literal notranslate"><span class="pre">get_noc_multicast_addr</span></code>,
+it issues <code class="docutils literal notranslate"><span class="pre">noc_async_write_multicast</span></code> to send the data to all receivers using the NoC.
+<code class="docutils literal notranslate"><span class="pre">noc_async_write_multicast</span></code> is a <strong>non-blocking</strong> operation. It enqueues a multicast transfer on the NoC,
+then returns control to the kernel immediately, while the hardware performs the tile transfer in the background.</p>
+<p>After issuing the tile multicast operation, the sender needs to inform receivers that the tile has been sent and is valid.
+To do this, it performs another multicast operation to update the receivers’ <code class="docutils literal notranslate"><span class="pre">tile_sent</span></code> semaphore to
+<code class="docutils literal notranslate"><span class="pre">VALID</span></code> by calling <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set_multicast</span></code>.
+On some architectures, NoC operations may be issued to separate command buffer FIFOs and may not be
+issued in the order they are called. To ensure the commands are issued in the program order,
+the sender calls <code class="docutils literal notranslate"><span class="pre">noc_async_writes_flushed()</span></code> before calling <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set_multicast</span></code>.
+This ensures that the tile multicast command has been sent into the NoC before the <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set_multicast</span></code>
+command that sets <code class="docutils literal notranslate"><span class="pre">tile_sent</span></code>.</p>
+<p>While this ensures commands are <strong>issued</strong> in the program order, multicast protocol correctness also requires
+that they <strong>complete</strong> in the same order.
+Because TT-Metalium routes both the tile multicast and the semaphore multicast over the same NoC instance
+(we specified the interface to use when creating the kernels), and the hardware guarantees that writes from
+a single core on one NoC are delivered in program order, any <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set_multicast</span></code> issued after a
+<code class="docutils literal notranslate"><span class="pre">noc_async_write_multicast</span></code> from the same core is guaranteed to complete only after the corresponding tile data.</p>
+<p>Finally, the sender calls <code class="docutils literal notranslate"><span class="pre">noc_async_write_barrier()</span></code> to wait until the multicast data transfer completes before reusing the CB slot.
+After this barrier the sender calls <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code> to free the CB entry for the next tile.
+This preserves the usual CB producer-consumer protocol by ensuring that multicast data has been sent before any
+tile data is overwritten.</p>
+<p>Note that <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set_multicast</span></code> takes a pointer to a value to be multicast.
+The NoC hardware does a 4-byte read from that address and multicasts those 4 bytes to the receiver cores.
+We could pass a pointer to any memory location that holds <code class="docutils literal notranslate"><span class="pre">VALID</span></code> (e.g., a pointer to a <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code>) and
+pass that as the source. Instead of using an arbitrary value, we use the <code class="docutils literal notranslate"><span class="pre">tile_sent</span></code> semaphore, which is
+already allocated and otherwise unused on the sender. This avoids the need for an additional variable and
+makes the code more resilient to any future changes to the semaphore’s internal representation (e.g., if in the
+future semaphores hold more than 4 bytes).</p>
+<p>It is worth noting that NoC supports other more complex modes of operation, where the order of completion of commands may not match
+the order of their issuance. In such cases, it may be necessary to add an additional <code class="docutils literal notranslate"><span class="pre">noc_async_write_barrier()</span></code> after the tile
+multicast to ensure that the data transfer completes before the semaphore set command is issued.</p>
+</section>
+</section>
+<section id="compute-and-writer-kernels">
+<h3>Compute and Writer Kernels<a class="headerlink" href="#compute-and-writer-kernels" title="Permalink to this heading"></a>
+</h3>
+<p>Compute and writer kernels are similar to the ones used in Labs 1 and 2.
+Because they use CBs for their data, they do not need to know whether the data was received via multicast or DRAM read.</p>
+</section>
+<section id="multicast-and-double-buffering">
+<h3>Multicast and Double Buffering<a class="headerlink" href="#multicast-and-double-buffering" title="Permalink to this heading"></a>
+</h3>
+<p>In the multicast example program, multicast is combined with <strong>double buffering</strong> in the CBs.
+On each receiver, double buffering allows overlapping:</p>
+<ul class="simple">
+<li><p>Receiving a tile via multicast into its input CB.</p></li>
+<li><p>Computing on previously received tiles.</p></li>
+</ul>
+<p>Double buffering still works with multicast as long as:</p>
+<ul class="simple">
+<li><p>You do not reuse a CB slot until all NoC operations that read or write the memory occupied by the slot have completed.</p></li>
+<li><p>You maintain a consistent pattern of <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code>, <code class="docutils literal notranslate"><span class="pre">cb_push_back</span></code>, <code class="docutils literal notranslate"><span class="pre">cb_wait_front</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code> across sender and receivers, so that senders and receivers consistently use
+the same memory addresses for the same tiles.</p></li>
+</ul>
+</section>
+<section id="multicast-exclusions">
+<h3>Multicast Exclusions<a class="headerlink" href="#multicast-exclusions" title="Permalink to this heading"></a>
+</h3>
+<p>When calling <code class="docutils literal notranslate"><span class="pre">noc_async_write_multicast</span></code> or <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set_multicast</span></code>, the core initiating these operations
+is excluded from the multicast operation by default.
+This means that the number of destination cores and the destination NoC address passed to these functions should not
+include the core initiating the operation.
+While we will not require it for this lab, separate functions exist that do include the core
+initiating the operation in the multicast operation. These functions are <code class="docutils literal notranslate"><span class="pre">noc_async_write_multicast_loopback_src</span></code> and
+<code class="docutils literal notranslate"><span class="pre">noc_semaphore_set_multicast_loopback_src</span></code>.</p>
+</section>
+</section>
+<section id="debugging-hangs-with-watcher">
+<h2>
+<a class="toc-backref" href="#id10" role="doc-backlink">Debugging Hangs with Watcher</a><a class="headerlink" href="#debugging-hangs-with-watcher" title="Permalink to this heading"></a>
+</h2>
+<p>Because multicast is relatively complex, it is possible to introduce bugs that are difficult to debug.
+For example, forgetting to update a semaphore, updating semaphores at the wrong points in the code, or passing incorrect
+coordinates to NoC APIs can lead to the program hanging indefinitely.
+While such issues can be debugged using debug features introduced in Lab 1, there is another tool that is particularly
+useful for debugging NoC issues and hangs.</p>
+<p>The <strong>Watcher</strong> tool in TT-Metalium is a debug facility that instruments firmware and kernels and runs a
+host-side monitoring thread to catch common programming errors and hangs.
+On a fatal error, Watcher stops the program and reports a clear message.
+On a hang, the log shows which kernels and cores were active at the time of the hang.</p>
+<p>Watcher can be enabled by setting an environment variable before running your program:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="c1"># Enable Watcher with a 10 second polling interval</span>
+<span class="n">export</span> <span class="n">TT_METAL_WATCHER</span><span class="o">=</span><span class="mi">10</span>
+</pre></div>
+</div>
+<p>The numeric value is the interval, in seconds, between Watcher status dumps. Small values like 1 give very frequent snapshots and
+are convenient while debugging a hang, but they introduce a significant performance overhead.
+Larger values like 10 or 60 are less intrusive and are a better starting point when doing initial debugging.</p>
+<p>When enabled, Watcher will print messages such as “Watcher checking device 0” to the terminal and write a log file
+to <code class="docutils literal notranslate"><span class="pre">generated/watcher/watcher.log</span></code>, which summarizes the kernel IDs that were running, as well as the
+last <strong>waypoint</strong> string hit on each RISC-V. Waypoints are short markers (up to 4 characters long) that can be inserted into kernel code to tag key
+positions like “entered main loop” or “finished writing”. Various TT-Metalium APIs already encode waypoints into their code.
+For example, if you examine the code for <code class="docutils literal notranslate"><span class="pre">noc_semaphore_wait</span></code> in <code class="docutils literal notranslate"><span class="pre">tt_metal/hw/inc/api/dataflow/dataflow_api.h</span></code>,
+you can observe that it encodes the waypoint “NSW” (for “NoC Semaphore Wait”) before waiting on a semaphore and “NSD” (for “NoC Semaphore Done”) after.
+You can also add your own waypoints to the code to tag key positions simply by adding the <code class="docutils literal notranslate"><span class="pre">#include</span> <span class="pre">"api/debug/waypoint.h"</span></code>
+and then using the <code class="docutils literal notranslate"><span class="pre">WAYPOINT</span></code> macro at the desired points in the code.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"api/debug/waypoint.h"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">   </span><span class="n">WAYPOINT</span><span class="p">(</span><span class="s">"MYWY"</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Ensure that you use unique waypoint strings for each key position in the code, otherwise the Watcher output may be misleading.</p>
+<p>Because Watcher adds extra checking and bookkeeping, it increases both runtime and code size.
+It should be disabled for performance benchmarking or production runs.
+In some cases, Watcher can significantly prolong execution time, making a valid program run appear to hang.
+For these labs, it is best to disable Watcher by default and enable it only when debugging.</p>
+<p>For more information about Watcher, refer to the Additional Information section at the end of this lab.</p>
+</section>
+<section id="exercise-1-debugging-multicast-issues-using-watcher">
+<h2>
+<a class="toc-backref" href="#id11" role="doc-backlink">Exercise 1: Debugging Multicast Issues Using Watcher</a><a class="headerlink" href="#exercise-1-debugging-multicast-issues-using-watcher" title="Permalink to this heading"></a>
+</h2>
+<p>In this exercise, you will intentionally introduce errors into the multicast sender and receiver kernels
+and use the Watcher and DPRINT to help diagnose the problem.
+This exercise gives you hands-on experience with debugging tools for distributed NoC and semaphore issues
+in a controlled environment with a well-defined problem.</p>
+<p>Perform the following steps to complete the exercise:</p>
+<ol class="arabic">
+<li><p>If you have not already done so, from the root of the <code class="docutils literal notranslate"><span class="pre">tt-metal</span></code> repository, run the build script <code class="docutils literal notranslate"><span class="pre">./build_metal.sh</span></code>.</p></li>
+<li><p>Run the multicast example (<code class="docutils literal notranslate"><span class="pre">./build/ttnn/examples/example_lab_multicast</span></code>) and
+verify that it completes successfully and prints a “Test Passed” message on the host.</p></li>
+<li>
+<p>Next, introduce an error in the multicast sender kernel by modifying the destination core range.
+Open <code class="docutils literal notranslate"><span class="pre">ttnn/examples/lab_multicast/kernels/dataflow/mcast_sender.cpp</span></code> and find the line where the sender
+precomputes the multicast address for the <code class="docutils literal notranslate"><span class="pre">tile_sent</span></code> semaphore:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">tile_sent_mcast_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_noc_multicast_addr</span><span class="p">(</span>
+<span class="w">    </span><span class="n">receiver_start_x</span><span class="p">,</span><span class="w"> </span><span class="n">receiver_start_y</span><span class="p">,</span><span class="w"> </span><span class="n">receiver_end_x</span><span class="p">,</span><span class="w"> </span><span class="n">receiver_end_y</span><span class="p">,</span><span class="w"> </span><span class="n">tile_sent_semaphore_addr</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Change <code class="docutils literal notranslate"><span class="pre">receiver_start_x</span></code> to a constant that is outside the valid core coordinate range on your device, such as <code class="docutils literal notranslate"><span class="pre">100</span></code>.
+This makes the sender attempt to multicast to a non-existent core along the <code class="docutils literal notranslate"><span class="pre">x</span></code> dimension.
+Because this is a change in kernel code only, you do not need to rebuild the program;
+the updated kernel will be JIT-compiled the next time the program is run.</p>
+</li>
+<li><p>Run the multicast example again:
+The program should now hang, running indefinitely without printing a final result or explicit error.
+This kind of hang is typical for incorrect NoC addressing or synchronization errors.</p></li>
+<li>
+<p>Terminate the program (using <code class="docutils literal notranslate"><span class="pre">Ctrl</span> <span class="pre">+</span> <span class="pre">C</span></code>) and execute the <code class="docutils literal notranslate"><span class="pre">tt-smi</span> <span class="pre">-r</span></code> command from the command line to reset the device.
+It is always a good idea to reset the device after a hang to ensure that the device is in a known good state.
+Note that using <code class="docutils literal notranslate"><span class="pre">Ctrl</span> <span class="pre">+</span> <span class="pre">C</span></code> may not always terminate a hung program. In that case, do the following:</p>
+<ul class="simple">
+<li><p>Press <code class="docutils literal notranslate"><span class="pre">Ctrl</span> <span class="pre">+</span> <span class="pre">Z</span></code> to suspend the program.</p></li>
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">kill</span> <span class="pre">%%</span></code> (or <code class="docutils literal notranslate"><span class="pre">kill</span> <span class="pre">%1</span></code>, depending on the job ID) to terminate the program.</p></li>
+<li><p>Run <code class="docutils literal notranslate"><span class="pre">tt-smi</span> <span class="pre">-r</span></code> to reset the device.</p></li>
+</ul>
+</li>
+<li>
+<p>Rerun the program with Watcher enabled with a period of 10 seconds:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nv">TT_METAL_WATCHER</span><span class="o">=</span><span class="m">10</span><span class="w"> </span>./build/ttnn/examples/example_lab_multicast
+</pre></div>
+</div>
+<p>Watcher will periodically inspect the device state. After some time it should detect that the program is not
+making progress and report an error. The error should indicate the logical (e.g., <code class="docutils literal notranslate"><span class="pre">core(x=</span> <span class="pre">0,y=</span> <span class="pre">0)</span></code>) and
+device (e.g., <code class="docutils literal notranslate"><span class="pre">virtual(x=</span> <span class="pre">1,y=</span> <span class="pre">2)</span></code>) coordinates of the core that caused the erroneous NoC operation,
+along with a message indicating the type of error. Note that the exact error messages may vary depending on the
+type of error.</p>
+</li>
+<li><p>Revert the sender change by putting <code class="docutils literal notranslate"><span class="pre">receiver_start_x</span></code> back into the <code class="docutils literal notranslate"><span class="pre">get_noc_multicast_addr</span></code> call
+in <code class="docutils literal notranslate"><span class="pre">mcast_sender.cpp</span></code>. Reset the device using <code class="docutils literal notranslate"><span class="pre">tt-smi</span> <span class="pre">-r</span></code>, then rerun the multicast example
+with Watcher disabled and confirm that it completes successfully without hanging.</p></li>
+<li><p>Next, introduce a synchronization bug in the receiver kernel by removing a key semaphore update.
+Open <code class="docutils literal notranslate"><span class="pre">ttnn/examples/lab_multicast/kernels/dataflow/mcast_receiver.cpp</span></code> and comment the <code class="docutils literal notranslate"><span class="pre">noc_semaphore_inc</span></code>
+line that signals the sender that this receiver is ready for the next tile.
+Rerun the multicast example once more with Watcher disabled.
+The sender kernel will hang waiting on the <code class="docutils literal notranslate"><span class="pre">receivers_ready</span></code> semaphore, because receivers no longer
+increment that semaphore.</p></li>
+<li>
+<p>Terminate the program, reset the device using <code class="docutils literal notranslate"><span class="pre">tt-smi</span> <span class="pre">-r</span></code>, then rerun the multicast example, this time
+with Watcher <strong>enabled</strong> with a period of 10 seconds.</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="nv">TT_METAL_WATCHER</span><span class="o">=</span><span class="m">10</span><span class="w"> </span>./build/ttnn/examples/example_lab_multicast
+</pre></div>
+</div>
+<p>Once the program starts, Watcher should activate every 10 seconds and log the state of the device to
+its log file. A major difference from the previous hang is that in this case the Watcher does not report an error.
+This is because the program has not performed any invalid operations; the hang occurs because the program logic
+is broken, which is not something that the Watcher can detect.
+After several Watcher status messages, terminate the program (using <code class="docutils literal notranslate"><span class="pre">Ctrl</span> <span class="pre">+</span> <span class="pre">C</span></code>) and inspect
+the log file in <code class="docutils literal notranslate"><span class="pre">generated/watcher/watcher.log</span></code>.</p>
+<p>The log file contains a lot of diagnostic information useful for troubleshooting.
+You can find the detailed explanation of the format of the log file in Appendix A of this lab.</p>
+<p>To help us identify the source of the hang, we analyze the <strong>first column of the status</strong> (BRISC status) for the
+cores running our kernels and observe that they are all stuck at <code class="docutils literal notranslate"><span class="pre">NSW</span></code> (<strong>N</strong>OC <strong>S</strong>emaphore <strong>W</strong>ait).
+Of course, we need to verify that this is actually a hang and not just a slow operation, which we can do by observing
+that the program state in multiple dumps does not change.</p>
+<p>With simple bugs like the one we introduced, this information may be sufficient to diagnose the problem.
+However, in more complex cases, we may need to add additional instrumentation to the kernels to help us diagnose the problem.
+This could be done either by adding additional waypoints, or by adding DPRINT statements to the code.</p>
+</li>
+<li><p>Revert the receiver change by uncommenting the <code class="docutils literal notranslate"><span class="pre">noc_semaphore_inc</span></code> line in <code class="docutils literal notranslate"><span class="pre">mcast_receiver.cpp</span></code>.
+Reset the device using <code class="docutils literal notranslate"><span class="pre">tt-smi</span> <span class="pre">-r</span></code>, then rerun the multicast example
+with Watcher disabled and confirm that it completes successfully without hanging.</p></li>
+</ol>
+<p>In this exercise, you have intentionally introduced NoC issues and then used Watcher to analyze the resulting behavior.
+Taken together, Watcher, waypoints, and DPRINTs provide a powerful set of tools for debugging NoC-related bugs
+in TT-Metalium multicast and multi core programs.</p>
+</section>
+<section id="exercise-2-extending-the-standalone-multicast-example">
+<h2>
+<a class="toc-backref" href="#id12" role="doc-backlink">Exercise 2: Extending the Standalone Multicast Example</a><a class="headerlink" href="#exercise-2-extending-the-standalone-multicast-example" title="Permalink to this heading"></a>
+</h2>
+<p>You may have noticed that the sender core in the multicast example program does not specify any compute or writer kernels.
+While this is acceptable, it is not an efficient use of the sender core’s resources, as most of the core is idle.
+In a real application, the sender core would also perform computation and writeback.
+In this exercise, you will extend the example program so that the sender core also participates in the same computation
+as the receiver cores.</p>
+<p>Perform the following steps to complete the exercise:</p>
+<ol class="arabic simple">
+<li><p>Start by copying the files from the <code class="docutils literal notranslate"><span class="pre">lab_multicast</span></code> directory into a new directory (e.g., <code class="docutils literal notranslate"><span class="pre">lab3_ex2</span></code>),
+and rename the copied <code class="docutils literal notranslate"><span class="pre">lab_multicast.cpp</span></code> file to match the directory name (e.g., <code class="docutils literal notranslate"><span class="pre">lab3_ex2.cpp</span></code>).</p></li>
+<li><p>Update all <code class="docutils literal notranslate"><span class="pre">CreateKernel</span></code> calls to point to kernel source files in the new directory.</p></li>
+<li><p>Update <code class="docutils literal notranslate"><span class="pre">CMakeLists.txt</span></code> files in the new directory and in the parent directory to include the new executable,
+then build and run the new program to confirm that it works the same as the original.
+This is a good practice to ensure that you are starting with a working program before making any changes.</p></li>
+<li><p>Update the host program to include the sender core in the core range when creating the compute and writer kernels.
+Do not forget to also pass runtime arguments for all cores where the kernels are created, including the sender core.
+Observe that the compute and writer kernels themselves do not need to change at all.</p></li>
+<li><p>Update <code class="docutils literal notranslate"><span class="pre">output_data</span></code> and related variables to account for the additional copy from the sender core.
+After the change, the output of the program should be a tensor that contains four copies of the input tensor;
+one from the sender core and three from the receiver cores.
+Make sure that each core writes to a unique region of the output tensor.</p></li>
+<li><p>Update the <code class="docutils literal notranslate"><span class="pre">mcast_sender</span></code> kernel code.
+The sender acting as a “local receiver” for compute does <strong>not</strong> require the introduction of
+any additional semaphores. This is because the sender already knows when a tile is in its
+local CB immediately after the DRAM read completes. However, there is one change that needs
+to be made to the sender kernel: it should not perform any <code class="docutils literal notranslate"><span class="pre">cb_wait_front</span></code> or <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code>
+operations, because the compute kernel will be doing this work.
+This also means that the sender kernel should not call <code class="docutils literal notranslate"><span class="pre">get_read_ptr</span></code>, since the read pointer
+is valid only between <code class="docutils literal notranslate"><span class="pre">cb_wait_front</span></code> and <code class="docutils literal notranslate"><span class="pre">cb_pop_front</span></code> calls.
+Instead, the source address for multicast should be the same address that was used for
+writing the tile to the CB, and multicast should be performed <strong>after</strong> the data has been
+read from DRAM (i.e., after the first <code class="docutils literal notranslate"><span class="pre">noc_async_read_barrier</span></code>).
+Similarly, the CB write address can be used to determine the destination address for multicast,
+because all receiver cores use the same CB write address.</p></li>
+<li><p>Ensure that result verification code on the host now also verifies the sender’s output.</p></li>
+<li><p>Build and run your program and verify that it completes successfully.
+Make sure that the output indicates the correct number of receiver cores and output tiles.</p></li>
+<li><p>Profile your program using the device profiler you learned about in previous labs.
+Ensure that you built the program with the Release option and that DPRINTs and Watcher are both
+disabled when profiling.
+Record the firmware time of this program as a reference point for the next exercise.</p></li>
+</ol>
+<p>In case you encounter any hangs, do not forget to use the <code class="docutils literal notranslate"><span class="pre">tt-smi</span> <span class="pre">-r</span></code> command to reset the device
+before running the program again.</p>
+<p>In this exercise, you extended the multicast example program to include the sender core in the computation.
+This is a common pattern in real applications, where we wish to maximize the utilization of the sender core.</p>
+</section>
+<section id="exercise-3-batched-multicast-for-improved-throughput">
+<h2>
+<a class="toc-backref" href="#id13" role="doc-backlink">Exercise 3: Batched Multicast for Improved Throughput</a><a class="headerlink" href="#exercise-3-batched-multicast-for-improved-throughput" title="Permalink to this heading"></a>
+</h2>
+<p>The multicast protocol used in the multicast example program involves a full semaphore handshake
+for every tile that is multicast: each receiver must signal readiness, the sender must wait for all
+receivers, perform the multicast, and then signal completion. While this protocol ensures correctness,
+the synchronization overhead is non-trivial. When tiles are transferred one at a time, this overhead is
+incurred for every single tile, which can significantly limit throughput.</p>
+<p>A straightforward way to reduce this overhead is to transfer multiple tiles per semaphore handshake.
+Instead of multicasting one tile and then performing the full synchronization protocol, the sender reads
+a <strong>batch</strong> of tiles from DRAM, multicasts the entire batch in a single <code class="docutils literal notranslate"><span class="pre">noc_async_write_multicast</span></code>
+call, and only then performs the semaphore signaling. Receivers similarly reserve space for the entire
+batch and perform a single semaphore exchange per batch rather than per tile. This reduces the number of
+synchronization rounds by a factor equal to the batch size, while the NoC hardware efficiently transfers
+the larger payload.</p>
+<p>In this exercise, you will modify your solution for Exercise 2 to multicast ten tiles per batch instead of
+one tile at a time, and then compare the performance of the two versions using the device profiler.</p>
+<p>Perform the following steps to complete the exercise:</p>
+<ol class="arabic">
+<li><p>Start by copying the files from the Exercise 2 solution directory into a new directory
+(e.g., <code class="docutils literal notranslate"><span class="pre">lab3_ex3</span></code>) and rename the copied <code class="docutils literal notranslate"><span class="pre">.cpp</span></code> file with the main host program
+to match the directory name.</p></li>
+<li><p>Update all <code class="docutils literal notranslate"><span class="pre">CreateKernel</span></code> calls to point to kernel source files in the new directory.</p></li>
+<li><p>Update <code class="docutils literal notranslate"><span class="pre">CMakeLists.txt</span></code> files in the new directory and in the parent directory to include
+the new executable, then build and run the new program to confirm that it works the same as the original.</p></li>
+<li><p>Define a compile-time constant <code class="docutils literal notranslate"><span class="pre">tiles_per_batch</span></code> with a value of <code class="docutils literal notranslate"><span class="pre">10</span></code> in the host program.
+This constant represents the number of tiles that will be transferred in each multicast batch.
+Add an assertion to verify that the total number of tiles is divisible by <code class="docutils literal notranslate"><span class="pre">tiles_per_batch</span></code>.</p></li>
+<li><p>Update the circular buffer setup in the host program. The input CB (<code class="docutils literal notranslate"><span class="pre">c_0</span></code>) must now be large
+enough to hold a full batch of tiles on each side of the double buffer to ensure that an entire
+batch can be loaded into one half of the double buffer while the previous batch is being consumed
+from the other half.</p></li>
+<li><p>Pass <code class="docutils literal notranslate"><span class="pre">tiles_per_batch</span></code> as a compile-time argument to both the sender and receiver kernels.</p></li>
+<li>
+<p>Update the sender kernel to operate on batches of tiles rather than individual tiles by
+reserving <code class="docutils literal notranslate"><span class="pre">tiles_per_batch</span></code> tiles in the CB at once using <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code>.
+You can still read tiles from DRAM one at a time in an inner loop.
+However, you should <strong>not</strong> issue a <code class="docutils literal notranslate"><span class="pre">noc_async_read_barrier</span></code> after each tile read from DRAM.
+Instead, you should issue a single <code class="docutils literal notranslate"><span class="pre">noc_async_read_barrier</span></code> after all tiles in the batch
+have been read into the CB. Because data in the CB is not used until all tiles in the batch have
+been read, there is no need to wait on a barrier after each individual tile read.
+Placing the barrier at the end of the batch allows DRAM reads to be overlapped and optimized
+across the entire batch.</p>
+<p>Since you will need to update the CB write address in the inner loop, make sure to preserve
+the starting address of the batch (i.e., the starting CB write address) in a variable,
+so it can be used as the multicast address for the batch.
+Perform the semaphore handshake once per batch using the same semaphore handshake protocol
+as before, but transferring <code class="docutils literal notranslate"><span class="pre">tiles_per_batch</span></code> tiles at once.</p>
+</li>
+<li>
+<p>Update the receiver kernel to receive one batch at a time rather than one tile at a time by
+reserving <code class="docutils literal notranslate"><span class="pre">tiles_per_batch</span></code> tiles in the CB at once using <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code>, performing
+the semaphore handshake once per batch, and pushing <code class="docutils literal notranslate"><span class="pre">tiles_per_batch</span></code> tiles at once.</p>
+<p>Note that the compute and writer kernels do not need to change. The compute kernel still processes
+tiles individually from the CB, and the CB abstraction hides whether tiles were loaded one at a time
+or in batches.</p>
+</li>
+<li><p>Build and run your modified program. Verify that it completes successfully.</p></li>
+<li><p>Profile your batched multicast program, then compare the firmware times of the batched version
+and the non-batched solution of Exercise 2. You should observe that the batched version is
+noticeably faster due to the reduced number of synchronization rounds.
+Ensure that you built the program with the Release option and that DPRINTs and Watcher are both
+disabled when profiling.</p></li>
+</ol>
+<p>In this exercise, you have seen that the semaphore handshake protocol has measurable overhead,
+and that batching multiple tiles per handshake is an effective way to amortize this cost.
+This principle of minimizing synchronization overhead by increasing the granularity of data transfers
+is broadly applicable to multicast-based communication patterns in TT-Metalium programs.</p>
+</section>
+<section id="applying-multicast-to-multi-core-matrix-multiplication">
+<h2>
+<a class="toc-backref" href="#id14" role="doc-backlink">Applying Multicast to Multi Core Matrix Multiplication</a><a class="headerlink" href="#applying-multicast-to-multi-core-matrix-multiplication" title="Permalink to this heading"></a>
+</h2>
+<p>You now have sufficient understanding of the multicast protocol to apply it to the matrix multiplication problem.
+In the introductory sections of this lab, we already described the high-level idea of using multicast to reduce DRAM traffic.
+As shown in Figure 2, the idea is to have only one core read tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> from DRAM and multicast them to all other cores in
+the same row and column. As discussed earlier, to use <code class="docutils literal notranslate"><span class="pre">noc_async_write_multicast</span></code> or <code class="docutils literal notranslate"><span class="pre">noc_semaphore_set_multicast</span></code>,
+the destination must be a rectangular grid of cores. One way to meet this requirement is to have cores in the leftmost column
+read tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> from DRAM and multicast them to all other cores in the same row, and have cores in the topmost row
+read tiles of <code class="docutils literal notranslate"><span class="pre">B</span></code> from DRAM and multicast them to all other cores in the same column.
+With this arrangement, all the receiving cores for every multicast operation form a rectangular grid.
+This is shown in Figure 5.</p>
+<figure class="align-center" id="id5">
+<a class="reference internal image-reference" href="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/core_roles.png"><img alt="Core roles in Matrix Multiplication with Multicast" src="https://raw.githubusercontent.com/tenstorrent/tutorial-assets/main/media/tt_metal/labs/lab3/core_roles.png" style="width: 400px;"></a>
+<figcaption>
+<p><span class="caption-text">Figure 5: Core roles in Matrix Multiplication with Multicast</span><a class="headerlink" href="#id5" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>As a reminder, each square in Figure 5 represents a Tensix core labeled with its <code class="docutils literal notranslate"><span class="pre">(x,</span> <span class="pre">y)</span></code> core coordinates.
+The thick arrows in the figure represent multicast operations.
+While this figure shows a <code class="docutils literal notranslate"><span class="pre">3x3</span></code> core grid, the same pattern and analysis below apply to a grid of any size with four or more cores.</p>
+<p>While computation remains the same on all cores, with each core computing its own output block <code class="docutils literal notranslate"><span class="pre">C_block(x,</span> <span class="pre">y)</span></code>,
+the multicast approach involves four distinct roles that cores play, indicated by different colors in the figure.</p>
+<p>Recall that in Lab 2, data was divided into slabs to allow data to fit into limited on-chip SRAM.
+With multicast, this approach stays the same. CB capacities, division of data into slabs and the slab
+organization inside CBs remain the same. The main change that is required is for reader kernels to read
+slabs of tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> differently depending on their role:</p>
+<ul class="simple">
+<li><p><strong>Interior cores</strong> (white background) with coordinates <code class="docutils literal notranslate"><span class="pre">(x,</span> <span class="pre">y)</span></code>, where <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">&gt;</span> <span class="pre">0</span></code> and <code class="docutils literal notranslate"><span class="pre">y</span> <span class="pre">&gt;</span> <span class="pre">0</span></code>:
+These cores never read slabs of <code class="docutils literal notranslate"><span class="pre">A</span></code> or <code class="docutils literal notranslate"><span class="pre">B</span></code> directly from DRAM, but always receive them via multicast.</p></li>
+<li>
+<p><strong>Left column A-source cores</strong> (red background) with coordinates <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">y)</span></code>, where <code class="docutils literal notranslate"><span class="pre">y</span> <span class="pre">&gt;</span> <span class="pre">0</span></code>:
+Each of these cores:</p>
+<ul>
+<li><p>Reads slabs of <code class="docutils literal notranslate"><span class="pre">A</span></code> it needs for its own computation from DRAM and multicasts them across their row <code class="docutils literal notranslate"><span class="pre">y</span></code>.</p></li>
+<li><p>Receives slabs of <code class="docutils literal notranslate"><span class="pre">B</span></code> from the topmost core in its column via multicast.</p></li>
+</ul>
+</li>
+<li>
+<p><strong>Top row B-source cores</strong> (blue background) with coordinates <code class="docutils literal notranslate"><span class="pre">(x,</span> <span class="pre">0)</span></code>, where <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">&gt;</span> <span class="pre">0</span></code>:
+Each of these cores:</p>
+<ul>
+<li><p>Reads slabs of <code class="docutils literal notranslate"><span class="pre">B</span></code> it needs for its own computation from DRAM and multicasts them down their column <code class="docutils literal notranslate"><span class="pre">x</span></code>.</p></li>
+<li><p>Receives slabs of <code class="docutils literal notranslate"><span class="pre">A</span></code> from the leftmost core in its row via multicast.</p></li>
+</ul>
+</li>
+<li><p><strong>Top-left core</strong> (purple background) with coordinates <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">0)</span></code>:
+This core reads slabs of both <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> it needs for its own computation from DRAM.
+It also multicasts slabs of <code class="docutils literal notranslate"><span class="pre">A</span></code> it read from DRAM to all the other cores in row <code class="docutils literal notranslate"><span class="pre">0</span></code>,
+and slabs of <code class="docutils literal notranslate"><span class="pre">B</span></code> to all the other cores in column <code class="docutils literal notranslate"><span class="pre">0</span></code>.</p></li>
+</ul>
+<p>What this translates to is that a matrix multiplication implementation with multicast will require
+four different types of reader kernels, corresponding to the four different roles identified above.</p>
+<p>Similar to Exercises 2 and 3, we observe that the compute and writer kernels do not need to change at all.
+The compute kernel uses CBs for its data, without any awareness of whether the data was received via multicast or DRAM read.
+The writer kernel reads tiles from the output of the compute kernel, and also does not require any changes.</p>
+</section>
+<section id="exercise-4-multi-core-matrix-multiplication-with-multicast">
+<h2>
+<a class="toc-backref" href="#id15" role="doc-backlink">Exercise 4: Multi Core Matrix Multiplication with Multicast</a><a class="headerlink" href="#exercise-4-multi-core-matrix-multiplication-with-multicast" title="Permalink to this heading"></a>
+</h2>
+<p>In this exercise, you will start from your <strong>Exercise 2 solution from Lab 2</strong> (multi core matrix multiplication with
+data reuse) and extend it to:</p>
+<ul class="simple">
+<li><p>Use slab-level multicast for <code class="docutils literal notranslate"><span class="pre">A</span></code> slabs across rows,</p></li>
+<li><p>Use slab-level multicast for <code class="docutils literal notranslate"><span class="pre">B</span></code> slabs down columns,</p></li>
+<li><p>Retain the same blocked compute kernel and writer kernel,</p></li>
+<li><p>Preserve correctness and then compare performance to the Lab 2 version.
+For this, you will use the same matrix sizes and core grid sizes as in Lab 2.</p></li>
+</ul>
+<p>Perform the following steps to complete the exercise:</p>
+<ol class="arabic">
+<li>
+<p><strong>Set up a new project directory</strong></p>
+<p>Copy your Lab 2 Exercise 2 solution files into a new directory (e.g., <code class="docutils literal notranslate"><span class="pre">lab3_ex4</span></code>).
+Update the <code class="docutils literal notranslate"><span class="pre">CMakeLists.txt</span></code> files in the new directory and in the parent directory to
+include the new executable. Build and run the program to confirm that it still produces
+correct results before making any changes.</p>
+</li>
+<li>
+<p><strong>Define core ranges for the four different roles</strong></p>
+<p>As described in Figure 5 and the accompanying text, the core grid is divided into four
+roles based on each core’s logical coordinates:</p>
+<p>Define <code class="docutils literal notranslate"><span class="pre">CoreRange</span></code> objects in your host code that contain <strong>logical</strong>
+coordinates for four core groups corresponding to the four different roles.
+These ranges should be used when calling <code class="docutils literal notranslate"><span class="pre">CreateKernel</span></code> to assign the correct reader
+kernel to each core group.</p>
+</li>
+<li>
+<p><strong>Create semaphores for multicast synchronization</strong></p>
+<p>For A-slab multicast, create two semaphores on all cores: one “receivers ready” semaphore
+for receivers to signal readiness to the row’s A-source core, and one “slab sent” semaphore
+for the A-source core to signal that the slab has been multicast. Create an analogous pair
+of semaphores for B-slab multicast, for a total of four semaphores.</p>
+<p>Although not every core will use every semaphore locally, creating all four semaphores on
+all cores ensures that <code class="docutils literal notranslate"><span class="pre">get_semaphore</span></code> returns the same on-chip SRAM address on every core
+for a given semaphore ID. This is required for the multicast protocol to work correctly,
+as described in the <em>Semaphores: Local vs. Remote Access</em> section earlier in this lab.</p>
+</li>
+<li>
+<p><strong>Replace the single reader kernel with four role-specific reader kernels</strong></p>
+<p>In Lab 2, all cores used the same reader kernel that read both <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> slabs from DRAM.
+Replace this with four separate reader kernels, one for each core role defined above. Each
+kernel implements a different combination of DRAM reads and multicast send/receive operations
+for <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> slabs. Use <code class="docutils literal notranslate"><span class="pre">CreateKernel</span></code> to create each kernel on the corresponding
+<code class="docutils literal notranslate"><span class="pre">CoreRange</span></code> defined for the four core groups.</p>
+<p>The compute and writer kernels remain identical to Lab 2 and should continue to be created
+on all cores, just as before.</p>
+</li>
+<li>
+<p><strong>Implement the top-left core reader kernel</strong></p>
+<p>This kernel reads slabs of both <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> matrices from DRAM the same way as it did in Lab 2.
+However, it also needs to multicast slabs of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> to all other cores in the
+same row and column, respectively. To achieve this, it needs to take as kernel arguments
+the ranges of core coordinates to multicast to. Remember that these coordinates must be
+device coordinates, obtained via <code class="docutils literal notranslate"><span class="pre">worker_core_from_logical_core</span></code>.
+It also needs to take as kernel arguments the IDs of the semaphores to use for the multicast
+operations. Then it needs to implement the sender side of the multicast protocol for both
+<code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> slabs, similar to the one described earlier in this lab.</p>
+<p><strong>IMPORTANT</strong>:
+When forming the multicast destination address using <code class="docutils literal notranslate"><span class="pre">get_noc_multicast_addr</span></code>, make sure
+to pass device coordinates in an order such that the “start” coordinates are always
+lower than the end coordinates. This is a requirement for the <code class="docutils literal notranslate"><span class="pre">NOC0</span></code> instance used by all
+reader kernels when using the default NoC mapping, as specified earlier in the lab.
+This applies to all the ranges of device coordinates that you will need to form in this exercise.
+While you technically do not know the values of the device coordinates, only logical coordinates,
+you can safely assume that relative ordering of values of device coordinates will correspond
+to the relative ordering of values of logical coordinates.
+For example, if the logical coordinates of the first and last receiver cores
+in a range are <code class="docutils literal notranslate"><span class="pre">(0,</span> <span class="pre">0)</span></code> and <code class="docutils literal notranslate"><span class="pre">(2,</span> <span class="pre">2)</span></code>, the corresponding device coordinates will have some
+values <code class="docutils literal notranslate"><span class="pre">(x0,</span> <span class="pre">y0)</span></code> and <code class="docutils literal notranslate"><span class="pre">(x1,</span> <span class="pre">y1)</span></code>. You can safely assume that <code class="docutils literal notranslate"><span class="pre">x0</span> <span class="pre">&lt;</span> <span class="pre">x1</span></code> and <code class="docutils literal notranslate"><span class="pre">y0</span> <span class="pre">&lt;</span> <span class="pre">y1</span></code>.
+Thus, <code class="docutils literal notranslate"><span class="pre">x0</span></code> and <code class="docutils literal notranslate"><span class="pre">y0</span></code> should be passed as the start coordinates and <code class="docutils literal notranslate"><span class="pre">x1</span></code> and <code class="docutils literal notranslate"><span class="pre">y1</span></code> should
+be passed as the end coordinates.</p>
+</li>
+<li>
+<p><strong>Implement the left-column core reader kernel</strong></p>
+<p>This kernel behaves differently with respect to slabs of the <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> matrices:</p>
+<ul class="simple">
+<li><p><strong>Sends A slabs:</strong> reads slabs of <code class="docutils literal notranslate"><span class="pre">A</span></code> from DRAM the same way as it did in Lab 2.
+However, it also needs to multicast slabs of <code class="docutils literal notranslate"><span class="pre">A</span></code> to all other cores in the
+same row. This behavior is just a subset of the behavior of the top-left core described in the
+previous step.</p></li>
+<li><p><strong>Receives B slab:</strong> Rather than reading <code class="docutils literal notranslate"><span class="pre">B</span></code> slabs from DRAM, this kernel receives the
+<code class="docutils literal notranslate"><span class="pre">B</span></code> slabs via multicast from the topmost core in its column. To achieve this, it needs to
+take as kernel arguments the device coordinates of the sender kernel (the topmost core in its column).
+It also needs to take as kernel arguments the IDs of the semaphores to use for the multicast
+operations. Then it needs to implement the receiver side of the multicast protocol for the
+<code class="docutils literal notranslate"><span class="pre">B</span></code> slabs, similar to the one described earlier in this lab.</p></li>
+</ul>
+</li>
+<li>
+<p><strong>Implement the top-row core reader kernel</strong></p>
+<p>This kernel mirrors the left-column kernel with <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> roles swapped. All requirements
+are otherwise identical.</p>
+</li>
+<li>
+<p><strong>Implement the interior core reader kernel</strong></p>
+<p>This is the simplest reader kernel. Rather than reading slabs of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> from DRAM,
+it receives both the <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> slabs via multicast from the corresponding source cores.
+If you already implemented the left-column and top-row kernels, you can reuse the code for these.
+Consider refactoring common code into helper functions to reduce the risk of copy-paste
+errors.</p>
+</li>
+<li>
+<p><strong>Create appropriate reader kernels on appropriate core groups</strong></p>
+<p>Create the four reader kernels on the appropriate core groups using <code class="docutils literal notranslate"><span class="pre">CreateKernel</span></code>.
+Use the <code class="docutils literal notranslate"><span class="pre">CoreRange</span></code> objects defined for the four core groups earlier in this exercise.
+Define <code class="docutils literal notranslate"><span class="pre">KernelHandle</span></code> objects for the four reader kernel groups to be used to set runtime
+arguments below.</p>
+</li>
+<li>
+<p><strong>Set per-core runtime arguments</strong></p>
+<p>Update the host code to iterate over all logical core coordinates in the grid. For each
+core, determine its role based on its <code class="docutils literal notranslate"><span class="pre">(x,</span> <span class="pre">y)</span></code> position and call <code class="docutils literal notranslate"><span class="pre">SetRuntimeArgs</span></code>
+with the appropriate arguments for that core’s reader kernel.</p>
+<p>In addition to runtime arguments used in Lab 2, sender kernels need:</p>
+<ul class="simple">
+<li><p>Device coordinates of the first and last receiver cores in the multicast destination
+range (for use with <code class="docutils literal notranslate"><span class="pre">get_noc_multicast_addr</span></code> in the kernel).</p></li>
+<li><p>Semaphore IDs for the relevant “receivers ready” and “slab sent” semaphores.</p></li>
+<li><p>The number of receiver cores in the destination range.</p></li>
+</ul>
+<p>Similarly, receiver kernels need:</p>
+<ul class="simple">
+<li><p>Device coordinates of their source core (for use with <code class="docutils literal notranslate"><span class="pre">noc_semaphore_inc</span></code>).</p></li>
+<li><p>Semaphore IDs for the relevant “receivers ready” and “slab sent” semaphores.</p></li>
+</ul>
+<p>Be careful with coordinate systems: <code class="docutils literal notranslate"><span class="pre">SetRuntimeArgs</span></code> is a host API that takes
+<strong>logical</strong> coordinates to identify which core receives the arguments, but any coordinates
+passed <strong>as</strong> runtime argument values must be <strong>device</strong> coordinates, obtained via
+<code class="docutils literal notranslate"><span class="pre">worker_core_from_logical_core</span></code>. Perform all coordinate arithmetic (e.g., determining
+the core one position to the right or below, or the last core in a row) in logical coordinate space,
+then convert the final result to device coordinates. This is important because adjacent
+logical cores may not be adjacent in device coordinates due to non-compute cores in the
+physical layout (e.g., DRAM or Ethernet cores).</p>
+<p>Also keep in mind that <code class="docutils literal notranslate"><span class="pre">worker_core_from_logical_core</span></code> accepts only valid logical coordinates.
+For example, it is not legal to pass in a logical coordinate outside the grid size or a negative
+coordinate, so make sure you structure all your computations to only result in legal logical coordinates.
+Finally, <code class="docutils literal notranslate"><span class="pre">worker_core_from_logical_core</span></code> converts only a single logical coordinate at a time,
+so if you need to convert a range of logical coordinates, you need to convert coordinates of
+the start and end of the range individually.</p>
+<p>It is a good practice to include “logical” or “device” in the names of all coordinate
+variables to avoid accidental misuse.</p>
+</li>
+<li>
+<p><strong>Build and verify correctness</strong></p>
+<p>Build and run your program and verify correctness in the same manner as in Lab 2.</p>
+<p>If you encounter hangs, use the Watcher (as practiced in Exercise 1) and DPRINT statements
+to diagnose the issue. Common causes include incorrect semaphore updates, mismatched
+semaphore IDs between sender and receiver kernels, and incorrect device coordinates in
+multicast addresses. When debugging, consider reducing matrix and core grid sizes to
+simplify the problem while respecting divisibility constraints.
+Do not forget that you can debug host code using the usual debugger tools like <code class="docutils literal notranslate"><span class="pre">gdb</span></code>.
+Remember to reset the device with <code class="docutils literal notranslate"><span class="pre">tt-smi</span> <span class="pre">-r</span></code> after any hang.</p>
+<p>If the program runs but produces incorrect results, common causes include incorrect slab
+tile indexing, accidentally using <code class="docutils literal notranslate"><span class="pre">A</span></code>-related addresses or semaphores for <code class="docutils literal notranslate"><span class="pre">B</span></code>
+(or vice versa), and incorrect runtime argument ordering. Use DPRINT statements to print
+runtime argument values and CB contents to identify the source of the mismatch.
+Remember that the output of DPRINT automatically indicates <code class="docutils literal notranslate"><span class="pre">(x,</span> <span class="pre">y)</span></code> logical coordinates of the core,
+but it does not automatically indicate the name of the kernel. Therefore, make sure to include a
+brief kernel name if the text of the DPRINT statement does not uniquely identify the kernel,
+while avoiding very long DPRINT messages, particularly in inner loops.</p>
+<p>If you are copy-pasting code segments between kernels, take extra care to update all variable
+names and parameters used in the copied code.
+Consider refactoring common code into helper functions to reduce the risk of copy-paste
+errors.</p>
+</li>
+<li>
+<p><strong>Profile performance</strong></p>
+<p>Once correctness is verified, profile both your Lab 2 implementation and your new
+multicast-enabled implementation using the device profiler.
+Ensure that you built the program with the Release option and that DPRINTs and Watcher are both
+disabled when profiling.
+Compare firmware times for the same matrix sizes and core grid configurations.
+Plot firmware time or speedup versus the number of cores and compare against:</p>
+<ul class="simple">
+<li><p>Your single-core baseline from Lab 1,</p></li>
+<li><p>Your multi core with data reuse implementation from Lab 2 (no multicast),</p></li>
+<li><p>Your multicast-enabled implementation from this exercise.</p></li>
+</ul>
+<p>You should observe that the multicast version reduces overall DRAM read traffic and can
+yield a measurable performance improvement.</p>
+<p><strong>Important Note</strong>
+If you observe that the multicast implementation performs worse than the data reuse implementation,
+it is likely because you are multicasting one tile at a time, rather than a slab at a time.
+In Lab 2, you had a choice of pushing one tile at a time or a slab at a time into the CB.
+If you pushed one tile at a time and simply added multicast to that solution, you would
+experience the handshake overhead we explored in Exercise 3. To achieve performance
+improvement, update your code to push a slab at a time into the CBs and also multicast the slab
+rather than individual tiles, similarly to how you modified your code in Exercise 3.
+When implementing this optimization, you should <strong>not</strong> issue a <code class="docutils literal notranslate"><span class="pre">noc_async_read_barrier</span></code> after
+each tile read from DRAM. Instead, you should issue a single <code class="docutils literal notranslate"><span class="pre">noc_async_read_barrier</span></code> after
+all tiles in the slab have been read into the CB, similar to how it was done in Exercise 3
+for batched tiles.</p>
+</li>
+</ol>
+<p>In this exercise, you have applied slab-level multicast to multi core matrix multiplication,
+combining the blocked compute structure from Lab 2 with the NoC multicast protocols practiced
+earlier in this lab. By reading each slab from DRAM only once per row or column and distributing
+it to all cores via multicast, you have reduced redundant DRAM traffic and demonstrated how
+cross-core data reuse can improve performance on Tenstorrent hardware.</p>
+</section>
+<section id="conclusion">
+<h2>
+<a class="toc-backref" href="#id16" role="doc-backlink">Conclusion</a><a class="headerlink" href="#conclusion" title="Permalink to this heading"></a>
+</h2>
+<p>In this lab, you refined the multi core matrix multiplication with reuse implementation from Lab 2 by adding
+<strong>cross-core reuse of data via multicast</strong>, taking advantage of the regular pattern of data use across cores.
+This was possible because all cores in the same row need the same data from the <code class="docutils literal notranslate"><span class="pre">A</span></code> matrix
+and all cores in the same column need the same data from the <code class="docutils literal notranslate"><span class="pre">B</span></code> matrix.
+Multicast is perfectly suited for this use case because it allows a sender core to write the same data
+to multiple destination cores efficiently, in a single NoC operation.</p>
+<p>This lab shows how higher-level algorithmic structure (blocked matrix multiplication with slabs) can
+be combined with low-level architectural features (NoC multicast and semaphores) to further reduce
+DRAM traffic and improve performance, without changing the core mathematical computation.</p>
+<p>Additional information about the features used in this lab can be found in the following resources:</p>
+<ul class="simple">
+<li><p>NoC (Network on Chip) Readme: <a class="reference external" href="https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/README.md">https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/NoC/README.md</a></p></li>
+<li><p>Networks and Communication Lesson: <a class="reference external" href="https://github.com/tenstorrent/tt-vscode-toolkit/blob/main/content/lessons/cs-fundamentals-04-networks.md">https://github.com/tenstorrent/tt-vscode-toolkit/blob/main/content/lessons/cs-fundamentals-04-networks.md</a></p></li>
+<li><p>Introduction to Data Movement in TT-Metal: <a class="reference external" href="https://github.com/tenstorrent/tt-low-level-documentation/blob/main/data_movement_doc/general/intro_to_dm.md">https://github.com/tenstorrent/tt-low-level-documentation/blob/main/data_movement_doc/general/intro_to_dm.md</a></p></li>
+<li><p>Watcher Documentation: <a class="reference external" href="https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/watcher.html">https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tools/watcher.html</a></p></li>
+</ul>
+</section>
+<section id="appendix-a-watcher-log-file-format">
+<h2>
+<a class="toc-backref" href="#id17" role="doc-backlink">Appendix A: Watcher Log File Format</a><a class="headerlink" href="#appendix-a-watcher-log-file-format" title="Permalink to this heading"></a>
+</h2>
+<p>The Watcher log file contains information about each Tensix core and its RISC-V processors.
+Each Tensix core has 5 RISC-V processors: BRISC, NCRISC, TRISC0, TRISC1, TRISC2, corresponding to
+RISC-V 0 through RISC-V 4 in the Tensix Core figure in Lab 1.
+BRISC is referred to as the primary processor, and the other RISC-V processors are referred
+to as subordinate processors.</p>
+<p>The format is best explained by analyzing an example line:</p>
+<div class="highlight-text notranslate">
+<div class="highlight"><pre><span></span>Device 0 worker core(x= 1,y= 0) virtual(x= 2,y= 2):  NSW,CWFW,   K,MWDD,   K  rmsg:D0G|BNT h_id:  0 smsg:GGGG k_ids:  5|  6|  7|  7|  7
+</pre></div>
+</div>
+<p>The meaning of the fields is as follows:</p>
+<ul>
+<li><p>The first field identifies the device number (some systems may have multiple devices)
+and the logical and device (a.k.a. virtual) coordinates of the core.</p></li>
+<li>
+<p>This is followed by a comma-separated list of waypoints for BRISC, NCRISC, TRISC0, TRISC1, and TRISC2, respectively.
+Waypoints are usually single-character codes (e.g., <code class="docutils literal notranslate"><span class="pre">W</span></code> = Waiting, <code class="docutils literal notranslate"><span class="pre">R</span></code> = Running, <code class="docutils literal notranslate"><span class="pre">D</span></code> = Done),
+or multi-character codes (e.g., <code class="docutils literal notranslate"><span class="pre">NRW</span></code> = “NoC Read Wait”, <code class="docutils literal notranslate"><span class="pre">NSW</span></code> = “NoC Semaphore Wait”).
+These codes correspond to the last waypoint encountered in that core’s execution.
+If you’re unsure what some of the codes mean, you can <cite>grep</cite> for the corresponding
+waypoint string in the source code. For example:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span>grep<span class="w"> </span>-rn<span class="w"> </span><span class="s2">"."</span><span class="w"> </span>--include<span class="o">=</span><span class="se">\*</span>.<span class="o">{</span>cpp,h,hpp<span class="o">}</span><span class="w"> </span>-e<span class="w"> </span><span class="s1">'WAYPOINT("CWFW")'</span>
+
+./tt_metal/hw/inc/api/dataflow/dataflow_api.h:476:<span class="w">    </span>WAYPOINT<span class="o">(</span><span class="s2">"CWFW"</span><span class="o">)</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>You can then examine the code around line <code class="docutils literal notranslate"><span class="pre">476</span></code> to better understand the <code class="docutils literal notranslate"><span class="pre">CWFW</span></code> waypoint.</p>
+</li>
+<li><p>The <code class="docutils literal notranslate"><span class="pre">rmsg</span></code> field shows basic info about the state of the Tensix core with respect to code being dispatched to this core.
+The first field indicates whether the kernels were dispatched to this Tensix core
+by the host (H) or by another core on the device (D). The second field indicates the NoC ID used by the
+primary processor (BRISC). Note that NCRISC uses the other NoC by convention.
+The third field indicates the state of the Tensix core with respect to code being dispatched to it:
+initialization (<code class="docutils literal notranslate"><span class="pre">I</span></code>), running/go (<code class="docutils literal notranslate"><span class="pre">G</span></code>) or done (<code class="docutils literal notranslate"><span class="pre">D</span></code>). This is followed by the <code class="docutils literal notranslate"><span class="pre">|</span></code> separator and then codes
+for different parts of the core being enabled/disabled. Uppercase letters mean a component is enabled (i.e., there
+is a kernel running on it), while lowercase letters mean it is disabled (i.e., there is no kernel running on it).
+For example, <code class="docutils literal notranslate"><span class="pre">BNT</span></code> means that BRISC, NCRISC, and TRISCs are all enabled, whereas <code class="docutils literal notranslate"><span class="pre">Bnt</span></code> means that only BRISC is enabled.</p></li>
+<li><p>The <code class="docutils literal notranslate"><span class="pre">h_id</span></code> field shows the internal program ID assigned by the host that is used for profiling.</p></li>
+<li><p>The <code class="docutils literal notranslate"><span class="pre">smsg</span></code> field shows the run state of the subordinate processors, using the same <code class="docutils literal notranslate"><span class="pre">I/G/D</span></code> codes mentioned above.</p></li>
+<li><p>The <code class="docutils literal notranslate"><span class="pre">k_ids</span></code> field shows the ID of the kernel (by ID) loaded on each of the five processors on this core.
+The five values correspond to BRISC, NCRISC, TRISC0, TRISC1, and TRISC2, respectively.</p></li>
+</ul>
+<p>Based on this, we can summarize the above line in the following table:</p>
+<table class="docutils align-default">
+<tbody>
+<tr class="row-odd">
+<td><p>Field</p></td>
+<td><p>Value</p></td>
+<td><p>Meaning</p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">core(x=</span> <span class="pre">1,y=</span> <span class="pre">0)</span></code></p></td>
+<td><p>Logical coordinates</p></td>
+<td><p>This is logical core <code class="docutils literal notranslate"><span class="pre">(1,0)</span></code></p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">virtual(x=</span> <span class="pre">2,y=</span> <span class="pre">2)</span></code></p></td>
+<td><p>Device/Virtual coordinates</p></td>
+<td><p>Used for NoC addressing</p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">NSW</span></code></p></td>
+<td><p>BRISC status</p></td>
+<td><p><strong>N</strong>OC <strong>S</strong>emaphore <strong>W</strong>ait</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">CWFW</span></code></p></td>
+<td><p>NCRISC status</p></td>
+<td><p><strong>C</strong>B <strong>W</strong>ait <strong>F</strong>or <strong>W</strong>rite</p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">K</span></code></p></td>
+<td><p>TRISC0 status</p></td>
+<td><p>In <strong>K</strong>ernel</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">MWDD</span></code></p></td>
+<td><p>TRISC1 status</p></td>
+<td><p><strong>M</strong>ath <strong>W</strong>ait <strong>D</strong>ata <strong>D</strong>ependency</p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">K</span></code></p></td>
+<td><p>TRISC2 status</p></td>
+<td><p>In <strong>K</strong>ernel</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">rmsg:D0G|BNT</span></code></p></td>
+<td><p>Run message</p></td>
+<td><p>Device dispatch, <code class="docutils literal notranslate"><span class="pre">NOC0</span></code>, Go state; BRISC/NCRISC/TRISCs enabled</p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">h_id:</span>  <span class="pre">0</span></code></p></td>
+<td><p>Host assigned ID</p></td>
+<td><p>Internal ID used for profiling</p></td>
+</tr>
+<tr class="row-odd">
+<td><p><code class="docutils literal notranslate"><span class="pre">smsg:GGGG</span></code></p></td>
+<td><p>Subordinate message</p></td>
+<td><p>NCRISC, TRISC0, TRISC1, TRISC2 in <strong>G</strong>o state (running)</p></td>
+</tr>
+<tr class="row-even">
+<td><p><code class="docutils literal notranslate"><span class="pre">k_ids:</span> <span class="pre">5|</span> <span class="pre">6|</span> <span class="pre">7|</span> <span class="pre">7|</span> <span class="pre">7</span></code></p></td>
+<td><p>Kernel IDs</p></td>
+<td><p>BRISC=5, NCRISC=6, TRISC0/1/2=7</p></td>
+</tr>
+</tbody>
+</table>
+<p>Kernels are identified by their IDs (<code class="docutils literal notranslate"><span class="pre">k_ids</span></code>). The mapping from kernel ID to source file name for a given section
+is listed at the end of that section. For example:</p>
+<div class="highlight-text notranslate">
+<div class="highlight"><pre><span></span>k_id[  0]: blank
+k_id[  1]: tt_metal/impl/dispatch/kernels/cq_prefetch.cpp
+k_id[  2]: tt_metal/impl/dispatch/kernels/cq_dispatch.cpp
+k_id[  3]: tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp
+k_id[  4]: ttnn/examples/lab_multicast/kernels/dataflow/mcast_sender.cpp
+k_id[  5]: ttnn/examples/lab_multicast/kernels/dataflow/mcast_receiver.cpp
+k_id[  6]: ttnn/examples/lab_multicast/kernels/dataflow/write_tiles.cpp
+k_id[  7]: ttnn/examples/lab_multicast/kernels/compute/tiles_copy.cpp
+</pre></div>
+</div>
+<p>Idle cores, where the program has not created any kernels, can easily be identified by their <code class="docutils literal notranslate"><span class="pre">k_ids</span></code> fields all set to 0.</p>
+<p>Together with waypoints, asserts, and DPRINTs, this log format turns Watcher into a practical tool for quickly pinpointing
+the cores, kernels, and code locations involved in hangs and other hard to debug issues.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../lab2/lab2.html" class="btn btn-neutral float-left" title="Lab 2: Multi Core Matrix Multiplication" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../../../advanced_topics/index.html" class="btn btn-neutral float-right" title="Advanced Topics" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>
