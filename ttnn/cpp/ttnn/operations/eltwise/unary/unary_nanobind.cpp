@@ -66,6 +66,16 @@ Tensor unary_composite_3param_to_4param_wrapper(
     return Func(input_tensor, parameter_a, parameter_b, memory_config, std::nullopt);
 }
 
+template <auto Func>
+Tensor unary_rrelu_wrapper(
+    const Tensor& input_tensor,
+    float lower,
+    float upper,
+    bool training,
+    const std::optional<MemoryConfig>& memory_config) {
+    return Func(input_tensor, lower, upper, training, memory_config, std::nullopt);
+}
+
 void bind_unary_clamp(nb::module_& mod) {
     const char* doc = R"doc(
         Applies clamp to :attr:`input_tensor` element-wise.
@@ -2290,14 +2300,49 @@ void py_module(nb::module_& mod) {
     bind_unary_clamp(mod);
     bind_unary_composite_floats_with_default<"selu", &ttnn::selu>(
         mod, "scale", "Scale value", 1.0507, "alpha", "Alpha value", 1.67326);
-    bind_unary_composite_floats_with_default<"rrelu", &ttnn::rrelu>(
-        mod,
-        "lower",
-        "Lower bound of uniform distribution",
-        0.125f,
-        "upper",
-        "Upper bound of uniform distribution",
-        0.3333333333f);
+    {
+        auto doc = R"doc(
+        Performs rrelu (Randomized Leaky ReLU) on :attr:`input_tensor`.
+
+        In evaluation mode (training=False), uses a deterministic slope of (lower + upper) / 2 for negative inputs.
+        In training mode (training=True), samples a random slope from U(lower, upper) per negative element.
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword args:
+            lower (float, optional): Lower bound of uniform distribution. Defaults to `0.125`.
+            upper (float, optional): Upper bound of uniform distribution. Defaults to `0.333`.
+            training (bool, optional): If True, use random slopes (training mode). Defaults to `False`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, BFLOAT8_B
+                 - TILE, ROW_MAJOR
+        )doc";
+
+        ttnn::bind_function<"rrelu">(
+            mod,
+            doc,
+            ttnn::overload_t{
+                &unary_rrelu_wrapper<&ttnn::rrelu>,
+                nb::arg("input_tensor"),
+                nb::kw_only(),
+                nb::arg("lower") = 0.125f,
+                nb::arg("upper") = 1.0f / 3.0f,
+                nb::arg("training") = false,
+                nb::arg("memory_config") = nb::none()});
+    }
     bind_unary_composite_floats_with_default<"hardtanh", &ttnn::hardtanh>(
         mod, "min_val", "min value", -1.0f, "max_val", "max value", 1.0f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_threshold<"threshold", &ttnn::threshold>(

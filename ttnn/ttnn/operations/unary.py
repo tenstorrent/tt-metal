@@ -403,12 +403,17 @@ def _golden_function_selu(input_tensor_a, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.selu, golden_function=_golden_function_selu)
 
 
-def _golden_function_rrelu(input_tensor_a, *args, lower=0.125, upper=1.0 / 3.0, **kwargs):
+def _golden_function_rrelu(input_tensor_a, *args, lower=0.125, upper=1.0 / 3.0, training=False, **kwargs):
     import torch
 
-    # Evaluation mode: use deterministic midpoint slope = (lower + upper) / 2
-    slope = (lower + upper) / 2.0
-    return torch.where(input_tensor_a >= 0, input_tensor_a, input_tensor_a * slope)
+    if training:
+        # Training mode: per-element random slope from U(lower, upper)
+        slope = torch.empty_like(input_tensor_a).uniform_(lower, upper)
+        return torch.where(input_tensor_a >= 0, input_tensor_a, input_tensor_a * slope)
+    else:
+        # Evaluation mode: use deterministic midpoint slope = (lower + upper) / 2
+        slope = (lower + upper) / 2.0
+        return torch.where(input_tensor_a >= 0, input_tensor_a, input_tensor_a * slope)
 
 
 ttnn.attach_golden_function(ttnn.rrelu, golden_function=_golden_function_rrelu)

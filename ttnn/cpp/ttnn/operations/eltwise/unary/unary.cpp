@@ -4,6 +4,8 @@
 
 #include "unary.hpp"
 
+#include <random>
+
 #include "common/unary_op_types.hpp"
 #include "device/unary_device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -375,13 +377,25 @@ Tensor rrelu(
     const Tensor& input_tensor,
     float lower,
     float upper,
+    bool training,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    // Evaluation mode (seed=0): deterministic midpoint slope
-    float seed = 0.0f;
+    float seed_f;
+    if (training) {
+        // Generate a non-zero seed for the hardware PRNG
+        static thread_local std::mt19937 rng{std::random_device{}()};
+        uint32_t seed;
+        do {
+            seed = rng();
+        } while (seed == 0);
+        seed_f = std::bit_cast<float>(seed);
+    } else {
+        // Evaluation mode: seed=0 triggers deterministic midpoint slope
+        seed_f = 0.0f;
+    }
     return ttnn::detail::unary_impl(
         input_tensor,
-        {UnaryWithParam{UnaryOpType::RRELU, {lower, upper, seed}}},
+        {UnaryWithParam{UnaryOpType::RRELU, {lower, upper, seed_f}}},
         memory_config,
         optional_output_tensor);
 }
