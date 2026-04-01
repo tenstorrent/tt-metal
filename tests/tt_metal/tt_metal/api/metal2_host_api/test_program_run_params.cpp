@@ -30,7 +30,6 @@ namespace {
 
 // Import shared test helpers
 using test_helpers::BindDFBToKernel;
-using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
@@ -44,8 +43,8 @@ using test_helpers::MakeMinimalWorker;
 class ProgramRunParamsTestQuasar : public ::testing::Test {
 protected:
     void SetUp() override {
-        GTEST_SKIP() << "Re-enable tests after Quasar mock device support is checked in";
-        // Configure global mock mode for Quasar
+        // GTEST_SKIP() << "Re-enable tests after Quasar mock device support is checked in";
+        //  Configure global mock mode for Quasar
         experimental::configure_mock_mode(tt::ARCH::QUASAR, 1);
     }
     void TearDown() override { experimental::disable_mock_mode(); }
