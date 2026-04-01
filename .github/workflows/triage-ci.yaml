@@ -271,6 +271,17 @@ jobs:
             --days 14 \
             --output build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
 
+      - name: Enrich triage channel export with issue closure booleans
+        if: ${{ !inputs['data-gathering-mode'] }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_REPO_GITHUB_TOKEN: ${{ secrets.ISSUE_REPO_GITHUB_TOKEN || secrets.EVAN_RESTRICTED_TOKEN }}
+        run: |
+          set -euo pipefail
+          python tools/ci/enrich_slack_with_issue_status.py \
+            --input build_ci/raw_data/slack_C0APK6215B5_last_14_days.json \
+            --output build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
+
       - name: Ensure CURSOR_API_KEY is configured (data gathering mode)
         if: ${{ inputs['data-gathering-mode'] }}
         env:
@@ -391,7 +402,7 @@ jobs:
           TARGET_PR_PUSH_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
         uses: ./.github/actions/auto-disable-stale-ci
         with:
-          input-json-path: build_ci/raw_data/slack_C0APK6215B5_U08GTDV8MDH_threads.json
+          input-json-path: build_ci/raw_data/slack_C0APK6215B5_last_14_days.json
           stale-hours: ${{ github.event.inputs['stale-hours-threshold'] || '32' }}
           hold-hours-after-progress: ${{ github.event.inputs['stale-progress-hold-hours'] || '24' }}
           max-actions: ${{ github.event.inputs['max-auto-disable-actions'] || '3' }}

@@ -62,6 +62,15 @@ def primary_issue_detail(msg: dict[str, Any]) -> dict[str, Any] | None:
     return first
 
 
+def message_replies(msg: dict[str, Any]) -> list[dict[str, Any]]:
+    replies = msg.get("thread_replies")
+    if not isinstance(replies, list):
+        replies = msg.get("replies")
+    if not isinstance(replies, list):
+        return []
+    return [row for row in replies if isinstance(row, dict)]
+
+
 def main() -> int:
     args = parse_args()
     now = time.time()
@@ -99,9 +108,7 @@ def main() -> int:
             skipped.append({"ts": ts, "reason": "not_stale", "age_hours": round(age_hours, 2)})
             continue
 
-        thread_replies = msg.get("thread_replies", [])
-        if not isinstance(thread_replies, list):
-            thread_replies = []
+        thread_replies = message_replies(msg)
         progress = classify_thread_progress(
             top_level_text=str(msg.get("text", "")),
             thread_replies=thread_replies,
