@@ -474,6 +474,36 @@ def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -
         "Dest Read Backpressure",
         "Math Dest Write Port Stall Rate",
         "Math Scoreboard Stall Rate",
+        # NEW: Per-type instruction issue efficiency
+        "CFG Instrn Avail Rate T0",
+        "SYNC Instrn Avail Rate T0",
+        "THCON Instrn Avail Rate T0",
+        "MOVE Instrn Avail Rate T0",
+        "MATH Instrn Avail Rate T1",
+        "UNPACK Instrn Avail Rate T0",
+        "PACK Instrn Avail Rate T2",
+        # NEW: Stall breakdown
+        "THCON Idle Stall Pct T0",
+        "MOVE Idle Stall Pct T0",
+        "MMIO Idle Stall Pct T1",
+        "SFPU Idle Stall Pct T1",
+        # NEW: Write port blocking
+        "SrcB Write Port Blocked Rate",
+        "SrcA Write Actual Efficiency",
+        "SrcB Write Actual Efficiency",
+        # NEW: Fidelity analysis
+        "HiFi4 Instrn Rate",
+        "Fidelity Phase Overhead",
+        # NEW: Packer engine granularity
+        "Packer Engine 0 Util",
+        "Packer Engine 1 Util",
+        "Packer Engine 2 Util",
+        # NEW: Low priority waits
+        "MMIO Idle Wait T0",
+        "SFPU Idle Wait T1",
+        "THCON Idle Wait T0",
+        "MOVE Idle Wait T0",
+        "RISC Core L1 Util",
     ]
 
     # Non-percentage metrics (raw rates, not %)

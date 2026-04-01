@@ -353,6 +353,109 @@ PERF_COUNTER_CSV_HEADERS = [
     "Pack Instrn Issue Rate T2 Median",
     "Pack Instrn Issue Rate T2 Max",
     "Pack Instrn Issue Rate T2 Avg",
+    # === NEW: Per-type instruction issue efficiency ===
+    "CFG Instrn Avail Rate T0 Min (%)",
+    "CFG Instrn Avail Rate T0 Median (%)",
+    "CFG Instrn Avail Rate T0 Max (%)",
+    "CFG Instrn Avail Rate T0 Avg (%)",
+    "SYNC Instrn Avail Rate T0 Min (%)",
+    "SYNC Instrn Avail Rate T0 Median (%)",
+    "SYNC Instrn Avail Rate T0 Max (%)",
+    "SYNC Instrn Avail Rate T0 Avg (%)",
+    "THCON Instrn Avail Rate T0 Min (%)",
+    "THCON Instrn Avail Rate T0 Median (%)",
+    "THCON Instrn Avail Rate T0 Max (%)",
+    "THCON Instrn Avail Rate T0 Avg (%)",
+    "MOVE Instrn Avail Rate T0 Min (%)",
+    "MOVE Instrn Avail Rate T0 Median (%)",
+    "MOVE Instrn Avail Rate T0 Max (%)",
+    "MOVE Instrn Avail Rate T0 Avg (%)",
+    "MATH Instrn Avail Rate T1 Min (%)",
+    "MATH Instrn Avail Rate T1 Median (%)",
+    "MATH Instrn Avail Rate T1 Max (%)",
+    "MATH Instrn Avail Rate T1 Avg (%)",
+    "UNPACK Instrn Avail Rate T0 Min (%)",
+    "UNPACK Instrn Avail Rate T0 Median (%)",
+    "UNPACK Instrn Avail Rate T0 Max (%)",
+    "UNPACK Instrn Avail Rate T0 Avg (%)",
+    "PACK Instrn Avail Rate T2 Min (%)",
+    "PACK Instrn Avail Rate T2 Median (%)",
+    "PACK Instrn Avail Rate T2 Max (%)",
+    "PACK Instrn Avail Rate T2 Avg (%)",
+    # === NEW: Stall breakdown (% of total stalls per thread) ===
+    "THCON Idle Stall Pct T0 Min (%)",
+    "THCON Idle Stall Pct T0 Median (%)",
+    "THCON Idle Stall Pct T0 Max (%)",
+    "THCON Idle Stall Pct T0 Avg (%)",
+    "MOVE Idle Stall Pct T0 Min (%)",
+    "MOVE Idle Stall Pct T0 Median (%)",
+    "MOVE Idle Stall Pct T0 Max (%)",
+    "MOVE Idle Stall Pct T0 Avg (%)",
+    "MMIO Idle Stall Pct T1 Min (%)",
+    "MMIO Idle Stall Pct T1 Median (%)",
+    "MMIO Idle Stall Pct T1 Max (%)",
+    "MMIO Idle Stall Pct T1 Avg (%)",
+    "SFPU Idle Stall Pct T1 Min (%)",
+    "SFPU Idle Stall Pct T1 Median (%)",
+    "SFPU Idle Stall Pct T1 Max (%)",
+    "SFPU Idle Stall Pct T1 Avg (%)",
+    # === NEW: Write port blocking ===
+    "SrcB Write Port Blocked Rate Min (%)",
+    "SrcB Write Port Blocked Rate Median (%)",
+    "SrcB Write Port Blocked Rate Max (%)",
+    "SrcB Write Port Blocked Rate Avg (%)",
+    "SrcA Write Actual Efficiency Min (%)",
+    "SrcA Write Actual Efficiency Median (%)",
+    "SrcA Write Actual Efficiency Max (%)",
+    "SrcA Write Actual Efficiency Avg (%)",
+    "SrcB Write Actual Efficiency Min (%)",
+    "SrcB Write Actual Efficiency Median (%)",
+    "SrcB Write Actual Efficiency Max (%)",
+    "SrcB Write Actual Efficiency Avg (%)",
+    # === NEW: Fidelity analysis ===
+    "HiFi4 Instrn Rate Min (%)",
+    "HiFi4 Instrn Rate Median (%)",
+    "HiFi4 Instrn Rate Max (%)",
+    "HiFi4 Instrn Rate Avg (%)",
+    "Fidelity Phase Overhead Min (%)",
+    "Fidelity Phase Overhead Median (%)",
+    "Fidelity Phase Overhead Max (%)",
+    "Fidelity Phase Overhead Avg (%)",
+    # === NEW: Packer engine granularity (WH) ===
+    "Packer Engine 0 Util Min (%)",
+    "Packer Engine 0 Util Median (%)",
+    "Packer Engine 0 Util Max (%)",
+    "Packer Engine 0 Util Avg (%)",
+    "Packer Engine 1 Util Min (%)",
+    "Packer Engine 1 Util Median (%)",
+    "Packer Engine 1 Util Max (%)",
+    "Packer Engine 1 Util Avg (%)",
+    "Packer Engine 2 Util Min (%)",
+    "Packer Engine 2 Util Median (%)",
+    "Packer Engine 2 Util Max (%)",
+    "Packer Engine 2 Util Avg (%)",
+    # === NEW: Low priority waits ===
+    "MMIO Idle Wait T0 Min (%)",
+    "MMIO Idle Wait T0 Median (%)",
+    "MMIO Idle Wait T0 Max (%)",
+    "MMIO Idle Wait T0 Avg (%)",
+    "SFPU Idle Wait T1 Min (%)",
+    "SFPU Idle Wait T1 Median (%)",
+    "SFPU Idle Wait T1 Max (%)",
+    "SFPU Idle Wait T1 Avg (%)",
+    "THCON Idle Wait T0 Min (%)",
+    "THCON Idle Wait T0 Median (%)",
+    "THCON Idle Wait T0 Max (%)",
+    "THCON Idle Wait T0 Avg (%)",
+    "MOVE Idle Wait T0 Min (%)",
+    "MOVE Idle Wait T0 Median (%)",
+    "MOVE Idle Wait T0 Max (%)",
+    "MOVE Idle Wait T0 Avg (%)",
+    # === NEW: RISC Core L1 util (BH only) ===
+    "RISC Core L1 Util Min (%)",
+    "RISC Core L1 Util Median (%)",
+    "RISC Core L1 Util Max (%)",
+    "RISC Core L1 Util Avg (%)",
 ]
 
 _PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
@@ -1030,6 +1133,32 @@ def _enrich_ops_from_device_logs(
                     "avg": grouped.mean().to_dict(),
                 }
 
+            def compute_ratio_metric(numerator_name, denominator_name, scale=100):
+                """Compute numerator / denominator * scale per core, aggregate by op."""
+                num = get_counter_series(numerator_name)
+                den = get_counter_series(denominator_name)
+                ratio = (num / den * scale).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                return {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+
+            def compute_complement_metric(counter_name, total_name):
+                """Compute (total - counter) / total * 100 — for blocked/stall rates."""
+                val = get_counter_series(counter_name)
+                total = get_counter_series(total_name)
+                ratio = ((total - val) / total * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                return {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+
             def compute_backpressure(req_ch0, req_ch1, grant_ch0, grant_ch1):
                 """Compute avg back-pressure across two channels: (req-grant)/req * 100."""
                 r0 = get_counter_series(req_ch0)
@@ -1421,6 +1550,104 @@ def _enrich_ops_from_device_logs(
                     "avg": grouped.mean().to_dict(),
                 }
 
+            # === NEW: Per-type instruction issue efficiency ===
+            # Formula: ISSUED / AVAILABLE * 100 (per instruction type, on its primary thread)
+            cfg_issue_eff = {}
+            sync_issue_eff = {}
+            thcon_issue_eff = {}
+            move_issue_eff = {}
+            math_instrn_issue_eff = {}
+            unpack_instrn_issue_eff = {}
+            pack_instrn_issue_eff = {}
+            # Instruction availability rate = cycles available / ref_cnt * 100
+            # Shows what % of time each instruction type was ready to issue
+            if has_counter("CFG_INSTRN_AVAILABLE_0"):
+                cfg_issue_eff = compute_util_metric("CFG_INSTRN_AVAILABLE_0")
+            if has_counter("SYNC_INSTRN_AVAILABLE_0"):
+                sync_issue_eff = compute_util_metric("SYNC_INSTRN_AVAILABLE_0")
+            if has_counter("THCON_INSTRN_AVAILABLE_0"):
+                thcon_issue_eff = compute_util_metric("THCON_INSTRN_AVAILABLE_0")
+            if has_counter("MOVE_INSTRN_AVAILABLE_0"):
+                move_issue_eff = compute_util_metric("MOVE_INSTRN_AVAILABLE_0")
+            if has_counter("FPU_INSTRN_AVAILABLE_1"):
+                math_instrn_issue_eff = compute_util_metric("FPU_INSTRN_AVAILABLE_1")
+            if has_counter("UNPACK_INSTRN_AVAILABLE_0"):
+                unpack_instrn_issue_eff = compute_util_metric("UNPACK_INSTRN_AVAILABLE_0")
+            if has_counter("PACK_INSTRN_AVAILABLE_2"):
+                pack_instrn_issue_eff = compute_util_metric("PACK_INSTRN_AVAILABLE_2")
+
+            # === NEW: Stall breakdown (% of total stalls per thread) ===
+            thcon_stall_pct = {}
+            move_stall_pct = {}
+            mmio_stall_pct = {}
+            sfpu_stall_pct = {}
+            if has_counter("WAITING_FOR_THCON_IDLE_0") and has_counter("THREAD_STALLS_0"):
+                thcon_stall_pct = compute_ratio_metric("WAITING_FOR_THCON_IDLE_0", "THREAD_STALLS_0")
+            if has_counter("WAITING_FOR_MOVE_IDLE_0") and has_counter("THREAD_STALLS_0"):
+                move_stall_pct = compute_ratio_metric("WAITING_FOR_MOVE_IDLE_0", "THREAD_STALLS_0")
+            if has_counter("WAITING_FOR_MMIO_IDLE_1") and has_counter("THREAD_STALLS_1"):
+                mmio_stall_pct = compute_ratio_metric("WAITING_FOR_MMIO_IDLE_1", "THREAD_STALLS_1")
+            if has_counter("WAITING_FOR_SFPU_IDLE_1") and has_counter("THREAD_STALLS_1"):
+                sfpu_stall_pct = compute_ratio_metric("WAITING_FOR_SFPU_IDLE_1", "THREAD_STALLS_1")
+
+            # === NEW: Write port blocking ===
+            srcb_blocked = {}
+            srca_write_eff = {}
+            srcb_write_eff = {}
+            if has_counter("SRCB_WRITE_AVAILABLE") and has_counter("SRCB_WRITE_NOT_BLOCKED_PORT"):
+                srcb_blocked = compute_complement_metric("SRCB_WRITE_NOT_BLOCKED_PORT", "SRCB_WRITE_AVAILABLE")
+            if has_counter("SRCA_WRITE_ACTUAL") and has_counter("SRCA_WRITE_AVAILABLE"):
+                srca_write_eff = compute_ratio_metric("SRCA_WRITE_ACTUAL", "SRCA_WRITE_AVAILABLE")
+            if has_counter("SRCB_WRITE_ACTUAL") and has_counter("SRCB_WRITE_AVAILABLE"):
+                srcb_write_eff = compute_ratio_metric("SRCB_WRITE_ACTUAL", "SRCB_WRITE_AVAILABLE")
+
+            # === NEW: Fidelity analysis ===
+            hifi4_rate = {}
+            fidelity_overhead = {}
+            if has_counter("MATH_INSTRN_STARTED") and has_counter("INSTRN_2_HF_CYCLES") and has_counter("INSTRN_1_HF_CYCLE"):
+                total = get_counter_series("MATH_INSTRN_STARTED")
+                hf2 = get_counter_series("INSTRN_2_HF_CYCLES")
+                hf1 = get_counter_series("INSTRN_1_HF_CYCLE")
+                hf4 = total - hf2 - hf1
+                ratio = (hf4 / total * 100).clip(lower=0).replace([float("inf"), -float("inf")], nan)
+                grouped = ratio.groupby(level=["run_host_id", "trace_id_count"])
+                hifi4_rate = {
+                    "min": grouped.min().to_dict(),
+                    "median": grouped.median().to_dict(),
+                    "max": grouped.max().to_dict(),
+                    "avg": grouped.mean().to_dict(),
+                }
+            if has_counter("FIDELITY_PHASE_STALLS"):
+                fidelity_overhead = compute_util_metric("FIDELITY_PHASE_STALLS")
+
+            # === NEW: Packer engine granularity ===
+            packer_engine_0_util = {}
+            packer_engine_1_util = {}
+            packer_engine_2_util = {}
+            if has_counter("PACKER_BUSY_0"):
+                packer_engine_0_util = compute_util_metric("PACKER_BUSY_0")
+            if has_counter("PACKER_BUSY_1"):
+                packer_engine_1_util = compute_util_metric("PACKER_BUSY_1")
+            if has_counter("PACKER_BUSY_2"):
+                packer_engine_2_util = compute_util_metric("PACKER_BUSY_2")
+
+            # === NEW: Low priority waits ===
+            mmio_wait = {}
+            sfpu_wait = {}
+            thcon_wait = {}
+            move_wait = {}
+            risc_core_util = {}
+            if has_counter("WAITING_FOR_MMIO_IDLE_0"):
+                mmio_wait = compute_util_metric("WAITING_FOR_MMIO_IDLE_0")
+            if has_counter("WAITING_FOR_SFPU_IDLE_1"):
+                sfpu_wait = compute_util_metric("WAITING_FOR_SFPU_IDLE_1")
+            if has_counter("WAITING_FOR_THCON_IDLE_0"):
+                thcon_wait = compute_util_metric("WAITING_FOR_THCON_IDLE_0")
+            if has_counter("WAITING_FOR_MOVE_IDLE_0"):
+                move_wait = compute_util_metric("WAITING_FOR_MOVE_IDLE_0")
+            if has_counter("L1_1_RISC_CORE"):
+                risc_core_util = compute_util_metric("L1_1_RISC_CORE")
+
         # Enrich ops with device data and perf counters
         for device_op, device_op_time in zip(host_ops_by_device[device], device_ops_time):
             # Verify match again (redundant but safe)
@@ -1579,6 +1806,43 @@ def _enrich_ops_from_device_logs(
                 assign_metric("Unpack Instrn Issue Rate T0", unpack_issue_rate, suffix="")
                 assign_metric("Math Instrn Issue Rate T1", math_issue_rate, suffix="")
                 assign_metric("Pack Instrn Issue Rate T2", pack_issue_rate, suffix="")
+
+                # === NEW METRICS ===
+                # Per-type instruction issue efficiency
+                assign_metric("CFG Instrn Avail Rate T0", cfg_issue_eff)
+                assign_metric("SYNC Instrn Avail Rate T0", sync_issue_eff)
+                assign_metric("THCON Instrn Avail Rate T0", thcon_issue_eff)
+                assign_metric("MOVE Instrn Avail Rate T0", move_issue_eff)
+                assign_metric("MATH Instrn Avail Rate T1", math_instrn_issue_eff)
+                assign_metric("UNPACK Instrn Avail Rate T0", unpack_instrn_issue_eff)
+                assign_metric("PACK Instrn Avail Rate T2", pack_instrn_issue_eff)
+
+                # Stall breakdown
+                assign_metric("THCON Idle Stall Pct T0", thcon_stall_pct)
+                assign_metric("MOVE Idle Stall Pct T0", move_stall_pct)
+                assign_metric("MMIO Idle Stall Pct T1", mmio_stall_pct)
+                assign_metric("SFPU Idle Stall Pct T1", sfpu_stall_pct)
+
+                # Write port blocking
+                assign_metric("SrcB Write Port Blocked Rate", srcb_blocked)
+                assign_metric("SrcA Write Actual Efficiency", srca_write_eff)
+                assign_metric("SrcB Write Actual Efficiency", srcb_write_eff)
+
+                # Fidelity analysis
+                assign_metric("HiFi4 Instrn Rate", hifi4_rate)
+                assign_metric("Fidelity Phase Overhead", fidelity_overhead)
+
+                # Packer engine granularity
+                assign_metric("Packer Engine 0 Util", packer_engine_0_util)
+                assign_metric("Packer Engine 1 Util", packer_engine_1_util)
+                assign_metric("Packer Engine 2 Util", packer_engine_2_util)
+
+                # Low priority waits
+                assign_metric("MMIO Idle Wait T0", mmio_wait)
+                assign_metric("SFPU Idle Wait T1", sfpu_wait)
+                assign_metric("THCON Idle Wait T0", thcon_wait)
+                assign_metric("MOVE Idle Wait T0", move_wait)
+                assign_metric("RISC Core L1 Util", risc_core_util)
 
         if perf_counter_df is not None and not perf_counter_df.empty:
             print_efficiency_metrics_summary(pd.DataFrame(host_ops_by_device[device]), device)
@@ -2009,6 +2273,93 @@ def get_device_data_generate_report(
                         axis=1,
                     )
 
+                    # === NEW: Per-type instruction issue efficiency ===
+                    def safe_ratio(num_key, den_key):
+                        def fn(x):
+                            n = x.get(num_key, 0)
+                            d = x.get(den_key, 0)
+                            return (n / d * 100) if d > 0 else nan
+                        return fn
+
+                    def safe_complement(counter_key, total_key):
+                        def fn(x):
+                            v = x.get(counter_key, 0)
+                            t = x.get(total_key, 0)
+                            return max(0.0, (t - v) / t * 100) if t > 0 else nan
+                        return fn
+
+                    def safe_util(counter_key, ref_key):
+                        def fn(x):
+                            v = x.get(counter_key, 0)
+                            r = x.get(ref_key, 0)
+                            return (v / r * 100) if r > 0 else nan
+                        return fn
+
+                    # Instruction availability rate = cycles available / ref_cnt * 100
+                    # Shows what % of time each instruction type was ready to issue
+                    eff_pivot["CFG Instrn Avail Rate T0"] = eff_pivot.apply(
+                        safe_util("value_CFG_INSTRN_AVAILABLE_0", "ref_cnt_CFG_INSTRN_AVAILABLE_0"), axis=1)
+                    eff_pivot["SYNC Instrn Avail Rate T0"] = eff_pivot.apply(
+                        safe_util("value_SYNC_INSTRN_AVAILABLE_0", "ref_cnt_SYNC_INSTRN_AVAILABLE_0"), axis=1)
+                    eff_pivot["THCON Instrn Avail Rate T0"] = eff_pivot.apply(
+                        safe_util("value_THCON_INSTRN_AVAILABLE_0", "ref_cnt_THCON_INSTRN_AVAILABLE_0"), axis=1)
+                    eff_pivot["MOVE Instrn Avail Rate T0"] = eff_pivot.apply(
+                        safe_util("value_MOVE_INSTRN_AVAILABLE_0", "ref_cnt_MOVE_INSTRN_AVAILABLE_0"), axis=1)
+                    eff_pivot["MATH Instrn Avail Rate T1"] = eff_pivot.apply(
+                        safe_util("value_FPU_INSTRN_AVAILABLE_1", "ref_cnt_FPU_INSTRN_AVAILABLE_1"), axis=1)
+                    eff_pivot["UNPACK Instrn Avail Rate T0"] = eff_pivot.apply(
+                        safe_util("value_UNPACK_INSTRN_AVAILABLE_0", "ref_cnt_UNPACK_INSTRN_AVAILABLE_0"), axis=1)
+                    eff_pivot["PACK Instrn Avail Rate T2"] = eff_pivot.apply(
+                        safe_util("value_PACK_INSTRN_AVAILABLE_2", "ref_cnt_PACK_INSTRN_AVAILABLE_2"), axis=1)
+
+                    # Stall breakdown (% of total stalls per thread)
+                    eff_pivot["THCON Idle Stall Pct T0"] = eff_pivot.apply(
+                        safe_ratio("value_WAITING_FOR_THCON_IDLE_0", "value_THREAD_STALLS_0"), axis=1)
+                    eff_pivot["MOVE Idle Stall Pct T0"] = eff_pivot.apply(
+                        safe_ratio("value_WAITING_FOR_MOVE_IDLE_0", "value_THREAD_STALLS_0"), axis=1)
+                    eff_pivot["MMIO Idle Stall Pct T1"] = eff_pivot.apply(
+                        safe_ratio("value_WAITING_FOR_MMIO_IDLE_1", "value_THREAD_STALLS_1"), axis=1)
+                    eff_pivot["SFPU Idle Stall Pct T1"] = eff_pivot.apply(
+                        safe_ratio("value_WAITING_FOR_SFPU_IDLE_1", "value_THREAD_STALLS_1"), axis=1)
+
+                    # Write port blocking
+                    eff_pivot["SrcB Write Port Blocked Rate"] = eff_pivot.apply(
+                        safe_complement("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"), axis=1)
+                    eff_pivot["SrcA Write Actual Efficiency"] = eff_pivot.apply(
+                        safe_ratio("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"), axis=1)
+                    eff_pivot["SrcB Write Actual Efficiency"] = eff_pivot.apply(
+                        safe_ratio("value_SRCB_WRITE_ACTUAL", "value_SRCB_WRITE_AVAILABLE"), axis=1)
+
+                    # Fidelity analysis
+                    def hifi4_rate_fn(x):
+                        total = x.get("value_MATH_INSTRN_STARTED", 0)
+                        hf2 = x.get("value_INSTRN_2_HF_CYCLES", 0)
+                        hf1 = x.get("value_INSTRN_1_HF_CYCLE", 0)
+                        return max(0.0, (total - hf2 - hf1) / total * 100) if total > 0 else nan
+                    eff_pivot["HiFi4 Instrn Rate"] = eff_pivot.apply(hifi4_rate_fn, axis=1)
+                    eff_pivot["Fidelity Phase Overhead"] = eff_pivot.apply(
+                        safe_util("value_FIDELITY_PHASE_STALLS", "ref_cnt_FIDELITY_PHASE_STALLS"), axis=1)
+
+                    # Packer engine granularity
+                    eff_pivot["Packer Engine 0 Util"] = eff_pivot.apply(
+                        safe_util("value_PACKER_BUSY_0", "ref_cnt_PACKER_BUSY_0"), axis=1)
+                    eff_pivot["Packer Engine 1 Util"] = eff_pivot.apply(
+                        safe_util("value_PACKER_BUSY_1", "ref_cnt_PACKER_BUSY_1"), axis=1)
+                    eff_pivot["Packer Engine 2 Util"] = eff_pivot.apply(
+                        safe_util("value_PACKER_BUSY_2", "ref_cnt_PACKER_BUSY_2"), axis=1)
+
+                    # Low priority waits
+                    eff_pivot["MMIO Idle Wait T0"] = eff_pivot.apply(
+                        safe_util("value_WAITING_FOR_MMIO_IDLE_0", "ref_cnt_WAITING_FOR_MMIO_IDLE_0"), axis=1)
+                    eff_pivot["SFPU Idle Wait T1"] = eff_pivot.apply(
+                        safe_util("value_WAITING_FOR_SFPU_IDLE_1", "ref_cnt_WAITING_FOR_SFPU_IDLE_1"), axis=1)
+                    eff_pivot["THCON Idle Wait T0"] = eff_pivot.apply(
+                        safe_util("value_WAITING_FOR_THCON_IDLE_0", "ref_cnt_WAITING_FOR_THCON_IDLE_0"), axis=1)
+                    eff_pivot["MOVE Idle Wait T0"] = eff_pivot.apply(
+                        safe_util("value_WAITING_FOR_MOVE_IDLE_0", "ref_cnt_WAITING_FOR_MOVE_IDLE_0"), axis=1)
+                    eff_pivot["RISC Core L1 Util"] = eff_pivot.apply(
+                        safe_util("value_L1_1_RISC_CORE", "ref_cnt_L1_1_RISC_CORE"), axis=1)
+
                     # Aggregate metrics per operation (min, median, max, avg)
                     grouped_eff = eff_pivot.groupby(["run_host_id", "trace_id_count"])
 
@@ -2063,6 +2414,31 @@ def get_device_data_generate_report(
                         "Dest Read Backpressure",
                         "Math Dest Write Port Stall Rate",
                         "Math Scoreboard Stall Rate",
+                        # NEW metrics
+                        "CFG Instrn Avail Rate T0",
+                        "SYNC Instrn Avail Rate T0",
+                        "THCON Instrn Avail Rate T0",
+                        "MOVE Instrn Avail Rate T0",
+                        "MATH Instrn Avail Rate T1",
+                        "UNPACK Instrn Avail Rate T0",
+                        "PACK Instrn Avail Rate T2",
+                        "THCON Idle Stall Pct T0",
+                        "MOVE Idle Stall Pct T0",
+                        "MMIO Idle Stall Pct T1",
+                        "SFPU Idle Stall Pct T1",
+                        "SrcB Write Port Blocked Rate",
+                        "SrcA Write Actual Efficiency",
+                        "SrcB Write Actual Efficiency",
+                        "HiFi4 Instrn Rate",
+                        "Fidelity Phase Overhead",
+                        "Packer Engine 0 Util",
+                        "Packer Engine 1 Util",
+                        "Packer Engine 2 Util",
+                        "MMIO Idle Wait T0",
+                        "SFPU Idle Wait T1",
+                        "THCON Idle Wait T0",
+                        "MOVE Idle Wait T0",
+                        "RISC Core L1 Util",
                     ]
                     # Non-percentage metrics (raw rates)
                     _ipc_metric_names = [
