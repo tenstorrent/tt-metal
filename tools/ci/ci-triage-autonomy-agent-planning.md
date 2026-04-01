@@ -127,8 +127,20 @@ These invariants must always hold:
 8. During bootstrap testing, both `{{SLACK_READ_CHANNEL_ID}}` and `{{SLACK_NOTIFY_CHANNEL_ID_TEST}}` must resolve to `C0APK6215B5`.
 9. Automated GitHub commands must be executed via `tools/ci/guarded_gh.py` only.
 10. Any new disable added to code must include a nearby non-closing issue reference comment linking the incident ticket.
+11. Token efficiency is a first-class constraint: minimize model calls and prompt size, prefer deterministic scripts for orchestration, and avoid repeated agent invocations when one structured pass is sufficient.
 
 Violation of any invariant is a release blocker.
+
+### 5.1 Token Efficiency Execution Rules
+
+To keep runtime cost bounded for both local implementation and CI:
+
+- default to deterministic Python/shell logic for control flow, validation, and formatting
+- call agent models only for tasks that require semantic judgment or code synthesis
+- prefer one batched agent decision over many per-item agent calls when output contracts allow
+- reuse cached decisions/state artifacts when inputs are unchanged
+- avoid passing large raw logs/threads inline when file-path based retrieval is available
+- if an additional agent call is not likely to change the decision quality, skip it and escalate deterministically
 
 ---
 
