@@ -34,7 +34,6 @@ from ttnn.distributed.ttrun import (
     write_phase1_cache_key_file,
     read_stored_phase1_cache_key,
     PHASE2_MOCK_MAPPING_FILENAME,
-    PHASE1_CACHE_KEY_FILENAME,
     PHASE1_CACHE_ID_HEX_LEN,
 )
 
@@ -124,13 +123,82 @@ class TestCommandLineArguments:
         assert result.exit_code != 0
         assert "--hosts is required" in result.output.lower()
 
-    def test_new_mode_with_hosts(self, runner, sample_mesh_graph_descriptor):
-        """Test that new mode accepts --hosts and attempts Phase 1."""
+    def test_hosts_rejects_duplicates(self, runner, sample_mesh_graph_descriptor):
+        """Duplicate hostnames in --hosts are rejected."""
+        result = runner.invoke(
+            main,
+            [
+                "--mesh-graph-descriptor",
+                str(sample_mesh_graph_descriptor),
+                "--hosts",
+                "node1,node2,node1",
+                "--dry-run",
+                "echo",
+                "test",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "duplicate" in result.output.lower()
+
+    def test_hosts_all_empty_segments_rejected(self, runner, sample_mesh_graph_descriptor):
+        """--hosts with only commas / empty entries is rejected."""
+        result = runner.invoke(
+            main,
+            [
+                "--mesh-graph-descriptor",
+                str(sample_mesh_graph_descriptor),
+                "--hosts",
+                ",,,",
+                "--dry-run",
+                "echo",
+                "test",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "no valid hostname" in result.output.lower()
+
+    def test_hosts_rejects_embedded_spaces(self, runner, sample_mesh_graph_descriptor):
+        """Host tokens must not contain spaces."""
+        result = runner.invoke(
+            main,
+            [
+                "--mesh-graph-descriptor",
+                str(sample_mesh_graph_descriptor),
+                "--hosts",
+                "node1,node 2",
+                "--dry-run",
+                "echo",
+                "test",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "space" in result.output.lower()
+
+    def test_hosts_empty_segments_between_commas_ok(self, runner, sample_mesh_graph_descriptor):
+        """Extra commas act as empty segments and are ignored."""
         import subprocess
 
-        # Mock subprocess.run to avoid actually running MPI
         with patch.object(subprocess, "run") as mock_run:
-            # Mock Phase 1 failure (executable not found) - this is expected in test env
+            result = runner.invoke(
+                main,
+                [
+                    "--mesh-graph-descriptor",
+                    str(sample_mesh_graph_descriptor),
+                    "--hosts",
+                    "node1,,node2",
+                    "--dry-run",
+                    "echo",
+                    "test",
+                ],
+            )
+        assert result.exit_code == 0
+        mock_run.assert_not_called()
+
+    def test_new_mode_with_hosts(self, runner, sample_mesh_graph_descriptor):
+        """New mode with --hosts and --dry-run: Phase 1 must not invoke subprocess.run."""
+        import subprocess
+
+        with patch.object(subprocess, "run") as mock_run:
             mock_run.side_effect = FileNotFoundError("generate_rank_bindings not found")
 
             result = runner.invoke(
@@ -145,8 +213,8 @@ class TestCommandLineArguments:
                     "test",
                 ],
             )
-            assert result.exit_code != 0
-            assert "--hosts is required" not in result.output.lower()
+            assert result.exit_code == 0
+            mock_run.assert_not_called()
 
     def test_new_mode_with_mock_cluster_no_hosts(self, runner, sample_mesh_graph_descriptor, temp_dir):
         """Test that new mode doesn't require --hosts when --mock-cluster-rank-binding is provided."""
@@ -169,9 +237,8 @@ class TestCommandLineArguments:
         with open(mock_file, "w") as f:
             yaml.dump(mock_data, f)
 
-        # Mock subprocess.run to avoid actually running MPI
+        # Mock subprocess.run; --dry-run skips Phase 1 so MPI is never invoked.
         with patch.object(subprocess, "run") as mock_run:
-            # Mock Phase 1 failure (executable not found) - this is expected in test env
             mock_run.side_effect = FileNotFoundError("generate_rank_bindings not found")
 
             result = runner.invoke(
@@ -186,8 +253,8 @@ class TestCommandLineArguments:
                     "test",
                 ],
             )
-            assert result.exit_code != 0
-            assert "--hosts is required" not in result.output.lower()
+            assert result.exit_code == 0
+            mock_run.assert_not_called()
 
 
 class TestPhase2Helpers:
@@ -772,7 +839,6 @@ class TestNewModeFlow:
                     str(mgd_path),
                     "--hosts",
                     "node1,node2",
-                    "--dry-run",
                     "echo",
                     "test",
                 ],
@@ -877,7 +943,6 @@ class TestNewModeFlow:
                     "--hosts",
                     "node1,node2",
                     "--force-rediscovery",
-                    "--dry-run",
                     "echo",
                     "test",
                 ],
@@ -930,7 +995,6 @@ class TestNewModeFlow:
                     str(mgd_path),
                     "--mock-cluster-rank-binding",
                     str(mock_binding_file),
-                    "--dry-run",
                     "echo",
                     "test",
                 ],
