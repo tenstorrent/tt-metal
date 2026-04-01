@@ -119,7 +119,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             "expert_mapping_tensors": expert_mapping_tensors,
             "remap_topk_mask": remap_topk_mask,
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "moe_gate": MoEGate.create_shared_state(mesh_device),
+            "moe_gate": MoEGate.create_shared_state(hf_config, mesh_device),
         }
 
     @classmethod

@@ -126,7 +126,7 @@ def test_forward_pass(
     model_config = get_model_config(MoEGate, mode, hf_config, mesh_device)
 
     # Create a new model state
-    model_state = MoEGate.create_shared_state(mesh_device)
+    model_state = MoEGate.create_shared_state(hf_config, mesh_device)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -193,50 +193,9 @@ def test_forward_pass(
     topk_weights_pcc_required = 0.99
     passing, pcc_message = comp_pcc(ref_sorted_weights, tt_sorted_weights, topk_weights_pcc_required)
 
-    def count_different_indices_vectorized(ref_weights, ref_indices, tt_weights, tt_indices, rtol=1e-5, atol=1e-8):
-        """
-        Compute the number of different TopK indices while considering tie-breaking.
-
-        Args:
-            ref_weights (torch.Tensor): Reference weights [B, K], assumed sorted in descending order.
-            ref_indices (torch.Tensor): Reference indices [B, K], aligned with weights.
-            tt_weights (torch.Tensor): Target weights [B, K], assumed sorted in descending order.
-            tt_indices (torch.Tensor): Target indices [B, K], aligned with weights.
-            rtol (float): Relative tolerance for considering weights as tied.
-            atol (float): Absolute tolerance for considering weights as tied.
-
-        Returns:
-            total_diff (int): Total number of positions where indices differ, considering tie-breaking.
-            total_positions (int): Total number of positions (B*K).
-            accuracy (float): Fraction of positions that match (tie-aware TopK accuracy).
-        """
-        B, K = ref_weights.shape
-        total_positions = B * K
-        total_diff = 0
-
-        # Compute tie mask: True where adjacent weights are considered equal
-        close_mask = torch.isclose(ref_weights[:, 1:], ref_weights[:, :-1], rtol=rtol, atol=atol)
-
-        # Pad with False to mark the end of last group
-        padded_mask = torch.cat([close_mask, torch.zeros((B, 1), dtype=torch.bool, device=ref_weights.device)], dim=1)
-
-        # Loop over each row (batch) and count differences per tie group
-        for i in range(B):
-            start = 0
-            for j in range(K):
-                if not padded_mask[i, j]:
-                    # Current tie group: indices from start to j (inclusive)
-                    ref_set = set(ref_indices[i, start : j + 1].tolist())
-                    tt_set = set(tt_indices[i, start : j + 1].tolist())
-                    total_diff += len(ref_set - tt_set)  # count positions in ref not in tt
-                    start = j + 1
-
-        accuracy = 1 - total_diff / total_positions
-        return total_diff, total_positions, accuracy
-
-    total_diff, total_positions, accuracy = count_different_indices_vectorized(
-        ref_sorted_weights, ref_sorted_indices, tt_sorted_weights, tt_sorted_indices
-    )
+    # due to tie breaking, the first 2 indices are the most important
+    topk_indices_accuracy_required = 1 if mode == "decode" else 0.92
+    accuracy = tt_sorted_indices[:, :2].eq(ref_sorted_indices[:, :2]).float().mean()
 
     logger.info(f"TopK experts weights PCC: {pcc_message}")
     logger.info(f"TopK experts indices accuracy: {accuracy}")
@@ -244,7 +203,7 @@ def test_forward_pass(
         passing
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
-    assert accuracy >= 0.59, f"TopK experts indices output does not match: {accuracy}"
+    assert accuracy >= topk_indices_accuracy_required, f"TopK experts indices output does not match: {accuracy}"
     # due to tie breaking, we cannot guarantee all the indices are the same as the pytorch version
 
 
