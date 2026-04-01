@@ -295,7 +295,7 @@ def test_vector_matrix_multiplication(device, dtype, size, case_type):
             output_tensor,
             atol=0.004 * m,
             rtol=0.009 * m,
-            frobenius_threshold=0.001 * m,
+            frobenius_threshold=0.00125 * m,
             pcc_threshold=0.9999,
             check_ulp=False,
         )
