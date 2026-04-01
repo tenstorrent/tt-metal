@@ -1,0 +1,96 @@
+name: Auto-approve SFPI version bump
+
+# Fires on every PR open/update. The job itself guards with author + file checks.
+#
+# Security note: pull_request_target runs with write access to the base repo
+# even for fork PRs. We mitigate this by:
+#   1. Only acting on PRs from the known SFPI author (nathan-TT)
+#   2. Verifying the PR touches ONLY the allowed SFPI files via API — no code checkout
+#   3. Never executing any code from the PR branch
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  auto-approve-sfpi:
+    name: Auto-approve SFPI bump
+    runs-on: ubuntu-latest
+    # Fast-exit: only run for nathan-TT non-draft PRs
+    if: |
+      github.event.pull_request.user.login == 'nathan-TT' &&
+      !github.event.pull_request.draft
+    steps:
+      - name: Verify only SFPI files are changed
+        id: verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Fetch changed files via API (no code checkout needed)
+          FILES=$(gh api "repos/tenstorrent/tt-metal/pulls/${PR_NUMBER}/files" \
+            --jq '.[].filename')
+
+          echo "Changed files in PR #${PR_NUMBER}:"
+          echo "$FILES"
+
+          # Allowed files for SFPI version bumps.
+          # Add to this list only when the SFPI bump scope genuinely expands.
+          ALLOWED=(
+            "tt_metal/sfpi-version"
+            "tt_metal/sfpi-info.sh"
+          )
+
+          SAFE=true
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            match=false
+            for allowed in "${ALLOWED[@]}"; do
+              if [[ "$file" == "$allowed" ]]; then
+                match=true
+                break
+              fi
+            done
+            if [[ "$match" == "false" ]]; then
+              echo "FAIL: Unexpected file not in SFPI allowlist: $file"
+              SAFE=false
+            fi
+          done <<< "$FILES"
+
+          if [[ "$SAFE" == "true" ]]; then
+            echo "All changed files are in the SFPI allowlist — safe to auto-approve."
+            echo "safe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "PR contains files outside the SFPI allowlist — skipping auto-approve."
+            echo "safe=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Approve PR
+        if: steps.verify.outputs.safe == 'true'
+        env:
+          # Must be a token for an account in tenstorrent/codeowner-bypass.
+          # See repo Settings → Secrets → SFPI_AUTO_APPROVE_PAT.
+          GH_TOKEN: ${{ secrets.SFPI_AUTO_APPROVE_PAT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr review "$PR_NUMBER" \
+            --repo tenstorrent/tt-metal \
+            --approve \
+            --body "🤖 Auto-approved: SFPI version bump from @nathan-TT (component author). Only tt_metal/sfpi-version was modified."
+
+      - name: Enable auto-merge
+        if: steps.verify.outputs.safe == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SFPI_AUTO_APPROVE_PAT }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Enables auto-merge: GitHub will merge automatically once all required
+          # status checks pass and the merge queue processes the PR.
+          gh pr merge "$PR_NUMBER" \
+            --repo tenstorrent/tt-metal \
+            --auto \
+            --squash || true  # Non-fatal: PR may already have auto-merge enabled
