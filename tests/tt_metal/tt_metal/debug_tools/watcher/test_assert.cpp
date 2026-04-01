@@ -191,7 +191,6 @@ static void RunTest(
         case 7: hw_fault_info = 0xffffffffff000000; break;
         default: hw_fault_info = 0; break;
     }
-    log_critical(LogTest, "hw_fault_info: 0x{:x}, hw_assert_cause: 0x{:x}", hw_fault_info, hw_assert_cause);
     const std::string msg = get_debug_assert_message(
         assert_type,
         0,
