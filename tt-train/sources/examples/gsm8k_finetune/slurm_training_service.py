@@ -759,7 +759,7 @@ def list_jobs():
 # Capabilities: what the server/demo actually supports (dashboard should restrict or warn)
 SUPPORTED_TRAINERS = get_supported_trainers()
 SUPPORTED_OPTIMIZERS = {"adamw"}
-SUPPORTED_DATASETS = {"gsm8k"}  # others work in gsm8k_finetune but less tested
+SUPPORTED_DATASETS = {"gsm8k", "shakespeare"}  # others work in gsm8k_finetune but less tested
 
 
 @app.get("/v1/catalog")
@@ -776,6 +776,8 @@ def catalog():
         "tinyllama": "TinyLlama 1.1B",
         "gpt2": "GPT-2",
         "llama8b": "Llama 3.1 8B",
+        "llama70b": "Llama 3.1 70B",
+        "llama405b": "Llama 3.1 405B",
     }
 
     # Get model configs from registry (they already have proper TT_METAL_RUNTIME_ROOT paths)
@@ -794,7 +796,7 @@ def catalog():
         )
 
         # Mark smaller models as supported by default, larger ones may need more resources
-        is_supported = model_id in {"tinyllama", "gpt2"}
+        is_supported = model_id in {"tinyllama", "gpt2", "llama8b", "llama70b", "llama405b"}
 
         models.append(
             {
@@ -842,6 +844,7 @@ def catalog():
         "models": models,
         "datasets": [
             {"id": "gsm8k", "display_name": "GSM8K", "supported": True},
+            {"id": "shakespeare", "display_name": "Shakespeare", "supported": True},
             {"id": "math_qa", "display_name": "Math QA", "supported": True},
             {"id": "aqua_rat", "display_name": "AQuA-RAT", "supported": True},
             {"id": "svamp", "display_name": "SVAMP", "supported": True},

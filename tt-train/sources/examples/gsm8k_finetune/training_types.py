@@ -306,6 +306,8 @@ def _get_model_to_config_mapping():
         "tinyllama": f"{tt_train_root}/configs/model_configs/tinyllama.yaml",
         "gpt2": f"{tt_train_root}/configs/model_configs/gpt2s.yaml",
         "llama8b": f"{tt_train_root}/configs/model_configs/llama8b.yaml",
+        "llama70b": f"{tt_train_root}/configs/model_configs/llama70b_tp32.yaml",
+        "llama405b": f"{tt_train_root}/configs/model_configs/llama405b.yaml",
     }
 
 
@@ -317,7 +319,7 @@ sft_training_config = TrainingTypeConfig(
     name="sft",
     script_path="gsm8k_finetune/gsm8k_finetune.py",
     model_configs=_get_model_to_config_mapping(),
-    supported_models={"tinyllama", "gpt2", "llama8b"},
+    supported_models={"tinyllama", "gpt2"},
     param_validator=validate_sft_params,
     config_builder=build_sft_config,
 )
@@ -327,7 +329,7 @@ lora_training_config = TrainingTypeConfig(
     name="lora",
     script_path="gsm8k_finetune/gsm8k_finetune.py",
     model_configs=_get_model_to_config_mapping(),
-    supported_models={"tinyllama", "gpt2", "llama8b"},
+    supported_models={"tinyllama", "gpt2"},
     param_validator=validate_lora_params,
     config_builder=build_lora_config,
 )
@@ -356,8 +358,8 @@ def _build_pretrain_run_command() -> str:
 pretrain_training_config = TrainingTypeConfig(
     name="pretrain",
     script_path="python/multihost/pipeline_parallel_training/training.py",
-    model_configs={},
-    supported_models=set(),
+    model_configs=_get_model_to_config_mapping(),
+    supported_models={"llama8b", "llama70b", "llama405b"},
     param_validator=validate_pretrain_params,
     config_builder=build_pretrain_config,
     run_command_override=_build_pretrain_run_command(),
