@@ -911,7 +911,7 @@ jobs:
           items = data.get('include', [])
           def hw_matrix(groups):
               hw_items = [x for x in items if x.get('test_group_name', '') in groups]
-              return json.dumps({'include': hw_items})
+              return json.dumps({'include': hw_items}, separators=(',', ':'))
           print('n150-matrix=' + hw_matrix(['wormhole-n150-sweeps', 'lead-models-single-chip']))
           print('n300-matrix=' + hw_matrix(['wormhole-n300-sweeps', 'n300-llmbox-ccl']))
           print('p150b-matrix=' + hw_matrix(['blackhole-p150b-sweeps']))
@@ -1185,7 +1185,6 @@ jobs:
       - ttnn-sweeps-galaxy
     if: |
       !cancelled() &&
-      !contains(needs.*.result, 'failure') &&
       (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'success')
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
