@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -543,26 +544,28 @@ class NormalRun:
     @staticmethod
     def to_torch(self):
         """Convert to PyTorch tensor."""
-        if self.elem is not None and self.elem.device.type != "meta" and self.ttnn_tensor is None:
-            return self.elem
 
-        def _to_torch(self):
+        def _to_torch_from_device(self):
             is_mesh_device = self.ttnn_distributed_tensor_config is not None
             if is_mesh_device:
-                result = ttnn.to_torch(
+                return ttnn.to_torch(
                     self.ttnn_tensor, mesh_composer=self.ttnn_distributed_tensor_config.mesh_composer
                 ).to(self.device, self.dtype)
-            else:
-                result = ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
-            return result
+            return ttnn.to_torch(self.ttnn_tensor).to(self.device, self.dtype)
 
-        result = self.elem
-        if self.ttnn_tensor is not None and self.elem is None:
-            result = _to_torch(self)
-        assert result is not None, "Both ttnn_tensor and elem are None. This should not happen."
-        if result.device.type == "meta" and self.ttnn_tensor is not None:
-            result = _to_torch(self)
-        self.elem = result if self.elem is None else self.elem
+        if self.ttnn_tensor is None:
+            assert self.elem is not None, "Both ttnn_tensor and elem are None. This should not happen."
+            return self.elem
+
+        need_refresh = self.elem is None or self.elem.device.type == "meta"
+        if not need_refresh and self.ttnn_distributed_tensor_config is not None:
+            logical_shape = self.ttnn_distributed_tensor_config.get_logical_shape(
+                tuple(int(x) for x in self.ttnn_tensor.shape)
+            )
+            need_refresh = self.elem.numel() != math.prod(logical_shape)
+
+        if need_refresh:
+            self.elem = _to_torch_from_device(self)
         return self.elem
 
     @staticmethod
