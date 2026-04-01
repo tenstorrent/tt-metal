@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -15,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.ci.thread_signal_analysis import classify_thread_progress, detect_dev_fix_request
+from tools.ci.slack_thread_agent_analysis import analyze_thread_with_agent
 
 NON_ACTIONABLE_SUBTYPES = {
     "channel_join",
@@ -78,6 +79,8 @@ def main() -> int:
     payload = json.loads(src.read_text(encoding="utf-8"))
     messages = payload.get("messages", [])
 
+    analysis_model = str(os.environ.get("SLACK_THREAD_ANALYSIS_MODEL", "auto")).strip() or "auto"
+
     candidates: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     for msg in messages:
@@ -109,16 +112,27 @@ def main() -> int:
             continue
 
         thread_replies = message_replies(msg)
-        progress = classify_thread_progress(
-            top_level_text=str(msg.get("text", "")),
-            thread_replies=thread_replies,
-            now_unix=now,
-            hold_hours_after_progress=args.hold_hours_after_progress,
-        )
-        fix_request = detect_dev_fix_request(
-            top_level_text=str(msg.get("text", "")),
-            thread_replies=thread_replies,
-        )
+        try:
+            analysis = analyze_thread_with_agent(
+                top_level_text=str(msg.get("text", "")),
+                thread_replies=thread_replies,
+                hold_hours_after_progress=args.hold_hours_after_progress,
+                include_owner_claim=False,
+                model=analysis_model,
+            )
+        except Exception as exc:
+            skipped.append({"ts": ts, "reason": f"agent_thread_analysis_failed:{exc}"})
+            continue
+        progress = {
+            "progress_state": analysis.get("progress_state", "no_progress"),
+            "confidence": analysis.get("confidence", "low"),
+            "defer_disable": bool(analysis.get("defer_disable", False)),
+            "reason": analysis.get("progress_reason", "unspecified"),
+        }
+        fix_request = {
+            "requested": bool(analysis.get("fix_request_requested", False)),
+            "reason": analysis.get("fix_request_reason", "unspecified"),
+        }
         if bool(progress.get("defer_disable", False)):
             skipped.append(
                 {

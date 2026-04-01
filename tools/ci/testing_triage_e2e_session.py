@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.ci.thread_signal_analysis import classify_thread_progress, detect_dev_fix_request
+from tools.ci.slack_thread_agent_analysis import analyze_thread_with_agent
 
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 ISSUE_URL_RE = re.compile(r"https://github\.com/ebanerjeeTT/issue_dump/issues/(\d+)")
@@ -113,6 +113,29 @@ def parse_issue_number(text: str) -> int:
     return int(m.group(1))
 
 
+def parse_codeowners_logins(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        for tok in line.split()[1:]:
+            if not tok.startswith("@"):
+                continue
+            login = tok[1:].strip()
+            if not login or "/" in login:
+                continue
+            low = login.lower()
+            if low in seen:
+                continue
+            seen.add(low)
+            out.append(login)
+    return out
+
+
 def find_real_issue_threads(messages: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     threads: list[dict[str, Any]] = []
     for msg in messages:
@@ -136,22 +159,24 @@ def find_real_issue_threads(messages: list[dict[str, Any]], limit: int) -> list[
     return threads
 
 
-def choose_mock_dev_reply(idx: int) -> str:
+def choose_mock_dev_reply(idx: int, github_login: str) -> str:
     options = [
-        "Testing-mode mock dev reply: Looking now, I will post PR in 2 hours.",
-        "Testing-mode mock dev reply: Can agent fix this and draft a fix PR if possible?",
-        "Testing-mode mock dev reply: Blocked on infra/hardware dependency.",
-        "Testing-mode mock dev reply: Should be fixed by https://github.com/tenstorrent/tt-metal/pull/12346; please verify.",
+        f"Testing-mode mock dev reply from @{github_login}: looking now, I will post PR in 2 hours.",
+        f"Testing-mode mock dev reply from @{github_login}: can agent fix this and draft a fix PR if possible?",
+        f"Testing-mode mock dev reply from @{github_login}: blocked on infra/hardware dependency.",
+        f"Testing-mode mock dev reply from @{github_login}: should be fixed by https://github.com/tenstorrent/tt-metal/pull/12346; please verify.",
     ]
     return options[idx % len(options)]
 
 
-def build_bot_response(*, issue_number: int, progress: dict[str, Any], fix_request: dict[str, Any]) -> str:
+def build_bot_response(
+    *, issue_number: int, progress: dict[str, Any], fix_request: dict[str, Any], mock_github_owner: str
+) -> str:
     mock_pr = f"https://github.com/ebanerjeeTT/tt-metal/pull/mock-{issue_number}"
     if fix_request.get("requested"):
         return (
             "Testing-mode bot response: fix request detected in thread. "
-            f"Mock draft PR: {mock_pr} | Mock assignment note: issue #{issue_number} assigned for bot-proposed patch review."
+            f"Mock draft PR: {mock_pr} | Mock assignment note: would assign issue #{issue_number} to @{mock_github_owner}."
         )
     if bool(progress.get("defer_disable", False)):
         return (
@@ -197,6 +222,9 @@ def main() -> int:
     github_token = require_env("GITHUB_TOKEN")
     messages = read_channel_messages(slack_token, args.slack_channel_id, limit=160)
     threads = find_real_issue_threads(messages, args.max_threads)
+    mock_devs = parse_codeowners_logins(Path(".github/CODEOWNERS"))
+    if not mock_devs:
+        mock_devs = ["ebanerjeeTT"]
 
     results: list[dict[str, Any]] = []
     mock_dev_reply_count = 0
@@ -206,7 +234,8 @@ def main() -> int:
         if not issue_exists(github_token, issue_number):
             continue
         thread_ts = str(thread["thread_ts"])
-        mock_reply = choose_mock_dev_reply(idx)
+        mock_dev_login = mock_devs[idx % len(mock_devs)]
+        mock_reply = choose_mock_dev_reply(idx, mock_dev_login)
         mock_ts = post_thread_message(
             token=slack_token,
             channel=args.slack_channel_id,
@@ -216,15 +245,23 @@ def main() -> int:
         mock_dev_reply_count += 1
         thread_messages = read_thread_messages(slack_token, args.slack_channel_id, thread_ts)
         thread_replies = [m for m in thread_messages if str(m.get("ts", "")).strip() != thread_ts]
-        progress = classify_thread_progress(
+        analysis = analyze_thread_with_agent(
             top_level_text=thread["top_text"],
             thread_replies=thread_replies,
+            include_owner_claim=False,
+            model="auto",
         )
-        fix_request = detect_dev_fix_request(
-            top_level_text=thread["top_text"],
-            thread_replies=thread_replies,
+        progress = {
+            "progress_state": analysis.get("progress_state", "no_progress"),
+            "defer_disable": bool(analysis.get("defer_disable", False)),
+        }
+        fix_request = {"requested": bool(analysis.get("fix_request_requested", False))}
+        bot_text = build_bot_response(
+            issue_number=issue_number,
+            progress=progress,
+            fix_request=fix_request,
+            mock_github_owner=mock_dev_login,
         )
-        bot_text = build_bot_response(issue_number=issue_number, progress=progress, fix_request=fix_request)
         bot_ts = post_thread_message(
             token=slack_token,
             channel=args.slack_channel_id,
@@ -245,6 +282,7 @@ def main() -> int:
                 "defer_disable": bool(progress.get("defer_disable", False)),
                 "fix_request_requested": bool(fix_request.get("requested", False)),
                 "thread_message_count_after": len(thread_messages_after),
+                "mock_dev_login": mock_dev_login,
             }
         )
 

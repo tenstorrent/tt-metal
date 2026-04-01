@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.ci.thread_signal_analysis import classify_thread_progress, detect_dev_fix_request
+from tools.ci.slack_thread_agent_analysis import analyze_thread_with_agent
 
 
 def parse_args() -> argparse.Namespace:
@@ -101,21 +101,22 @@ def main() -> int:
     outputs: list[dict[str, Any]] = []
     for name, text in scenarios:
         ts = post_message(token=token, channel=args.slack_channel_id, text=text, thread_ts=anchor_ts)
-        progress = classify_thread_progress(
+        analysis = analyze_thread_with_agent(
             top_level_text=anchor_text,
             thread_replies=[{"ts": ts, "text": text}],
+            include_owner_claim=False,
+            model="auto",
         )
-        fix_req = detect_dev_fix_request(top_level_text=anchor_text, thread_replies=[{"ts": ts, "text": text}])
         outputs.append(
             {
                 "name": name,
                 "reply_ts": ts,
                 "reply_text": text,
-                "progress_state": progress.get("progress_state"),
-                "defer_disable": bool(progress.get("defer_disable", False)),
-                "progress_reason": progress.get("reason", ""),
-                "fix_request_requested": bool(fix_req.get("requested", False)),
-                "fix_request_reason": fix_req.get("reason", ""),
+                "progress_state": analysis.get("progress_state"),
+                "defer_disable": bool(analysis.get("defer_disable", False)),
+                "progress_reason": analysis.get("progress_reason", ""),
+                "fix_request_requested": bool(analysis.get("fix_request_requested", False)),
+                "fix_request_reason": analysis.get("fix_request_reason", ""),
             }
         )
 

@@ -878,6 +878,27 @@ jobs:
             exit 1
           fi
 
+      - name: Ensure CURSOR_API_KEY is configured
+        env:
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
+        run: |
+          if [ -z "$CURSOR_API_KEY" ]; then
+            echo "Missing secret EVAN_CURSOR_API_KEY"
+            exit 1
+          fi
+
+      - name: Install Cursor CLI for testing-mode thread analysis
+        run: |
+          set -euo pipefail
+          install_script="$(mktemp)"
+          curl --fail --show-error --silent --location \
+            --proto '=https' --tlsv1.2 \
+            https://cursor.com/install \
+            -o "$install_script"
+          bash "$install_script"
+          rm -f "$install_script"
+          echo "$HOME/.cursor/bin" >> "$GITHUB_PATH"
+
       - name: Run owner-resolution Slack testing session
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
@@ -894,6 +915,7 @@ jobs:
       - name: Run thread persona simulation session
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
         run: |
           set -euo pipefail
           python tools/ci/testing_thread_persona_session.py \
@@ -905,6 +927,7 @@ jobs:
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.EVAN_RESTRICTED_TOKEN }}
+          CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
         run: |
           set -euo pipefail
           python tools/ci/testing_triage_e2e_session.py \

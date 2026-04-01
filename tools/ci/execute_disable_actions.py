@@ -805,6 +805,48 @@ def post_triggered_workflows_comment(pr_url: str, runs: dict[str, str], pr_repo:
     )
 
 
+def post_pr_update_changelog_comment(
+    *,
+    pr_url: str,
+    pr_repo: str,
+    issue_number: int,
+    changed_files: list[str],
+    disable_edit_summary: dict[str, Any],
+) -> None:
+    pr_number = parse_pr_number(pr_url)
+    if pr_number <= 0:
+        return
+    lines = [
+        "Auto-triage incremental update pushed to this draft PR.",
+        "",
+        f"- Linked issue: #{issue_number}",
+        f"- Updated files count: {len(changed_files)}",
+    ]
+    if changed_files:
+        lines.append("- Files changed:")
+        for path in sorted(changed_files)[:20]:
+            lines.append(f"  - `{path}`")
+    scope = str(disable_edit_summary.get("disable_scope", "")).strip()
+    notes = str(disable_edit_summary.get("notes", "")).strip()
+    if scope:
+        lines.append(f"- Disable scope: {scope}")
+    if notes:
+        lines.append(f"- Notes: {notes}")
+    body = "\n".join(lines).strip()
+    run_guarded_gh(
+        [
+            "gh",
+            "pr",
+            "comment",
+            "--repo",
+            pr_repo,
+            str(pr_number),
+            "--body",
+            body,
+        ]
+    )
+
+
 def post_issue_justification_comment(
     *,
     issue_number: int,
@@ -1427,6 +1469,13 @@ def main() -> int:
                 if not push_token:
                     raise RuntimeError("TARGET_PR_PUSH_TOKEN or GITHUB_TOKEN is required for PR branch push")
                 push_branch_with_token(branch, target_pr_repo, push_token)
+                post_pr_update_changelog_comment(
+                    pr_url=active_pr_url,
+                    pr_repo=target_pr_repo,
+                    issue_number=issue_number,
+                    changed_files=changed,
+                    disable_edit_summary=edit_summary if isinstance(edit_summary, dict) else {},
+                )
 
                 rerun_check_runs, rerun_records = dispatch_required_pr_check_workflows(
                     branch,

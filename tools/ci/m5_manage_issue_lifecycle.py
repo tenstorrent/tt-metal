@@ -22,7 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools.ci.thread_signal_analysis import classify_thread_progress, detect_dev_fix_request
+from tools.ci.slack_thread_agent_analysis import analyze_thread_with_agent
 
 ISSUE_REPO_TEST = "ebanerjeeTT/issue_dump"
 SLACK_CHANNEL_TEST = "C0APK6215B5"
@@ -502,6 +502,7 @@ def main() -> int:
     slack_profile_cache: dict[str, dict[str, Any]] = {}
     slack_to_github_cache: dict[str, str | None] = {}
     owner_claim_cache: dict[str, dict[str, Any]] = {}
+    thread_analysis_cache: dict[str, dict[str, Any]] = {}
     m5_agent_model = os.environ.get("M5_AGENT_MODEL", "").strip() or "auto"
 
     output: dict[str, Any] = {
@@ -532,13 +533,46 @@ def main() -> int:
 
         top_text = str(msg.get("text", ""))
         thread_replies = message_replies(msg)
-        progress = classify_thread_progress(
-            top_level_text=top_text,
-            thread_replies=thread_replies,
-            now_unix=now,
-            hold_hours_after_progress=args.progress_hold_hours,
-        )
-        fix_request = detect_dev_fix_request(top_level_text=top_text, thread_replies=thread_replies)
+        thread_fingerprint = hashlib.sha256(
+            json.dumps(
+                [{"ts": r.get("ts"), "user": r.get("user"), "text": r.get("text")} for r in thread_replies[-16:]],
+                sort_keys=True,
+                ensure_ascii=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        analysis_cache_key = f"{ts}:{thread_fingerprint}:progress_fix"
+        analysis = thread_analysis_cache.get(analysis_cache_key)
+        if analysis is None:
+            try:
+                analysis = analyze_thread_with_agent(
+                    top_level_text=top_text,
+                    thread_replies=thread_replies,
+                    bot_user_ids=bot_user_ids,
+                    hold_hours_after_progress=args.progress_hold_hours,
+                    include_owner_claim=False,
+                    model=m5_agent_model,
+                )
+            except Exception as exc:
+                output["notes"].append(f"thread_progress_fix_agent_error_issue_{issue_number}:{exc}")
+                analysis = {
+                    "progress_state": "no_progress",
+                    "confidence": "low",
+                    "defer_disable": False,
+                    "progress_reason": "agent_failed",
+                    "fix_request_requested": False,
+                    "fix_request_reason": "agent_failed",
+                }
+            thread_analysis_cache[analysis_cache_key] = analysis
+        progress = {
+            "progress_state": analysis.get("progress_state", "no_progress"),
+            "confidence": analysis.get("confidence", "low"),
+            "defer_disable": bool(analysis.get("defer_disable", False)),
+            "reason": analysis.get("progress_reason", "unspecified"),
+        }
+        fix_request = {
+            "requested": bool(analysis.get("fix_request_requested", False)),
+            "reason": analysis.get("fix_request_reason", "unspecified"),
+        }
         if fix_request.get("requested"):
             output["fix_requests_detected"].append(
                 {"source_slack_ts": ts, "issue_number": issue_number, "reason": fix_request.get("reason", "")}
@@ -557,13 +591,6 @@ def main() -> int:
 
         assignees = issue_assignees(issue_token, issue_number)
         if not assignees:
-            thread_fingerprint = hashlib.sha256(
-                json.dumps(
-                    [{"ts": r.get("ts"), "user": r.get("user"), "text": r.get("text")} for r in thread_replies[-16:]],
-                    sort_keys=True,
-                    ensure_ascii=True,
-                ).encode("utf-8")
-            ).hexdigest()
             claim_cache_key = f"{ts}:{thread_fingerprint}"
             claim = owner_claim_cache.get(claim_cache_key)
             if claim is None:
@@ -612,9 +639,28 @@ def main() -> int:
                         assignees = [github_login]
                     except Exception as exc:
                         output["notes"].append(f"thread_claim_assignment_failed_issue_{issue_number}:{exc}")
+                        post_slack_thread_message(
+                            slack_token=slack_token,
+                            channel=args.channel_id,
+                            thread_ts=ts,
+                            text=(
+                                "I detected an ownership claim but could not auto-assign this GitHub issue. "
+                                "Please self-assign the issue in GitHub, or post your exact GitHub handle here "
+                                "so assignment can be retried."
+                            ),
+                        )
                 else:
                     output["notes"].append(
                         f"thread_claim_no_github_match_issue_{issue_number}:slack_user={claim_user_id}"
+                    )
+                    post_slack_thread_message(
+                        slack_token=slack_token,
+                        channel=args.channel_id,
+                        thread_ts=ts,
+                        text=(
+                            "I detected an ownership claim but could not map your Slack identity to a GitHub login. "
+                            "Please self-assign the issue in GitHub, or reply with your GitHub handle."
+                        ),
                     )
 
         # Stage warnings unless thread has active high-confidence progress.
@@ -756,6 +802,15 @@ def main() -> int:
             output["notes"].append(
                 f"ad_hoc_thread_claim_no_github_match_issue_{issue_number}:slack_user={claim_user_id}"
             )
+            post_slack_thread_message(
+                slack_token=slack_token,
+                channel=args.channel_id,
+                thread_ts=ts,
+                text=(
+                    "Ownership claim detected, but I could not map this Slack user to a GitHub login. "
+                    "Please self-assign the issue or reply with your GitHub handle."
+                ),
+            )
             continue
         try:
             assign_issue(issue_token, issue_number, github_login)
@@ -779,6 +834,15 @@ def main() -> int:
             tracked_issue_numbers.add(issue_number)
         except Exception as exc:
             output["notes"].append(f"ad_hoc_thread_claim_assignment_failed_issue_{issue_number}:{exc}")
+            post_slack_thread_message(
+                slack_token=slack_token,
+                channel=args.channel_id,
+                thread_ts=ts,
+                text=(
+                    "Ownership claim detected, but auto-assignment failed. "
+                    "Please self-assign this issue in GitHub, or reply with your GitHub handle to retry."
+                ),
+            )
 
     save_state(state_path, state)
     out_path = Path(args.output_json)

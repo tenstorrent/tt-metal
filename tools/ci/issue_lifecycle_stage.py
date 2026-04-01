@@ -333,6 +333,8 @@ def agent_decide_issue_action(
         "Then print only JSON object:\n"
         "{\n"
         '  "action": "close|update|unchanged",\n'
+        '  "confidence": "high|medium|low",\n'
+        '  "signal_mix": "clean|mixed|unknown",\n'
         '  "reason": "brief",\n'
         '  "comment": "brief markdown",\n'
         '  "current_signature": "optional short signature",\n'
@@ -532,6 +534,15 @@ def main() -> int:
                 model=args.model,
             )
             action = str(decision.get("action", "unchanged"))
+            confidence = str(decision.get("confidence", "")).strip().lower()
+            signal_mix = str(decision.get("signal_mix", "")).strip().lower()
+            if action == "unchanged" and confidence == "medium" and signal_mix == "mixed":
+                action = "update"
+                if not str(decision.get("comment", "")).strip():
+                    decision["comment"] = (
+                        "Auto-triage lifecycle review: evidence is mixed at medium confidence. "
+                        "Keeping this issue open with a watching update until the signal becomes clearer."
+                    )
             comment = str(decision.get("comment", "")).strip()
             most_recent_job_url = str(decision.get("most_recent_job_url", "")).strip() or str(selected[0]["job_url"])
             last_three_job_urls = [
