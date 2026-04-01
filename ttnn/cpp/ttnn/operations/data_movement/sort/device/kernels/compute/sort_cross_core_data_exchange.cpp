@@ -118,24 +118,18 @@ void kernel_main() {
                             copy_tile(index_tensor_transposed_cb_index, left_tile_id, index_dest_start);
                             copy_tile(index_tensor_transposed_cb_index, right_tile_id, index_dest_end);
 
-                            uint32_t tile_input_low = input_dest_start;
-                            uint32_t tile_input_high = input_dest_end;
-                            uint32_t tile_index_low = index_dest_start;
-                            uint32_t tile_index_high = index_dest_end;
+                            if constexpr (stable) {
+                                ckernel::topk_set_stable_descending_mode(!ascending);
+                            }
 
                             if (sub == 1) {
                                 // Use sort LLK only the last stage to sort the last pair of tiles - speed up
                                 ckernel::topk_local_sort<stable>(/*idst=*/0, (int)dir, /*end_phase(log2(K))=*/5);
                             } else {
-                                ckernel::topk_merge<false, stable>(/*idst=*/0, m_iter, /*k=*/32);
-
-                                // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
-                                // We swap their indices when using descending order
                                 if (dir) {
-                                    tile_input_low = input_dest_end;
-                                    tile_input_high = input_dest_start;
-                                    tile_index_low = index_dest_end;
-                                    tile_index_high = index_dest_start;
+                                    ckernel::topk_merge<true, stable>(/*idst=*/0, m_iter, /*k=*/32);
+                                } else {
+                                    ckernel::topk_merge<false, stable>(/*idst=*/0, m_iter, /*k=*/32);
                                 }
                             }
                             tile_regs_commit();
@@ -143,13 +137,13 @@ void kernel_main() {
 
                             // Pack value tiles to CB
                             pack_reconfig_data_format(input_tensor_transposed_cb_index);
-                            pack_tile<true>(tile_input_low, input_tensor_transposed_cb_index, left_tile_id);
-                            pack_tile<true>(tile_input_high, input_tensor_transposed_cb_index, right_tile_id);
+                            pack_tile<true>(input_dest_start, input_tensor_transposed_cb_index, left_tile_id);
+                            pack_tile<true>(input_dest_end, input_tensor_transposed_cb_index, right_tile_id);
 
                             // Pack index tiles to CB
                             pack_reconfig_data_format(index_tensor_transposed_cb_index);
-                            pack_tile<true>(tile_index_low, index_tensor_transposed_cb_index, left_tile_id);
-                            pack_tile<true>(tile_index_high, index_tensor_transposed_cb_index, right_tile_id);
+                            pack_tile<true>(index_dest_start, index_tensor_transposed_cb_index, left_tile_id);
+                            pack_tile<true>(index_dest_end, index_tensor_transposed_cb_index, right_tile_id);
 
                             tile_regs_release();
                         }
@@ -222,15 +216,21 @@ void kernel_main() {
 
                         cb_pop_front(value_tensor_peer_cb_index, one_tile);
 
-                        ckernel::topk_merge<false, stable>(0, m_iter, 32);
+                        if constexpr (stable) {
+                            ckernel::topk_set_stable_descending_mode(!ascending);
+                        }
+                        if (dir) {
+                            ckernel::topk_merge<true, stable>(0, m_iter, 32);
+                        } else {
+                            ckernel::topk_merge<false, stable>(0, m_iter, 32);
+                        }
 
-                        // topk_merge puts smallest values in DEST[0] and largest in DEST[1]
-                        // If core must keep smallest values, then keep DEST[1] instead of DEST[0]
-                        const uint32_t select_lower = dir ^ (i < j);
+                        // After merging in the requested direction, DEST[0] corresponds to the left tile slot.
+                        const uint32_t keep_left_slot = (i < j);
 
                         uint32_t value_output_tile = input_dest_start;
                         uint32_t index_output_tile = index_dest_start;
-                        if (!select_lower) {
+                        if (!keep_left_slot) {
                             value_output_tile = input_dest_end;
                             index_output_tile = index_dest_end;
                         }

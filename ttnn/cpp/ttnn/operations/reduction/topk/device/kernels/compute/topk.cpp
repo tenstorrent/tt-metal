@@ -317,6 +317,9 @@ void kernel_main() {
                 // Merge and sort 64 elements (32 existing + 32 new) using topk_local_sort
                 // Results: dest reg 0 = top 32 elements, dest reg 1 = bottom 32 elements
                 // largest flag determines ascending (0) vs descending (1) sort order
+                if constexpr (stable) {
+                    ckernel::topk_set_stable_descending_mode(largest);
+                }
                 ckernel::topk_local_sort<stable>(0, (int)!largest, end_phase);
 
                 // Store sorted results back to buffers

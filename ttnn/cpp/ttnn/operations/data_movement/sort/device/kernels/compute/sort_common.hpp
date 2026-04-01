@@ -58,6 +58,9 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
         transpose_wh_tile(index_cb_index, 1, 3);
 
         // llk_topk_sort -> inplace
+        if constexpr (stable) {
+            ckernel::topk_set_stable_descending_mode(!ascending);
+        }
         ckernel::topk_local_sort<stable>(0, (int)ascending_local, end_phase);
 
         tile_regs_commit();

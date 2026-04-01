@@ -39,6 +39,9 @@ void process_and_sort_tiles(
             transpose_wh_tile(index_cb_index, 1, 3);
         }
         // llk_topk_sort -> inplace
+        if constexpr (stable) {
+            ckernel::topk_set_stable_descending_mode(!ascending);
+        }
         ckernel::topk_local_sort<stable>(0, (int)ascending, end_phase);
         // pack value tiles into cb_intermed0
         pack_reconfig_data_format(input_transposed_cb_index);
@@ -94,6 +97,9 @@ void process_tile_pair(
 
     // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
     // sort within the larger 32 values
+    if constexpr (stable) {
+        ckernel::topk_set_stable_descending_mode(!ascending);
+    }
     ckernel::topk_rebuild<stable>(0, (uint32_t)ascending, m_iter, K, logk, target_tiles_is_one);
 
     // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32
@@ -154,6 +160,9 @@ void process_tiles(
             copy_tile(index_transposed_cb_index, right_tile_id, index_dest_end);
 
             // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
+            if constexpr (stable) {
+                ckernel::topk_set_stable_descending_mode(largest);
+            }
             if (largest) {
                 ckernel::topk_merge<false, stable>(0, m_iter, K);
             } else {

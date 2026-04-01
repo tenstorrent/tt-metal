@@ -113,6 +113,24 @@ def test_sort_standard(shape, dim, descending, device, torch_dtype, ttnn_dtype, 
             assert_equal(torch_sort_values, ttnn_torch_gather_from_indices)
 
 
+@pytest.mark.parametrize("shape", ([1, 1, 32, 288], [1, 1, 32, 544]))
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.xfail(
+    reason="Known raw uint16 sort index corruption past the 256-element boundary; tracked separately from stable tie ordering"
+)
+def test_sort_stable_uint16_boundary_regression(shape, descending, device):
+    input = torch.zeros(shape, dtype=torch.bfloat16)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    torch_sort_values, torch_sort_indices = torch.sort(input, dim=-1, descending=descending, stable=True)
+    ttnn_sort_values, ttnn_sort_indices = ttnn.sort(ttnn_input, dim=-1, descending=descending, stable=True)
+
+    assert_equal(torch_sort_values, ttnn.to_torch(ttnn_sort_values))
+    assert_equal(
+        torch_sort_indices.to(torch.int64), ttnn.to_torch(ttnn_sort_indices, dtype=torch.uint16).to(torch.int64)
+    )
+
+
 @pytest.mark.parametrize(
     "shape, dim, descending",
     [

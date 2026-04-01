@@ -516,6 +516,10 @@ ALWI void topk_local_sort(
         idst, idir, i_end_phase, i_start_phase, i_end_step, i_start_step)));
 }
 
+ALWI void topk_set_stable_descending_mode(bool descending) {
+    MATH((ckernel::sfpu::set_topk_stable_descending_mode(descending)));
+}
+
 // topK merge
 // clang-format off
 /**
