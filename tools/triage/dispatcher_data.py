@@ -155,11 +155,12 @@ class DispatcherData:
 
         # Load DRISC ELF for DRAM cores (Blackhole only)
         self._drisc_elf = None
-        if self._is_blackhole:
+        if self._is_blackhole and self._drisc_enabled_flag:
             try:
                 drisc_elf_path = os.path.join(build_env.firmwarePath, "drisc", "drisc.elf")
                 self._drisc_elf = elfs_cache[drisc_elf_path]
             except Exception:
+                # DRISC firmware is optional; if it cannot be loaded, leave self._drisc_elf as None
                 pass
 
         # Access the value of enumerator for supported blocks

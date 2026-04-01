@@ -24,6 +24,7 @@ from callstack_provider import (
     run as get_callstack_provider,
     CallstackProvider,
 )
+from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from run_checks import run as get_run_checks
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
@@ -146,9 +147,13 @@ def serialize_variables(variables: list[CallstackEntryVariable], assert_code: st
 def dump_lightweight_asserts(
     location: OnChipCoordinate,
     risc_name: str,
+    dispatcher_data: DispatcherData,
     callstack_provider: CallstackProvider,
 ) -> LightweightAssertInfo | None:
     try:
+        if not dispatcher_data.risc_enabled(risc_name):
+            return None
+
         risc_debug = location._device.get_block(location).get_risc_debug(risc_name)
 
         # We don't care about cores that are in reset
@@ -241,15 +246,17 @@ def dump_lightweight_asserts(
 
 
 def run(args, context: Context):
-    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth"]
+    BLOCK_TYPES_TO_CHECK = ["tensix", "idle_eth", "active_eth", "dram"]
 
     run_checks = get_run_checks(args, context)
     callstack_provider = get_callstack_provider(args, context)
+    dispatcher_data = get_dispatcher_data(args, context)
 
     callstacks_data = run_checks.run_per_core_check(
         lambda location, risc_name: dump_lightweight_asserts(
             location,
             risc_name,
+            dispatcher_data,
             callstack_provider,
         ),
         block_filter=BLOCK_TYPES_TO_CHECK,
