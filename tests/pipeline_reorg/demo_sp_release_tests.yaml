@@ -67,6 +67,72 @@
   team: models
 
 # ============================================================================
+# DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole 2x2 mesh (BH-LLMBox)
+# ============================================================================
+
+- name: bh_llmbox_DeepSeek_B1_HostIO
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+  model: deepseek_decode
+  skus:
+    bh_llmbox:
+      timeout: 10
+  owner_id: U03HY7MK4BT
+  team: models
+
+# ============================================================================
+# DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole Single Card
+# ============================================================================
+
+- name: bh_p150_DeepSeek_B1_Full_Unit_Tests_SlowDispatch
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/ \
+      -m "not skip_post_commit" \
+      -vvv --tb=short --timeout 1200
+  model: deepseek_decode
+  skus:
+    bh_p150:
+      timeout: 90
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_p150_DeepSeek_B1_Full_Unit_Tests_FastDispatch
+  cmd: |
+    pytest models/demos/deepseek_v3_b1/tests/unit_tests/ \
+      -m "not skip_post_commit" \
+      -vvv --tb=short --timeout 1200
+  model: deepseek_decode
+  skus:
+    bh_p150:
+      timeout: 90
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_p100_DeepSeek_B1_Full_Unit_Tests_SlowDispatch
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 pytest models/demos/deepseek_v3_b1/tests/unit_tests/ \
+      -m "not skip_post_commit" \
+      -vvv --tb=short --timeout 1200
+  model: deepseek_decode
+  skus:
+    bh_p100:
+      timeout: 90
+  owner_id: U03HY7MK4BT
+  team: models
+
+- name: bh_p100_DeepSeek_B1_Full_Unit_Tests_FastDispatch
+  cmd: |
+    pytest models/demos/deepseek_v3_b1/tests/unit_tests/ \
+      -m "not skip_post_commit" \
+      -vvv --tb=short --timeout 1200
+  model: deepseek_decode
+  skus:
+    bh_p100:
+      timeout: 90
+  owner_id: U03HY7MK4BT
+  team: models
+
+# ============================================================================
 # DeepSeek V3 B1 Decode Tests (Blitz) - Blackhole Multihost (4x2 mesh)
 # ============================================================================
 
