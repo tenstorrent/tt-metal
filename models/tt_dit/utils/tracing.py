@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import functools
 import inspect
+import weakref
 from types import NoneType
 from typing import TYPE_CHECKING, Any
 
@@ -237,8 +239,11 @@ class Tracer:
             raise ValueError(msg)
 
 
+_TRACER_VALID_INPUT_TYPES = (ttnn.Tensor, int, float, str, bool, NoneType)
+
+
 def _verify_value(value: Any, *, path_label: str) -> Any:
-    if not isinstance(value, (ttnn.Tensor, int, float, str, bool, NoneType)):
+    if not isinstance(value, _TRACER_VALID_INPUT_TYPES):
         msg = f"value '{path_label}' has unsupported type {type(value)}"
         raise TypeError(msg)
 
@@ -305,3 +310,122 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
         return {key: _tree_map(f, *(d[key] for d in (x, *xs)), path_label=f'{path_label}["{key}"]') for key in x}
 
     raise AssertionError  # unreachable
+
+
+_TRACER_CALL_KWARGS = frozenset(
+    name
+    for name, param in inspect.signature(Tracer.__call__).parameters.items()
+    if param.kind == inspect.Parameter.KEYWORD_ONLY
+)
+
+
+def traced_function(
+    _fn: Callable[..., Any] | None = None,
+    *,
+    device: ttnn.MeshDevice | Callable[..., ttnn.MeshDevice] | None = None,
+    prep_run: bool = True,
+    clone_prep_inputs: bool = True,
+) -> Any:
+    """Decorator that adds optional tracing to any function or method via the ``Tracer`` class.
+
+    Can be applied with or without arguments::
+
+        # Standalone function — device provided directly at decoration time:
+        @traced_function(device=mesh_device, clone_prep_inputs=False)
+        def my_function(x: ttnn.Tensor, scale: float) -> ttnn.Tensor: ...
+
+        # Method — device resolved lazily via lambda from the bound context (self):
+        @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False)
+        def my_method(self, x: ttnn.Tensor, scale: float) -> ttnn.Tensor: ...
+
+        # Call without tracing (original function, no overhead):
+        result = my_function(x, scale=1.0)
+        result = model.my_method(x, scale=1.0)
+
+        # Call with tracing (captures on first call, replays on subsequent calls):
+        result = my_function(x, scale=1.0, traced=True)
+        result = model.my_method(x, scale=1.0, traced=True)
+
+        # With optional Tracer call-time kwargs:
+        result = my_function(x, scale=1.0, traced=True, tracer_cq_id=1, tracer_blocking_execution=False)
+
+    The decorated callable gains a ``traced`` keyword argument at call time. When
+    ``traced=False`` (the default) the original function is called directly. When
+    ``traced=True`` a ``Tracer`` is lazily created on the first call and subsequent
+    calls execute the captured trace.
+
+    If the first positional argument is not a valid ``Tracer`` input type
+    (i.e. not a ``ttnn.Tensor``, scalar, or ``None``) it is treated as a
+    bindable context (e.g. ``self``) and bound away before the ``Tracer`` sees
+    any inputs.     When ``device`` is a callable it is called with that context to
+    resolve the device. One ``Tracer`` per unique first argument is maintained in a
+    ``WeakKeyDictionary``, giving per-instance tracing for methods. For plain
+    functions whose first argument is a valid tracer type, a single shared
+    ``Tracer`` is used instead.
+
+    Tracer call-time kwargs (``tracer_cq_id``, ``tracer_blocking_execution``,
+    ``tracer_execute_on_capture``) are forwarded to the ``Tracer`` when tracing
+    and stripped before calling the original function in the untraced path.
+
+    Args:
+        _fn: The function to wrap when used without parentheses (``@traced_function``).
+        device: Device for tracing. Pass a ``ttnn.MeshDevice`` directly for plain
+            functions, or a callable (e.g. ``lambda self: self.mesh_device``) for
+            methods so it can be resolved lazily from the bound context.
+        prep_run: Forwarded to ``Tracer.__init__``.
+        clone_prep_inputs: Forwarded to ``Tracer.__init__``.
+    """
+
+    def _resolve_device(context: Any) -> ttnn.MeshDevice:
+        if device is None:
+            msg = (
+                "device= must be provided to @traced_function. "
+                "Pass a ttnn.MeshDevice directly, or a callable that accepts the bound context "
+                "and returns one (e.g. device=lambda self: self.mesh_device)."
+            )
+            raise ValueError(msg)
+        return device(context) if callable(device) else device
+
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        _tracers: weakref.WeakKeyDictionary[Any, Tracer] = weakref.WeakKeyDictionary()
+        _tracer_shared: Tracer | None = None
+
+        @functools.wraps(fn)
+        def wrapper(*args: Any, traced: bool = False, **kwargs: Any) -> Any:
+            nonlocal _tracer_shared
+
+            if not traced:
+                for k in _TRACER_CALL_KWARGS:
+                    kwargs.pop(k, None)
+                return fn(*args, **kwargs)
+
+            # If the first argument is not a valid Tracer input type, treat it as a
+            # bindable context (e.g. self) — bind it away and track a Tracer per instance.
+            if args and not isinstance(args[0], _TRACER_VALID_INPUT_TYPES):
+                context, rest = args[0], args[1:]
+                if context not in _tracers:
+                    _tracers[context] = Tracer(
+                        functools.partial(fn, context),
+                        device=_resolve_device(context),
+                        prep_run=prep_run,
+                        clone_prep_inputs=clone_prep_inputs,
+                    )
+                return _tracers[context](*rest, **kwargs)
+
+            # Plain function — single shared Tracer.
+            if _tracer_shared is None:
+                _tracer_shared = Tracer(
+                    fn,
+                    device=_resolve_device(None),
+                    prep_run=prep_run,
+                    clone_prep_inputs=clone_prep_inputs,
+                )
+            return _tracer_shared(*args, **kwargs)
+
+        wrapper._tracers = _tracers  # type: ignore[attr-defined]
+        return wrapper
+
+    if _fn is not None:
+        return decorator(_fn)
+
+    return decorator

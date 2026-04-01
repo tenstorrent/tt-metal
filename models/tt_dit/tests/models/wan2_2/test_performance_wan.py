@@ -217,7 +217,7 @@ def test_pipeline_performance(
     ]
 
     num_frames = 81
-    num_inference_steps = 10
+    num_inference_steps = 40
 
     print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 

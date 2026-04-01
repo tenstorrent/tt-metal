@@ -34,7 +34,6 @@ from ...parallel.manager import CCLManager
 from ...utils import cache
 from ...utils.conv3d import conv3d_blocking_hash
 from ...utils.tensor import fast_device_to_host, bf16_tensor, float32_tensor, local_device_to_torch, typed_tensor_2dshard
-from ...utils.tracing import Tracer
 
 _UNSET = object()  # sentinel for "use config default" in create_pipeline
 
@@ -273,14 +272,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 self.transformer.set_unload_set(self.transformer_2, self.tt_vae)
                 self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder, self.tt_vae)
                 self.tt_vae.set_unload_set(self.transformer, self.transformer_2)
-
-        # Trace setup
-        self._transformer_tracer = Tracer(
-            self.transformer.combined_step, device=self.mesh_device, clone_prep_inputs=False
-        )
-        self._transformer_2_tracer = Tracer(
-            self.transformer_2.combined_step, device=self.mesh_device, clone_prep_inputs=False
-        )
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
@@ -961,7 +952,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     self._prepare_transformer1()
                     # wan2.1 or high-noise stage in wan2.2
                     current_model = self.transformer
-                    forward = self._transformer_tracer if traced else self.transformer.combined_step
                     prompt_embeds_buffer = self.prompt_t1_buffer
                     negative_prompt_embeds_buffer = self.negative_prompt_t1_buffer
                     current_guidance_scale = guidance_scale
@@ -969,7 +959,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     # low-noise stage in wan2.2
                     self._prepare_transformer2()
                     current_model = self.transformer_2
-                    forward = self._transformer_2_tracer if traced else self.transformer_2.combined_step
                     prompt_embeds_buffer = self.prompt_t2_buffer
                     negative_prompt_embeds_buffer = self.negative_prompt_t2_buffer
                     current_guidance_scale = guidance_scale_2
@@ -1010,7 +999,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
                 )
 
-                permuted_noise_pred_tt = forward(
+                permuted_noise_pred_tt = current_model.combined_step(
                     do_classifier_free_guidance=self.do_classifier_free_guidance,
                     spatial_1BNI=permuted_model_input,
                     prompt_1BLP=prompt_embeds_buffer,
@@ -1019,6 +1008,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     timestep=timestep,
                     **rope_args,
                     guidance_scale=current_guidance_scale,
+                    traced=traced,
                 )
 
                 # Move result to host for scheduler step
@@ -1116,5 +1106,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         ttnn.synchronize_device(self.mesh_device)
 
     def release_traces(self):
-        self._transformer_tracer.release_trace()
-        self._transformer_2_tracer.release_trace()
+        for model in (self.transformer, self.transformer_2):
+            tracer = WanTransformer3DModel.combined_step._tracers.get(model)
+            if tracer is not None:
+                tracer.release_trace()

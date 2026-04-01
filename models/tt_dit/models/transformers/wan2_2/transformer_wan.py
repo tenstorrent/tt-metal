@@ -23,6 +23,7 @@ from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor, from_torch, unflatten
+from ....utils.tracing import traced_function
 from .attention_wan import WanAttention
 
 
@@ -638,6 +639,7 @@ class WanTransformer3DModel(Module):
 
         return spatial_1BNI
 
+    @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False)
     def combined_step(
         self,
         do_classifier_free_guidance: bool,
