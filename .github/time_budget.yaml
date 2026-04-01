@@ -75,8 +75,8 @@ ttnn:
     wh_llmbox: 50
   e2e:
     wh_llmbox: 90
-    wh_galaxy: 40
-    bh_galaxy: 40
+    wh_galaxy: 70
+    bh_galaxy: 70
   integration:
     wh_llmbox: 30
     wh_galaxy: 350
