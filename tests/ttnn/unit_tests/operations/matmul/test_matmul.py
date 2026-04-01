@@ -2804,6 +2804,77 @@ def test_matmul_block_sharded_input_with_padding(device):
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
+def test_matmul_height_sharded_input_with_padding(device):
+    """
+    Test matmul with height-sharded input where K dimension has tile padding.
+
+    Exercises reader_bmm_tile_layout_in0_sender_padding.cpp with IN0_SHARDED
+    via the 1D mcast (in1 direction) program. Uses per_core_M=2 so that each
+    core's block has multiple tile rows, which is necessary to trigger the bug
+    where only the last tile row's K-padding was zeroed.
+
+    - Input 0: (256, 16) height_sharded on 4 cores, shard [64, 32]
+    - Input 1: (16, 128) interleaved, DRAM
+    """
+    torch.manual_seed(0)
+
+    input_a_shape = (256, 16)
+    input_b_shape = (16, 128)
+
+    torch_input_a = torch.randn(input_a_shape, dtype=torch.bfloat16)
+    torch_input_b = torch.randn(input_b_shape, dtype=torch.bfloat16)
+    torch_output = torch.matmul(torch_input_a, torch_input_b)
+
+    ttnn_input_a = ttnn.from_torch(
+        torch_input_a,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn_input_a = ttnn.reshape(ttnn_input_a, input_a_shape, padded_shape=(256, 32))
+
+    ttnn_input_b = ttnn.from_torch(
+        torch_input_b,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile((32, 32)),
+        device=device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_a_sharded_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))]),
+            [64, 32],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    ttnn_input_a = ttnn.to_memory_config(ttnn_input_a, input_a_sharded_memory_config)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(4, 1),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=2,
+        per_core_N=4,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+
+    ttnn_output = ttnn.matmul(ttnn_input_a, ttnn_input_b, program_config=program_config)
+
+    output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_output, output, pcc=0.99)
+
+
 def test_matmul_activation_with_sharded_input(device):
     # Create input tensors
     torch.manual_seed(0)
