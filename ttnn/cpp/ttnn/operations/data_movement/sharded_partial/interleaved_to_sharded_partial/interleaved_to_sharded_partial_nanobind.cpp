@@ -40,25 +40,24 @@ void bind_interleaved_to_sharded_partial(nb::module_& mod) {
     ttnn::bind_function<"interleaved_to_sharded_partial">(
         mod,
         doc,
-        ttnn::overload_t(
-            nb::overload_cast<
-                const ttnn::Tensor&,
-                const std::variant<CoreCoord, CoreRangeSet>&,
-                const std::array<uint32_t, 2>&,
-                int64_t&,
-                int64_t&,
-                tt::tt_metal::TensorMemoryLayout,
-                tt::tt_metal::ShardOrientation,
-                const std::optional<ttnn::DataType>&>(&ttnn::interleaved_to_sharded_partial),
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("grid"),
-            nb::arg("shard_shape"),
-            nb::arg("num_slices"),
-            nb::arg("slice_index"),
-            nb::arg("shard_scheme"),
-            nb::arg("shard_orientation"),
-            nb::kw_only(),
-            nb::arg("output_dtype") = nb::none()));
+        nb::overload_cast<
+            const ttnn::Tensor&,
+            const std::variant<CoreCoord, CoreRangeSet>&,
+            const std::array<uint32_t, 2>&,
+            int64_t&,
+            int64_t&,
+            tt::tt_metal::TensorMemoryLayout,
+            tt::tt_metal::ShardOrientation,
+            const std::optional<ttnn::DataType>&>(&ttnn::interleaved_to_sharded_partial),
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("grid"),
+        nb::arg("shard_shape"),
+        nb::arg("num_slices"),
+        nb::arg("slice_index"),
+        nb::arg("shard_scheme"),
+        nb::arg("shard_orientation"),
+        nb::kw_only(),
+        nb::arg("output_dtype") = nb::none());
 }
 
 }  // namespace ttnn::operations::data_movement

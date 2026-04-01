@@ -8,8 +8,6 @@
 #include <variant>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 
 #include "layernorm_device_operation_types.hpp"
 #include "layernorm_op_multi_core.hpp"
