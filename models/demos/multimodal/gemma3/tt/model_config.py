@@ -106,6 +106,7 @@ class ModelArgs(TTModelArgs):
             "N300": [],
             "T3K": [],
             "TG": [],
+            "P150": [],
         }
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
