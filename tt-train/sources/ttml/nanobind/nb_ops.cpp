@@ -12,6 +12,8 @@
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
+#include "metal/ops/moe_counting_sort/moe_counting_sort.hpp"
+#include "metal/ops/moe_dispatch/moe_dispatch.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
@@ -58,6 +60,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("rmsnorm");
     m.def_submodule("sample");
     m.def_submodule("unary");
+    m.def_submodule("moe");
 }
 
 void py_module(nb::module_& m) {
@@ -399,6 +402,34 @@ void py_module(nb::module_& m) {
         py_unary.def("broadcast_batch", &ttml::ops::broadcast_batch, nb::arg("tensor"), nb::arg("new_batch_dim"));
         py_unary.def("log_softmax", &ttml::ops::log_softmax, nb::arg("tensor"), nb::arg("dim"));
         py_unary.def("log_softmax_moreh", &ttml::ops::log_softmax_moreh, nb::arg("tensor"), nb::arg("dim"));
+    }
+
+    {
+        auto py_moe = static_cast<nb::module_>(m.attr("moe"));
+        py_moe.def(
+            "counting_sort",
+            [](const tt::tt_metal::Tensor& expert_ids, const tt::tt_metal::Tensor& flat_token_ids, uint32_t E)
+                -> tt::tt_metal::Tensor { return ttml::metal::moe_counting_sort(expert_ids, flat_token_ids, E); },
+            nb::arg("expert_ids"),
+            nb::arg("flat_token_ids"),
+            nb::arg("E"));
+        py_moe.def(
+            "dispatch",
+            [](const tt::tt_metal::Tensor& sorted_hidden,
+               const tt::tt_metal::Tensor& w_up,
+               uint32_t cluster_axis,
+               const std::vector<std::vector<uint32_t>>& expert_offsets_per_device,
+               const std::vector<std::vector<uint32_t>>& expert_counts_per_device,
+               uint32_t E_local) -> tt::tt_metal::Tensor {
+                return ttml::metal::moe_dispatch(
+                    sorted_hidden, w_up, cluster_axis, expert_offsets_per_device, expert_counts_per_device, E_local);
+            },
+            nb::arg("sorted_hidden"),
+            nb::arg("w_up"),
+            nb::arg("cluster_axis"),
+            nb::arg("expert_offsets_per_device"),
+            nb::arg("expert_counts_per_device"),
+            nb::arg("E_local"));
     }
 }
 

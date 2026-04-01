@@ -1,4 +1,5 @@
 .cache
+node_modules/
 .clangd
 .devcontainer/
 .vscode
@@ -152,3 +153,12 @@ Testing
 models/experimental/petr/resources/*.pth
 
 .claude
+node_modules/
+
+# Local dev notes
+tt-train/sources/ttml/metal/ops/moe_dispatch/README.md
+tt-train/sources/ttml/metal/ops/moe_dispatch/DEBUG_REPORT.md
+tt-train/PR_DESCRIPTION.md
+tt-train/plan.md
+tt-train/sources/ttml/metal/ops/moe_dispatch/PR_DESCRIPTION.md
+tt-train/sources/ttml/metal/ops/moe_dispatch/debug.md
