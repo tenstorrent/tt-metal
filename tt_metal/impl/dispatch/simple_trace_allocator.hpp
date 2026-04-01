@@ -4,10 +4,14 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
-#include <api/tt-metalium/device.hpp>
-#include <vector>
+#include <map>
 #include <optional>
+#include <vector>
+
+#include <api/tt-metalium/device.hpp>
 
 #include "trace/trace_node.hpp"
 

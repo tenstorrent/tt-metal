@@ -4,6 +4,10 @@
 
 #include "simple_trace_allocator.hpp"
 
+#include <limits>
+#include <set>
+#include <tuple>
+
 #include "impl/context/metal_context.hpp"
 #include "hal/generated/dev_msgs.hpp"
 
@@ -136,14 +140,14 @@ void SimpleTraceAllocator::allocate_trace_programs(std::vector<TraceNode*>& trac
     extra_data_.resize(trace_nodes.size());
 
     std::set<SubDeviceId> sub_device_ids;
-    for (int i = trace_nodes.size() - 1; i >= 0; i--) {
+    for (size_t i = trace_nodes.size(); i-- > 0;) {
         auto& node = *trace_nodes[i];
         auto it = program_ids_use_map.find(node.program->get_id());
         if (it != program_ids_use_map.end()) {
             // Binary is reused, but the nonbinary is not.
             extra_data_[i].next_use_idx[ExtraData::kBinary] = it->second;
         }
-        program_ids_use_map[node.program->get_id()] = i;
+        program_ids_use_map[node.program->get_id()] = static_cast<uint32_t>(i);
         sub_device_ids.insert(node.sub_device_id);
     }
     for (auto& sub_device_id : sub_device_ids) {
