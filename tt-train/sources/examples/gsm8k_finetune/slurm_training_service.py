@@ -1074,6 +1074,8 @@ def create_job():
     }
     if training_params.get("model_config"):
         slurm_config["model_config"] = training_params["model_config"]
+    if training_params.get("model_type"):
+        slurm_config["model_type"] = training_params["model_type"]
     # Pass dataset for training script (HF name or s3:// URL)
     slurm_config["dataset"] = dataset_url
     if not slurm_config["dataset"]:
