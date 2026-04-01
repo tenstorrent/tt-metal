@@ -8,6 +8,10 @@ inputs:
     description: "Slack age threshold in hours"
     required: false
     default: "32"
+  hold-hours-after-progress:
+    description: "Temporary hold window after progress signals"
+    required: false
+    default: "24"
   max-actions:
     description: "Max disable actions to execute in one run"
     required: false
@@ -56,7 +60,8 @@ runs:
           --input "${{ inputs.input-json-path }}" \
           --output "${{ inputs.output-dir }}/stale_candidates.json" \
           --stale-hours "${{ inputs.stale-hours }}" \
-          --max-candidates "${{ inputs.max-actions }}"
+          --max-candidates "${{ inputs.max-actions }}" \
+          --hold-hours-after-progress "${{ inputs.hold-hours-after-progress }}"
 
     - name: Generate planning prompt
       shell: bash
