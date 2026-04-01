@@ -57,6 +57,9 @@ from ttml.modules import LoraConfig
 from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
 
 
+from training_types import resolve_lora_targets
+
+
 class DDPCallback(TrainerCallback):
     """Synchronise gradients across all DDP devices before the optimiser step."""
 
@@ -587,7 +590,7 @@ def train():
         peft_config = LoraConfig(
             rank=lora_cfg.get("rank", 8),
             alpha=lora_cfg.get("alpha", 16),
-            target_modules=lora_cfg.get("target_modules", ["q_linear", "kv_linear", "out_linear"]),
+            target_modules=lora_cfg.get("target_modules") or resolve_lora_targets(model_type),
             lora_dropout=lora_cfg.get("lora_dropout", 0.05),
             use_rslora=lora_cfg.get("use_rslora", False),
             is_bias_trainable=lora_cfg.get("is_bias_trainable", False),

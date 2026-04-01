@@ -9,11 +9,56 @@ This module provides a clean registry system for different training types (SFT, 
 Each training type defines its own parameter validation, configuration building, and script paths.
 """
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional, Set
 import yaml
 from ttml.common.utils import get_tt_metal_runtime_root
+
+# Model-type -> default LoRA target modules.
+# Used as fallback when target_modules is not explicitly provided.
+DEFAULT_LORA_TARGETS = {
+    "gpt2": ["q_linear", "kv_linear", "out_linear"],
+    "llama": ["q_linear", "kv_linear", "out_linear"],
+    "qwen3": ["q_proj", "k_proj", "v_proj", "o_proj"],
+}
+
+
+def resolve_lora_targets(model_type: str) -> list[str]:
+    """Return default LoRA target modules for a model type, or raise if unknown."""
+    targets = DEFAULT_LORA_TARGETS.get(model_type)
+    if not targets:
+        raise ValueError(
+            f"No default LoRA target_modules for model_type '{model_type}'. "
+            f"Specify target_modules in lora_config or add defaults for this model type."
+        )
+    return targets
+
+
+_MODEL_ID_TO_TYPE = {
+    "tinyllama": "llama",
+    "gpt2": "gpt2",
+    "llama8b": "llama",
+    "qwen3_0_6B": "qwen3",
+}
+
+_MODEL_ID_TO_RELATIVE_CONFIG_PATH = {
+    "tinyllama": "model_configs/tinyllama.yaml",
+    "gpt2": "model_configs/gpt2s.yaml",
+    "llama8b": "model_configs/llama8b.yaml",
+    "qwen3_0_6B": "model_configs/qwen3_0_6B.yaml",
+}
+
+
+def get_model_type(model_id: str) -> str:
+    """Return model type for a model ID."""
+    return _MODEL_ID_TO_TYPE[model_id]
+
+
+def get_model_config_path(model_id: str) -> str:
+    """Return config YAML path for a model ID."""
+    return os.path.join(get_tt_metal_runtime_root(), "tt-train", "configs", _MODEL_ID_TO_RELATIVE_CONFIG_PATH[model_id])
 
 
 @dataclass
@@ -22,13 +67,20 @@ class TrainingTypeConfig:
 
     name: str
     script_path: str  # Path to the training script relative to examples/
-    model_configs: Dict[str, str]  # model_id -> config_path mapping
-    supported_models: Set[str]  # Set of supported model IDs
+    supported_model_ids: Set[str]  # Set of supported model IDs
     param_validator: Callable[[dict], dict]  # Function to validate/normalize parameters
     config_builder: Callable[[dict, Path], Path]  # Function to build training config YAML
     # If set, replaces the default "python {script_path}" in the SLURM run step.
     # May reference shell variables available in the SLURM environment (e.g. $TT_METAL_HOME).
     run_command_override: Optional[str] = None
+
+    def __post_init__(self):
+        missing_config = self.supported_model_ids - _MODEL_ID_TO_RELATIVE_CONFIG_PATH.keys()
+        assert (
+            not missing_config
+        ), f"{self.name}: model IDs missing from _MODEL_ID_TO_RELATIVE_CONFIG_PATH: {missing_config}"
+        missing_type = self.supported_model_ids - _MODEL_ID_TO_TYPE.keys()
+        assert not missing_type, f"{self.name}: model IDs missing from _MODEL_ID_TO_TYPE: {missing_type}"
 
 
 # ── Parameter Validators ──────────────────────────────────────────────────────
@@ -88,10 +140,10 @@ def validate_lora_params(params: dict) -> dict:
     # LoRA-specific defaults
     validated.setdefault("lora_rank", 8)
     validated.setdefault("lora_alpha", 16)
-    # Map target_modules (OpenAPI spec name) → lora_target_modules (internal name)
-    validated["lora_target_modules"] = validated.pop(
-        "target_modules", validated.pop("lora_target_modules", ["q_linear", "kv_linear", "out_linear"])
-    )
+    # Normalize key: target_modules (OpenAPI) -> lora_target_modules (internal).
+    # Defaults are resolved in build_lora_config where model_type is available.
+    if "target_modules" in validated:
+        validated["lora_target_modules"] = validated.pop("target_modules")
     validated.setdefault("lora_dropout", 0.05)
     validated.setdefault("use_rslora", False)
     validated.setdefault("is_bias_trainable", False)
@@ -221,10 +273,12 @@ def build_lora_config(config: dict, output_dir: Path) -> Path:
     }
 
     # LoRA-specific configuration
+    if "model_type" not in config:
+        raise ValueError("build_lora_config requires 'model_type' in config to resolve default target_modules")
     lora_config = {
         "rank": config.get("lora_rank", 8),
         "alpha": config.get("lora_alpha", 16),
-        "target_modules": config.get("lora_target_modules", ["q_linear", "kv_linear", "out_linear"]),
+        "target_modules": config.get("lora_target_modules") or resolve_lora_targets(config["model_type"]),
         "lora_dropout": config.get("lora_dropout", 0.05),
         "use_rslora": config.get("use_rslora", False),
         "is_bias_trainable": config.get("is_bias_trainable", False),
@@ -296,20 +350,6 @@ def build_grpo_config(config: dict, output_dir: Path) -> Path:
     return config_path
 
 
-# ── Model Configuration Mappings ──────────────────────────────────────────────
-
-
-def _get_model_to_config_mapping():
-    """Get model config mapping with paths relative to tt_metal_runtime_root."""
-    tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
-    return {
-        "tinyllama": f"{tt_train_root}/configs/model_configs/tinyllama.yaml",
-        "gpt2": f"{tt_train_root}/configs/model_configs/gpt2s.yaml",
-        "llama8b": f"{tt_train_root}/configs/model_configs/llama8b.yaml",
-        "qwen3_0_6B": f"{tt_train_root}/configs/model_configs/qwen3_0_6B.yaml",
-    }
-
-
 # ── Training Type Configurations ──────────────────────────────────────────────
 
 
@@ -317,8 +357,7 @@ def _get_model_to_config_mapping():
 sft_training_config = TrainingTypeConfig(
     name="sft",
     script_path="gsm8k_finetune/gsm8k_finetune.py",
-    model_configs=_get_model_to_config_mapping(),
-    supported_models={"tinyllama", "gpt2", "llama8b", "qwen3_0_6B"},
+    supported_model_ids={"tinyllama", "gpt2", "llama8b", "qwen3_0_6B"},
     param_validator=validate_sft_params,
     config_builder=build_sft_config,
 )
@@ -327,8 +366,7 @@ sft_training_config = TrainingTypeConfig(
 lora_training_config = TrainingTypeConfig(
     name="lora",
     script_path="gsm8k_finetune/gsm8k_finetune.py",
-    model_configs=_get_model_to_config_mapping(),
-    supported_models={"tinyllama", "gpt2", "llama8b", "qwen3_0_6B"},
+    supported_model_ids={"tinyllama", "gpt2", "llama8b", "qwen3_0_6B"},
     param_validator=validate_lora_params,
     config_builder=build_lora_config,
 )
@@ -356,8 +394,7 @@ def _build_grpo_run_command() -> str:
 grpo_training_config = TrainingTypeConfig(
     name="grpo",
     script_path="python/multihost/pipeline_parallel_training/training.py",
-    model_configs={},
-    supported_models=set(),
+    supported_model_ids=set(),
     param_validator=validate_grpo_params,
     config_builder=build_grpo_config,
     run_command_override=_build_grpo_run_command(),
@@ -411,10 +448,10 @@ def get_supported_models(trainer_name: Optional[str] = None) -> Set[str]:
         Set of supported model IDs
     """
     if trainer_name:
-        return get_training_type(trainer_name).supported_models
+        return get_training_type(trainer_name).supported_model_ids
 
     # Return union of all supported models across all trainers
     all_models = set()
     for config in TRAINING_TYPES.values():
-        all_models.update(config.supported_models)
+        all_models.update(config.supported_model_ids)
     return all_models
