@@ -13,25 +13,37 @@ from ttml.common.utils import no_grad
 
 from utils.setup import InferenceCtx, setup_inference, setup_grpo_config, setup_training_optimizer
 from utils.gsm8k import get_gsm8k
-from utils.inference import completion_batched_multiple_prompts, deallocate_tensors
+from utils.inference import deallocate_tensors
+from utils.inference_tr import (
+    TrInferenceCtx,
+    completion_batched_multiple_prompts_tr,
+    setup_tt_transformers_inference,
+    sync_ttml_to_tt_transformers,
+)
 from utils.loss import compute_nlog_probs, compute_grpo_loss, compute_rewards_advantages
 from utils.bookkeeping import RunContext, TrainingMetricsTracker, setup_training_run
 
 
 def iter_batched_completions(
     ctx: InferenceCtx,
+    tr_ctx: TrInferenceCtx,
     run: RunContext,
     prompts: Sequence[List[int]],
+    prompt_texts: Sequence[str],
     answers: Sequence[float],
     batch_size: int = 32,
 ) -> Iterator[tuple[List[List[int]], List[float], List[List[int]]]]:
-    for start in range(0, len(prompts), batch_size):
-        end = min(start + batch_size, len(prompts))
+    for start in range(0, len(prompt_texts), batch_size):
+        end = min(start + batch_size, len(prompt_texts))
+        prompt_texts_batch = list(prompt_texts[start:end])
         prompt_batch = list(prompts[start:end])
         answers_batch = list(answers[start:end])
 
         start_time = time.perf_counter()
-        completions_batch = completion_batched_multiple_prompts(ctx, prompt_batch)
+        completions_batch = completion_batched_multiple_prompts_tr(tr_ctx, prompt_texts_batch)
+        print(f"{len(prompt_texts_batch)=}, {len(completions_batch)=}")
+        for i, comp_tokens in enumerate(completions_batch[:4]):
+            run.logger.info(f"[completion {i}] {repr(ctx.tokenizer.decode(comp_tokens, skip_special_tokens=True))}")
         run.logger.info(f"batch of completions done! took {time.perf_counter() - start_time} s")
 
         answers_batch_yield = [item for item in answers_batch for _ in range(ctx.group_size)]
@@ -55,20 +67,36 @@ def train_grpo(yaml_config_path, checkpoint_interval):
     ctx = setup_inference(
         yaml_config_path,
         hf_model_id="unsloth/Llama-3.2-1B-Instruct",
-        load_pretrained=True,
     )
+
     grpo_cfg = setup_grpo_config(yaml_config_path)
+
+    tr_ctx = setup_tt_transformers_inference(
+        mesh_device=ttml.autograd.AutoContext.get_instance().get_device(),
+        tokenizer=ctx.tokenizer,
+        max_seq_len=ctx.transformer_config.max_sequence_length,
+        max_batch_size=grpo_cfg.completions_batch_size * ctx.group_size,
+        max_tokens_to_complete=ctx.max_tokens_to_complete,
+        temperature=ctx.temperature,
+        instruct=False,
+        group_size=ctx.group_size,
+    )
+
+    sync_ttml_to_tt_transformers(ctx.tt_model, tr_ctx.model)
+    run.logger.info(f"synced weights back to tt-transformers library")
+
     optimizer = setup_training_optimizer(yaml_config_path, ctx.tt_model)
 
-    prompts, answers = get_gsm8k(ctx, split="train", shuffle_seed=42)
-    prompts = [ctx.tokenizer.encode(s) for s in prompts]
-    prompts, answers = prompts[: grpo_cfg.prompts_to_train], answers[: grpo_cfg.prompts_to_train]
+    prompts_dataset, answers_dataset = get_gsm8k(ctx, split="train", shuffle_seed=42)
+    prompt_texts = prompts_dataset[: grpo_cfg.prompts_to_train]
+    prompts = [ctx.tokenizer.encode(s) for s in prompt_texts]
+    answers = answers_dataset[: grpo_cfg.prompts_to_train]
 
     num_batches = 0
     num_steps = 0
 
     for prompts_batch, answers_batch, completions_batch in iter_batched_completions(
-        ctx, run, prompts, answers, batch_size=grpo_cfg.completions_batch_size
+        ctx, tr_ctx, run, prompts, prompt_texts, answers, batch_size=grpo_cfg.completions_batch_size
     ):
         batch_time_start = time.perf_counter()
         num_batches += 1
@@ -137,6 +165,8 @@ def train_grpo(yaml_config_path, checkpoint_interval):
 
         run.logger.info(f"reward_mean={rewards_np.mean():.4f}, reward_std={rewards_np.std():.4f}")
         run.logger.info(f"batch={num_batches} done!")
+        sync_ttml_to_tt_transformers(ctx.tt_model, tr_ctx.model)
+        run.logger.info(f"synced weights back to tt-transformers library")
 
     run.logger.info("training process done!")
     run.save_checkpoint(ctx.tt_model, step=num_steps)

@@ -116,7 +116,7 @@ def get_stop_tokens(tokenizer):
 
 def completion_batched_multiple_prompts_tr(
     ctx: TrInferenceCtx,
-    prompts: List[List[int]],
+    prompt_texts: List[str],
 ) -> List[List[int]]:
     """
     Equivalent of completion_batched_multiple_prompts but using tt-transformers.
@@ -124,15 +124,13 @@ def completion_batched_multiple_prompts_tr(
     Returns a flat list of completion token lists (len = len(prompts) * group_size).
     Completions contain only the generated tokens (no prompt tokens).
     """
-    expanded_prompts = [p for p in prompts for _ in range(ctx.group_size)]
-    global_batch_size = len(expanded_prompts)
+    expanded_prompt_texts = [p for p in prompt_texts for _ in range(ctx.group_size)]
+    global_batch_size = len(expanded_prompt_texts)
 
     assert global_batch_size <= ctx.max_batch_size, (
-        f"Total batch ({global_batch_size} = {len(prompts)} prompts * {ctx.group_size} group_size) "
+        f"Total batch ({global_batch_size} = {len(prompt_texts)} prompts * {ctx.group_size} group_size) "
         f"exceeds model max_batch_size ({ctx.max_batch_size})"
     )
-
-    prompt_texts = [ctx.tokenizer.decode(p) for p in expanded_prompts]
 
     (
         input_tokens_prefill_pt,
@@ -140,10 +138,10 @@ def completion_batched_multiple_prompts_tr(
         decoding_pos,
         prefill_lens,
     ) = preprocess_inputs_prefill(
-        prompt_texts,
+        expanded_prompt_texts,
         ctx.tokenizer,
         [ctx.model_args],
-        instruct=ctx.instruct,
+        instruct=False,
         max_generated_tokens=ctx.max_tokens_to_complete,
         max_prefill_len=ctx.max_seq_len,
     )

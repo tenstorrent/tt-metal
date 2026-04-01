@@ -1,5 +1,5 @@
 training_config:
-  batch_size: 2                # 2 prompts * 8 group_size = 16 total completions
+  batch_size: 4                # 4 prompts * 8 group_size = 32 total completions
   num_epochs: 1
   model_config: "model_configs/llama3_2_1B.yaml"
 
