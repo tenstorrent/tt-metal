@@ -191,6 +191,20 @@ TEST_F(ProgramRunParamsTestQuasar, MissingKernelParamsFails) {
     EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
 }
 
+TEST_F(ProgramRunParamsTestQuasar, DuplicateKernelParamsFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(spec);
+
+    // Provide params for dm_kernel twice
+    ProgramRunParams params;
+    params.kernel_run_params.push_back(MakeKernelRunParams("dm_kernel", node, {}, {}));
+    params.kernel_run_params.push_back(MakeKernelRunParams("dm_kernel", node, {}, {}));  // Duplicate!
+    params.kernel_run_params.push_back(MakeKernelRunParams("compute_kernel", node, {}, {}));
+
+    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+}
+
 TEST_F(ProgramRunParamsTestQuasar, MissingNodeRTAsFails) {
     NodeCoord node{0, 0};
     ProgramSpec spec = MakeSpecWithRTAs(node, /*num_per_node_rtas=*/2, /*num_common_rtas=*/0);
@@ -238,6 +252,20 @@ TEST_F(ProgramRunParamsTestQuasar, DFBNumEntriesOverrideFails) {
         .dfb_spec_name = "dfb_0",
         .num_entries = 4,  // Override - not implemented!
     });
+
+    EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
+}
+
+TEST_F(ProgramRunParamsTestQuasar, DuplicateDFBParamsFails) {
+    NodeCoord node{0, 0};
+    ProgramSpec spec = MakeSpecWithRTAs(node, 0, 0);
+    Program program = MakeProgramFromSpec(spec);
+
+    auto params = MakeRunParamsForMinimalSpec(node, {}, {});
+
+    // Add the same DFB twice
+    params.dfb_run_params.push_back({.dfb_spec_name = "dfb_0"});
+    params.dfb_run_params.push_back({.dfb_spec_name = "dfb_0"});  // Duplicate!
 
     EXPECT_ANY_THROW(SetProgramRunParameters(program, params));
 }
