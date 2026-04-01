@@ -922,7 +922,7 @@ experimental::quasar::QuasarDataMovementConfig MakeQuasarDataMovementConfig(
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
         uint32_t dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
         const auto& local_dfb_name = dfb_binding.local_accessor_name;
-        if (named_compile_args.find(local_dfb_name) != named_compile_args.end()) {
+        if (named_compile_args.contains(local_dfb_name)) {
             TT_FATAL(
                 false,
                 "DFB local accessor name '{}' collides with an existing compile-time arg binding. "
