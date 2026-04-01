@@ -248,12 +248,12 @@ run_t3000_mistral_tests() {
   # Mistral-Small-3.1-24B text demo
   mistral24b=mistralai/Mistral-Small-3.1-24B-Instruct-2503
   tt_cache_mistral24b=$TT_CACHE_HOME/$mistral24b
-  CI= MESH_DEVICE=T3K TT_CACHE_PATH=$tt_cache_mistral24b HF_MODEL=$mistral24b \
+  MESH_DEVICE=T3K TT_CACHE_PATH=$tt_cache_mistral24b HF_MODEL=$mistral24b \
     pytest models/tt_transformers/demo/simple_text_demo.py --timeout 10800 -k "not performance-ci-stress-1"
   echo "LOG_METAL: Mistral-Small-3.1-24B tests completed (text)"
 
   # Mistral-Small-3.1-24B vision demo
-  CI= MESH_DEVICE=T3K HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b \
+  MESH_DEVICE=T3K HF_MODEL=$mistral24b TT_CACHE_PATH=$tt_cache_mistral24b \
     pytest models/tt_transformers/demo/simple_vision_demo.py -k "batch1-trace" --timeout 900
   echo "LOG_METAL: Mistral-Small-3.1-24B tests completed (vision)"
 
