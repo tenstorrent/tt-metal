@@ -2795,6 +2795,8 @@ def test_matmul_block_sharded_input_with_padding(device):
         ),
     )
     ttnn_input_a = ttnn.to_memory_config(ttnn_input_a, input_a_sharded_memory_config)
+    ttnn_input_a = ttnn.fill_implicit_tile_padding(ttnn_input_a, -42)
+    ttnn_input_b = ttnn.fill_implicit_tile_padding(ttnn_input_b, -42)
 
     ttnn_output = ttnn.matmul(ttnn_input_a, ttnn_input_b, transpose_a=False, transpose_b=False)
 
