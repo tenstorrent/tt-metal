@@ -12,7 +12,8 @@
 #include "ttnn/operations/data_movement/sharded/reshard/device/nd_reshard_program_factory_copy_local.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/decorators.hpp"
+#include "ttnn/types.hpp"
+#include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 
