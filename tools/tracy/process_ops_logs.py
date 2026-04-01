@@ -2213,13 +2213,14 @@ def get_device_data_generate_report(
                     eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
                         lambda x: min(100.0, safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("value_PACKER_BUSY", 0))), axis=1
                     )
-                    eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
-                        lambda x: safe_div(
-                            (x.get("value_SRCA_WRITE_AVAILABLE", 0) + x.get("value_SRCB_WRITE_AVAILABLE", 0)) / 2,
-                            (x.get("value_UNPACK0_BUSY_THREAD0", 0) + x.get("value_UNPACK1_BUSY_THREAD0", 0)) / 2,
-                        ),
-                        axis=1,
-                    )
+                    if "value_SRCB_WRITE_AVAILABLE" in eff_pivot.columns:
+                        eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
+                            lambda x: safe_div(
+                                (x.get("value_SRCA_WRITE_AVAILABLE", 0) + x.get("value_SRCB_WRITE_AVAILABLE", 0)) / 2,
+                                (x.get("value_UNPACK0_BUSY_THREAD0", 0) + x.get("value_UNPACK1_BUSY_THREAD0", 0)) / 2,
+                            ),
+                            axis=1,
+                        )
                     if "Unpacker0 Write Efficiency" in eff_pivot.columns:
                         eff_pivot["Unpacker Write Efficiency"] = eff_pivot[
                             ["Unpacker0 Write Efficiency", "Unpacker1 Write Efficiency"]
@@ -2462,10 +2463,12 @@ def get_device_data_generate_report(
                     if "value_SRCA_WRITE_NOT_BLOCKED_OVR" in eff_pivot.columns:
                         eff_pivot["SrcA Write Port Blocked Rate"] = eff_pivot.apply(
                             safe_complement("value_SRCA_WRITE_NOT_BLOCKED_OVR", "value_SRCA_WRITE_AVAILABLE"), axis=1)
-                    eff_pivot["SrcB Write Port Blocked Rate"] = eff_pivot.apply(
-                        safe_complement("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"), axis=1)
-                    eff_pivot["SrcA Write Actual Efficiency"] = eff_pivot.apply(
-                        safe_ratio("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"), axis=1)
+                    if "value_SRCB_WRITE_AVAILABLE" in eff_pivot.columns:
+                        eff_pivot["SrcB Write Port Blocked Rate"] = eff_pivot.apply(
+                            safe_complement("value_SRCB_WRITE_NOT_BLOCKED_PORT", "value_SRCB_WRITE_AVAILABLE"), axis=1)
+                    if "value_SRCA_WRITE_ACTUAL" in eff_pivot.columns:
+                        eff_pivot["SrcA Write Actual Efficiency"] = eff_pivot.apply(
+                            safe_ratio("value_SRCA_WRITE_ACTUAL", "value_SRCA_WRITE_AVAILABLE"), axis=1)
                     if "value_SRCB_WRITE_ACTUAL" in eff_pivot.columns:
                         eff_pivot["SrcB Write Actual Efficiency"] = eff_pivot.apply(
                             safe_ratio("value_SRCB_WRITE_ACTUAL", "value_SRCB_WRITE_AVAILABLE"), axis=1)
@@ -2822,7 +2825,7 @@ def get_device_data_generate_report(
 
                     # Write all metrics to CSV row systematically
                     for base_name, m in metrics.items():
-                        is_ipc = "IPC" in base_name
+                        is_ipc = "IPC" in base_name or "Issue Rate" in base_name
                         suffix = "" if is_ipc else " (%)"
                         # Special handling for SFPU/FPU/MATH "Avg on full grid" legacy names
                         if base_name == "SFPU Util":
