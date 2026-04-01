@@ -69,7 +69,7 @@ def vae_device_config(func):
     func = pytest.mark.parametrize(
         "mesh_device",
         [
-            {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "T3K_2D": (2, 4), "TG": (8, 4)}.get(
                 os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
             )
         ],
@@ -263,9 +263,14 @@ def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links)
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
 
+    # Pass original (unpadded) spatial dims so ResBlock can slice padding
+    # before GroupNorm and re-pad after, preventing zero contamination.
+    logical_h = H if vae_parallel_config.h_parallel.factor > 1 else 0
+    logical_w = W if vae_parallel_config.w_parallel.factor > 1 else 0
+
     logger.info(f"TT input shape: {tt_input.shape}")
     logger.info("Run TtResBlock forward")
-    tt_output = tt_model(tt_input)
+    tt_output = tt_model(tt_input, logical_h, logical_w)
     logger.info("End TtResBlock forward")
 
     # Convert TT output to torch tensor
@@ -466,9 +471,14 @@ def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
 
+    # Pass original (unpadded) spatial dims so ResBlocks inside the upsample
+    # block can slice padding before GroupNorm.
+    logical_h = H if vae_parallel_config.h_parallel.factor > 1 else 0
+    logical_w = W if vae_parallel_config.w_parallel.factor > 1 else 0
+
     logger.info(f"Input shape: {torch_input.shape}")
     logger.info("Run TtCausalUpsampleBlock forward")
-    tt_output = tt_model(tt_input)
+    tt_output = tt_model(tt_input, logical_h, logical_w)
     logger.info("End TtCausalUpsampleBlock forward")
 
     # Convert TT output to torch tensor
@@ -726,9 +736,14 @@ def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, 
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
 
+    # Pass original (unpadded) spatial dims so ResBlocks can slice padding
+    # before GroupNorm.
+    logical_h = H if vae_parallel_config.h_parallel.factor > 1 else 0
+    logical_w = W if vae_parallel_config.w_parallel.factor > 1 else 0
+
     logger.info(f"Input shape: {torch_input.shape}")
     logger.info("Run TtDecoder forward")
-    tt_output = tt_model(tt_input)
+    tt_output = tt_model(tt_input, logical_h, logical_w)
     logger.info("End TtDecoder forward")
 
     # Convert TT output to torch tensor
