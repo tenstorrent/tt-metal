@@ -17,7 +17,7 @@
 
 // 27-bit position_idx makes ABA impractical (2^27 entries between collisions)
 
-// SPSC (WH/BH)
+// SPSC
 constexpr int16_t DEBUG_RING_BUFFER_STARTING_INDEX = -1;
 constexpr uint32_t DEBUG_RING_BUFFER_SPSC_ELEMENTS = 32;
 
@@ -27,7 +27,7 @@ struct debug_spsc_ring_buf_msg_t {
     uint32_t data[DEBUG_RING_BUFFER_SPSC_ELEMENTS];
 };
 
-// MPSC (Quasar): lock-free ring buffer for concurrent writes using 32-bit atomics
+// MPSC: lock-free ring buffer for concurrent writes using 32-bit atomics
 // Works on both DMs (tt-qsr64) and TRISCs (tt-qsr32)
 constexpr uint32_t DEBUG_RING_BUFFER_MPSC_ELEMENTS = 128;
 constexpr uint32_t DEBUG_RING_BUFFER_MPSC_MASK = DEBUG_RING_BUFFER_MPSC_ELEMENTS - 1;

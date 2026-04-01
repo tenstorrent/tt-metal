@@ -29,6 +29,11 @@ struct MpscRingBufEntry {
     uint32_t thread_idx;  // Needed for [DM0] prefix in output
 };
 
+struct MpscRingBufState {
+    uint32_t last_pos = 0;
+    std::vector<MpscRingBufEntry> entries;
+};
+
 class WatcherDeviceReader {
 public:
     WatcherDeviceReader(
@@ -60,8 +65,7 @@ private:
 
     // MPSC state cached on host: slots get overwritten (lock-free), so we track position and
     // buffer history per core. SPSC doesn't need this since current_ptr/wrapped give full state.
-    mutable std::map<CoreCoord, uint32_t> mpsc_last_consumed_pos_;
-    mutable std::map<CoreCoord, std::vector<MpscRingBufEntry>> mpsc_ring_buf_entries_;
+    mutable std::map<CoreCoord, MpscRingBufState> mpsc_ring_buf_entries_;
 };
 
 }  // namespace tt::tt_metal

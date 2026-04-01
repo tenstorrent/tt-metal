@@ -906,8 +906,9 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
     uint32_t mask = hal.get_ring_buffer_mask();
 
     // Track position and buffer per core
-    uint32_t& last_pos = reader_.mpsc_last_consumed_pos_[virtual_coord_];
-    auto& entries = reader_.mpsc_ring_buf_entries_[virtual_coord_];
+    auto& state = reader_.mpsc_ring_buf_entries_[virtual_coord_];
+    uint32_t& last_pos = state.last_pos;
+    auto& entries = state.entries;
 
     // Collect new valid entries (oldest to newest)
     std::vector<MpscRingBufEntry> new_entries;

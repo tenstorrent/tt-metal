@@ -215,10 +215,8 @@ void RunTest(
     log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
 
     // Validate output
-    uint32_t thread_idx = processor.processor_type;
-    if (is_quasar && processor.processor_class == HalProcessorClassType::COMPUTE) {
-        thread_idx = hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
-    }
+    uint32_t thread_idx =
+        hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     EXPECT_TRUE(FileContainsAllStringsInOrder(
         fixture->log_file_name, get_expected_single_processor(processor.core_type, thread_idx, num_pushes)));
 }
