@@ -131,6 +131,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::HARDSIGMOID:
         case UnaryOpType::SOFTSIGN:
         case UnaryOpType::SOFTSHRINK:
+        case UnaryOpType::HARDSHRINK:
         case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         case UnaryOpType::LGAMMA: return "SFPU_OP_LGAMMA_INCLUDE";
         case UnaryOpType::POLYGAMMA: return "SFPU_OP_POLYGAMMA_INCLUDE";
@@ -443,6 +444,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("polygamma_tile({}, {:#x}u, {:#x}u);", idst, as_uint(param0), as_uint(param1))};
         }
         case UnaryOpType::HARDSHRINK:
+            return {"hardshrink_tile_init();", fmt::format("hardshrink_tile({}, {:#x}u);", idst, as_uint(param0))};
         case UnaryOpType::LOGIT:
         case UnaryOpType::BITCAST:
             // Bitcast uses identity kernel (copy_tile + pack_tile) - no LLK needed
@@ -666,7 +668,6 @@ std::string_view get_compute_kernel_path(UnaryOpType op_type, std::optional<Data
         case UnaryOpType::IDENTITY: return "eltwise_identity_kernel.cpp";
         case UnaryOpType::WHERE_TSS: return "where_tss_kernel.cpp";
         case UnaryOpType::LOGIT: return "logit_kernel.cpp";
-        case UnaryOpType::HARDSHRINK: return "hardshrink_kernel.cpp";
         case UnaryOpType::HARDSWISH: return "hardswish_kernel.cpp";
         case UnaryOpType::LOGSIGMOID: return "logsigmoid_kernel.cpp";
         default: return "eltwise_sfpu.cpp";

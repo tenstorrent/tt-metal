@@ -67,7 +67,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK) {
+    if (ops_chain[0].type() == UnaryOpType::LOGIT) {
         tt::tt_metal::CircularBufferConfig cb_tmp0_config =
             tt::tt_metal::CircularBufferConfig(num_input_tiles * input_cb_page_size, {{tmp0_cb_index, cb_data_format}})
                 .set_page_size(tmp0_cb_index, input_cb_page_size);
@@ -126,7 +126,6 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
     if (!ops_chain[0].empty()) {
         switch (ops_chain[0].type()) {
-            case UnaryOpType::HARDSHRINK:
             case UnaryOpType::MISH:
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 break;
@@ -302,12 +301,7 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
-    if (ops_chain[0].type() == UnaryOpType::HARDSHRINK) {
-        tt::tt_metal::CircularBufferConfig cb_tmp0_config =
-            tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tmp0_cb_index, cb_data_format}})
-                .set_page_size(tmp0_cb_index, single_tile_size);
-        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp0_config);
-    }
+    // HARDSHRINK no longer needs tmp0 CB — migrated to SFPU
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = ntiles_per_block * 2;
@@ -364,7 +358,6 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
 
     if (!ops_chain[0].empty()) {
         switch (ops_chain[0].type()) {
-            case UnaryOpType::HARDSHRINK:
             case UnaryOpType::MISH:
                 packed_scalar1 = utils::pack_scalar_runtime_arg(ops_chain[0], 0, input.dtype());
                 break;
