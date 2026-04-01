@@ -69,10 +69,11 @@ class ModelPipeline:
         config = create_pipeline_configuration_from_num_procs(
             num_procs,
             provider,
-            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
-            lm_head_persistent_mode=lm_head_persistent_mode,
+            fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            persistent_mode=lm_head_persistent_mode,
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
+            enable_mtp=True,
         )
         if config.num_stages != num_procs:
             raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes")
@@ -206,6 +207,11 @@ class ModelPipeline:
 
             if is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens:
                 break
+
+            print("Got MD from Device: ")
+            print(f"Token 0 Pos: {result.token_0_pos}, Token 1 Pos: {result.token_1_pos}")
+            print(f"Token 0 Type: {result.token_0_type}, Token 1 Type: {result.token_1_type}")
+            print(f"Token 0: {result.token_0}, Token 1: {result.token_1}")
 
             self._write_spec_pair(
                 result.token_0,

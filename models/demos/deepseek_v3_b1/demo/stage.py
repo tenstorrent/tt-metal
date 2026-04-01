@@ -665,12 +665,14 @@ class BaseLMHeadStage(StageKind):
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
         mtp_weights: DeepSeekV3MTPWeights | None = None,
+        embedding_weights: DeepSeekV3EmbeddingLayerWeights | None = None,
         send_mtp_output_downstream: bool = False,
     ) -> None:
         self._weights = weights
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
         self._mtp_weights = mtp_weights
+        self._embedding_weights = embedding_weights
         self._enable_mtp = mtp_weights is not None
         self._send_mtp_output_downstream = send_mtp_output_downstream and self._enable_mtp
         self._lmhead_state: dict[str, Any] = {}
@@ -956,7 +958,7 @@ class BaseLMHeadStage(StageKind):
         }
         if self._enable_mtp:
             self._lmhead_state["ttnn_mtp_output"] = ttnn_mtp_output
-            self._lmhead_state["ttnn_embedding"] = self._mtp_weights.embedding
+            self._lmhead_state["ttnn_embedding"] = self._embedding_weights.embedding
             self._lmhead_state["ttnn_h_gamma"] = self._mtp_weights.h_gamma
             self._lmhead_state["ttnn_e_gamma"] = self._mtp_weights.e_gamma
             self._lmhead_state["ttnn_eh_proj"] = self._mtp_weights.eh_projection

@@ -100,27 +100,28 @@ std::vector<PhysicalPipelineStageConfig> generate_physical_pipeline_config() {
     auto num_procs = *(tt::tt_metal::MetalContext::instance().get_distributed_context_ptr()->size());
     switch (num_procs) {
         case 4:
-            return {
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 2,
-                 .exit_node_asic_location = 6},
-                {.entry_node_tray_id = 3,
-                 .exit_node_tray_id = 3,
-                 .entry_node_asic_location = 6,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 4,
-                 .exit_node_tray_id = 4,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 7},
-                {.entry_node_tray_id = 2,
-                 .exit_node_tray_id = 2,
-                 .entry_node_asic_location = 7,
-                 .exit_node_asic_location = 4},
-                {.entry_node_tray_id = 1,
-                 .exit_node_tray_id = 1,
-                 .entry_node_asic_location = 4,
-                 .exit_node_asic_location = 3}};
+            return {// First Tray
+                    {.entry_node_tray_id = 1,
+                     .exit_node_tray_id = 1,
+                     .entry_node_asic_location = 1,
+                     .exit_node_asic_location = 2},
+                    {.entry_node_tray_id = 1,
+                     .exit_node_tray_id = 1,
+                     .entry_node_asic_location = 3,
+                     .exit_node_asic_location = 4},
+                    {.entry_node_tray_id = 2,
+                     .exit_node_tray_id = 2,
+                     .entry_node_asic_location = 4,
+                     .exit_node_asic_location = 3},
+                    {.entry_node_tray_id = 2,
+                     .exit_node_tray_id = 2,
+                     .entry_node_asic_location = 2,
+                     .exit_node_asic_location = 5},
+                    // Wrap-around
+                    {.entry_node_tray_id = 1,
+                     .exit_node_tray_id = 1,
+                     .entry_node_asic_location = 5,
+                     .exit_node_asic_location = 6}};
         case 16:
             return {
                 // First Tray

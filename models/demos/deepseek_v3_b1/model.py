@@ -36,7 +36,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_W_METADATA_PAGE_SIZE_BYTES
+from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
 
 # Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
 TOKEN_ID_BYTES: int = 4
@@ -74,12 +74,6 @@ class TokenType:
     SPEC = 1
 
 
-class NumTokens:
-    STALE = 0  # SPEC arrived, BASE was rejected — discard
-    ACCEPT = 1  # BASE matched speculation — emit accepted token
-    REJECT_OR_CONTINUE = 2  # REJECT or CONTINUE — two tokens present
-
-
 @dataclass
 class DecodeResult:
     """Parsed output page from the pipeline."""
@@ -87,7 +81,6 @@ class DecodeResult:
     token_0: int
     token_0_type: int
     token_0_pos: int
-    num_tokens: int
     token_1: int | None = None
     token_1_type: int | None = None
     token_1_pos: int | None = None
@@ -96,16 +89,13 @@ class DecodeResult:
 def parse_output_page(output_buffer: ttnn.Tensor) -> DecodeResult:
     """Parse a 16-word output page into a structured DecodeResult."""
     raw = ttnn.to_torch(output_buffer).to(torch.int32).flatten()
-    num_tokens = int(raw[OutputField.NUM_TOKENS].item())
-    has_second = num_tokens == NumTokens.REJECT_OR_CONTINUE
     return DecodeResult(
         token_0=int(raw[OutputField.TOKEN_0].item()),
         token_0_type=int(raw[OutputField.TOKEN_0_TYPE].item()),
         token_0_pos=int(raw[OutputField.TOKEN_0_POS].item()),
-        num_tokens=num_tokens,
-        token_1=int(raw[OutputField.TOKEN_1].item()) if has_second else None,
-        token_1_type=int(raw[OutputField.TOKEN_1_TYPE].item()) if has_second else None,
-        token_1_pos=int(raw[OutputField.TOKEN_1_POS].item()) if has_second else None,
+        token_1=int(raw[OutputField.TOKEN_1].item()),
+        token_1_type=int(raw[OutputField.TOKEN_1_TYPE].item()),
+        token_1_pos=int(raw[OutputField.TOKEN_1_POS].item()),
     )
 
 
@@ -187,7 +177,7 @@ class DeepSeekV3:
         self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
         self._page_size_datums: int = self._tensor_size_bytes // TOKEN_ID_BYTES
         self._position: int = 0
-        self._output_buffer: ttnn.Tensor = create_output_buffer(ACTIVATION_W_METADATA_PAGE_SIZE_BYTES // 4)
+        self._output_buffer: ttnn.Tensor = create_output_buffer(ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES // 4)
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
     def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> list[DecodeResult]:
