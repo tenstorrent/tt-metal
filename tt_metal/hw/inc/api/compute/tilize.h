@@ -41,7 +41,7 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
           false /*is_int_en*/,
           true /*tilize en*/>(icb)));
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb)));
+    PACK((llk_pack_init<false /*untilize*/, false /*zero output*/, true /*tilize en*/>(ocb, 1, icb)));
 #endif
 }
 
@@ -117,7 +117,7 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
     UNPACK((llk_unpack_tilize_init(new_icb, block)));
 
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_init<false, false, true /*tilize en*/>(ocb)));
+    PACK((llk_pack_init<false, false, true /*tilize en*/>(ocb, 1, new_icb)));
 #endif
 }
 
