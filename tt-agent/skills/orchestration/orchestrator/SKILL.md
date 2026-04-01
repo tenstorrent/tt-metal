@@ -1,5 +1,5 @@
 ---
-name: tt-orchestrator
+name: orchestrator
 description: "Route, plan, and decompose high-level Tenstorrent hardware development requests — new kernels, ops, models, CI failures, regressions, optimizations — into sequenced skill dispatches with tracked plans"
 ---
 
@@ -22,7 +22,7 @@ Trigger on high-level requests like:
 - "Add a new model to tt-metal"
 
 If the request maps directly to a single tool (e.g., "run the profiler"), go there
-directly. Use tt-orchestrator when the request requires multiple steps or skills.
+directly. Use the orchestrator when the request requires multiple steps or skills.
 
 ## Pipeline
 
@@ -52,16 +52,16 @@ analyze → scope → decompose → dispatch → verify → iterate
 
 | Situation | Dispatch to |
 |---|---|
-| Profile bottleneck, find hot kernels | `tt-profiler` |
-| Optimize an existing op or kernel | `tt-iterator` |
-| CI job is failing | `tt-ci-fixer` |
-| Performance regression bisect | `tt-bisect` |
-| Build, flash, or run on device | `tt-device` |
-| Write or run tests for an op | `tt-tester` |
-| Debug wrong outputs or crashes | `tt-debugger` |
-| Design a new op or kernel | `tt-designer` |
-| Review code before merging | `tt-code-review` |
-| Need codebase context before proceeding | `tt-learn` |
+| Profile bottleneck, find hot kernels | `/tt:profiler` |
+| Optimize an existing op or kernel | `/tt:iterator` |
+| CI job is failing | `/tt:ci-fixer` |
+| Performance regression bisect | `/tt:bisect` |
+| Build, flash, or run on device | `/tt:device` |
+| Write or run tests for an op | `/tt:tester` |
+| Debug wrong outputs or crashes | `/tt:debugger` |
+| Design a new op or kernel | `/tt:designer` |
+| Review code before merging | `/tt:code-review` |
+| Need codebase context before proceeding | `/tt:learn` |
 
 ## Document Protocol
 

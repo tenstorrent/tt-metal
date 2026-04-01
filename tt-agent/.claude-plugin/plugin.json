@@ -1,0 +1,7 @@
+{
+  "name": "tt",
+  "description": "Agentic tooling for Tenstorrent hardware development — skills for writing, testing, profiling, debugging, and optimizing TT kernels, operators, and models",
+  "version": "0.1.0",
+  "author": { "name": "Tenstorrent" },
+  "repository": "https://github.com/tenstorrent/tt-metal"
+}
