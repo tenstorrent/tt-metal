@@ -65,6 +65,7 @@ class TtMoe(LightweightModule):
         metadata_len: int,
         max_dispatched_tokens_per_expert: int,
         seq_len_per_chip: int,
+        gate_weights: dict,
         emb_dim: int = DeepSeekV3Config.EMB_SIZE,
         hidden_dim: int = DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
         num_links: Union[int, tuple[int, int]] = 1,
@@ -73,7 +74,6 @@ class TtMoe(LightweightModule):
         shared_expert_weights: dict = None,
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        gate_weights: dict = None,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
     ):
         """
@@ -101,7 +101,7 @@ class TtMoe(LightweightModule):
                                    for shared expert.
             activations_dtype: Data type for activations (default: bfloat8_b)
             weights_dtype: Data type for weights (default: bfloat4_b)
-            gate_weights: Optional dict with "weight" and "e_score_correction_bias" keys for gate
+            gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
             gate_fallback_mode: Fallback mode for gate (default: HOST_ALL)
         """
         super().__init__()

@@ -63,7 +63,7 @@ class TtMoERoutingSetup(LightweightModule):
             ttnn_top_k_experts_indices = ttnn.pad(
                 ttnn_top_k_experts_indices,
                 padding=((0, 0), (0, shard_width - num_experts_per_tok)),
-                value=257,
+                value=(num_routed_experts + 1),
             )
 
         bincount_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
