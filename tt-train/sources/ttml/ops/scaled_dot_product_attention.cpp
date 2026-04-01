@@ -113,7 +113,6 @@ void validate_qkv_shapes(
             value->get_value().logical_shape()));
     }
 
-    uint32_t group_num = query_heads;  // (G) number of KV groups, H for MHA mode
     if (query_heads != key_heads || query_heads != value_heads) {
         // grouped query mode
         if (value_heads != key_heads) {
@@ -124,7 +123,7 @@ void validate_qkv_shapes(
                 key_heads,
                 value_heads));
         }
-        group_num = value_heads;
+        const uint32_t group_num = value_heads;  // (G) number of KV groups
         if (query_heads % group_num != 0) {
             throw std::invalid_argument(fmt::format(
                 "In grouped query mode, the number of query heads must be divisible by the number of key/value groups. "
