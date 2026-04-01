@@ -13,10 +13,12 @@ from typing import Optional
 
 import ttml
 
-from .layout import Layout, Shard, Replicate, get_layout, set_layout
+from .layout import DistributedLayout, Shard, Replicate, get_layout, set_layout
 
 
-def _redistribute_impl(tensor, current_layout: Layout, target_layout: Layout):
+def _redistribute_impl(
+    tensor, current_layout: DistributedLayout, target_layout: DistributedLayout
+):
     """Perform redistribution using ttml autograd-aware collectives.
 
     Uses regular all_gather / scatter. Gradient handling (e.g. GradOutputType.REPLICATED)
@@ -52,7 +54,7 @@ def _redistribute_impl(tensor, current_layout: Layout, target_layout: Layout):
     return result
 
 
-def redistribute(tensor, target_layout: Layout):
+def redistribute(tensor, target_layout: DistributedLayout):
     """Transform tensor to *target_layout*.  Differentiable for autograd.
 
     No-op if the tensor already has the requested layout. Uses regular all_gather/scatter.

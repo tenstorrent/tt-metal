@@ -305,19 +305,34 @@ def dispatch(op_name: str, *args, **kwargs):
 # ---------------------------------------------------------------------------
 
 
-def register_op(op_name: str, opp: Callable):
+def register_op(op_name: str, opp: Callable = None):
     """Register an op for distributed dispatch.
+
+    Can be used in two ways:
+
+    1. As a decorator::
+
+        @register_op("my_op")
+        def my_op(x, w):
+            ...
+
+    2. As a two-arg call (used internally by ``_register_ops``)::
+
+        my_op = register_op("my_op", raw_callable)
 
     Saves the raw callable and returns a wrapper that routes through
     ``dispatch(op_name, ...)``.
-
-    This is the decorator that ``_register_ops`` uses at import-time to
-    monkey-patch ``ttml.ops.*`` entry points.
     """
-    _RAW_OPS[op_name] = opp
 
-    @functools.wraps(opp)
-    def wrapper(*args, **kwargs):
-        return dispatch(op_name, *args, **kwargs)
+    def _wrap(fn: Callable) -> Callable:
+        _RAW_OPS[op_name] = fn
 
-    return wrapper
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            return dispatch(op_name, *args, **kwargs)
+
+        return wrapper
+
+    if opp is not None:
+        return _wrap(opp)
+    return _wrap

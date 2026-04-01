@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 if TYPE_CHECKING:
     from ttml.trainers import SFTTrainer
 
-from .layout import Layout
+from .layout import DistributedLayout
 
 logger = logging.getLogger("ttml.distributed.dispatch")
 
@@ -54,13 +54,13 @@ class TraceEntry:
     """Single dispatch event."""
 
     op_name: str
-    input_layouts: List[Optional[Layout]]
+    input_layouts: List[Optional[DistributedLayout]]
     rule_name: Optional[str]
     plan: Any  # ShardingPlan or None
     pre_collectives: List[Dict[str, Any]]
     redistributions: List[Dict[str, Any]]
     post_collectives: List[Dict[str, Any]]
-    output_layout: Optional[Layout]
+    output_layout: Optional[DistributedLayout]
     depth: int = 0
     module_stack: List[str] = field(default_factory=list)
     op_kwargs: Dict[str, Any] = field(default_factory=dict)
@@ -84,14 +84,14 @@ class TraceEntry:
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable dict representation."""
 
-        def layout_repr(layout: Optional[Layout]) -> Optional[str]:
+        def layout_repr(layout: Optional[DistributedLayout]) -> Optional[str]:
             return repr(layout) if layout is not None else None
 
         def json_safe(obj: Any) -> Any:
-            """Recursively convert Layout and other non-JSON types to strings."""
+            """Recursively convert DistributedLayout and other non-JSON types to strings."""
             if obj is None or isinstance(obj, (bool, int, float, str)):
                 return obj
-            if isinstance(obj, Layout):
+            if isinstance(obj, DistributedLayout):
                 return repr(obj)
             if isinstance(obj, (list, tuple)):
                 return [json_safe(x) for x in obj]

@@ -13,18 +13,18 @@ Row-parallel: weight sharded on -1, input sharded, output replicated.
 
 from __future__ import annotations
 
-from ..layout import Layout, Shard, Replicate
+from ..layout import DistributedLayout, Shard, Replicate
 from .registry import ShardingPlan, register_rule
 
 
-def _is_shard_on(layout: Layout, dim: int) -> bool:
+def _is_shard_on(layout: DistributedLayout, dim: int) -> bool:
     for p in layout.placements:
         if isinstance(p, Shard) and p.dim == dim:
             return True
     return False
 
 
-def _find_shard_axis(layout: Layout, dim: int) -> int:
+def _find_shard_axis(layout: DistributedLayout, dim: int) -> int:
     for axis, p in enumerate(layout.placements):
         if isinstance(p, Shard) and p.dim == dim:
             return axis
@@ -32,8 +32,8 @@ def _find_shard_axis(layout: Layout, dim: int) -> int:
 
 
 def _linear_matmul_plan(
-    input_layout: Layout,
-    weight_layout: Layout,
+    input_layout: DistributedLayout,
+    weight_layout: DistributedLayout,
     *extra_layouts,
     runtime=None,
     **kwargs,

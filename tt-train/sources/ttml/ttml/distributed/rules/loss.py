@@ -11,7 +11,7 @@ batch sharding).
 
 from __future__ import annotations
 
-from ..layout import Layout, Shard, Replicate, replicated_layout
+from ..layout import DistributedLayout, Shard, replicated_layout
 from .registry import ShardingPlan, register_rule
 
 
@@ -42,7 +42,7 @@ def cross_entropy_loss_rule(
             pass
         elif isinstance(p, Shard):
             axis_placements[i] = p
-    logit_target_layout = Layout(ndim=ndim, axis_placements=axis_placements)
+    logit_target_layout = DistributedLayout(ndim=ndim, axis_placements=axis_placements)
 
     # Target layout: keep as-is (preserves DP batch sharding)
     input_layouts = [logit_target_layout] + list(layouts[1:])

@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Layout primitives: Shard, Replicate, and Layout.
+"""Layout primitives: Shard, Replicate, and DistributedLayout.
 
-A Layout describes how a tensor is distributed across the mesh dimensions.
+A DistributedLayout describes how a tensor is distributed across the mesh dimensions.
 It maps 1-to-1 with ttnn TensorTopology placements but is a lightweight
 Python object that supports hashing and equality for use as cache keys.
 """
@@ -44,19 +44,19 @@ Placement = Union[Shard, Replicate]
 
 
 # ---------------------------------------------------------------------------
-# Layout
+# DistributedLayout
 # ---------------------------------------------------------------------------
 
 
-class Layout:
+class DistributedLayout:
     """Describes how a tensor is placed across an N-dimensional mesh.
 
     ``placements`` is a tuple with one entry per mesh dimension.  Each entry
     is either ``Shard(dim)`` or ``Replicate()``.
 
     Can be created in several ways:
-    - Layout(ndim=2)  # all Replicate()
-    - Layout(ndim=2, axis_placements={1: Shard(-1)})  # Replicate() on axis 0, Shard(-1) on axis 1
+    - DistributedLayout(ndim=2)  # all Replicate()
+    - DistributedLayout(ndim=2, axis_placements={1: Shard(-1)})  # Replicate() on axis 0, Shard(-1) on axis 1
     """
 
     __slots__ = ("placements",)
@@ -66,7 +66,7 @@ class Layout:
         ndim: int = None,
         axis_placements: dict = None,
     ):
-        """Create a Layout.
+        """Create a DistributedLayout.
 
         Args:
             ndim: Number of mesh dimensions (creates all Replicate() by default)
@@ -104,17 +104,19 @@ class Layout:
             return p.dim
         return None
 
-    def with_placement(self, mesh_axis: int, placement: Placement) -> "Layout":
+    def with_placement(
+        self, mesh_axis: int, placement: Placement
+    ) -> "DistributedLayout":
         ndim = len(self.placements)
         axis_placements = {}
         for i in range(ndim):
             p = placement if i == mesh_axis else self.placements[i]
             if isinstance(p, Shard):
                 axis_placements[i] = p
-        return Layout(ndim=ndim, axis_placements=axis_placements)
+        return DistributedLayout(ndim=ndim, axis_placements=axis_placements)
 
     def __eq__(self, other):
-        if not isinstance(other, Layout):
+        if not isinstance(other, DistributedLayout):
             return False
         return self.placements == other.placements
 
@@ -122,11 +124,11 @@ class Layout:
         return hash(self.placements)
 
     def __repr__(self):
-        return f"Layout({self.placements})"
+        return f"DistributedLayout({self.placements})"
 
 
-def replicated_layout(ndim: int = 2) -> Layout:
-    return Layout(ndim=ndim)
+def replicated_layout(ndim: int = 2) -> DistributedLayout:
+    return DistributedLayout(ndim=ndim)
 
 
 # ---------------------------------------------------------------------------
@@ -134,8 +136,8 @@ def replicated_layout(ndim: int = 2) -> Layout:
 # ---------------------------------------------------------------------------
 
 
-def layout_from_topology(topology, mesh_ndim: int) -> Layout:
-    """Extract a Layout from a ttnn TensorTopology object."""
+def layout_from_topology(topology, mesh_ndim: int) -> DistributedLayout:
+    """Extract a DistributedLayout from a ttnn TensorTopology object."""
     placements: List[Placement] = []
     for p in topology.placements():
         if isinstance(p, ttnn.PlacementShard):
@@ -147,11 +149,11 @@ def layout_from_topology(topology, mesh_ndim: int) -> Layout:
         for i in range(len(placements))
         if isinstance(placements[i], Shard)
     }
-    return Layout(ndim=mesh_ndim, axis_placements=axis_placements)
+    return DistributedLayout(ndim=mesh_ndim, axis_placements=axis_placements)
 
 
-def layout_to_mapper_config(layout: Layout) -> ttnn.MeshMapperConfig:
-    """Convert a Layout to a ttnn MeshMapperConfig."""
+def layout_to_mapper_config(layout: DistributedLayout) -> ttnn.MeshMapperConfig:
+    """Convert a DistributedLayout to a ttnn MeshMapperConfig."""
     ttnn_placements = []
     for p in layout.placements:
         if isinstance(p, Shard):
@@ -166,8 +168,8 @@ def layout_to_mapper_config(layout: Layout) -> ttnn.MeshMapperConfig:
 # ---------------------------------------------------------------------------
 
 
-def get_layout(tensor) -> Optional[Layout]:
-    """Read the Layout attached to a ttml autograd tensor.
+def get_layout(tensor) -> Optional[DistributedLayout]:
+    """Read the DistributedLayout attached to a ttml autograd tensor.
 
     The layout dimensions always match the mesh device dimensions.
     Falls back to reading the underlying ttnn TensorTopology.
@@ -185,13 +187,13 @@ def get_layout(tensor) -> Optional[Layout]:
     # Extend to mesh dimensions if needed
     if layout.ndim < mesh_ndim:
         axis_placements = {i: p for i, p in enumerate(layout.placements)}
-        layout = Layout(ndim=mesh_ndim, axis_placements=axis_placements)
+        layout = DistributedLayout(ndim=mesh_ndim, axis_placements=axis_placements)
 
     return layout
 
 
-def set_layout(tensor, layout: Layout) -> None:
-    """Stamp a Layout on a ttml autograd tensor.
+def set_layout(tensor, layout: DistributedLayout) -> None:
+    """Stamp a DistributedLayout on a ttml autograd tensor.
 
     Updates both the Python-side attribute and the underlying ttnn tensor's
     TensorTopology placements.

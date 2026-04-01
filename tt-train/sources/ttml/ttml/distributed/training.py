@@ -17,7 +17,7 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase
 
-from .layout import Layout, Shard, set_layout
+from .layout import DistributedLayout, Shard, set_layout
 from .mesh_runtime import MeshRuntime, set_runtime
 from .rules.registry import get_module_rule
 from .style import ParallelStyle
@@ -32,7 +32,7 @@ from ._register_ops import init_ops
 def distribute_tensor(
     tensor,
     mesh_device,
-    layout: Layout,
+    layout: DistributedLayout,
     requires_grad: Optional[bool] = None,
 ) -> Any:
     """Distribute a single ttml autograd tensor to *mesh_device* with *layout*.
@@ -55,9 +55,9 @@ def distribute_tensor(
     )
     orig_dtype = tensor.dtype()
 
-    # Use composer to gather tensor from mesh (needed when mesh is open)
+    # Use composer to gather multi-device tensor back to single numpy array.
+    # Tensors are already replicated across the mesh when the device is open.
     composer = ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0)
-
     np_data = tensor.to_numpy(orig_dtype, composer)
 
     # Composer concatenates all devices along dim 0, take first slice for replicated data

@@ -62,7 +62,6 @@ def print_memory_stats(label: str):
     """
     try:
         dram = MemoryUsageTracker.get_dram_usage(label)
-        l1 = MemoryUsageTracker.get_l1_usage(label)
 
         MB = 1024 * 1024
         alloc_mb = dram.total_allocations / MB

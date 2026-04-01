@@ -13,7 +13,7 @@ dim), so the common path is pass-through.
 
 from __future__ import annotations
 
-from ..layout import Layout, Shard, Replicate, replicated_layout
+from ..layout import replicated_layout
 from .registry import ShardingPlan, register_rule
 
 

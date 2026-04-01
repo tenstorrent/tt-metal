@@ -729,7 +729,7 @@ This section describes the **rule-based layout and dispatch layer** used for Pyt
 
 ### Overview
 
-1. **Layout**: Describes how a tensor is placed across the mesh (`Shard(dim)` or `Replicate()` per mesh axis). Built with `Layout(ndim=..., axis_placements={axis: Shard(dim), ...})`.
+1. **DistributedLayout**: Describes how a tensor is placed across the mesh (`Shard(dim)` or `Replicate()` per mesh axis). Built with `DistributedLayout(ndim=..., axis_placements={axis: Shard(dim), ...})`.
 2. **Dispatch**: When you call a patched op (e.g. `ttml.ops.linear.linear`), the call goes through `dispatch()`. Dispatch reads layouts from tensor metadata, looks up a **sharding rule** by op name, gets a `ShardingPlan`, redistributes inputs as needed, runs optional **pre-collectives** (e.g. broadcast), calls the raw op, runs optional **post-collectives** (e.g. all_reduce, all_gather), and stamps the output layout.
 3. **Parallelize**: `parallelize_module(model, mesh_device, parallelize_plan, tp_axis=..., cp_axis=...)` walks the module tree, matches module names to the plan (exact or regex), and applies a **ParallelStyle** (e.g. `ColwiseParallel`, `RowwiseParallel`) or a **module rule** for composite modules (e.g. GQA).
 4. **Op rules** and **module rules** are registered with decorators; the same op name used in the rule is used when patching `ttml.ops.*` so dispatch finds the rule.
@@ -776,11 +776,11 @@ For the last linear (e.g. logits over vocab), use `ColwiseParallel(gather_output
 **Where this appears in dispatch**
 Op rules return `ShardingPlan`s with optional **`Broadcast`** (pre), **`AllReduce`**, **`AllGather`** (post). `parallelize_module` + `ColwiseParallel`/`RowwiseParallel` attach the collectives by wrapping modules; dispatch still stamps layouts for `linear`/`matmul`.
 
-### Layout
+### DistributedLayout
 
-- **Construction**: `Layout(ndim=N)` (all Replicate) or `Layout(ndim=N, axis_placements={mesh_axis: Shard(dim), ...})`. Unspecified axes are Replicate.
+- **Construction**: `DistributedLayout(ndim=N)` (all Replicate) or `DistributedLayout(ndim=N, axis_placements={mesh_axis: Shard(dim), ...})`. Unspecified axes are Replicate.
 - **Placements**: `layout.placements` is a tuple of `Shard(dim)` or `Replicate()` per mesh dimension.
-- **Helpers**: `layout.with_placement(mesh_axis, placement)` returns a new Layout with that axis updated. `layout.ndim`, `layout.is_replicated()`, `layout.is_sharded_on(axis)`.
+- **Helpers**: `layout.with_placement(mesh_axis, placement)` returns a new DistributedLayout with that axis updated. `layout.ndim`, `layout.is_replicated()`, `layout.is_sharded_on(axis)`.
 
 ### Op Rules (What They Are For)
 
@@ -820,14 +820,14 @@ Rules are **per op name** (e.g. `"linear"`, `"matmul"`). The op name in `@regist
    - **Post-collectives**: `AllReduce(mesh_axis, noop_backward=False)` — sum partial results (typical row-parallel forward); backward behavior depends on `noop_backward` when the input was already sharded.
    - **Post-collectives**: `AllGather(dim, mesh_axis, gather_grad_replicated=False)` — gather shards along `dim`; set **`gather_grad_replicated=True`** when upstream loss provides **replicated** gradients w.r.t. the gathered tensor (same as `GradOutputType.REPLICATED` on the C++ `all_gather` path—required for correct LM-head-style training).
 
-3. **Register your op under the same name**: Wrap your raw callable with `register_op(op_name, raw_callable)`. Use the returned wrapper as your op entry point (no patching of ttml.ops).
+3. **Define your op with `@register_op`**: The decorator registers the raw callable and returns a dispatch-aware wrapper. Use the same name as in `@register_rule`.
 
    ```python
-   def my_raw_op(*args, **kwargs):
+   @register_op("my_custom_op")
+   def my_custom_op(*args, **kwargs):
        # Your implementation (e.g. ttnn call or Python logic).
        return ...
 
-   my_custom_op = register_op("my_custom_op", my_raw_op)
    # From here on, call my_custom_op(...) so it goes through dispatch.
    ```
 
@@ -881,16 +881,14 @@ from ttml.distributed.rules.registry import (
     register_rule,
     register_module_rule,
 )
-from ttml.distributed.layout import Layout, Shard, Replicate
+from ttml.distributed.layout import DistributedLayout, Shard, Replicate
 
 
-# ── 1. Raw op (wraps a ttnn / Python call) ──────────────────────────────────
-def _my_proj_raw(x, w):
+# ── 1. Op (wraps a ttnn / Python call) ───────────────────────────────────────
+@register_op("my_proj")
+def my_proj(x, w):
     """Row-parallel projection: expects x sharded on last dim, w sharded on rows."""
     return ttml.ops.linear.linear_raw(x, w)   # or your ttnn call
-
-# Register under a unique name; use the returned wrapper everywhere.
-my_proj = register_op("my_proj", _my_proj_raw)
 
 
 # ── 2. Op rule: tells dispatch how inputs/outputs are sharded ───────────────
@@ -898,9 +896,9 @@ my_proj = register_op("my_proj", _my_proj_raw)
 def _my_proj_rule(x_layout, w_layout, *, runtime=None, **kwargs):
     """Row-parallel: x sharded on last dim → partial sums → all_reduce."""
     tp_axis = runtime.tp_axis
-    required_x = Layout(ndim=x_layout.ndim, axis_placements={tp_axis: Shard(-1)})
-    required_w = Layout(ndim=w_layout.ndim, axis_placements={tp_axis: Shard(0)})
-    out_layout = Layout(ndim=x_layout.ndim)   # fully replicated after reduce
+    required_x = DistributedLayout(ndim=x_layout.ndim, axis_placements={tp_axis: Shard(-1)})
+    required_w = DistributedLayout(ndim=w_layout.ndim, axis_placements={tp_axis: Shard(0)})
+    out_layout = DistributedLayout(ndim=x_layout.ndim)   # fully replicated after reduce
     return ShardingPlan(
         input_layouts=[required_x, required_w],
         output_layout=out_layout,
@@ -956,8 +954,8 @@ model = parallelize_module(model, mesh_device, MY_PLAN, tp_axis=1, cp_axis=0)
 ```
 
 Key points:
-- **`register_op`** returns the dispatch-aware wrapper; use it instead of `ttml.ops.*` in your module.
-- **`register_rule`** must use the **same string** as `register_op`.
+- **`@register_op("name")`** decorates your raw op and returns the dispatch-aware wrapper; use it instead of `ttml.ops.*` in your module.
+- **`@register_rule("name")`** must use the **same string** as `@register_op`.
 - **Module rule** only does composite-specific work (head counts, ring_sdpa swap). Sub-linear sharding comes from the plan styles on recursion.
 
 ### Custom ParallelStyle
@@ -965,14 +963,14 @@ Key points:
 To define a new style (e.g. a variant of column/row parallel):
 
 1. Subclass `ParallelStyle` and implement `_apply(module, mesh_device, tp_axis)` (mutate the module’s parameters with `distribute_tensor` and the layout you want).
-2. Implement `get_layout(mesh_device, tp_axis) -> Layout` when callers need the style’s weight layout without applying it to a module (e.g. tests, tooling). `parallelize_module` does **not** use this to detect composites; detection is **`get_module_rule(type(module))`** only.
+2. Implement `get_layout(mesh_device, tp_axis) -> DistributedLayout` when callers need the style’s weight layout without applying it to a module (e.g. tests, tooling). `parallelize_module` does **not** use this to detect composites; detection is **`get_module_rule(type(module))`** only.
 3. Add your style to the parallelize plan by name or regex, e.g. `{"my_layer": MyCustomStyle()}`.
 
 ### Summary
 
 | Concept | Purpose |
 |--------|---------|
-| **Layout** | Describes sharding/replication per mesh axis; used for redistribution and plan output. |
+| **DistributedLayout** | Describes sharding/replication per mesh axis; used for redistribution and plan output. |
 | **Op rule** | Maps op name + input layouts → ShardingPlan (layouts + optional pre/post collectives). |
 | **Module rule** | For composite modules: called with `(module, mesh_device, tp_axis, cp_axis)`; handles TP/CP logic (e.g. head counts, rope, ring_sdpa); children get styles on recursion. |
 | **ParallelStyle** | Assignable by name pattern; applies to leaf modules (e.g. LinearLayer). Optional `get_layout` for introspection / tests. |
@@ -1019,7 +1017,7 @@ trainer = SFTTrainer(model, config, dataloader, optimizer, callbacks=callbacks)
 
 Each recorded event contains:
 - `op_name`: the dispatched op (e.g. `"linear"`, `"matmul"`)
-- `input_layouts` / `output_layout`: the `Layout` stamped on each tensor
+- `input_layouts` / `output_layout`: the `DistributedLayout` stamped on each tensor
 - `rule_name`: which sharding rule was applied
 - `pre_collectives`: e.g. `Broadcast(axis=1)` before the op
 - `redistributions`: inputs that were resharded to match the rule's required layout

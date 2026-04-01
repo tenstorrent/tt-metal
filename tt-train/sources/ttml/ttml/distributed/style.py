@@ -4,15 +4,15 @@
 """PyTorch-style ParallelStyle classes for tensor parallelism.
 
 Users assign ColwiseParallel / RowwiseParallel to modules by name pattern
-via parallelize_module(); no Layout construction in user code.
+via parallelize_module(); no DistributedLayout construction in user code.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
-from .layout import Layout, Shard, Replicate
+from .layout import DistributedLayout, Shard, Replicate
 
 if TYPE_CHECKING:
     from ttml.modules import AbstractModuleBase
@@ -57,10 +57,10 @@ class ColwiseParallel(ParallelStyle):
         """
         self.gather_output = gather_output
 
-    def get_layout(self, mesh_device, tp_axis: int) -> Layout:
+    def get_layout(self, mesh_device, tp_axis: int) -> DistributedLayout:
         """Return the weight layout for this style (for composite module rules)."""
         ndim = _mesh_ndim(mesh_device)
-        return Layout(ndim=ndim, axis_placements={tp_axis: Shard(-2)})
+        return DistributedLayout(ndim=ndim, axis_placements={tp_axis: Shard(-2)})
 
     def _apply(
         self,
@@ -87,7 +87,9 @@ class ColwiseParallel(ParallelStyle):
         # Distribute bias (sharded on last dim for column-parallel)
         if module.bias is not None:
             ndim = _mesh_ndim(mesh_device)
-            bias_layout = Layout(ndim=ndim, axis_placements={tp_axis: Shard(-1)})
+            bias_layout = DistributedLayout(
+                ndim=ndim, axis_placements={tp_axis: Shard(-1)}
+            )
             new_b = distribute_tensor(module.bias.tensor, mesh_device, bias_layout)
             module.bias.tensor = new_b
             module.override_tensor(new_b, "bias")
@@ -130,10 +132,10 @@ class RowwiseParallel(ParallelStyle):
         parallelize_module(model, mesh, {"w2": RowwiseParallel()})
     """
 
-    def get_layout(self, mesh_device, tp_axis: int) -> Layout:
+    def get_layout(self, mesh_device, tp_axis: int) -> DistributedLayout:
         """Return the weight layout for this style (for composite module rules)."""
         ndim = _mesh_ndim(mesh_device)
-        return Layout(ndim=ndim, axis_placements={tp_axis: Shard(-1)})
+        return DistributedLayout(ndim=ndim, axis_placements={tp_axis: Shard(-1)})
 
     def _apply(
         self,
@@ -160,7 +162,7 @@ class RowwiseParallel(ParallelStyle):
         # Bias stays replicated for row-parallel
         if module.bias is not None:
             ndim = _mesh_ndim(mesh_device)
-            bias_layout = Layout(ndim=ndim)
+            bias_layout = DistributedLayout(ndim=ndim)
             new_b = distribute_tensor(module.bias.tensor, mesh_device, bias_layout)
             module.bias.tensor = new_b
             module.override_tensor(new_b, "bias")

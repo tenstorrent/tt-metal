@@ -11,8 +11,6 @@ No Python-side topology rewriting is needed.
 
 from __future__ import annotations
 
-from .layout import Layout, Shard, Replicate
-
 
 def is_distributed(tensor) -> bool:
     """True if the tensor lives on a mesh device (more than one shard)."""

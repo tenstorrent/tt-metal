@@ -16,13 +16,11 @@ The rule must return the (possibly mutated) module.
 from __future__ import annotations
 
 from functools import partial
-from typing import Any, Dict, Optional
+from typing import Optional
 
-from .layout import Layout, Shard, Replicate
 from .rules.registry import register_module_rule
 
 import ttml
-from ttml.modules import LinearLayer, AbstractModuleBase
 
 # ---------------------------------------------------------------------------
 # GroupedQueryAttention

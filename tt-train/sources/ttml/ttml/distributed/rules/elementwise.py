@@ -9,15 +9,15 @@ Unary ops: layout passes through unchanged.
 
 from __future__ import annotations
 
-from ..layout import Layout, Shard, Replicate
+from ..layout import DistributedLayout, Shard, Replicate
 from .registry import ShardingPlan, register_rule
 
 
-def _shard_count(layout: Layout) -> int:
+def _shard_count(layout: DistributedLayout) -> int:
     return sum(1 for p in layout.placements if isinstance(p, Shard))
 
 
-def _pick_target(a: Layout, b: Layout) -> Layout:
+def _pick_target(a: DistributedLayout, b: DistributedLayout) -> DistributedLayout:
     """Choose the more-sharded layout as the target."""
     if _shard_count(a) >= _shard_count(b):
         return a
@@ -32,8 +32,8 @@ def _pick_target(a: Layout, b: Layout) -> Layout:
 @register_rule("mul")
 @register_rule("div")
 def elementwise_binary_rule(
-    a_layout: Layout,
-    b_layout: Layout = None,
+    a_layout: DistributedLayout,
+    b_layout: DistributedLayout = None,
     *extra,
     runtime=None,
     **kwargs,
@@ -61,7 +61,7 @@ def elementwise_unary_rule(
     runtime=None,
     **kwargs,
 ) -> ShardingPlan:
-    input_layout = layouts[0] if layouts else Layout(ndim=1)
+    input_layout = layouts[0] if layouts else DistributedLayout(ndim=1)
     return ShardingPlan(
         input_layouts=list(layouts),
         output_layout=input_layout,
@@ -77,7 +77,7 @@ def dropout_rule(
     runtime=None,
     **kwargs,
 ) -> ShardingPlan:
-    input_layout = layouts[0] if layouts else Layout(ndim=1)
+    input_layout = layouts[0] if layouts else DistributedLayout(ndim=1)
     return ShardingPlan(
         input_layouts=list(layouts),
         output_layout=input_layout,

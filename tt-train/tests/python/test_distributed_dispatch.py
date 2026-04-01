@@ -13,7 +13,7 @@ import pytest
 import numpy as np
 
 from ttml.distributed.layout import (
-    Layout,
+    DistributedLayout,
     Shard,
     Replicate,
     replicated_layout,
@@ -36,24 +36,24 @@ from ttml.distributed.rules.registry import (
 from ttml.distributed.debug import TraceEntry, dispatch_trace, DispatchTracer
 
 
-def _layout_rep_shard(tp_axis: int = 1, dim: int = -1) -> Layout:
-    return Layout(ndim=2, axis_placements={tp_axis: Shard(dim)})
+def _layout_rep_shard(tp_axis: int = 1, dim: int = -1) -> DistributedLayout:
+    return DistributedLayout(ndim=2, axis_placements={tp_axis: Shard(dim)})
 
 
-def _layout_col_parallel(tp_axis: int = 1) -> Layout:
-    return Layout(ndim=2, axis_placements={tp_axis: Shard(-2)})
+def _layout_col_parallel(tp_axis: int = 1) -> DistributedLayout:
+    return DistributedLayout(ndim=2, axis_placements={tp_axis: Shard(-2)})
 
 
-def _layout_row_parallel(tp_axis: int = 1) -> Layout:
-    return Layout(ndim=2, axis_placements={tp_axis: Shard(-1)})
+def _layout_row_parallel(tp_axis: int = 1) -> DistributedLayout:
+    return DistributedLayout(ndim=2, axis_placements={tp_axis: Shard(-1)})
 
 
 # ---------------------------------------------------------------------------
-# Layout
+# DistributedLayout
 # ---------------------------------------------------------------------------
 
 
-class TestLayout:
+class TestDistributedLayout:
     def test_shard_replicate_equality(self):
         assert Shard(0) == Shard(0)
         assert Shard(0) != Shard(1)
@@ -69,7 +69,7 @@ class TestLayout:
 
     def test_layout_hash_equality(self):
         a = _layout_rep_shard()
-        b = Layout(ndim=2, axis_placements={1: Shard(-1)})
+        b = DistributedLayout(ndim=2, axis_placements={1: Shard(-1)})
         assert a == b
         assert hash(a) == hash(b)
 
@@ -86,7 +86,7 @@ class TestLayout:
         assert isinstance(layout.placements[1], Replicate)
 
     def test_layout_to_mapper_config(self):
-        layout = Layout(ndim=2, axis_placements={1: Shard(-1)})
+        layout = DistributedLayout(ndim=2, axis_placements={1: Shard(-1)})
         assert layout_to_mapper_config(layout) is not None
 
 
@@ -100,7 +100,7 @@ class TestPlanCache:
         cache = PlanCache(maxsize=2)
         la = replicated_layout(2)
         lb = _layout_rep_shard()
-        lc = Layout(ndim=2, axis_placements={0: Shard(0)})
+        lc = DistributedLayout(ndim=2, axis_placements={0: Shard(0)})
         key_a = ("op", (la,), ())
         key_b = ("op", (lb,), ())
         key_c = ("op", (lc,), ())
@@ -169,18 +169,18 @@ class TestPolicyMatch:
         from ttml.distributed.training import _match_plan
 
         policy = {
-            "a.weight": Layout(ndim=2, axis_placements={1: Shard(-2)}),
-            r".*\.bias": Layout(ndim=2, axis_placements={1: Shard(-1)}),
+            "a.weight": DistributedLayout(ndim=2, axis_placements={1: Shard(-2)}),
+            r".*\.bias": DistributedLayout(ndim=2, axis_placements={1: Shard(-1)}),
         }
         assert _match_plan("a.weight", policy).is_sharded_on(1)
         assert _match_plan("layer.a.bias", policy).shard_dim(1) == -1
 
 
-class TestBiasLayoutInvariants:
+class TestBiasDistributedLayoutInvariants:
     """Column-parallel bias is sharded on last dim; row-parallel bias stays replicated."""
 
     def test_column_vs_row_expected_layouts(self):
-        col_bias = Layout(ndim=2, axis_placements={1: Shard(-1)})
+        col_bias = DistributedLayout(ndim=2, axis_placements={1: Shard(-1)})
         assert col_bias.shard_dim(1) == -1
         row_bias = replicated_layout(2)
         assert row_bias.is_replicated()
@@ -222,7 +222,7 @@ class TestTraceEntry:
 class TestCustomOpRuleUnit:
     def test_rule_with_all_reduce_cleanup_registry(self):
         @register_rule("__test_arule__")
-        def _r(layout: Layout, *e, runtime=None, **kw):
+        def _r(layout: DistributedLayout, *e, runtime=None, **kw):
             if layout.is_sharded_on(1):
                 return ShardingPlan(
                     input_layouts=[layout],
@@ -444,16 +444,8 @@ class TestDistributedMesh:
                 return self.fc2(h)
 
         def _clone_weights_bf16(template: TwoLayerSiluMLP):
-            w1 = np.asarray(
-                ttml.autograd.to_numpy(template.fc1.weight.tensor, composer=composer)[
-                    :1
-                ]
-            )
-            w2 = np.asarray(
-                ttml.autograd.to_numpy(template.fc2.weight.tensor, composer=composer)[
-                    :1
-                ]
-            )
+            w1 = np.asarray(template.fc1.weight.tensor.to_numpy(composer=composer)[:1])
+            w2 = np.asarray(template.fc2.weight.tensor.to_numpy(composer=composer)[:1])
             return w1, w2
 
         def _load_weights(m: TwoLayerSiluMLP, w1_np, w2_np):
@@ -491,7 +483,7 @@ class TestDistributedMesh:
         out_ref = m_ref(x_ref)
         loss_ref = ttml.ops.unary.mean(out_ref)
         loss_ref.backward(False)
-        out_ref_np = np.asarray(ttml.autograd.to_numpy(out_ref, composer=composer)[:1])
+        out_ref_np = np.asarray(out_ref.to_numpy(composer=composer)[:1])
         xg_ref = np.asarray(x_ref.get_grad_tensor().to_numpy(composer=composer)[:1])
         w1g = m_ref.fc1.weight.tensor.get_grad_tensor()
         w2g = m_ref.fc2.weight.tensor.get_grad_tensor()
@@ -520,7 +512,7 @@ class TestDistributedMesh:
         out_tp = m_tp(x_tp)
         loss_tp = ttml.ops.unary.mean(out_tp)
         loss_tp.backward(False)
-        out_tp_np = np.asarray(ttml.autograd.to_numpy(out_tp, composer=composer)[:1])
+        out_tp_np = np.asarray(out_tp.to_numpy(composer=composer)[:1])
         xg_tp = np.asarray(x_tp.get_grad_tensor().to_numpy(composer=composer)[:1])
 
         w1g_tp = m_tp.fc1.weight.tensor.get_grad_tensor()
@@ -593,21 +585,20 @@ class TestDistributedMesh:
         import ttml
         import ttnn
         import ml_dtypes
-        from ttml.distributed import init_ops
-        from ttml.distributed.dispatch import dispatch, _get_raw, _RAW_OPS
+        from ttml.distributed import init_ops, register_op
+        from ttml.distributed.dispatch import _get_raw, _RAW_OPS
         from ttml.distributed.training import distribute_tensor
 
         init_ops()
         mesh = ttml.autograd.AutoContext.get_instance().get_device()
         name = "__test_dispatch_custom__"
 
-        def raw_pass(x):
+        @register_op(name)
+        def custom_pass(x):
             return _get_raw("silu")(x)
 
-        _RAW_OPS[name] = raw_pass
-
         @register_rule(name)
-        def _rule(layout: Layout, *e, runtime=None, **kw):
+        def _rule(layout: DistributedLayout, *e, runtime=None, **kw):
             return ShardingPlan(input_layouts=[layout], output_layout=layout)
 
         layout = _layout_rep_shard(1, -1)
@@ -619,7 +610,7 @@ class TestDistributedMesh:
             mesh,
             layout,
         )
-        y = dispatch(name, x)
+        y = custom_pass(x)
         assert get_layout(y) == layout
         del _OP_RULES[name]
         del _RAW_OPS[name]
@@ -653,12 +644,8 @@ class TestDistributedMesh:
 
         m = SmallMLP()
         # Full logical weights before TP sharding (composer [:1] is one replica, not a TP shard).
-        w1_full = np.asarray(
-            ttml.autograd.to_numpy(m.fc1.weight.tensor, composer=composer)[:1]
-        )
-        w2_full = np.asarray(
-            ttml.autograd.to_numpy(m.fc2.weight.tensor, composer=composer)[:1]
-        )
+        w1_full = np.asarray(m.fc1.weight.tensor.to_numpy(composer=composer)[:1])
+        w2_full = np.asarray(m.fc2.weight.tensor.to_numpy(composer=composer)[:1])
 
         parallelize_module(
             m,
@@ -683,9 +670,7 @@ class TestDistributedMesh:
         h = np_x @ w1_full[0, 0].T
         h = h * (1.0 / (1.0 + np.exp(-h)))
         expected = (h @ w2_full[0, 0].T).astype(np.float32)
-        out_np = np.asarray(ttml.autograd.to_numpy(out, composer=composer)[:1]).astype(
-            np.float32
-        )
+        out_np = np.asarray(out.to_numpy(composer=composer)[:1]).astype(np.float32)
         assert self._pcc(out_np, expected) > 0.99
 
     def test_custom_module_rule_invoked_by_parallelize_module(self):

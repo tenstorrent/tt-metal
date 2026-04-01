@@ -60,44 +60,11 @@ except ImportError:
     pass
 
 
-def to_numpy(tensor_or_grad, new_type=None, composer=None):
-    """Convert a ttml.autograd.Tensor or raw ttnn.Tensor (gradient) to numpy.
-
-    This is a convenience function that handles both:
-    - ttml.autograd.Tensor objects (calls tensor.to_numpy())
-    - Raw ttnn.Tensor objects (e.g., from tensor.get_grad())
-
-    Args:
-        tensor_or_grad: Either a ttml.autograd.Tensor or a raw ttnn.Tensor
-        new_type: Optional target data type for conversion (only for autograd.Tensor)
-        composer: Optional MeshToTensor composer for distributed tensors
-
-    Returns:
-        numpy array with the tensor data
-    """
-    # Check if it's a ttml.autograd.Tensor by checking for get_value method
-    # (both have to_numpy but with different signatures)
-    if isinstance(tensor_or_grad, Tensor):
-        # It's a ttml.autograd.Tensor - signature: to_numpy(new_type, composer)
-        return tensor_or_grad.to_numpy(new_type, composer)
-
-    # It's a raw ttnn.Tensor (e.g., from tensor.get_grad())
-    # ttnn.Tensor.to_numpy signature: to_numpy(mesh_composer=None)
-    import ttnn
-
-    if isinstance(tensor_or_grad, ttnn.Tensor):
-        return tensor_or_grad.to_numpy(composer)
-
-    raise TypeError(f"Cannot convert {type(tensor_or_grad)} to numpy")
-
-
 __all__ = [
     # Python classes
     "Function",
     "FunctionContext",
     "get_links",
-    # Utility functions
-    "to_numpy",
     # C++ classes and enums (available after build)
     "AutoContext",
     "AutocastTensor",

@@ -21,7 +21,10 @@ Usage:
     # from here on, ttml.ops.linear.linear etc. go through dispatch
 """
 
-from .layout import Layout, Shard, Replicate, get_layout, set_layout
+from .layout import DistributedLayout, Shard, Replicate, get_layout, set_layout
+
+# Backward-compatibility alias
+Layout = DistributedLayout
 from .mesh_runtime import MeshRuntime, get_runtime, set_runtime
 from .dispatch import dispatch, register_op
 from .redistribute import redistribute
@@ -46,7 +49,8 @@ from ._register_ops import init_ops
 from . import module_rules as _module_rules  # register module rules  # noqa: F401
 
 __all__ = [
-    "Layout",
+    "DistributedLayout",
+    "Layout",  # backward-compat alias
     "Shard",
     "Replicate",
     "get_layout",

@@ -9,10 +9,10 @@ Rules are registered with decorators and looked up at dispatch time.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Union
 
-from ..layout import Layout
+from ..layout import DistributedLayout
 
 
 # ---------------------------------------------------------------------------
@@ -152,8 +152,8 @@ class ShardingPlan:
         post_collectives: Optional list of OptionalCCL, one per output.
     """
 
-    input_layouts: List[Layout]
-    output_layout: Layout
+    input_layouts: List[DistributedLayout]
+    output_layout: DistributedLayout
     pre_collectives: Optional[List[OptionalCCL]] = None
     post_collectives: Optional[List[OptionalCCL]] = None
 

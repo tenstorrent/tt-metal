@@ -10,7 +10,7 @@ scatter shards on the axis at the given tensor dimension.
 
 from __future__ import annotations
 
-from ..layout import Layout, Replicate, Shard
+from ..layout import DistributedLayout, Replicate, Shard
 from .registry import ShardingPlan, register_rule
 
 
@@ -20,7 +20,7 @@ def _mesh_axis_from_kwargs(kwargs) -> int:
 
 @register_rule("broadcast")
 def broadcast_rule(
-    input_layout: Layout,
+    input_layout: DistributedLayout,
     *,
     runtime=None,
     **kwargs,
@@ -36,7 +36,7 @@ def broadcast_rule(
 
 @register_rule("all_gather")
 def all_gather_rule(
-    input_layout: Layout,
+    input_layout: DistributedLayout,
     *,
     runtime=None,
     **kwargs,
@@ -52,7 +52,7 @@ def all_gather_rule(
 
 @register_rule("all_reduce")
 def all_reduce_rule(
-    input_layout: Layout,
+    input_layout: DistributedLayout,
     *,
     runtime=None,
     **kwargs,
@@ -68,7 +68,7 @@ def all_reduce_rule(
 
 @register_rule("scatter")
 def scatter_rule(
-    input_layout: Layout,
+    input_layout: DistributedLayout,
     *,
     runtime=None,
     **kwargs,
