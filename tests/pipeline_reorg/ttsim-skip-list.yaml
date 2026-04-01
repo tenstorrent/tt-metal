@@ -75,9 +75,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/eltwise/test_remainder.py
   - tests/ttnn/unit_tests/operations/eltwise/test_fmod.py
   - tests/ttnn/unit_tests/operations/eltwise/test_expm1.py
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_program_cache.py  # skip-list: ttsim + Wormhole failure #38203
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_ng.py::test_unary_sharded_interleaved
-  - tests/ttnn/unit_tests/operations/eltwise/test_unary_ng.py::test_unary_ng_row_major_sharded
 
   # Pool tests
   - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py
