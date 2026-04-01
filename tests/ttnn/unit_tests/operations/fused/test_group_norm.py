@@ -17,6 +17,8 @@ from tests.ttnn.unit_tests.base_functionality.test_bh_20_cores_sharding import s
 
 welford_flavors, welford_ids = (True, False), ("welford", "legacy")
 
+TEST_PADDING_VALUE = -42
+
 
 # for debug purpose
 def manual_group_norm(input_tensor, num_groups, eps=1e-2):
@@ -98,6 +100,7 @@ def test_group_norm_with_height_sharded(device, N, C, H, W, num_groups, use_welf
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.group_norm(
         input_tensor,
@@ -185,6 +188,7 @@ def test_group_norm_with_block_sharded_v2_8x4_grid(device, N, C, H, W, num_group
         ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     # groupnorm
     output_tensor = ttnn.group_norm(
@@ -285,6 +289,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid(device, N, C, H, W, num_group
         ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
     input_tensor = ttnn.interleaved_to_sharded(input_tensor, sharded_mem_config, keep_l1_aligned=True)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     # groupnorm
     output_tensor = ttnn.group_norm(
@@ -340,6 +345,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        pad_value=TEST_PADDING_VALUE,
     )
 
     # input mask
@@ -374,6 +380,7 @@ def test_group_norm_with_block_sharded_v2_8x8_grid_tile_layout(device, N, C, H, 
         ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
     input_tensor = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     # groupnorm
     output_tensor = ttnn.group_norm(
@@ -469,6 +476,9 @@ def run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inpla
 
     # Generate ttnn tensor
     dummy_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    from_torch_kw = {}
+    if layout == ttnn.TILE_LAYOUT:
+        from_torch_kw["pad_value"] = TEST_PADDING_VALUE
     tt_input_tensor = ttnn.from_torch(
         dummy_tensor,
         dtype=ttnn.DataType.BFLOAT16,
@@ -480,7 +490,9 @@ def run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inpla
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
         device=device,
+        **from_torch_kw,
     )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
     # Generate input mask
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, core_grid.x, ttnn.DataType.BFLOAT8_B)
@@ -572,6 +584,9 @@ def test_sdxl_base_group_norm_bh(device, input_shape, perf_test_mode=False):
 
     # Generate ttnn tensor
     dummy_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    from_torch_kw_bh = {}
+    if layout == ttnn.TILE_LAYOUT:
+        from_torch_kw_bh["pad_value"] = TEST_PADDING_VALUE
     tt_input_tensor = ttnn.from_torch(
         dummy_tensor,
         dtype=ttnn.DataType.BFLOAT16,
@@ -583,7 +598,9 @@ def test_sdxl_base_group_norm_bh(device, input_shape, perf_test_mode=False):
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
         ),
         device=device,
+        **from_torch_kw_bh,
     )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
     # Generate input mask
     input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, core_grid.x, ttnn.DataType.BFLOAT8_B)
@@ -685,6 +702,7 @@ def test_sdxl_base_group_norm_negative_mask(device, input_shape, perf_test_mode=
         ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device, memory_config=sharded_mem_config)
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
     # Execute ttnn group_norm
     tt_output_tensor = ttnn.group_norm(
@@ -753,6 +771,7 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
             device=device,
             memory_config=sharded_mem_config,
         )
+        tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
         tt_output_tensor = ttnn.group_norm(
             tt_input_tensor,
@@ -882,6 +901,7 @@ def test_group_norm_oft(device, N, C, H, W, num_groups, shard, eps, use_negative
             ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, TEST_PADDING_VALUE)
 
     output_tensor = ttnn.group_norm(
         input_tensor,
@@ -936,6 +956,7 @@ def test_group_norm_no_input_mask(device, N, C, H, W, num_groups):
             device=device,
             memory_config=sharded_mem_config,
         )
+        tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, TEST_PADDING_VALUE)
 
         tt_output_tensor = ttnn.group_norm(
             tt_input_tensor,
@@ -1044,7 +1065,9 @@ def test_group_norm_dram_grid_size(device, N, C, H, W, num_groups, specify_grid)
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        pad_value=TEST_PADDING_VALUE,
     )
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)
 
     tt_output = ttnn.group_norm(
         tt_input,
@@ -1141,7 +1164,9 @@ def test_group_norm_optional_weight_bias(device, N, C, H, W, num_groups, use_wel
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        pad_value=TEST_PADDING_VALUE,
     )
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, TEST_PADDING_VALUE)
 
     tt_output = ttnn.group_norm(
         tt_input,

@@ -16,6 +16,8 @@ from models.common.utility_functions import (
 
 from models.common.utility_functions import tt2torch_tensor
 
+TEST_PADDING_VALUE = -42
+
 PREFETCHER_NOC1_GRID = [
     (6, 6),
     (6, 7),
@@ -93,6 +95,7 @@ def create_tt_tensors(
                 use_height_and_width_as_shard_shape=True,
             )
             tt_tensor = ttnn.to_memory_config(tt_tensor, memory_config=tt_sharded_config)
+            tt_tensor = ttnn.fill_implicit_tile_padding(tt_tensor, TEST_PADDING_VALUE)
 
         return tt_tensor
 
