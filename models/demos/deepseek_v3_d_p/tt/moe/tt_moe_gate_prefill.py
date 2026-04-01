@@ -18,7 +18,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 
 
-class GateFallbackMode(Enum):
+class GateComputeMode(Enum):
     """Controls which parts of the gate computation fall back to host (torch).
 
     The gate has two stages: matmul (x @ W_gate) and grouped_gate (topk routing).
@@ -95,7 +95,7 @@ class TtMoEGatePrefill(LightweightModule):
         dispatch_table: torch.Tensor,
         weight: torch.Tensor = None,
         bias: torch.Tensor = None,
-        fallback_mode: GateFallbackMode = GateFallbackMode.DEVICE,
+        fallback_mode: GateComputeMode = GateComputeMode.DEVICE,
     ):
         """
         Args:
@@ -137,12 +137,12 @@ class TtMoEGatePrefill(LightweightModule):
         self.routing_setup = TtMoERoutingSetup(mesh_device, dispatch_table, num_links=config.ccl_config["NUM_LINKS"])
 
         # Torch copies for host fallback paths — keep in HF convention (n_experts, dim)
-        if fallback_mode != GateFallbackMode.DEVICE:
+        if fallback_mode != GateComputeMode.DEVICE:
             self.torch_weight = weight  # (n_experts, dim)
             self.torch_bias = bias  # (n_experts,)
 
         # Reference model for host grouped-gate paths
-        if fallback_mode in (GateFallbackMode.HOST_GROUPED_GATE, GateFallbackMode.HOST_ALL):
+        if fallback_mode in (GateComputeMode.HOST_GROUPED_GATE, GateComputeMode.HOST_ALL):
             from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 
             self.ref_config = SimpleNamespace(
@@ -308,7 +308,7 @@ class TtMoEGatePrefill(LightweightModule):
 
         # ---- Phase 1: Logits (matmul) ----
         signpost(header="moe_gate_linear")
-        if mode in (GateFallbackMode.DEVICE, GateFallbackMode.HOST_GROUPED_GATE):
+        if mode in (GateComputeMode.DEVICE, GateComputeMode.HOST_GROUPED_GATE):
             logits = self._device_matmul(x)
         else:  # HOST_MATMUL, HOST_ALL
             host_logits = self._host_matmul(x)
@@ -316,20 +316,20 @@ class TtMoEGatePrefill(LightweightModule):
 
         # ---- Phase 2: Grouped gate ----
         signpost(header="moe_gate_grouped_gate")
-        if mode == GateFallbackMode.DEVICE:
+        if mode == GateComputeMode.DEVICE:
             ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate(logits)
 
-        elif mode == GateFallbackMode.HOST_GROUPED_GATE:
+        elif mode == GateComputeMode.HOST_GROUPED_GATE:
             host_logits = self._compose_logits_to_host(logits)
             host_indices, host_scores = self._host_grouped_gate(host_logits)
             ttnn_scores = self._host_scores_to_device(host_scores)
             ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
 
-        elif mode == GateFallbackMode.HOST_MATMUL:
+        elif mode == GateComputeMode.HOST_MATMUL:
             logits = self._host_logits_to_device(host_logits)
             ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate(logits)
 
-        elif mode == GateFallbackMode.HOST_ALL:
+        elif mode == GateComputeMode.HOST_ALL:
             host_indices, host_scores = self._host_grouped_gate(host_logits)
             ttnn_scores = self._host_scores_to_device(host_scores)
             ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
